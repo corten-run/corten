@@ -1860,6 +1860,9 @@ enum TopRead {
     Unknown,
 }
 
+/// Where a refusal of `check_patch_top` sends the reader for why each shape is lost, and where.
+const PARSE_REFUSALS: &str = "https://github.com/corten-run/corten/blob/main/docs/design.md#choice-html-parse-refusals";
+
 /// A view that could be a patch (`could_patch`) whose top level is lost wherever it is written: a
 /// first `<table>` with a table part after it; a first `<col>` with an element HTML's wherever it
 /// lands (`breaks_out`) after it; and a first other table part with a `<table>` after it, at the
@@ -1923,7 +1926,7 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
                         return Err((
                             attrs,
                             format!(
-                                "<{name}> after <table> is lost: the runtime parses a patch as a <template>'s content, where the first element decides how the rest is read, and after a <table> a <{name}> is dropped, with only a console error (where the patch began with a table part, the <table> tag is dropped instead and its parts read as the patch's; on a page the browser drops the <{name}> too). Send the <{name}> inside the <table>, or in a patch of its own"
+                                "send the <{name}> inside the <table>, or in a patch of its own: a patch that begins with a <table> loses a <{name}> after it wherever it is written ({PARSE_REFUSALS})"
                             ),
                         ));
                     }
@@ -1931,7 +1934,7 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
                         return Err((
                             attrs,
                             format!(
-                                "<{name}> after <col> is lost: the runtime parses a patch as a <template>'s content, where the first element decides how the rest is read, and after a <col> anything but a <col> or a <template> is dropped, with only a console error (where the patch began with another table part, the <col> is dropped or put in a <colgroup> the browser adds instead; after a leading <title>, <base>, <basefont>, <bgsound> or <noframes>, Chromium and WebKit drop the <col> instead; on a page the browser drops the <col>, and in an <svg> the <{name}> closes it). Send the <col>s in a <colgroup> with an id, or the <{name}> in a patch of its own"
+                                "send the <col>s in a <colgroup> with an id, or the <{name}> in a patch of its own: a patch that begins with a <col> loses a <{name}> after it wherever it is written, or after a leading <title>, <base>, <basefont>, <bgsound> or <noframes> Chromium and WebKit drop the <col> instead ({PARSE_REFUSALS})"
                             ),
                         ));
                     }
@@ -1940,7 +1943,7 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
                         return Err((
                             attrs,
                             format!(
-                                "<{name}> after <{first}> is lost: the runtime parses a patch as a <template>'s content, where the first element decides how the rest is read, and after a <{first}> a <table> tag is dropped and its parts are read as the patch's, with only a console error (where the patch began with an element that is not a table part, or after a leading <title>, <base>, <basefont>, <bgsound> or <noframes> in Chromium and WebKit, the <{first}> is dropped instead; on a page the browser drops the <{first}>, and in a table or an <svg> the <{name}> closes it). Send the <{name}> in a patch of its own"
+                                "send the <{name}> in a patch of its own: a patch that begins with a <{first}> loses a <table> after it wherever it is written ({PARSE_REFUSALS})"
                             ),
                         ));
                     }
@@ -1970,20 +1973,16 @@ enum PartLoss {
 impl PartLoss {
     /// Why the top-level `<top>` is lost after a first `<first>`, for the error.
     fn message(&self, top: &str, first: &str) -> String {
-        let (what, how) = match self {
-            PartLoss::Table => (
-                "table",
-                "a <table> in another element is dropped and its parts moved out of it, and in an <svg> the <table> closes the drawing",
-            ),
-            PartLoss::Form => (
-                "form",
-                "a <form> is put in empty and what it holds moved out of it, and in an <svg> the element HTML's wherever it lands in or around it (a <div>, a <p> ..) closes the drawing",
-            ),
+        let what = match self {
+            PartLoss::Table => "table",
+            PartLoss::Form => "form",
         };
         let place = if top.eq_ignore_ascii_case(what) { String::new() } else { format!(" in <{top}>") };
-        format!(
-            "<{what}>{place} after <{first}> is lost: the runtime parses a patch as a <template>'s content, where the first element decides how the rest is read, and after a <{first}> {how}, with only a console error (where the patch began with an element that is not a table part, or after a leading <title>, <base>, <basefont>, <bgsound> or <noframes> in Chromium and WebKit, the <{first}> is dropped instead; on a page the browser drops the <{first}>, and in a table it is moved out of the table the same way). Send the <{top}> in a patch of its own"
-        )
+        let loses = match self {
+            PartLoss::Table => format!("loses a <table>{place} after it"),
+            PartLoss::Form => format!("loses what a <form>{place} after it holds"),
+        };
+        format!("send the <{top}> in a patch of its own: a patch that begins with a <{first}> {loses} wherever it is written ({PARSE_REFUSALS})")
     }
 }
 
@@ -3119,18 +3118,23 @@ mod tests {
         // a table part in a block after it counts.
         for part in TABLE_PARTS {
             let why = lost(&[el("table", vec![]), el(part, vec![])]).expect("refused");
-            assert!(why.starts_with(&format!("<{part}> after <table> is lost")), "{why}");
-            assert!(why.contains("in a patch of its own"), "{why}");
+            assert!(why.starts_with(&format!("send the <{part}> inside the <table>, or in a patch of its own:")), "{why}");
+            assert!(why.contains(&format!("begins with a <table> loses a <{part}> after it")), "{why}");
+            assert!(why.ends_with("#choice-html-parse-refusals)"), "{why}");
         }
         for head in TEMPLATE_HEAD {
             let block = Node::Block { head: Vec::new(), bodies: vec![vec![el("tr", vec![])]], arms: false };
             let why = lost(&[el(head, vec![]), el("TABLE", vec![]), el("p", vec![]), block]).expect("refused");
-            assert!(why.starts_with("<tr> after <table>"), "{head}: {why}");
+            assert!(why.starts_with("send the <tr> inside the <table>"), "{head}: {why}");
         }
         // After a first <col>, an element HTML's wherever it lands is lost.
         for name in ["p", "div", "span", "table"] {
             let why = lost(&[el("col", vec![]), el("col", vec![]), el(name, vec![])]).expect("refused");
-            assert!(why.starts_with(&format!("<{name}> after <col> is lost")), "{why}");
+            assert!(
+                why.starts_with(&format!("send the <col>s in a <colgroup> with an id, or the <{name}> in a patch of its own:")),
+                "{why}"
+            );
+            assert!(why.contains(&format!("begins with a <col> loses a <{name}> after it")), "{why}");
             assert!(why.contains("Chromium and WebKit drop the <col> instead"), "{why}");
         }
         // After a first other table part, a <table> at the top level or in a later element, and a
@@ -3139,25 +3143,29 @@ mod tests {
         let input = || el("input", vec![]);
         for part in TABLE_PARTS.iter().filter(|part| **part != "col") {
             let first = || el(part, vec![]);
-            let refused: [(Vec<Node>, &str); 7] = [
-                (vec![first(), table()], "<table> after"),
-                (vec![first(), el("div", vec![table()])], "<table> in <div> after"),
-                (vec![first(), el("label", vec![el("span", vec![table()])])], "<table> in <label> after"),
-                (vec![first(), el("form", vec![el("div", vec![input()])])], "<form> after"),
-                (vec![first(), el("form", vec![el("p", vec![])])], "<form> after"),
-                (vec![first(), el("div", vec![el("form", vec![input()])])], "<form> in <div> after"),
-                (vec![first(), el("form", vec![el("label", vec![el("span", vec![input()])])])], "<form> after"),
+            let refused: [(Vec<Node>, &str, &str); 7] = [
+                (vec![first(), table()], "table", "loses a <table> after it"),
+                (vec![first(), el("div", vec![table()])], "div", "loses a <table> in <div> after it"),
+                (vec![first(), el("label", vec![el("span", vec![table()])])], "label", "loses a <table> in <label> after it"),
+                (vec![first(), el("form", vec![el("div", vec![input()])])], "form", "loses what a <form> after it holds"),
+                (vec![first(), el("form", vec![el("p", vec![])])], "form", "loses what a <form> after it holds"),
+                (vec![first(), el("div", vec![el("form", vec![input()])])], "div", "loses what a <form> in <div> after it holds"),
+                (
+                    vec![first(), el("form", vec![el("label", vec![el("span", vec![input()])])])],
+                    "form",
+                    "loses what a <form> after it holds",
+                ),
             ];
-            for (nodes, says) in refused {
+            for (nodes, top, says) in refused {
                 let why = lost(&nodes).expect("refused");
-                assert!(why.starts_with(&format!("{says} <{part}> is lost")), "{why}");
-                assert!(why.contains("in a patch of its own"), "{why}");
+                assert!(why.starts_with(&format!("send the <{top}> in a patch of its own:")), "{why}");
+                assert!(why.contains(&format!("begins with a <{part}> {says}")), "{why}");
             }
         }
         for head in TEMPLATE_HEAD {
             let block = Node::Block { head: Vec::new(), bodies: vec![vec![table()]], arms: false };
             let why = lost(&[el(head, vec![]), el("TR", vec![]), el("p", vec![]), block]).expect("refused");
-            assert!(why.starts_with("<table> after <tr>"), "{head}: {why}");
+            assert!(why.starts_with("send the <table> in a patch of its own: a patch that begins with a <tr>"), "{head}: {why}");
         }
 
         // Markup a browser may keep as written, or whose first element is not known, compiles:

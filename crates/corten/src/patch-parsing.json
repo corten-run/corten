@@ -4363,6 +4363,2255 @@
         "form#f"
       ],
       "lost": null
+    },
+    {
+      "html": "<caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "caption#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "caption#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "caption#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "colgroup#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "colgroup#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "colgroup#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tbody#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tbody#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tbody#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "td#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "td#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "td#a",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tfoot#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tfoot#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tfoot#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "th#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "th#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "th#a",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "thead#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "thead#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "thead#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tr#a(td)",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tr#a(td)",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tr#a(td)",
+        "label#b(span)",
+        "tr(td)"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "caption#h",
+        "caption#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "caption#h",
+        "caption#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "caption#h",
+        "caption#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "caption#h",
+        "colgroup#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "caption#h",
+        "colgroup#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "caption#h",
+        "colgroup#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "caption#h",
+        "tbody#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "caption#h",
+        "tbody#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "caption#h",
+        "tbody#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td#a,form#b))",
+        "p"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "caption#h",
+        "tfoot#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "caption#h",
+        "tfoot#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "caption#h",
+        "tfoot#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(th#a,form#b))",
+        "p"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(th#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(th#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "caption#h",
+        "thead#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "caption#h",
+        "thead#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "caption#h",
+        "thead#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr#a(td),form#b)",
+        "p"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr#a(td),form#b)",
+        "label(span(input))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr#a(td))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<col id=\"h\"><caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<td id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<td id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<td id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<th id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<th id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<th id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<tr id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<tr id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<tr id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "colgroup#h",
+        "caption#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "colgroup#h",
+        "caption#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "colgroup#h",
+        "caption#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "colgroup#h",
+        "colgroup#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "colgroup#h",
+        "colgroup#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "colgroup#h",
+        "colgroup#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "colgroup#h",
+        "tbody#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "colgroup#h",
+        "tbody#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "colgroup#h",
+        "tbody#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td#a,form#b))",
+        "p"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "colgroup#h",
+        "tfoot#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "colgroup#h",
+        "tfoot#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "colgroup#h",
+        "tfoot#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(th#a,form#b))",
+        "p"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(th#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(th#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "colgroup#h",
+        "thead#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "colgroup#h",
+        "thead#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "colgroup#h",
+        "thead#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr#a(td),form#b)",
+        "p"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr#a(td),form#b)",
+        "label(span(input))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr#a(td))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tbody#h",
+        "caption#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tbody#h",
+        "caption#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tbody#h",
+        "caption#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tbody#h",
+        "colgroup#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tbody#h",
+        "colgroup#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tbody#h",
+        "colgroup#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tbody#h",
+        "tbody#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tbody#h",
+        "tbody#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tbody#h",
+        "tbody#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td#a,form#b))",
+        "p"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tbody#h",
+        "tfoot#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tbody#h",
+        "tfoot#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tbody#h",
+        "tfoot#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(th#a,form#b))",
+        "p"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(th#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(th#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tbody#h",
+        "thead#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tbody#h",
+        "thead#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tbody#h",
+        "thead#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr#a(td),form#b)",
+        "p"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr#a(td),form#b)",
+        "label(span(input))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr#a(td))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<td id=\"h\">1</td><caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "td#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "td#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "td#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "td#h",
+        "td#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<td id=\"h\">1</td><td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "td#h",
+        "td#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<td id=\"h\">1</td><td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "td#h",
+        "td#a",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<td id=\"h\">1</td><tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "td#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "td#h",
+        "th#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<td id=\"h\">1</td><th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "td#h",
+        "th#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<td id=\"h\">1</td><th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "td#h",
+        "th#a",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<td id=\"h\">1</td><thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "td#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "td#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "td#h",
+        "td",
+        "form#b",
+        "p"
+      ],
+      "lost": "<tr id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "td#h",
+        "td",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<tr id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "td#h",
+        "td",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<tr id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tfoot#h",
+        "caption#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tfoot#h",
+        "caption#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tfoot#h",
+        "caption#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tfoot#h",
+        "colgroup#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tfoot#h",
+        "colgroup#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tfoot#h",
+        "colgroup#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tfoot#h",
+        "tbody#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tfoot#h",
+        "tbody#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tfoot#h",
+        "tbody#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td#a,form#b))",
+        "p"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tfoot#h",
+        "tfoot#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tfoot#h",
+        "tfoot#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tfoot#h",
+        "tfoot#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(th#a,form#b))",
+        "p"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(th#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(th#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tfoot#h",
+        "thead#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tfoot#h",
+        "thead#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tfoot#h",
+        "thead#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr#a(td),form#b)",
+        "p"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr#a(td),form#b)",
+        "label(span(input))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr#a(td))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<th id=\"h\">1</th><caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "th#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "th#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "th#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "th#h",
+        "td#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<th id=\"h\">1</th><td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "th#h",
+        "td#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<th id=\"h\">1</th><td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "th#h",
+        "td#a",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<th id=\"h\">1</th><tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "th#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "th#h",
+        "th#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<th id=\"h\">1</th><th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "th#h",
+        "th#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<th id=\"h\">1</th><th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "th#h",
+        "th#a",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<th id=\"h\">1</th><thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "p"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "th#h",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "th#h",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "th#h",
+        "td",
+        "form#b",
+        "p"
+      ],
+      "lost": "<tr id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "th#h",
+        "td",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<tr id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "th#h",
+        "td",
+        "label#b(span)",
+        "td"
+      ],
+      "lost": "<tr id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "thead#h",
+        "caption#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "thead#h",
+        "caption#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "thead#h",
+        "caption#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "thead#h",
+        "colgroup#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "thead#h",
+        "colgroup#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "thead#h",
+        "colgroup#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "thead#h",
+        "tbody#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "thead#h",
+        "tbody#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "thead#h",
+        "tbody#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td#a,form#b))",
+        "p"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "thead#h",
+        "tfoot#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "thead#h",
+        "tfoot#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "thead#h",
+        "tfoot#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(th#a,form#b))",
+        "p"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(th#a,form#b))",
+        "label(span(input))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(th#a))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "thead#h",
+        "thead#a",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "thead#h",
+        "thead#a",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "thead#h",
+        "thead#a",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr#a(td),form#b)",
+        "p"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr#a(td),form#b)",
+        "label(span(input))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr#a(td))",
+        "label#b(span)",
+        "tbody(tr(td))"
+      ],
+      "lost": "<tr id=\"a\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><caption id=\"a\">x</caption><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "p"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><caption id=\"a\">x</caption><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><caption id=\"a\">x</caption><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tr#h(td)",
+        "label#b(span)",
+        "tr(td)"
+      ],
+      "lost": "<caption id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><colgroup id=\"a\"></colgroup><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "p"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><colgroup id=\"a\"></colgroup><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><colgroup id=\"a\"></colgroup><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tr#h(td)",
+        "label#b(span)",
+        "tr(td)"
+      ],
+      "lost": "<colgroup id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><tbody id=\"a\"></tbody><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "p"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><tbody id=\"a\"></tbody><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><tbody id=\"a\"></tbody><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tr#h(td)",
+        "label#b(span)",
+        "tr(td)"
+      ],
+      "lost": "<tbody id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><td id=\"a\">2</td><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td#a,form#b)",
+        "p"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tr> the browser adds"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><td id=\"a\">2</td><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td#a,form#b)",
+        "label(span(input))"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tr> the browser adds"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><td id=\"a\">2</td><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td#a)",
+        "label#b(span)",
+        "tr(td)"
+      ],
+      "lost": "<td id=\"a\"> is put in a <tr> the browser adds"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><tfoot id=\"a\"></tfoot><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "p"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><tfoot id=\"a\"></tfoot><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><tfoot id=\"a\"></tfoot><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tr#h(td)",
+        "label#b(span)",
+        "tr(td)"
+      ],
+      "lost": "<tfoot id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><th id=\"a\">2</th><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(th#a,form#b)",
+        "p"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tr> the browser adds"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><th id=\"a\">2</th><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(th#a,form#b)",
+        "label(span(input))"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tr> the browser adds"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><th id=\"a\">2</th><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(th#a)",
+        "label#b(span)",
+        "tr(td)"
+      ],
+      "lost": "<th id=\"a\"> is put in a <tr> the browser adds"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><thead id=\"a\"></thead><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "p"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><thead id=\"a\"></thead><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tr#h(td)",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><thead id=\"a\"></thead><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tr#h(td)",
+        "label#b(span)",
+        "tr(td)"
+      ],
+      "lost": "<thead id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><tr id=\"a\"><td>2</td></tr><form id=\"b\"><p>x</p></form>",
+      "parsed": [
+        "tr#h(td)",
+        "tr#a(td)",
+        "form#b",
+        "p"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><tr id=\"a\"><td>2</td></tr><form id=\"b\"><label><span><input name=\"q\"></span></label></form>",
+      "parsed": [
+        "tr#h(td)",
+        "tr#a(td)",
+        "form#b",
+        "label(span(input))"
+      ],
+      "lost": "<form id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><tr id=\"a\"><td>2</td></tr><label id=\"b\"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>",
+      "parsed": [
+        "tr#h(td)",
+        "tr#a(td)",
+        "label#b(span)",
+        "tr(td)"
+      ],
+      "lost": "<table> in <label id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<p id=\"msg\">saved</p><tr id=\"row-1\"><td><svg><title>Delete</title><path d=\"M0 0\"/></svg></td></tr>",
+      "parsed": [
+        "p#msg",
+        "svg(title,path)"
+      ],
+      "lost": "<tr id=\"row-1\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"row-1\"><td><svg><title>Delete</title><path d=\"M0 0\"/></svg></td></tr><tr id=\"row-2\"><td>2</td></tr>",
+      "parsed": [
+        "tr#row-1(td(svg(title,path)))",
+        "tr#row-2(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<colgroup id=\"a\"><col></colgroup><link rel=\"stylesheet\" href=\"/s.css\" data-corten-style>",
+      "parsed": [
+        "colgroup#a(col)",
+        "link"
+      ],
+      "lost": null
     }
   ]
 }

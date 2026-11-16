@@ -4233,7 +4233,9 @@ rules something out.
     its `<form>` is put in empty; and in an `<svg>` or a `<math>`, the `<table>`, the element
     after a `<col>` or the element HTML's wherever it lands in or around the `<form>` closes the
     drawing or the formula. A test in `corten` (`a_shape_html_refuses_is_lost_after_each_table_part`)
-    holds each shape, written first and after each of the nine table parts, to
+    holds each shape, and each kind of the third (a `<table>` at the top level, in a `<div>` and
+    in a `<label>`'s `<span>`; a `<form>` holding a `<div>`, a `<p>` or a `<label>`'s `<span>`,
+    and one in a `<div>`), written first and after each of the nine table parts, to
     `crates/corten/src/patch-parsing.json`, whose parses `scripts/smoke.mjs` checks in Chromium,
     Firefox and WebKit; the other places were probed once (Last checked). No other shape of the
     kinds these come from is lost wherever it is written: after a first `<tr>`, `<td>`, `<tbody>`
@@ -4750,6 +4752,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
    and the browser loses the part, so a mix that only some data draws is found only by a debug
    render that draws it
    ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
+   That check refuses a patch from an area's handler that begins with a `<col>` even where the page
+   already has the area's stylesheet, whose link Corten writes after the patch's elements and the
+   parse drops: the server does not know what the page linked, and on a page without it the patch
+   would land unstyled, so it is refused on both, and a `<colgroup>` with an id keeps the link.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating

@@ -289,6 +289,127 @@ pub(crate) const PATCH_PARSE_HELP: &str = "The runtime parses a patch as a <temp
 #[cfg(any(debug_assertions, test))]
 const TABLE_PARTS: &[&str] = &["caption", "col", "colgroup", "tbody", "td", "tfoot", "th", "thead", "tr"];
 
+/// The SVG elements whose children are HTML's: the HTML standard's HTML integration points in SVG.
+/// The same list as `SVG_HTML_POINTS` in `crates/corten-macros/src/html.rs`, which
+/// `the_macro_s_patch_lists_are_the_check_s` holds it to.
+#[cfg(any(debug_assertions, test))]
+const SVG_HTML_POINTS: &[&str] = &["foreignObject", "desc", "title"];
+
+/// The MathML elements whose children are HTML's but a `<mglyph>` and a `<malignmark>`: the HTML
+/// standard's MathML text integration points. The same list as `MATH_HTML_POINTS` in
+/// `crates/corten-macros/src/html.rs`.
+#[cfg(any(debug_assertions, test))]
+const MATH_HTML_POINTS: &[&str] = &["mi", "mo", "mn", "ms", "mtext"];
+
+/// The start tags the HTML standard's rules for foreign content take out of an `<svg>` or a
+/// `<math>` (and a `<font>` with a `color`, `face` or `size`). The same list as `BREAKOUT` in
+/// `crates/corten-macros/src/html.rs`, which refuses one written straight in either.
+#[cfg(any(debug_assertions, test))]
+const BREAKOUT: &[&str] = &[
+    "b",
+    "big",
+    "blockquote",
+    "body",
+    "br",
+    "center",
+    "code",
+    "dd",
+    "div",
+    "dl",
+    "dt",
+    "em",
+    "embed",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "hr",
+    "i",
+    "img",
+    "li",
+    "listing",
+    "menu",
+    "meta",
+    "nobr",
+    "ol",
+    "p",
+    "pre",
+    "ruby",
+    "s",
+    "small",
+    "span",
+    "strong",
+    "strike",
+    "sub",
+    "sup",
+    "table",
+    "tt",
+    "u",
+    "ul",
+    "var",
+];
+
+/// How the start tags in an open element are read, as the HTML standard's tree construction
+/// dispatcher reads them, as far as a patch's foreign content needs.
+#[cfg(any(debug_assertions, test))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Within {
+    /// As HTML's: outside foreign content, and in an SVG or MathML HTML integration point.
+    Html,
+    /// As HTML's but a `<mglyph>` and a `<malignmark>`: in a MathML text integration point.
+    MathText,
+    /// As SVG's.
+    Svg,
+    /// As MathML's.
+    Math,
+    /// As MathML's but an `<svg>`: in an `<annotation-xml>` that is not an HTML integration point.
+    AnnotationXml,
+}
+
+/// An element open in a patch: its name, whether it is foreign content's (an SVG or MathML
+/// element, in which a CDATA section is one and a `<title>` or `<style>` holds elements), and how
+/// what it holds is read.
+#[cfg(any(debug_assertions, test))]
+struct Open {
+    name: String,
+    foreign: bool,
+    within: Within,
+}
+
+/// Where the element of `tag`, written in an element whose content is read `within`, lands: whether
+/// it is foreign content's and how what it holds is read. `None` for an element HTML's wherever it
+/// lands written straight in foreign content (`BREAKOUT`), which the browser takes out of it, closing
+/// the elements around it: not followed here, and `html!` refuses it.
+#[cfg(any(debug_assertions, test))]
+fn placed(within: Within, tag: &Tag) -> Option<(bool, Within)> {
+    let is = |name: &str| tag.name.eq_ignore_ascii_case(name);
+    let any = |list: &[&str]| list.iter().any(|name| is(name));
+    let breaks_out = any(BREAKOUT) || (is("font") && ["color", "face", "size"].iter().any(|a| tag.attr(a).is_some()));
+    match within {
+        Within::Html if is("svg") => Some((true, Within::Svg)),
+        Within::Html if is("math") => Some((true, Within::Math)),
+        Within::Html => Some((false, Within::Html)),
+        Within::MathText if is("mglyph") || is("malignmark") => Some((true, Within::Math)),
+        Within::MathText => placed(Within::Html, tag),
+        _ if breaks_out => None,
+        Within::Svg if any(SVG_HTML_POINTS) => Some((true, Within::Html)),
+        Within::Svg => Some((true, Within::Svg)),
+        Within::AnnotationXml if is("svg") => Some((true, Within::Svg)),
+        Within::Math | Within::AnnotationXml if any(MATH_HTML_POINTS) => Some((true, Within::MathText)),
+        Within::Math | Within::AnnotationXml if is("annotation-xml") => {
+            // An HTML integration point by its first `encoding`.
+            let html = tag.attr("encoding").is_some_and(|encoding| {
+                encoding.eq_ignore_ascii_case("text/html") || encoding.eq_ignore_ascii_case("application/xhtml+xml")
+            });
+            Some((true, if html { Within::Html } else { Within::AnnotationXml }))
+        }
+        Within::Math | Within::AnnotationXml => Some((true, Within::Math)),
+    }
+}
+
 /// Start tags the "in template" insertion mode reads as a head's: they do not decide how the rest
 /// is read (but [`DECIDING_HEAD`]'s, in Chromium and WebKit), and every mode keeps them but a
 /// `<col>`'s, which keeps only `<template>`. The same list as `TEMPLATE_HEAD` in
@@ -332,8 +453,11 @@ enum Reading {
 /// and Firefox does not), so a patch with one is read both ways. Describes the first loss, for an
 /// error; [`PATCH_PARSE_HELP`] says why and what to do. Reads markup as `html!` writes it, each
 /// element closed by its own end tag, in one pass for each way it is read
-/// ([`template_problem`]); what an `<svg>` or `<math>` holds, and what follows a script whose
-/// text could hide its end tag, are not read, so those are misses, never refusals. Checked in
+/// ([`template_problem`]). What an `<svg>` or `<math>` holds is read by foreign content's rules
+/// ([`placed`]: a `<title>` or `<style>` there holds elements, a CDATA section is text) for where
+/// it ends, and no loss inside one is reported; an element HTML's wherever it lands written straight
+/// in one, which `html!` refuses, and what follows a script whose text could hide its end tag, are
+/// not read: those are misses, never refusals. Checked in
 /// debug builds only; `scripts/smoke.mjs` checks the browsers against `patch-parsing.json`, the
 /// cases `a_patch_s_parse_problems_are_what_browsers_parse` holds this to.
 #[cfg(any(debug_assertions, test))]
@@ -359,10 +483,11 @@ struct Read {
     /// The first of [`DECIDING_HEAD`] read before the first element that decides, here or in a
     /// `<template>`'s content.
     headed: Option<&'static str>,
-    /// Whether each element in it but a void one is closed by its own end tag, in order, with no
-    /// CDATA section, every comment ended by `-->`, and no comment, `<style>` or `<script>` in an
-    /// `<svg>` or `<math>`. Where one is not (an `<li>` closed by its list's end tag, a `<p>` by the
-    /// next `<p>`), the browser closes it where its rules say, which this does not follow, so
+    /// Whether each element in it but a void one is closed by its own end tag, in order, with a
+    /// CDATA section only in an SVG or MathML element, every comment ended by `-->`, and no element
+    /// HTML's wherever it lands written straight in an `<svg>` or `<math>`. Where one is not (an
+    /// `<li>` closed by its list's end tag, a `<p>` by the next `<p>`, a `<p>` the browser takes out
+    /// of an `<svg>`), the browser closes it where its rules say, which this does not follow, so
     /// nothing is reported.
     readable: bool,
 }
@@ -392,8 +517,8 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
     let mut headed = None;
     // The first loss: once one is found, the rest is read only for whether it is closed.
     let mut problem: Option<String> = None;
-    // The elements open, by name, each closed by its own end tag.
-    let mut open: Vec<String> = Vec::new();
+    // The elements open, each closed by its own end tag.
+    let mut open: Vec<Open> = Vec::new();
     // A top-level element other than a table part or a head's, open in a table's reading: the
     // browser reads what it holds by the table's rules, so a table part in it leaves it.
     let mut watched: Option<&str> = None;
@@ -401,7 +526,7 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
     // content starts. Its content is read on its own, when it closes, so nothing in it is read here.
     let mut template: Option<(usize, usize)> = None;
     // How many elements are open around an open `<svg>` or `<math>`: what it holds is foreign
-    // content, read by other rules, which are not followed here.
+    // content, read by its own rules ([`placed`]) for where it ends, and no loss in it is reported.
     let mut foreign: Option<usize> = None;
     let mut i = 0;
     while i < bytes.len() {
@@ -410,30 +535,30 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             continue;
         }
         if html[i..].starts_with("<!--") {
-            // A comment ended by `-->` alone: one written `<!-->`, `<!--->` or with `--!>` in it ends
-            // elsewhere, and one in foreign content is not followed.
+            // A comment ended by `-->` alone, in foreign content as outside it: one written `<!-->`,
+            // `<!--->` or with `--!>` in it ends elsewhere.
             let body = i + 4;
             let end = html[body..].find("-->").map_or(bytes.len(), |n| body + n);
-            if foreign.is_some()
-                || html[body..].starts_with('>')
-                || html[body..].starts_with("->")
-                || html[body..end].contains("--!>")
-            {
+            if html[body..].starts_with('>') || html[body..].starts_with("->") || html[body..end].contains("--!>") {
                 return unread(headed);
             }
             i = (end + 3).min(bytes.len());
             continue;
         }
-        // A CDATA section, which an `<svg>` or `<math>` reads as text up to `]]>` and HTML as a
-        // comment up to `>`: not followed.
+        // A CDATA section, which an SVG or MathML element holds as text up to `]]>`, and HTML as a
+        // comment up to `>`, which is not followed.
         if html[i..].starts_with("<![CDATA[") {
-            return unread(headed);
+            match html[i..].find("]]>").filter(|_| open.last().is_some_and(|last| last.foreign)) {
+                Some(n) => i += n + 3,
+                None => return unread(headed),
+            }
+            continue;
         }
         match bytes.get(i + 1) {
             Some(b'/') => {
                 let at = i;
                 let end = html[i..].find('>').map_or(bytes.len(), |n| i + n);
-                if !open.last().is_some_and(|last| last.eq_ignore_ascii_case(html[i + 2..end].trim_end())) {
+                if !open.last().is_some_and(|last| last.name.eq_ignore_ascii_case(html[i + 2..end].trim_end())) {
                     return unread(headed);
                 }
                 open.pop();
@@ -467,12 +592,16 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         }
         let tag = start_tag(html, i);
         i = tag.end;
+        let Some((foreign_element, within)) = placed(open.last().map_or(Within::Html, |last| last.within), &tag) else {
+            return unread(headed);
+        };
         let name = tag.name.as_str();
         let written = &html[tag.start..tag.end];
         let part = TABLE_PARTS.contains(&name);
         let head = HEAD_TAGS.contains(&name);
         let holds = name == "form" && holds_shown(html, i);
-        let opens = !VOID.contains(&name) && !tag.self_closing;
+        // It ends at `/>`, and an HTML one with no end tag at once.
+        let opens = !tag.self_closing && (foreign_element || !VOID.contains(&name));
         if problem.is_some() {
             // Read on only for whether it is closed.
         } else if open.is_empty() {
@@ -540,11 +669,9 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                 problem = Some(format!("{} in {} loses what it holds{}", shown(written), shown(top), since(first)));
             }
         }
-        if RAW_TEXT.contains(&name) {
-            if foreign.is_some() {
-                return unread(headed);
-            }
-            // Its text, up to its end tag: nothing in it is markup.
+        // An HTML element's text, up to its end tag: nothing in it is markup. An SVG or MathML
+        // `<title>`, `<style>` or `<script>` holds elements.
+        if !foreign_element && RAW_TEXT.contains(&name) {
             let end = raw_text_end(html, i, name);
             // A `<script>` written after `<!--` in a script's text can make the tokenizer read the
             // next `</script>` as text (its double-escaped state), which is not followed here: what
@@ -560,10 +687,10 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             if name == "template" && template.is_none() && foreign.is_none() {
                 template = Some((open.len(), i));
             }
-            if (name == "svg" || name == "math") && foreign.is_none() && template.is_none() {
+            if foreign_element && foreign.is_none() && template.is_none() {
                 foreign = Some(open.len());
             }
-            open.push(tag.name);
+            open.push(Open { name: tag.name, foreign: foreign_element, within });
         }
     }
     Read { problem, headed, readable: open.is_empty() }
@@ -737,7 +864,7 @@ mod tests {
                 r#"<tr id="r"></tr><svg id="s"><style><!--</style></svg><table id="t"></table><svg id="s2"><style>--></style></svg>"#
             ),
             None,
-            "an <svg>'s <style> holds markup: not read"
+            "an <svg>'s <style> holds markup, here a comment that hides the <table>"
         );
         assert_eq!(
             patch_parse_problem(r#"<!-- --!><tr id="a"></tr><!-- --><div id="b"></div><tr id="c"></tr>"#),
@@ -747,7 +874,42 @@ mod tests {
         assert_eq!(
             patch_parse_problem(r#"<svg id="s"><![CDATA[></svg><tr id="r"></tr><svg id="x">]]></svg>"#),
             None,
-            "an <svg>'s CDATA section is text: not read"
+            "an <svg>'s CDATA section is text, up to ]]>"
+        );
+        // Foreign content is read for where it ends, so a loss before, around or after it is found.
+        let icon = r#"<svg><title>Delete</title><style>path { fill: red; }</style><!-- trash --><path d="M0 0"/></svg>"#;
+        assert_eq!(
+            patch_parse_problem(&format!(r#"<p id="msg">saved</p><tr id="row-1"><td>{icon}</td></tr>"#)).as_deref(),
+            Some(r#"<tr id="row-1"> is dropped, since <p id="msg"> comes first"#),
+            "a row with an icon's <svg> in it, after a <p>"
+        );
+        assert_eq!(
+            patch_parse_problem(&format!(r#"<tr id="row-1"><td>{icon}</td></tr><p id="msg">saved</p><tr id="row-2"></tr>"#)),
+            None,
+            "after a first <tr>, a <p> and a <tr> are kept, an icon's <svg> or not"
+        );
+        assert_eq!(
+            patch_parse_problem(&format!(r#"<tr id="row-1"><td>{icon}</td></tr><table id="t"></table>"#)).as_deref(),
+            Some(r#"<table id="t"> is dropped, since <tr id="row-1"> comes first"#),
+            "a loss after an <svg> is found"
+        );
+        assert_eq!(
+            patch_parse_problem(r#"<p id="m"></p><tr id="r"><td><svg><![CDATA[<x>]]><g/></svg><math><mi>x</mi><annotation-xml encoding="text/html"><style><svg></style></annotation-xml></math></td></tr>"#)
+                .as_deref(),
+            Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#),
+            "a CDATA section, a MathML text integration point and an HTML <style> in an <annotation-xml>"
+        );
+        assert_eq!(
+            patch_parse_problem(
+                r#"<tr id="r"></tr><svg id="s"><desc><style></desc></svg><table id="t"></table></style></desc></svg>"#
+            ),
+            None,
+            "an HTML <style> at an <svg>'s integration point is text up to its end tag"
+        );
+        assert_eq!(
+            patch_parse_problem(r#"<p id="m"></p><tr id="r"><td><svg><p>x</p></svg></td></tr>"#),
+            None,
+            "a <p> written straight in an <svg>, which the browser takes out of it (and html! refuses): not read"
         );
         assert_eq!(
             patch_parse_problem(r#"<tr id="r"></tr><form id="f">saved</form>"#).as_deref(),
@@ -918,7 +1080,10 @@ mod tests {
         let after_part = [
             r#"<table id="b"><tbody><tr><td>1</td></tr></tbody></table>"#,
             r#"<div id="b"><table><tbody><tr><td>1</td></tr></tbody></table></div>"#,
+            r#"<label id="b"><span><table><tbody><tr><td>1</td></tr></tbody></table></span></label>"#,
             r#"<form id="b"><div><input name="q"></div></form>"#,
+            r#"<form id="b"><p>x</p></form>"#,
+            r#"<form id="b"><label><span><input name="q"></span></label></form>"#,
             r#"<div id="b"><form><input name="q"></form></div>"#,
         ];
         for part in super::TABLE_PARTS.iter().filter(|part| **part != "col") {
@@ -941,8 +1106,8 @@ mod tests {
         }
     }
 
-    /// The lists `html!`'s refusal reads a patch's top level by are this check's: `corten-macros` has
-    /// no dependency to share them through. (Skipped outside the repository.)
+    /// The lists `html!`'s refusal reads a patch's top level and foreign content by are this check's:
+    /// `corten-macros` has no dependency to share them through. (Skipped outside the repository.)
     #[test]
     fn the_macro_s_patch_lists_are_the_check_s() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../corten-macros/src/html.rs");
@@ -954,5 +1119,8 @@ mod tests {
         };
         assert_eq!(list("TEMPLATE_HEAD"), super::HEAD_TAGS);
         assert_eq!(list("TABLE_PARTS"), super::TABLE_PARTS);
+        assert_eq!(list("SVG_HTML_POINTS"), super::SVG_HTML_POINTS);
+        assert_eq!(list("MATH_HTML_POINTS"), super::MATH_HTML_POINTS);
+        assert_eq!(list("BREAKOUT"), super::BREAKOUT);
     }
 }

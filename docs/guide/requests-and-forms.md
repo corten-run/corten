@@ -1086,9 +1086,15 @@ with one is read both ways. A debug-build test of the app that draws such a patc
 500 too. A release build sends the patch as drawn, so a mix only some data
 draws (a row in one branch of an `if`) is found only by a debug render that draws it. The check
 covers what a table's reading does to a patch as `html!` writes it, each element closed by its own
-end tag, not every way a browser's parse can differ from the markup: it does not read inside an
-`<svg>` or `<math>`, nor a patch with an end tag left out, nor what a table part holds (a `<form>`
-written straight in a `<tr>`, which a page's table takes apart too).
+end tag, not every way a browser's parse can differ from the markup. It reads what an `<svg>` or
+`<math>` holds by their own rules (a `<title>` or `<style>` there holds elements) only to find where
+it ends, so a row holding an icon with a `<title>` is checked like any other, but it reports no loss
+inside one. It does not read a patch with an end tag left out, or with an element HTML's wherever it
+lands written straight in an `<svg>` or `<math>` (which `html!` refuses), nor what a table part
+holds (a `<form>` written straight in a `<tr>`, which a page's table takes apart too). A patch that
+begins with a `<col>` from an area's handler is refused even on a page that already has the area's
+stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know
+what the page linked, so send the `<col>`s in a `<colgroup>` with an id.
 
 ## Work that must not run twice at once
 
