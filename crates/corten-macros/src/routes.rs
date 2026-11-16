@@ -537,8 +537,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 impl ::corten::route::__private::ScreenData<__A1> for __A0 {}
                 #[automatically_derived]
                 impl ::corten::route::__private::RouteData for __A0 {
-                    const DATA: ::core::option::Option<fn() -> ::core::any::TypeId> =
-                        ::core::option::Option::Some(::core::any::TypeId::of::<__A1> as fn() -> ::core::any::TypeId);
+                    type Data = ::corten::route::HasData<__A1>;
                 }",
                 &[ty, data.clone()],
             ));
@@ -1460,8 +1459,8 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
     if !serves.actions.is_empty() {
         marked.extend(q(", __actions", &[]));
     }
-    // `data = SetListing`, likewise: the route's `Route::DATA`, which `Area::route` and
-    // `Api::route` compare the `get` they are given with. The type is named where the routes
+    // `data = SetListing`, likewise: the route's `Route::Data`, which `Area::route` and
+    // `Api::route` require the `get` they are given to answer. The type is named where the routes
     // module is declared, in `RouteData` (below), since the module may be declared in a function,
     // whose items no path from inside it reaches.
     if serves.data.is_some() {

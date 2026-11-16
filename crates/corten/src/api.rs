@@ -112,7 +112,7 @@ impl<P: Prefix> Api<P> {
     /// document at `R`, made into JSON once the router knows the API's settings. Not a public API.
     #[cfg(feature = "types")]
     #[doc(hidden)]
-    pub fn __openapi<R: TypedRoute>(mut self, document: crate::openapi::Document) -> Self {
+    pub fn __openapi<R: TypedRoute<Data = crate::route::NoData>>(mut self, document: crate::openapi::Document) -> Self {
         assert!(self.openapi.is_none(), "corten: an API has one OpenAPI document");
         let served = crate::openapi::Served::new(document);
         self.openapi = Some(served.clone());
@@ -166,6 +166,7 @@ impl<P: Prefix> Api<P> {
     ///
     /// struct Evil;
     /// impl corten::Route for Evil {
+    ///     type Data = corten::route::NoData;
     ///     const PATH: &'static str = "//evil.example/{x}";
     ///     fn write_href(&self, out: &mut String, _: bool) {
     ///         out.push_str("//evil.example/x");
@@ -187,6 +188,7 @@ impl<P: Prefix> Api<P> {
     ///
     /// struct Item;
     /// impl corten::Route for Item {
+    ///     type Data = corten::route::NoData;
     ///     const PATH: &'static str = "/apis/a/../b";
     ///     fn write_href(&self, out: &mut String, _: bool) {
     ///         out.push_str("/apis/b");
@@ -196,7 +198,10 @@ impl<P: Prefix> Api<P> {
     /// let app = App::new(Routes::new()).api::<ApiRoot>(|api| api.route::<Item>(get(|| async { "item" })));
     /// # let _ = app.router();
     /// ```
-    pub fn route<R: TypedRoute>(mut self, methods: crate::Methods<(), impl crate::answer::AnswerKind>) -> Self {
+    pub fn route<R: TypedRoute>(
+        mut self,
+        methods: crate::Methods<(), impl crate::answer::AnswerKind + crate::route::__private::DataMatches<R::Data>>,
+    ) -> Self {
         crate::route::mounted_with::<R, _, _>(&methods);
         self.place::<R>();
         self.routes = crate::route::written::<R, ()>(self.routes, methods.0);

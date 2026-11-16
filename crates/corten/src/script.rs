@@ -555,42 +555,40 @@
 //! # fn main() { let _ = url::router; }
 //! ```
 //!
+//! A `SetListing` the script declares itself (`local_reader.js`:
+//! `/** @typedef {{ name: string, products: string[] }} SetListing */`), where `set_reader.js`
+//! names the one `corten::types` writes, for the same route as above:
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! pub struct SetListing { name: String, products: Vec<String> }
+//!
+//! #[corten::routes]
+//! pub mod url {
+//!     #[route("/sets/{set}", get = set, data = SetListing)]
+//!     pub struct Set<'a> { pub set: &'a str }
+//! }
+//!
+//! async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
+//!     let listing = SetListing { name: at.set.to_string(), products: Vec::new() };
+//!     req.screen(&listing, html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
+//! }
+//!
+//! // local_reader.js: @typedef {{ name: string, products: string[] }} SetListing
+//! #[component(js)]
+//! pub fn LocalReader() -> impl Render {
+//!     let out = refs();
+//!     html! { <output ref={out} on:connect={js::show(out, url::Set { set: "m21" }, signal)}></output> }
+//! }
+//! # fn main() { let _ = url::router; }
+//! ```
+//!
 //! A screen's route says `data` alone: its `get` answers a screen, not a patch the runtime
-//! applies (`patches`) nor a feed's rows (`rows`), so either beside it does not compile:
-//!
-//! ```compile_fail
-//! use corten::prelude::*;
-//!
-//! pub struct SetListing;
-//!
-//! #[corten::routes]
-//! pub mod url {
-//!     #[route("/sets", get = sets, data = SetListing, patches)]
-//!     pub struct Sets;
-//! }
-//!
-//! async fn sets(req: Req) -> HtmlResult<Patches> {
-//!     req.patch(html! {})
-//! }
-//! # fn main() { let _ = url::router; }
-//! ```
-//!
-//! ```compile_fail
-//! use corten::prelude::*;
-//!
-//! pub struct SetListing;
-//!
-//! #[corten::routes]
-//! pub mod url {
-//!     #[route("/sets", get = sets, data = SetListing, rows = SetListing)]
-//!     pub struct Sets;
-//! }
-//!
-//! async fn sets() -> &'static str {
-//!     "sets"
-//! }
-//! # fn main() { let _ = url::router; }
-//! ```
+//! applies (`patches`) nor a feed's rows (`rows`), so the routes module refuses either beside
+//! it, saying so.
 //!
 //! A ref on an element the handler does not take (`enable` takes a `<button>`):
 //!

@@ -956,7 +956,12 @@ async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::S
 
 // In another page's markup: a link per set it can switch to. Without JavaScript it opens the
 // set's page; with it, its click reads the set's data and draws it here, and the address stays.
-<a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>{&s.name}</a>
+// `data-no-prefetch`, or a hover fetches the set's page, which the click then does not use.
+<nav data-no-prefetch>
+    for s in &sets {
+        <a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>{&s.name}</a>
+    }
+</nav>
 ```
 
 ```js
@@ -1014,9 +1019,7 @@ at the call. In the script a plain string is not a
 `ScreenUrl`, so `read("/sets/m21")` fails `tsc`, and so does a field the data does not have. A
 route says `data` only in its routes module, which mounts it with the `get` it checked; the same
 route mounted again by hand (`Area::route`, `Api::route`) takes only a `get` that answers a
-screen of its data, and one that answers a page or other data stops the app when it is built
-(the check compares the two types' `TypeId`s, which the Rust version Corten supports cannot do
-while the crate compiles). A response a handler replaces through `DerefMut` or
+screen of its data, and one that answers a page or other data does not compile. A response a handler replaces through `DerefMut` or
 middleware answers instead is not checked either. The data must be a type without a borrowed lifetime (`SetListing`,
 not `SetListing<'a>`), since the handler's return type names it.
 
@@ -1026,7 +1029,10 @@ kept and an unchanged answer is a `304` with no body; a `Public` route's `max-ag
 within it make no request at all. The page and its data share the URL, and `Vary: corten, accept`
 keeps a cached page from answering a read. The browser keeps one answer per URL, so the 304 holds
 while nothing else fetched that URL in between: once the page itself is fetched there again (a
-navigation back to it), the next read gets the whole answer. A read rejects with a `ReadError` (from `corten/read`)
+navigation back to it, or the runtime's hover prefetch of a link to it), the next read gets the
+whole answer. So a link whose click reads, as `switchTo`'s do, sits under `data-no-prefetch`, as
+a sorting table's `<thead>` does ([UI guide](ui.md)): a hover would otherwise have the server
+draw the page, which the click does not use, and replace the read's cached answer. A read rejects with a `ReadError` (from `corten/read`)
 when the answer is not a success (`status` is its status: a 404, a 503, or the 401 that Corten's
 own sign-in refusal, a `Caller` or `Refused::sign_in`, answers a data client where a browser gets
 a redirect) or when there is none it can use (`status` 0, with the error as `cause`: `fetch`'s

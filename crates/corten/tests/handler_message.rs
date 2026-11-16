@@ -38,11 +38,17 @@ fn build(args: &str) -> (bool, String) {
 /// building at once in one target directory do not write each other's binary), whose `main.rs` is
 /// `main`.
 fn build_main(dir: &str, main: &str) -> (bool, String) {
+    build_main_with(dir, main, &[])
+}
+
+/// `build_main` with Corten's `features` on.
+fn build_main_with(dir: &str, main: &str, features: &[&str]) -> (bool, String) {
     let corten = Path::new(env!("CARGO_MANIFEST_DIR")).to_string_lossy().replace('\\', "/");
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(dir);
+    let features = features.iter().map(|feature| format!("\"{feature}\"")).collect::<Vec<_>>().join(", ");
     write(
         &root.join("Cargo.toml"),
-        &format!("[package]\nname = \"{dir}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncorten = {{ package = \"corten-run\", path = \"{corten}\" }}\n\n[workspace]\n"),
+        &format!("[package]\nname = \"{dir}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncorten = {{ package = \"corten-run\", path = \"{corten}\", features = [{features}] }}\n\n[workspace]\n"),
     );
     std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"), root.join("Cargo.lock")).unwrap();
     write(&root.join("src/main.rs"), main);
@@ -194,6 +200,41 @@ fn a_patches_route_mounted_by_hand_with_a_page_handler_says_why() {
     }
     let (ok, stderr) = build_main("patches-mount-message", &app("HtmlResult<Patches>", "get"));
     assert!(ok, "the same mount with HtmlResult<Patches>: {stderr}");
+}
+
+/// A `data` route mounted by hand (`Area::route`) with a `get` handler that answers a page, or
+/// a screen of other data, does not compile and says what it takes, at the mount; with a screen of
+/// its data it builds (#1399).
+#[test]
+fn a_data_route_mounted_by_hand_with_a_page_handler_says_why() {
+    let app = |answer: &str, body: &str| {
+        format!(
+            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[derive(ToJson)]\npub struct Listing {{\n    name: String,\n}}\n\n#[derive(ToJson)]\npub struct Order {{\n    id: u32,\n}}\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/sets\", get = sets, data = Listing)]\n    pub struct Sets;\n}}\n\nfn doc() -> impl Document {{\n    html! {{ <html><head><title>\"Sets\"</title><Corten /></head><body><main>\"Sets\"</main></body></html> }}\n}}\n\nasync fn sets(req: Req) -> HtmlResult<corten::Screen<Listing>> {{\n    req.screen(&Listing {{ name: \"All\".into() }}, doc())\n}}\n\nasync fn mounted(req: Req) -> {answer} {{\n    {body}\n}}\n\nfn main() {{\n    let _ = sets;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>(get(mounted))).router();\n}}\n"
+        )
+    };
+    for (answer, body, kind) in [
+        ("HtmlResult", "req.page(doc())", "AnyAnswer"),
+        ("HtmlResult<corten::Screen<Order>>", "req.screen(&Order { id: 7 }, doc())", "Screen<Order>"),
+    ] {
+        let (ok, stderr) = build_main_with("data-mount-message", &app(answer, body), &["json"]);
+        assert!(!ok, "a data route mounted with get({answer}) built");
+        assert!(stderr.contains("error[E0277]"), "an error when the crate compiles: {stderr}");
+        assert!(
+            stderr.contains(
+                "the route says `data`, and the handlers it is mounted with have no get that answers a screen of its data"
+            ),
+            "Corten's message: {stderr}"
+        );
+        assert!(stderr.contains(kind), "the kind its get answers as: {stderr}");
+        // `get(mounted)` in `admin.route::<url::Sets>(..)`, on the last line of `main`.
+        assert!(stderr.contains("admin.route::<url::Sets>"), "the error points at the mount: {stderr}");
+    }
+    let (ok, stderr) = build_main_with(
+        "data-mount-message",
+        &app("HtmlResult<corten::Screen<Listing>>", "req.screen(&Listing { name: \"Mine\".into() }, doc())"),
+        &["json"],
+    );
+    assert!(ok, "the same mount with a screen of its data: {stderr}");
 }
 
 /// `patches` where it cannot hold: a route with no `get`, an `unstaged` one, one with a type

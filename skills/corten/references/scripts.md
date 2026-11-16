@@ -290,8 +290,10 @@ async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::S
     let listing = SetListing::read(at.set).await?; // a ToJson, added with Types::add
     req.screen(&listing, set_page(&req, &listing))
 }
-// another page's markup, a link that is the set's page without JavaScript (with it, the address stays):
-// <a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>
+// another page's markup, links that are the set's page without JavaScript (with it, the address stays),
+// under data-no-prefetch: a hover would have the server draw the page the click does not use, and
+// replace the read's cached answer (no 304 for the next read):
+// <nav data-no-prefetch> for s in &sets { <a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>{&s.name}</a> } </nav>
 ```
 
 ```js
@@ -334,7 +336,8 @@ start again gets its own `AbortController`, aborted by the next, as above.
 Never `fetch` a screen's JSON by hand or write its type: the route types it. `read()` returns what
 the handler gives `req.screen` to any script on this origin, with the user's cookie: only what the
 page may show. The browser keeps one answer per URL, so a read after the page itself was fetched
-again there gets the whole answer, not a 304.
+again there (a navigation, or a hover prefetch of a link to it) gets the whole answer, not a 304:
+put `data-no-prefetch` around links whose click reads.
 A patch-making method (`req.patch`, `patch_or`, `invalid`) does not compile in a handler that
 returns `HtmlResult<Screen<T>>`.
 

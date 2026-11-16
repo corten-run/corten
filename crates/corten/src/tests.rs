@@ -2091,6 +2091,7 @@ fn a_nav_link_writes_its_route_once_and_says_when_it_is_the_page() {
     // compared unescaped.
     struct Terms;
     impl crate::Route for Terms {
+        type Data = crate::route::NoData;
         const PATH: &'static str = "/terms&privacy";
         fn write_href(&self, out: &mut String, html: bool) {
             out.push_str(if html { "/terms&amp;privacy" } else { "/terms&privacy" });
@@ -2649,12 +2650,6 @@ pub struct ShownListing {
     name: &'static str,
 }
 
-#[cfg(feature = "json")]
-#[derive(crate::json::ToJson)]
-pub struct OtherListing {
-    id: u32,
-}
-
 /// The listing's page, titled.
 #[cfg(feature = "json")]
 fn listing_page(name: &str) -> impl crate::Document + '_ {
@@ -2689,16 +2684,6 @@ async fn listing_by_ref(req: Req) -> HtmlResult<crate::Screen<ShownListing>> {
     req.screen(&by_ref, listing_page(by_ref.name))
 }
 
-#[cfg(feature = "json")]
-async fn listing_page_only(req: Req) -> HtmlResult {
-    req.page(listing_page("Page"))
-}
-
-#[cfg(feature = "json")]
-async fn other_listing(req: Req) -> HtmlResult<crate::Screen<OtherListing>> {
-    req.screen(&OtherListing { id: 7 }, listing_page("Other"))
-}
-
 /// The area a route that says `data` is mounted again in, by hand.
 #[cfg(feature = "json")]
 #[derive(crate::Route)]
@@ -2719,30 +2704,6 @@ async fn a_route_that_says_data_answers_its_data_in_its_module_and_mounted_by_ha
         .test();
     let read = by_hand.get(&url_screen::Listing).header(http::header::ACCEPT, "application/json").await;
     assert_eq!(read.text(), r#"{"title":"Listing","data":{"name":"Borrowed"}}"#);
-}
-
-/// Mounted by hand (`Area::route`) with a `get` that answers a page, a route that says `data`
-/// would answer a script's read with no data: the app is not built.
-#[cfg(feature = "json")]
-#[test]
-#[should_panic(
-    expected = "says `data`, and the handlers it is mounted with have no get that answers a screen of its data (their get answers as corten::answer::AnyAnswer)"
-)]
-fn a_route_that_says_data_mounted_by_hand_with_a_page_is_refused() {
-    let _ = App::new(Routes::new())
-        .area::<ListingArea>(|area| area.route::<url_screen::Listing>(crate::route::get(listing_page_only)))
-        .router();
-}
-
-/// Nor with a `get` that answers a screen of other data, which the script's `ScreenUrl` would
-/// take for the route's.
-#[cfg(feature = "json")]
-#[test]
-#[should_panic(expected = "their get answers as corten::answer::Screen<corten::tests::OtherListing>")]
-fn a_route_that_says_data_mounted_by_hand_with_other_data_is_refused() {
-    let _ = App::new(Routes::new())
-        .area::<ListingArea>(|area| area.route::<url_screen::Listing>(crate::route::get(other_listing)))
-        .router();
 }
 
 /// `patch_or`, `invalid` and `invalid_with` answer `req.mode` as the handler leaves it, so a
@@ -4840,6 +4801,7 @@ fn a_router_conflict_names_both_routes() {
 async fn a_prefixed_hand_written_route_conflicts_in_one_order_only() {
     struct Prefixed;
     impl crate::Route for Prefixed {
+        type Data = crate::route::NoData;
         const PATH: &'static str = "/a{x}/{y}";
         fn write_href(&self, out: &mut String, _: bool) {
             out.push_str("/ax/c");
@@ -4847,6 +4809,7 @@ async fn a_prefixed_hand_written_route_conflicts_in_one_order_only() {
     }
     struct Leading;
     impl crate::Route for Leading {
+        type Data = crate::route::NoData;
         const PATH: &'static str = "/{z}/b";
         fn write_href(&self, out: &mut String, _: bool) {
             out.push_str("/q/b");
@@ -7265,6 +7228,7 @@ async fn a_path_that_starts_with_a_parameter_stays_on_this_site_and_reads_back()
     // writes, as a browser reads it: `\` is `/` to it, and it drops a tab.
     struct Evil(&'static str);
     impl crate::Route for Evil {
+        type Data = crate::route::NoData;
         const PATH: &'static str = "/evil";
         fn write_href(&self, out: &mut String, _: bool) {
             out.push_str(self.0);

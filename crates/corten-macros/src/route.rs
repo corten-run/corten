@@ -228,11 +228,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         written.extend(q("const PATCHES: bool = true;", &[]));
     }
     if data {
-        written.extend(q(
-            "const DATA: ::core::option::Option<fn() -> ::core::any::TypeId> =
-                <Self as ::corten::route::__private::RouteData>::DATA;",
-            &[],
-        ));
+        written.extend(q("type Data = <Self as ::corten::route::__private::RouteData>::Data;", &[]));
+    } else {
+        written.extend(q("type Data = ::corten::route::NoData;", &[]));
     }
     let mut out = item.impl_block(
         "::corten::route::Route",
@@ -847,7 +845,7 @@ fn is_route_query(attr: &proc_macro::Group) -> bool {
 /// unless it says otherwise), whether `#[corten::routes]` said the route says `patches`
 /// (`"/..", __patches`, right after the path), for `Route::PATCHES`, whether it said the route
 /// has actions (`__actions`, after it), whose `do` its query parameters may not be, and whether
-/// it said the route's screen answers data (`__data`, after those), for `Route::DATA`, which
+/// it said the route's screen answers data (`__data`, after those), for `Route::Data`, which
 /// reads the type from the `RouteData` impl the routes module writes where the type is in scope.
 fn route_prefetch(attrs: &[Group], span: Span) -> Result<(Vec<Group>, TokenStream, bool, bool, bool), Error> {
     let mut prefetch: TokenStream = TokenTree::Ident(Ident::new("true", span)).into();

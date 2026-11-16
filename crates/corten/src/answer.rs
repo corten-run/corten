@@ -207,10 +207,6 @@ pub trait AnswerKind: sealed::Kind {
     /// Whether the answer is a patch whenever the runtime asked.
     #[doc(hidden)]
     const PATCHES: bool;
-    /// The type of the data a screen's answer gives a data client (`Screen<T>`: `T`), which a
-    /// route that says `data = T` mounted by hand is compared with when the app is built.
-    #[doc(hidden)]
-    const DATA: Option<fn() -> std::any::TypeId> = None;
 }
 
 impl AnswerKind for AnyAnswer {
@@ -223,7 +219,6 @@ impl AnswerKind for Patches {
 
 impl<T: ?Sized + 'static> AnswerKind for Screen<T> {
     const PATCHES: bool = false;
-    const DATA: Option<fn() -> std::any::TypeId> = Some(std::any::TypeId::of::<T> as fn() -> std::any::TypeId);
 }
 
 /// The kinds an answer `A` can say it is ([`Answer::Kind`]): [`AnyAnswer`] for any answer,
