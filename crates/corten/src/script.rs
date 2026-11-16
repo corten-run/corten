@@ -455,6 +455,141 @@
 //! # fn main() { let _ = url::router; }
 //! ```
 //!
+//! A screen's URL carries the screen's data to the script the same way. The route names it
+//! (`data = SetListing`), its `get` handler answers with it (`HtmlResult<Screen<SetListing>>`,
+//! which only `req.screen` makes, given a `SetListing`), and the handler parameter that takes the
+//! route is a `ScreenUrl<SetListing>` (from `corten/read`), from which `read()` takes the data's
+//! type:
+//!
+//! ```
+//! # #[cfg(feature = "json")]
+//! # mod app {
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! pub struct SetListing { name: String, products: Vec<String> }
+//!
+//! #[corten::routes]
+//! pub mod url {
+//!     #[route("/sets/{set}", get = set, data = SetListing)]
+//!     pub struct Set<'a> { pub set: &'a str }
+//! }
+//!
+//! async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
+//!     let listing = SetListing { name: at.set.to_string(), products: Vec::new() };
+//!     req.screen(&listing, html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
+//! }
+//!
+//! // set_reader.js: @param {ScreenUrl<SetListing>} set
+//! #[component(js)]
+//! pub fn SetReader() -> impl Render {
+//!     let out = refs();
+//!     html! { <output ref={out} on:connect={js::show(out, url::Set { set: "m21" }, signal)}></output> }
+//! }
+//! # }
+//! # fn main() {
+//! # use corten::prelude::*;
+//! # #[cfg(feature = "json")]
+//! assert!(app::SetReader {}.to_html().contains(r#"set_reader.show(@out,"/sets/m21",$s)"#));
+//! # }
+//! ```
+//!
+//! A route passed for a `ScreenUrl<SetListing>` that does not say its data is a `SetListing`
+//! (`url::Home` answers a page):
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! pub struct SetListing { name: String, products: Vec<String> }
+//!
+//! #[corten::routes]
+//! pub mod url {
+//!     #[route("/", get = home)]
+//!     pub struct Home;
+//! }
+//!
+//! async fn home(req: Req) -> HtmlResult {
+//!     req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html> })
+//! }
+//!
+//! #[component(js)]
+//! fn SetReader() -> impl Render {
+//!     let out = refs();
+//!     html! { <output ref={out} on:connect={js::show(out, url::Home, signal)}></output> }
+//! }
+//! # fn main() { let _ = url::router; }
+//! ```
+//!
+//! A screen of other data with the same name (`order::SetListing`, where the component's
+//! `SetListing` is this module's):
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! pub struct SetListing { name: String, products: Vec<String> }
+//! mod order {
+//!     #[derive(corten::ToJson)]
+//!     pub struct SetListing { pub id: String }
+//! }
+//!
+//! #[corten::routes]
+//! pub mod url {
+//!     #[route("/sets", get = sets, data = order::SetListing)]
+//!     pub struct Sets;
+//! }
+//!
+//! async fn sets(req: Req) -> HtmlResult<corten::Screen<order::SetListing>> {
+//!     let listing = order::SetListing { id: "7".into() };
+//!     req.screen(&listing, html! { <html><head><title>"Sets"</title><Corten /></head><body><main>"Sets"</main></body></html> })
+//! }
+//!
+//! #[component(js)]
+//! fn SetReader() -> impl Render {
+//!     let out = refs();
+//!     html! { <output ref={out} on:connect={js::show(out, url::Sets, signal)}></output> }
+//! }
+//! # fn main() { let _ = url::router; }
+//! ```
+//!
+//! A `SetListing` the script declares itself (`local_reader.js`:
+//! `/** @typedef {{ name: string, products: string[] }} SetListing */`), where `set_reader.js`
+//! names the one `corten::types` writes, for the same route as above:
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! pub struct SetListing { name: String, products: Vec<String> }
+//!
+//! #[corten::routes]
+//! pub mod url {
+//!     #[route("/sets/{set}", get = set, data = SetListing)]
+//!     pub struct Set<'a> { pub set: &'a str }
+//! }
+//!
+//! async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
+//!     let listing = SetListing { name: at.set.to_string(), products: Vec::new() };
+//!     req.screen(&listing, html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
+//! }
+//!
+//! // local_reader.js: @typedef {{ name: string, products: string[] }} SetListing
+//! #[component(js)]
+//! pub fn LocalReader() -> impl Render {
+//!     let out = refs();
+//!     html! { <output ref={out} on:connect={js::show(out, url::Set { set: "m21" }, signal)}></output> }
+//! }
+//! # fn main() { let _ = url::router; }
+//! ```
+//!
+//! A screen's route says `data` alone: its `get` answers a screen, not a patch the runtime
+//! applies (`patches`) nor a feed's rows (`rows`), so the routes module refuses either beside
+//! it, saying so.
+//!
 //! A ref on an element the handler does not take (`enable` takes a `<button>`):
 //!
 //! ```compile_fail
@@ -2236,6 +2371,10 @@ pub mod ts {
     /// `#[route(..)]` says `rows = Level`. `Level` is the type of that name in the component's
     /// module. `subscribe()` reads the row type from it.
     pub struct FeedUrl<Row>(std::marker::PhantomData<Row>);
+    /// `ScreenUrl<SetListing>` (from `corten/read`): the URL of a screen whose data is
+    /// `SetListing`, a route whose `#[route(..)]` says `data = SetListing`. `SetListing` is the type
+    /// of that name in the component's module. `read()` reads the data's type from it.
+    pub struct ScreenUrl<Data>(std::marker::PhantomData<Data>);
     /// A type `corten::types` generated (`import("../types/app").SortBy`): the Rust type of that
     /// name in the component's module, so a call passes one of its values and nothing else.
     pub struct Generated<T>(std::marker::PhantomData<T>);
@@ -2699,6 +2838,20 @@ pub(crate) const KEYS_MODULE: &str = "corten-keys";
 
 /// [`KEYS_MODULE`]'s source.
 pub(crate) const KEYS_JS: &str = include_str!("../js/dist/keys.js");
+
+/// The module of `read` for a script (`js/read.js`, minified into `js/dist/read.js`), which
+/// scripts import as `corten/read`: served and preloaded as [`KEYS_MODULE`] is.
+pub(crate) const READ_MODULE: &str = "corten-read";
+
+/// [`READ_MODULE`]'s source.
+pub(crate) const READ_JS: &str = include_str!("../js/dist/read.js");
+
+/// Corten's modules a script imports by name, each served with the app's scripts only when a
+/// listed script imports it (the import map names it then), and preloaded with each script that
+/// does: (the name scripts import, the module it is served as, its source, what it is called in
+/// an error). `corten-macros` writes the module's name into such a script's imports.
+pub(crate) const IMPORTED: &[(&str, &str, &str, &str)] =
+    &[("corten/keys", KEYS_MODULE, KEYS_JS, "keys"), ("corten/read", READ_MODULE, READ_JS, "read")];
 
 /// The module that sends a `data-patch` form's multipart body by `XMLHttpRequest` to report its
 /// progress (`js/upload.js`, minified into `js/dist/upload.js`): served with the app's scripts,
@@ -3460,6 +3613,14 @@ pub mod __private {
 
     /// A feed's route, for a parameter that names its rows: written as its URL, as a `string` is.
     impl<R: crate::Route + crate::route::__private::FeedRows<T>, T> Arg<ts::FeedUrl<T>> for R {
+        fn write_arg(&self, ctx: &Ctx, out: &mut String) {
+            <R as Arg<ts::String>>::write_arg(self, ctx, out)
+        }
+    }
+
+    /// A screen's route, for a parameter that names its data: written as its URL, as a `string`
+    /// is.
+    impl<R: crate::Route + crate::route::__private::ScreenData<T>, T> Arg<ts::ScreenUrl<T>> for R {
         fn write_arg(&self, ctx: &Ctx, out: &mut String) {
             <R as Arg<ts::String>>::write_arg(self, ctx, out)
         }

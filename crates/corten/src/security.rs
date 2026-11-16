@@ -495,7 +495,7 @@ impl Policy {
 
     /// The CSP header value for one nonce.
     pub fn csp(&self, nonce: &str) -> String {
-        self.csp_with(Some(nonce), &crate::import_map(None, None, None))
+        self.csp_with(Some(nonce), &crate::import_map(None, None, &[]))
     }
 
     /// The CSP, with `'nonce-...'` sources only when there is a nonce. `import_map` is the text of
@@ -2390,7 +2390,7 @@ mod tests {
     #[test]
     fn csp_carries_the_nonce_and_extra_sources() {
         let csp = Policy::new().script_src("https://js.stripe.com").frame_src("https://js.stripe.com").csp("abc");
-        let import_map = hash_source(&crate::import_map(None, None, None));
+        let import_map = hash_source(&crate::import_map(None, None, &[]));
         // A host to load scripts from: the script that makes the `default` policy is allowed by hash.
         let loads = hash_source(SCRIPT_LOADS);
         assert!(csp.contains(&format!("script-src 'self' {import_map} {loads} 'nonce-abc' https://js.stripe.com;")), "{csp}");

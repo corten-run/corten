@@ -2,6 +2,15 @@
 // Types::sync rewrites this file when they change.
 
 /**
+ * What `/smoke/reading` shows and its script reads: a name and enough rows that the answer is
+ * larger than its headers, so the browser test can tell a 304 from a 200 by what it carried.
+ */
+export interface Reading {
+  name: string;
+  rows: string[];
+}
+
+/**
  * A feed row. `price` and `change` are the display text, for clients with no formatting of their
  * own (a native screen, an agent); the page's script writes `price_cents` and `change_bp` with
  * the page's formats (`t.js().money(USD)`, `t.js().change(2)`), which write what the server
