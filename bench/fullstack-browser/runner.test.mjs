@@ -248,8 +248,10 @@ test("native DOM consumer binds actual document scope and interval for page Alic
   const { PlatformLifecycle } = await import("./lifecycle.mjs"), { installResourceObserver, ResourceAudit } = await import("./resources.mjs");
   const { referenceHtml } = await import("../marketplace/reference.mjs"), { snapshotPage } = await import("../marketplace/check.mjs");
   const profile = plan.cases.find((p) => p.js && p.locale === "en-US" && p.source === "fixture");
-  const bodies = new Map(), store = { blob(body) { const ref = { path: `native-evidence/blobs/${sha256(body)}`, sha256: sha256(body), bytes: body.length }; bodies.set(ref.path, Buffer.from(body)); return ref; } };
-  const reader = { read: (ref) => bodies.get(ref.path), json: (ref) => JSON.parse(bodies.get(ref.path)) };
+  const { mkdtempSync, rmSync } = await import("node:fs"), { tmpdir } = await import("node:os"), { join } = await import("node:path");
+  const { EvidenceStore } = await import("./native-evidence.mjs");
+  const root = mkdtempSync(join(tmpdir(), "caller-native-dom-")); t.after(() => rmSync(root, { recursive: true }));
+  const store = new EvidenceStore(root), reader = { json: (ref) => store.readJSON(ref), read: (ref) => readFileSync(join(root, ref.path)) };
   let body = referenceHtml(records().item_1, "en-US"), hasDate = true;
   const server = createServer((req, res) => {
     res.sendDate = false;
@@ -299,7 +301,7 @@ test("native DOM consumer binds actual document scope and interval for page Alic
           incomplete.dom = await visibleDOM(page, observation, { context: observation.byContext.get(context).id, case: profile.key, action: action.id, scope: incomplete.resourcesAtDOM.scope,
             originatingResponse: network.originatingDocument(lifecycle.realms.get(incomplete.resourcesAtDOM.realm)) });
           assert.equal(incomplete.dom.extractionComplete, false); assert.equal(incomplete.dom.error, null); assert.equal(incomplete.dom.page, null);
-          assert.ok(!bodies.get(incomplete.dom.responseEvidence.body.path).includes(Buffer.from("LIVE-DIAGNOSTIC-CANARY")));
+          assert.ok(!JSON.stringify(reader.json(incomplete.dom.responseEvidence.body)).includes("LIVE-DIAGNOSTIC-CANARY"));
           incomplete.resources = await resources.checkpoint(); await lifecycle.recordDocument(incomplete.dom, incomplete.resources); rows.push(incomplete);
         }
       }
@@ -341,7 +343,7 @@ test("native DOM consumer binds actual document scope and interval for page Alic
             const row = rows[0], original = parser ? row.document : row.dom;
             const context = observation.contexts.find((c) => c.id === original.context);
             const identity = validateDOMIdentity(original, row, evidence, context, profile.key, new Set(), parser);
-            const changed = JSON.parse(reader.read(original.responseEvidence.body));
+            const changed = JSON.parse(JSON.stringify(reader.json(original.responseEvidence.body)));
             assert.notEqual(frame.id, changed.boundaryObservation.document.frameId);
             if (substitution.includes("frame")) changed.boundaryObservation.document.frameId = frame.id;
             // Change the whole retained native document, including every command,
