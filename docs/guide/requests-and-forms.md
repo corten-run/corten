@@ -282,6 +282,8 @@ sends (`condition: Option<Condition>` is a `FieldName<Condition>`), so a control
 name (`SubmitKey::field`, corten-ui's `Picker`, `Number` and `RequiredWhen`) cannot be given another
 field's; `name={..}` and `Errors` take a name of any type, and `.untyped()` drops the type for a
 list of names of several fields (`[f.email.untyped(), f.price.untyped()]`). Validation stays in the app; `Errors` carries the first message per field.
+A handler is given a field's control by the same name, `on:change={js::fill(f.weight)}`, with no ref
+in the component that draws it ([Scripts](scripts.md#form-fields)).
 Any name works, including ones the DOM gives a form's own properties (`action`, `method`, `id`): the runtime
 posts a `data-patch` form to its own `action` and `method` whatever its controls are named. An app's own
 script that reads `form.action` gets the control instead, as in any page; read `getAttribute("action")`.
@@ -408,7 +410,7 @@ whole number: above 0 in tenths is `Bounds::new(0.1, 16.0).step(0.1)`, and `Boun
 above 0. So an exclusive end on stepped bounds does not compile, nor `.step(..)` on any-step ones,
 nor `Bounds::any_step(0u32, 3)`: `step="any"` would let the browser send `2.5`, which no integer
 reads. What the input says and where a browser and the handler can still differ is
-[Choice 57](../design.md#choice-exclusive-ends).
+[Choice 58](../design.md#choice-exclusive-ends).
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
 handler runs, and the user loses the form: a blank field, `two`, a count past the type, or
