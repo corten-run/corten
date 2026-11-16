@@ -5,6 +5,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- The scripts guide gives `corten-format`'s size once, as built (3,005 bytes, 1,492 gzipped),
+  where it said 1.4 kB in one place and about 1 KB in another, and `corten/keys`'s as built too.
+  `npm run build:js` now writes the size a guide gives right after one of Corten's script modules
+  (`corten-format`, `corten-upload`, `corten/keys`, `corten/read`), as it writes the runtime's in
+  the README, and `npm run check` fails when one is not the built module's or is written another
+  way.
+
 - Scope the official cloud checkout's public umask to Git source creation so
   unprivileged load generators can read committed benchmark scripts. Keep job,
   control and campaign state private, with real Linux Git/nonroot regression

@@ -596,10 +596,10 @@ export function pauseKey(event, button, prices, changes) {
 ```
 
 The handler hears every key, so it asks `shortcut(event)` whether the key is the page's to take.
-`corten/keys` is a module of its own (870 B gzip): an app serves it only when one of its listed
-scripts imports it (a component's or a `script!` module, not a static file's), and a page whose
-handlers are in that script fetches it with the script, on a full load and on a page the runtime
-swaps in (not a patch).
+`corten/keys` is a module of its own (1,691 bytes, 871 gzipped): an app serves it only when one
+of its listed scripts imports it (a component's or a `script!` module, not a static file's), and
+a page whose handlers are in that script fetches it with the script, on a full load and on a page
+the runtime swaps in (not a patch).
 Pages without shortcuts fetch nothing more; the import map names it on every page of such an app
 (about 60 B). It is `null` when the key belongs to something else:
 
@@ -666,8 +666,8 @@ format (below). A plural message (`t.js().grid_items()`, from `grid.items_one` a
 the same `Message<"count">`: the script passes the count as a number, `label({ count: 3 })`, and
 the form is picked as the server picks it, with the count written in the page's format. It is sent
 with the locale's plural table and number format (about 300 bytes more in the attribute) and
-loads `corten-format` (2.9 kB, 1.4 kB gzipped). Never choose between two messages with
-`count === 1` in a script.
+loads `corten-format` ([below](#numbers-money-and-dates-a-script-writes)). Never choose between
+two messages with `count === 1` in a script.
 
 ## Numbers, money and dates a script writes
 
@@ -704,9 +704,9 @@ rendered (`scripts/format.mjs` checks the two on every case), not what the brows
 writes, which differs by browser and version. A zone with daylight saving time has no fixed
 offset to send: write those dates on the server.
 
-The code that writes them is a module of its own (about 1 KB gzip), not part of the runtime: a
-page whose handlers take a format loads it as a module script next to theirs, and a page whose
-handlers take none does not download it.
+The code that writes them, `corten-format`, is a module of its own (3,005 bytes, 1,492 gzipped),
+not part of the runtime: a page whose handlers take a format loads it as a module script next to
+theirs, and a page whose handlers take none does not download it.
 
 ## State
 
