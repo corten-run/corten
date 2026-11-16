@@ -619,16 +619,19 @@ fn a_spread_of_pairs_skips_data_vars() {
     assert_eq!(html! { <p {..attrs}></p> }.to_html(), r#"<p data-id="7"></p>"#);
 }
 
-/// Nor the script wiring, in any case: a ref's name and value, a handler call and a component's
-/// root are only what `ref=`, `on:` and the component write, so a spread cannot hand a script a
-/// value its ref's type does not hold. Names are compared whole, so a longer name that starts
-/// with one of them is kept.
+/// Nor the script wiring, in any case: a ref's name, value and key, a handler call and a
+/// component's root are only what `ref=`, `key=`, `on:` and the component write, so a spread
+/// cannot hand a script a value or a key its ref's type does not hold. Names are compared whole,
+/// so a longer name that starts with one of them is kept.
 #[test]
 fn a_spread_of_pairs_skips_the_wiring_corten_prints() {
     let attrs = [
         ("data-id", "7"),
         ("data-ref-value", "\"text\""),
         ("Data-Ref-Value", "1"),
+        ("data-key", "a"),
+        ("DATA-KEY", "b"),
+        ("data-keys", "kept"),
         ("data-ref", "row"),
         ("data-on", "click:m.f()"),
         ("data-scope", "m"),
@@ -640,6 +643,6 @@ fn a_spread_of_pairs_skips_the_wiring_corten_prints() {
     ];
     assert_eq!(
         html! { <p {..attrs}></p> }.to_html(),
-        r#"<p data-id="7" data-reference="kept" data-on-x="kept" data-ref-value-x="kept"></p>"#
+        r#"<p data-id="7" data-keys="kept" data-reference="kept" data-on-x="kept" data-ref-value-x="kept"></p>"#
     );
 }

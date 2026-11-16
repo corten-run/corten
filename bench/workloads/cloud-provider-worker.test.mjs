@@ -77,6 +77,27 @@ test("provider response reflecting a token never crosses IPC", async (t) => {
   assert.equal(h.state().consumes, 1); assert.equal(h.state().requests, 1);
 });
 
+test("failed-native absolute DELETE expiry crosses real worker IPC unchanged and expired actions never dispatch", async (t) => {
+  const deletion = ["compute", "droplet", "delete", "123", "--force", ...account.slice(-2)];
+  const expires = Date.now() + 60000;
+  let received;
+  const good = harness(t, "success", (message) => {
+    if (message.schema === "cloud-provider-action/v1") received = message.deleteProofExpiresAtMs;
+    return message;
+  });
+  assert.equal((await good.run(deletion, 120000, false, expires)).status, 0);
+  assert.equal(received, expires); assert.equal(good.state().calls.filter((v) => v.method === "DELETE").length, 1);
+  for (const value of [Date.now() - 1, Date.now() + 120000, null, "expired"]) {
+    const bad = harness(t, "success", (message) => message.schema === "cloud-provider-action/v1"
+      ? { ...message, deleteProofExpiresAtMs: value } : message);
+    await assert.rejects(bad.run(deletion, 120000, false, Date.now() + 60000));
+    assert.equal(bad.state().calls.filter((v) => v.method === "DELETE").length, 0);
+  }
+  const read = harness(t, "success", (message) => message.schema === "cloud-provider-action/v1"
+    ? { ...message, deleteProofExpiresAtMs: Date.now() + 60000 } : message);
+  await assert.rejects(read.run(account)); assert.equal(read.state().requests, 0);
+});
+
 test("bounded create classifications survive real worker IPC and cached teardown to public output", async (t) => {
   for (const [mode, diagnostic, requests] of [
     ["post-link-shape", { code: "create-link-shape" }, 1],
