@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { containerBase, startupFailure, writeFixtures } from './compiled-check.mjs';
+import './hydration-diagnostics.test.mjs';
 
 test('synthetic fixtures are readable by native image users even with a private umask', async () => {
   const folder = await mkdtemp(join(tmpdir(), 'compiled-fixture-test-'));

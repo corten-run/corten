@@ -11,6 +11,7 @@ import { archiveMembers, digest, durable, durableCopy, extractArchive, fileHash,
 import { campaignOutcome, controllerState, full, providerAccount, providerFailure, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
+import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript,
   verifyFailedNativeCustody, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
 
@@ -101,8 +102,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"];
   const transport = async (binary, args, timeout, allowFail) => {
     await own(); assert.ok(state.id && state.ip, "bound host required");
+    const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative);
+    if (mixedRecovery) assert.equal(fileHash(join(local, "known_hosts")), mixedWait.knownHostsSha256, "native host keys changed");
     if (existsSync(join(local, "known_hosts"))) regular(join(local, "known_hosts"), 1024 * 1024);
-    return execute(binary, [...sshOptions, ...args], timeout, allowFail);
+    const result = await execute(binary, [...(mixedRecovery ? ["-o", "StrictHostKeyChecking=yes"] : []), ...sshOptions, ...args], timeout, allowFail);
+    if (mixedRecovery) assert.equal(fileHash(join(local, "known_hosts")), mixedWait.knownHostsSha256, "native host keys changed during transport");
+    return result;
   };
   const ssh = (script, timeout = 60000, allowFail = false) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail);
   const scp = (from, to) => transport("scp", ["-q", from, to], 15 * 60000);
@@ -232,6 +237,45 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   return {
     get state() { return state ? structuredClone(state) : undefined; }, local,
+    async cancelMixedWait() {
+      assert.equal(options.cancelMixedWait, true, "explicit mixed cancellation required");
+      return locked(async () => {
+        ownedMixedWait(state);
+        assert.ok(recoveryApproval, "exact merged-source cancellation approval required");
+        full(recoveryApproval.controllerCommit, /[a-f0-9]{40}/, "merged cancellation controller source required");
+        assert.notEqual(recoveryApproval.controllerCommit, state.commit);
+        assert.equal(digest(regular(statePath)), recoveryApproval.reservationSha256, "locked cancellation reservation changed");
+        assert.equal(state.status, "running");
+        for (const key of ["mixedCancellation", "archiveSha256", "evidence", "deletionIntentAt", "collectedAt"]) assert.equal(state[key], undefined);
+        assert.ok(Date.now() < Date.parse(mixedWait.deadline), "original mixed wait deadline expired");
+        assert.equal(fileHash(join(local, "known_hosts")), mixedWait.knownHostsSha256, "saved native host key view changed");
+        for (const name of ["mixed-cancel-reservation.json", "mixed-cancel-intent.json", "mixed-cancel-signal.json"])
+          assert.ok(!existsSync(join(local, name)), "single cancellation attempt already reserved; never signal again");
+        await own(); // Fresh saved-context account/exact-ID/account before intent.
+        const script = mixedCancelScript(state), original = regular(statePath);
+        assert.equal(digest(original), recoveryApproval.reservationSha256, "reservation changed during ownership proof");
+        const bytes = `${JSON.stringify({ schema: "benchmark-mixed-cancel-intent/v1", wait: mixedWait,
+          controllerCommit: recoveryApproval.controllerCommit, reservationSha256: digest(original), scriptSha256: digest(script) }, null, 2)}\n`;
+        durable(join(local, "mixed-cancel-reservation.json"), original);
+        durable(join(local, "mixed-cancel-intent.json"), bytes);
+        // From here even a refusal or lost response retains the operation lock.
+        preserveOperationLock = true;
+        state.mixedCancellation = { controllerCommit: recoveryApproval.controllerCommit,
+          reservationSha256: digest(original), intentSha256: digest(bytes) }; save();
+        verifyMixedCancellation(local, state);
+        assert.equal(digest(regular(statePath)), digest(`${JSON.stringify(state, null, 2)}\n`), "cancellation state changed before dispatch");
+        const startedAtMs = Date.now(), raw = (await ssh(script, 50000)).stdout, finishedAtMs = Date.now();
+        const observation = mixedSignalObservation(raw, state, startedAtMs, finishedAtMs);
+        const signalBytes = `${JSON.stringify({ observation, startedAtMs, finishedAtMs }, null, 2)}\n`;
+        durable(join(local, "mixed-cancel-signal.json"), signalBytes);
+        verifyMixedCancellation(local, state);
+        assert.equal(digest(regular(statePath)), digest(`${JSON.stringify(state, null, 2)}\n`), "cancellation state changed during dispatch");
+        state.mixedCancellation.signalSha256 = digest(signalBytes); save();
+        verifyMixedSignal(local, state);
+        preserveOperationLock = false;
+        return 3; // Signal acknowledgement is neither terminal proof nor deletion.
+      });
+    },
     async launch() {
       assert.ok(options.detach, "detach options required");
       const launchLock = join(base, ".groups-launch.lock");
@@ -377,6 +421,27 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         }
         assert.ok(["starting", "running"].includes(state.status) && !state.deletionIntentAt && !state.collectedAt
           && !state.validation && !state.evidenceOutcome && state.createIntentAt, "only an unqualified failed native reservation can recover");
+        if (state.group === "mixed-production") {
+          verifyMixedSignal(local, state);
+          assert.equal(fileHash(join(local, "known_hosts")), mixedWait.knownHostsSha256, "saved native host key view changed");
+          if (!await unit()) return 3; // Observe once, never stop or repack the unit.
+          if (!state.archiveSha256) {
+            assert.ok(!existsSync(archive) && !existsSync(`${archive}.download`), "unrecorded wrapper archive retained");
+            const line = (await ssh("sha256sum /bench/results.tgz")).stdout;
+            full(line, /[a-f0-9]{64}  \/bench\/results\.tgz\n/, "wrapper archive hash required");
+            const hash = line.slice(0, 64), download = `${archive}.download`;
+            durable(download, ""); await scp(`root@${state.ip}:/bench/results.tgz`, download);
+            durableCopy(download, `${archive}.synced`, hash); renameSync(`${archive}.synced`, archive); syncDirectory(local);
+            state.archiveSha256 = hash; save();
+          }
+          verifyArchive(); await archiveMembers(archive, state.archiveSha256); check();
+          if (!state.evidence) {
+            const extracted = mkdtempSync(join(local, "evidence-"));
+            (state.extractionAttempts ??= []).push(basename(extracted)); save();
+            const hash = await extractArchive(archive, extracted, state.archiveSha256); check();
+            state.evidence = basename(extracted); state.evidenceSha256 = hash; save();
+          }
+        }
         failedNativeArchive(local, state);
         const original = regular(statePath, 1024 * 1024), originalPath = join(local, "failed-native-reservation.json");
         if (existsSync(originalPath)) assert.equal(digest(regular(originalPath, 1024 * 1024)), digest(original), "original reservation differs");
