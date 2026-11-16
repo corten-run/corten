@@ -165,6 +165,11 @@ Only an own data property from that vocabulary crosses the worker boundary;
 unknown values and accessors are not forwarded. It adds no retry, cleanup or
 launch authority. Raw Git errors, URLs, arguments and stderr remain private.
 
+The direct CLI renders that same closed controller stage and the provider's
+allowlisted code-specific detail or HTTP status. It never prints a native error's
+message, stack, response or accessor. These labels identify the stopped operation,
+not its cause or successful cleanup; the retained state still governs recovery.
+
 Historical href diagnostics could classify a refused representation as
 `non-string`, `malformed-uri`, `credentials-or-fragment`, `foreign-origin`,
 `semantically-same-canonical-uri`, `query-or-trailing-slash` or
