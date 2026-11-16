@@ -14,11 +14,15 @@ Corten is pre-1.0, so any minor version may change the API.
   page; entries at another route's address, a traversal while a write is on its way or after one
   redirected, an answer that is not a patch and a patch the runtime cannot draw whole are read as
   a page. Sending a marked form cancels any other one still on its way, so the last one sent is
-  the screen. `html!` refuses
-  the mark on anything but a `<form>`, on a form without `data-patch` and on one whose `method`
-  is `post` or `dialog`. Without the Navigation API the browser sends the form itself, a full
-  load of the page at its address
+  the screen. `html!` refuses the mark on anything but a `<form>`, on a form without `data-patch`
+  and on one whose `method` is `post` or `dialog`. Without the Navigation API the browser sends
+  the form itself, a full load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
+
+- Scope the official cloud checkout's public umask to Git source creation so
+  unprivileged load generators can read committed benchmark scripts. Keep job,
+  control and campaign state private, with real Linux Git/nonroot regression
+  controls and unchanged source, correctness and measurement gates.
 
 - A script reads a screen's data typed, from the route that answers it, with
   `read(url, { signal })` from the new `corten/read` module. A route that says `data = T` in
