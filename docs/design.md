@@ -4383,7 +4383,7 @@ rules something out.
     with a `<title>`) as a `<template>`'s content on `b89eead89`, which passed
     in Chromium 156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), with Chromium
     and WebKit letting a leading `<title>`, `<base>`, `<basefont>`, `<bgsound>` or
-    `<noframes>` decide; 2026-11-16, the same check of the 767 shapes there on `PENDING`, among
+    `<noframes>` decide; 2026-11-16, the same check of the 767 shapes there on `8b124f980`, among
     them an `<svg>`'s and a `<math>`'s `<form>` in a `<div>` after four first table parts, kept
     as written in all three; 2026-11-16, a one-off probe, not a repository check, in Chromium
     156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): each kind of the third shape (a `<table>` at the top level, in a `<div>` and in a
