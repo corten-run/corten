@@ -92,7 +92,8 @@ export function verifyImageExecution(execution) {
   assert.ok(argv.length && argv[0].length, "image executable missing");
 }
 export function imageCommandEvidence(image) {
-  const execution = { Entrypoint: image.Config?.Entrypoint, Cmd: image.Config?.Cmd };
+  assert.ok(image?.Config && typeof image.Config === "object" && !Array.isArray(image.Config), "image configuration missing");
+  const execution = { Entrypoint: image.Config.Entrypoint ?? null, Cmd: image.Config.Cmd ?? null };
   verifyImageExecution(execution); return execution;
 }
 export function appArgs({ name, profile, imageId, network, upstream, fixtures, cpus }) {
@@ -127,7 +128,7 @@ function observedConfiguration(info, expected, context, role) {
     .sort((a, b) => a.destination.localeCompare(b.destination));
   return { name: info.Name, network: Object.keys(info.NetworkSettings?.Networks ?? {}).sort(),
     owner: info.Config?.Labels?.["run.corten.json-api"], mounts, ...(["app", "load"].includes(role) ? { env } : {}),
-    entrypoint: info.Config?.Entrypoint, command: info.Config?.Cmd, path: info.Path, args: info.Args };
+    entrypoint: info.Config?.Entrypoint ?? null, command: info.Config?.Cmd ?? null, path: info.Path, args: info.Args };
 }
 function expectedConfiguration(expected, context, role) {
   assert.ok(context?.fixtureSource && context?.apiBase && context?.network, "owned runtime context required");
