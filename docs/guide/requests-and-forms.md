@@ -211,7 +211,7 @@ what to answer instead, so an app's router test that sends the plain request fai
 handler's cookies and `Clear-Site-Data` go out with the error, as above. The runtime's
 `data-patch` fetch and a client that does not ask for HTML still get the patch. The handler's type
 does not say which it answers, since one handler answers both from `req.mode`
-([design Choice 57](../design.md#choice-plain-request-patch)). Both checks here leave out a request
+([design Choice 58](../design.md#choice-plain-request-patch)). Both checks here leave out a request
 whose fetch metadata says it is not a top-level navigation (a page's own `fetch` that asks for
 HTML, an `<iframe>`'s load), whose answer the browser does not show as the tab's page, and a
 relayed upstream answer ([a `Relay`](app.md#websockets-and-relays)), checked by the upstream.
@@ -307,6 +307,8 @@ sends (`condition: Option<Condition>` is a `FieldName<Condition>`), so a control
 name (`SubmitKey::field`, corten-ui's `Picker`, `Number` and `RequiredWhen`) cannot be given another
 field's; `name={..}` and `Errors` take a name of any type, and `.untyped()` drops the type for a
 list of names of several fields (`[f.email.untyped(), f.price.untyped()]`). Validation stays in the app; `Errors` carries the first message per field.
+A handler is given a field's control by the same name, `on:change={js::fill(f.weight)}`, with no ref
+in the component that draws it ([Scripts](scripts.md#form-fields)).
 Any name works, including ones the DOM gives a form's own properties (`action`, `method`, `id`): the runtime
 posts a `data-patch` form to its own `action` and `method` whatever its controls are named. An app's own
 script that reads `form.action` gets the control instead, as in any page; read `getAttribute("action")`.

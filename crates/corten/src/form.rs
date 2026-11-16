@@ -570,6 +570,76 @@ deref!(Form);
 ///
 /// let _: FieldName<u32> = Sell::FIELDS.note;
 /// ```
+///
+/// A handler is given a field as its control (`js::fill(f.weight)`): a parameter typed
+/// `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement` or `HTMLInputElement[]` (radios
+/// or checkboxes that share the name) takes one, and the runtime finds it by its name in the
+/// handler's form when the handler runs. Which kind the form draws is not in the name, so the call
+/// is checked against the parameter's type and the runtime checks the control
+/// (`docs/guide/scripts.md`, Form fields):
+///
+/// ```
+/// use corten::{prelude::*, script::{Arg, el, ts}};
+///
+/// #[derive(Fields)]
+/// struct Ship { weight: String, #[serde(default)] gift: bool }
+///
+/// fn input<A: Arg<el::HTMLInputElement>>(_: A) {}
+/// fn select<A: Arg<el::HTMLSelectElement>>(_: A) {}
+/// fn note<A: Arg<el::HTMLTextAreaElement>>(_: A) {}
+/// fn group<A: Arg<ts::Array<el::HTMLInputElement>>>(_: A) {}
+/// let f = Ship::FIELDS;
+/// input(f.weight);
+/// select(f.weight);
+/// note(f.weight);
+/// group(f.gift);
+/// ```
+///
+/// It is not text, so a script is never given a name to look a control up by:
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, script::{Arg, ts}};
+///
+/// #[derive(Fields)]
+/// struct Ship { weight: String }
+///
+/// fn text<A: Arg<ts::String>>(_: A) {}
+/// text(Ship::FIELDS.weight);
+/// ```
+///
+/// A handler that takes anything (`unknown`) does not take one either: its parameter names no
+/// control for the runtime to find.
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, script::{Arg, ts}};
+///
+/// #[derive(Fields)]
+/// struct Ship { weight: String }
+///
+/// fn any<A: Arg<ts::Any>>(_: A) {}
+/// any(Ship::FIELDS.weight);
+/// ```
+///
+/// A handler that takes another element does not take one:
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, script::{Arg, el}};
+///
+/// #[derive(Fields)]
+/// struct Ship { weight: String }
+///
+/// fn panel<A: Arg<el::HTMLDivElement>>(_: A) {}
+/// panel(Ship::FIELDS.weight);
+/// ```
+///
+/// And a name written as text is not a field:
+///
+/// ```compile_fail,E0277
+/// use corten::script::{Arg, el};
+///
+/// fn input<A: Arg<el::HTMLInputElement>>(_: A) {}
+/// input("weight");
+/// ```
 pub struct FieldName<T = Untyped, P = Root> {
     at: P,
     name: &'static str,
@@ -616,6 +686,11 @@ impl<P: Place, T> FieldName<T, P> {
     /// sends text whatever the field reads. A typed control does not take it back.
     pub const fn untyped(self) -> FieldName<Untyped, P> {
         FieldName { at: self.at, name: self.name, value: std::marker::PhantomData }
+    }
+
+    /// Writes the name as posted, unescaped: a handler argument's (`crate::script`).
+    pub(crate) fn write_posted(self, out: &mut String) {
+        self.at.write(self.name, out)
     }
 }
 

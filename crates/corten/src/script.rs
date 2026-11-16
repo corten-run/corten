@@ -2197,7 +2197,7 @@ pub trait Arg<P> {
 #[diagnostic::on_unimplemented(
     message = "the script types this handler parameter so that no call can be checked against it",
     label = "the warning on this handler says why",
-    note = "a set of names, or any other JSON value, is a Rust type with a generated declaration, import(\"../types/app\").Name, and a list or an optional one a Rust type of its own; an element or an event takes an interface the scripts guide lists as checked (several events the one they share, UIEvent or Event); a parameter typed unknown takes any argument"
+    note = "a set of names, or any other JSON value, is a Rust type with a generated declaration, import(\"../types/app\").Name, and a list or an optional one a Rust type of its own; an element or an event takes an interface the scripts guide lists as checked (several events the one they share, UIEvent or Event); a parameter typed unknown takes any argument but a form field, which takes the control the form draws for it"
 )]
 pub trait Refused: refused::Sealed {}
 
@@ -2830,6 +2830,14 @@ pub(crate) const FORMAT_MODULE: &str = "corten-format";
 /// [`FORMAT_MODULE`]'s source.
 pub(crate) const FORMAT_JS: &str = include_str!("../js/dist/format.js");
 
+/// The module that finds the control a handler is given for a form field (`js/field.js`,
+/// minified into `js/dist/field.js`): served with the app's scripts, and loaded by the pages
+/// whose handlers take a field (`js::fill(f.weight)`), not by every page with the runtime.
+pub(crate) const FIELD_MODULE: &str = "corten-field";
+
+/// [`FIELD_MODULE`]'s source.
+pub(crate) const FIELD_JS: &str = include_str!("../js/dist/field.js");
+
 /// The module of `shortcut` for a script (`js/keys.js`, minified into `js/dist/keys.js`), which
 /// scripts import as `corten/keys`: served with the app's scripts when one imports it (the import
 /// map names it then), and preloaded with each script that does. Its name is the one
@@ -3399,6 +3407,53 @@ pub mod __private {
         }
     }
 
+    /// A parameter type a form field fits (`js::fill(f.weight)`): the controls of the field's
+    /// name in the form of the element with the handler, which the runtime finds when the handler
+    /// runs and checks are of this kind. The markup that draws them may be another component's,
+    /// so the compiler cannot see which kind they are (`docs/design.md#choice-field-arguments`).
+    #[diagnostic::on_unimplemented(
+        message = "a form field gives its handler an HTMLInputElement, an HTMLSelectElement, an HTMLTextAreaElement or HTMLInputElement[], and this parameter is {Self}",
+        label = "a form field, found by its name in the handler's form when the handler runs",
+        note = "type the parameter as the control the form draws for the field (HTMLInputElement[] for radios or checkboxes that share its name), or pass a ref"
+    )]
+    pub trait ControlParam {
+        /// The kind written after `~`: one input (`i`), select (`s`) or textarea (`t`), or
+        /// every input of the name (`*`).
+        const KIND: char;
+    }
+    impl ControlParam for el::HTMLInputElement {
+        const KIND: char = 'i';
+    }
+    impl ControlParam for el::HTMLSelectElement {
+        const KIND: char = 's';
+    }
+    impl ControlParam for el::HTMLTextAreaElement {
+        const KIND: char = 't';
+    }
+    impl ControlParam for ts::Array<el::HTMLInputElement> {
+        const KIND: char = '*';
+    }
+
+    /// `~i"weight"`: the field's name as posted (`rules[1].kind` in a row), as a JSON string.
+    impl<T, Pl: crate::form::Place, P: ControlParam> Arg<P> for crate::form::FieldName<T, Pl> {
+        fn write_arg(&self, _: &Ctx, out: &mut String) {
+            // The runtime finds the control with a module of its own, which this page now loads.
+            uses(FIELD_MODULE);
+            out.push('~');
+            out.push(P::KIND);
+            out.push('"');
+            let start = out.len();
+            self.write_posted(out);
+            // A name is letters, digits, `_`, `.`, brackets and a row key's `%` and `-`, unless
+            // `#[serde(rename)]` gave it others.
+            if !json_plain(&out[start..]) {
+                let name = out.split_off(start);
+                json_chars(&name, out);
+            }
+            out.push('"');
+        }
+    }
+
     /// `on:RowToggled={..}` names a type made with `#[event]`.
     pub fn is_event<E: DomEvent>() {}
 
@@ -3442,6 +3497,12 @@ pub mod __private {
     /// Writes `text` as a JSON string, escaped for `data-on`'s single-quoted attribute.
     pub fn json_str(text: &str, out: &mut String) {
         out.push('"');
+        json_chars(text, out);
+        out.push('"');
+    }
+
+    /// Writes `text` as the inside of a JSON string, escaped as [`json_str`] escapes it.
+    fn json_chars(text: &str, out: &mut String) {
         for c in text.chars() {
             match c {
                 '"' => out.push_str("\\\""),
@@ -3450,14 +3511,29 @@ pub mod __private {
                 '<' => out.push_str("&lt;"),
                 '>' => out.push_str("&gt;"),
                 '\'' => out.push_str("&#39;"),
-                c if (c as u32) < 0x20 || c == '\u{2028}' || c == '\u{2029}' => {
+                c if needs_unicode_escape(c) => {
                     use std::fmt::Write;
                     let _ = write!(out, "\\u{:04x}", c as u32);
                 }
                 c => out.push(c),
             }
         }
-        out.push('"');
+    }
+
+    /// Whether [`json_chars`] writes `c` as `\uXXXX`: a control character or a line separator.
+    /// Its own test, run for each character of every string argument, so it stays this cheap.
+    fn needs_unicode_escape(c: char) -> bool {
+        (c as u32) < 0x20 || c == '\u{2028}' || c == '\u{2029}'
+    }
+
+    /// Whether [`json_chars`] writes `c` other than as it is.
+    fn needs_escape(c: char) -> bool {
+        matches!(c, '"' | '\\' | '&' | '<' | '>' | '\'') || needs_unicode_escape(c)
+    }
+
+    /// Whether [`json_chars`] writes `text` as it is.
+    fn json_plain(text: &str) -> bool {
+        !text.chars().any(needs_escape)
     }
 
     /// Writes JSON text into `data-on`'s single-quoted attribute: its quotes as they are, and `&`,
