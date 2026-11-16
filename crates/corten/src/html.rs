@@ -460,6 +460,8 @@ struct Open {
     name: String,
     foreign: bool,
     within: Within,
+    /// Where its start tag is.
+    start: usize,
 }
 
 /// Where the element of `tag`, written in an element whose content is read `within`, lands: whether
@@ -542,8 +544,9 @@ enum Reading {
 /// script data states ([`script_end`]), and the end tag of a void element is ignored, as the
 /// browser does. A patch it cannot read to its end (an element closed by another's end tag, an
 /// element HTML's wherever it lands written straight in an `<svg>` or `<math>`, which `html!`
-/// refuses) is read up to there: a loss before it is reported, and [`patch_parse_checked`] logs
-/// that the rest was not read. Checked in debug builds only; `scripts/smoke.mjs` checks the
+/// refuses) is read up to there: a loss found before the element it cannot follow (where an end
+/// tag is left out, before that element's start tag, which the browser closes somewhere this does
+/// not read) is reported, and [`patch_parse_checked`] logs that the rest was not read. Checked in debug builds only; `scripts/smoke.mjs` checks the
 /// browsers against `patch-parsing.json`, the cases `a_patch_s_parse_problems_are_what_browsers_parse`
 /// holds this to.
 #[cfg(any(debug_assertions, test))]
@@ -627,14 +630,23 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
     // The element that decided, as written.
     let mut first = "";
     let mut headed = None;
-    // The first loss: once one is found, the rest is read only for whether it is closed.
+    // The first loss, and where the tag it was found at starts: once one is found, the rest is read
+    // only for whether it is closed.
     let mut problem: Option<String> = None;
-    // Stops reading where the patch is not read as written ([`Read::unread`]), keeping the loss
-    // found before.
+    let mut problem_at: Option<usize> = None;
+    // Stops reading where the patch is not read as written ([`Read::unread`]). The loss found
+    // before is kept if it was found before `since`: the start tag of the first element whose end
+    // tag may have been left out (the browser closed it somewhere after it, so what came after was
+    // not where this read it), or `usize::MAX` where the reason is where it is found.
     macro_rules! unread {
-        ($($why:tt)*) => {
-            return Read { problem, headed, unread: Some(format!($($why)*)) }
-        };
+        ($since:expr; $($why:tt)*) => {{
+            let since: usize = $since;
+            return Read {
+                problem: problem.filter(|_| problem_at.is_some_and(|at| at < since)),
+                headed,
+                unread: Some(format!($($why)*)),
+            };
+        }};
     }
     // The elements open, each closed by its own end tag.
     let mut open: Vec<Open> = Vec::new();
@@ -660,6 +672,7 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             let end = html[body..].find("-->").map_or(bytes.len(), |n| body + n);
             if html[body..].starts_with('>') || html[body..].starts_with("->") || html[body..end].contains("--!>") {
                 unread!(
+                    usize::MAX;
                     "the comment {}, which a browser ends elsewhere than at its -->",
                     shown(&html[i..(end + 3).min(bytes.len())])
                 );
@@ -673,6 +686,7 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             match html[i..].find("]]>").filter(|_| open.last().is_some_and(|last| last.foreign)) {
                 Some(n) => i += n + 3,
                 None => unread!(
+                    usize::MAX;
                     "the CDATA section {}, outside an SVG or MathML element (HTML reads it as a comment up to its first >) or not ended by ]]>",
                     shown(&html[i..])
                 ),
@@ -685,14 +699,21 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                 let end = html[i..].find('>').map_or(bytes.len(), |n| i + n);
                 let closing = html[i + 2..end].trim_end();
                 if !open.last().is_some_and(|last| last.name.eq_ignore_ascii_case(closing)) {
-                    // A void element's end tag (`html!` writes one for a `<param>` or a `<basefont>`)
-                    // closes nothing: the browser ignores it.
-                    if VOID.iter().any(|void| void.eq_ignore_ascii_case(closing)) {
-                        i = (end + 1).min(bytes.len());
-                        continue;
+                    match open.iter().rposition(|open| open.name.eq_ignore_ascii_case(closing)) {
+                        // It closes the elements open in it, whose end tags were left out.
+                        Some(at) => {
+                            let last = open.last().map_or("", |last| last.name.as_str());
+                            unread!(open[at + 1].start; "{}, where <{last}> is open", shown(&html[i..(end + 1).min(bytes.len())]));
+                        }
+                        // An end tag that closes no open element, a void element's among them
+                        // (`html!` writes one for a `<param>` or a `<basefont>`): the browser
+                        // ignores it, or for a `</p>` or `</br>` adds an empty element, which
+                        // loses nothing.
+                        None => {
+                            i = (end + 1).min(bytes.len());
+                            continue;
+                        }
                     }
-                    let open = open.last().map_or_else(|| String::from("nothing"), |last| format!("<{}>", last.name));
-                    unread!("{}, where {open} is open", shown(&html[i..(end + 1).min(bytes.len())]));
                 }
                 open.pop();
                 i = (end + 1).min(bytes.len());
@@ -703,9 +724,12 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                     template = None;
                     let inner = template_problem(&html[start..at], head_decides, true);
                     headed = headed.or(inner.headed);
-                    problem = problem.or(inner.problem);
+                    if problem.is_none() && inner.problem.is_some() {
+                        problem = inner.problem;
+                        problem_at = Some(start);
+                    }
                     if let Some(why) = inner.unread {
-                        unread!("{why}, in a <template>'s content");
+                        unread!(usize::MAX; "{why}, in a <template>'s content");
                     }
                 }
                 if open.is_empty() {
@@ -727,7 +751,7 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         i = tag.end;
         let Some((foreign_element, within)) = placed(open.last().map_or(Within::Html, |last| last.within), &tag) else {
             let holder = open.last().map_or("", |last| last.name.as_str());
-            unread!("{} written straight in <{holder}>, which a browser closes before it", shown(&html[tag.start..tag.end]));
+            unread!(usize::MAX; "{} written straight in <{holder}>, which a browser closes before it", shown(&html[tag.start..tag.end]));
         };
         let name = tag.name.as_str();
         let written = &html[tag.start..tag.end];
@@ -803,6 +827,9 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                 problem = Some(format!("{} in {} loses what it holds{}", shown(written), shown(top), since(first)));
             }
         }
+        if problem.is_some() && problem_at.is_none() {
+            problem_at = Some(tag.start);
+        }
         // An HTML element's text, up to its end tag: nothing in it is markup. An SVG or MathML
         // `<title>`, `<style>` or `<script>` holds elements.
         if !foreign_element && RAW_TEXT.contains(&name) {
@@ -818,8 +845,9 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                         "what follows {} is read as its text, since a <!-- and a <script in its text hide its end tag",
                         shown(written)
                     ));
+                    problem_at = Some(tag.start);
                 }
-                unread!("{}, which is not closed", shown(written));
+                unread!(usize::MAX; "{}, which is not closed", shown(written));
             }
             i = end;
         }
@@ -832,10 +860,16 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             if foreign_element && foreign.is_none() && template.is_none() {
                 foreign = Some(open.len());
             }
-            open.push(Open { name: tag.name, foreign: foreign_element, within });
+            open.push(Open { name: tag.name, foreign: foreign_element, within, start: tag.start });
         }
     }
-    Read { problem, headed, unread: open.last().map(|last| format!("<{}>, which is not closed", last.name)) }
+    match open.first() {
+        None => Read { problem, headed, unread: None },
+        Some(outer) => {
+            let last = open.last().map_or("", |last| last.name.as_str());
+            unread!(outer.start; "<{last}>, which is not closed")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -964,7 +998,6 @@ mod tests {
             (r#"<tr id="a"></tr><div id="b">"#, "<div>, which is not closed"),
             (r#"<div id="b"><template><ul><li>x</ul></template></div>"#, "</ul>, where <li> is open"),
             (r#"<script id="s"><!--<script></script>"#, r#"<script id="s">, which is not closed"#),
-            (r#"<tr id="a"></tr></div>"#, "</div>, where nothing is open"),
         ] {
             let why = super::patch_parse(html).unread.unwrap_or_else(|| panic!("{html}: read to its end"));
             assert!(why.contains(says), "{html}: {why}");
@@ -977,9 +1010,14 @@ mod tests {
             r#"<svg id="s"><![CDATA[x]]><title><b>t</b></title><!-- c --></svg>"#,
             r#"<math id="x"><mi>a</mi><annotation-xml encoding="text/html"><div>d</div></annotation-xml></math>"#,
             r#"<script id="s" type="text/plain"><!-- <script></script> --></script>"#,
+            r#"<tr id="a"></tr></div></p>"#,
         ] {
             assert_eq!(super::patch_parse(html).unread, None, "{html}");
         }
+        // A loss found after an element whose end tag is left out is not kept: the browser closed
+        // that element somewhere this did not read, so what follows may be elsewhere.
+        let parse = super::patch_parse(r#"<tr id="a"></tr><p id="b">one<p id="c">two</p><tr id="d"></tr>"#);
+        assert_eq!((parse.problem, parse.unread.as_deref()), (None, Some("<p>, which is not closed")));
     }
 
     /// The parse check names what is lost and the element that decided, and passes a patch a
@@ -1231,7 +1269,7 @@ mod tests {
                 // It closes the element it names and those inside it whose end tags are left out.
                 let end = html[at..].find('>').map_or(html.len(), |n| at + n);
                 let name = html[at + 2..end].trim().to_ascii_lowercase();
-                let named = |shown: &str| shown.split('#').next() == Some(name.as_str());
+                let named = |shown: &str| shown.split('#').next().is_some_and(|shown| shown.eq_ignore_ascii_case(&name));
                 if open.iter().skip(1).any(|(shown, _)| named(shown)) {
                     while !named(&open.last().expect("an open element").0) {
                         close(&mut open);
@@ -1244,9 +1282,15 @@ mod tests {
             let tag = super::start_tag(html, at);
             i = tag.end;
             let id = tag.attr("id").map(|id| format!("#{id}")).unwrap_or_default();
-            open.push((format!("{}{id}", tag.name), Vec::new()));
+            // An SVG element keeps its name's case (`foreignObject`), as written here.
+            let svg = tag.name == "svg" || open.iter().any(|(shown, _)| shown.split('#').next() == Some("svg"));
+            let name = if svg { &html[at + 1..at + 1 + tag.name.len()] } else { tag.name.as_str() };
+            open.push((format!("{name}{id}"), Vec::new()));
             if super::RAW_TEXT.contains(&tag.name.as_str()) {
-                i = super::raw_text_end(html, i, &tag.name);
+                // A script's text as the tokenizer ends it, or, where its text hides every end tag,
+                // as `html!` wrote it (to the end tag after its text).
+                let script = (tag.name == "script").then(|| super::script_end(html, i)).filter(|end| *end < html.len());
+                i = script.unwrap_or_else(|| super::raw_text_end(html, i, &tag.name));
             }
             if super::VOID.contains(&tag.name.as_str()) || tag.self_closing {
                 close(&mut open);

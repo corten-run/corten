@@ -1096,9 +1096,9 @@ other, but it reports no loss inside one. It reads a `<script>`'s text as the br
 `<!--` and a `<script` in a data block's text neither stop the check nor hide what follows, and it
 ignores the end tag `html!` writes for a `<param>` or a `<basefont>`, as the browser does. Where it
 cannot follow a patch (an end tag left out in `raw` markup, an element HTML's wherever it lands
-written straight in an `<svg>` or `<math>`, which `html!` refuses), it still reports a loss before
-that point, and otherwise logs a warning naming where it stopped, since what follows was not
-checked. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
+written straight in an `<svg>` or `<math>`, which `html!` refuses), it still reports a loss found
+before the element it cannot follow, and otherwise logs a warning naming where it stopped, since
+what follows was not checked. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
 a page's table takes apart too). A patch that
 begins with a `<col>` from an area's handler is refused even on a page that already has the area's
 stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know
