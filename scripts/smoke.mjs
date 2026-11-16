@@ -5152,7 +5152,8 @@ async function run(browser) {
     await split.context().close();
   }
   // A form's answer for one of two independent parts beside each other, with its own tag to read
-  // it again, does not take the place of the other part's tag (#1400).
+  // it again, does not take the place of the other part's tag, and finds its own beside a part
+  // that is a form whose control shadows `parentElement` (#1400).
   {
     const ind = await (await browser.newContext()).newPage();
     const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
@@ -5171,14 +5172,14 @@ async function run(browser) {
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
       await corten.patch(
         __html(
-          '<div id="ind-0"><p id="ind-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/ind-a-first" data-part="ind-a"></template><p id="ind-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/ind-b-first" data-part="ind-b"></template></div>',
+          '<div id="ind-0"><p id="ind-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/ind-a-first" data-part="ind-a"></template><form id="ind-b"><input name="parentElement">Waiting</form><template data-corten-read-again="0" data-from="/smoke/ind-b-first" data-part="ind-b"></template></div>',
         ),
       );
     });
     await ind.waitForSelector('template[data-from="/smoke/ind-a-poll"]', { state: "attached", timeout: 5000 }).catch(() => {});
     await ind.evaluate(async () => {
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-      await corten.patch(__html('<p id="ind-b">B by a form</p><template data-corten-read-again="1" data-from="/smoke/ind-b-poll"></template>'));
+      await corten.patch(__html('<form id="ind-b"><input name="parentElement">B by a form</form><template data-corten-read-again="1" data-from="/smoke/ind-b-poll"></template>'));
     });
     const indTags = await ind.evaluate(() => Array.from(document.querySelectorAll("#ind-0 > template")).map((tag) => tag.getAttribute("data-from")));
     // A sort of B before its poll changes the address it reads, on the page.
@@ -5189,6 +5190,31 @@ async function run(browser) {
       "a form's answer for one of two parts beside each other puts its tag to read it again in its own part's place, not the other's, where a sort reaches it",
       indTags.join() === "/smoke/ind-a-poll,/smoke/ind-b-poll" && indAsked.join() === "?o=2" && indB === "B ?o=2",
       JSON.stringify({ indTags, indAsked, indB }),
+    );
+    // And with the part's waiting tag inside the part the form's answer replaces: its tag goes
+    // beside the part drawn, where a sort reaches it too.
+    await ind.route("**/smoke/inner-first", () => {});
+    /** @type {string[]} */
+    const innerAsked = [];
+    await ind.route((url) => url.pathname === "/smoke/inner-poll", (route) => {
+      const search = new URL(route.request().url()).search;
+      innerAsked.push(search);
+      return route.fulfill(patchOf(`<div id="inner-b"><p>B ${search}</p></div>`));
+    });
+    await ind.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="inner-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="inner-0"><div id="inner-b"><p>Waiting</p><template data-corten-read-again="0" data-from="/smoke/inner-first" data-part="inner-b"></template></div></div>'));
+      await corten.patch(__html('<div id="inner-b"><p>B by a form</p></div><template data-corten-read-again="1" data-from="/smoke/inner-poll"></template>'));
+    });
+    const innerTags = await ind.evaluate(() => Array.from(document.querySelectorAll("#inner-0 > template")).map((tag) => tag.getAttribute("data-from")));
+    await ind.evaluate(() => document.querySelector('#inner-0 > template[data-from="/smoke/inner-poll"]')?.setAttribute("data-from", "/smoke/inner-poll?o=2"));
+    await ind.waitForFunction(() => document.querySelector("#inner-b p")?.textContent?.startsWith("B ?"), null, { timeout: 5000 }).catch(() => {});
+    const innerB = await ind.textContent("#inner-b p");
+    check(
+      "and so does one replacing a part whose waiting tag was inside it",
+      innerTags.join() === "/smoke/inner-poll" && innerAsked.join() === "?o=2" && innerB === "B ?o=2",
+      JSON.stringify({ innerTags, innerAsked, innerB }),
     );
     await ind.unrouteAll({ behavior: "ignoreErrors" });
     await ind.context().close();

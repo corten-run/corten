@@ -1012,6 +1012,10 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
+  // For an answer no tag asked for (a form's): the first element it draws in place of one that held
+  // a tag to read a part (that part's own), where its own tag then goes.
+  /** @type {Element | null} */
+  let heldTag = null;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
   for (const el of Array.from(content.children)) {
@@ -1035,6 +1039,7 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
       elementOwn.append.call(target, el.content);
     } else {
       if (target.parentElement) changedIn(target.parentElement, ["r", id, [el]]);
+      if (!asked && !heldTag && queryOne(target, PART_AGAIN)) heldTag = el;
       replaceKeeping(target, el, sent, took, true, within);
       put.push(el);
     }
@@ -1053,13 +1058,16 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
     const inside = !!asked && !asked.isConnected && !!asked.parentElement;
     const beside = asked?.isConnected ? asked : inside ? null : partTagBeside(put);
     if (beside) beside.replaceWith(again);
-    else if (inside) {
+    else if (inside || heldTag) {
       // The element the tag was in, drawn again under its id: not whatever else the answer drew.
       // Read through Node's own, as a form's controls may shadow both.
-      let was = /** @type {Element} */ (asked);
-      for (let up; (up = Reflect.get(Node.prototype, "parentElement", was)); ) was = up;
-      const id = idOf(was);
-      const drawn = put.find((el) => inPage(el) && !!id && idOf(el) === id) ?? put.find(inPage);
+      let drawn = heldTag && inPage(heldTag) ? heldTag : null;
+      if (inside) {
+        let was = /** @type {Element} */ (asked);
+        for (let up; (up = Reflect.get(Node.prototype, "parentElement", was)); ) was = up;
+        const id = idOf(was);
+        drawn = put.find((el) => inPage(el) && !!id && idOf(el) === id) ?? put.find(inPage) ?? null;
+      }
       if (drawn && matchesOf(drawn, `main, ${PAGE_PARTS}`)) elementOwn.append.call(drawn, again);
       else if (drawn) elementOwn.after.call(drawn, again);
     }
@@ -1082,10 +1090,12 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
 function partTagBeside(put) {
   for (const el of put) {
     const id = idOf(el);
-    if (!id || !el.parentElement) continue;
+    // Through Node's own, as a form's control may shadow it.
+    const parent = /** @type {Element | null} */ (Reflect.get(Node.prototype, "parentElement", el));
+    if (!id || !parent) continue;
     // Its own: the slow part's tag that named it (its read ended when the patch replaced it), or
     // one read again for it; not another part's of either kind.
-    const tag = Array.from(childrenOf(el.parentElement)).find(
+    const tag = Array.from(childrenOf(parent)).find(
       (sibling) =>
         matchesOf(sibling, PART_AGAIN) &&
         (hasAttr(sibling, "data-part") ? attrOf(sibling, "data-part") === id : (readFor.get(sibling)?.some((part) => idOf(part) === id) ?? true)),

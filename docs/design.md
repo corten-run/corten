@@ -3110,7 +3110,8 @@ rules something out.
     again (`ReadAgain::from`), which then reads in its place; that answer's tag goes beside the part
     it was in, as drawn again, when the tag it answered was inside the part it replaced, never in place of another part's (a
     form's answer's tag takes the place only of its own part's tag, the slow part's that named it
-    or one read again for it, so a sort still reaches it; never another part's)
+    or one read again for it, or goes beside the part when that tag was inside it, so a sort still
+    reaches it; never another part's)
     (inside it when that part is `<main>` or one of the layout's elements that are the page's).
     A part read again stops its read, and its listener, when its part leaves the page (an answer
     that was its tag alone reads for the parts the tag it answered read for, all of a shared
