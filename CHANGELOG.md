@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Verify the cancelled mixed campaign's captured source blobs and every selected
+  build context against its original authenticated subject before retirement;
+  refuse equally incomplete wrapper and custody copies without deletion intent.
+
 - Add an explicitly approved, single-attempt cancellation path for the exact old
   r21 mixed source-review wait. Signal only its verified pidfd-owned campaign entry,
   preserve the wrapper's terminal archive and all nine contexts, and require
