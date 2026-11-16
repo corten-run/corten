@@ -696,11 +696,8 @@ impl Router {
             paths.insert(entry.path.as_ref(), name).expect("router paths were already validated");
         }
         let inner = Router { inner: Inner::Routes(dispatch), edge: false };
-        let recording: Arc<dyn Outer> = if shared {
-            Arc::new(Recording::<true> { inner, paths })
-        } else {
-            Arc::new(Recording::<false> { inner, paths })
-        };
+        let recording: Arc<dyn Outer> =
+            if shared { Arc::new(Recording::<true> { inner, paths }) } else { Arc::new(Recording::<false> { inner, paths }) };
         Router { inner: Inner::Layered(recording), edge: true }
     }
 
