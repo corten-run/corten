@@ -34,6 +34,12 @@ must supply an authorization policy, not a review JSON field. Serialized handles
 work. A second instance, round, restart or completed attempt cannot acquire that root.
 No lock release, native-directory deletion, automatic cleanup or retry API exists.
 
+The private campaign umask remains in effect for evidence. Native fixture writers
+publish only their synthetic input file as `0644` and its immediate read-only bind
+root as `0711`. This permits known-path reads by non-root image users without directory
+listing or access to private sibling evidence. No recursive permission change or
+container user override is needed, and serialized workload input bytes are unchanged.
+
 The optional final `--group GROUP` is one exact current registry name, not an app/case
 filter. `bindGroupCampaign` returns `benchmark-isolated-group-campaign/v1`, with order
 exactly `[group]` and the same complete native binding that group has in `bindCampaign`.
@@ -401,6 +407,11 @@ eligibility cannot grant comparison; complete observed failures still finish the
 Live and recovery still replay every native scenario/fanout through the fixed verifier.
 Standalone native folders cannot establish cleanup. In a current campaign phase, the adapter
 also replays the adjacent fixed command's kernel observations and before/after host boundary.
+Its phase ordinal comes from the saved, rebound campaign order: zero on a dedicated
+group host, or that group's index in the full campaign. The adapter requires the exact
+selected binding and a matching campaign-plan hash, reservation, commit and nonce;
+it does not accept either ordinal interchangeably. The plan and reservation must remain
+unchanged across replay, as must the phase's evidence tree.
 It checks the exact binding/invocation, campaign/phase/command, boot and time window, native
 manifest, positive terminal empty scope, observed browser renderer, inherited controls and
 empty Docker container boundaries. Core's phase/journal seals bind these retained bytes;

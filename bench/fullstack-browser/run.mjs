@@ -8,7 +8,7 @@ import { hostname, platform, release } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { candidates, emptyCells, parseOptions, publishPort, retainedFamilies, schema, settings, sha256, validateTargets } from "./contract.mjs";
-import { records as fixtureRecords } from "../marketplace/fixtures.mjs";
+import { records as fixtureRecords, writeFixture } from "../marketplace/fixtures.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { runJourney } from "./journey.mjs";
 import { nativeBuildArgs } from "./build.mjs";
@@ -265,7 +265,7 @@ export async function run(args) {
     const { captureSources } = await import("../workloads/isolated/contract.mjs");
     source = captureSources(commit); native.sourceBinding = store.record("source-binding", source);
     native.inputsBefore = store.record("inputs-before", captureLiveInputs(store, source));
-    writeFileSync(join(folder, "marketplace.json"), JSON.stringify(records));
+    writeFixture(join(folder, "marketplace.json"), JSON.stringify(records));
     if (options.build) for (const app of options.apps) {
       if (interrupted) throw new Error("interrupted");
       const before = await sourceSnapshot();

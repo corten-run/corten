@@ -271,6 +271,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             const diagnostic = providerFailure(created);
             throw Object.assign(new Error("create completion was not proved; allocation retained for recovery"), diagnostic ? { providerDiagnostic: diagnostic } : {});
           }
+          const completed = JSON.parse(created.stdout);
+          assert.ok(Array.isArray(completed) && completed.length === 1 && Number.isSafeInteger(completed[0]?.id)
+            && completed[0].id > 0 && String(completed[0].id) === state.id,
+          "completed create and owned host differ; preserve reservation without provisioning");
           let ready = false;
           for (let i = 0; i < 40; i++) {
             if ((await ssh("true", 30000, true)).status === 0) { ready = true; break; }

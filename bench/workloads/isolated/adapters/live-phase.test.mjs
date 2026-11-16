@@ -4,6 +4,8 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { test } from "node:test";
 import { deploymentSha256 } from "../../deployments.mjs";
+import { groupNames } from "../../registry.mjs";
+import { campaignSchema, groupCampaignSchema } from "../campaign-contract.mjs";
 import { tree } from "../evidence.mjs";
 import { composePhase } from "../composition.mjs";
 import { composeHostProof, inspectLifetime } from "../host-lifetime.mjs";
@@ -12,7 +14,7 @@ import { inspectSaved as delivery } from "./live-delivery.mjs";
 import { inspectSaved as recovery } from "./recoverable-live.mjs";
 import { rewriteArtifact, syntheticFixture } from "./live-delivery.test.mjs";
 
-async function fixture(t, group, change = () => {}) {
+async function fixture(t, group, change = () => {}, dedicated = false) {
   const f = await syntheticFixture(t, group, { allRegistered: true, round: "r17" });
   for (const entry of f.plan.inventory) for (let i = 0; i < f.plan.scenarios.length; i++) await rewriteArtifact(f, entry.app, i, (a) => {
     a.capture = { schema: liveCaptureSchema, contract: liveContracts[group], records: [] };
@@ -20,7 +22,9 @@ async function fixture(t, group, change = () => {}) {
     a.network = [{ kind: "request", requestId: "http-1", method: "GET", url: "http://127.0.0.1:12345/" },
       { kind: "response", requestId: "http-1", status: 500, url: "http://127.0.0.1:12345/" }];
   });
-  const phase = join(f.folder, "r17-0123456789abcdef", `${group === "live-delivery" ? "06" : "07"}-${group}-timing`);
+  const order = dedicated ? [group] : [...groupNames];
+  const campaignRoot = join(f.folder, "r17-0123456789abcdef");
+  const phase = join(campaignRoot, `${String(order.indexOf(group)).padStart(2, "0")}-${group}-timing`);
   await mkdir(phase, { recursive: true });
   const native = join(phase, "native");
   for (const name of ["plan.json", "coverage.json", "source.diff.gz", ...f.plan.inventory.flatMap((entry) =>
@@ -48,12 +52,57 @@ async function fixture(t, group, change = () => {}) {
   change({ context, terminal, samples, before, after, binding: f.binding });
   const host = join(phase, `command-${command}-host`); await mkdir(host);
   const save = (file, value) => writeFile(file, JSON.stringify(value));
+  const campaignBody = { schema: dedicated ? groupCampaignSchema : campaignSchema, round: "r17", commit: f.binding.request.commit,
+    order, bindings: order.map((name) => name === group ? f.binding : { request: { group: name } }) };
+  const campaignPlan = { ...campaignBody, campaignSha256: deploymentSha256(campaignBody) };
+  const reservation = { schema: "benchmark-isolated-campaign-reservation/v1", id: campaign,
+    commit: campaignPlan.commit, campaignSha256: campaignPlan.campaignSha256 };
+  await save(join(campaignRoot, "plan.json"), campaignPlan);
+  await save(join(f.folder, ".host-attempt.json"), reservation);
   await save(join(host, "binding.json"), context); await save(join(host, "terminal.json"), terminal);
   await writeFile(join(host, "samples.jsonl"), samples.map((s) => JSON.stringify(s) + "\n").join(""));
   await save(join(phase, "host-before.json"), before); await save(join(phase, "host-after.json"), after);
   await save(join(phase, "native-manifest.json"), tree(native));
-  return { ...f, folder: native, phase, host, result, context, terminal, save, inspect: () => (group === "live-delivery" ? delivery : recovery)(f.binding, native) };
+  return { ...f, folder: native, phase, host, result, context, terminal, save, campaignPlan, reservation, campaignRoot,
+    inspect: () => (group === "live-delivery" ? delivery : recovery)(f.binding, native) };
 }
+
+for (const group of ["live-delivery", "recoverable-live"]) test(`${group}: dedicated campaign uses its own bound ordinal`, async (t) => {
+  const f = await fixture(t, group, () => {}, true), native = await f.inspect();
+  assert.equal(native.resources, "verified"); assert.equal(native.cleanupComplete, true);
+  assert.equal(native.attemptComplete, true); assert.equal(native.status, "failed");
+});
+
+for (const [name, mutate] of [
+  ["wrong group", (p) => { p.order = ["catalog-page"]; }],
+  ["arbitrary subset", (p) => { p.order.push("catalog-page"); p.bindings.push({ request: { group: "catalog-page" } }); }],
+  ["wrong scope", (p) => { p.schema = campaignSchema; }],
+  ["unknown scope", (p) => { p.schema = "unknown"; }],
+  ["wrong commit", (p) => { p.commit = "c".repeat(40); }],
+  ["wrong round", (p) => { p.round = "r18"; }],
+  ["changed selected binding", (p) => { p.bindings[0].request.recipe = "other"; }],
+]) test(`dedicated phase refuses ${name} even when rehashed`, async (t) => {
+  const f = await fixture(t, "live-delivery", () => {}, true);
+  const { campaignSha256: ignored, ...body } = structuredClone(f.campaignPlan); mutate(body);
+  const plan = { ...body, campaignSha256: deploymentSha256(body) };
+  await f.save(join(f.campaignRoot, "plan.json"), plan);
+  await f.save(join(f.campaignRoot, "..", ".host-attempt.json"), { ...f.reservation, campaignSha256: plan.campaignSha256 });
+  const result = await f.inspect(); assert.equal(result.resources, "invalid"); assert.equal(result.cleanupComplete, false);
+});
+
+for (const group of ["live-delivery", "recoverable-live"]) test(`${group}: registry ordinal cannot stand in for a dedicated ordinal`, async (t) => {
+  const f = await fixture(t, group, () => {}, true);
+  const wrong = join(f.campaignRoot, `${String(groupNames.indexOf(group)).padStart(2, "0")}-${group}-timing`);
+  await rename(f.phase, wrong);
+  const result = await (group === "live-delivery" ? delivery : recovery)(f.binding, join(wrong, "native"));
+  assert.equal(result.resources, "invalid"); assert.equal(result.cleanupComplete, false);
+});
+
+for (const field of ["id", "commit", "campaignSha256"]) test(`live phase requires matching reservation ${field}`, async (t) => {
+  const f = await fixture(t, "live-delivery", () => {}, true);
+  await f.save(join(f.campaignRoot, "..", ".host-attempt.json"), { ...f.reservation, [field]: "other" });
+  const result = await f.inspect(); assert.equal(result.resources, "invalid"); assert.equal(result.cleanupComplete, false);
+});
 
 for (const group of ["live-delivery", "recoverable-live"]) test(`${group}: exact core phase proof closes native lifecycle without promoting target failures`, async (t) => {
   const f = await fixture(t, group), native = await f.inspect();
