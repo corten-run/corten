@@ -4502,8 +4502,9 @@ rules something out.
     form is 266 bytes with fields against 331 with refs. Rendering a field writes its posted name as a string argument does;
     the item page's `render_cost`, which draws no field (so never notes the field module), is unchanged: its bytes are the same
     (7,772 for `<main>`, 9,236 for the document), and five alternated runs of each build gave
-    build and render of `<main>` in 19.2 us (15.6 to 20.8) before and 18.4 us (16.0 to 21.0) after,
-    each build's runs varying more than the two differ. The lookup is one pass
+    build and render of `<main>` in 19.2 us (18.0 to 21.7) on main and 20.4 us (18.0 to 22.8) on
+    this change, each build's runs varying more than the two differ, as they did when this was
+    first measured (19.2 us, 15.6 to 20.8, against 18.4 us, 16.0 to 21.0). The lookup is one pass
     over the form's controls when the handler runs, reasoned, not measured. Compile-time safety is
     what the change buys: the name was already right as text (`f.weight.as_str()`), and now the
     handler's parameter is the control, checked at the call.
@@ -4537,7 +4538,11 @@ rules something out.
     `corten dev`'s reports of a mismatched field in Chromium 156.0.8078.4; 2026-11-16, the runtime's size on `03283dcb3` against `1c72b0379`, and the
     smoke's retries of the field and format modules answered 503 and a link to a page that takes a
     field, on it, in the same three engines; 2026-11-16, the smoke's field and retry checks in the
-    same three engines and `corten dev`'s reports, on `e5e260bd6`, which merges main's `read()`.
+    same three engines and `corten dev`'s reports, on `e5e260bd6`, which merges main's `read()`;
+    2026-11-16, the item page's `render_cost` (native release builds) on `f7fc2e5ee` against
+    `226b12b35`, the runtime's and the field module's sizes on it, and the smoke's checks of the form
+    a field is found in, an empty group and a group named for a select, in the same three engines,
+    and `corten dev`'s reports, on it.
 
 ## Rules
 

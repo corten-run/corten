@@ -580,7 +580,7 @@ could not count on its type. Besides the cases above, a ref is an `<output>`, a 
 control outside any form, and an `<input type="image">`,
 which the browser leaves out of a form's controls since it is a submit button that posts `name.x`
 and `name.y`, never its field. The page's handlers that take a field load a small module that finds
-it (`corten-field`, 0.5 kB gzipped), as a format argument loads `corten-format`; a page with none
+it (`corten-field`, 893 bytes, 549 gzipped), as a format argument loads `corten-format`; a page with none
 does not.
 
 ## Shared scripts
