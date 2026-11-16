@@ -278,8 +278,8 @@ use std::{
 /// `<div>`, a `<p>`, a document's `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and
 /// `<title>`, which hold HTML, a `<title>` nested in an `<svg>`'s `<title>` included, and in a
 /// `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (but for a `<mglyph>` or a
-/// `<malignmark>` in them, which stay MathML's) and an `<annotation-xml>` whose `encoding` is
-/// `text/html` or `application/xhtml+xml`, which hold HTML too:
+/// `<malignmark>` in them, which stay MathML's) and an `<annotation-xml>` whose first `encoding`
+/// is `text/html` or `application/xhtml+xml`, which hold HTML too:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -359,7 +359,7 @@ use std::{
 /// Nor does an element the HTML standard's rules for foreign content take out of an `<svg>` or a
 /// `<math>` (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a
 /// `<font>` with `color`, `face` or `size`) written straight into one, or into an
-/// `<annotation-xml>` whose `encoding` is not an HTML one (or is not written), which holds MathML:
+/// `<annotation-xml>` whose first `encoding` is not an HTML one (or that has none), which holds MathML:
 /// the browser closes the `<svg>` or the MathML elements before it, so it and what follows land
 /// outside them. HTML in a drawing goes in a `<foreignObject>`, and in a formula in an `<mtext>`:
 ///
@@ -441,9 +441,11 @@ use std::{
 /// `<math>` with text in its `<mi>`, a `<div>` in its `<mtext>` and a `<title>` holding
 /// elements in a `<mglyph>` and a `<malignmark>` there, an `<svg>` straight in a `<math>`
 /// (MathML's, as a browser reads it), an `<annotation-xml>` holding HTML (its first `encoding`
-/// `text/html`, in any case), ones with a MathML `encoding` and with none holding a MathML
+/// `text/html`, in any letter case), ones with a MathML `encoding` and with none holding a MathML
 /// `<title>` and an `<svg>` with HTML in its `<foreignObject>`, one whose `encoding` an
-/// expression writes (which the markup does not show, so nothing in it is refused), and a link named by `aria-label` in an `<svg>`'s `<title>` whose
+/// expression writes and one where a spread comes before the written `encoding` (which the
+/// markup does not show, so nothing in them is refused; this spread writes `text/html` first,
+/// the one a browser keeps), and a link named by `aria-label` in an `<svg>`'s `<title>` whose
 /// `href` may write nothing (the accessible-name and `href` checks keep their older rule: they
 /// look at nothing in an `<svg>` but what its `<foreignObject>` holds):
 ///
@@ -458,6 +460,7 @@ use std::{
 /// fn main() {
 ///     let home: Option<&str> = Some("#top");
 ///     let encoding = "application/mathml+xml";
+///     let html_encoding = [("encoding", "text/html")];
 ///     let view = html! {
 ///         <div>
 ///             <script type="text/x-template">"<b>Draft</b>"</script>
@@ -472,6 +475,7 @@ use std::{
 ///             <math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>"x"</b></foreignObject></svg></annotation-xml></math>
 ///             <math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>
 ///             <math><annotation-xml encoding={encoding}><title><mrow></mrow></title></annotation-xml></math>
+///             <math><annotation-xml {..html_encoding} encoding="x"><div>"x"</div></annotation-xml></math>
 ///             <svg><title><a aria-label="Home" href={home}>"x"</a></title></svg>
 ///         </div>
 ///     };
@@ -489,6 +493,7 @@ use std::{
 ///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>x</b></foreignObject></svg></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="text/html" encoding="x"><div>x</div></annotation-xml></math>"#,
 ///             r##"<svg><title><a aria-label="Home" href="#top">x</a></title></svg></div>"##,
 ///         )
 ///     );

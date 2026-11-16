@@ -3389,9 +3389,9 @@ rules something out.
     instructions to the line (2,416 lines each, addresses aside). A document with refs cannot
     write its doctype: `html!` takes a `<!DOCTYPE html>` for a second root beside the `<html>`,
     and a component with refs renders one root element, so the harness writes the document
-    without one. That is a known limit, not a choice: the HTML standard requires the doctype, and a
-    page without it renders in quirks mode
-    ([#1489](https://github.com/corten-run/corten/issues/1489)). Card-market's `render_cost`,
+    without one. That is not a choice but a gap, tracked in
+    [#1489 A document component with refs, scope or keep cannot write `<!DOCTYPE html>`, because mark_scope counts it as a second root, so the page renders in quirks mode](https://github.com/corten-run/corten/issues/1489): the HTML standard requires the doctype, and a page without it renders in
+    quirks mode. Card-market's `render_cost`,
     on `6575d4d8c` against `72a37a87e` (no generated code has changed since), counted
     `ItemDetail`'s render at 2,372,754,748 instructions (median; 2,372,507,167 to 2,372,779,152)
     on the base and 2,372,745,747 (2,369,854,428 to 2,372,790,283) on the branch, each difference
@@ -4204,7 +4204,7 @@ rules something out.
     integration points), and in a `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (its
     text integration points, where a `<mglyph>` or a `<malignmark>` stays MathML's) and an
     `<annotation-xml>` whose first `encoding` (the one a browser keeps of an attribute written
-    twice) is `text/html` or `application/xhtml+xml`, in any case; SVG in a
+    twice) is `text/html` or `application/xhtml+xml`, in any letter case; SVG in a
     literal `<svg>`, where a `<textarea>`, `<title>` or `<style>` is SVG's and holds elements;
     MathML in a literal `<math>`, outside those points, and in an `<annotation-xml>` whose first
     `encoding` is another or that has none (where an `<svg>` is SVG's, as the standard's tree
@@ -4226,12 +4226,23 @@ rules something out.
 
     Not chosen: refusing HTML a browser rearranges inside HTML: a `<div>` in a `<p>` (the
     `<p>` closes before it), an `<a>` in an `<a>` or a `<form>` in a `<form>`, an `<li>` in an
-    `<li>`, a `<div>` written straight into a `<table>` (moved before the table). Those follow the
-    standard's insertion modes for HTML content, whose outcome depends on which elements are open
-    and in which mode (implied end tags, the adoption agency, foster parenting), not on the one
-    holder or namespace the three refused kinds read, so refusing them would need a model of those
-    modes in the macro; they compile as before, and the key check's limit for a table is in
-    [Choice 46](#choice-ref-values). Refusing where the markup does not show the context, which would refuse a
+    `<li>`, a `<div>` written straight into a `<table>` (moved before the table). Most of these
+    are decided by the elements open around the tag in the same markup, as the holder chain the
+    refused kinds follow is (a `<p>` open in button scope, an `<a>` among the active formatting
+    elements, a `<form>` already open, an `<li>` open with no special element but an `<address>`,
+    `<div>` or `<p>` between); only the `<table>` case needs the insertion modes (foster
+    parenting). They are left out for this change's size, not because the macro could not see
+    them: each is its own list from the standard (the tags that close a `<p>`, the scopes that
+    stop the search, the formatting elements the adoption agency reopens) with its own errors and
+    examples, and each has the same component edge as the refused kinds (a `<div>` at the top of
+    a component whose parent writes it in a `<p>`; [Limit 30](#limit-markup-context)). They
+    compile as before. A ref in such an element can land outside its component's scope, tracked
+    in [#1505 A ref inside an element the browser closes early (a div in a p) lands outside its component's scope, and nothing refuses or documents it](https://github.com/corten-run/corten/issues/1505), and the key check's limit for a table is in [Choice 46](#choice-ref-values).
+    Refusing an attribute written twice on one element, which a browser parses as the first:
+    this change reads the first `encoding` as a browser does rather than refuse the second,
+    because a duplicate attribute is a mistake on any element, not one of parsing context, and
+    refusing it touches every attribute `html!` writes, spreads included, so it belongs in a
+    change of its own, tracked in [#1504 html! accepts an attribute written twice on one element, which the browser parses as the first and drops the rest](https://github.com/corten-run/corten/issues/1504). Refusing where the markup does not show the context, which would refuse a
     component's SVG fragment, valid wherever its parent writes it in an `<svg>`. Following the
     context across components, which the macro does not see: each component's render would
     report its namespace to the next, at a cost to every render for markup few apps write. A
@@ -4244,12 +4255,17 @@ rules something out.
     `<xmp>`, `<iframe>`, `<noembed>` and `<noframes>`, and script data, `<script>`; `<plaintext>`;
     the HTML integration points in SVG, the MathML text integration points, the two start tags
     (`<mglyph>`, `<malignmark>`) they keep MathML's, and `<annotation-xml>`'s two HTML encodings;
+    the tokenizer's rule that of an attribute written twice on one tag the first is kept and the
+    rest are dropped;
     and the start tags its rules for parsing tokens in foreign content take out
     of an `<svg>` or a `<math>`, which `TEXT_ONLY`, `RAW_TEXT`, `SVG_HTML_POINTS`,
     `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the browsers
     Playwright runs, which read an element in those holders as text and keep one in an `<svg>`'s
-    own `<title>`); reasoned (an `html!` sees its own markup and nothing around it, so what its top
-    and a component's children land in is not known; the refusals add no code to what `html!`
+    own `<title>`, and keep the first of a duplicated `encoding`); reasoned (an `html!` sees its
+    own markup and nothing around it, so what its top and a component's children land in is not
+    known; `html!` writes an element's attributes in the order they are written, spreads in their
+    place (`open_tag` in `crates/corten-macros/src/html.rs`), so the first `encoding` in the
+    markup is the first the browser reads; the refusals add no code to what `html!`
     writes, so a view that compiles renders as before); value (correct output above the rest, the
     README's conflict order 1, which is why a refusal never stops markup a browser keeps as
     written; a mistake the compiler can see is a compile error, its 3 and Values 4).
@@ -4280,7 +4296,10 @@ rules something out.
     them (an element in a `<title>` in an `<mi>` and in an HTML `<annotation-xml>`, a `<div>` in
     an `<mrow>` and in an `<annotation-xml>` with no `encoding`, with a MathML one and with a
     non-HTML one before `text/html`, a `<p>` in an `<svg>`), and checks the parsed elements, and
-    passed in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1); 2026-11-14, a one-off probe, not a repository check: a
+    passed in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1). Its two
+    duplicated-`encoding` shapes (`TEXT/HTML` then `x`, which holds HTML, and `x` then
+    `text/html`, whose `<div>` lands outside the `<math>`) are the evidence for the tokenizer's
+    first-kept rule, and `open_tag`'s written order was read on `a10334375`; 2026-11-14, a one-off probe, not a repository check: a
     page written by hand (not by `html!`, which refuses most of it) loaded in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), reading
     `querySelectorAll` for an element written in a `<textarea>`, an HTML `<title>` (in `<head>`,
@@ -4749,8 +4768,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     form and a form a script adds are not seen. A patch is not read: the runtime applies it at the
     address the browser was already at.
 30. <a id="limit-markup-context"></a>An `html!` sees one component's markup, not what it lands in
-    or where a component writes its children, so `html!`'s refusals of markup a browser does not
-    keep as written ([Choice 54](#choice-html-parse-refusals)) and the debug check of a keyed ref's
+    or where a component writes its children, so `html!`'s refusals of three kinds of markup a
+    browser parses differently from how it is written (an element in an element whose content is
+    text, a `<plaintext>`, an element taken out of foreign content;
+    [Choice 54](#choice-html-parse-refusals)) and the debug check of a keyed ref's
     keys ([Choice 46](#choice-ref-values)) act only where that markup shows how a browser parses
     it, and where it does not they let a mistake pass rather than stop correct markup. At the top
     of a component's markup, which its parent may write into an `<svg>` or a `<math>`, none of

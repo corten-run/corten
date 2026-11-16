@@ -1015,8 +1015,8 @@ const MATH_HTML_POINTS: &[&str] = &["mi", "mo", "mn", "ms", "mtext"];
 enum Parsing {
     /// As HTML: under an element that is HTML's wherever it lands (one of `BREAKOUT`, which a
     /// document's `<head>` and `<body>` are), in an `<svg>`'s `<foreignObject>`, `<desc>` or
-    /// `<title>` (`SVG_HTML_POINTS`), or in a `<math>`'s `<annotation-xml>` with an HTML
-    /// `encoding`.
+    /// `<title>` (`SVG_HTML_POINTS`), or in a `<math>`'s `<annotation-xml>` whose first
+    /// `encoding` is an HTML one.
     Html,
     /// As HTML, but for two tags: straight in a `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` or
     /// `<mtext>` (`MATH_HTML_POINTS`), where a `<mglyph>` or a `<malignmark>` is MathML's.
@@ -1027,12 +1027,13 @@ enum Parsing {
     /// foreign content (`BREAKOUT`) is refused here as in an `<svg>`; the rules for elements
     /// read as text do not apply.
     Math,
-    /// As MathML, but an `<svg>` is SVG's: straight in an `<annotation-xml>` whose `encoding` is
-    /// written, and is not an HTML one, or is not written at all. Refuses as `Math` does.
+    /// As MathML, but an `<svg>` is SVG's: straight in an `<annotation-xml>` whose first
+    /// `encoding` is not an HTML one, or that has none. Refuses as `Math` does.
     AnnotationXml,
     /// Not known: at the top of an `html!` (a component's markup lands where its parent writes
     /// it, in an `<svg>` perhaps), among a component's children, which go where it writes them,
-    /// and in an `<annotation-xml>` whose `encoding` an expression or a spread may write.
+    /// and in an `<annotation-xml>` where an expression or a spread comes before the first written
+    /// `encoding` (either may write the first); one after it changes nothing.
     Unknown,
 }
 
@@ -2774,7 +2775,7 @@ mod tests {
     }
 
     /// A `<math>`'s text integration points hold HTML but for `<mglyph>` and `<malignmark>`, and
-    /// an `<annotation-xml>` holds HTML only with an HTML `encoding`; an `<svg>` straight in a
+    /// an `<annotation-xml>` holds HTML only with an HTML first `encoding`; an `<svg>` straight in a
     /// `<math>` is MathML's.
     #[test]
     fn a_math_holds_html_at_its_text_integration_points() {
@@ -2838,6 +2839,22 @@ mod tests {
         assert_eq!(parsing_within(math, "annotation-xml", &html_second), Parsing::AnnotationXml);
         let html_first = [Attr::Static("ENCODING".into(), "TEXT/HTML".into()), Attr::Static("encoding".into(), "x".into())];
         assert_eq!(parsing_within(math, "annotation-xml", &html_first), Parsing::Html);
+        // Only an `encoding` an expression writes makes it unknown: another attribute's expression
+        // or a ref before the written one changes nothing. (An `on:` holds a span, which a test
+        // cannot make outside a macro; it takes the same arm as a ref.)
+        for (encoding, parsing) in [("text/html", Parsing::Html), ("x", Parsing::AnnotationXml)] {
+            let attrs = [
+                Attr::Expr("class".into(), TokenStream::new()),
+                Attr::Ref(TokenStream::new(), None),
+                Attr::Static("encoding".into(), encoding.into()),
+            ];
+            assert_eq!(parsing_within(math, "annotation-xml", &attrs), parsing, "{encoding}");
+        }
+        // An expression after a written `encoding` writes a second one, which a browser drops.
+        for (encoding, parsing) in [("text/html", Parsing::Html), ("x", Parsing::AnnotationXml)] {
+            let attrs = [Attr::Static("encoding".into(), encoding.into()), Attr::Expr("encoding".into(), TokenStream::new())];
+            assert_eq!(parsing_within(math, "annotation-xml", &attrs), parsing, "{encoding} first");
+        }
         assert_eq!(parsing_within(math, "annotation-xml", &[Attr::Bare("encoding".into())]), Parsing::AnnotationXml);
         // An element a browser takes out of foreign content is refused there, as in an <svg>.
         for name in BREAKOUT {
