@@ -1534,15 +1534,24 @@ async function run(browser) {
       const body = (await res.text()).replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
       await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
     });
-    // The page's read again, once it has loaded: a navigation's fetch of it, or a reload where there
-    // is no Navigation API.
-    let [loaded, wholeReads] = [false, 0];
-    both.on("request", (r) => loaded && new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeReads++);
+    // The page's read again: a navigation's fetch of it, or a reload where there is no Navigation
+    // API. Every whole read after the load's own counts, from the first request on: a loaded
+    // WebKit fires `load` late enough that the read again can come before `goto` returns.
+    let wholeReads = -1;
+    both.on("request", (r) => new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeReads++);
+    // Whether the picks were drawn at all, seen as they are: the page's read again, about when
+    // they come (a loaded WebKit draws them some 300 ms after their read ends), swaps in <main>
+    // with them waiting again, so a look afterwards can miss them.
+    let drawnFirst = false;
+    await both.exposeBinding("__picksDrawn", () => {
+      drawnFirst = true;
+    });
+    await both.addInitScript(() =>
+      new MutationObserver(() => document.querySelectorAll("ul#picks li").length === 2 && (/** @type {any} */ (window)).__picksDrawn()).observe(document, { childList: true, subtree: true }),
+    );
     await both.goto(`${base}/`);
-    loaded = true;
-    await both.waitForSelector("ul#picks", { state: "attached", timeout: 5000 }).catch(() => {});
-    const drawnFirst = (await both.$$("ul#picks li")).length === 2;
-    for (let waited = 0; !wholeReads && waited < 5000; waited += 100) await both.waitForTimeout(100);
+    for (let waited = 0; !drawnFirst && waited < 5000; waited += 100) await both.waitForTimeout(100);
+    for (let waited = 0; wholeReads < 1 && waited < 5000; waited += 100) await both.waitForTimeout(100);
     const whole = wholeReads > 0;
     check("a page that asks to be read again is, though it also waits for a slow part", drawnFirst && whole, `picks drawn ${drawnFirst}, read again ${whole}`);
     await both.unrouteAll({ behavior: "ignoreErrors" });

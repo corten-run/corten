@@ -3146,7 +3146,11 @@ rules something out.
     Reads do not chain: a part waiting in the answer to a part's read, or to a part read again
     (`ReadAgain::from`), is marked failed rather than read, so two parts whose answers draw each
     other waiting cannot read each other without end with no delay; a part's own slow part is
-    read in by the link's page. A page whose head asks to be read again (`ReadAgain`) puts its
+    read in by the link's page. A part a `<corten-live>` fragment or a script's `patch` draws
+    waiting is read, as one a form's answer draws is: what draws it is not a read the runtime
+    started, so it sets the pace (a stream's fragments, a user's submits), and a fragment that
+    draws the part again ends the read the one before started, so one read at most is on its way
+    for a part. A page whose head asks to be read again (`ReadAgain`) puts its
     whole read off once, by its interval, while a part's read is on its way: read whole, the page
     would draw the part waiting again, so a part slower than the interval would never come, and
     once only, so a read the server never answers does not stop the page's reads. A part's answer
@@ -3236,7 +3240,9 @@ rules something out.
     ends putting the page's read off only once, a read cut by a hidden page read again when shown
     and not over a part a form replaced meanwhile (`pagehide` and `pageshow` dispatched by the
     test), a client navigation away leaving nothing marked, a page left whole and come back to with
-    its part, a part in a layout element that is the page's, a prerendered page read once shown
+    its part, a part in a layout element that is the page's, a part in a live region around
+    `<main>` drawn in place by a write's page and by its read again with `<main>` unchanged, a
+    part a `<corten-live>` fragment draws and draws again, a prerendered page read once shown
     (`document.prerendering` and `prerenderingchange` stood in for: Playwright's headless Chromium
     156 did not prerender a Speculation Rules page in a probe), and `@media (scripting: none)` and
     `(scripting: enabled)` with JavaScript off and on (`javaScriptEnabled` in Playwright 1.64.1),

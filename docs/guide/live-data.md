@@ -285,8 +285,10 @@ that element, stops the fetch, so the server stops reading. The read depends on 
 alone: a patch of anything else meanwhile (the next cell of a grid, a live row of the same list,
 another part read first) neither stops it nor marks it. A part is read once; one that should be
 read again later carries `ReadAgain::from` in its answer ([read again](requests-and-forms.md)). A
-part a page or a form's patch draws waiting is read; one a part's answer, or the answer to a
-part read again, draws waiting is marked failed instead, so reads do not chain. A read the
+part a page, a form's patch, a script's `patch` or a `<corten-live>` fragment draws waiting is
+read, at the pace those come (a fragment that draws the part again ends the read the one before
+started); one a part's answer, or the answer to a part read again, draws waiting is marked failed
+instead, so reads do not chain. A read the
 browser cut short by keeping the page in its back-forward cache is made again when the page is
 shown, if its part is still there; a page the browser prerenders reads its parts once it is shown.
 A page whose head asks to be read again (`ReadAgain`) waits once more, one interval, while a
