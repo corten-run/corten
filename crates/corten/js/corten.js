@@ -83,6 +83,10 @@ const metas = scriptsMeta?.parentElement ?? document;
 // loads the handlers' own modules.
 const FORMAT = "corten-format";
 
+// A form field a handler is given (`js::fill(f.weight)`) is found by field.js, a module of its own
+// as the formatter is: only a page whose handlers take a field loads it, with theirs.
+const FIELD = "corten-field";
+
 // A multipart submit whose progress a form's `on:corten:progress` handler is told of goes by
 // XMLHttpRequest (upload.js), a module of its own that only a page with such a form loads, as
 // soon as the form's handlers are read; fetch reports no upload progress. Without it (it did not
@@ -156,6 +160,7 @@ function load(name) {
           loading.delete(name);
           const wait = Math.min(30_000, (failed.get(name)?.[0] ?? 250) * 2);
           failed.set(name, [wait, performance.now() + wait]);
+          // Corten's own modules (`corten-format`) are served with any app's scripts: no component to list.
           console.error(`corten: script module ${url} did not load (is its component in App::components?)`, error);
         },
       );
@@ -244,7 +249,11 @@ function bindings(el) {
   if (!entry || entry.source !== source) {
     entry = { source, list: parseOn(source) };
     for (const b of entry.list) {
-      if (b.args.some(formatted)) formats.add(b);
+      /** @type {string[]} */
+      const extra = [];
+      if (b.args.some(takes("f"))) extra.push(FORMAT);
+      if (b.args.some(takes("~"))) extra.push(FIELD);
+      if (extra.length) needs.set(b, [b.module, ...extra]);
       if (b.type === PROGRESS) load(UPLOAD);
     }
     parsed.set(el, entry);
@@ -252,18 +261,28 @@ function bindings(el) {
   return entry.list;
 }
 
-/** The bindings with a format argument, which need the format module too. @type {WeakSet<Binding>} */
-const formats = new WeakSet();
+/**
+ * The modules of the bindings that need more than their own: the format module for a format
+ * argument, the field module for a field. @type {WeakMap<Binding, string[]>}
+ */
+const needs = new WeakMap();
 
-/** @param {Arg} arg @returns {boolean} */
-const formatted = (arg) => arg.kind === "f" || (arg.kind === "{" && arg.fields.some(([, field]) => formatted(field)));
+/** The modules binding `b` needs: its own, and those of its arguments. @param {Binding} b */
+const needed = (b) => needs.get(b) ?? [b.module];
+
+/** Whether module `name` is in. @param {string} name */
+const isLoaded = (name) => modules.has(name);
+
+/** Whether an argument, or one in its group, is of kind `kind`. @param {string} kind @returns {(arg: Arg) => boolean} */
+const takes = (kind) => (arg) => arg.kind === kind || (arg.kind === "{" && arg.fields.some(([, part]) => takes(kind)(part)));
 
 /**
- * Imports what binding `b` needs: its module, and the format module when it takes a format.
+ * Imports what binding `b` needs: its module, and the format or field module when it takes one.
  * @param {Binding} b
  */
 function loadFor(b) {
-  return formats.has(b) ? Promise.all([load(b.module), load(FORMAT)]) : load(b.module);
+  const names = needs.get(b);
+  return names ? Promise.all(names.map(load)) : load(b.module);
 }
 
 /**
@@ -499,11 +518,13 @@ function resolve(arg, el, event, binding) {
       return new Map(findRefs(el, arg.owner, arg.name).map((found) => [found, JSON.parse(attrOf(found, "data-ref-value") ?? "null")]));
     case "^":
       return closestRef(el, arg.owner, arg.name, event) ?? SKIP;
+    case "~":
+      return /** @type {typeof import("./field.js")} */ (modules.get(FIELD)).given(el, arg, binding);
     case "{": {
       /** @type {Record<string, unknown>} */
       const group = {};
-      for (const [key, field] of arg.fields) {
-        const value = resolve(field, el, event, binding);
+      for (const [key, part] of arg.fields) {
+        const value = resolve(part, el, event, binding);
         if (value === SKIP) return SKIP;
         group[key] = value;
       }
@@ -528,7 +549,7 @@ function connectWhenLoaded(el, binding, event, ready, signal) {
   loadFor(binding).then(() => {
     if (signal.aborted || !inPage(el)) return;
     if (ready()) return void run(el, binding, event);
-    const wait = Math.max(untilRetry(binding.module), formats.has(binding) ? untilRetry(FORMAT) : 0);
+    const wait = Math.max(...needed(binding).map(untilRetry));
     setTimeout(() => connectWhenLoaded(el, binding, event, ready, signal), wait);
   });
 }
@@ -543,8 +564,9 @@ function connectWhenLoaded(el, binding, event, ready, signal) {
  */
 function run(el, binding, event) {
   const module = modules.get(binding.module);
-  if (!module || (formats.has(binding) && !modules.has(FORMAT))) {
-    const ready = () => modules.has(binding.module) && (!formats.has(binding) || modules.has(FORMAT));
+  const extra = needs.get(binding);
+  if (!module || (extra && !extra.every(isLoaded))) {
+    const ready = () => needed(binding).every(isLoaded);
     // Another event gets the browser's default; a module that did not load is asked for again, so
     // the next one finds it.
     if (event.type === "connect") connectWhenLoaded(el, binding, event, ready, signalOf(el));
