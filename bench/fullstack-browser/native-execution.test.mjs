@@ -37,6 +37,13 @@ function fixture() {
     ...["container", "network", "image", "volume"].map((kind) => ({ event: "inventory", at: 230, kind, scope: "owned", code: 0, ids: [] })),
   ];
 }
+test("native execution root keeps the exact replayed host-subject identity", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "corten-native-subject-")); t.after(() => rmSync(root, { recursive: true }));
+  const store = new EvidenceStore(root), ledger = new ExecutionLedger(store, { task, commit, startedAt: 100 });
+  for (const event of fixture()) ledger.append(event);
+  const ref = ledger.finish({ endedAt: 300 }); store.seal(); const reader = openEvidence(root);
+  assert.equal(replayExecution(reader, ref).subjectSha256, ref.sha256); reader.finish();
+});
 test("execution ledger binds original ID/configuration and derives terminal cleanup independently", (t) => {
   const result = replay(t, fixture()); assert.deepEqual(result.blocked, []); assert.equal(result.cleanupComplete, true);
   assert.equal(result.participants[0].id, cid); assert.deepEqual(result.participants[0].window, { startedAt: 110, endedAt: 200 });

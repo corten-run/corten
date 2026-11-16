@@ -1,5 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { EvidenceStore, openEvidence } from "./native-evidence.mjs";
 import { replayWorkerAbsence, replayPeerApplicability, expectedNativeExitCode } from "./native-lifetimes.mjs";
 
 export function journalFixture() {
@@ -18,6 +23,41 @@ export function journalFixture() {
       { event: "Target.getTargets", phase: "terminal", startedAt: 552, receivedAt: 553, targets: [target] },
     ] };
 }
+
+test("accepted large record streams actual verified and blocked native proof hashes including newline", (t) => {
+  const folder = mkdtempSync(join(tmpdir(), "native-proof-record-")); t.after(() => rmSync(folder, { recursive: true }));
+  const journal = journalFixture(), event = { event: "native-control", receivedAt: 40, publicPadding: "x".repeat(32768) };
+  journal.events.splice(9, 0, ...Array(7900).fill(event));
+  const store = new EvidenceStore(folder), ref = store.recordJSON("journal", journal); store.seal();
+  const reader = openEvidence(folder), decoded = reader.json(ref); reader.finish();
+  const logicalLowerBound = Buffer.byteLength(JSON.stringify(event)) * 7900;
+  assert.ok(logicalLowerBound > 250000000); assert.equal(decoded.events.length, 7911);
+  // Independent native JSON reference, one small event at a time. The fixture's
+  // events member is last; no whole expanded journal/string is ever allocated.
+  const expected = () => {
+    const hash = createHash("sha256").update(JSON.stringify({ ...decoded, events: [] }).slice(0, -2)), cache = new WeakMap();
+    for (const [i, row] of decoded.events.entries()) {
+      if (i) hash.update(",");
+      if (!cache.has(row)) cache.set(row, JSON.stringify(row)); hash.update(cache.get(row));
+    }
+    return hash.update("]}\n").digest("hex");
+  };
+  const digest = expected(), stringify = JSON.stringify;
+  // A recording mock would retain every yielded string/argument and defeat
+  // this memory regression even when the production consumer streams.
+  JSON.stringify = (value, ...args) => {
+    assert.ok(value !== decoded, "Native proof must not stringify the whole accepted journal");
+    return stringify(value, ...args);
+  };
+  t.after(() => { JSON.stringify = stringify; });
+  const workers = replayWorkerAbsence(decoded); assert.equal(workers.status, "verified"); assert.equal(workers.journalSha256, digest);
+  const peers = replayPeerApplicability(decoded, workers); assert.equal(peers.status, "verified"); assert.equal(peers.journalSha256, digest);
+  assert.throws(() => replayPeerApplicability(decoded, { ...workers, journalSha256: "0".repeat(64) }), /not bound/);
+  decoded.observationFailures = ["Observed collector loss"];
+  const blocked = replayWorkerAbsence(decoded); assert.equal(blocked.status, "blocked"); assert.equal(blocked.journalSha256, expected());
+  assert.equal(replayPeerApplicability(decoded, blocked).status, "blocked");
+  t.diagnostic(JSON.stringify({ logicalLowerBound, storedBytes: store.total, files: store.files.size, peakRSSKiB: process.resourceUsage().maxRSS }));
+});
 test("continuous worker-free completed HTTP journal derives applicability, not semantic cleanup", () => {
   const journal = journalFixture(), workers = replayWorkerAbsence(journal), peers = replayPeerApplicability(journal, workers);
   assert.equal(workers.status, "verified"); assert.equal(peers.status, "verified"); assert.equal(peers.applicability, "empty-set");

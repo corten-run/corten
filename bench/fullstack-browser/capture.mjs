@@ -6,6 +6,8 @@ import { reconcileRequests } from "./ledger.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
 import { replayActionBinding } from "./binding-window.mjs";
 import { validateBindingArtifact } from "./binding-artifact.mjs";
+import { createHash } from "node:crypto";
+import { updateJSON } from "./json-records.mjs";
 
 const keys = ["subscriptions", "connections", "listeners", "timers", "pendingTasks"];
 const owned = (value) => {
@@ -89,15 +91,17 @@ export function projectCase(cell, profile, app, settings, bindingArtifact = null
 
 // Every candidate/profile survives export. Rejected projection keeps its raw
 // evidence in summary.json; the strict schema prohibits partial invented cells.
-export function exportBrowserCaptures(summary, records) {
+export function exportBrowserCaptures(summary, records, readCell = (cell) => cell) {
   const plan = summary.effectivePlan, settings = oracleSettings(summary.settings), captures = {}, reports = {};
   for (const app of candidates) {
     const raw = summary.cells[app]; assert.ok(Array.isArray(raw) && raw.length === plan.cases.length, "Raw profile matrix incomplete");
     const capture = { schema: browserCaptureSchema, app, effectivePlan: structuredClone(plan), cases: plan.cases.map((profile) => unavailable({ case: profile.key }, "not-run", "Native profile not executed")) };
-    const diagnostics = [];
-    for (const profile of plan.cases) {
-      const matches = raw.filter((cell) => cell.case === profile.key); assert.equal(matches.length, 1, "Missing/duplicate raw case");
-      const cell = matches[0], index = capture.cases.findIndex((c) => c.case === cell.case);
+    const diagnostics = [], digest = createHash("sha256").update("["), seen = new Set();
+    for (const [rawIndex, saved] of raw.entries()) {
+      const cell = readCell(saved, app), profile = plan.cases.find((p) => p.key === cell.case);
+      assert.ok(profile && !seen.has(cell.case), "Missing/duplicate raw case"); seen.add(cell.case);
+      if (rawIndex) digest.update(","); updateJSON(digest, cell);
+      const index = capture.cases.findIndex((c) => c.case === cell.case);
       if (cell.outcome !== "captured") {
         assert.ok(["failed", "unsupported", "not-run"].includes(cell.outcome), "Unknown raw outcome");
         capture.cases[index] = unavailable(cell, cell.outcome, cell.reason ?? cell.evidence?.failures?.[0] ?? "Native evidence unavailable"); continue;
@@ -118,7 +122,7 @@ export function exportBrowserCaptures(summary, records) {
       }
     }
     const validation = validateBrowserCapture(plan, capture, records, settings);
-    captures[app] = capture; reports[app] = { validation, diagnostics, rawCasesSha256: sha256(JSON.stringify(raw)), captureSha256: sha256(JSON.stringify(capture)) };
+    captures[app] = capture; reports[app] = { validation, diagnostics, rawCasesSha256: digest.update("]").digest("hex"), captureSha256: sha256(JSON.stringify(capture)) };
   }
   return { captures, manifest: { schema: "native-browser-strict-export/v1", settings, reports, code: structuredClone(summary.code), images: structuredClone(summary.images), browser: structuredClone(summary.browser),
     scope: "Offline strict semantic captures, not native qualification, comparative measurements or load readiness. Partial evidence remains in summary.json." } };

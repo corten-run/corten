@@ -4,6 +4,7 @@ import { runInNewContext } from "node:vm";
 import { snapshotPage } from "../marketplace/check.mjs";
 import { definition } from "../workloads/registry.mjs";
 import { encoded, exact, sha256 } from "./native-evidence.mjs";
+import { jsonByteLength } from "./json-records.mjs";
 
 // These fixed functions alone choose reads. Neither capture nor replay accepts
 // a source, selector or function from the caller or saved observation.
@@ -262,7 +263,7 @@ async function readNativeBoundary(page, identity, collect, observer, startedAt) 
   const check = () => { assert.equal(changed, false); assert.ok(Date.now() - startedAt <= 15000); };
   const measure = (raw) => {
     // This transient size check is never written to evidence or diagnostics.
-    assert.ok((bytes += Buffer.byteLength(JSON.stringify(raw))) <= 32 * 1024 ** 2);
+    assert.ok((bytes += jsonByteLength(raw, 32 * 1024 ** 2 - bytes)) <= 32 * 1024 ** 2);
     return raw;
   };
   const consume = (raw) => {
@@ -473,7 +474,7 @@ export async function collectBrowserDOM(page, identity) {
   const transcript = await readNativeBoundary(page, { ...identity, url }, collect, observer, startedAt);
   const observation = { schema: "native-browser-dom-observation/v1", observer, ...identity,
     readInterval: { startedAt, finishedAt: Date.now() }, url, snapshotSha256, ...transcript };
-  assert.ok(encoded(observation).length <= 32 * 1024 ** 2);
+  assert.ok(jsonByteLength(observation, 32 * 1024 ** 2 - 1) + 1 <= 32 * 1024 ** 2, "DOM JSON exceeds bounds");
   expectedShape({ observer, ...identity, readInterval: observation.readInterval, url });
   return observation;
 }
@@ -487,7 +488,7 @@ export function replayBrowserDOM(observation, expectedIdentity, nativeDocument) 
   exact(observation, ["schema", ...Object.keys(expectedIdentity), "snapshotSha256", "roots", "events", "result", "failure", "scopeObservation", "urlObservation", "boundaryObservation"]);
   assert.equal(observation.schema, "native-browser-dom-observation/v1"); assert.equal(observation.snapshotSha256, snapshotSha256);
   for (const key of Object.keys(expectedIdentity)) assert.deepEqual(observation[key], expectedIdentity[key]);
-  assert.ok(encoded(observation).length <= 32 * 1024 ** 2);
+  assert.ok(jsonByteLength(observation, 32 * 1024 ** 2 - 1) + 1 <= 32 * 1024 ** 2, "DOM JSON exceeds bounds");
   assert.deepEqual(observation.roots, { document: 0, location: 1, global: 2 });
   assert.ok(Array.isArray(observation.events) && observation.events.length <= 30000);
   if (observation.failure !== null) {
