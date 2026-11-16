@@ -180,7 +180,9 @@ test("browser cleanup and mutation probes retain real final request and upstream
         (l) => { l.phases[2].after.snapshot.events.at(-1).completed = null; },
         (l) => { l.phases[3].after.snapshot.events.at(-1).completed = null; },
       ]) {
-        const altered = structuredClone(audit.ledger); mutate(altered);
+        // Saved JSON has independent occurrences. structuredClone preserves the
+        // collector's immutable aliases and would mutate several snapshots.
+        const altered = JSON.parse(JSON.stringify(audit.ledger)); mutate(altered);
         assert.equal(reconcileUpstream(altered, options).outcome, "unknown");
       }
       assert.equal(reconcileUpstream(audit.ledger, { ...options, source: "fixture" }).outcome, "unknown");

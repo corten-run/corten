@@ -10,6 +10,11 @@ Corten is pre-1.0, so any minor version may change the API.
   final status, body bytes (or `"stream"`) and duration to response readiness. Off for existing
   apps; `corten new` enables it in the app it writes. Uses the existing subscriber and escaping.
 
+- Fullstack browser benchmark evidence uses bounded, authenticated, deduplicated JSON
+  records and incremental raw-case hashing instead of one growing inline summary. The
+  complete matrix, raw observations, native settings, safety ceilings and proof gates
+  are preserved; bounded historical summaries remain read-only diagnostics.
+
 - Scope the official cloud checkout's public umask to Git source creation so
   unprivileged load generators can read committed benchmark scripts. Keep job,
   control and campaign state private, with real Linux Git/nonroot regression
