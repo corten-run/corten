@@ -50,18 +50,20 @@ export function imageProof(summary) {
     assert.equal(raw.length, 1); const info = raw[0];
     assert.equal(info.Id, saved.imageId);
     for (const [key, value] of Object.entries(saved.labels)) assert.equal(info.Config?.Labels?.[key], value);
-    assert.deepEqual(imageCommandEvidence(info), saved.execution, "saved app execution differs from actual built image");
+    const execution = imageCommandEvidence(info);
+    assert.deepEqual(execution, saved.execution, "saved app execution differs from actual built image");
     // Preserve actual configuration without forwarding image Env, which may contain secrets.
     images.push({ app, payload, imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
-      rootFS: info.RootFS, config: { entrypoint: info.Config?.Entrypoint, cmd: info.Config?.Cmd, workingDir: info.Config?.WorkingDir },
+      rootFS: info.RootFS, config: { entrypoint: execution.Entrypoint, cmd: execution.Cmd, workingDir: info.Config.WorkingDir },
       labels: saved.labels });
   }
   for (const tool of ["node", "k6"]) {
     const raw = JSON.parse(dockerRead(["image", "inspect", summary.tools[tool].imageId]));
     assert.equal(raw.length, 1); const info = raw[0]; assert.equal(info.Id, summary.tools[tool].imageId);
-    assert.deepEqual(imageCommandEvidence(info), summary.toolExecutions[tool], "saved execution differs from actual tool image");
+    const execution = imageCommandEvidence(info);
+    assert.deepEqual(execution, summary.toolExecutions[tool], "saved execution differs from actual tool image");
     images.push({ tool, imageId: info.Id, created: info.Created, architecture: info.Architecture, os: info.Os,
-      rootFS: info.RootFS, config: { entrypoint: info.Config.Entrypoint, cmd: info.Config.Cmd, workingDir: info.Config.WorkingDir } });
+      rootFS: info.RootFS, config: { entrypoint: execution.Entrypoint, cmd: execution.Cmd, workingDir: info.Config.WorkingDir } });
   }
   return images;
 }

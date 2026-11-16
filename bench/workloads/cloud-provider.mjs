@@ -101,17 +101,19 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
     })();
     return closing;
   }
-  const run = async (args, timeout = 60000, allowFail = false) => {
+  const run = async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
     if (closed || failed || interrupted()) throw uncertain();
     assert.ok(!pending, "provider action already pending");
     assert.ok(Array.isArray(args) && args.length <= 20 && args.every((value) => typeof value === "string" && value.length <= 512 && !value.includes("\0")));
     assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 900000 && typeof allowFail === "boolean");
+    if (deleteProofExpiresAtMs !== undefined) assert.ok(args[2] === "delete" && Number.isSafeInteger(deleteProofExpiresAtMs) && deleteProofExpiresAtMs > 0);
     try {
       if (!child) await start();
       if (failed || closed || interrupted()) throw uncertain();
       const id = ++sequence;
       const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get" }; });
-      child.send({ schema: "cloud-provider-action/v1", sequence: id, args, timeout, allowFail }, (error) => { if (error) fail(); });
+      child.send({ schema: "cloud-provider-action/v1", sequence: id, args, timeout, allowFail,
+        ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }, (error) => { if (error) fail(); });
       return await bounded(result, timeout + 1000);
     } catch { await close(); throw uncertain(); }
   };

@@ -17,6 +17,22 @@ Corten is pre-1.0, so any minor version may change the API.
   load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
+- Bound failed-native retirement proof age from the final SSH request's local
+  start, including response delivery, and refuse expired DELETEs after asynchronous
+  HTTPS socket/TLS setup without queuing a mutation before readiness.
+
+- Add an explicitly approved r21 failed-native custody/retirement action, separate
+  from benchmark qualification. Preserve original failure evidence and all reserved
+  native roots before fresh terminal-host checks and one owned deletion attempt;
+  stream directory admission within global evidence budgets and carry the final
+  proof's absolute expiry through private provider dispatch. Keep ordinary
+  collection gates and uncertain-delete reconciliation unchanged.
+
+- Retain omitted optional Docker image/container command defaults as explicit null
+  in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
+  Missing or malformed image configuration, malformed execution and substituted or missing
+  required nonempty container commands remain invalid; no image or workload changes.
+
 - Publish synthetic benchmark fixtures with explicit readable file permissions
   and search-only bind roots, including under the private campaign umask. Keep
   neighboring evidence private and contender users/read-only mounts unchanged.
