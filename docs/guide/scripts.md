@@ -910,12 +910,12 @@ async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::S
 }
 
 // In another page's markup: a link per set it can switch to. Without JavaScript it opens the
-// set's page; with it, its click reads the set's data and draws it here.
+// set's page; with it, its click reads the set's data and draws it here, and the address stays.
 <a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>{&s.name}</a>
 ```
 
 ```js
-import { read } from "corten/read";
+import { read, ReadError } from "corten/read";
 /** @import { ScreenUrl } from "corten/read" */
 /** @typedef {import("../types/app").SetListing} SetListing */
 
@@ -930,18 +930,20 @@ const switching = new WeakMap();
 export async function switchTo(event, rows, set, signal) {
   // A click that opens a new tab or window is the link's own.
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  // Aborted when the link leaves the page or the next switch starts. Made before the click is
+  // taken, so a browser that cannot (no AbortSignal.any) throws here and the link opens the page.
+  const mine = new AbortController();
+  const stop = AbortSignal.any([signal, mine.signal]);
   event.preventDefault();
   switching.get(rows)?.abort();
-  const mine = new AbortController();
   switching.set(rows, mine);
-  // Aborted when the link leaves the page or the next switch starts.
-  const stop = AbortSignal.any([signal, mine.signal]);
   try {
     const listing = await read(set, { signal: stop });
     // listing.products is SetListing's, as the server declared it: draw it into rows.
   } catch (error) {
     if (stop.aborted) return; // the link left the page, or a later switch took over
-    throw error;
+    if (!(error instanceof ReadError)) throw error;
+    location.assign(set); // the read failed (offline, a 401, a redirect): the set's page instead
   }
 }
 ```
@@ -980,26 +982,32 @@ within it make no request at all. The page and its data share the URL, and `Vary
 keeps a cached page from answering a read. The browser keeps one answer per URL, so the 304 holds
 while nothing else fetched that URL in between: once the page itself is fetched there again (a
 navigation back to it), the next read gets the whole answer. A read rejects with a `ReadError` (from `corten/read`)
-when the answer is not a success (`status` is its status, a 404 or a 503) or when there is none it
-can use (`status` 0, with the error as `cause`: offline, a redirect, or a success that is not a
-screen's JSON, whose `cause` is a `TypeError`), and with `signal`'s reason once it aborts, even
-when a failed answer came first. A redirect is not followed: middleware that sends a signed-out
-visitor to sign in would otherwise hand the script another route's answer. The browser does not
-say where it would have gone, so a sign-in redirect is a `ReadError` 0, as being offline is; a
-script that may meet one can navigate to the URL instead, and the browser follows it
-([Limits](../design.md#limit-read-redirect)). In a handler pass `signal`, so a read the element no
+when the answer is not a success (`status` is its status: a 404, a 503, or the 401 that Corten's
+own sign-in refusal, a `Caller` or `Refused::sign_in`, answers a data client where a browser gets
+a redirect) or when there is none it can use (`status` 0, with the error as `cause`: `fetch`'s
+`TypeError` offline, a `SyntaxError` for a success that is not JSON, a `TypeError` for JSON that
+is not a screen's), and with `signal`'s reason once it aborts, even when a failed answer came
+first. A redirect is not followed, since its target is another route's answer: it is a
+`ReadError` 0 with `redirected` true. Corten answers a data client with none, so a redirect is one
+the app writes (its own middleware, or an answer it replaced): send a signed-out visitor to sign
+in with `Refused::sign_in` ([Who is asking](app.md#who-is-asking)), which a script reads as a 401.
+On either, a script can navigate to the URL, and the browser follows the sign-in or the redirect,
+as `switchTo` does ([Limits](../design.md#limit-read-redirect)). In a handler pass `signal`, so a read the element no
 longer needs is dropped when it leaves the page; the runtime reports a handler's rejected promise,
 so a handler whose element can leave while it reads catches the rejection and returns when
 its signal is aborted, as `switchTo` does. A read the user can start again before the last one
 answers gets a controller of its own that the next one aborts, joined to `signal` with
-`AbortSignal.any`, so an older answer that arrives last is never drawn. The envelope is checked; the data is trusted as the route's own type, as a
+`AbortSignal.any`, so an older answer that arrives last is never drawn. `switchTo` keeps the
+address: a reload, the back button or a shared link shows the page the address names, not the set
+it drew, so a switch that should be in the address is a plain link the runtime navigates, with no
+handler. The envelope is checked; the data is trusted as the route's own type, as a
 feed's rows are ([design Choice 40](../design.md#choice-script-boundaries)). `read()` returns
 what the handler gives `req.screen`, and any script on this origin can read it with the user's
 cookie, so give it only what the page itself may show that user.
 
 Data the page needs when it loads is a handler argument, which costs no request; data it may never
 need, or that a choice the user makes picks, is a read; a change to what the server draws is a
-`data-patch` form. `corten/read` is a module of its own (666 bytes, 438 gzipped), served only to
+`data-patch` form. `corten/read` is a module of its own (749 bytes, 486 gzipped), served only to
 apps whose scripts import it and preloaded with those scripts, so a page that reads nothing does
 not download it and the runtime is unchanged; such an app's import map names it on every page (60
 bytes, under 10 compressed)

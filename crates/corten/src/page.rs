@@ -2150,6 +2150,23 @@ impl Req {
     /// # let _ = get(set);
     /// ```
     ///
+    /// ```
+    /// use std::time::Duration;
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// let set = |req: Req| async move {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     Public::new(
+    ///         Duration::from_secs(60),
+    ///         req.screen::<_, corten::AnyAnswer, _>(&listing, html! { <html><head><title>"All"</title><Corten /></head><body><main>"All"</main></body></html> }),
+    ///     )
+    /// };
+    /// # let _: corten::Methods = get(set);
+    /// ```
+    ///
     /// Nor does `NoStore::new(..)` in a closure:
     ///
     /// ```compile_fail,E0283
@@ -2165,8 +2182,9 @@ impl Req {
     /// # let _ = get(set);
     /// ```
     ///
+    /// and names the kind the same way:
+    ///
     /// ```
-    /// use std::time::Duration;
     /// use corten::prelude::*;
     ///
     /// #[derive(ToJson)]
@@ -2174,8 +2192,7 @@ impl Req {
     ///
     /// let set = |req: Req| async move {
     ///     let listing = SetListing { name: "All".into() };
-    ///     Public::new(
-    ///         Duration::from_secs(60),
+    ///     NoStore::new(
     ///         req.screen::<_, corten::AnyAnswer, _>(&listing, html! { <html><head><title>"All"</title><Corten /></head><body><main>"All"</main></body></html> }),
     ///     )
     /// };

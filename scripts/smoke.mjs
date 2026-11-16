@@ -592,7 +592,13 @@ async function run(browser) {
       const settled = (p) =>
         p.then(
           () => "resolved",
-          (e) => (e instanceof ReadError ? `ReadError ${e.status}` : e instanceof DOMException ? e.name : String(e)),
+          (e) => (e instanceof ReadError ? `ReadError ${e.status}${e.redirected ? " redirected" : ""}` : e instanceof DOMException ? e.name : String(e)),
+        );
+      /** @param {Promise<unknown>} p */
+      const cause = (p) =>
+        p.then(
+          () => "resolved",
+          (e) => (e instanceof ReadError ? `ReadError ${e.status} ${e.cause instanceof Error ? e.cause.name : String(e.cause)}` : String(e)),
         );
       const missing = await settled(read(/** @type {any} */ ("/smoke/reading?missing=true")));
       const moved = await settled(read(/** @type {any} */ ("/smoke/reading?moved=true")));
@@ -604,7 +610,7 @@ async function run(browser) {
       // Two answers no server here gives, from a stand-in fetch: a 404 that arrives as the signal
       // aborts, and a success that is not a screen's JSON.
       const real = window.fetch;
-      let late, bare;
+      let late, bare, notJson;
       try {
         const leaving = new AbortController();
         window.fetch = async () => {
@@ -613,23 +619,23 @@ async function run(browser) {
         };
         late = await settled(read(/** @type {any} */ ("/smoke/reading"), { signal: leaving.signal }));
         window.fetch = async () => new Response('{"rows":[]}', { headers: { "content-type": "application/json" } });
-        bare = await read(/** @type {any} */ ("/smoke/reading")).then(
-          () => "resolved",
-          (e) => (e instanceof ReadError ? `ReadError ${e.status} ${e.cause instanceof TypeError ? "TypeError" : String(e.cause)}` : String(e)),
-        );
+        bare = await cause(read(/** @type {any} */ ("/smoke/reading")));
+        window.fetch = async () => new Response("<p>not JSON</p>", { headers: { "content-type": "text/html" } });
+        notJson = await cause(read(/** @type {any} */ ("/smoke/reading")));
       } finally {
         window.fetch = real;
       }
-      return { missing, moved, aborted, before, late, bare };
+      return { missing, moved, aborted, before, late, bare, notJson };
     });
     check(
-      "read() rejects with a ReadError of the status when the answer is not a success, with a ReadError 0 for a redirect it does not follow, with a ReadError 0 whose cause is a TypeError for a success that is not a screen's JSON, and with the signal's reason once it aborts, even after a failed answer",
+      "read() rejects with a ReadError of the status when the answer is not a success, with a redirected ReadError 0 for a redirect it does not follow, with a ReadError 0 whose cause is a SyntaxError for a success that is not JSON and a TypeError for JSON that is not a screen's, and with the signal's reason once it aborts, even after a failed answer (the last three from a stand-in fetch)",
       outcomes.missing === "ReadError 404" &&
-        outcomes.moved === "ReadError 0" &&
+        outcomes.moved === "ReadError 0 redirected" &&
         outcomes.aborted === "AbortError" &&
         outcomes.before === "Error: left" &&
         outcomes.late === "AbortError" &&
-        outcomes.bare === "ReadError 0 TypeError",
+        outcomes.bare === "ReadError 0 TypeError" &&
+        outcomes.notJson === "ReadError 0 SyntaxError",
       JSON.stringify(outcomes),
     );
     await reader.close();

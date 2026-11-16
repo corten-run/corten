@@ -286,12 +286,12 @@ async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::S
     let listing = SetListing::read(at.set).await?; // a ToJson, added with Types::add
     req.screen(&listing, set_page(&req, &listing))
 }
-// another page's markup, a link that is the set's page without JavaScript:
+// another page's markup, a link that is the set's page without JavaScript (with it, the address stays):
 // <a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>
 ```
 
 ```js
-import { read } from "corten/read";
+import { read, ReadError } from "corten/read";
 /** @import { ScreenUrl } from "corten/read" */
 /** @typedef {import("../types/app").SetListing} SetListing */
 
@@ -305,24 +305,27 @@ const switching = new WeakMap(); // each table's switch in progress, aborted by 
 /** @param {MouseEvent} event @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
 export async function switchTo(event, rows, set, signal) {
   if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; // a new tab: the link's
-  event.preventDefault();
-  switching.get(rows)?.abort();
   const mine = new AbortController();
-  switching.set(rows, mine);
   const stop = AbortSignal.any([signal, mine.signal]); // the link left, or a later switch started
+  event.preventDefault(); // after the line above: where it throws, the link still opens the page
+  switching.get(rows)?.abort();
+  switching.set(rows, mine);
   try {
     const listing = await read(set, { signal: stop }); // a SetListing: draw it into rows
   } catch (error) {
     if (stop.aborted) return; // so an older, slower answer is never drawn
-    throw error;
+    if (!(error instanceof ReadError)) throw error;
+    location.assign(set); // a failed read (offline, a 401, a redirect): the set's page instead
   }
 }
 ```
 
-It rejects with a `ReadError` (`status` the answer's, or 0 with a `cause` when there was none it
-could use, a redirect included: it follows none, and cannot tell a sign-in redirect from another)
-and with `signal`'s reason once it aborts, even after a failed answer; a handler whose element can
-leave while it reads catches that and returns when its signal is aborted. A read the user can
+It rejects with a `ReadError` (`status` the answer's, a signed-out `Caller` or `Refused::sign_in`
+included, which answers a data client 401; or 0, with `redirected` true for a redirect, which it
+follows none of and Corten never sends a data client, else with the error as `cause`) and with
+`signal`'s reason once it aborts, even after a failed answer. An app sends a signed-out visitor to
+sign in with `Refused::sign_in`, not a redirect of its own. A handler whose element can leave
+while it reads catches the rejection and returns when its signal is aborted. A read the user can
 start again gets its own `AbortController`, aborted by the next, as above.
 Never `fetch` a screen's JSON by hand or write its type: the route types it. `read()` returns what
 the handler gives `req.screen` to any script on this origin, with the user's cookie: only what the

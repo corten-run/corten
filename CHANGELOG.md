@@ -16,13 +16,14 @@ Corten is pre-1.0, so any minor version may change the API.
   itself does not compile). A route says `data` without `patches` or `rows`, and the same route
   mounted again by hand (`Area::route`, `Api::route`) with a `get` that answers a page or other
   data stops the app when it is built. It follows no redirect, and rejects with a `ReadError`
-  (`status` the answer's, or 0 with a `cause` when there was none it could use: offline, a
-  redirect, which it cannot tell from being offline, or a success that is not a screen's JSON,
-  whose `cause` is a `TypeError`) and with `signal`'s reason once it aborts, even after a failed
+  (`status` the answer's, a signed-out `Caller`'s or `Refused::sign_in`'s 401 included; or 0 when
+  there was none it could use, with `redirected` true for a redirect the app wrote itself, else
+  with the error as `cause`: offline, a success that is not JSON, a `SyntaxError`, or JSON that
+  is not a screen's, a `TypeError`) and with `signal`'s reason once it aborts, even after a failed
   answer. `req.patch`,
   `patch_with_status`, `patch_or`, `invalid` and `invalid_with` answer only as `AnyAnswer` or
   `Patches` (the sealed `corten::answer::PatchingKind`), so a handler that returns
-  `HtmlResult<Screen<T>>` cannot answer through them. The module (666 bytes, 438 with gzip, 367
+  `HtmlResult<Screen<T>>` cannot answer through them. The module (749 bytes, 486 with gzip, 409
   with brotli) is served and preloaded only for apps whose scripts import it; the runtime is
   unchanged. A static script's import of `corten/keys` or `corten/read` is now looked for outside
   its comments, so a `corten/keys` named only in a comment no longer stops the app
