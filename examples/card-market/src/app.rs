@@ -104,7 +104,12 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
     let policy = Policy::new().report_to(&routes::CspReports);
     let policy = if std::env::var_os("HTTPS").is_some() { policy.hsts() } else { policy };
     let ready = source.clone();
-    App::new(routes::router(source.clone()))
+    let pwa = Pwa::new(manifest).import_script(views::Static::SW_PUSH_JS).network_only(mcp::Mcp::PATH);
+    // The browser test's own routes and its count of requests (`smoke.rs`), built in only for the
+    // test (`build.rs`), so a deploy's build cannot serve them.
+    #[cfg(smoke_routes)]
+    let (pwa, count) = (pwa.network_only(crate::smoke::url::Once::PATH), crate::smoke::Requests::default());
+    let app = App::new(routes::router(source.clone()))
         .area(|area| items::area(area, source.clone()).middleware(limit.clone()))
         .area(|area| grading::area(area).components(&[ConditionGuide]))
         .area(|area| {
@@ -115,12 +120,15 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
         .api(|routes| api::api(routes, ApiState { source, partners }).middleware(limit.for_partners()))
         .api(|routes| {
             let routes = mcp::api(routes).route::<mcp::Mcp>(tools).errors(rpc_failure);
-            origins.split(',').filter(|o| !o.is_empty()).fold(routes, |routes, origin| routes.allow_origin(origin))
+            let routes = origins.split(',').filter(|o| !o.is_empty()).fold(routes, |routes, origin| routes.allow_origin(origin));
+            #[cfg(smoke_routes)]
+            let routes = routes.middleware(count.clone());
+            routes
         })
         .error_page(views::error_page, ())
         .messages::<Msg>()
         .components(views::COMPONENTS)
-        .pwa(Pwa::new(manifest).import_script(views::Static::SW_PUSH_JS).network_only(mcp::Mcp::PATH))
+        .pwa(pwa)
         .policy(policy)
         // An item page waits on the item API: past 10 seconds the visitor gets the 503 page.
         .deadline(Duration::from_secs(10))
@@ -128,7 +136,10 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
         .ready(move || {
             let source = ready.clone();
             async move { source.reachable().await }
-        })
+        });
+    #[cfg(smoke_routes)]
+    let app = app.area(|area| crate::smoke::url::area(area, count.clone()).middleware(count));
+    app
 }
 
 /// What the JSON routes share: the items, and the partners that may set alerts.

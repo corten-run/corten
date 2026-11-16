@@ -42,8 +42,9 @@ Choice in the same pull request.
    before writing); run it on `crates examples bench` after editing markup.
 5. Edit the runtime in `crates/corten/js/corten.js` and `view.js` (`dev.js`, the checks only
    `corten dev` serves, is embedded as written); the crate embeds their minified builds in
-   `js/dist/`, which only `npm run build:js` writes, with the runtime's size in the README
-   (`npm run check` fails when either is stale). The `data-on` format is written by
+   `js/dist/`, which only `npm run build:js` writes, with the runtime's size in the README and each
+   module size a guide gives after a module's name, as `(3,005 bytes, 1,492 gzipped)`
+   (`npm run check` fails when any of them is stale). The `data-on` format is written by
    `crates/corten/src/script.rs` and read by `crates/corten/js/on.js`; a change to it updates
    `crates/corten/src/script/wire.json`, which both sides are tested against (`cargo test` and
    `npm run check`).

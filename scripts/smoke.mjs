@@ -2631,10 +2631,14 @@ async function run(browser) {
       document.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
       document.querySelector("#queue-box form")?.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
     }, form);
-    await page.click("#queue-box button");
+    // Dispatch each press in the page: a loaded browser can acknowledge Playwright's click
+    // before its submit runs. The first must run before n changes, the second before pressed().
+    const first = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue", { timeout: 6000 });
+    await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#queue-box button")).click());
+    await first;
     await page.fill("#queue-box [name=n]", "2");
     const busy = await page.getAttribute("#queue-box form", "aria-busy");
-    await page.click("#queue-box button");
+    await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#queue-box button")).click());
     pressed();
     const until = Date.now() + 6000;
     let ended = await done();
@@ -2936,14 +2940,18 @@ async function run(browser) {
         );
     });
     await pickFile(["first", 1]);
-    await page.click("#queue-file button");
+    // As in queueCase, the submit must run before changing the file or releasing its answer.
+    const first = page.waitForRequest((r) => new URL(r.url()).pathname === "/queue-file", { timeout: 6000 });
+    await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#queue-file button")).click());
+    await first;
     if (second) await pickFile(second);
     const busy = await page.getAttribute("#queue-file", "aria-busy");
-    await page.click("#queue-file button");
+    await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#queue-file button")).click());
     pressed();
     const want = second ? "saved 2" : "saved 1";
+    // Read the outcome even when a loaded browser is not delivering animation frames.
     const ended = await page
-      .waitForFunction((want) => document.getElementById("queue-file-out")?.textContent === want, want, { timeout: 6000 })
+      .waitForFunction((want) => document.getElementById("queue-file-out")?.textContent === want, want, { timeout: 6000, polling: 50 })
       .then(() => true, () => false);
     // Time in which a send the queue must not make would be seen.
     await page.waitForTimeout(700);
