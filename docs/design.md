@@ -4533,7 +4533,8 @@ rules something out.
     them, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), and
     `corten dev`'s reports of a mismatched field in Chromium 156.0.8078.4; 2026-11-16, the runtime's size on `03283dcb3` against `1c72b0379`, and the
     smoke's retries of the field and format modules answered 503 and a link to a page that takes a
-    field, on it, in the same three engines.
+    field, on it, in the same three engines; 2026-11-16, the smoke's field and retry checks in the
+    same three engines and `corten dev`'s reports, on `e5e260bd6`, which merges main's `read()`.
 
 ## Rules
 
