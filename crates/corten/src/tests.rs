@@ -2692,6 +2692,35 @@ async fn a_route_that_says_patches_answers_the_runtimes_read_with_a_patch() {
     assert_eq!((page.status(), page.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/saved"));
 }
 
+/// A page that draws a part waiting (`ReadAgain::now`, its tag inside the part) preloads the part
+/// module with the runtime, and so does a navigation's answer, which the runtime moves into the
+/// head; a page without one preloads nothing more. The module is served beside the runtime, which
+/// imports it from there, versioned and cached with it (#1400).
+#[tokio::test]
+async fn a_page_that_waits_for_a_part_preloads_the_part_module() {
+    fn page(req: &Req, waits: bool) -> HtmlResult {
+        let now = waits.then(|| ReadAgain::now(url_patches::Saved { after: None }));
+        req.test_page("Home", html! { <p id={MsgId}>"Finding" {now}</p> })
+    }
+    let routes = Table::new()
+        .route("/", get(|req: Req| async move { page(&req, true) }))
+        .route("/plain", get(|req: Req| async move { page(&req, false) }));
+    let preload = format!(r#"<link rel="modulepreload" href="{}">"#, crate::part_path());
+    assert_eq!(crate::part_path(), format!("/corten/{}/part.js", crate::runtime_version()));
+    for mode in [None, Some("nav")] {
+        let (status, _, body) = call_with(app(routes.clone(), None), "GET", "/", mode, None).await;
+        assert_eq!(status, StatusCode::OK, "{mode:?} {body}");
+        assert!(body.contains(&preload), "{mode:?}: {body}");
+        assert!(body.contains(r#"<p id="msg">Finding<template data-corten-read-now data-from="/saved"></template></p>"#), "{body}");
+        let (_, _, plain) = call_with(app(routes.clone(), None), "GET", "/plain", mode, None).await;
+        assert!(!plain.contains("part.js"), "{mode:?}: {plain}");
+    }
+    let (status, headers, body) = call_with(app(routes, None), "GET", crate::part_path(), None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, crate::PART_JS));
+    assert_eq!(headers["content-type"], "text/javascript; charset=utf-8");
+    assert!(headers["cache-control"].to_str().unwrap().contains("immutable"), "{headers:?}");
+}
+
 /// A route that says `patches` mounted by hand (`Area::route`) with a `get` handler that answers
 /// one, as its routes module would: the runtime's read of it still gets the patch. One that may
 /// answer the page does not compile (`Methods`'s doctest).

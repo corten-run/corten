@@ -2049,15 +2049,14 @@ req.page(html! {
 `examples/watchlist`'s alerts page has all three.
 
 A part the page does not wait for at all (a slow read, such as recommendations) is read the same
-way, once and with no delay: `ReadAgain::now(route, PartId)` beside the part drawn waiting, naming
-it, and the page's own handler answers both with `req.patch_or_with(part, page)`, whose sides are
-closures, so the part's read is not the page's and the page's is not the part's. It is read once,
-so a page that waits for one and asks in its head to be read again still is. The runtime marks
-the named element, and only it, `aria-busy="true"` while the read is on its way and
-`data-corten-read-failed` if it ends without a patch, where a stylesheet shows the link to the page
-with the part read in that a browser without JavaScript follows
-([A slow part](live-data.md#a-slow-part)). A read again's own tag (`ReadAgain::from`) is read a
-second apart at the least, so a script's patch whose tag says 0 does not ask again at once.
+way, once and with no delay: `ReadAgain::now(route)` inside the part drawn waiting, and the page's
+own handler answers both with `req.patch_or_with(part, page)`, whose sides are closures, so the
+part's read is not the page's and the page's is not the part's. It is read once, so a page that
+waits for one and asks in its head to be read again still is, once the part has come or one more
+interval has passed. The runtime marks the element the tag is in, and only it, `aria-busy="true"`
+while the read is on its way and `data-corten-read-failed` if the read does not replace it (no
+patch, an error page, a redirect), where a stylesheet shows the link to the page with the part
+read in that a browser without JavaScript follows ([A slow part](live-data.md#a-slow-part)).
 
 A page whose changing part a `<corten-live>` relays ([live data](live-data.md)) already keeps
 itself fresh with JavaScript; reading it whole would replace the `<corten-live>` and open its

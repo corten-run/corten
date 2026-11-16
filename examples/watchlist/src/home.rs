@@ -253,8 +253,8 @@ fn LastTrade(text: &str) -> impl Render {
 #[derive(Id)]
 struct PicksId;
 
-/// The picks waiting, with the runtime's read of them beside them (`ReadAgain::now`, naming
-/// `PicksId`), which the page's own handler answers (`page`). Its link goes to the same page
+/// The picks waiting, with the runtime's read of them inside them (`ReadAgain::now`), which the
+/// page's own handler answers (`page`) with the picks that replace them. Its link goes to the same page
 /// with the picks read in, and shows where no read will bring them (`picks_loading.css`): without JavaScript, which reads
 /// nothing, and once the read has failed (`data-corten-read-failed`), when the line saying they
 /// are on their way is hidden instead. A browser without the `scripting` media feature shows
@@ -265,8 +265,8 @@ pub(crate) fn PicksLoading() -> impl Render {
         <p id={PicksId}>
             <span class={Finding}>"Finding picks for you..."</span>
             <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
+            {ReadAgain::now(url::Home::default())}
         </p>
-        {ReadAgain::now(url::Home::default(), PicksId)}
     }
 }
 
@@ -564,7 +564,7 @@ mod tests {
     }
 
     /// A slow part (#1264, #1400): the page goes without the picks and draws them waiting with
-    /// the runtime's read of them beside them, which the same route answers with the picks alone;
+    /// the runtime's read of them inside them, which the same route answers with the picks alone;
     /// the waiting part links to the same page with them read in, for a browser without
     /// JavaScript, which reads nothing, and for a read that fails.
     #[tokio::test]
@@ -575,8 +575,8 @@ mod tests {
         assert!(
             page.contains(concat!(
                 r#"<p id="picks"><span class="picks-loading__finding">Finding picks for you...</span>"#,
-                r#"<a class="picks-loading__show" href="/?picks=true" rel="nofollow">Show picks for you</a></p>"#,
-                r#"<template data-corten-read-again="0" data-from="/" data-part="picks"></template>"#
+                r#"<a class="picks-loading__show" href="/?picks=true" rel="nofollow">Show picks for you</a>"#,
+                r#"<template data-corten-read-now data-from="/"></template></p>"#
             )),
             "{page}"
         );
@@ -590,7 +590,7 @@ mod tests {
         let read = app.get(&url::Home { picks: Some(true) }).await;
         let read = read.text();
         assert!(read.contains("<li>Halcyon Health (HLTH) 0.00%</li><li>Northgate Rail (NRTH) 0.00%</li></ul>"), "{read}");
-        assert!(!read.contains("read-again=\"0\"") && !read.contains("?picks=true") && !read.contains("Finding picks"), "{read}");
+        assert!(!read.contains("data-corten-read-now") && !read.contains("?picks=true") && !read.contains("Finding picks"), "{read}");
         // A data client asks the same address for them; without it they are left out.
         let data = app.get(&url::Home { picks: Some(true) }).mode(Mode::Data).await;
         assert!(data.text().contains(r#""picks":[{"id":"HLTH","#), "{}", data.text());

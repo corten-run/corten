@@ -214,7 +214,8 @@ can go without at first is drawn waiting, and read once the page is on the scree
 own route. One handler answers both: the route says `patches`, and its handler answers with
 `req.patch_or_with(part, page)`. The part side runs only for the runtime's read of the part
 (`Mode::Action`) and reads only the part; the page side runs for every other request and draws
-the part waiting, with `ReadAgain::now(route, PartId)` beside it, naming the waiting element.
+the part waiting, with `ReadAgain::now(route)` inside the waiting element, whose id the part's
+patch replaces.
 
 ```rust,ignore
 // in the routes module: `picks` has the page read them in (the link a browser without
@@ -254,9 +255,10 @@ fn PicksLoading() -> impl Render {
         <p id={PicksId}>
             <span class={Finding}>"Finding picks for you..."</span>
             <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
+            // read at once from the page's own route, as a patch that replaces #picks, the
+            // element the tag is in
+            {ReadAgain::now(url::Home::default())}
         </p>
-        // read at once from the page's own route, as a patch that replaces #picks
-        {ReadAgain::now(url::Home::default(), PicksId)}
     }
 }
 
@@ -275,46 +277,48 @@ App::new(url::router()).components(&[.., PicksLoading])
 The runtime fetches the route with `corten: action` as soon as the page is on the screen (a full
 load or a navigation), whether the tab is shown or not, and applies the patch it answers by id.
 The handler runs once for the page and once for the part, and each run reads only what it draws.
-The element the tag names, and only it, is `aria-busy="true"` while the read is on its way, and a
-navigation away, or a patch that replaces that element, stops the fetch, so the server stops
-reading. The read depends on that element
+The reads are a script module of their own, which only a page with such a tag loads, preloaded
+with the runtime: a page without a slow part loads nothing for them. The element the tag is in
+(the part: it needs an id, and the runtime logs a tag in an element without one) is
+`aria-busy="true"` while the read is on its way, and a navigation away, or a patch that replaces
+that element, stops the fetch, so the server stops reading. The read depends on that element
 alone: a patch of anything else meanwhile (the next cell of a grid, a live row of the same list,
 another part read first) neither stops it nor marks it. A part is read once; one that should be
 read again later carries `ReadAgain::from` in its answer ([read again](requests-and-forms.md)). A
-part a form's patch or another part's answer draws waiting is read the same way, unless its tag
-names the address that answer came from, which would ask for itself again: that part is marked
-failed. Tags are read in `<main>` and in the layout's elements that are the page's (`page` in
-`html!`). A read the server redirects (a sign-in) takes the page there, as a form's does, unless
-its part was replaced or a navigation started meanwhile (the user's link wins, whether the
-runtime or the browser loads its page); a read the browser
-cut short by keeping the page in its back-forward cache, or by beginning to leave it (Firefox ends
-a page's fetches before it knows a link's answer is a 204 or a download), is made again when the
-page is shown, if its part is still the one it waited for; a page the browser prerenders reads its parts once it is
-shown. A page whose head asks to be read again (`ReadAgain`) is not read whole while a part's
-read is on its way, since its answer would replace the part and the read with it: a part slower
-than the page's interval still comes, and the page is read once it has (unless the part's answer
-asked to be read again itself, which then reads in the page's place). A read whose part a form's
-answer replaces is over: its other parts show their link at once.
+part a page or a form's patch draws waiting is read; one a part's answer, or the answer to a
+part read again, draws waiting is marked failed instead, so reads do not chain. A read the
+browser cut short by keeping the page in its back-forward cache is made again when the page is
+shown, if its part is still there; a page the browser prerenders reads its parts once it is shown.
+A page whose head asks to be read again (`ReadAgain`) waits once more, one interval, while a
+part's read is on its way, since its answer would draw the part waiting again: a part slower than
+the interval but not than two still comes, and a read that never ends holds the page's reads up
+only once.
 
-Two parts one read draws (four panels from one report) each take a tag naming its own element and
-the same address: the runtime reads it once, and the part side draws both in one patch. No
-element wraps a part, so each can be a cell of a grid. A shared read is as slow as all it reads,
-so each part waits for the slowest: parts that do not need one read take a query field each
-(`url::Home { part: Some(Part::Picks) }`), so each has an address and a read of its own. A page
-in a `Public`, which shared caches give to anyone, answers its part to anyone too: a part read for
-one visitor there (picks for the visitor on a cached home page) is read from a route of its own
-that says `patches`, named in its `ReadAgain::now`.
+Two parts one read draws (four panels from one report) each take a tag inside its own element,
+with the same address: the runtime reads it once, and the part side draws both in one patch. A
+`<template>` is allowed in any element a part may be, so each can be a cell of a grid, a row of
+a table or an item of a list. A shared read is as slow as all it reads, so each part waits for the
+slowest: independent slow parts on one route share that one read unless the app gives each a query
+field (`url::Home { part: Some(Part::Picks) }`), so each has an address and a read of its own. A
+page in a `Public`, which shared caches give to anyone, answers its part to anyone too: a part
+read for one visitor there (picks for the visitor on a cached home page) needs a route of its own
+that says `patches`, named in its `ReadAgain::now`. The page side takes any `HtmlResult`, so a
+`req.patch` there compiles too, and a full load would get the fragment: draw the page there
+([#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)).
 
 Without JavaScript nothing reads the part, so the waiting part holds a link to the page's own
 route with a query field its page side reads the part in for: no second route, and nothing of
 Corten's own in the URL. The component's CSS hides the link while a read may still bring the
 part, and shows it in place of the line saying the part is on its way under
-`@media (scripting: none)` and once the read has failed: a read that brings no patch (offline,
-the server unreachable, an error page) marks the waiting elements `data-corten-read-failed`. A read
-that brings a patch is not a failure, even one that leaves the part as it was. One of the parts
-replaced or removed while the read was on its way (a form's answer, a script) is not drawn over:
-the patch is not applied, and the parts still waiting are marked failed, so their links show. A browser without
-the `scripting` media feature matches neither query and shows both. The query follows whether
+`@media (scripting: none)` and once the read has failed: a part its read did not replace
+(offline, the server unreachable, an error page, a page, a patch without it) is marked
+`data-corten-read-failed`. A read the server redirects (a sign-in) marks it too, and the page
+stays: its link, a navigation, follows the redirect, as without JavaScript, so a user typing
+elsewhere on the page is not taken away. A read that brings a patch is not a failure, even one
+that leaves the part as it was. One of a shared read's parts replaced or removed while the read
+was on its way (a form's answer, a script) is not drawn over: the patch is not applied, and the
+parts still waiting are marked failed at once, so their links show. A browser without the
+`scripting` media feature matches neither query and shows both. The query follows whether
 scripts are on, not whether the runtime ran
 ([A control only the script makes work](scripts.md#a-control-only-the-script-makes-work)): with
 the runtime blocked or failed, the line stays and the link is hidden. Following the link costs

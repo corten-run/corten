@@ -724,6 +724,9 @@ impl Pwa {
         let imports: Vec<String> = self.imports.iter().map(|src| src.url().into_owned()).collect();
         let mut precache = self.precache.clone();
         precache.push(crate::runtime_path().to_string());
+        // The part module beside it (`ReadAgain::now`), so an offline page that waits for a part
+        // can still mark its read failed and show its link.
+        precache.push(crate::part_path().to_string());
         let cache = format!("corten-{}-{}", self.version, crate::runtime_version());
         // The worker is served under the pages' CSP, which requires Trusted Types: the URLs go
         // through the runtime's policy, as the page's `register` does.
