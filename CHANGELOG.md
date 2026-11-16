@@ -46,8 +46,12 @@ Corten is pre-1.0, so any minor version may change the API.
   `corten::form::DrawZone` (`DrawZone::from(req.zone())`, `DrawZone::from(Utc)` on a `Public`
   page, `DrawZone::from(&input.zone)` when a refused post is drawn again): `zone.field(f.zone)`
   writes the zone as a hidden input, `zone.name()` shows it (`UTC` without JavaScript), and
-  `zone.local(at)` writes an instant as the input's `value`, `min` or `max`, each drawn rounded
-  down to the input's minute steps with `floor_minute`. The post reads the hidden input as a
+  `zone.local(at)` writes an instant as the input's `value` (rounded down to the input's minute
+  steps with `floor_minute`), and `zone.min(at)` and `zone.max(at)` as its bounds, to the minute
+  and, where the clocks go back, at the offset that keeps every value between them inside them.
+  A tz database zone draws and reads only where its rules reach (jiff's range, to late 9999-12-30
+  UTC); past it a time is refused, not taken as UTC, and `Zone::known_offset` says where a zone's
+  rules end. The post reads the hidden input as a
   `corten::form::FormZone` field, and `entry.at(&input.zone)` is the instant;
   `entry.at_keeping(&input.zone, stored)`, for an edit form, is `stored` when the field comes back
   as it was drawn. The compiler checks that a posted time is read only in a `FormZone` (not in

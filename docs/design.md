@@ -4709,8 +4709,8 @@ rules something out.
     after a refused post, from the zone that post sent (`DrawZone::from(&input.zone)`), so a time
     typed under `UTC` is not shown again as another zone's. It writes the hidden input
     (`zone.field(f.zone)`), the zone's name (`zone.name()`) and an instant as the input's
-    `value`, `min` or `max` (`zone.local(at)`, the only public way to), so the three come from one
-    zone. The post reads the hidden input as a typed `FormZone` field (a 422 naming it when it is
+    `value` (`zone.local(at)`) or its `min` and `max` (`zone.min(at)`, `zone.max(at)`), the only
+    public ways to, so the three come from one zone. The post reads the hidden input as a typed `FormZone` field (a 422 naming it when it is
     missing or names no zone, as any typed field a page writes itself). What the compiler checks,
     each with a `compile_fail` example: `Entry::at` and `LocalDateTime::at` take only a
     `FormZone`, so neither `req.zone()` nor a `DrawZone` reads a posted time; a `FormZone` has no
@@ -4747,22 +4747,33 @@ rules something out.
     draws, the stored `value`, the `min` and the `max`, is rounded down to the minute
     (`floor_minute`): an input counts its steps from its `min`, so one with seconds is off every
     step and the browser would not send the form, and rounding all of them down keeps their order,
-    so a stored time in the same minute as its `min` is not drawn before it. An edit form reads
+    so a stored time in the same minute as its `min` is not drawn before it. Where the clocks go
+    back, a later instant reads earlier on the clock (`01:45` before the change, `01:30` after
+    it), so a `min` drawn at its own reading can be after the value of a later instant, and a
+    `max` before the value of an earlier one; `zone.min(at)` draws at the smaller of the offsets
+    at `at` and a day after it, and `zone.max(at)` at the larger of those at `at` and a day before
+    it, so the bounds hold every value drawn between them, an hour wider near the change. An edit
+    form reads
     the field with `Entry::at_keeping(&input.zone, stored)`, which is the stored instant when the
     field comes back equal to the value drawn from it, so an unchanged field keeps its seconds and
     its offset in a repeated hour (Temporal's `ZonedDateTime.with` keeps the offset an edit started
     from, `offset: 'prefer'`, for the same reason). The input then allows the part of a minute
     before a `min` with seconds, and a time the clocks skip or repeat near a bound reads outside
     it, so the handler's comparison stays the check. Reading asks the zone only for its offset
-    (`Zone::offset`), a day before and a day after the time and at the two instants those give, so
+    (`Zone::known_offset`, `Zone::offset` with `None` where the zone's rules end, as jiff's range
+    does late on 9999-12-30 UTC), a day before and a day after the time and at the two instants
+    those give, so
     it works for every zone a form is drawn in (`Utc`, an `Offset`, `req.zone()`'s `Visitor`)
     without the `zones` feature and adds no dependency; a zone whose offset changed twice within
     two days would be read with the outer two; where the platform has no instant a day away (its
     first and last days), the nearest instant it has stands in, so `day.start(Utc)` is midnight
-    UTC on every day the platform has. A test reads every zone in the bundled tz database
+    UTC on every day the platform has. A time whose instant is past a zone's rules is refused
+    (drawn as nothing, read as `None`, the field's message) rather than taken at UTC's offset,
+    which `Visitor::offset` gives there for a written date. A test reads every zone in the bundled tz database
     around every change of offset from 1970 to 2040, compares each reading with jiff's
     `compatible()`, which finds the candidates in the database itself, fails if any zone
-    changes its offset twice within two days, and checks that each zone is sent by a name a
+    changes its offset twice within two days, checks that a `min` and a `max` drawn around each
+    change hold every value drawn between them, and checks that each zone is sent by a name a
     `FormZone` reads back.
 
     Not chosen: reading in the request's zone (`req.zone()`) with no zone in the form, which this
@@ -4775,7 +4786,13 @@ rules something out.
     it, and the browser would not send the form, even with only another field changed. Keeping
     the stored instant by a comparison each handler wrote, which this Choice showed before
     `at_keeping`: a handler that left it out lost the stored seconds and, in a repeated hour, moved
-    an unchanged time by an hour. Carrying the drawn instant or each field's offset instead of
+    an unchanged time by an hour. Drawing a `min` and a `max` at their own readings, which this
+    Choice did next: where the clocks go back they could be out of order with the stored value,
+    and the browser would not send the form unchanged. Finding the instant of the change to draw
+    the bounds exactly: it asks the zone for its offset some thirty times where a day either side
+    is two, and only near a change does it draw tighter bounds than the handler checks anyway.
+    Taking a zone's offset past its database's range as UTC's, as reading did before: a time in
+    the year 9999 was read and drawn in UTC under the zone's name. Carrying the drawn instant or each field's offset instead of
     the zone: a visitor who changes the time across a change of the clocks would be read at the
     offset of a time they did not pick. Reading or writing in the zone Corten writes dates in
     while it renders (`App::zoned_dates`), so a component would draw an input from an instant with
@@ -4811,7 +4828,9 @@ rules something out.
     request drew it; a clock reading that is no `Into<SystemTime>` and no `DateValue` cannot reach
     `t.date` or a field typed as an instant, and a reader that takes only a type with no
     constructor but deserializing what a client sent cannot be given the request's zone; rounding
-    every instant a form draws down keeps their order); value (a standard's answer
+    every instant a form draws down keeps their order, and a clock read at the smaller of two
+    offsets a day apart is no later than it reads at any instant in that day, where the zone
+    changes its offset at most once); value (a standard's answer
     before one of Corten's, HTML that works on its own, a mistake the compiler can catch is a
     compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
 

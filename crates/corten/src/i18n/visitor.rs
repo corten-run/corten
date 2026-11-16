@@ -84,10 +84,17 @@ mod zones {
         }
     }
 
+    /// Its offset at an instant; UTC's (0) for a zone not known, and, for written dates, past the
+    /// database's range (`jiff::Timestamp`'s, which ends late on 9999-12-30 UTC), where
+    /// [`known_offset`](Zone::known_offset) is `None`.
     impl Zone for Visitor {
         fn offset(&self, at: SystemTime) -> i32 {
-            let (Some(zone), Ok(at)) = (&self.0, jiff::Timestamp::try_from(at)) else { return 0 };
-            zone.to_offset(at).seconds()
+            self.known_offset(at).unwrap_or(0)
+        }
+
+        fn known_offset(&self, at: SystemTime) -> Option<i32> {
+            let Some(zone) = &self.0 else { return Some(0) };
+            jiff::Timestamp::try_from(at).ok().map(|at| zone.to_offset(at).seconds())
         }
     }
 

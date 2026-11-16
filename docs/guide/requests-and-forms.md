@@ -470,8 +470,8 @@ let Some(live_at) = input.live_at.at_keeping(&input.zone, stored).filter(|at| *a
 // <label>{t.goes_live(zone.name())}
 //   <input type="datetime-local" name={f.live_at}
 //       value={zone.local(stored).map(LocalDateTime::floor_minute)}  (&input.live_at when drawn again)
-//       min={zone.local(listed).map(LocalDateTime::floor_minute)}
-//       max={zone.local(now).map(LocalDateTime::floor_minute)}>
+//       min={zone.min(listed)}
+//       max={zone.max(now)}>
 // </label>
 ```
 
@@ -489,14 +489,22 @@ instant, before the clocks go back. So an instant in the repeated hour, drawn an
 unchanged, reads as the earlier one. An input counts its steps (a minute) from its `min`, else its
 `value`, so a `min` or `value` with seconds or a fraction of one is off a step and the form is not
 sent until the visitor picks a time on one (`corten dev` names such a control drawn with a value):
-draw every instant rounded down to the minute (`floor_minute`), the `value`, the `min` and the
-`max`. Rounding all of them down keeps their order, so a stored time in the same minute as the
-`min` (stored a few seconds after the listing) is not drawn before it, which would stop the form
-being sent even when the visitor changes another field. An edit form reads the field with
+draw every instant rounded down to the minute, the `value` with `floor_minute`, the `min` and the
+`max` with `zone.min(at)` and `zone.max(at)`. Rounding all of them down keeps their order, so a
+stored time in the same minute as the `min` (stored a few seconds after the listing) is not drawn
+before it, which would stop the form being sent even when the visitor changes another field.
+Where the clocks go back a later instant reads earlier on the clock (`01:45` before the change,
+`01:30` after it), so a `min` drawn at its own reading could be after the value of a later
+instant; `zone.min` draws it at the offset the clocks go back to when they do so within the day
+after it, and `zone.max` at the offset before when they did within the day before it, so the
+bounds hold every value between them, an hour wider near the change. An edit form reads the field with
 `at_keeping(&input.zone, stored)`, which is the stored instant, seconds and the second `01:30`
 included, when the field comes back as it was drawn. The input then allows the part of a minute
-before a `min` with seconds, and a time the clocks skip or repeat near a bound reads outside it,
-so the handler's own comparison is the check, and refuses those with the field's message.
+before a `min` with seconds, up to an hour beside a bound near a change of the clocks, and a time
+the clocks skip or repeat near a bound reads outside it, so the handler's own comparison is the
+check, and refuses those with the field's message. A tz database zone's rules end late on
+9999-12-30 UTC (jiff's range): past that a time is neither drawn (`None`, no attribute) nor read
+(`None`, the field's message), rather than taken as UTC.
 
 A `LocalDateTime` is not an instant, so `t.date` and a field typed as one do not take it. A day
 (`<input type="date">`) is an `Entry<Day>` in no zone, and `day.start(&input.zone)` is the instant

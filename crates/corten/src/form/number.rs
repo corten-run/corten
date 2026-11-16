@@ -177,7 +177,7 @@ pub(crate) fn whole_magnitude(w: &Written<'_>) -> Option<u128> {
 /// let view = html! {
 ///     {zone.field(f.zone)}
 ///     <input type="datetime-local" name={f.live_at} value={&repair.live_at}
-///         min={zone.local(listed).map(LocalDateTime::floor_minute)}>
+///         min={zone.min(listed)}>
 /// };
 /// assert!(view.to_html().contains(r#"value="2026-11-13T14:05" min="2026-11-12T09:30""#));
 ///
@@ -336,7 +336,7 @@ impl Entry<LocalDateTime> {
     /// assert_eq!(moved.live_at.at_keeping(&moved.zone, stored), parse_timestamp("2026-11-13T20:06:00Z"));
     /// ```
     pub fn at_keeping(&self, zone: &FormZone, stored: SystemTime) -> Option<SystemTime> {
-        let drawn = crate::form::DrawZone::from(zone).local(stored).map(LocalDateTime::floor_minute);
+        let drawn = LocalDateTime::clock(stored, zone).map(LocalDateTime::floor_minute);
         if self.value.is_some() && self.value == drawn {
             Some(stored)
         } else {

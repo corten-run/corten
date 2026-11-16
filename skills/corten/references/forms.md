@@ -197,9 +197,10 @@ picks (`<input type="datetime-local">`) is `when: Entry<LocalDateTime>` (`corten
 `zone: FormZone` (`corten::form`): the page draws in `let zone = DrawZone::from(req.zone())`
 (`DrawZone::from(Utc)` on a `Public` page): `{zone.field(f.zone)}`, `zone.name()` by the field
 (without JavaScript it is `UTC`, and the visitor knows only if the page shows it),
-`value={zone.local(stored).map(LocalDateTime::floor_minute)}`,
-`min={zone.local(at).map(LocalDateTime::floor_minute)}` and a `max` the same (every instant
-rounded down, so a stored time in its `min`'s minute is not drawn before it); the post reads
+`value={zone.local(stored).map(LocalDateTime::floor_minute)}`, `min={zone.min(at)}` and
+`max={zone.max(at)}` (every instant rounded down, so a stored time in its `min`'s minute is not
+drawn before it, and the bounds drawn at the offset that keeps a value between them inside them
+where the clocks go back); the post reads
 `input.when.at(&input.zone)` (`None` for the field's message), never in `req.zone()`, which
 differs between a first page and its post (`Entry::at` takes only a `FormZone`, which is made only
 by deserializing what a client sent), and the handler's own bounds check refuses what the input

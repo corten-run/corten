@@ -563,6 +563,15 @@ pub enum TimeStyle {
 /// its offset (`GMT-5`), since names like `CDT` are not the same in every locale.
 pub trait Zone {
     fn offset(&self, at: SystemTime) -> i32;
+
+    /// [`offset`](Zone::offset), or `None` where the zone has no rules for `at`: a zone from a
+    /// database whose range ends (jiff's ends late on 9999-12-30 UTC) gives its offset only inside
+    /// it. Reading a form's date and time and drawing one ([`LocalDateTime`](super::LocalDateTime))
+    /// ask this, so a time past the zone's range is refused rather than read at another offset.
+    /// Every offset by default; a zone with a range says where it ends.
+    fn known_offset(&self, at: SystemTime) -> Option<i32> {
+        Some(self.offset(at))
+    }
 }
 
 /// Coordinated Universal Time, written as the locale names it (`UTC`).
@@ -598,6 +607,10 @@ impl Zone for Offset {
 impl<Z: Zone + ?Sized> Zone for &Z {
     fn offset(&self, at: SystemTime) -> i32 {
         (**self).offset(at)
+    }
+
+    fn known_offset(&self, at: SystemTime) -> Option<i32> {
+        (**self).known_offset(at)
     }
 }
 

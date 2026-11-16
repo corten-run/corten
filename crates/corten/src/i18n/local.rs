@@ -73,14 +73,18 @@ const DAY: i64 = 86_400_000;
 /// else its `value`, so a `min` or a `value` with seconds or a fraction of one puts every whole
 /// minute, or the value itself, off a step, and the form is not sent until the visitor picks a
 /// time that is on one (`corten dev` names such a control drawn with a value). Draw each of them
-/// rounded down to the minute ([`floor_minute`](LocalDateTime::floor_minute)): the `value`, the
-/// `min` and the `max`. Each is then on a step, and a stored instant inside the handler's bounds
-/// is drawn inside the drawn ones, since rounding down keeps their order (a `min` rounded up would
-/// be after a stored value in the same minute, and the browser would not send the form). The
-/// input then allows the part of a minute before a `min`, and a time the clocks skip or repeat
-/// near a bound reads outside it (a skipped minute an hour later, a repeated one as its first
-/// instant), so the handler's own comparison is the check, and refuses those with the field's
-/// message.
+/// rounded down to the minute: the `value` with [`floor_minute`](LocalDateTime::floor_minute), the
+/// `min` and the `max` with [`DrawZone::min`](crate::form::DrawZone::min) and
+/// [`DrawZone::max`](crate::form::DrawZone::max). Each is then on a step, and a stored instant
+/// inside the handler's bounds is drawn inside the drawn ones: rounding down keeps their order (a
+/// `min` rounded up would be after a stored value in the same minute, and the browser would not
+/// send the form), and where the clocks go back, which puts a later instant at an earlier reading
+/// (`01:45` before the change, `01:30` after it), `min` and `max` are drawn at the offset that
+/// keeps every later or earlier instant inside them. The input then allows the part of a minute
+/// before a `min`, up to an hour beside a bound near a change of the clocks, and a time the clocks
+/// skip or repeat near a bound reads outside it (a skipped minute an hour later, a repeated one as
+/// its first instant), so the handler's own comparison is the check, and refuses those with the
+/// field's message.
 ///
 /// ```
 /// use corten::form::DrawZone;
@@ -89,7 +93,7 @@ const DAY: i64 = 86_400_000;
 /// let zone = DrawZone::from(Utc);
 /// let listed = parse_timestamp("2026-11-12T15:30:09.250Z").unwrap();
 /// let stored = parse_timestamp("2026-11-12T15:30:40Z").unwrap(); // in the same minute
-/// let min = zone.local(listed).map(LocalDateTime::floor_minute).unwrap();
+/// let min = zone.min(listed).unwrap();
 /// let value = zone.local(stored).map(LocalDateTime::floor_minute).unwrap();
 /// assert_eq!((min.to_string(), value.to_string()), ("2026-11-12T15:30".into(), "2026-11-12T15:30".into()));
 /// assert!(min <= value, "the browser sends the form unchanged");
@@ -157,17 +161,82 @@ impl LocalDateTime {
     /// What the clock in `zone` reads at `at`, to the millisecond (rounded down); `None` outside
     /// the years a [`Day`] has (1 to 9999). A form writes it with
     /// [`DrawZone::local`](crate::form::DrawZone::local), in the zone it sends back.
+    /// `None` too past the zone's rules ([`Zone::known_offset`]), so a time is not drawn at an
+    /// offset the zone does not have there.
     pub(crate) fn clock(at: SystemTime, zone: impl Zone) -> Option<Self> {
-        let local = unix_millis(at)?.checked_add(i64::from(zone.offset(at)) * 1000)?;
+        Self::clock_at(at, zone.known_offset(at)?)
+    }
+
+    /// What a clock `offset` seconds east of UTC reads at `at`.
+    fn clock_at(at: SystemTime, offset: i32) -> Option<Self> {
+        let local = unix_millis(at)?.checked_add(i64::from(offset) * 1000)?;
         let day = Day::from_days(local.div_euclid(DAY))?;
         Some(LocalDateTime { day, millis: local.rem_euclid(DAY) as u32 })
+    }
+
+    /// The minute the clock in `zone` reads at `at`, or, where the clocks go back within the day
+    /// after it, the minute it reads at the offset they go back to: no later than the clock reads
+    /// at any instant from `at` on, so an input's `min` drawn from it is before a value drawn from
+    /// any later instant, even in the hour the clocks repeat (`01:45` before the change is after
+    /// `01:30` after it).
+    pub(crate) fn lowest_from(at: SystemTime, zone: impl Zone) -> Option<Self> {
+        let here = zone.known_offset(at)?;
+        let later = at.checked_add(Duration::from_millis(DAY as u64)).and_then(|a| zone.known_offset(a));
+        Self::clock_at(at, here.min(later.unwrap_or(here))).map(Self::floor_minute)
+    }
+
+    /// The minute the clock in `zone` reads at `at`, or, where the clocks went back within the day
+    /// before it, the minute it read at the offset before: no earlier than the clock read at any
+    /// instant up to `at`, for an input's `max`.
+    pub(crate) fn highest_until(at: SystemTime, zone: impl Zone) -> Option<Self> {
+        let here = zone.known_offset(at)?;
+        let earlier = at.checked_sub(Duration::from_millis(DAY as u64)).and_then(|a| zone.known_offset(a));
+        Self::clock_at(at, here.max(earlier.unwrap_or(here))).map(Self::floor_minute)
     }
 
     /// The instant this time on the clock is in the zone its form was drawn in and sent back (the
     /// form's [`FormZone`]): a skipped time moves forward by the gap, and a repeated time is the
     /// earlier instant, as the [type](LocalDateTime) says. `None` before the earliest
-    /// `SystemTime` the platform has (1601-01-01 on Windows). It takes no other zone: the zone of
-    /// the request that posts a form need not be the one the form was drawn in.
+    /// `SystemTime` the platform has (1601-01-01 on Windows), and past the zone's rules (a tz
+    /// database name past late 9999-12-30 UTC, where jiff's range ends): a time is refused, the
+    /// field's message, rather than read at an offset the zone does not have there. It takes no
+    /// other zone: the zone of the request that posts a form need not be the one the form was
+    /// drawn in.
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::i18n::{LocalDateTime, Utc};
+    ///
+    /// let read: LocalDateTime = "2026-11-13T14:05".parse().unwrap();
+    /// let _ = read.at(Utc); // as req.zone() would be without the `zones` feature
+    /// ```
+    ///
+    /// Nor the request's zone with it (`req.zone()` is a `Visitor`), by value or by reference:
+    ///
+    #[cfg_attr(feature = "zones", doc = "```compile_fail,E0308")]
+    #[cfg_attr(not(feature = "zones"), doc = "```ignore")]
+    /// use corten::i18n::{LocalDateTime, Visitor};
+    ///
+    /// let read: LocalDateTime = "2026-11-13T14:05".parse().unwrap();
+    /// let _ = read.at(Visitor::named("America/Chicago")); // as read.at(req.zone()) would be
+    /// ```
+    ///
+    #[cfg_attr(feature = "zones", doc = "```compile_fail,E0308")]
+    #[cfg_attr(not(feature = "zones"), doc = "```ignore")]
+    /// use corten::i18n::{LocalDateTime, Visitor};
+    ///
+    /// let read: LocalDateTime = "2026-11-13T14:05".parse().unwrap();
+    /// let _ = read.at(&Visitor::named("America/Chicago")); // as read.at(&req.zone()) would be
+    /// ```
+    ///
+    /// Nor the zone a page draws in:
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::form::DrawZone;
+    /// use corten::i18n::{LocalDateTime, Utc};
+    ///
+    /// let read: LocalDateTime = "2026-11-13T14:05".parse().unwrap();
+    /// let _ = read.at(&DrawZone::from(Utc)); // as DrawZone::from(req.zone()) would be
+    /// ```
     pub fn at(self, zone: &FormZone) -> Option<SystemTime> {
         self.read_in(zone)
     }
@@ -178,17 +247,22 @@ impl LocalDateTime {
     pub(crate) fn read_in(self, zone: impl Zone) -> Option<SystemTime> {
         // The clock's reading as if it were UTC's; the instant is that minus the offset there.
         let local = self.day.days() * DAY + i64::from(self.millis);
-        let offset = |utc: i64| instant(utc).map(|at| i64::from(zone.offset(at)) * 1000);
-        // A day before the platform's first instant (1601-01-01 on Windows) or after its last
-        // has no offset to ask for; the nearest instant it has stands in, as no zone changes its
-        // offset there.
+        // The offset at `utc`, if the platform has that instant and the zone's rules reach it.
+        let offset = |utc: i64| instant(utc).and_then(|at| zone.known_offset(at)).map(|o| i64::from(o) * 1000);
+        // A day before the first instant the platform has (1601-01-01 on Windows) or the zone's
+        // rules reach, or after the last, has no offset to ask for; the nearest that has one
+        // stands in, as no zone changes its offset there.
         let before = offset(local - DAY).or_else(|| offset(local)).or_else(|| offset(local + DAY))?;
         let after = offset(local + DAY).or_else(|| offset(local)).or_else(|| offset(local - DAY))?;
         // Whether the clock reads `local` at the instant it gives with offset `o`.
         let holds = |o: i64| offset(local - o) == Some(o);
         // Repeated: both hold, and the offset before is the larger, so its instant is the earlier.
         // Skipped: neither holds, and the offset before moves it forward by the gap.
-        instant(if holds(before) || !holds(after) { local - before } else { local - after })
+        let read = if holds(before) || !holds(after) { local - before } else { local - after };
+        // An instant past the zone's rules is refused, not read at an offset the zone gives
+        // somewhere else.
+        offset(read)?;
+        instant(read)
     }
 }
 
@@ -444,6 +518,68 @@ mod tests {
         assert_eq!(LocalDateTime::clock(ts("2026-03-08T08:00:00Z"), &zone).unwrap().to_string(), "2026-03-08T03:00");
     }
 
+    /// Where the clocks go back, a later instant reads earlier on the clock (`01:45` before the
+    /// change, `01:30` after it), so bounds drawn at their own instants' readings would be out of
+    /// order with a value between them, and the browser would not send the form unchanged.
+    #[test]
+    fn bounds_hold_every_value_between_them_where_the_clocks_go_back() {
+        let ts = |text: &str| parse_timestamp(text).unwrap();
+        let secs = |text: &str| unix_millis(ts(text)).unwrap() / 1000;
+        // Clocks go from 02:00 back to 01:00 at 07:00Z.
+        let zone = Changes(vec![(0, -5 * 3600), (secs("2026-11-01T07:00:00Z"), -6 * 3600)]);
+        let shown = |at| LocalDateTime::clock(at, &zone).unwrap().floor_minute();
+        let (listed, stored, now) = (ts("2026-11-01T06:45:00Z"), ts("2026-11-01T07:30:00Z"), ts("2026-11-01T07:40:00Z"));
+        let value = shown(stored);
+        assert_eq!(
+            (shown(listed).to_string(), value.to_string(), shown(now).to_string()),
+            ("2026-11-01T01:45".into(), "2026-11-01T01:30".into(), "2026-11-01T01:40".into()),
+            "at their own readings the bounds are out of order with the value"
+        );
+        let (min, max) = (LocalDateTime::lowest_from(listed, &zone).unwrap(), LocalDateTime::highest_until(now, &zone).unwrap());
+        assert_eq!((min.to_string(), max.to_string()), ("2026-11-01T00:45".into(), "2026-11-01T02:40".into()));
+        assert!(min <= value && value <= max, "{min} <= {value} <= {max}");
+        // Within the day before the change a `min` is drawn at the offset after it, an hour
+        // earlier; away from a change, bounds are the instant's own reading.
+        let day_before = ts("2026-10-31T12:00:09Z");
+        assert_eq!(LocalDateTime::lowest_from(day_before, &zone).map(|m| m.to_string()), Some("2026-10-31T06:00".into()));
+        assert_eq!(LocalDateTime::highest_until(day_before, &zone), Some(shown(day_before)));
+        let july = ts("2026-07-01T12:00:09Z");
+        assert_eq!(LocalDateTime::lowest_from(july, &zone), Some(shown(july)));
+        assert_eq!(LocalDateTime::highest_until(july, &zone), Some(shown(july)));
+    }
+
+    /// jiff's range ends late on 9999-12-30 UTC. A tz database zone past it is refused, drawn as
+    /// nothing and read as no instant, rather than taken as UTC; a fixed offset has no range.
+    #[cfg(feature = "zones")]
+    #[test]
+    fn a_tz_database_zone_draws_and_reads_only_where_its_rules_reach() {
+        use crate::form::{DrawZone, FormZone};
+        use crate::i18n::Visitor;
+        let (max, hour) = (SystemTime::from(jiff::Timestamp::MAX), Duration::from_secs(3600));
+        let (fixed, named) = (Offset::hours(-6), Visitor::named("Etc/GMT+6"));
+        let draw = DrawZone::from(named.clone());
+        let posted = FormZone::read("Etc/GMT+6").expect("Etc/GMT+6 is sent and read back");
+        // Inside the range: as the fixed offset draws and reads.
+        let inside = max - hour;
+        assert!(LocalDateTime::clock(inside, fixed).is_some());
+        assert_eq!(draw.local(inside), LocalDateTime::clock(inside, fixed));
+        assert_eq!(draw.min(inside), LocalDateTime::lowest_from(inside, fixed));
+        let shown = LocalDateTime::clock(inside, fixed).unwrap().floor_minute();
+        assert!(shown.at(&posted).is_some());
+        assert_eq!(shown.at(&posted), shown.read_in(fixed));
+        // Past it: nothing, where the zone's offset was taken as UTC's.
+        let past = max + hour;
+        assert_eq!(draw.local(past), None);
+        assert_eq!((draw.min(past), draw.max(past)), (None, None));
+        let late = LocalDateTime::clock(past, fixed).unwrap();
+        assert!(late.read_in(fixed).is_some(), "an offset has no range");
+        assert_eq!(late.at(&posted), None);
+        assert_eq!(read("9999-12-31T23:00").at(&posted), None);
+        assert_eq!(Day::new(9999, 12, 31).unwrap().start(&posted), None);
+        // A date written past it is still written at UTC's offset, as before.
+        assert_eq!(named.offset(past), 0);
+    }
+
     #[test]
     fn a_day_starts_where_its_clock_first_reads_it() {
         let ts = |text: &str| parse_timestamp(text).unwrap();
@@ -502,7 +638,8 @@ mod tests {
     /// In every zone in the bundled tz database, around every change of offset from 1970 to 2040,
     /// `at` gives the instant jiff's `compatible()` gives (Temporal's default) and `clock` reads it
     /// back as jiff's clock does; no zone changes its offset twice within two days, which `at`'s
-    /// reading a day either side relies on; and every zone is sent with a form by a name its post
+    /// reading a day either side relies on; an input's `min` and `max` drawn around the change
+    /// hold every value drawn between them; and every zone is sent with a form by a name its post
     /// reads back as the same zone.
     #[cfg(feature = "zones")]
     #[test]
@@ -547,6 +684,19 @@ mod tests {
                     let written = LocalDateTime::clock(instant(theirs).unwrap(), &zone);
                     assert_eq!(written, LocalDateTime::clock(instant(shown).unwrap(), Utc), "{clock} in {name} written back");
                     checked += 1;
+                }
+                // A `min` and a `max` drawn from instants around the change hold every value
+                // drawn from an instant between them, in order.
+                let near = [-2 * 3_600_000, -1_800_000, -1, 0, 1_800_000, 2 * 3_600_000].map(|d| instant(at + d).unwrap());
+                let drawn = near.map(|t| {
+                    let value = LocalDateTime::clock(t, &zone).unwrap().floor_minute();
+                    (LocalDateTime::lowest_from(t, &zone).unwrap(), value, LocalDateTime::highest_until(t, &zone).unwrap())
+                });
+                for i in 0..drawn.len() {
+                    for j in i..drawn.len() {
+                        let ((min, earlier, _), (_, later, max)) = (drawn[i], drawn[j]);
+                        assert!(min <= later && earlier <= max, "{name}: min {min} or max {max} around {at} ms");
+                    }
                 }
             }
         }

@@ -44,7 +44,7 @@ use crate::view::{escape_into, Render};
 ///         {zone.field(f.zone)}
 ///         <label>"Goes live (" {zone.name()} ")"
 ///             <input type="datetime-local" name={f.live_at}
-///                 min={zone.local(listed).map(LocalDateTime::floor_minute)}>
+///                 min={zone.min(listed)}>
 ///         </label>
 ///     </form>
 /// };
@@ -59,11 +59,15 @@ use crate::view::{escape_into, Render};
 /// assert_eq!(DrawZone::from(&posted.zone).name(), "-06:00");
 /// ```
 ///
-/// Every instant is drawn to the minute ([`LocalDateTime::floor_minute`]), the stored `value`, the
-/// `min` and the `max`: an input counts its steps (a minute) from its `min`, so one with seconds is
-/// off every step, and the browser does not send the form until the visitor changes it. Rounding
-/// all of them down keeps their order, so a stored instant in the same minute as its `min` is not
-/// drawn before it. The post reads an edited field with
+/// Every instant is drawn to the minute, the stored `value` with
+/// [`LocalDateTime::floor_minute`], the `min` and the `max` with [`min`](DrawZone::min) and
+/// [`max`](DrawZone::max): an input counts its steps (a minute) from its `min`, so one with seconds
+/// is off every step, and the browser does not send the form until the visitor changes it.
+/// Rounding all of them down keeps their order, so a stored instant in the same minute as its
+/// `min` is not drawn before it; and `min` and `max` are drawn at the offset that keeps them
+/// outside every value an instant between them is drawn as, where the clocks go back (a `min` at
+/// `01:45` before the change would be after a value of `01:30` after it). The post reads an
+/// edited field with
 /// [`Entry::at_keeping`](crate::form::Entry::at_keeping), which keeps the stored instant when the
 /// field comes back as it was drawn, so an unchanged field is not moved to its minute, nor, in an
 /// hour the clocks repeat, to the first of the two (the second `01:30` is drawn as `01:30`, which
@@ -78,7 +82,7 @@ use crate::view::{escape_into, Render};
 /// let listed = parse_timestamp("2026-11-13T20:05:01Z").unwrap();
 /// let stored = parse_timestamp("2026-11-13T20:05:09.250Z").unwrap();
 /// let zone = DrawZone::from(Utc);
-/// let min = zone.local(listed).map(LocalDateTime::floor_minute);
+/// let min = zone.min(listed);
 /// let shown = zone.local(stored).map(LocalDateTime::floor_minute);
 /// assert!(min <= shown, "the browser sends it unchanged");
 /// assert_eq!(shown.unwrap().to_string(), "2026-11-13T20:05");
@@ -215,6 +219,17 @@ impl Zone for Named {
             Rules::Named(zone) => zone.offset(at),
         }
     }
+
+    fn known_offset(&self, at: SystemTime) -> Option<i32> {
+        match &self.rules {
+            Rules::Fixed(east) => {
+                let _ = at;
+                Some(*east)
+            }
+            #[cfg(feature = "zones")]
+            Rules::Named(zone) => zone.known_offset(at),
+        }
+    }
 }
 
 impl PartialEq for Named {
@@ -260,6 +275,25 @@ impl DrawZone {
     /// [`Day`](crate::i18n::Day) has (1 to 9999).
     pub fn local(&self, at: impl Into<SystemTime>) -> Option<LocalDateTime> {
         LocalDateTime::clock(at.into(), &self.0)
+    }
+
+    /// An instant as the input's `min`: the minute this zone's clock reads at `at`, or, where the
+    /// clocks go back within the day after it, the minute it reads at the offset they go back to.
+    /// A clock that goes back reads `01:45` before the change and `01:30` after it, so a `min`
+    /// drawn at `at`'s own reading would be after the value of an instant later than `at`, and
+    /// the browser would not send the form; drawn this way it is no later than the clock reads
+    /// at any instant from `at` on. The input then allows up to the hour before `at` near such a
+    /// change, which the handler's own comparison refuses. `None` where
+    /// [`local`](DrawZone::local) is.
+    pub fn min(&self, at: impl Into<SystemTime>) -> Option<LocalDateTime> {
+        LocalDateTime::lowest_from(at.into(), &self.0)
+    }
+
+    /// An instant as the input's `max`, as [`min`](DrawZone::min) draws a `min`: the minute the
+    /// clock reads at `at`, or, where the clocks went back within the day before it, the minute it
+    /// read at the offset before, no earlier than the clock read at any instant up to `at`.
+    pub fn max(&self, at: impl Into<SystemTime>) -> Option<LocalDateTime> {
+        LocalDateTime::highest_until(at.into(), &self.0)
     }
 }
 
@@ -312,6 +346,10 @@ impl FormZone {
 impl Zone for FormZone {
     fn offset(&self, at: SystemTime) -> i32 {
         self.0.offset(at)
+    }
+
+    fn known_offset(&self, at: SystemTime) -> Option<i32> {
+        self.0.known_offset(at)
     }
 }
 
@@ -431,6 +469,29 @@ mod tests {
         for text in ["Mars/Olympus", "../etc/passwd", "america/chicago", "utc", "Etc/Unknown"] {
             assert!(FormZone::read(text).is_none(), "{text}");
         }
+    }
+
+    /// The night Chicago's clocks go back, an edit form listed at 01:45 before the change, stored
+    /// at 01:30 after it and drawn at 01:40 after it: drawn at their own readings, `min` (01:45)
+    /// would be after the value and `max` (01:40) before it, and the browser would not send the
+    /// form unchanged. `min` and `max` hold the value, and the post keeps the stored instant.
+    #[cfg(feature = "zones")]
+    #[test]
+    fn bounds_drawn_where_the_clocks_go_back_hold_an_unchanged_value() {
+        use crate::i18n::{parse_timestamp, Visitor};
+        let ts = |text: &str| parse_timestamp(text).unwrap();
+        let zone = DrawZone::from(Visitor::named("America/Chicago"));
+        let (listed, stored, now) = (ts("2026-11-01T06:45:00Z"), ts("2026-11-01T07:30:00Z"), ts("2026-11-01T07:40:00Z"));
+        let value = zone.local(stored).map(LocalDateTime::floor_minute).unwrap();
+        let (min, max) = (zone.min(listed).unwrap(), zone.max(now).unwrap());
+        assert_eq!(
+            (min.to_string(), value.to_string(), max.to_string()),
+            ("2026-11-01T00:45".into(), "2026-11-01T01:30".into(), "2026-11-01T02:40".into())
+        );
+        assert!(min <= value && value <= max, "the browser sends the input unchanged");
+        assert!(zone.local(listed).map(LocalDateTime::floor_minute) > Some(value), "drawn at its own reading, min is after it");
+        let posted = FormZone::read(zone.name()).unwrap();
+        assert_eq!(crate::form::Entry::from(value).at_keeping(&posted, stored), Some(stored));
     }
 
     /// The second 01:30 of the night Chicago's clocks go back is drawn as 01:30, which reads as
