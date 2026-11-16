@@ -4747,9 +4747,12 @@ async function run(browser) {
               Response.prototype.text = text;
               Object.assign(window, { __reading: true });
               return waiting.then(async () => {
-                const read = await text.call(this);
-                Object.assign(window, { __read: true });
-                return read;
+                // Read or refused (the request was aborted): seen through either way.
+                try {
+                  return await text.call(this);
+                } finally {
+                  Object.assign(window, { __read: true });
+                }
               });
             };
           });
@@ -5037,9 +5040,11 @@ async function run(browser) {
           Response.prototype.text = text;
           Object.assign(window, { __reading: true });
           return waiting.then(async () => {
-            const read = await text.call(this);
-            Object.assign(window, { __read: true });
-            return read;
+            try {
+              return await text.call(this);
+            } finally {
+              Object.assign(window, { __read: true });
+            }
           });
         };
       });
@@ -5051,7 +5056,7 @@ async function run(browser) {
       await scope.evaluate(() => /** @type {any} */ (window).__release());
       const seen = await scope.waitForFunction(() => /** @type {any} */ (window).__read, undefined, { timeout: 5000 }).then(() => true, () => false);
       await scope.waitForTimeout(100);
-      const dropped = {
+      const abandoned = {
         heldMonth,
         seen,
         leftFor,
@@ -5065,9 +5070,9 @@ async function run(browser) {
       };
       check(
         "a data-address form's submit on its way when Back is pressed draws nothing and puts no address in history",
-        dropped.heldMonth && dropped.seen && dropped.at === "/smoke/scope?scope=day" && dropped.shown === "day" &&
-          dropped.asked.join() === "action ?scope=month,action ?scope=day" && dropped.ahead.endsWith("/smoke/scope?scope=week"),
-        JSON.stringify(dropped),
+        abandoned.heldMonth && abandoned.seen && abandoned.at === "/smoke/scope?scope=day" && abandoned.shown === "day" &&
+          abandoned.asked.join() === "action ?scope=month,action ?scope=day" && abandoned.ahead.endsWith("/smoke/scope?scope=week"),
+        JSON.stringify(abandoned),
       );
       // A `#fragment` of the form's `formaction` or `action` stays in the address, as the browser
       // keeps it for the form without JavaScript; Back between them reads the patch.
