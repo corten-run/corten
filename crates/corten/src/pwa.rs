@@ -20,13 +20,20 @@
 //!   startup delay) and fall back to the cached offline page. The worker never caches pages:
 //!   they may carry the signed-in user's data, and the browser's HTTP cache already follows the
 //!   page's `Cache-Control` ([`crate::cache`]).
+//! - A navigation under a `network_only` prefix (sign-in, checkout, an OAuth callback) is the
+//!   network's answer alone: no cache, no offline page, the browser's error when the network
+//!   fails. The worker still answers it, with the request navigation preload already sent: were
+//!   it declined, the browser would drop that answer and send the request again, and a one-time
+//!   link would be redeemed twice. In a browser without navigation preload it is declined, which
+//!   sends it once.
 //! - Versioned files (`/assets/{version}/...` and the runtime) are served cache-first, and only
 //!   responses marked `immutable` are stored, so a mismatched version is never cached. A request
 //!   for a range of one (a video seeking), or for the video or audio a player loads, is left to
 //!   the network (`scripts/worker.test.mjs` runs the worker); its captions and poster are cached
 //!   like any versioned file.
 //! - Everything else (runtime navigation fetches, form actions, feeds, JSON, anything under a
-//!   `network_only` prefix) is not touched by the worker at all, so it costs nothing.
+//!   `network_only` prefix but a navigation) is not touched by the worker at all, so it costs
+//!   nothing.
 //! - A new deploy changes the worker's bytes (the cache name includes the version), the browser
 //!   installs it, and old caches are deleted on activate.
 //!
@@ -657,7 +664,10 @@ impl Pwa {
         self
     }
 
-    /// A path prefix the worker never touches (`/api/`, `/auth/`).
+    /// A path prefix the worker leaves to the network (`/api/`, `/auth/`): nothing under it is
+    /// cached or answered with the offline page. A navigation there is answered with the request
+    /// navigation preload already sent, so it reaches the server once (an OAuth callback's code is
+    /// redeemed once); anything else under it is not touched.
     pub fn network_only(mut self, prefix: &str) -> Self {
         self.network_only.push(prefix.into());
         self
@@ -823,10 +833,13 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
-  if (NETWORK_ONLY.some((prefix) => url.pathname.startsWith(prefix))) return;
+  const networkOnly = NETWORK_ONLY.some((prefix) => url.pathname.startsWith(prefix));
   if (request.mode === "navigate") {
+    // Navigation preload sent it: declined, it would be sent again. Network-only: no cache or offline page.
+    if (networkOnly && !self.registration.navigationPreload) return;
     event.respondWith(
       (async () => {
+        if (networkOnly) return (await event.preloadResponse) || fetch(request);
         try {
           return (await event.preloadResponse) || (await fetch(request));
         } catch {
@@ -836,6 +849,7 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
+  if (networkOnly) return;
   // Only versioned files are cached; everything else is left to the browser. A range (a video
   // seeking) is too: the cache holds whole files and cannot hold a 206. So is a media element's
   // request without one: storing it would download the whole video, which a player does not

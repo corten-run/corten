@@ -29,7 +29,7 @@ use corten::{
 use crate::{
     api, embeds, grading, items, mcp,
     model::{AlertInput, ItemView, set_alert},
-    routes,
+    routes, smoke,
     source::Source,
     text::Msg,
     views::{
@@ -104,7 +104,12 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
     let policy = Policy::new().report_to(&routes::CspReports);
     let policy = if std::env::var_os("HTTPS").is_some() { policy.hsts() } else { policy };
     let ready = source.clone();
-    App::new(routes::router(source.clone()))
+    // The browser test's own routes and its count of requests (`smoke.rs`), with `SMOKE_ROUTES=1`;
+    // a deploy leaves it unset.
+    let smoke = std::env::var("SMOKE_ROUTES").is_ok_and(|on| on == "1").then(smoke::Requests::default);
+    let pwa = Pwa::new(manifest).import_script(views::Static::SW_PUSH_JS).network_only(mcp::Mcp::PATH);
+    let pwa = if smoke.is_some() { pwa.network_only(smoke::url::Once::PATH) } else { pwa };
+    let app = App::new(routes::router(source.clone()))
         .area(|area| items::area(area, source.clone()).middleware(limit.clone()))
         .area(|area| grading::area(area).components(&[ConditionGuide]))
         .area(|area| {
@@ -115,12 +120,16 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
         .api(|routes| api::api(routes, ApiState { source, partners }).middleware(limit.for_partners()))
         .api(|routes| {
             let routes = mcp::api(routes).route::<mcp::Mcp>(tools).errors(rpc_failure);
-            origins.split(',').filter(|o| !o.is_empty()).fold(routes, |routes, origin| routes.allow_origin(origin))
+            let routes = origins.split(',').filter(|o| !o.is_empty()).fold(routes, |routes, origin| routes.allow_origin(origin));
+            match &smoke {
+                Some(count) => routes.middleware(count.clone()),
+                None => routes,
+            }
         })
         .error_page(views::error_page, ())
         .messages::<Msg>()
         .components(views::COMPONENTS)
-        .pwa(Pwa::new(manifest).import_script(views::Static::SW_PUSH_JS).network_only(mcp::Mcp::PATH))
+        .pwa(pwa)
         .policy(policy)
         // An item page waits on the item API: past 10 seconds the visitor gets the 503 page.
         .deadline(Duration::from_secs(10))
@@ -128,7 +137,11 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
         .ready(move || {
             let source = ready.clone();
             async move { source.reachable().await }
-        })
+        });
+    match smoke {
+        Some(count) => app.area(|area| smoke::url::area(area, count.clone()).middleware(count)),
+        None => app,
+    }
 }
 
 /// What the JSON routes share: the items, and the partners that may set alerts.

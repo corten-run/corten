@@ -38,6 +38,7 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 | `HTTPS` | present (any value) when served over HTTPS: browsers are told to keep using it (HSTS) | not sent |
 | `HOSTS` | the host names the app answers, comma separated (`*` for any); a request for any other gets a 421 | `localhost` and names under it, IP addresses, and requests with no `Host` |
 | `HOST`, `PORT` | the address it listens on | both loopback addresses, port 3000 (the image sets `0.0.0.0:8080`) |
+| `SMOKE_ROUTES=1` | the browser test's own routes under `/smoke` and its count of the requests that reach the server there and at `/mcp` ([`src/smoke.rs`](src/smoke.rs)); a deploy leaves it unset | none |
 
 ## Where things are
 
@@ -52,5 +53,6 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 | Design tokens (W3C format, dark and compact themes) | [`tokens/`](tokens/tokens.resolver.json), [`src/theme.rs`](src/theme.rs) |
 | The stylesheet, the demo cards' art, icons, the push handler, the grading clip and its captions | [`static/`](static) |
 
-The browser test of the production pieces: [`smoke.mjs`](smoke.mjs). The item page is the one
-the [full-stack benchmark](../../bench/fullstack) measures.
+The browser test of the production pieces: [`smoke.mjs`](smoke.mjs), against the app run with
+`SMOKE_ROUTES=1`. The item page is the one the [full-stack benchmark](../../bench/fullstack)
+measures.

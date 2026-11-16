@@ -1,5 +1,6 @@
 mod app;
 mod model;
+mod smoke;
 mod source;
 mod text;
 mod theme;
