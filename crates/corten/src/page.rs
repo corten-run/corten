@@ -956,6 +956,8 @@ impl FormPatch<'_> {
         let mut body = String::new();
         self.0.render_into(view, &mut body, false)?;
         self.0.section_links(&mut body);
+        #[cfg(debug_assertions)]
+        self.0.parses_whole(&body)?;
         Ok(DrawnPatch(body))
     }
 }
@@ -2049,6 +2051,21 @@ impl Req {
         Ok(HtmlResponse::new(res))
     }
 
+    /// In a debug build: the patch `body`, as sent, is one the browser keeps whole when the runtime
+    /// parses it as a `<template>`'s content (`crate::html::patch_parse_problem`): a table part
+    /// beside other elements can be dropped or moved there, which the compiler does not see when a
+    /// component or an expression writes it. A release build sends it as it is.
+    #[cfg(debug_assertions)]
+    fn parses_whole(&self, body: &str) -> Result<()> {
+        match crate::html::patch_parse_problem(body) {
+            Some(problem) => {
+                Err(self
+                    .unserved(format!("the browser would lose part of this patch: {problem}. {}", crate::html::PATCH_PARSE_HELP)))
+            }
+            None => Ok(()),
+        }
+    }
+
     /// Answers a `<form data-patch>` submit with fragments: the runtime replaces each element on
     /// the page that has the id of one of `view`'s top-level elements. One without an id would
     /// be dropped in the browser, so `view` is a [`Patch`](crate::view::Patch), which the compiler
@@ -2086,6 +2103,8 @@ impl Req {
         if !self.shared.sections.is_empty() {
             self.section_links(&mut body);
         }
+        #[cfg(debug_assertions)]
+        self.parses_whole(&body)?;
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.
         if crate::form::DREW_KEY.take() {

@@ -3487,6 +3487,163 @@ fn a_place_elsewhere_on_a_path_panics_in_debug_builds() {
     let _ = crate::route::Elsewhere::at(&path, "place-7");
 }
 
+#[derive(crate::view::Id)]
+struct LostRowId;
+
+/// A message a patch sends.
+#[crate::component]
+fn SavedNote() -> impl crate::Patch {
+    html! { <p id={MsgId}>"saved"</p> }
+}
+
+/// A table row, a patch on its own.
+#[crate::component]
+fn LostRow() -> impl crate::Patch {
+    html! { <tr id={LostRowId}><td>"1"</td></tr> }
+}
+
+/// A patch whose table row comes after another element, which the runtime's parse (a
+/// `<template>`'s content) drops. Each is a component, so the `html!` that sends them together
+/// sees neither's tags: only the patch as sent shows the row after the message.
+fn lost_row() -> impl crate::Patch {
+    html! { <SavedNote /> <LostRow /> }
+}
+
+/// `req.patch_or` and `req.invalid_with`'s `form.draw` answering with `lost_row`.
+fn lost_row_routes() -> Table {
+    Table::new()
+        .route(
+            "/",
+            crate::router::post(|req: Req| async move {
+                req.patch_or::<ForOne, AnyAnswer, _, _>(lost_row(), || async { req.redirect(&Done) }).await
+            }),
+        )
+        .route(
+            "/refused",
+            crate::router::post(|req: Req| async move {
+                let mut errors = crate::Errors::new();
+                errors.refuse(crate::Refusal::Conflict, "moved on");
+                req.invalid_with::<ForOne, AnyAnswer, _, _, _, _>(
+                    &errors,
+                    |form| async move { form.draw(lost_row()) },
+                    || async { req.redirect(&Done) },
+                )
+                .await
+            }),
+        )
+}
+
+/// A debug build answers a patch the browser would lose part of with an error that names the
+/// element lost and the one that came first, outside `corten dev` too: through `req.patch` (here
+/// `patch_or`) and a refusal's `form.draw`.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_the_browser_would_lose_part_of_is_an_error_in_debug_builds() {
+    for path in ["/", "/refused"] {
+        let (status, _, body) = call_with(app(lost_row_routes(), None), "POST", path, Some("action"), None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {body}");
+        let named = crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#);
+        assert!(body.contains(&named), "{path}: {body}");
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(crate::view::Id)]
+struct LostColId;
+
+/// The area's stylesheet links Corten writes after a patch's elements are read with them: after a
+/// leading `<col>` the browser drops them, so the patch would go in unstyled.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_whose_area_stylesheet_the_browser_would_drop_is_an_error_in_debug_builds() {
+    async fn col_patch(req: Req) -> HtmlResult {
+        req.patch(html! { <col id={LostColId}> })
+    }
+    let router = App::new(Routes::new())
+        .area::<Shop>(|shop| shop.route::<ShopItem>(crate::Methods::reads(get(col_patch))).components(&[COST_STYLED]))
+        .router();
+    let (status, _, body) = call_with(router, "GET", "/shop/item", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains(&crate::escape("the area's stylesheet (<link")), "{body}");
+    assert!(body.contains(&crate::escape(r#"since <col id="lost-col"> comes first"#)), "{body}");
+}
+
+/// A release build compiles none of the check: the patch is sent as drawn.
+#[cfg(not(debug_assertions))]
+#[tokio::test]
+async fn a_patch_the_browser_would_lose_part_of_is_sent_in_release_builds() {
+    for (path, status) in [("/", StatusCode::OK), ("/refused", StatusCode::CONFLICT)] {
+        let (got, headers, body) = call_with(app(lost_row_routes(), None), "POST", path, Some("action"), None).await;
+        assert_eq!(got, status, "{path}: {body}");
+        assert_eq!(headers["corten-patch"], "1", "{path}");
+        assert_eq!(body, r#"<p id="msg">saved</p><tr id="lost-row"><td>1</td></tr>"#, "{path}");
+    }
+}
+
+#[derive(crate::view::Id)]
+struct CostRowId(u32);
+
+/// A patch of 50 table rows, each with three cells, one of them holding a form.
+fn fifty_rows() -> impl crate::Patch {
+    html! {
+        for n in 0..50u32 {
+            <tr id={CostRowId(n)}>
+                <td>"Item "{n}</td>
+                <td>{n * 3}</td>
+                <td><form method="post"><input type="hidden" name="row" value={n}><button>"Save"</button></form></td>
+            </tr>
+        }
+    }
+}
+
+/// What the debug check of a patch's parse costs a debug build, which every test is: a 50-row patch
+/// (`fifty_rows`) checked `PARSE_ROUNDS` times (2,000 by default), timed beside the same patch sent
+/// through `req.patch` in process, which includes one check. Run in a debug build:
+/// `cargo test -p corten-run --all-features --lib -- --ignored --exact tests::what_the_patch_parse_check_costs --nocapture`.
+#[test]
+#[ignore]
+fn what_the_patch_parse_check_costs() {
+    use std::time::Instant;
+    let rounds: u32 = std::env::var("PARSE_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(2000);
+    let body = fifty_rows().to_html();
+    assert_eq!(crate::html::patch_parse_problem(&body), None);
+    let start = Instant::now();
+    for _ in 0..rounds {
+        std::hint::black_box(crate::html::patch_parse_problem(std::hint::black_box(&body)));
+    }
+    let check = start.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+    let routes =
+        Table::new().route("/", crate::router::post(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(fifty_rows()) }));
+    let router = app(routes, None);
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let requests = rounds / 10;
+    let start = Instant::now();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, sent) = call(router.clone(), "POST", Some("action")).await;
+            assert!(status == StatusCode::OK && sent.len() == body.len(), "{status}");
+        }
+    });
+    let request = start.elapsed().as_secs_f64() * 1e6 / f64::from(requests);
+    println!(
+        "debug={}: {} bytes; check {check:.1} us; req.patch request {request:.1} us (the check is {:.1}% of it)",
+        cfg!(debug_assertions),
+        body.len(),
+        100.0 * check / request
+    );
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+#[should_panic(
+    expected = "the browser would lose part of a live fragment: <tr id=\"b\"> is dropped, since <p id=\"a\"> comes first"
+)]
+async fn a_live_fragment_the_browser_would_lose_part_of_panics_in_debug_builds() {
+    let fragment = || String::from(r#"<p id="a">1</p><tr id="b"><td>2</td></tr>"#);
+    let router = Table::new().route("/", get(move || async move { crate::live(futures_util::stream::iter([fragment()])) }));
+    let _ = call(router, "GET", None).await;
+}
+
 #[cfg(debug_assertions)]
 #[tokio::test]
 #[should_panic(expected = "top-level text \"saved\" outside an element")]

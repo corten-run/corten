@@ -5,6 +5,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A debug build refuses a patch the browser would lose part of: the runtime parses a patch as a
+  `<template>`'s content, where the first top-level element (other than a head's, such as a
+  `<script>` or `<template>`) decides how the rest is read, so a table row, cell or other table
+  part beside another element was dropped (or a `<table>` or `<form>` after a row taken apart)
+  with only a console error about the next element. `req.patch`,
+  `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
+  fragment panics, naming the element lost and the one that came first; a release build is
+  unchanged ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
+
 - A page's several writes are named posts of its own route, `#[route("/inventory", get = show,
   post(price) = set_price, post(photo) = add_photo)]`, so a screen with several writes declares
   its query set once instead of on a route per write to redirect back to the same view

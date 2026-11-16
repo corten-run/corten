@@ -499,6 +499,33 @@ async function run(browser) {
       watched.slice(0, 120),
     );
   }
+  // The runtime parses a patch as a <template>'s content (`parse`), where the first top-level
+  // element decides how the rest is read: what each engine keeps of the shapes the server's debug
+  // check (`patch_parse_problem`) is held to, Chromium's and WebKit's <title> included.
+  {
+    /** @type {{ cases: { html: string, parsed: string[], parsedIn?: Record<string, string[]> }[] }} */
+    const { cases } = JSON.parse(readFileSync(new URL("../crates/corten/src/patch-parsing.json", import.meta.url), "utf8"));
+    const parsed = await page.evaluate(
+      (cases) =>
+        cases.map((html) => {
+          const template = document.createElement("template");
+          template.innerHTML = /** @type {any} */ (window).__html(html);
+          /** @param {Element} el @returns {string} */
+          const show = (el) => {
+            const name = el.localName + (el.id ? `#${el.id}` : "");
+            if (el instanceof HTMLTemplateElement) return `${name}{${Array.from(el.content.children, show).join(",")}}`;
+            return el.children.length ? `${name}(${Array.from(el.children, show).join(",")})` : name;
+          };
+          return Array.from(template.content.children, show);
+        }),
+      cases.map((c) => c.html),
+    );
+    const differ = cases.flatMap((c, i) => {
+      const want = c.parsedIn?.[engine] ?? c.parsed;
+      return JSON.stringify(parsed[i]) === JSON.stringify(want) ? [] : [`${c.html} => ${JSON.stringify(parsed[i])}`];
+    });
+    check(`a patch's top level parses as patch-parsing.json says, in ${cases.length} shapes`, !differ.length, differ.join("; "));
+  }
   // A handler is given its text and JSON arguments as the server had them, with an apostrophe
   // (`&#39;` in the single-quoted attribute), quotes, `&` and `<` in them, and so are the text and
   // the booleans elements give their refs (`ref={said.with(..)}`, `data-ref-value`, JSON read with

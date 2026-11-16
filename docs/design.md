@@ -3303,7 +3303,9 @@ rules something out.
     ([#1366 A patch answered by another area's handler draws that area's components unstyled: the runtime's patch loads no section stylesheet and check_rendered reads the handler's path](https://github.com/corten-run/corten/issues/1366)).
     Now `Req::patch` (and a refused form's patch) ends with the links of the handler's path, after
     the patch's elements, and `apply()` loads those the document lacks with the patch's modules,
-    through the function a navigation uses (`stylesOf`). A component a patch renders is then
+    through the function a navigation uses (`stylesOf`). A patch whose first element is a `<col>`
+    loses them, since the runtime's parse then keeps only `<col>`s and `<template>`s, which a debug
+    build refuses ([Limit 2](#limit-whole-element-patches)). A component a patch renders is then
     listed where its handler is, as a page's components are listed where the page is, and the
     debug check's path is the right one. A stylesheet that fails to load is taken out of the
     head again and the patch goes in unstyled, where a navigation loads the page in full: a
@@ -3390,7 +3392,10 @@ rules something out.
     it fails, `style-src 'self'` allows it under the policy the document loaded with, and its
     subresources are under that policy too; the load, the failure and a second patch waiting for
     a load are checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`, and a navigation
-    waiting for a patch's load in Chromium and Firefox, WebKit having no Navigation API); reasoned (a
+    waiting for a patch's load in Chromium and Firefox, WebKit having no Navigation API; a
+    `<template>` whose first element is a `<col>` keeps only `<col>`s and `<template>`s, the HTML
+    standard's "in column group" insertion mode, checked in the three by `scripts/smoke.mjs`
+    against `crates/corten/src/patch-parsing.json`); reasoned (a
     handler's path decides its area, as a page's does, so the links need nothing the request does
     not have; the runtime already skips a stylesheet the head has, by its URL; the wait a page
     outside the area pays is one request; the harness patch's buffer grows once more for the link,
@@ -3421,7 +3426,9 @@ rules something out.
     Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1) by `scripts/smoke.mjs`, and a navigation
     waiting for a patch's load in Chromium and Firefox; 2026-11-13, both of those waits drawn
     unstyled, and those two checks alone failing, in Chromium and Firefox with round 1's
-    `stylesOf` (`9c722e27`) put back in this head's runtime.
+    `stylesOf` (`9c722e27`) put back in this head's runtime; 2026-11-15, a leading `<col>`'s
+    patch losing its stylesheet link in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
+    (Playwright 1.64.1), on main `83a9c9fb`.
 
 48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
     `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what
@@ -4050,7 +4057,8 @@ rules something out.
 2. <a id="rule-patchable-components"></a>A fragment that can be patched is a component, rendered by the page and by the patch, so the
    two cannot drift. It is declared `-> impl Patch`, and its markup's top-level elements each have
    a `#[derive(Id)]` id, which the compiler checks (`view::Patch`), so no patch loses an element in
-   the browser.
+   the browser for want of an id; what the browser's parse of a patch's top level loses is
+   [Limit 2](#limit-whole-element-patches).
 3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, `event`, `target`, `signal`,
    `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
    running handler's component's own. (Three exceptions: `CopyButton` copies an element outside
@@ -4146,7 +4154,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `<details>` that moved takes another's state. A dialog the server drew open, which the user
    closed and opened again, looks unchanged, so an answer that draws it closed closes it, without
    a `close` event ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)). Other
-   browser state inside a replaced element (scroll position) resets, so keep targets small.
+   browser state inside a replaced element (scroll position) resets, so keep targets small. The
+   runtime parses a patch as a `<template>`'s content, where the first top-level element (other
+   than a head's, such as a `<script>` or `<template>`) decides how the rest is read, so a table
+   part beside other elements is dropped or moved there unless the table parts come first. A
+   debug build refuses such a patch, as `html!` writes it, when it sends it, naming the element,
+   but a release build sends it as drawn and the browser loses the part, so a mix that only some
+   data draws is found only by a debug render that draws it
+   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating

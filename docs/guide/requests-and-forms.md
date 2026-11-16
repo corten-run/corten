@@ -1021,6 +1021,32 @@ the view's top-level parts. A `corten::live`
 fragment is already text, so debug builds check it when it is sent instead (it panics, naming the
 element).
 
+The runtime parses a patch as a `<template>`'s content, as the HTML standard's "in template"
+insertion mode reads it: the first top-level element other than a `<template>`, `<script>`,
+`<style>`, `<link>`, `<meta>`, `<title>` or another tag a document's head holds decides how
+the rest is read. After any other
+element, table parts (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`,
+`<col>`, `<colgroup>`) are dropped. After a table part, a table part of another kind is dropped
+or put in a `<tbody>`, `<tr>` or `<colgroup>` the browser adds, a `<table>` is dropped, a
+table part inside a later top-level element that is not a table part (a `<div>` after the rows)
+is moved out of it, a `<table>` there is taken apart, its parts moved out, and a `<form>` there or
+at the top level loses what it holds (its fields are moved out of it); a table or form inside a
+row's cell is kept. After a `<col>`, everything but a `<col>` or
+`<template>` is dropped. A `<template>`'s content (`Append`'s rows, or a `<template>` inside an
+element) is read the same way on its own, except that Firefox drops a `<form>` there whole after
+a table part. So a patch that sends a table's header row beside a summary loses the row.
+Send the `<table>` whole with an id, or put the table parts first, of one kind, with no
+`<table>` or `<form>` in what follows. Debug builds check each patch as it is sent (`req.patch`,
+`req.patch_or`, `req.invalid`, `form.draw` and `corten::live`, with the area's stylesheet
+links Corten adds after its elements): the request fails with a 500, or the stream panics, naming
+the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`
+decide, so it is read both ways. A release build sends the patch as drawn, so a mix only some data
+draws (a row in one branch of an `if`) is found only by a debug render that draws it. The check
+covers what a table's reading does to a patch as `html!` writes it, each element closed by its own
+end tag, not every way a browser's parse can differ from the markup: it does not read inside an
+`<svg>` or `<math>`, nor a patch with an end tag left out, nor what a table part holds (a `<form>`
+written straight in a `<tr>`, which a page's table takes apart too).
+
 ## Work that must not run twice at once
 
 Some work on something the app's data already names must not run while the same work is running, or

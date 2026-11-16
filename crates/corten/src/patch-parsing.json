@@ -1,0 +1,407 @@
+{
+  "//": "How a browser parses a patch's top level as a <template>'s content (the runtime's parse in corten.js). parsed is each top-level element as name#id, (its child elements) and a template's {content}, without text, as the HTML standard and Firefox parse it; parsedIn, where an engine differs. lost is what the server's debug check (patch_parse_problem in html.rs) reports, null when it reports nothing: html.rs's tests hold it to report exactly the cases a browser does not parse as written, and scripts/smoke.mjs checks parsed in Chromium, Firefox and WebKit.",
+  "cases": [
+    {
+      "html": "<tr id=\"a\"><td>1</td></tr><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tr#a(td)",
+        "tr#b(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<template id=\"t\" data-remove></template><tr id=\"a\"><td>1</td></tr><div id=\"b\"></div>",
+      "parsed": [
+        "template#t{}",
+        "tr#a(td)",
+        "div#b"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"a\"><td>1</td></tr><div id=\"b\"><p>x</p></div><template data-corten-read-again=\"2\" data-from=\"/x\"></template><link rel=\"stylesheet\" href=\"/s.css\" data-corten-style>",
+      "parsed": [
+        "tr#a(td)",
+        "div#b(p)",
+        "template{}",
+        "link"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<td id=\"a\">1</td><th id=\"b\">2</th><div id=\"c\"></div>",
+      "parsed": [
+        "td#a",
+        "th#b",
+        "div#c"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<caption id=\"a\">x</caption><colgroup id=\"b\"><col></colgroup><thead id=\"c\"></thead><tbody id=\"d\"></tbody><tfoot id=\"e\"></tfoot><div id=\"f\"></div>",
+      "parsed": [
+        "caption#a",
+        "colgroup#b(col)",
+        "thead#c",
+        "tbody#d",
+        "tfoot#e",
+        "div#f"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<div id=\"a\"></div><table id=\"b\"><tbody><tr><td>1</td></tr></tbody></table><form id=\"c\"><input name=\"q\"></form>",
+      "parsed": [
+        "div#a",
+        "table#b(tbody(tr(td)))",
+        "form#c(input)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"a\"><td><table><tbody><tr><td>1</td></tr></tbody></table><form><input name=\"q\"></form></td></tr><div id=\"b\"></div>",
+      "parsed": [
+        "tr#a(td(table(tbody(tr(td))),form(input)))",
+        "div#b"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<style></style><link rel=\"stylesheet\" href=\"/x.css\"><meta name=\"x\"><tr id=\"a\"><td>1</td></tr>",
+      "parsed": [
+        "style",
+        "link",
+        "meta",
+        "tr#a(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<col id=\"a\"><col id=\"b\"><template id=\"t\" data-remove></template>",
+      "parsed": [
+        "col#a",
+        "col#b",
+        "template#t{}"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<div id=\"a\"></div><template id=\"t\" data-append><tr id=\"b\"><td>1</td></tr></template>",
+      "parsed": [
+        "div#a",
+        "template#t{tr#b(td)}"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"a\"></tr><select id=\"s\"><option>1</option></select><svg id=\"g\"><rect></rect></svg>",
+      "parsed": [
+        "tr#a",
+        "select#s(option)",
+        "svg#g(rect)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"a\"></tr><input id=\"b\" type=\"hidden\" name=\"h\"><img id=\"c\" alt=\"\"><tr id=\"d\"><td>1</td></tr>",
+      "parsed": [
+        "tr#a",
+        "input#b",
+        "img#c",
+        "tr#d(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<div id=\"a\"></div><tr id=\"b\"><td>1</td></tr>",
+      "parsed": [
+        "div#a"
+      ],
+      "lost": "<tr id=\"b\"> is dropped, since <div id=\"a\"> comes first"
+    },
+    {
+      "html": "<p id=\"a\"></p><td id=\"b\">1</td>",
+      "parsed": [
+        "p#a"
+      ],
+      "lost": "<td id=\"b\"> is dropped, since <p id=\"a\"> comes first"
+    },
+    {
+      "html": "<span id=\"a\"></span><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "span#a"
+      ],
+      "lost": "<tbody id=\"b\"> is dropped"
+    },
+    {
+      "html": "<a id=\"a\"></a><caption id=\"b\">x</caption>",
+      "parsed": [
+        "a#a"
+      ],
+      "lost": "<caption id=\"b\"> is dropped"
+    },
+    {
+      "html": "<select id=\"a\"></select><colgroup id=\"b\"></colgroup><col id=\"c\">",
+      "parsed": [
+        "select#a"
+      ],
+      "lost": "<colgroup id=\"b\"> is dropped"
+    },
+    {
+      "html": "<table id=\"a\"></table><tr id=\"b\"></tr>",
+      "parsed": [
+        "table#a"
+      ],
+      "lost": "<tr id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<div id=\"a\"></div><template id=\"t\" data-remove></template><tr id=\"b\"></tr>",
+      "parsed": [
+        "div#a",
+        "template#t{}"
+      ],
+      "lost": "<tr id=\"b\"> is dropped, since <div id=\"a\"> comes first"
+    },
+    {
+      "html": "<title>t</title><tr id=\"a\"><td>1</td></tr>",
+      "parsed": [
+        "title",
+        "tr#a(td)"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "title"
+        ],
+        "webkit": [
+          "title"
+        ]
+      },
+      "lost": "<tr id=\"a\"> is dropped, since <title> comes first in Chromium and WebKit"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "tr#a"
+      ],
+      "lost": "<tbody id=\"b\"> is dropped, since <tr id=\"a\"> comes first"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><caption id=\"b\"></caption>",
+      "parsed": [
+        "tr#a"
+      ],
+      "lost": "<caption id=\"b\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><col id=\"b\">",
+      "parsed": [
+        "tr#a"
+      ],
+      "lost": "<col id=\"b\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><td id=\"b\">1</td>",
+      "parsed": [
+        "tr#a",
+        "tr(td#b)"
+      ],
+      "lost": "<td id=\"b\"> is put in a <tr> the browser adds"
+    },
+    {
+      "html": "<td id=\"a\"></td><tr id=\"b\"></tr>",
+      "parsed": [
+        "td#a"
+      ],
+      "lost": "<tr id=\"b\"> is dropped, since <td id=\"a\"> comes first"
+    },
+    {
+      "html": "<td id=\"a\"></td><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "td#a"
+      ],
+      "lost": "<tbody id=\"b\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"a\"></tbody><tr id=\"b\"></tr>",
+      "parsed": [
+        "tbody#a",
+        "tbody(tr#b)"
+      ],
+      "lost": "<tr id=\"b\"> is put in a <tbody> the browser adds"
+    },
+    {
+      "html": "<caption id=\"a\">x</caption><td id=\"b\">1</td>",
+      "parsed": [
+        "caption#a",
+        "tbody(tr(td#b))"
+      ],
+      "lost": "<td id=\"b\"> is put in a <tbody> and a <tr> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"a\"></colgroup><col id=\"b\">",
+      "parsed": [
+        "colgroup#a",
+        "colgroup(col#b)"
+      ],
+      "lost": "<col id=\"b\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"a\"></tbody><table id=\"b\"></table>",
+      "parsed": [
+        "tbody#a"
+      ],
+      "lost": "<table id=\"b\"> is dropped"
+    },
+    {
+      "html": "<col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "col#a"
+      ],
+      "lost": "<div id=\"b\"> is dropped, since <col id=\"a\"> comes first"
+    },
+    {
+      "html": "<col id=\"a\"><link rel=\"stylesheet\" href=\"/s.css\" data-corten-style>",
+      "parsed": [
+        "col#a"
+      ],
+      "lost": "the area's stylesheet (<link rel=\"stylesheet\" href=\"/s.css\" data-corten-style>), which Corten writes after the patch's elements, is dropped"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><div id=\"b\"><table><tr><td>1</td></tr></table></div>",
+      "parsed": [
+        "tr#a",
+        "div#b",
+        "tr(td)"
+      ],
+      "lost": "<table> in <div id=\"b\"> is taken apart, its parts moved out of it, since <tr id=\"a\"> comes first"
+    },
+    {
+      "html": "<tbody id=\"a\"></tbody><div id=\"b\"><table id=\"t\"><tbody><tr><td>1</td></tr></tbody></table></div>",
+      "parsed": [
+        "tbody#a",
+        "div#b",
+        "tbody(tr(td))"
+      ],
+      "lost": "<table id=\"t\"> in <div id=\"b\"> is taken apart, its parts moved out of it"
+    },
+    {
+      "html": "<td id=\"a\"></td><div id=\"b\"><td id=\"c\">x</td></div>",
+      "parsed": [
+        "td#a",
+        "div#b",
+        "td#c"
+      ],
+      "lost": "<td id=\"c\"> in <div id=\"b\"> is moved out of it"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><form id=\"f\"><input name=\"q\"><button>Save</button></form>",
+      "parsed": [
+        "tr#a",
+        "form#f",
+        "input",
+        "button"
+      ],
+      "lost": "<form id=\"f\"> loses what it holds, since <tr id=\"a\"> comes first"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><div id=\"b\"><form><input name=\"q\"></form></div>",
+      "parsed": [
+        "tr#a",
+        "div#b(form,input)"
+      ],
+      "lost": "<form> in <div id=\"b\"> loses what it holds"
+    },
+    {
+      "html": "<template id=\"t\" data-append><div id=\"a\"></div><tr id=\"b\"><td>1</td></tr></template>",
+      "parsed": [
+        "template#t{div#a}"
+      ],
+      "lost": "<tr id=\"b\"> is dropped, since <div id=\"a\"> comes first"
+    },
+    {
+      "html": "<script id=\"s\" type=\"text/plain\"></scriptx><div id=\"d\"></div></script><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "script#s",
+        "tr#r(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<div id=\"host\"><template id=\"rows\"><p id=\"msg\"></p><tr id=\"row\"></tr></template></div>",
+      "parsed": [
+        "div#host(template#rows{p#msg})"
+      ],
+      "lost": "<tr id=\"row\"> is dropped, since <p id=\"msg\"> comes first"
+    },
+    {
+      "html": "<tr id=\"a\"><td><template><div></div><tr><td>1</td></tr></template></td></tr>",
+      "parsed": [
+        "tr#a(td(template{div}))"
+      ],
+      "lost": "<tr> is dropped, since <div> comes first"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><ul id=\"b\"><li>x</ul><tr id=\"c\"></tr>",
+      "parsed": [
+        "tr#a",
+        "ul#b(li)",
+        "tr#c"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<basefont id=\"h\"><p id=\"m\">saved</p><tr id=\"r\"></tr>",
+      "parsed": [
+        "basefont#h",
+        "p#m"
+      ],
+      "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><svg id=\"b\"><g><tr></tr></g></svg>",
+      "parsed": [
+        "tr#a",
+        "svg#b(g(tr))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<script id=\"s\"><!-- note --></script><p id=\"m\"></p><tr id=\"r\"></tr>",
+      "parsed": [
+        "script#s",
+        "p#m"
+      ],
+      "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<svg id=\"s\"><template><g></g><tr></tr></template></svg>",
+      "parsed": [
+        "svg#s(template(g,tr))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<template id=\"t\"><tr id=\"r\"></tr><form id=\"f\"></form></template>",
+      "parsed": [
+        "template#t{tr#r}"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "template#t{tr#r,form#f}"
+        ],
+        "webkit": [
+          "template#t{tr#r,form#f}"
+        ]
+      },
+      "lost": "<form id=\"f\"> is dropped in Firefox, since <tr id=\"r\"> comes first"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><form id=\"f\"></form>",
+      "parsed": [
+        "tr#r",
+        "form#f"
+      ],
+      "lost": null
+    }
+  ]
+}
