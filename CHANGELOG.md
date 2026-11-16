@@ -28,6 +28,26 @@ Corten is pre-1.0, so any minor version may change the API.
   Refuse unqualified Linux output filesystems before creation, including WSL
   DrvFS/9p where descriptor child paths can create through a replaced directory.
 
+- Keep asynchronous benchmark observer startup owned through cancellation and
+  early native exit; dispose abandoned setup without late capture or a terminal seal.
+
+- Keep benchmark host sampling off synchronous record flushes with one bounded
+  asynchronous filesystem FIFO. Preserve per-record file/directory durability
+  before referencing sample writes, strict continuity and cancellation gates;
+  do not seal unfinished or failed storage or reinterpret historical failures.
+
+- Resample complete benchmark host scopes within the existing one-second window
+  when process churn invalidates a census, and require matching recursive
+  membership bookends. Keep PID/start, executable, accounting, observer-error and
+  positive-empty cleanup gates; roll back executable captures from rejected
+  attempts and observations without closing earlier accepted inputs. Do not
+  reinterpret retained failed evidence.
+
+- Retain raw host process stat evidence and exempt only identity-bound Linux kernel
+  threads from grouped benchmark user-process cleanup. Prepare fresh disposable
+  hosts against firmware-service activation before baseline; keep new user-process
+  leaks and unproved historical inventories fail-closed.
+
 - Retain omitted optional Docker image/container command defaults as explicit null
   in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
   Missing or malformed image configuration, malformed execution and substituted or missing
