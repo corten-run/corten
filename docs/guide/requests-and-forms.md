@@ -211,7 +211,7 @@ what to answer instead, so an app's router test that sends the plain request fai
 handler's cookies and `Clear-Site-Data` go out with the error, as above. The runtime's
 `data-patch` fetch and a client that does not ask for HTML still get the patch. The handler's type
 does not say which it answers, since one handler answers both from `req.mode`
-([design Choice 56](../design.md#choice-plain-request-patch)). Both checks here leave out a request
+([design Choice 57](../design.md#choice-plain-request-patch)). Both checks here leave out a request
 whose fetch metadata says it is not a top-level navigation (a page's own `fetch` that asks for
 HTML, an `<iframe>`'s load), whose answer the browser does not show as the tab's page. It does
 not see an `unstaged` route, a fragment answered without the patch's `corten-patch` header (a response built by hand,

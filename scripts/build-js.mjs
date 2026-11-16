@@ -14,13 +14,15 @@
 // about 3.6% smaller after compression and a little smaller before it (docs/design.md#choice-runtime-terser).
 // `node scripts/build-js.mjs --check` fails when a built file is not what its source builds to, or
 // when the runtime's size in README.md ("A(n) <size> KB (gzip) runtime") is not the built file's,
-// which a build writes there (scripts/readme-size.mjs).
+// which a build writes there (scripts/readme-size.mjs), or when a size a guide gives for one of the
+// script modules is not the built file's, which a build writes too (scripts/module-sizes.mjs).
 import { build } from "esbuild";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { minify } from "terser";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipped, keep } from "./readme-size.mjs";
+import { keepSizes } from "./module-sizes.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const js = join(root, "crates", "corten", "js");
@@ -74,12 +76,16 @@ const outputs = [
 let stale = 0;
 /** The runtime as built now, not as dist/ has it. */
 let runtime = "";
+/** Each file as built now, by name. */
+/** @type {Record<string, string>} */
+const built = {};
 for (const { name, wrap, banner, ...options } of outputs) {
   const out = join(js, "dist", name);
   const result = await build({ ...common, ...options, outfile: out });
   const code = /** @type {string} */ ((await minify(result.outputFiles[0].text, terse)).code);
   const text = wrap ? wrap(code) : `${banner?.js ?? ""}\n${code}\n`;
   if (name === "corten.js") runtime = text;
+  built[name] = text;
   let current = "";
   try {
     current = readFileSync(out, "utf8");
@@ -102,5 +108,15 @@ if (kept.error) {
   stale += 1;
 } else if (!check && kept.text !== before) {
   writeFileSync(readme, /** @type {string} */ (kept.text));
+}
+for (const dir of [join(root, "docs", "guide"), join(root, "skills", "corten", "references")]) {
+  for (const file of readdirSync(dir).filter((f) => f.endsWith(".md"))) {
+    const path = join(dir, file);
+    const guide = readFileSync(path, "utf8");
+    const sizes = keepSizes(guide, built, check);
+    for (const error of sizes.errors) console.error(`${path}: ${error}`);
+    stale += sizes.errors.length;
+    if (!check && sizes.text !== guide) writeFileSync(path, sizes.text);
+  }
 }
 process.exit(stale ? 1 : 0);
