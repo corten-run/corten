@@ -1,56 +1,123 @@
-//! The zone a form's dates and times are drawn in, sent back with the form ([`FormZone`]).
+//! The zone a form's dates and times are drawn in ([`DrawZone`]), and the same zone sent back
+//! with the form for its post to read them in ([`FormZone`]).
 
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::form::FieldName;
-use crate::i18n::{Offset, Utc, Zone};
+use crate::i18n::{LocalDateTime, Offset, Utc, Zone};
 use crate::view::{escape_into, Render};
 
-/// The zone a form's dates and times are drawn in, sent back with the form so that its handler
-/// reads them in the same zone: a hidden input the draw writes ([`FormZone::field`]) and a field
-/// of this type the post reads. An [`Entry<LocalDateTime>`](crate::form::Entry) is read only in
-/// one ([`Entry::at`](crate::form::Entry::at)), never in the zone of the request that posts it:
-/// `req.zone()` is UTC on a browser's first page and in a `Public` page, and the visitor's own
-/// zone on the post after it, so a form drawn in one and read in the other would store a time
-/// moved by the visitor's offset, with nothing to say so.
+/// The zone a form's dates and times are drawn in: it writes the hidden input that sends the
+/// zone back with the form ([`field`](DrawZone::field)), the zone's name for the visitor to read
+/// ([`name`](DrawZone::name)), and an instant as the `value`, `min` or `max` of an
+/// `<input type="datetime-local">` ([`local`](DrawZone::local)), so the three are in one zone.
+/// The post reads the form's times in the [`FormZone`] it sends back, never in the zone of the
+/// request that posts it: `req.zone()` is UTC on a browser's first page and in a `Public` page, and
+/// the visitor's own zone on the post after it, so a form drawn in one and read in the other would
+/// store a time moved by the visitor's offset, with nothing to say so.
 ///
-/// It is sent as the name the visitor reads it by: `UTC`, an offset (`-06:00`), or a tz database
-/// name (`America/Chicago`, with the `zones` feature). Show [`name`](FormZone::name) beside the
-/// form's dates and times: without JavaScript a browser never reports its zone, so they are drawn
-/// and read in UTC, and the visitor needs to see that to type a time in it.
+/// It is made from the request's zone (`DrawZone::from(req.zone())`, with the `zones` feature),
+/// from [`Utc`] (a `Public` page, which is the same for everyone) or an [`Offset`], and, for a form
+/// drawn again after a refused post, from the zone that post sent (`DrawZone::from(&input.zone)`),
+/// so the times the visitor typed stay in the zone they typed them in. It is sent as the name the
+/// visitor reads it by: `UTC`, an offset (`-06:00`), or a tz database name (`America/Chicago`).
+///
+/// Show [`name`](DrawZone::name) with the form's dates and times: without JavaScript a browser
+/// never reports its zone, so they are drawn and read in UTC, and a visitor types a time in UTC
+/// only if the page says so.
 ///
 /// ```
 /// use corten::prelude::*;
-/// use corten::form::{Entry, FormZone};
+/// use corten::form::{DrawZone, Entry, FormZone};
 /// use corten::i18n::{parse_timestamp, LocalDateTime, Offset};
 ///
 /// #[derive(Fields)]
 /// struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
 ///
-/// // Drawn in the request's zone (in a handler, `FormZone::from(req.zone())`).
-/// let zone = FormZone::from(Offset::hours(-6));
-/// let listed = parse_timestamp("2026-11-12T15:30:00Z").unwrap();
+/// // In a handler, DrawZone::from(req.zone()).
+/// let zone = DrawZone::from(Offset::hours(-6));
+/// let listed = parse_timestamp("2026-11-12T15:30:09Z").unwrap();
 /// let f = Repair::FIELDS;
 /// let form = html! {
 ///     <form method="post">
 ///         {zone.field(f.zone)}
 ///         <label>"Goes live (" {zone.name()} ")"
-///             <input type="datetime-local" name={f.live_at} min={LocalDateTime::of(listed, &zone)}>
+///             <input type="datetime-local" name={f.live_at}
+///                 min={zone.local(listed).and_then(LocalDateTime::ceil_minute)}>
 ///         </label>
 ///     </form>
 /// };
 /// let html = form.to_html();
 /// assert!(html.contains(r#"<input type="hidden" name="zone" value="-06:00">"#), "{html}");
-/// assert!(html.contains("Goes live (-06:00)") && html.contains(r#"min="2026-11-12T09:30""#), "{html}");
+/// assert!(html.contains("Goes live (-06:00)") && html.contains(r#"min="2026-11-12T09:31""#), "{html}");
 ///
-/// // Read in the zone it was drawn in, whatever zone the post's request is in.
+/// // The post reads in the zone the form came back with, whatever zone its request is in,
 /// let posted: Repair = corten::form::from_bytes(b"live_at=2026-11-13T14%3A05&zone=-06%3A00").unwrap();
 /// assert_eq!(posted.live_at.at(&posted.zone), parse_timestamp("2026-11-13T20:05:00Z"));
+/// // and a form drawn again after a refusal is drawn in it.
+/// assert_eq!(DrawZone::from(&posted.zone).name(), "-06:00");
 /// ```
 ///
-/// A zone that is none of these is a 422 naming the field, as any typed field a page writes
-/// itself: it came from no page of the app's.
+/// An edit form draws the stored instant to the minute ([`LocalDateTime::floor_minute`]): an
+/// input counts its steps (a minute) from its `min`, so a `value` with seconds is off every step a
+/// `min` rounded to the minute starts, and the browser does not send the form until the visitor
+/// changes it. The post keeps the stored instant when the field comes back as it was drawn, so an
+/// unchanged field is not moved to its minute, nor, in an hour the clocks repeat, to the first of
+/// the two (the second `01:30` is drawn as `01:30`, which reads as the first):
+///
+/// ```
+/// # use corten::prelude::*;
+/// # use corten::form::{DrawZone, Entry, FormZone};
+/// # use corten::i18n::{parse_timestamp, LocalDateTime, Utc};
+/// # #[derive(Fields)]
+/// # struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
+/// let stored = parse_timestamp("2026-11-13T20:05:09.250Z").unwrap();
+/// let shown = DrawZone::from(Utc).local(stored).map(LocalDateTime::floor_minute);
+/// assert_eq!(shown.unwrap().to_string(), "2026-11-13T20:05");
+///
+/// // The post: sent back as it was drawn, it is the stored instant.
+/// let read = |input: &Repair| {
+///     let drawn = DrawZone::from(&input.zone).local(stored).map(LocalDateTime::floor_minute);
+///     if input.live_at.value() == drawn { Some(stored) } else { input.live_at.at(&input.zone) }
+/// };
+/// let same: Repair = corten::form::from_bytes(b"live_at=2026-11-13T20%3A05&zone=UTC").unwrap();
+/// assert_eq!(read(&same), Some(stored));
+/// let moved: Repair = corten::form::from_bytes(b"live_at=2026-11-13T20%3A06&zone=UTC").unwrap();
+/// assert_eq!(read(&moved), parse_timestamp("2026-11-13T20:06:00Z"));
+/// ```
+///
+/// [`field`](DrawZone::field) takes only a `FormZone` field's name:
+///
+/// ```compile_fail,E0308
+/// use corten::prelude::*;
+/// use corten::form::{DrawZone, Entry, FormZone};
+/// use corten::i18n::{LocalDateTime, Utc};
+///
+/// #[derive(Fields)]
+/// struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
+///
+/// let _ = DrawZone::from(Utc).field(Repair::FIELDS.live_at);
+/// ```
+///
+/// The compiler checks that a posted time is read only in a `FormZone`, that a `FormZone` comes
+/// only from a post, that the hidden input is a `FormZone` field, and that an instant is written
+/// as a field's time only through a `DrawZone`. It does not check that the form draws the hidden
+/// input (a form without it compiles, and its post is a 422), that the input and the times are
+/// drawn from the same `DrawZone`, nor that a form drawn again is drawn in the posted zone rather
+/// than the request's.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DrawZone(Named);
+
+/// The zone a form was drawn in, as its post sends it back (the hidden input
+/// [`DrawZone::field`] writes): the only zone a posted date and time is read in
+/// ([`Entry::at`](crate::form::Entry::at), [`LocalDateTime::at`]), and, for a day the visitor
+/// picked, where it begins ([`Day::start`](crate::i18n::Day::start), `day.start(&input.zone)`).
+/// It is read from a post and from nothing else, so the zone of the request that posts it cannot
+/// stand in for it.
+///
+/// A zone that is none a [`DrawZone`] writes is a 422 naming the field, as any typed field a page
+/// writes itself: it came from no page of the app's. So is a post without it.
 ///
 /// ```
 /// # use corten::prelude::*;
@@ -65,20 +132,20 @@ use crate::view::{escape_into, Render};
 /// assert!(corten::form::from_bytes::<Repair>(b"live_at=2026-11-13T14%3A05").is_err(), "not sent");
 /// ```
 ///
-/// [`field`](FormZone::field) takes only a `FormZone` field's name:
+/// It cannot be made from a zone, the request's included:
 ///
-/// ```compile_fail,E0308
-/// use corten::prelude::*;
-/// use corten::form::{Entry, FormZone};
-/// use corten::i18n::{LocalDateTime, Utc};
+/// ```compile_fail,E0277
+/// use corten::form::FormZone;
+/// use corten::i18n::Utc;
 ///
-/// #[derive(Fields)]
-/// struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
-///
-/// let _ = FormZone::from(Utc).field(Repair::FIELDS.live_at);
+/// let _ = FormZone::from(Utc); // as FormZone::from(req.zone()) would be
 /// ```
+#[derive(Clone, PartialEq, Eq)]
+pub struct FormZone(Named);
+
+/// A zone by the name it is sent as.
 #[derive(Clone)]
-pub struct FormZone {
+struct Named {
     /// As sent and shown: `UTC`, `-06:00`, `America/Chicago`.
     name: Box<str>,
     rules: Rules,
@@ -91,27 +158,22 @@ enum Rules {
     Named(crate::i18n::Visitor),
 }
 
-impl FormZone {
-    /// The hidden input that sends this zone back with the form:
-    /// `<input type="hidden" name="zone" value="America/Chicago">`. Drawn again from a post that
-    /// was refused, it is the posted zone, so the form drawn again is still in it.
-    pub fn field(&self, name: FieldName<FormZone>) -> ZoneField<'_> {
-        ZoneField { name: name.untyped(), zone: &self.name }
+/// The largest offset a zone is written with, 23:59, in seconds: Temporal's offsets are less than
+/// a day.
+const MOST: i32 = 24 * 3600 - 60;
+
+impl Named {
+    fn utc() -> Self {
+        Named { name: "UTC".into(), rules: Rules::Fixed(0) }
     }
 
-    /// Its name, as sent and for the visitor to read beside the form's dates and times:
-    /// `UTC`, an offset (`+05:30`), or a tz database name (`America/Chicago`).
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The zone `text` names, as [`FormZone::name`] writes one.
-    fn read(text: &str) -> Option<FormZone> {
+    /// The zone `text` names, as a [`DrawZone`] writes one.
+    fn read(text: &str) -> Option<Self> {
         if text == "UTC" {
-            return Some(Utc.into());
+            return Some(Named::utc());
         }
         if let Some(east) = read_offset(text) {
-            return Some(Offset::seconds(east).into());
+            return Some(Named::offset(east));
         }
         // Only as the database writes it (jiff finds `america/chicago` too), so one zone is
         // sent one way, the way `field` draws it.
@@ -119,12 +181,43 @@ impl FormZone {
         if crate::client::zone_name(text) {
             let zone = crate::i18n::Visitor::named(text);
             if zone.name() == Some(text) {
-                return Some(FormZone { name: text.into(), rules: Rules::Named(zone) });
+                return Some(Named { name: text.into(), rules: Rules::Named(zone) });
             }
         }
         None
     }
+
+    /// `east` seconds east of UTC, taken to the minute toward zero and to at most 23:59.
+    fn offset(east: i32) -> Self {
+        let east = (east / 60 * 60).clamp(-MOST, MOST);
+        if east == 0 {
+            return Named::utc();
+        }
+        let (sign, s) = (if east < 0 { '-' } else { '+' }, east.unsigned_abs());
+        Named { name: format!("{sign}{:02}:{:02}", s / 3600, s / 60 % 60).into(), rules: Rules::Fixed(east) }
+    }
 }
+
+impl Zone for Named {
+    fn offset(&self, at: SystemTime) -> i32 {
+        match &self.rules {
+            Rules::Fixed(east) => {
+                let _ = at;
+                *east
+            }
+            #[cfg(feature = "zones")]
+            Rules::Named(zone) => zone.offset(at),
+        }
+    }
+}
+
+impl PartialEq for Named {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+    }
+}
+
+impl Eq for Named {}
 
 /// `+HH:MM` or `-HH:MM`, as Temporal writes an offset zone: seconds east of UTC.
 fn read_offset(text: &str) -> Option<i32> {
@@ -142,70 +235,104 @@ fn read_offset(text: &str) -> Option<i32> {
     (b.len() == 6 && b[3] == b':' && hours < 24 && minutes < 60).then(|| sign * (hours * 3600 + minutes * 60))
 }
 
-/// `UTC`, as a form whose zone is not known (no JavaScript, a first page) is drawn in.
-impl From<Utc> for FormZone {
-    fn from(_: Utc) -> Self {
-        FormZone { name: "UTC".into(), rules: Rules::Fixed(0) }
+impl DrawZone {
+    /// The hidden input that sends this zone back with the form, as its [`FormZone`] field:
+    /// `<input type="hidden" name="zone" value="America/Chicago">`.
+    pub fn field(&self, name: FieldName<FormZone>) -> ZoneField<'_> {
+        ZoneField { name: name.untyped(), zone: &self.0.name }
+    }
+
+    /// Its name, as sent and for the visitor to read with the form's dates and times: `UTC`, an
+    /// offset (`+05:30`), or a tz database name (`America/Chicago`).
+    pub fn name(&self) -> &str {
+        &self.0.name
+    }
+
+    /// What the clock in this zone reads at `at`, to the millisecond (rounded down): the `value`,
+    /// `min` or `max` of an `<input type="datetime-local">`. Round a `min` up and a `max` or a
+    /// stored `value` down to the minute the input steps by ([`LocalDateTime::ceil_minute`],
+    /// [`LocalDateTime::floor_minute`]). `None` outside the years a [`Day`](crate::i18n::Day) has
+    /// (1 to 9999).
+    pub fn local(&self, at: impl Into<SystemTime>) -> Option<LocalDateTime> {
+        LocalDateTime::clock(at.into(), &self.0)
     }
 }
 
-/// Named by its offset (`-06:00`, `+05:30`), `UTC` for none. An offset zone is to the minute, as
-/// Temporal's are, so one with seconds is taken to the minute toward zero, and the form is drawn
-/// and read at the offset it names.
-impl From<Offset> for FormZone {
+/// `UTC`: a `Public` page, which is the same for everyone, or an app that does not learn its
+/// visitors' zones.
+impl From<Utc> for DrawZone {
+    fn from(_: Utc) -> Self {
+        DrawZone(Named::utc())
+    }
+}
+
+/// Named by its offset (`-06:00`, `+05:30`), `UTC` for none. An offset zone is to the minute and
+/// less than a day, as Temporal's are, so one with seconds is taken to the minute toward zero and
+/// one of a day or more (which no zone has) to 23:59; the form is drawn and read at the offset it
+/// names.
+impl From<Offset> for DrawZone {
     fn from(offset: Offset) -> Self {
-        let east = offset.offset(UNIX_EPOCH) / 60 * 60;
-        if east == 0 {
-            return Utc.into();
-        }
-        let (sign, s) = (if east < 0 { '-' } else { '+' }, east.unsigned_abs());
-        FormZone { name: format!("{sign}{:02}:{:02}", s / 3600, s / 60 % 60).into(), rules: Rules::Fixed(east) }
+        DrawZone(Named::offset(offset.offset(UNIX_EPOCH)))
     }
 }
 
 /// The visitor's zone (`req.zone()`), by its tz database name; `UTC` when it is not known
 /// (no JavaScript, a browser's first page, a `Public` page).
 #[cfg(feature = "zones")]
-impl From<crate::i18n::Visitor> for FormZone {
+impl From<crate::i18n::Visitor> for DrawZone {
     fn from(zone: crate::i18n::Visitor) -> Self {
         match zone.name() {
-            Some(name) if name != "UTC" => FormZone { name: name.into(), rules: Rules::Named(zone) },
-            _ => Utc.into(),
+            Some(name) if name != "UTC" => DrawZone(Named { name: name.into(), rules: Rules::Named(zone) }),
+            _ => DrawZone(Named::utc()),
         }
     }
 }
 
+/// The zone a refused post sent, to draw its form again in.
+impl From<&FormZone> for DrawZone {
+    fn from(posted: &FormZone) -> Self {
+        DrawZone(posted.0.clone())
+    }
+}
+
+impl FormZone {
+    /// The zone `text` names, as a [`DrawZone`] writes one: what its `Deserialize` reads.
+    pub(crate) fn read(text: &str) -> Option<FormZone> {
+        Named::read(text).map(FormZone)
+    }
+}
+
+/// Where a day the visitor picked begins (`day.start(&input.zone)`), and any other instant the
+/// form's zone gives.
 impl Zone for FormZone {
     fn offset(&self, at: SystemTime) -> i32 {
-        match &self.rules {
-            Rules::Fixed(east) => {
-                let _ = at;
-                *east
-            }
-            #[cfg(feature = "zones")]
-            Rules::Named(zone) => zone.offset(at),
-        }
+        self.0.offset(at)
     }
 }
 
-impl PartialEq for FormZone {
-    fn eq(&self, other: &Self) -> bool {
-        self.name == other.name
+impl fmt::Debug for DrawZone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "DrawZone({})", self.0.name)
     }
 }
-
-impl Eq for FormZone {}
 
 impl fmt::Debug for FormZone {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FormZone({})", self.name)
+        write!(f, "FormZone({})", self.0.name)
     }
 }
 
 /// Its name, as it is sent.
+impl fmt::Display for DrawZone {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0.name)
+    }
+}
+
+/// Its name, as it was sent.
 impl fmt::Display for FormZone {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.name)
+        f.write_str(&self.0.name)
     }
 }
 
@@ -220,7 +347,7 @@ impl<'de> serde::Deserialize<'de> for FormZone {
     }
 }
 
-/// [`FormZone::field`]'s hidden input.
+/// [`DrawZone::field`]'s hidden input.
 pub struct ZoneField<'a> {
     name: FieldName,
     zone: &'a str,
@@ -243,26 +370,43 @@ mod tests {
     #[test]
     fn a_zone_is_sent_as_its_name_and_read_back_from_it() {
         for (zone, name) in [
-            (FormZone::from(Utc), "UTC"),
-            (FormZone::from(Offset::hours(0)), "UTC"),
-            (FormZone::from(Offset::hours(-6)), "-06:00"),
-            (FormZone::from(Offset::seconds(5 * 3600 + 1800)), "+05:30"),
-            (FormZone::from(Offset::seconds(-(3600 + 60 + 1))), "-01:01"),
-            (FormZone::from(Offset::hours(14)), "+14:00"),
+            (DrawZone::from(Utc), "UTC"),
+            (DrawZone::from(Offset::hours(0)), "UTC"),
+            (DrawZone::from(Offset::hours(-6)), "-06:00"),
+            (DrawZone::from(Offset::seconds(5 * 3600 + 1800)), "+05:30"),
+            (DrawZone::from(Offset::seconds(-(3600 + 60 + 1))), "-01:01"),
+            (DrawZone::from(Offset::hours(14)), "+14:00"),
+            // No zone is a day or more from UTC: the largest offset written is 23:59.
+            (DrawZone::from(Offset::hours(30)), "+23:59"),
+            (DrawZone::from(Offset::seconds(-24 * 3600)), "-23:59"),
+            (DrawZone::from(Offset::seconds(i32::MIN)), "-23:59"),
         ] {
             assert_eq!(zone.name(), name);
-            let read = FormZone::read(name).unwrap();
-            assert_eq!((read.name(), read.offset(UNIX_EPOCH)), (name, zone.offset(UNIX_EPOCH)), "{name}");
+            let read = FormZone::read(name).unwrap_or_else(|| panic!("{name} reads back"));
+            assert_eq!((read.to_string(), read.offset(UNIX_EPOCH)), (name.to_string(), zone.0.offset(UNIX_EPOCH)), "{name}");
+            assert_eq!(DrawZone::from(&read), zone, "{name} is drawn again as it was");
         }
-        assert_eq!(FormZone::read("+00:00").unwrap().name(), "UTC");
-        assert_eq!(FormZone::from(Offset::seconds(-(3600 + 60 + 1))).offset(UNIX_EPOCH), -3660, "to the minute");
-        for text in
-            ["", "utc", "Z", "+5:30", "+05:3", "+0530", "05:30", "+24:00", "+05:60", "+05:30:15", "+05:30:0", "Mars/Olympus"]
-        {
+        assert_eq!(FormZone::read("+00:00").unwrap().to_string(), "UTC");
+        assert_eq!(DrawZone::from(Offset::seconds(-(3600 + 60 + 1))).0.offset(UNIX_EPOCH), -3660, "to the minute");
+        for text in [
+            "",
+            "utc",
+            "Z",
+            "+5:30",
+            "+05:3",
+            "+0530",
+            "05:30",
+            "+24:00",
+            "+30:00",
+            "+05:60",
+            "+05:30:15",
+            "+05:30:0",
+            "Mars/Olympus",
+        ] {
             assert!(FormZone::read(text).is_none(), "{text:?}");
         }
         let mut out = String::new();
-        FormZone::from(Offset::hours(-6)).field(FieldName::__new("zone")).render(&mut out);
+        DrawZone::from(Offset::hours(-6)).field(FieldName::__new("zone")).render(&mut out);
         assert_eq!(out, r#"<input type="hidden" name="zone" value="-06:00">"#);
     }
 
@@ -271,14 +415,31 @@ mod tests {
     fn the_visitors_zone_is_sent_by_its_tz_database_name() {
         use crate::i18n::Visitor;
         use std::time::Duration;
-        let chicago = FormZone::from(Visitor::named("America/Chicago"));
+        let chicago = DrawZone::from(Visitor::named("America/Chicago"));
         let july = UNIX_EPOCH + Duration::from_secs(1_783_000_000);
-        assert_eq!((chicago.name(), chicago.offset(july)), ("America/Chicago", -5 * 3600));
-        assert_eq!(FormZone::read("America/Chicago"), Some(chicago));
+        assert_eq!((chicago.name(), chicago.0.offset(july)), ("America/Chicago", -5 * 3600));
+        assert_eq!(FormZone::read("America/Chicago").map(|z| DrawZone::from(&z)), Some(chicago));
         // Not known (no zone reported yet): UTC, and said so.
-        assert_eq!(FormZone::from(Visitor::default()).name(), "UTC");
+        assert_eq!(DrawZone::from(Visitor::default()).name(), "UTC");
         for text in ["Mars/Olympus", "../etc/passwd", "america/chicago", "utc", "Etc/Unknown"] {
             assert!(FormZone::read(text).is_none(), "{text}");
         }
+    }
+
+    /// The second 01:30 of the night Chicago's clocks go back is drawn as 01:30, which reads as
+    /// the first; an edit form that compares the field with what it drew keeps the stored instant.
+    #[cfg(feature = "zones")]
+    #[test]
+    fn an_unchanged_field_keeps_a_stored_instant_in_a_repeated_hour() {
+        use crate::i18n::{parse_timestamp, Visitor};
+        let stored = parse_timestamp("2026-11-01T07:30:00Z").unwrap();
+        let zone = DrawZone::from(Visitor::named("America/Chicago"));
+        let drawn = zone.local(stored).map(LocalDateTime::floor_minute).unwrap();
+        assert_eq!(drawn.to_string(), "2026-11-01T01:30");
+        let posted = FormZone::read(zone.name()).unwrap();
+        assert_eq!(drawn.at(&posted), parse_timestamp("2026-11-01T06:30:00Z"), "read alone: the first 01:30");
+        let shown = DrawZone::from(&posted).local(stored).map(LocalDateTime::floor_minute);
+        let kept = if Some(drawn) == shown { Some(stored) } else { drawn.at(&posted) };
+        assert_eq!(kept, Some(stored));
     }
 }

@@ -4308,46 +4308,58 @@ rules something out.
     it, load such a page in the three engines and count the matches.
 
 55. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
-    zone its form was drawn in, which the form carries back (`FormZone`); a time the clocks skip
-    or repeat is read as Temporal's default (`compatible`) reads it.** `<input type="datetime-local">`
-    sends what the visitor's clock read (`2026-11-13T14:05`), with no offset. Corten wrote an
-    instant in the visitor's zone (`t.date_time`) but read none back, so an app took the field as
-    a `String`, parsed it, and found the instant with `Zone::offset`, whose offset is the
-    instant's, the one being found: each app corrected its own guess and decided on its own what a
-    time the clocks skip or repeat means, and one that got it wrong stored the wrong instant
+    zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
+    what the post reads); a time the clocks skip or repeat is read as Temporal's default
+    (`compatible`) reads it.** `<input type="datetime-local">` sends what the visitor's clock read
+    (`2026-11-13T14:05`), with no offset. Corten wrote an instant in the visitor's zone
+    (`t.date_time`) but read none back, so an app took the field as a `String`, parsed it, and found
+    the instant with `Zone::offset`, whose offset is the instant's, the one being found: each app
+    corrected its own guess and decided on its own what a time the clocks skip or repeat means, and
+    one that got it wrong stored the wrong instant
     ([#1421 A datetime-local field has no typed reader: each app parses the visitor's local time and resolves its zone offset itself](https://github.com/corten-run/corten/issues/1421)).
     Now `corten::i18n::LocalDateTime` reads and writes HTML's local date and time syntax, and an
-    `Entry<LocalDateTime>` field keeps the text as sent, as `Entry<u32>` does.
-    `LocalDateTime::of(at, zone)` writes an instant as the input's `value`, `min` or `max`, and
-    `ceil_minute` and `floor_minute` round a `min` up and a `max` down to the minute the input
-    steps by. A `LocalDateTime` is not an instant (no `Into<SystemTime>`, not a `DateValue`), so a
-    clock reading is not written or stored as one without its zone (a `compile_fail` example on the
+    `Entry<LocalDateTime>` field keeps the text as sent, as `Entry<u32>` does. A
+    `LocalDateTime` is not an instant (no `Into<SystemTime>`, not a `DateValue`), so a clock
+    reading is not written or stored as one without its zone (a `compile_fail` example on the
     type). `Entry` now holds a sealed `EntryValue` (a number, a `Day` or a `LocalDateTime`, a
     `compile_fail` example for an app's own) rather than numbers alone, so `<input type="date">`
     became `Entry<Day>` at no further cost, and `day.start(zone)` is where a picked day begins
-    there (its midnight, or the instant the clocks skip to); `day.midnight_utc()`, the same as
-    `day.start(Utc)`, is deprecated for it.
+    (its midnight, or the instant the clocks skip to; `day.start(&input.zone)` in a form that
+    carries its zone); `day.midnight_utc()`, the same as `day.start(Utc)`, is deprecated for it.
 
     The zone a form is read in is the one it was drawn in, and the form carries it. `req.zone()`
     is not the same across the two requests: it is UTC on a browser's first page, which loads the
     script that reports the zone, and in a `Public` page, and the visitor's zone on the post after
     it. A form drawn on the first page and read in the post's zone would store its time moved by
-    the visitor's offset, with no error. So the draw writes its zone as a hidden input
-    (`zone.field(f.zone)`, from `FormZone::from(req.zone())`), the post reads it as a typed
-    `FormZone` field (a 422 naming it when it is missing or names no zone, as any typed field a page
-    writes itself), and `Entry::at` takes only a `FormZone`, so reading a posted time in
-    `req.zone()` does not compile (a `compile_fail` example); `field` takes only a `FormZone`
-    field's name. A form drawn again after a refused post is drawn in the posted zone and sends it
-    again. The zone is sent as a name that already exists: a tz database name (`America/Chicago`,
-    `UTC`) or an offset (`-06:00`).
+    the visitor's offset, with no error. So a page draws in a `DrawZone`, made from the request's
+    zone (`DrawZone::from(req.zone())`), from `Utc` or an `Offset`, or, for a form drawn again
+    after a refused post, from the zone that post sent (`DrawZone::from(&input.zone)`), so a time
+    typed under `UTC` is not shown again as another zone's. It writes the hidden input
+    (`zone.field(f.zone)`), the zone's name (`zone.name()`) and an instant as the input's
+    `value`, `min` or `max` (`zone.local(at)`, the only public way to), so the three come from one
+    zone. The post reads the hidden input as a typed `FormZone` field (a 422 naming it when it is
+    missing or names no zone, as any typed field a page writes itself). What the compiler checks,
+    each with a `compile_fail` example: `Entry::at` and `LocalDateTime::at` take only a
+    `FormZone`, so neither `req.zone()` nor a `DrawZone` reads a posted time; a `FormZone` has no
+    constructor but its `Deserialize`, so `FormZone::from(req.zone())` does not compile; and
+    `field` takes only a `FormZone` field's name. What it does not check: that the form draws the
+    hidden input at all (a form without it compiles, and its post is a 422), that a page draws the
+    input and the times from the same `DrawZone`, and that a form drawn again is drawn in the
+    posted zone rather than the request's. The zone is sent as a name that already exists: a tz
+    database name (`America/Chicago`, `UTC`) or an offset (`-06:00`, to the minute and less than a
+    day, so an `Offset` of a day or more is drawn as `±23:59`).
 
     Without JavaScript the browser never reports its zone, so the form is drawn and read in UTC.
-    The answer is to say so: `zone.name()` is shown with the field (the guide's example draws it in
-    the label), so a visitor types a time in the zone the page states, the form works as plain
-    HTML, posts with no script, and reads back what the visitor saw (Value 3, HTML that works on
-    its own). A browser with JavaScript gets the same on its first page and its own zone from the
-    next. Drawing in UTC and saying nothing would store a visitor's `14:05` as UTC's; guessing a
-    zone (from the language, the address) would store it in a zone the visitor was never shown.
+    The answer is to say so: the page shows `zone.name()` with the field (the guide's example draws
+    it in the label), so a visitor types a time in the zone the page states, the form works as
+    plain HTML, posts with no script, and reads back what the visitor saw (Value 3, HTML that works
+    on its own). That holds only for a page that draws the name, which Corten cannot check; the
+    guide, the skill and the types' documentation draw it. A browser with JavaScript gets the same on its first
+    page and its own zone from the next. A `Public` page is the same for everyone, so it draws in
+    `DrawZone::from(Utc)` (`req.zone()` there is UTC too, and a debug build warns each time a
+    `Public` answer reads it). Drawing in UTC and saying nothing would store a visitor's `14:05` as
+    UTC's; guessing a zone (from the language, the address) would store it in a zone the visitor
+    was never shown.
 
     A skipped time (`02:30` on the morning the clocks go from 2 to 3) moves forward by the gap,
     and a repeated one (`01:30` on the night they go back) is the earlier instant. That is
@@ -4356,38 +4368,43 @@ rules something out.
     occurrence of a repeated time, and a skipped time read at the UTC offset before the gap. It
     is also what `day.start(zone)` needs, since it gives the first instant of a day whose midnight
     is skipped or repeated. So an instant in the second of two repeated hours, drawn and sent back
-    unchanged, reads as the first: the form carries the zone, not the instant, and an edit form
-    keeps a stored instant by comparing the field with `LocalDateTime::of(stored, zone)`, which the
-    guide and the type's documentation show (Temporal's `ZonedDateTime.with` keeps the offset an
-    edit started from, `offset: 'prefer'`, for the same reason; here the handler holds the stored
-    instant). `at` asks the zone only for its offset
+    unchanged, reads as the first: the form carries the zone, not the instant. An edit form draws
+    the stored instant to the minute (a `value` with seconds is off the steps a minute-rounded
+    `min` starts, and the browser would not send the form), and keeps the stored instant when the
+    field comes back equal to that drawn value, which the guide and `DrawZone`'s documentation
+    show and a test holds (Temporal's `ZonedDateTime.with` keeps the offset an edit started from,
+    `offset: 'prefer'`, for the same reason; here the handler holds the stored instant). A `min`
+    rounded up and a `max` rounded down keep every minute the input allows on a step; each reads
+    inside the handler's bounds except where the clocks skip or repeat a time near a bound, so the
+    handler's comparison stays the check. Reading asks the zone only for its offset
     (`Zone::offset`), a day before and a day after the time and at the two instants those give, so
-    it works for every `Zone` (`Utc`, an `Offset`, `req.zone()`'s `Visitor`, an app's own) without
-    the `zones` feature and adds no dependency; a zone whose offset changed twice within two days
-    would be read with the outer two offsets. A test reads every zone in the bundled tz database
+    it works for every zone a form is drawn in (`Utc`, an `Offset`, `req.zone()`'s `Visitor`)
+    without the `zones` feature and adds no dependency; a zone whose offset changed twice within
+    two days would be read with the outer two. A test reads every zone in the bundled tz database
     around every change of offset from 1970 to 2040, compares each reading with jiff's
     `compatible()`, which finds the candidates in the database itself, and fails if any zone
     changes its offset twice within two days.
 
     Not chosen: reading in the request's zone (`req.zone()`) with no zone in the form, which this
     Choice first did: it is right only when the draw and the post have the same zone, which a
-    first page and its post do not. Carrying the drawn instant or each field's offset instead of
+    first page and its post do not. One type for the zone drawn and the zone posted, which this
+    Choice did next: it had to be made from `req.zone()` to draw, so a post could make one from
+    `req.zone()` too and read in it, and `LocalDateTime::at` took any zone; two types leave the
+    post only the zone it was sent. Carrying the drawn instant or each field's offset instead of
     the zone: a visitor who changes the time across a change of the clocks would be read at the
     offset of a time they did not pick. Reading or writing in the zone Corten writes dates in
     while it renders (`App::zoned_dates`), so a component would draw an input from an instant with
     no zone, as `t.date_time` does: the handler reads the form before any render, outside that
-    zone. Asking the visitor for their zone in the form (a `<select>` of zones): an app can, and
-    its `FormZone` is then what it posts; most forms have no room for it. Temporal's other answers
+    zone. Asking the visitor for their zone in the form (a `<select>` of zones): an app can, and the
+    zone it posts is a `FormZone` then; most forms have no room for it. Temporal's other answers
     (`earlier`, `later`, `reject`) as options: one answer is one way to do it, and no app has asked
     which of two `01:30`s a visitor meant. `<input type="time">`: a time of day names no day, so it
     is no instant in any zone, and a type for it would be a new concept no app has needed; an app
     with a date and a time posts one `datetime-local`. A `Bounds` for times (`min`, `max` and
     `step` written once for the input and the handler): a time's bounds are mostly instants known
-    only at the request (now, when a listing went up), so the handler compares the instants, and a
-    `min` rounded up and a `max` rounded down to the minute keep every time the input allows
-    inside them. `Serialize` and JSON for `LocalDateTime`: an API sends an instant with its offset
-    (RFC 3339, `parse_timestamp`); it is read from text (`Deserialize`) only as a form's or a
-    query's field.
+    only at the request (now, when a listing went up), so the handler compares the instants.
+    `Serialize` and JSON for `LocalDateTime`: an API sends an instant with its offset (RFC 3339,
+    `parse_timestamp`); it is read from text (`Deserialize`) only as a form's or a query's field.
 
     Stands on: platform (the HTML standard's valid local date and time string, `T` or a space
     between a date and a time of `HH:MM` with optional seconds and one to three fraction digits,
@@ -4407,17 +4424,18 @@ rules something out.
     offset a day before or a day after, and a time the clock skips has neither, so both reads are
     exact; a form read in the zone it was drawn in reads back what the visitor saw, whichever
     request drew it; a clock reading that is no `Into<SystemTime>` and no `DateValue` cannot reach
-    `t.date` or a field typed as an instant, and an `Entry::at` that takes only a `FormZone`
-    cannot be given the post's zone); value (a standard's answer before one of Corten's, HTML that
-    works on its own, a mistake the compiler can catch is a compile error, one way to do each
-    thing and a small surface: Values 2, 3, 4, 5 and 6).
+    `t.date` or a field typed as an instant, and a reader that takes only a type with no
+    constructor but a post's cannot be given the request's zone); value (a standard's answer
+    before one of Corten's, HTML that works on its own, a mistake the compiler can catch is a
+    compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
 
     Revisit when: an app needs to ask a visitor which of two repeated times they meant, or to
     refuse a skipped one; an app needs a time of day alone; the tz database gives a zone two
     changes of offset within two days (the all-zones test fails after a jiff-tzdb update); the
     runtime can redraw a first page's dates and times in the zone it reports, so a first page
-    need not be in UTC; or an app repeats the same instant bounds check on many forms, when a
-    `Bounds` for times would earn its place.
+    need not be in UTC; a way appears to tie a form's hidden zone input to its time fields at
+    compile time (a form type that draws both); or an app repeats the same instant bounds check on
+    many forms, when a `Bounds` for times would earn its place.
 
     Last checked: 2026-11-15, the HTML standard's local dates and times microsyntax, its
     `datetime-local` state and its step base (Living Standard, last updated 14 November 2026),
@@ -4425,8 +4443,8 @@ rules something out.
     `DisambiguatePossibleEpochNanoseconds`, and RFC 5545 section 3.3.5, read that day, against
     `1c72b0379`; 2026-11-16, the HTML standard's step scale factor and default step for
     `datetime-local` and Temporal's `ZonedDateTime` documentation for time zone identifiers, read
-    that day, against `834149fc5`, with jiff 0.2.38 and jiff-tzdb 0.1.9
-    (`Cargo.lock`) and the all-zones test run on this change.
+    that day and checked against the `FormZone` reader at `67d280e88`, with jiff 0.2.38 and
+    jiff-tzdb 0.1.9 (`Cargo.lock`), and the all-zones test passing on `67d280e88`.
 
 ## Rules
 

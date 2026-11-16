@@ -194,17 +194,20 @@ its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new
 message) and drawn again with `value={&input.qty}`; a typed `qty: u32` is only for a number a
 page writes itself, since one that does not read is the error page. A date and time the user
 picks (`<input type="datetime-local">`) is `when: Entry<LocalDateTime>` (`corten::i18n`) beside
-`zone: FormZone` (`corten::form`): the page draws `{zone.field(f.zone)}` with
-`let zone = FormZone::from(req.zone())`, shows `zone.name()` by the field (without JavaScript it is
-`UTC`), and draws `value={&input.when}`,
-`min={LocalDateTime::of(at, &zone).and_then(LocalDateTime::ceil_minute)}` and a `max` with
-`floor_minute`; the post reads `input.when.at(&input.zone)` (`None` for the field's message),
-never in `req.zone()`, which differs between a first page and its post (`Entry::at` takes only a
-`FormZone`), and a refused post draws again in `input.zone`. Never a `String` parsed by hand or an
-offset worked out with `Zone::offset`. A time the clocks skip moves forward by the gap and a
-repeated one is the earlier (Temporal's default), so an edit keeps its stored instant when
-`input.when.value() == LocalDateTime::of(stored, &input.zone)`. A picked day is `Entry<Day>`,
-`day.start(zone)` where it begins. A value the app stores and
+`zone: FormZone` (`corten::form`): the page draws in `let zone = DrawZone::from(req.zone())`
+(`DrawZone::from(Utc)` on a `Public` page): `{zone.field(f.zone)}`, `zone.name()` by the field
+(without JavaScript it is `UTC`, and the visitor knows only if the page shows it),
+`value={zone.local(stored).map(LocalDateTime::floor_minute)}`,
+`min={zone.local(at).and_then(LocalDateTime::ceil_minute)}` and a `max` with `floor_minute`; the
+post reads `input.when.at(&input.zone)` (`None` for the field's message), never in `req.zone()`,
+which differs between a first page and its post (`Entry::at` takes only a `FormZone`, which only a
+post makes), and a refused post draws again in `DrawZone::from(&input.zone)` with
+`value={&input.when}`. A form without `zone.field` compiles and its post is a 422. Never a
+`String` parsed by hand or an offset worked out with `Zone::offset`. A time the clocks skip moves
+forward by the gap and a repeated one is the earlier (Temporal's default), so an edit keeps its
+stored instant when `input.when.value()` equals
+`DrawZone::from(&input.zone).local(stored).map(LocalDateTime::floor_minute)`, the value it drew.
+A picked day is `Entry<Day>`, `day.start(&input.zone)` where it begins. A value the app stores and
 draws back into a number field must be one its `Bounds` hold (a ported screen's `min`/`step`
 never ran under `fetcher.submit`), or the browser will not send the form; `corten dev` names
 such a control in the console. A helper that takes a name of any field is generic over it

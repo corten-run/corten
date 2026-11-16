@@ -155,15 +155,15 @@ pub(crate) fn whole_magnitude(w: &Written<'_>) -> Option<u128> {
 /// typed field: one that does not read came from no page of the app's. A number made in code
 /// (`Entry::from(1)`) is drawn as the number.
 ///
-/// A date and time is drawn in a zone ([`LocalDateTime::of`]) and read in the same one
-/// ([`Entry::at`]), the [`FormZone`] the form sent back with it, so the form shows what the
-/// visitor's clock read, and a time their clocks skip or repeat has one answer
+/// A date and time is drawn in a [`DrawZone`](crate::form::DrawZone) (`zone.local(at)`), which writes the zone into the
+/// form, and read in the [`FormZone`] the form sends back ([`Entry::at`]), so the form shows what
+/// the visitor's clock read, and a time their clocks skip or repeat has one answer
 /// ([`LocalDateTime`]):
 ///
 /// ```
 /// use corten::prelude::*;
-/// use corten::form::FormZone;
-/// use corten::i18n::{parse_timestamp, LocalDateTime, Offset};
+/// use corten::form::{DrawZone, FormZone};
+/// use corten::i18n::{parse_timestamp, LocalDateTime};
 ///
 /// #[derive(Fields)]
 /// struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
@@ -171,13 +171,13 @@ pub(crate) fn whole_magnitude(w: &Written<'_>) -> Option<u128> {
 /// let repair: Repair = corten::form::from_bytes(b"live_at=2026-11-13T14%3A05&zone=-06%3A00").unwrap();
 /// assert_eq!(repair.live_at.at(&repair.zone), parse_timestamp("2026-11-13T20:05:00Z"));
 ///
-/// // Drawn again in the zone it was sent in.
+/// // Refused, it is drawn again in the zone it was sent in.
 /// let listed = parse_timestamp("2026-11-12T15:30:00Z").unwrap();
-/// let (f, zone) = (Repair::FIELDS, &repair.zone);
+/// let (f, zone) = (Repair::FIELDS, DrawZone::from(&repair.zone));
 /// let view = html! {
 ///     {zone.field(f.zone)}
 ///     <input type="datetime-local" name={f.live_at} value={&repair.live_at}
-///         min={LocalDateTime::of(listed, zone).and_then(LocalDateTime::ceil_minute)}>
+///         min={zone.local(listed).and_then(LocalDateTime::ceil_minute)}>
 /// };
 /// assert!(view.to_html().contains(r#"value="2026-11-13T14:05" min="2026-11-12T09:30""#));
 ///
@@ -285,9 +285,9 @@ impl Entry<LocalDateTime> {
     /// one they repeat is the earlier. `None` when it is blank or not a date and time, the
     /// field's message.
     ///
-    /// It takes only the form's zone, not the request's: `req.zone()` on the post may not be the
-    /// zone the form was drawn in (UTC on a browser's first page), and reading in it would move
-    /// the time by the visitor's offset.
+    /// It takes only the form's zone, which comes only from the post, not the request's:
+    /// `req.zone()` on the post may not be the zone the form was drawn in (UTC on a browser's first
+    /// page), and reading in it would move the time by the visitor's offset.
     ///
     /// ```compile_fail,E0308
     /// use corten::prelude::*;
@@ -295,6 +295,17 @@ impl Entry<LocalDateTime> {
     ///
     /// let when = Entry::<LocalDateTime>::typed("2026-11-13T14:05");
     /// let _ = when.at(Utc); // as req.zone() would be
+    /// ```
+    ///
+    /// Nor the zone a page draws in, which is the request's:
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    /// use corten::form::DrawZone;
+    /// use corten::i18n::{LocalDateTime, Utc};
+    ///
+    /// let when = Entry::<LocalDateTime>::typed("2026-11-13T14:05");
+    /// let _ = when.at(&DrawZone::from(Utc)); // as DrawZone::from(req.zone()) would be
     /// ```
     pub fn at(&self, zone: &FormZone) -> Option<SystemTime> {
         self.value?.at(zone)
@@ -455,8 +466,8 @@ mod tests {
 
     #[test]
     fn a_day_or_a_date_and_time_entry_keeps_its_text_and_reads_it() {
-        use crate::i18n::{parse_timestamp, Offset, Utc};
-        let (chicago_winter, utc) = (FormZone::from(Offset::hours(-6)), FormZone::from(Utc));
+        use crate::i18n::parse_timestamp;
+        let (chicago_winter, utc) = (FormZone::read("-06:00").unwrap(), FormZone::read("UTC").unwrap());
         let day = Entry::<Day>::typed("2026-09-02");
         assert_eq!(day.value().map(|d| d.to_string()).as_deref(), Some("2026-09-02"));
         let bad = Entry::<Day>::typed("09/02/2026");

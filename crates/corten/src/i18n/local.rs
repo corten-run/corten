@@ -5,6 +5,7 @@ use std::fmt::{self, Display, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{Day, Zone};
+use crate::form::FormZone;
 use crate::view::{quoted, AttrValue, Render};
 
 /// Milliseconds in a day.
@@ -12,20 +13,25 @@ const DAY: i64 = 86_400_000;
 
 /// A date and a time of day on a clock, with no zone: what `<input type="datetime-local">`
 /// sends (`2026-11-13T14:05`), the time a person reads off the clock where they are. It names an
-/// instant only in a zone, so it is not one: [`at`](LocalDateTime::at) reads it in a zone, and
-/// [`of`](LocalDateTime::of) writes an instant in a zone as the input's `value`, `min` or
-/// `max`. A field the user fills in is an [`Entry<LocalDateTime>`](crate::form::Entry), which
-/// keeps the text when it does not read and is read in the zone its form was drawn in, a
-/// [`FormZone`](crate::form::FormZone) the form sends back with it.
+/// instant only in a zone, so it is not one. A form draws an instant as the input's `value`, `min`
+/// or `max` in a [`DrawZone`](crate::form::DrawZone) (`zone.local(at)`), which also writes that
+/// zone into the form, and its post reads the field in the zone the form sends back, a
+/// [`FormZone`](crate::form::FormZone): [`at`](LocalDateTime::at) takes only that. A field the
+/// user fills in is an [`Entry<LocalDateTime>`](crate::form::Entry), which keeps the text when it
+/// does not read.
 ///
 /// ```
+/// use corten::prelude::*;
+/// use corten::form::{DrawZone, FormZone};
 /// use corten::i18n::{parse_timestamp, LocalDateTime, Offset};
 ///
-/// let zone = Offset::hours(-6); // in a handler, the form's FormZone
-/// let read: LocalDateTime = "2026-11-13T14:05".parse().unwrap();
-/// let at = read.at(zone).unwrap();
-/// assert_eq!(Some(at), parse_timestamp("2026-11-13T20:05:00Z"));
-/// assert_eq!(LocalDateTime::of(at, zone).unwrap().to_string(), "2026-11-13T14:05");
+/// #[derive(Fields)]
+/// struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
+///
+/// let at = parse_timestamp("2026-11-13T20:05:00Z").unwrap();
+/// assert_eq!(DrawZone::from(Offset::hours(-6)).local(at).unwrap().to_string(), "2026-11-13T14:05");
+/// let posted: Repair = corten::form::from_bytes(b"live_at=2026-11-13T14%3A05&zone=-06%3A00").unwrap();
+/// assert_eq!(posted.live_at.at(&posted.zone), Some(at));
 /// ```
 ///
 /// Where the clocks change, a time on the clock names no instant (skipped, `02:30` on the
@@ -38,9 +44,14 @@ const DAY: i64 = 86_400_000;
 /// ```
 /// # #[cfg(feature = "zones")]
 /// # {
-/// use corten::i18n::{parse_timestamp, LocalDateTime, Visitor};
+/// use corten::prelude::*;
+/// use corten::form::FormZone;
+/// use corten::i18n::{parse_timestamp, LocalDateTime};
 ///
-/// let chicago = Visitor::named("America/Chicago");
+/// #[derive(Fields)]
+/// struct Posted { zone: FormZone }
+///
+/// let chicago = corten::form::from_bytes::<Posted>(b"zone=America%2FChicago").unwrap().zone;
 /// let skipped: LocalDateTime = "2026-03-08T02:30".parse().unwrap();
 /// assert_eq!(skipped.at(&chicago), parse_timestamp("2026-03-08T03:30:00-05:00"));
 /// let repeated: LocalDateTime = "2026-11-01T01:30".parse().unwrap();
@@ -48,32 +59,35 @@ const DAY: i64 = 86_400_000;
 /// # }
 /// ```
 ///
-/// [`of`](LocalDateTime::of) then [`at`](LocalDateTime::at) gives the instant back, except in
-/// an hour the clocks repeat: the second `01:30` (`07:30Z` in Chicago) is drawn as `01:30`,
-/// which reads as the first (`06:30Z`). A form that edits a stored instant keeps it when the
-/// field comes back as it was drawn: compare the field's value with `LocalDateTime::of(stored,
-/// zone)` before reading it.
+/// An instant drawn and read back is itself, except in an hour the clocks repeat: the second
+/// `01:30` (`07:30Z` in Chicago) is drawn as `01:30`, which reads as the first (`06:30Z`). A form
+/// that edits a stored instant keeps it when the field comes back as it was drawn, as
+/// [`DrawZone`](crate::form::DrawZone) shows.
 ///
 /// It reads and writes HTML's syntax for a local date and time: a [`Day`], `T` (or a space) and
 /// the time to the minute, with seconds and up to three digits of a second when the input's
 /// `step` asks for them (`2026-11-13T14:05:09.5`). It is written as HTML normalizes one, which
 /// is what a browser sends: with `T`, and with the seconds and their fraction only where they are
 /// not zero. An input counts its steps (a minute unless `step` says otherwise) from its `min`,
-/// else its `value`, so a `min` with seconds or a fraction of one puts every whole minute off a
-/// step and the form is not sent until the visitor picks a time that is on one (`corten dev`
-/// names such a control drawn with a value). Draw a `min` rounded up to the minute and a `max`
-/// rounded down ([`ceil_minute`](LocalDateTime::ceil_minute),
-/// [`floor_minute`](LocalDateTime::floor_minute)): every minute between them is then a step, and
-/// each one reads as an instant inside the bounds the handler compares with.
+/// else its `value`, so a `min` or a `value` with seconds or a fraction of one puts every whole
+/// minute, or the value itself, off a step, and the form is not sent until the visitor picks a
+/// time that is on one (`corten dev` names such a control drawn with a value). Draw a `min`
+/// rounded up to the minute, and a `max` and a stored `value` rounded down
+/// ([`ceil_minute`](LocalDateTime::ceil_minute), [`floor_minute`](LocalDateTime::floor_minute)):
+/// every minute between them is then a step, and each one reads as an instant inside the bounds
+/// the handler compares with, except where the clocks skip or repeat a time near a bound (a
+/// skipped minute reads an hour later, a repeated one as its first instant), so the handler's own
+/// comparison is the check.
 ///
 /// ```
+/// use corten::form::DrawZone;
 /// use corten::i18n::{parse_timestamp, LocalDateTime, Utc};
 ///
+/// let zone = DrawZone::from(Utc);
 /// let listed = parse_timestamp("2026-11-12T15:30:09.250Z").unwrap();
-/// let min = LocalDateTime::of(listed, Utc).and_then(LocalDateTime::ceil_minute).unwrap();
+/// let min = zone.local(listed).and_then(LocalDateTime::ceil_minute).unwrap();
 /// assert_eq!(min.to_string(), "2026-11-12T15:31");
-/// assert!(min.at(Utc).unwrap() >= listed, "the earliest time the input allows is not before it");
-/// let max = LocalDateTime::of(listed, Utc).unwrap().floor_minute();
+/// let max = zone.local(listed).unwrap().floor_minute();
 /// assert_eq!(max.to_string(), "2026-11-12T15:30");
 /// ```
 ///
@@ -148,25 +162,28 @@ impl LocalDateTime {
         }
     }
 
-    /// What the clock in `zone` reads at `at`, to the millisecond (rounded down): for the
-    /// `value`, `min` or `max` of an `<input type="datetime-local">`, drawn in the form's zone
-    /// (`min={LocalDateTime::of(listed, &zone)}`, a [`FormZone`](crate::form::FormZone)) that the
-    /// form sends back and the handler reads what the visitor picked in. `None` outside the years a
-    /// [`Day`] has (1 to 9999).
-    pub fn of(at: impl Into<SystemTime>, zone: impl Zone) -> Option<Self> {
-        let at = at.into();
+    /// What the clock in `zone` reads at `at`, to the millisecond (rounded down); `None` outside
+    /// the years a [`Day`] has (1 to 9999). A form writes it with
+    /// [`DrawZone::local`](crate::form::DrawZone::local), in the zone it sends back.
+    pub(crate) fn clock(at: SystemTime, zone: impl Zone) -> Option<Self> {
         let local = unix_millis(at)?.checked_add(i64::from(zone.offset(at)) * 1000)?;
         let day = Day::from_days(local.div_euclid(DAY))?;
         Some(LocalDateTime { day, millis: local.rem_euclid(DAY) as u32 })
     }
 
-    /// The instant this time on the clock is in `zone`: a skipped time moves forward by the gap, and a repeated time is the earlier instant, as the
-    /// [type](LocalDateTime) says. `None` before the earliest `SystemTime` the platform has
-    /// (1601-01-01 on Windows).
-    ///
-    /// It asks the zone for its offset a day before and a day after, so a zone whose offset
-    /// changed twice within two days would be read with the outer two.
-    pub fn at(self, zone: impl Zone) -> Option<SystemTime> {
+    /// The instant this time on the clock is in the zone its form was drawn in and sent back (the
+    /// form's [`FormZone`]): a skipped time moves forward by the gap, and a repeated time is the
+    /// earlier instant, as the [type](LocalDateTime) says. `None` before the earliest
+    /// `SystemTime` the platform has (1601-01-01 on Windows). It takes no other zone: the zone of
+    /// the request that posts a form need not be the one the form was drawn in.
+    pub fn at(self, zone: &FormZone) -> Option<SystemTime> {
+        self.read_in(zone)
+    }
+
+    /// [`at`](LocalDateTime::at) in any zone. It asks the zone for its offset a day before and a
+    /// day after, so a zone whose offset changed twice within two days would be read with the
+    /// outer two.
+    pub(crate) fn read_in(self, zone: impl Zone) -> Option<SystemTime> {
         // The clock's reading as if it were UTC's; the instant is that minus the offset there.
         let local = self.day.days() * DAY + i64::from(self.millis);
         let offset = |utc: i64| instant(utc).map(|at| i64::from(zone.offset(at)) * 1000);
@@ -381,17 +398,17 @@ mod tests {
             (Offset::seconds(5 * 3600 + 1800), "2026-11-14T01:35:09.25"),
             (Offset::hours(14), "2026-11-14T10:05:09.25"),
         ] {
-            let local = LocalDateTime::of(at, zone).unwrap();
+            let local = LocalDateTime::clock(at, zone).unwrap();
             assert_eq!(local.to_string(), written);
-            assert_eq!(local.at(zone), Some(at), "{written} reads back as the instant");
+            assert_eq!(local.read_in(zone), Some(at), "{written} reads back as the instant");
         }
-        assert_eq!(LocalDateTime::of(at, Utc).unwrap().to_string(), "2026-11-13T20:05:09.25");
+        assert_eq!(LocalDateTime::clock(at, Utc).unwrap().to_string(), "2026-11-13T20:05:09.25");
         // Before 1970 it rounds down too, so the clock reads what it read a moment before.
         let before = UNIX_EPOCH - Duration::from_nanos(1);
-        assert_eq!(LocalDateTime::of(before, Utc).unwrap().to_string(), "1969-12-31T23:59:59.999");
-        assert_eq!(read("1969-12-31T23:59:59.999").at(Utc), Some(UNIX_EPOCH - Duration::from_millis(1)));
+        assert_eq!(LocalDateTime::clock(before, Utc).unwrap().to_string(), "1969-12-31T23:59:59.999");
+        assert_eq!(read("1969-12-31T23:59:59.999").read_in(Utc), Some(UNIX_EPOCH - Duration::from_millis(1)));
         // A day reads only within the years a Day has.
-        assert_eq!(LocalDateTime::of(parse_timestamp("9999-12-31T23:00:00Z").unwrap(), Offset::hours(2)), None);
+        assert_eq!(LocalDateTime::clock(parse_timestamp("9999-12-31T23:00:00Z").unwrap(), Offset::hours(2)), None);
     }
 
     /// A zone that moves its clocks at fixed instants, as a rule in the tz database does, to
@@ -424,11 +441,11 @@ mod tests {
             ("2026-11-01T01:59:59.999", "2026-11-01T06:59:59.999Z"),
             ("2026-11-01T02:00", "2026-11-01T08:00:00Z"),
         ] {
-            assert_eq!(read(local).at(&zone), Some(ts(instant)), "{local}");
+            assert_eq!(read(local).read_in(&zone), Some(ts(instant)), "{local}");
         }
         // An instant reads back as the clock showed it, the second 01:30 included.
-        assert_eq!(LocalDateTime::of(ts("2026-11-01T07:30:00Z"), &zone).unwrap().to_string(), "2026-11-01T01:30");
-        assert_eq!(LocalDateTime::of(ts("2026-03-08T08:00:00Z"), &zone).unwrap().to_string(), "2026-03-08T03:00");
+        assert_eq!(LocalDateTime::clock(ts("2026-11-01T07:30:00Z"), &zone).unwrap().to_string(), "2026-11-01T01:30");
+        assert_eq!(LocalDateTime::clock(ts("2026-03-08T08:00:00Z"), &zone).unwrap().to_string(), "2026-03-08T03:00");
     }
 
     #[test]
@@ -464,13 +481,13 @@ mod tests {
             ("Pacific/Apia", "2011-12-30T12:00", "2011-12-31T12:00:00+14:00"),
             ("Pacific/Apia", "2011-12-29T23:59", "2011-12-29T23:59:00-10:00"),
         ] {
-            assert_eq!(read(local).at(Visitor::named(zone)), Some(ts(instant)), "{local} in {zone}");
+            assert_eq!(read(local).read_in(Visitor::named(zone)), Some(ts(instant)), "{local} in {zone}");
         }
         // Sao Paulo moved its clocks at midnight: the day began at 01:00.
         let sao_paulo = Visitor::named("America/Sao_Paulo");
         assert_eq!(Day::new(2018, 11, 4).unwrap().start(&sao_paulo), Some(ts("2018-11-04T01:00:00-02:00")));
         assert_eq!(Day::new(2019, 2, 17).unwrap().start(&sao_paulo), Some(ts("2019-02-17T00:00:00-03:00")));
-        assert_eq!(LocalDateTime::of(ts("2026-11-15T09:00:00Z"), &sao_paulo).unwrap().to_string(), "2026-11-15T06:00");
+        assert_eq!(LocalDateTime::clock(ts("2026-11-15T09:00:00Z"), &sao_paulo).unwrap().to_string(), "2026-11-15T06:00");
     }
 
     /// In every zone in the bundled tz database, around every change of offset from 1970 to 2040,
@@ -507,14 +524,14 @@ mod tests {
                 // the middle of the time it skips or repeats.
                 let edges = [at + before, at + after].into_iter().flat_map(|e| [e - 1, e, e + 1]);
                 for local in edges.chain([at + (before + after) / 2]) {
-                    let clock = LocalDateTime::of(instant(local).unwrap(), Utc).unwrap();
+                    let clock = LocalDateTime::clock(instant(local).unwrap(), Utc).unwrap();
                     let civil = Timestamp::from_millisecond(local).unwrap().to_zoned(TimeZone::UTC).datetime();
                     let theirs = tz.to_ambiguous_timestamp(civil).compatible().unwrap().as_millisecond();
-                    let ours = clock.at(&zone).and_then(unix_millis);
+                    let ours = clock.read_in(&zone).and_then(unix_millis);
                     assert_eq!(ours, Some(theirs), "{clock} in {name}");
                     let shown = theirs + i64::from(tz.to_offset(Timestamp::from_millisecond(theirs).unwrap()).seconds()) * 1000;
-                    let written = LocalDateTime::of(instant(theirs).unwrap(), &zone);
-                    assert_eq!(written, LocalDateTime::of(instant(shown).unwrap(), Utc), "{clock} in {name} written back");
+                    let written = LocalDateTime::clock(instant(theirs).unwrap(), &zone);
+                    assert_eq!(written, LocalDateTime::clock(instant(shown).unwrap(), Utc), "{clock} in {name} written back");
                     checked += 1;
                 }
             }

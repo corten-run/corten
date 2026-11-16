@@ -215,9 +215,9 @@
 //!   saving time that gives its offset at the instant (`Visitor`). Another zone is written as its
 //!   offset (`GMT-5`).
 //! - A date and time a person picked (`<input type="datetime-local">`) is a [`LocalDateTime`],
-//!   what their clock read: no instant until [`LocalDateTime::at`] reads it in a zone, and
-//!   [`LocalDateTime::of`] writes an instant back as the input's value there; a form is read in
-//!   the zone it was drawn in, which it sends back ([`crate::form::FormZone`]).
+//!   what their clock read: a form draws an instant as the input's value in a
+//!   [`crate::form::DrawZone`], which writes that zone into the form, and its post reads the
+//!   field in the zone the form sends back ([`crate::form::FormZone`], [`LocalDateTime::at`]).
 //! - `t.date(at, MonthStyle)`: the month and year without the day (`Short` is `Mar 2026`, `Long`
 //!   `March 2026`), in the locale's order and words, for a "Member since" line or a release
 //!   month. It has no time, so `t.date_time` does not take one.

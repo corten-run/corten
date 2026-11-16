@@ -8,18 +8,24 @@ Corten is pre-1.0, so any minor version may change the API.
 - Read a date and time a visitor picks (`<input type="datetime-local">`) as the instant it
   names in the zone its form was drawn in: `corten::i18n::LocalDateTime` reads and writes HTML's
   local date and time syntax (`InvalidLocalDateTime` when it does not read), and
-  `Entry<LocalDateTime>` keeps the text as sent (as `Entry<u32>` does). A
-  `corten::form::FormZone` field carries the zone: drawn as a hidden input
-  (`zone.field(f.zone)`, from `FormZone::from(req.zone())`) and shown by its name (`UTC` without
-  JavaScript), it is read back with the post, and `entry.at(&input.zone)` takes only it, so a
-  time is never read in a post's zone that differs from the page's. A skipped time moves forward by
-  the gap and a repeated one is the earlier (Temporal's default, RFC 5545).
-  `LocalDateTime::of(at, zone)` draws an instant as the input's `value`, `min` or `max`, and
-  `ceil_minute` and `floor_minute` keep a `min` and a `max` on the input's minute steps.
-  `Entry` holds any sealed `corten::form::EntryValue` (a number, a `Day` for
+  `Entry<LocalDateTime>` keeps the text as sent (as `Entry<u32>` does). A page draws in a
+  `corten::form::DrawZone` (`DrawZone::from(req.zone())`, `DrawZone::from(Utc)` on a `Public`
+  page, `DrawZone::from(&input.zone)` when a refused post is drawn again): `zone.field(f.zone)`
+  writes the zone as a hidden input, `zone.name()` shows it (`UTC` without JavaScript), and
+  `zone.local(at)` writes an instant as the input's `value`, `min` or `max`, which
+  `ceil_minute` and `floor_minute` keep on the input's minute steps. The post reads the hidden
+  input as a `corten::form::FormZone` field, and `entry.at(&input.zone)` is the instant. The
+  compiler checks that a posted time is read only in a `FormZone` (not in `req.zone()` or a
+  `DrawZone`), that a `FormZone` comes only from a post, and that the hidden input is a
+  `FormZone` field; a form that leaves out the hidden input still compiles, and its post is a 422.
+  A skipped time moves forward by the gap and a repeated one is the earlier (Temporal's default,
+  RFC 5545). `Entry` holds any sealed `corten::form::EntryValue` (a number, a `Day` for
   `<input type="date">`, or a `LocalDateTime`), and `day.start(zone)` is where a day begins in a
-  zone; `day.midnight_utc()` is deprecated for `day.start(Utc)`
-  ([design Choice 55](docs/design.md#choice-local-date-time)).
+  zone ([design Choice 55](docs/design.md#choice-local-date-time)).
+
+- **Breaking (for `#![deny(warnings)]` builds):** `Day::midnight_utc` is deprecated for
+  `day.start(Utc)`, the same instant, so a crate that denies warnings and calls it no longer
+  builds until it changes the call.
 
 - Verify the cancelled mixed campaign's captured source blobs and every selected
   build context against its original authenticated subject before retirement;

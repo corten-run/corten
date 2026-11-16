@@ -657,9 +657,10 @@ another (a store's own zone). A page that writes a date in the visitor's zone an
 (`Cache-Control: private`), and the zone is not part of the page's key, so it does not make the
 runtime load the next page in full; a date the layout writes is drawn in `LocalTime` for that
 reason (a navigation keeps the layout's text from the first page). `req.zone()` is the zone itself (a
-`corten::i18n::Visitor`, a `Zone`), for turning a picked date or time into the instant it means
-there (`day.start(req.zone())`; a form's date and time is drawn in `FormZone::from(req.zone())`,
-which the form sends back and its post reads in: [Requests and forms](requests-and-forms.md));
+`corten::i18n::Visitor`, a `Zone`), for the zone a page draws a form's dates and times in
+(`DrawZone::from(req.zone())`), which the form sends back as a `FormZone`; its post reads a
+picked date and time, and finds where a picked day begins (`day.start(&input.zone)`), in that, not
+in the post's `req.zone()` ([Requests and forms](requests-and-forms.md));
 `Option<ClientZone>` is its name. Both are UTC (`None`) on a browser's first page, before it
 has reported its zone, and without JavaScript; draw a date the first page shows in
 `corten_ui::LocalTime`, whose script writes it again in the browser's zone there, in the
