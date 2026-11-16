@@ -4565,50 +4565,60 @@ rules something out.
     without JavaScript does. In the watchlist (its real layout, no layout reads) the write's own page
     is 2,632 bytes, 1,123 with gzip, where `<main>` is 911 and 471 (the smoke's write to
     `/smoke/written`, fetched by Node three times each, the same each time, gzip by Node's `zlib` at
-    its default level). In instructions, against
-    `main` at `83a9c9fbd`, it takes 62,007 where its `<main>` swap took 24,914; the same write
-    from a browser without JavaScript, the same whole document, takes 57,422 (57,209 before), and
-    a `GET` of the whole document 53,425, so the runtime's write pays 4,585 more than the same
-    write without JavaScript: the copy of the request's head that its reads start from (made before
-    the handler, since the handler takes the request), the fill's two boxes and the preference. In
-    an app without layout reads it takes 28,166 where it took 24,808 (the document's head and
-    layout). A runtime that does not prefer it gets `<main>` in 23,558 (23,240 before: the look
-    for the preference and the route's look at the request's mark). A write that answers something
-    else starts no read, since nothing runs beside its handler. In an app with layout reads only a
-    route whose answer type can be a page keeps a copy of the request's head, known where the route
-    is called: one that answers patches alone (`HtmlResult<Patches>`), JSON or text keeps none,
-    and its patch takes 25,553 where it took 23,667. An `HtmlResult` route keeps it, since its
-    handler may answer either: a `data-patch` form whose handler is `req.patch_or(view, page)`
-    answers a patch with JavaScript and its page without, so it is `HtmlResult` and pays the copy
-    on each patch, 31,017 where it took 23,034, 7,983 more; such a handler may return
-    `HtmlResult<Patches>` instead, as the guides say. The copy is made field by field from the
-    request in place, 140 instructions less than taking the request apart and putting it back (the
-    `HtmlResult` patch less the `Patches` one, 5,395 against 5,535); the headers and extensions
+    its default level). In instructions (callgrind, release, `70031a793` against `main` at
+    `1c72b037` with the harness tests added), it takes 62,450 where its `<main>` swap took 24,781;
+    the same write from a browser without JavaScript, the same whole document, takes 57,595 (57,182
+    before), and a `GET` of the whole document 53,072, so the runtime's write pays 4,855 more than
+    the same write without JavaScript: the copy of the request's head that its reads start from
+    (made before the handler, since the handler takes the request), the fill's two boxes and the
+    preference. In an app without layout reads it takes 28,199 where it took 24,683 (the document's
+    head and layout). A runtime that does not prefer it gets `<main>` in 23,885 (23,244 before: the
+    look for the preference and the route's look at the request's mark; not traced further). A write
+    that answers something else starts no read, since nothing runs beside its handler. In an app
+    with layout reads only a route whose answer type can be a page keeps a copy of the request's
+    head, known where the route is called: one that answers patches alone (`HtmlResult<Patches>`),
+    JSON or text keeps none, and its patch takes 25,716 where it took 23,532. An `HtmlResult` route
+    keeps it, since its handler may answer either: a `data-patch` form whose handler is
+    `req.patch_or(view, page)` answers a patch with JavaScript and its page without, so it is
+    `HtmlResult` and pays the copy on each patch, 31,180 where it took 22,900, 8,280 more; such a
+    handler may return `HtmlResult<Patches>` instead, as the guides say. The copy alone is the
+    `HtmlResult` patch less the `Patches` one at the same commit: 5,464 on `70031a793` (31,180 less
+    25,716), as on `bb7562d9d` and `70b69a3db`, where `main` has -632, so the copy is about 6,100.
+    It is made field by field from the request in place: before `main`'s named posts were merged in,
+    that gave 5,395 (`914f4781e`, 30,930 less 25,535) where taking the request apart and putting it
+    back gave 5,535 (`17f285075`, 31,132 less 25,597), 140 less; with them merged in, the same copy
+    gives 5,464 (`70b69a3db`, 31,017 less 25,553), 69 more, not traced. The headers and extensions
     are cloned either way, since a read is given the whole head. A route given by hand (`Table`)
-    copies the head as its `Req` is taken, whatever it answers, and so does a `Req` the app's or
-    an area's middleware takes before a write's route, a second copy beside the route's: the own
-    page takes 66,870 and an `HtmlResult` patch 35,542 with a middleware that takes `Req` and
-    passes the request on, about 3,000 and 2,600 more than without it once the `Req` itself
-    (1,880 before) is counted. Other requests pay a little or nothing: in an app without layout
-    reads a patch takes 23,289 where it took 22,890 (the look for the preference as its `Req` is
-    made and the route's look at the request), a navigation in an app with them 22,209 where it
-    took 22,219, and a whole document 53,425 where it took 52,835 (before `main`'s named posts
-    were merged in, 53,012 where it took 52,820; where the two meet is not traced). The watchlist's
-    watch (an app without layout reads) takes 81,133 where it took 80,823, and `main` takes 81,525
-    for the same request with the preference, which `corten::testing` now sends for
-    `Mode::Action` and `main` ignores. So the watch's rise (762 at the round before, against 412
-    for the crate's patch, whose harness sent the same headers to both builds) is the test client's
-    one header more; what the server adds to the watch is within its runs' range (up to 600
-    instructions here, against 2 on the crate's patch) and is not resolved. The route's
+    copies the head as its `Req` is taken, whatever it answers, and so does a `Req` the app's or an
+    area's middleware takes before a write's route, a second copy beside the route's: the own page
+    takes 66,413 and an `HtmlResult` patch 35,580 with a middleware that takes `Req` and passes the
+    request on, about 2,100 and 2,550 more than without it once the `Req` itself (1,847 before) is
+    counted. Other requests pay a little: in an app without layout reads a patch takes 23,269 where
+    it took 22,752, a navigation in an app with them 22,358 where it took 22,221, and a whole
+    document 53,072 where it took 52,782. Of the whole document's 290 (`callgrind_annotate`, each
+    function's own instructions, `main` against the head): 145 is the test's own search of the
+    answer (`str::contains`, called as often in both; not the server's work, and why it reads more
+    is not traced); 87 is copying, two more copies a request in `At::run`'s future (58; the request
+    is moved into its future by a function that first looks for the preference, which a variant with
+    the look inside the future cost the whole document 995 over `main`, a slot of the request kept
+    in each of its states) and a `Req` 8 bytes larger (29); 24 in `At::run` itself, 12 in taking
+    `Req`, and 10 in the head's extensions cloned under another name. So about 145 is the server's,
+    all of it moving bytes. The navigation's 137 and the patch's 517 are not traced. The watchlist's
+    watch (an app without layout reads) takes 81,585 where it took 80,551, and `main` takes 81,697
+    for the same request with the preference, which `corten::testing` now sends for `Mode::Action`
+    and `main` ignores: the watch's rise is the test client's one header more, and what the server
+    adds to it is within its runs' range (up to 430 instructions here, against 2 on the crate's
+    patch) and is not resolved. The route's
     fill is boxed: with the box only around the reads, past the handler, an `HtmlResult` patch took
     262 less but every other write about 480 to 590 more, as each route's future grew. The runtime
-    is 1,180 bytes larger raw and 431 with gzip (15,341 to 15,772 at zlib's default level), numbering
+    is 1,180 bytes larger raw and 431 with gzip (15,341 to 15,772 at zlib's default level, against
+    `main` at `30bed57ed`), numbering
     the writes a layout draws and which of them failed in view.
 
     Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`,
     `what_a_page_with_layout_reads_costs` and the watchlist's `what_a_watch_costs`, the difference
     of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every range within
-    140 instructions but the watch's (up to 600); `what_a_writes_own_page_costs_in_time_and_bytes` for the time and bytes; the
+    140 instructions but the watch's (up to 430); `what_a_writes_own_page_costs_in_time_and_bytes` for the time and bytes; the
     runtime's size by Node's `zlib`, once each build); reasoned (a patch carries elements by id, and
     a layout read's view at two places has none, so filling it needs a marker on every page; a
     write's own answer is not at an address a full load would draw; a handler takes the request, so
@@ -4621,18 +4631,24 @@ rules something out.
     Revisit when: an app needs a patch to change a layout read and cannot answer its page (a write
     whose page is too costly to draw again), which would reopen markers on the places; or a route
     can have the request's head back from its handler once it has answered (an extractor that hands
-    it on), which would take the copy off an `HtmlResult` route's patch; or the instructions such a
-    patch pays over the base in an app with layout reads
-    (`what_a_write_answering_in_an_action_costs` with `WRITE_ANSWER=patch`, against the commit before
-    the change with the harness added) grow past the 7,983 taken at `70b69a3db` by more than the
-    runs vary (300): this choice was weighed at that cost, 9.9% of what the watchlist's watch costs
-    in process on `main` (80,823; `what_a_watch_costs`, a real write's handler answering with its
-    patch, a lower bound since it has no I/O), so any growth is work on every patch of such a route
-    that nothing here has weighed. (Earlier rounds set the line at a share of the watch, 10% and
-    then 12%, a number just above the figure each took; the line is now the figure itself.)
+    it on), which would take the copy off an `HtmlResult` route's patch; or the copy of the head on an `HtmlResult` route's
+    patch, that patch less the `Patches` one at the same commit
+    (`what_a_write_answering_in_an_action_costs` with `WRITE_ANSWER=patch` and with
+    `WRITE_ANSWER=patches`), grows past the 5,464 taken at `70031a793` by more than it varied
+    between runs and builds of the same copy (5,462 to 5,466): this choice was weighed at that cost,
+    6.8% of what the watchlist's watch costs in process on `main` (80,551; `what_a_watch_costs`, a
+    real write's handler answering with its patch, a lower bound since it has no I/O), so any growth
+    is work on every patch of such a route that nothing here has weighed. (Earlier rounds set the
+    line at a share of the watch, 10% and then 12%, then at the `HtmlResult` patch's cost over the
+    base, which moves with the base as much as with the copy; the difference at one commit is the
+    copy's alone.)
 
-    Last checked: 2026-11-15, callgrind (valgrind 3.19.0) on `70b69a3db` against `main` at
-    `83a9c9fbd` with the harness tests added, and `914f4781e` with and without the whole `Prefer`
+    Last checked: 2026-11-16, callgrind (valgrind 3.19.0) on `70031a793` against `main` at
+    `1c72b037` with the harness tests added and `bb7562d9d` as a third build, three alternating
+    rounds each, the whole document's own instructions per function compared by `callgrind_annotate`,
+    and the runtime's size against `30bed57ed` by Node's `zlib` (the head merges `main` at
+    `30bed57ed` after `70031a793`; that merge is not measured); 2026-11-15, callgrind on `70b69a3db`
+    against `main` at `83a9c9fbd` with the harness tests added, and `914f4781e` with and without the whole `Prefer`
     line compared first against `17f285075` (the round before, `5d0bf7599` merged), three
     alternating rounds each, the time and bytes in release on `70b69a3db` (three runs of 25), the
     watchlist's bytes on `70b69a3db`, and the runtime's size against `83a9c9fbd` by Node's `zlib`;
