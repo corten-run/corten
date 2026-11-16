@@ -4567,7 +4567,7 @@ rules something out.
     `elements` cannot stand in for it), and gives the one control of the name with the kind's tag,
     or every input of it for a group (`[]` for none); a control a patch replaced is the new one, as
     a ref's is. Anything else runs nothing and throws. Whether the form draws the field as the kind the
-    handler takes cannot be known when the crate compiles ([Limit 33](#limit-field-kind)), so
+    handler takes cannot be known when the crate compiles ([Limit 32](#limit-field-kind)), so
     `corten dev` reports such a call, with what the form has, when a page or a later draw puts it
     on the page. Behavior is still a function the markup calls, and the field is an argument as a
     ref is: no second way to attach behavior, and nothing to learn but the parameter's type.
@@ -5145,7 +5145,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     meets either navigates to the URL, and the browser follows the redirect or the sign-in
     ([Choice 55](#choice-screen-read)).
 
-33. <a id="limit-field-kind"></a>A form field given to a handler (`js::fill(f.weight)`) is checked
+32. <a id="limit-field-kind"></a>A form field given to a handler (`js::fill(f.weight)`) is checked
     against the handler's parameter when the crate compiles, but whether its form draws that
     control is checked only when the handler runs ([Choice 57](#choice-field-arguments)). A
     field's name carries what it reads (`FieldName<Condition>`), not whether a form draws it as a

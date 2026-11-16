@@ -573,7 +573,7 @@ input, runs nothing and reports
 control of the name is `[]`, as a group of radios the form left out is.
 Under `corten dev` the console says which as soon as the page draws such a call, before anything
 calls it: `corten: shipping.fill takes field weight as one <input>, and its form has select`
-([design Limit 33](../design.md#limit-field-kind)). A group is an array, not the
+([design Limit 32](../design.md#limit-field-kind)). A group is an array, not the
 `RadioNodeList` a form's `elements.namedItem` gives: `namedItem` gives a list only for two or more
 controls of a name and the control itself for one, and a script cannot make one, so the handler
 could not count on its type. Besides the cases above, a ref is an `<output>`, a list, a button, a
