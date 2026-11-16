@@ -5153,7 +5153,7 @@ async function run(browser) {
   }
   // A form's answer for one of two independent parts beside each other, with its own tag to read
   // it again, does not take the place of the other part's tag, and finds its own beside a part
-  // that is a form whose control shadows `parentElement` (#1400).
+  // that is a form whose control shadows `id` (#1400).
   {
     const ind = await (await browser.newContext()).newPage();
     const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
@@ -5172,14 +5172,14 @@ async function run(browser) {
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
       await corten.patch(
         __html(
-          '<div id="ind-0"><p id="ind-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/ind-a-first" data-part="ind-a"></template><form id="ind-b"><input name="parentElement">Waiting</form><template data-corten-read-again="0" data-from="/smoke/ind-b-first" data-part="ind-b"></template></div>',
+          '<div id="ind-0"><p id="ind-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/ind-a-first" data-part="ind-a"></template><form id="ind-b"><input name="id">Waiting</form><template data-corten-read-again="0" data-from="/smoke/ind-b-first" data-part="ind-b"></template></div>',
         ),
       );
     });
     await ind.waitForSelector('template[data-from="/smoke/ind-a-poll"]', { state: "attached", timeout: 5000 }).catch(() => {});
     await ind.evaluate(async () => {
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-      await corten.patch(__html('<form id="ind-b"><input name="parentElement">B by a form</form><template data-corten-read-again="1" data-from="/smoke/ind-b-poll"></template>'));
+      await corten.patch(__html('<form id="ind-b"><input name="id">B by a form</form><template data-corten-read-again="1" data-from="/smoke/ind-b-poll"></template>'));
     });
     const indTags = await ind.evaluate(() => Array.from(document.querySelectorAll("#ind-0 > template")).map((tag) => tag.getAttribute("data-from")));
     // A sort of B before its poll changes the address it reads, on the page.
@@ -5244,6 +5244,55 @@ async function run(browser) {
     await rm.waitForFunction(() => document.getElementById("rm-b")?.textContent === "B again", null, { timeout: 6000 }).catch(() => {});
     const rmState = await rm.evaluate(() => [document.getElementById("rm-a") === null, document.getElementById("rm-b")?.textContent]);
     check("a part read again whose answer removes one of its elements and asks again reads on for the rest", rmAsked === 1 && rmState[0] === true && rmState[1] === "B again", JSON.stringify({ rmAsked, rmState }));
+    // And one whose answer removes the part its tag was inside: its tag goes beside the part it
+    // still reads for, on the page.
+    await rm.route("**/smoke/rmi-first", (route) => route.fulfill(patchOf('<template id="rmi-a" data-remove></template><template data-corten-read-again="30" data-from="/smoke/rmi-poll"></template>')));
+    await rm.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="rmi-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="rmi-0"><div id="rmi-a"><p>Waiting</p><template data-corten-read-again="0" data-from="/smoke/rmi-first" data-part="rmi-a"></template></div><p id="rmi-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/rmi-first" data-part="rmi-b"></template></div>',
+        ),
+      );
+    });
+    await rm.waitForSelector('#rmi-0 > template[data-from="/smoke/rmi-poll"]', { state: "attached", timeout: 5000 }).catch(() => {});
+    const rmiTags = await rm.evaluate(() => [document.getElementById("rmi-a") === null, Array.from(document.querySelectorAll("#rmi-0 > *")).map((el) => el.id || el.getAttribute("data-from"))]);
+    check("and one whose answer removes the part its tag was inside puts its next tag beside the part it still reads for", rmiTags[0] === true && JSON.stringify(rmiTags[1]) === JSON.stringify(["rmi-b", "/smoke/rmi-poll"]), JSON.stringify(rmiTags));
+    // A shared read's answer that draws one part and asks again still reads for the other: a form's
+    // answer replacing that one while the next read is held stops it.
+    await rm.evaluate(() => {
+      const send = window.fetch;
+      window.fetch = function (input, init) {
+        const sent = send.call(this, input, init);
+        if (String(input).endsWith("/smoke/pa-poll-2")) sent.catch((error) => error?.name === "AbortError" && Object.assign(window, { __paStopped: true }));
+        return sent;
+      };
+    });
+    let paAsked = false;
+    await rm.route("**/smoke/pa-first", (route) => route.fulfill(patchOf('<p id="pa-a">A</p><p id="pa-b">B</p><template data-corten-read-again="1" data-from="/smoke/pa-poll"></template>')));
+    await rm.route("**/smoke/pa-poll", (route) => route.fulfill(patchOf('<p id="pa-a">A again</p><template data-corten-read-again="1" data-from="/smoke/pa-poll-2"></template>')));
+    await rm.route("**/smoke/pa-poll-2", () => void (paAsked = true));
+    await rm.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="pa-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="pa-0"><p id="pa-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/pa-first" data-part="pa-a"></template><p id="pa-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/pa-first" data-part="pa-b"></template></div>',
+        ),
+      );
+    });
+    for (let waited = 0; !paAsked && waited < 6000; waited += 50) await rm.waitForTimeout(50);
+    await rm.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<p id="pa-b">B by a form</p>'));
+    });
+    let paStopped = false;
+    for (let waited = 0; !paStopped && waited < 2000; waited += 100) {
+      await rm.waitForTimeout(100);
+      paStopped = await rm.evaluate(() => !!(/** @type {any} */ (window).__paStopped));
+    }
+    check("a shared read's answer that draws one part and asks again stops when a form's answer replaces the other", paAsked && paStopped, `asked ${paAsked}, fetch stopped ${paStopped}`);
     await rm.unrouteAll({ behavior: "ignoreErrors" });
     await rm.context().close();
   }

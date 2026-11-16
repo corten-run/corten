@@ -3114,9 +3114,10 @@ rules something out.
     reaches it; never another part's)
     (inside it when that part is `<main>` or one of the layout's elements that are the page's).
     A part read again stops its read, and its listener, when its part leaves the page (an answer
-    that drew nothing but its tag, or only removed elements, reads for the parts the tag it
-    answered read for that are still there, all of a shared read's, and lasts while they and it
-    are there; a form's or script's answer that is a tag alone,
+    reads for what it drew and for the parts the tag it answered read for that are still there,
+    all of a shared read's, so one that drew one part, nothing but its tag, or only removed
+    elements still guards the rest, and its tag goes beside a part it still reads for when the
+    part it was in is gone; a form's or script's answer that is a tag alone,
     which has no place on the page, lasts while the page does, and so do the answers to it), and its answer is checked again once its stylesheets have loaded, as a slow
     part's is: one whose address a script moved meanwhile is read again there. A read is over, and stops putting
     them off, when a part it waits for leaves the page (a form's answer replaced it): its fetch

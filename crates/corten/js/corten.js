@@ -1069,7 +1069,8 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
         let was = /** @type {Element} */ (asked);
         for (let up; (up = Reflect.get(Node.prototype, "parentElement", was)); ) was = up;
         const id = idOf(was);
-        drawn = put.find((el) => inPage(el) && !!id && idOf(el) === id) ?? put.find(inPage) ?? null;
+        // Or, when it drew nothing (it removed the part), beside a part it still reads for.
+        drawn = put.find((el) => inPage(el) && !!id && idOf(el) === id) ?? put.find(inPage) ?? readFor.get(/** @type {Element} */ (asked))?.find(inPage) ?? null;
       }
       if (drawn && matchesOf(drawn, `main, ${PAGE_PARTS}`)) elementOwn.append.call(drawn, again);
       else if (drawn) elementOwn.after.call(drawn, again);
@@ -1123,10 +1124,12 @@ function readPatchAgain(tag, put, asked) {
   // it answered (every part of a slow part's shared read), and lasts while they are there, and the
   // tag too when it took the answered one's place on the page. One that has no place there (a
   // form's or a script's answer, and the answers to it) lasts while the page does, as before.
-  // Of those, the ones still there: an answer that removed one (`data-remove`) reads for the rest.
-  const parts = (put.length ? put : ((asked && readFor.get(asked)) || []).filter(inPage)).filter((el) => el !== tag && !matchesOf(el, PART_AGAIN));
+  // What it drew, and of the parts before it the ones still there: an answer that drew one part of
+  // a shared read, or removed one (`data-remove`), still reads for the rest.
+  const kept = ((asked && readFor.get(asked)) || []).filter(inPage);
+  const parts = [...new Set([...put, ...kept])].filter((el) => el !== tag && !matchesOf(el, PART_AGAIN));
   readFor.set(tag, parts);
-  const held = put.length ? put : inPage(tag) ? [tag, ...parts] : parts;
+  const held = put.length ? [...new Set([...put, ...kept])] : inPage(tag) ? [tag, ...parts] : parts;
   const here = () => page === swapped && held.every(inPage);
   // At least a second: a patch's own tag that says 0 (a script's, as `ReadAgain::now` is no patch)
   // would otherwise ask again at once, for as long as its answer does.
