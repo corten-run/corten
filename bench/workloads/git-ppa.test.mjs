@@ -20,11 +20,13 @@ const scripts = {
 for (const [name, original] of Object.entries(scripts)) {
   for (const [scenario, options] of Object.entries({
     accepted: {},
+    "accepted with subkey": { keys: `pub:::::::::\nfpr:::::::::${fingerprint}:\nsub:::::::::\nfpr:::::::::SUBKEY:\n` },
     "wrong primary": { keys: "pub:::::::::\nfpr:::::::::BAD:\n" },
     "extra primary": { keys: `pub:::::::::\nfpr:::::::::${fingerprint}:\npub:::::::::\nfpr:::::::::BAD:\n` },
     "missing primary": { keys: `fpr:::::::::${fingerprint}:\n` },
     "key parser failure": { gpgExit: 38 },
     "key download failure": { curlExit: 37 },
+    "extractor failure after fingerprint": { awkExit: 39 },
   })) test(`${name} Git PPA setup ${scenario}`, { skip: process.platform !== "linux" }, t => {
     const root = mkdtempSync(join(tmpdir(), "corten-git-ppa-"));
     chmodSync(root, 0o700);
@@ -36,6 +38,7 @@ for (const [name, original] of Object.entries(scripts)) {
       git: '#!/bin/sh\nprintf "git version fixture\\n"\n',
       timeout: '#!/bin/sh\nshift\nexec "$@"\n',
     };
+    if (options.awkExit) shims.awk = `#!/bin/sh\nprintf '%s\\n' '${fingerprint}'\nexit ${options.awkExit}\n`;
     for (const [command, bytes] of Object.entries(shims)) writeFileSync(join(root, command), bytes, { mode: 0o700 });
     const probe = join(root, "fixture-probe");
     writeFileSync(probe, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
@@ -45,7 +48,7 @@ for (const [name, original] of Object.entries(scripts)) {
     const script = original.replaceAll("/etc/apt", `${root}/apt`).replaceAll("/tmp/corten-git-ppa.keys", `${root}/keys`)
       .replaceAll("/tmp/corten-git-ppa.asc", `${root}/public-key`)
       .replaceAll("/var/lib/apt/lists/*", `${root}/unused-lists`);
-    const result = spawnSync("/bin/bash", ["-c", `set -Eeuo pipefail\numask 077\nmkdir -p '${root}/apt/sources.list.d'\n${script}`], {
+    const result = spawnSync(name === "cloud" ? "/bin/bash" : "/bin/sh", ["-c", `${name === "cloud" ? "set -Eeuo pipefail" : "set -eu"}\numask 077\nmkdir -p '${root}/apt/sources.list.d'\n${script}`], {
       env: { PATH: `${root}:/usr/bin:/bin`, HOME: root, ROOT: root,
         KEYS: options.keys ?? `pub:::::::::\nfpr:::::::::${fingerprint}:\n`,
         GPG_EXIT: String(options.gpgExit ?? 0), CURL_EXIT: String(options.curlExit ?? 0) },
@@ -54,7 +57,7 @@ for (const [name, original] of Object.entries(scripts)) {
     assert.equal(result.error, undefined);
     assert.equal(result.signal, null);
     const list = join(root, "apt/sources.list.d/corten-git-ppa.list");
-    if (scenario === "accepted") {
+    if (scenario.startsWith("accepted")) {
       assert.equal(result.status, 0, result.stderr);
       assert.equal(statSync(list).mode & 0o777, 0o644);
       assert.equal(statSync(join(root, "apt/keyrings/corten-git-ppa.asc")).mode & 0o777, 0o644);

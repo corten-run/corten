@@ -325,7 +325,8 @@ bootstrap_stage=git-install
 install -d -m 0755 /etc/apt/keyrings
 timeout 60 curl --proto '=https' --tlsv1.2 --fail --silent --show-error --max-time 60 'https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xF911AB184317630C59970973E363C90F8F1B6217' -o /tmp/corten-git-ppa.asc
 gpg --batch --show-keys --with-colons /tmp/corten-git-ppa.asc > /tmp/corten-git-ppa.keys
-test "$(awk -F: '$1 == "pub" { primary=1; next } primary && $1 == "fpr" { print $10; primary=0 }' /tmp/corten-git-ppa.keys)" = F911AB184317630C59970973E363C90F8F1B6217
+git_primary_fingerprints=$(awk -F: '$1 == "pub" { primary=1; next } primary && $1 == "fpr" { print $10; primary=0 }' /tmp/corten-git-ppa.keys)
+test "$git_primary_fingerprints" = F911AB184317630C59970973E363C90F8F1B6217
 install -m 0644 /tmp/corten-git-ppa.asc /etc/apt/keyrings/corten-git-ppa.asc
 install -m 0644 /dev/null /etc/apt/sources.list.d/corten-git-ppa.list
 printf '%s\\n' 'deb [signed-by=/etc/apt/keyrings/corten-git-ppa.asc] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main' > /etc/apt/sources.list.d/corten-git-ppa.list
