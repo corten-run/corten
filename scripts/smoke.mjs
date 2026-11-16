@@ -2258,13 +2258,25 @@ async function run(browser) {
     let [loaded, wholeReads] = [false, 0];
     cut.on("request", (r) => loaded && new URL(r.url()).pathname === "/" && r.method() === "GET" && r.headers().corten !== "action" && wholeReads++);
     await cut.goto(`${base}/`);
-    await cut.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
+    // The part is drawn while the picks' own read still puts the head ReadAgain off, so the page
+    // is not read whole (taking the link and the part with `<main>`) before the part's read begins.
     await cut.evaluate(async (href) => {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="cut-0"></div><a id="cut-away" href="${href}">Away</a>`));
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
       await corten.patch(__html('<div id="cut-0"><p id="cut-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/cut-part" data-part="cut-a"></template></div>'));
+      // Once the part is drawn the head ReadAgain may read the page whole and take the test's
+      // element away with `<main>`, so the part is seen as it is drawn, not after a wait.
+      const seen = /** @type {any} */ (window);
+      seen.__cut = { text: null, failed: false };
+      new MutationObserver(() => {
+        const el = document.getElementById("cut-a");
+        if (!el) return;
+        if (el.hasAttribute("data-corten-read-failed")) seen.__cut.failed = true;
+        if (el.textContent === "Read again") seen.__cut.text = el.textContent;
+      }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
     }, `${crossBase}/smoke/no-content`);
     for (let waited = 0; !cutAsked && waited < 5000; waited += 50) await cut.waitForTimeout(50);
+    await cut.waitForSelector("ul#picks li", { state: "attached", timeout: 5000 }).catch(() => {});
     loaded = true;
     await cut.click("#cut-away", { noWaitAfter: true });
     await cut.waitForTimeout(300);
@@ -2273,8 +2285,8 @@ async function run(browser) {
     const wholeBefore = wholeReads;
     await cut.waitForTimeout(300);
     const part = await cut.evaluate(() => {
-      const el = document.getElementById("cut-a");
-      return [el?.textContent ?? null, el?.hasAttribute("data-corten-read-failed") ?? null];
+      const seen = /** @type {any} */ (window).__cut;
+      return [seen?.text ?? null, seen?.failed ?? null];
     });
     check(
       "a read cut as the page began to be left is made again, and the page's head ReadAgain waits for it",
