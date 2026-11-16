@@ -452,7 +452,9 @@ their injected process promises; production keeps its existing bounded calls.
 The fixed default validator runs in a separate local worker, never downloaded
 code. `cloud-validation-snapshot.mjs` reads its fixed project-module closure from
 immutable Git blobs at the approved installed commit, with bounded no-lazy-fetch
-reads. The fixed TypeScript bundle is captured once and checked against its pinned
+reads. The closure includes the observer's durable writer; transitive observer
+imports use those captured bytes under the same deny-unlisted loader.
+The fixed TypeScript bundle is captured once and checked against its pinned
 package hash. The nested worker executes captured entry bytes and installs a
 deny-unlisted loader before project or package code evaluates; it never reopens
 mutable executable paths or falls back to a package loader. The snapshot helper is
@@ -703,6 +705,21 @@ An SSH timeout never proves a remote command stopped. No recovery path stops a
 running unit, retries a start or allocates a replacement.
 
 ## Evidence And Cleanup
+
+Fresh disposable-host bootstrap runtime-masks `fwupd.service`,
+`fwupd-refresh.service` and `fwupd-refresh.timer` after cloud-init and before
+provisioning. It requires all three to remain masked and inactive before native
+entry, preventing firmware timer/D-Bus activation inside the baseline boundary.
+This preparation is not applied to existing hosts or replayed during collection.
+
+Host inventories retain every PID/start/cgroup and the raw `/proc/PID/stat` read
+that supplied its identity. Only new identities with matching saved PID/start
+fields and Linux's `PF_KTHREAD` flag are exempt from the user-process cleanup
+comparison. Names, parent PIDs and claimed kernel booleans are not proof; absent,
+malformed or identity-mismatched stat data cannot excuse a new process. New user
+daemons, including fwupd, and application leaks still fail. Container, network,
+boot, participant and lifetime/resource gates are unchanged. Old inventories do
+not acquire proof from later observations: failed historical r21 stays invalid.
 
 Collection hashes the remote archive, reserves a download destination, preserves
 interrupted bytes and verifies SHA256 before extraction. A separate synced copy is

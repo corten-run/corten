@@ -9,8 +9,9 @@ cannot clear either gate.
 
 `terminal.json` additionally retains `observerFailures` with a total `count` and only
 the `first` and `last` caught failures. Each entry records the catch phase, operation,
-allowlisted error code (or `unknown`), observation time, completed sample count and
-last successful sample timestamp. Operation names describe fixed collector steps,
+allowlisted error code (or `unknown`), observation time, admitted capture count and
+last successful capture timestamp. These counts do not certify storage completion.
+Operation names describe fixed collector steps,
 such as `process-stat`, `executable-link`, `process-name-recheck`, `cgroup-read`
 and `sample-write`. No error messages, stacks, paths, arguments, daemon output or
 arbitrary error properties are saved. Identity diagnostics distinguish PID, start-tick
@@ -27,25 +28,102 @@ failure, identity change or latency cause from a generic `host-observation-gap` 
 
 ## Snapshot Retries
 
-The existing three-attempt snapshot budget also covers a process-name-only bookend
-change when PID and kernel start ticks are unchanged. The full identity assertion
-still rejects that attempt. The collector discards every group and process from it,
-rereads the entire recursive scope, and saves only a fresh, fully coherent snapshot.
-It never accepts mixed names or skips a member. This repairs the demonstrated local
-native churn name race; it does not establish the cause of the historical r21 error.
+Each attempt reads the entire recursive scope's accounting and membership, then
+captures every member with PID/start/name and executable bookends. A closing
+recursive membership-only census must match the opening paths and PID sets. Order
+alone does not matter. A changed census or a name-only bookend change discards the
+whole attempt, including earlier process records, metadata and accounting reads.
+No member is skipped or carried forward from a failed attempt.
 
-PID or start-tick changes fail immediately, including changes accompanied by a new
-name. ENOENT/ESRCH and name races share one three-attempt budget; other read errors
-still fail immediately. Three racing attempts remain an observer gap. Retries do
-not reset timestamps, extend the one-second continuity gate, clear a prior observer
-failure or replace positive empty-scope proof.
+Process-read ENOENT/ESRCH is a consistency candidate, not proof that a PID exited.
+It can recover only through a new complete snapshot. A still-listed PID whose
+executable remains unreadable exhausts the budget and blocks proof. Permission,
+I/O, non-process read failures and PID/start-tick changes still fail immediately.
+
+Retries use the time left until the previous sample's existing one-second limit,
+capped at one second for an initial observation, rather than an arbitrary attempt
+count. A monotonic deadline prevents a backward wall-clock change from renewing
+that budget. A one-millisecond pause between attempts avoids a busy retry loop.
+A retry completing after the deadline cannot publish a sample. Synchronous kernel
+reads themselves are not interruptible; the unchanged saved-timestamp continuity
+gate independently rejects any oversized gap, even without an observer exception.
+Retries never clear a prior observer failure or replace positive empty-scope proof.
+
+Deferred executable captures are transactional: a rejected attempt closes only
+its newly pinned descriptors, not inputs referenced by earlier accepted samples.
+A complete census commits into the enclosing Docker observation, which must also
+pass its root identity and Docker bookends. Those captures commit to the command
+only after the enclosing sample passes all bounds and is admitted to the storage
+FIFO. Synchronous admission failure rolls back that sample's new captures.
+Rejected-only inputs are neither retained between retries nor hashed at finish.
+After admission, pending captures remain owned until finish: a later async write
+failure is sticky and prevents terminal publication rather than rolling back an
+already admitted sample and pretending earlier evidence alone is complete.
+
+These are sampled observations, not an event trace of every short-lived process.
+Cumulative cgroup accounting is reread even when exited members are absent from
+the accepted census. Nothing reconstructs an unobserved executable or repairs old
+evidence. The r21 process-read ENOENT records identify failed operations, not every
+native runner failure or the cause of an exception-free accounting gap.
+
+## Ordered Asynchronous Storage
+
+One in-process `fs/promises` FIFO writes initial process records and samples. It
+completely writes each exact initial PID/start/name/executable/cgroup/type record,
+fsyncs its file, closes it, fsyncs its directory and closes that descriptor before
+appending a sample that references it. Samples are never written ahead of their
+record dependencies, even when the kernel flushes un-fsynced appends on its own.
+There is no helper process, worker, custom message protocol or production I/O hook.
+
+The sampler retains its actual capture timestamps, 100 ms interval and independent
+one-second replay limit. It can capture ahead of storage without retimestamping
+rows at completion. The combined 256 MiB record/sample limit includes admitted but
+unfinished bytes. Additional queue limits are 8 MiB, 64 frames and 4,096 initial
+records, including the one in-flight frame. Overflow fails rather than waiting on
+the sampler, dropping a member or growing an unbounded queue. Storage uses at most
+two evidence FDs: the sample file and one record or directory. Queue payload and
+V8 heap limits are not claims about total process memory.
+
+`beginLifetime`, `attach` and `finish` are awaited. Attachment starts periodic
+capture before waiting for its initial record writes, keeping the native bootstrap
+gated until they finish. Finish stops capture, waits for every admitted frame,
+fsyncs/closes the sample file and its directory, and verifies exact initial record
+bytes before publishing terminal evidence. The terminal sample count must match
+completed appends. A private fsynced terminal file is renamed to the final name
+only after these steps; the caller receives a manifest only after namespace sync.
+
+Observer setup remains owned by its command even if the gated native child exits
+or is cancelled while asynchronous storage is pending. Supervision supplies a
+startup AbortSignal and joins setup until it settles or the original 30-second
+startup deadline expires; child close never renews that deadline. Cancellation,
+early exit and setup failure forbid later attachment or timer creation. A late
+returned observer is disposed without a terminal seal, and pending filesystem I/O
+retains its FIFO ownership until it actually returns. Completed attachment releases
+the startup-only listeners, preserving normal drained-cancellation collection.
+
+Storage errors and the existing 30-second startup/frame/drain deadlines are sticky.
+A timeout cannot cancel an uninterruptible filesystem operation. Its FIFO retains
+ownership until the operation returns and cleanup is attempted; partial files and
+an unproven scope remain retained, with no terminal seal or cleanup claim. Neither
+an empty cgroup nor an eventual successful fsync clears a prior storage failure.
+Fully observed and flushed cancelled/forced evidence retains the old contract:
+it can be collected as explicitly nonqualifying evidence, never a clean success.
+A new abort during finish cannot seal an earlier contradictorily clean result.
+
+Queued raw bytes are **not yet durable**. Off-sampler capture enlarges the bounded
+pending-observation window compared with blocking capture. Power loss before a
+record's file and directory sync can lose that pending record; completed per-record
+syncs still happen during sampling, not only at finish. Durable orphan records may
+survive without a sample. Preterminal sample appends may be missing/torn after power
+loss, as before. No referencing append precedes its record flushes. A process-kill
+control tests interruption, not hardware power-loss durability or old failure causes.
 
 ## Checks
 
 Run portable replay tests with:
 
 ```sh
-node --test bench/workloads/isolated/host-lifetime.test.mjs
+node --test --test-concurrency=1 bench/workloads/isolated/host-lifetime-durability.test.mjs bench/workloads/isolated/host-lifetime-churn.test.mjs bench/workloads/isolated/host-lifetime.test.mjs
 ```
 
 Inside a fresh, explicitly owned delegated test unit with the layout described in
@@ -55,14 +133,28 @@ Inside a fresh, explicitly owned delegated test unit with the layout described i
 node --test --test-concurrency=1 bench/workloads/isolated/host-lifetime-linux.test.mjs
 ```
 
-The Linux tests use real child PIDs and cgroups. Fault-injection cases exercise
-repeated interval errors, shared retry exhaustion, strict process-name bookends,
+The churn tests use synthetic cgroup files on Windows and Linux. On Linux they also
+force six actual, bounded, shell-reaped exits between the census and either the
+stat read or executable-link read, using real `/proc` and real clocks. These hybrid
+controls are not delegated-cgroup or host qualification. They test whole-snapshot
+discard, recursive membership changes, persistent missing reads, immediate
+permission/I/O failures, PID/start mismatches, monotonic retry exhaustion, and the
+separate accounting-only block for a coherent 1,909 ms gap.
+Pending-capture controls use real owned file descriptors with synthetic
+membership and Docker reads. They check descriptor bounds, earlier accepted
+inputs, final hash membership, enclosing-bookend and sample-write failures. Linux
+uses the actual inherited-descriptor digest helper; Windows emulates only that
+subprocess. These controls do not establish actual Docker/native qualification.
+
+The delegated Linux tests use real child PIDs and cgroups. Fault-injection cases exercise
+repeated interval errors, deadline exhaustion, strict process-name bookends,
 unknown-code sanitization, recovery that remains blocked, and a final sample failure
 that cannot claim an empty scope. Native descendant churn must retain all eight observed children and
 positive empty cleanup. An actual 1,250 ms sampler stall must fail the unchanged
 one-second continuity gate despite a clean native exit. These are collector tests,
 not benchmark qualification or proof of a historical failure's cause. The two-member
-bookend fixture proves that one or two name races discard earlier member records,
+bookend fixture proves that repeated name races discard earlier member records,
 metadata and accounting reads, and that the accepted retry has complete fresh
-bookends. PID/start changes, three name races, mixed retry exhaustion and read-error
-controls remain blocked.
+bookends. Six name changes and a mixed missing-read/name sequence must recover
+inside the deadline. PID/start changes, persistent missing reads and nonretryable
+read-error controls remain blocked.
