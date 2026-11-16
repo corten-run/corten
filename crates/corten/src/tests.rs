@@ -2432,6 +2432,82 @@ async fn a_failed_service_answers_502_with_the_form_message_in_each_mode() {
     }
 }
 
+/// A price basis picked from radios drawn with none checked.
+#[derive(Clone, Copy, Debug, PartialEq, crate::UrlValue)]
+#[serde(rename_all = "snake_case")]
+enum Basis {
+    Observed,
+    Manual,
+}
+
+/// Radios drawn with none checked send nothing until the user picks one, so the field is an
+/// `Option` of its enum.
+#[derive(crate::Fields)]
+struct PricingInput {
+    basis: Option<Basis>,
+}
+
+#[derive(crate::view::Id)]
+struct PricingId;
+
+#[crate::routes]
+mod url_pricing {
+    #[route("/pricing", get = pricing_page, post = set_pricing)]
+    pub struct Pricing;
+}
+
+fn pricing_form(errors: &Errors) -> impl crate::Patch + '_ {
+    let f = PricingInput::FIELDS;
+    let e = errors.within(PricingId);
+    html! {
+        <form id={PricingId} method="post">
+            <div role="radiogroup" aria-label="Price basis" {..e.aria(f.basis)}>
+                <label><input type="radio" name={f.basis} value={Basis::Observed} required>"Observed"</label>
+                <label><input type="radio" name={f.basis} value={Basis::Manual} required>"Manual"</label>
+            </div>
+            {e.message(f.basis)}
+        </form>
+    }
+}
+
+async fn pricing_page(req: Req) -> HtmlResult {
+    req.test_page("Pricing", pricing_form(&Errors::new()))
+}
+
+async fn set_pricing(req: Req, Form(input): Form<PricingInput>) -> HtmlResult {
+    let Some(basis) = input.basis else {
+        let mut errors = Errors::new();
+        errors.add(PricingInput::FIELDS.basis, "Choose observed or manual.");
+        let page = || async { req.test_page("Pricing", pricing_form(&errors)) };
+        return req.invalid(&errors, pricing_form(&errors), page).await;
+    };
+    req.test_page("Priced", html! { <p>{basis.to_string()}</p> })
+}
+
+/// A choice left unpicked is `None`, and the handler's message for it reaches a browser without
+/// JavaScript as the whole page drawn again with the message on the group, a 422 and not the
+/// error page (#1413). A word no page offers is still refused before the handler runs.
+#[tokio::test]
+async fn a_missing_radio_choice_redraws_the_page_with_its_message_without_javascript() {
+    let app = App::new(url_pricing::router()).test();
+    let f = PricingInput::FIELDS;
+    let none_checked = app.post(&url_pricing::Pricing).await;
+    let blank = app.post(&url_pricing::Pricing).field(f.basis.untyped(), "").await;
+    for missing in [none_checked, blank] {
+        assert_eq!(missing.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let page = missing.text();
+        assert!(page.contains("<title>Pricing</title>"), "the page, not the error page: {page}");
+        assert!(page.contains(r#"<p class="field-error" id="pricing-basis-error">Choose observed or manual.</p>"#), "{page}");
+        assert!(page.contains(r#"aria-invalid="true" aria-describedby="pricing-basis-error""#), "{page}");
+    }
+    let picked = app.post(&url_pricing::Pricing).field(f.basis, Basis::Manual).await;
+    assert_eq!(picked.status(), StatusCode::OK);
+    assert!(picked.text().contains("<p>manual</p>"), "{}", picked.text());
+    let forged = app.post(&url_pricing::Pricing).field(f.basis.untyped(), "guessed").await;
+    assert_eq!(forged.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!forged.text().contains("<title>Pricing</title>"), "the extractor's refusal: {}", forged.text());
+}
+
 /// A refusal whose form needs a read, drawn per mode: `reads` counts the form side's reads and
 /// `pages` the page side's runs.
 fn lazily_refused_routes(

@@ -33,6 +33,57 @@ Corten is pre-1.0, so any minor version may change the API.
   checks it again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+- Include the observer's durable writer in the fixed native replay source closure;
+  keep deny-unlisted imports and replay captured commit bytes, not checkout edits.
+
+- Verify the standard cloud-init instance selector by pinned descriptor and exact
+  owned host ID during failed-native custody. Keep all other paths link-free,
+  require matching instance identity and empty regular user data, and refuse
+  selector, ancestry or file replacement during each terminal proof.
+
+- Bound failed-native retirement proof age from the final SSH request's local
+  start, including response delivery, and refuse expired DELETEs after asynchronous
+  HTTPS socket/TLS setup without queuing a mutation before readiness.
+
+- Add an explicitly approved r21 failed-native custody/retirement action, separate
+  from benchmark qualification. Preserve original failure evidence and all reserved
+  native roots before fresh terminal-host checks and one owned deletion attempt;
+  stream directory admission within global evidence budgets and carry the final
+  proof's absolute expiry through private provider dispatch. Keep ordinary
+  collection gates and uncertain-delete reconciliation unchanged.
+
+- Probe the marketplace JSON route's method rejection with POST, which the page
+  form implements, rather than requiring an app to implement DELETE somewhere.
+  Keep the JSON 405 requirement and all production qualification gates.
+
+- Copy stable installed dependency hardlinks into independent hardening evidence,
+  retaining source identity and mutation checks, bounded no-follow reads and
+  single-link saved evidence. Report bounded relative-path rejection diagnostics.
+  Pin snapshot output directories before creates/writes and retain output
+  identities through sealing, rejecting directory/junction and file replacement.
+  Refuse unqualified Linux output filesystems before creation, including WSL
+  DrvFS/9p where descriptor child paths can create through a replaced directory.
+
+- Keep asynchronous benchmark observer startup owned through cancellation and
+  early native exit; dispose abandoned setup without late capture or a terminal seal.
+
+- Keep benchmark host sampling off synchronous record flushes with one bounded
+  asynchronous filesystem FIFO. Preserve per-record file/directory durability
+  before referencing sample writes, strict continuity and cancellation gates;
+  do not seal unfinished or failed storage or reinterpret historical failures.
+
+- Resample complete benchmark host scopes within the existing one-second window
+  when process churn invalidates a census, and require matching recursive
+  membership bookends. Keep PID/start, executable, accounting, observer-error and
+  positive-empty cleanup gates; roll back executable captures from rejected
+  attempts and observations without closing earlier accepted inputs. Do not
+  reinterpret retained failed evidence.
+
+- Retain raw host process stat evidence and exempt only identity-bound Linux kernel
+  threads from grouped benchmark user-process cleanup. Prepare fresh disposable
+  hosts against firmware-service activation before baseline; keep new user-process
+  leaks and unproved historical inventories fail-closed.
+
 - Retain omitted optional Docker image/container command defaults as explicit null
   in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
   Missing or malformed image configuration, malformed execution and substituted or missing
@@ -273,6 +324,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- `corten::script::Keyed` and `corten::script::NoKey`: the fourth type parameter of `Ref`,
+  which says whether a ref's elements have a `key={..}`, so a handler parameter typed
+  `Map<string, El>` takes only a keyed ref. A component's prop for a parent's keyed ref names it
+  `Ref<El, NoRows, NoValue, Keyed>`; `Ref<El>` is `NoKey`
+  ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
+  [design Choice 46](docs/design.md#choice-ref-values)).
 - Bind native browser DOM evidence to bounded public reads, the actual document and
   network origin, with exact replay and separate semantic and apparatus lifetimes.
   Unsupported structure, private data, missing proof and uncertain cleanup remain
@@ -680,6 +737,63 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- **Breaking:** a handler parameter typed `Map<string, El>` takes only a ref whose every element
+  has a `key={..}`: a ref without keys no longer compiles there, and the error says to add `key={..}`,
+  where it compiled and the handler got a one-entry `Map`. A ref with a key on some elements and
+  not on others does not compile, whatever its handlers take (`El`, `El[]` or a `Map`). A ref
+  now carries in its fourth type parameter whether its elements have keys (`Keyed` or `NoKey`),
+  fixed by the markup as its value's kind is
+  ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
+  [design Choice 46](docs/design.md#choice-ref-values)).
+- Debug builds stop a render in which two elements of a ref in one render of its component have
+  keys the browser reads as equal (`key={true}` and `key=""` are one, and so are a carriage
+  return and a line feed), or a `key={..}` writes none (`None`), since the `Map` would hold one
+  entry for them. Whether it runs is `corten-run`'s debug-assertions setting, for every crate's
+  markup. Release builds do not check, and the runtime is unchanged.
+- The check counts the elements the runtime finds. It leaves out a `<template>`'s or a
+  `<noscript>`'s content, and what an expression or a component writes into an element a browser
+  reads as text (a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>`
+  outside an `<svg>` or in its `<foreignObject>`, `<desc>` or `<title>`). It leaves out a key
+  written with a reference Corten does not write (an app's own `AttrValue`). Where the markup
+  cannot know how a browser parses it, it lets a duplicate pass: in a `<template>` or an element
+  read as text at the top of a component's markup, which its parent may write into an `<svg>`,
+  and among a component's children, which the component may write in an `<svg>`'s `<desc>`
+  (unless they are in an `<svg>` of the children's own). Keys a view writes into a string of its
+  own (`html! { .. }.to_html()` or `children.to_html()` as an attribute's value) are not its
+  component's. A document's head tags, each copied into the page, are not checked against each
+  other or the body.
+- A spread of attribute pairs now skips `data-key`, as it skips `data-ref` and `data-ref-value`:
+  a key is `key={..}`'s to write. A `data-key=".."` written by hand beside a ref is still taken
+  as its key, a known limit: `html!` does not yet refuse it as it refuses `data-ref`.
+- **Breaking:** a component that puts a parent's ref on elements with a key names the ref's type
+  `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
+  `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
+  gets `key={..}` on each of its elements.
+- **Breaking:** three kinds of markup a browser parses differently from how it is written no
+  longer compile (an element in an element whose content is text, a `<plaintext>`, and an element
+  taken out of foreign content; HTML a browser rearranges inside HTML, such as a `<div>` in a
+  `<p>`, still compiles) where the markup shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
+  a `<p>`, a document's `<head>`), in an `<svg>`, its `<foreignObject>`, `<desc>` and
+  `<title>` included, in a `<math>`, and in its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (where
+  a `<mglyph>` or a `<malignmark>` stays MathML's) and an `<annotation-xml>` whose first
+  `encoding` is `text/html` or `application/xhtml+xml`
+  ([design Choice 54](docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
+  SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
+  put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
+  inside a `<script>` or a `<style>`: behavior goes in a `#[component(js)]`, styles in the
+  component's CSS file, and a data block (`<script type="text/x-template">`) writes its content as
+  a string literal, which a `<script>` or `<style>` writes as is. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
+  the HTML standard's rules for foreign content take out of an `<svg>` or a `<math>` (`<b>`,
+  `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a `<font>` with `color`,
+  `face` or `size`), written straight into one, or into an `<annotation-xml>` whose first
+  `encoding` is not an HTML one (or that has none), closed the `<svg>` or the MathML around it: put
+  it in a `<foreignObject>`, in a formula in an `<mtext>`, or give the `<annotation-xml>`
+  `encoding="text/html"` first. Inside an `<svg>`,
+  or a `<math>` outside those elements, a `<textarea>`, `<title>` or `<style>` belongs to the
+  drawing or the formula and holds elements. At the top of a component's markup, among a
+  component's children and in an `<annotation-xml>` whose `encoding` an expression or a spread may
+  write first, where the markup does not show how they are parsed, none of this is refused until
+  an element of the markup shows the context ([design Limit 30](docs/design.md#limit-markup-context)).
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the
@@ -1097,6 +1211,13 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
 ### Documentation
+
+- The forms guide no longer pairs a radio group with a plain enum field: a radio group drawn
+  with none checked sends nothing, so its field is `Option<Enum>` and the handler adds the
+  field's message when it is `None`, which redraws the form with the message without JavaScript;
+  a `<select>`, or radios drawn with one checked, stays the enum. A word the page never offers is
+  still a 422. A doctest and a router test hold the reading and the redraw
+  ([#1413 An enum form field that is missing or holds an unknown word fails the whole form with a 422, where a string field could draw a message on the field](https://github.com/corten-run/corten/issues/1413)).
 
 - Benchmark deployment refreshes target the newest stable framework, runtime and build
   tools rather than LTS alone. Record incompatible inputs without forcing dependencies,

@@ -13,12 +13,14 @@ const directory = stdinEntry ? dirname(resolve(process.argv[2])) : dirname(fileU
 const exact = (value, keys) => assert.deepEqual(Object.keys(value ?? {}).sort(), [...keys].sort());
 const diagnosticEnv = /^(?:NODE_|SSL|OPENSSL|LD_|DYLD_)/i;
 function action(message, host) {
-  exact(message, ["schema", "sequence", "args", "timeout", "allowFail"]);
+  exact(message, ["schema", "sequence", "args", "timeout", "allowFail", ...(Object.hasOwn(message, "deleteProofExpiresAtMs") ? ["deleteProofExpiresAtMs"] : [])]);
   assert.ok(Array.isArray(message.args) && message.args.length <= 20 && message.args.every((value) => typeof value === "string" && value.length <= 512 && !value.includes("\0")));
   assert.ok(Number.isSafeInteger(message.timeout) && message.timeout > 0 && message.timeout <= 900000 && typeof message.allowFail === "boolean");
   const args = message.args;
   assert.equal(args.at(-2), "--context"); assert.match(args.at(-1), /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/);
   const command = args.slice(0, -2);
+  if (Object.hasOwn(message, "deleteProofExpiresAtMs")) assert.ok(command[2] === "delete"
+    && Number.isSafeInteger(message.deleteProofExpiresAtMs) && message.deleteProofExpiresAtMs > 0);
   if (command[0] === "account") assert.deepEqual(command, ["account", "get", "--output", "json"]);
   else if (command[2] === "list") assert.deepEqual(command, ["compute", "droplet", "list", "--output", "json"]);
   else if (command[2] === "get") {
@@ -86,7 +88,7 @@ export function serveProviderWorker(dependencies = {}) {
         run = createProviderEngine({ ...dependencies, repo: process.cwd(), interrupted: () => closing }); result = "ready";
       } else {
         action(message, host); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
-        result = await run(message.args, message.timeout, message.allowFail);
+        result = await run(message.args, message.timeout, message.allowFail, message.deleteProofExpiresAtMs);
         // Never serialize exceptions, provider error bodies or native stderr.
         const diagnostic = result.status === 1 ? providerFailure(result) : undefined;
         result = { status: result.status, stdout: result.stdout, stderr: "", ...(diagnostic ? { providerDiagnostic: diagnostic } : {}) };

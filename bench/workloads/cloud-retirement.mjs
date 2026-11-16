@@ -1,8 +1,446 @@
 // Retirement evidence is separate from benchmark qualification. No operations on import.
 import assert from "node:assert/strict";
-import { digest } from "./cloud-local.mjs";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
+import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { quote } from "./cloud-transport.mjs";
+
+// This migration is not a general old-source collection or validation override.
+export const failedNativeCommit = "9f3d35884c67d90524f978d173fabeb3a17bc970";
+export function failedNativeRoots(state) {
+  assert.equal(state.commit, failedNativeCommit, "unsupported failed-native measured source");
+  assert.equal(state.round, "r21", "unsupported failed-native round");
+  const roots = { "catalog-page": ["bench/catalog/results/c21"], "json-api": ["bench/json-api/results/j42", "bench/json-api/results/j43"],
+    "localized-marketplace": ["bench/marketplace/results/r21"], "fullstack-browser": ["bench/fullstack-browser/work/w21"],
+    "client-heavy": ["bench/client-heavy/work/w21"], "live-delivery": ["bench/live/results/parity/r21"],
+    "recoverable-live": ["bench/recoverable-live/results/r21"], hardening: ["bench/hardening/results/w21"] };
+  assert.ok(Object.hasOwn(roots, state.group), "unsupported failed-native group");
+  return ["/bench/campaign", ...roots[state.group].map((path) => `/bench/repo/${path}`)];
+}
+export function failedNativeArchive(local, state) {
+  const roots = failedNativeRoots(state);
+  assert.equal(fileHash(join(local, "results.tgz")), state.archiveSha256, "original failed archive changed");
+  const extracted = join(local, state.evidence); physical(extracted);
+  assert.equal(treeHash(extracted), state.evidenceSha256, "original failed extraction changed");
+  assert.equal(regular(join(extracted, "exit-code"), 16).toString("ascii"), "2\n", "migration requires the saved failure exit, not a successful report");
+  const folder = join(extracted, "campaign"); physical(folder);
+  const names = readdirSync(folder), campaigns = names.filter((name) => /^r21-[a-f0-9]{16}$/.test(name));
+  assert.equal(campaigns.length, 1, "one original failed campaign required");
+  assert.ok(names.every((name) => name === campaigns[0] || name === ".host-attempt.json"), "unknown campaign root");
+  const campaign = campaigns[0], dir = join(folder, campaign); physical(dir);
+  const plan = JSON.parse(regular(join(dir, "plan.json"))), result = JSON.parse(regular(join(dir, "campaign-result.json")));
+  assert.equal(plan.schema, "benchmark-isolated-group-campaign/v1");
+  assert.equal(plan.commit, state.commit); assert.equal(plan.round, state.round); assert.deepEqual(plan.order, [state.group]);
+  assert.equal(plan.bindings.length, 1); assert.equal(plan.bindings[0].request.group, state.group);
+  assert.ok(roots.includes(`/bench/repo/${plan.bindings[0].validation.artifactRoot}`), "unknown reserved native root");
+  assert.equal(result.status.campaign, campaign); assert.equal(result.status.round, state.round);
+  assert.equal(result.status.campaignSha256, plan.campaignSha256);
+  assert.ok(["preserved-uncertain", "finished"].includes(result.status.state), "saved failed terminal campaign required");
+  assert.ok(Array.isArray(result.status.uncollectedNativeRoots));
+  for (const pending of result.status.uncollectedNativeRoots) {
+    assert.equal(pending.group, state.group);
+    assert.ok(["prepare", "timing"].includes(pending.phase));
+    assert.ok(roots.includes(`/bench/repo/${pending.artifactRoot}`), "unaccounted pending native output");
+  }
+  return { campaign, roots };
+}
+
+// Only trusted controller code runs remotely. Native files are opened as data,
+// never imported, invoked, followed through links, or promoted to valid evidence.
+export function failedNativeScript(state, captureSha256 = null, fence = null) {
+  const roots = failedNativeRoots(state);
+  assert.ok(captureSha256 === null || /^[a-f0-9]{64}$/.test(captureSha256));
+  if (fence !== null) {
+    assert.equal(fence.snapshotSha256, captureSha256);
+    assert.deepEqual(fence.roots.map((root) => root.path), [...roots, "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"]);
+  }
+  const files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
+  const config = { roots, files, archiveSha256: state.archiveSha256, captureSha256, marker: `${JSON.stringify(bootstrapMarker(state))}\n`,
+    requireMarker: state.bootstrapReady !== undefined, commit: state.commit, bounds: evidenceEnvelope, fence };
+  return `/usr/bin/timeout 600 /usr/bin/python3 - ${quote(state.id)} ${quote(state.unit)} ${quote(JSON.stringify(config))} <<'CORTEN_FAILED_NATIVE_HOST'
+import configparser, hashlib, io, json, os, pathlib, re, stat, subprocess, sys, tarfile, time, urllib.request
+host_id, unit, raw_config = sys.argv[1:]
+c = json.loads(raw_config)
+def failed(kind, value, traceback):
+    print(json.dumps(dict(schema='benchmark-failed-native-host/v1', custody=False)))
+sys.excepthook = failed
+assert os.getuid() == 0
+os.umask(0o077)
+def encoded(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True).encode('ascii')
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+def info(s):
+    return [s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns]
+def opened(path, flags=os.O_RDONLY):
+    parts = path.split('/')
+    assert parts[0] == '' and all(p not in ['', '.', '..'] for p in parts[1:])
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in parts[1:-1]:
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        try:
+            before = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            assert flags & os.O_CREAT and flags & os.O_EXCL or not flags & os.O_CREAT
+            before = None
+        if before is not None:
+            assert stat.S_ISDIR(before.st_mode) or stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+        result = os.open(parts[-1], flags | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=fd)
+        if before is not None:
+            try:
+                assert info(before) == info(os.fstat(result))
+            except:
+                os.close(result)
+                raise
+        return result
+    finally:
+        os.close(fd)
+def small(path, limit):
+    fd = opened(path)
+    try:
+        s = os.fstat(fd)
+        assert stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_size <= limit
+        data = os.read(fd, limit + 1)
+        assert len(data) == s.st_size and info(s) == info(os.fstat(fd))
+        return data
+    finally:
+        os.close(fd)
+cloud_binding = None
+
+def cloud_instance():
+    global cloud_binding
+    assert re.fullmatch(r'[1-9][0-9]*', host_id)
+    descriptors, entries = [], []
+    def entry(parent, name, flags):
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        fd = os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        descriptors.append(fd)
+        assert info(before) == info(os.fstat(fd))
+        entries.append((parent, name, fd, info(before)))
+        return fd
+    def directory(parent, name):
+        return entry(parent, name, os.O_RDONLY | os.O_DIRECTORY)
+    def data(parent, name, limit):
+        fd = entry(parent, name, os.O_RDONLY)
+        s = os.fstat(fd)
+        assert stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_size <= limit
+        value = os.read(fd, limit + 1)
+        assert len(value) == s.st_size and info(s) == info(os.fstat(fd))
+        return value
+    try:
+        cloud = directory(None, '/')
+        for name in ['var', 'lib', 'cloud']:
+            cloud = directory(cloud, name)
+        # Read the one supported selector as data through its own pinned inode.
+        # Never traverse it, and never extend opened()'s no-symlink policy.
+        selector = entry(cloud, 'instance', os.O_PATH)
+        s = os.fstat(selector)
+        assert stat.S_ISLNK(s.st_mode) and s.st_nlink == 1
+        assert os.readlink('', dir_fd=selector) == '/var/lib/cloud/instances/' + host_id
+        instance = directory(directory(cloud, 'instances'), host_id)
+        instance_id = data(directory(cloud, 'data'), 'instance-id', 64)
+        assert instance_id in [host_id.encode('ascii'), (host_id + '\\n').encode('ascii')]
+        assert data(instance, 'user-data.txt', 0) == b''
+        for parent, name, fd, before in reversed(entries):
+            assert before == info(os.fstat(fd)) == info(os.stat(name, dir_fd=parent, follow_symlinks=False))
+        binding = [before for parent, name, fd, before in entries]
+        if cloud_binding is not None:
+            assert binding == cloud_binding
+        cloud_binding = binding
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)
+
+def command(args):
+    r = subprocess.run(args, capture_output=True, text=True, timeout=5)
+    assert r.returncode == 0
+    return r.stdout
+parent_pid = os.getppid()
+parent = pathlib.Path('/proc') / str(parent_pid)
+parent_command = b'\\0'.join(os.fsencode(arg) for arg in ['/usr/bin/timeout', '600', '/usr/bin/python3'] + sys.argv) + b'\\0'
+def quiet():
+    assert parent_pid > 1 and os.getppid() == parent_pid and parent_pid != os.getpid()
+    assert (parent / 'cmdline').read_bytes() == parent_command and os.readlink(parent / 'exe') == '/usr/bin/timeout'
+    with urllib.request.urlopen('http://169.254.169.254/metadata/v1/id', timeout=3) as response:
+        assert response.read(64).decode().strip() == host_id
+    properties = ['Id', 'LoadState', 'FragmentPath', 'ActiveState', 'Restart', 'MainPID', 'Job', 'ExecMainCode', 'ExecMainStatus', 'ExecMainStartTimestamp']
+    lines = command(['systemctl', 'show', unit] + ['--property=' + p for p in properties]).splitlines()
+    assert len(lines) == len(properties) and all('=' in line for line in lines)
+    v = dict(line.split('=', 1) for line in lines)
+    assert set(v) == set(properties) and v['Id'] == unit and v['LoadState'] == 'loaded'
+    assert v['FragmentPath'] == '/etc/systemd/system/' + unit
+    assert v['ActiveState'] in ['inactive', 'failed'] and v['Restart'] == 'no' and v['MainPID'] == '0' and v['Job'] == ''
+    assert v['ExecMainCode'] == '1' and v['ExecMainStatus'] == '2' and v['ExecMainStartTimestamp'].strip() not in ['', 'n/a']
+    assert command(['systemctl', 'list-jobs', '--no-legend', '--no-pager']).strip() == ''
+    assert json.loads(command(['cloud-init', 'status', '--format', 'json']))['status'] == 'done'
+    cloud_instance()
+    for name, expected in c['files'].items():
+        assert sha(small('/bench/' + name, 1048576)) == expected
+    assert sha(small('/etc/systemd/system/' + unit, 1048576)) == c['files'][unit]
+    for base in ['/etc/systemd/system', '/run/systemd/system']:
+        for entry in pathlib.Path(base).glob('corten-bench*'):
+            assert str(entry) == '/etc/systemd/system/' + unit
+    if os.path.lexists('/bench/bootstrap-ready.json'):
+        assert small('/bench/bootstrap-ready.json', 1024) == c['marker'].encode('ascii')
+    else:
+        assert not c['requireMarker']
+    assert small('/bench/exit-code', 16) == b'2\\n'
+    assert small('/bench/repo/.git/HEAD', 128) == (c['commit'] + '\\n').encode('ascii')
+    git = configparser.ConfigParser(interpolation=None)
+    git.read_string(small('/bench/repo/.git/config', 65536).decode('utf8'))
+    assert git['remote "origin"']['url'] == 'https://github.com/corten-run/corten.git'
+    if os.path.lexists('/run/docker.sock') or os.path.lexists('/run/containerd/containerd.sock'):
+        assert command(['docker', 'ps', '--quiet', '--no-trunc']).strip() == ''
+    for entry in pathlib.Path('/proc').iterdir():
+        if not entry.name.isdigit() or int(entry.name) in [os.getpid(), parent_pid]:
+            continue
+        try:
+            cmd = (entry / 'cmdline').read_bytes()
+            assert b'/bench' not in cmd and b'corten-bench-groups-' not in cmd
+            for name in ['cwd', 'exe']:
+                try:
+                    target = os.readlink(entry / name)
+                except FileNotFoundError:
+                    continue
+                assert '/bench' not in target and 'corten-bench-groups-' not in target
+        except FileNotFoundError:
+            continue
+    assert os.getppid() == parent_pid and (parent / 'cmdline').read_bytes() == parent_command
+    assert os.readlink(parent / 'exe') == '/usr/bin/timeout'
+quiet()
+nodes, content, names, members = 0, 0, 0, 0
+def admit(key):
+    global nodes, names, members
+    assert key.count('/') < 60 and len(key) < 3800
+    assert nodes + 1 <= c['bounds']['nodes'] - 16
+    assert names + len(key.rsplit('/', 1)[-1]) <= c['bounds']['nameBytes'] and members + len(key) <= c['bounds']['memberBytes']
+    nodes += 1
+    names += len(key.rsplit('/', 1)[-1])
+    members += len(key)
+def inventory(path, key='', admitted=False):
+    global content
+    try:
+        fd = opened(path)
+    except FileNotFoundError:
+        assert key == ''
+        return None
+    try:
+        s = os.fstat(fd)
+        kind = 'd' if stat.S_ISDIR(s.st_mode) else 'f'
+        assert kind == 'd' or stat.S_ISREG(s.st_mode) and s.st_nlink == 1
+        if not admitted:
+            admit(key)
+        rows = [dict(key=key, kind=kind, metadata=info(s))]
+        if kind == 'd':
+            children = []
+            with os.scandir(fd) as entries:
+                for entry in entries:
+                    name = entry.name
+                    assert name.isascii() and re.fullmatch(r'[][A-Za-z0-9_.@$%+-]+', name) and name not in ['.', '..']
+                    assert len(name) <= 255 and not name.endswith('.') and not re.fullmatch(r'(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:[.].*)?', name)
+                    admit(key + '/' + name)
+                    children.append(name)
+            for name in sorted(children):
+                child = inventory(path + '/' + name, key + '/' + name, True)
+                assert child is not None
+                rows.extend(child)
+        else:
+            content += s.st_size
+            assert content <= c['bounds']['content']
+        assert info(s) == info(os.fstat(fd))
+        return rows
+    finally:
+        os.close(fd)
+# Validate and hash every node's metadata before reading any evidence payload.
+all_roots = c['roots'] + ['/bench/run.log', '/bench/host.txt', '/bench/exit-code', '/bench/results.tgz']
+inventories = [inventory(path) for path in all_roots]
+assert inventories[0] is not None and all(rows is not None for rows in inventories[len(c['roots']):])
+metadata_bytes = encoded(inventories)
+metadata_sha = sha(metadata_bytes)
+def consume(path, row, callback):
+    fd = opened(path)
+    try:
+        assert info(os.fstat(fd)) == row['metadata'] and row['kind'] == 'f'
+        while True:
+            block = os.read(fd, 65536)
+            if not block:
+                break
+            callback(block)
+        assert info(os.fstat(fd)) == row['metadata']
+    finally:
+        os.close(fd)
+hashes = {}
+roots = []
+if c['fence'] is not None:
+    assert metadata_sha == c['fence']['metadataSha256']
+    roots = c['fence']['roots']
+for index, (path, rows) in enumerate([] if c['fence'] is not None else zip(all_roots, inventories)):
+    if rows is None:
+        roots.append(dict(path=path, present=False))
+        continue
+    h = hashlib.sha256()
+    size = 0
+    for row in rows:
+        key = row['key']
+        if row['kind'] == 'd':
+            h.update(('d\\0' + key + '\\0').encode('ascii'))
+        else:
+            size += row['metadata'][4]
+            h.update(('f\\0' + key + '\\0' + str(row['metadata'][4]) + '\\0').encode('ascii'))
+            f = hashlib.sha256()
+            def update(block):
+                h.update(block)
+                f.update(block)
+            consume(path + key, row, update)
+            hashes[path + key] = f.hexdigest()
+    roots.append(dict(path=path, present=True, treeSha256=h.hexdigest(), nodes=len(rows), bytes=size))
+if c['fence'] is None:
+    assert hashes['/bench/results.tgz'] == c['archiveSha256']
+snapshot = dict(roots=roots, metadataSha256=metadata_sha)
+snapshot_sha = sha(encoded(snapshot))
+archive = '/bench/failed-native-custody.tgz'
+if c['captureSha256'] is None:
+    # Exclusive publication: unexplained/partial capture files are never adopted.
+    fd = opened(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    with os.fdopen(fd, 'wb') as target:
+        with tarfile.open(fileobj=target, mode='w|gz', format=tarfile.GNU_FORMAT) as tar:
+            def data(name, value):
+                t = tarfile.TarInfo(name)
+                t.mode, t.size = 0o600, len(value)
+                tar.addfile(t, io.BytesIO(value))
+            data('campaign/custody-metadata.json', metadata_bytes)
+            data('campaign/custody-files.json', encoded(hashes))
+            data('campaign/custody-snapshot.json', encoded(snapshot))
+            for index, (path, rows) in enumerate(zip(all_roots[:-1], inventories[:-1])):
+                if rows is None:
+                    continue
+                prefix = 'campaign/root-' + str(index) if index < len(c['roots']) else path.rsplit('/', 1)[-1]
+                for row in rows:
+                    t = tarfile.TarInfo(prefix + row['key'] + ('/' if row['kind'] == 'd' else ''))
+                    t.mode = 0o700 if row['kind'] == 'd' else 0o600
+                    if row['kind'] == 'd':
+                        t.type = tarfile.DIRTYPE
+                        tar.addfile(t)
+                    else:
+                        t.size = row['metadata'][4]
+                        f = opened(path + row['key'])
+                        with os.fdopen(f, 'rb') as source:
+                            assert info(os.fstat(source.fileno())) == row['metadata']
+                            class Reader:
+                                def __init__(self): self.hash = hashlib.sha256()
+                                def read(self, n):
+                                    block = source.read(n)
+                                    self.hash.update(block)
+                                    return block
+                            reader = Reader()
+                            tar.addfile(t, reader)
+                            assert reader.hash.hexdigest() == hashes[path + row['key']]
+                            assert info(os.fstat(source.fileno())) == row['metadata']
+        target.flush()
+        os.fsync(target.fileno())
+else:
+    assert snapshot_sha == c['captureSha256']
+archive_row = inventory(archive)[0]
+assert archive_row['metadata'][4] <= c['bounds']['compressed']
+h = hashlib.sha256()
+consume(archive, archive_row, h.update)
+archive_sha = h.hexdigest()
+if c['fence'] is not None:
+    assert archive_sha == c['fence']['archiveSha256']
+# Both the captured paths and their metadata must remain current after copying.
+nodes, content, names, members = 0, 0, 0, 0
+assert encoded([inventory(path) for path in all_roots]) == metadata_bytes
+quiet()
+print(json.dumps(dict(schema='benchmark-failed-native-host/v1', hostId=host_id, unit=unit, custody=True,
+    roots=roots, metadataSha256=metadata_sha, snapshotSha256=snapshot_sha, archiveSha256=archive_sha,
+    observedAtMs=int(time.time()*1000), historicalAccountingQualified=False)))
+CORTEN_FAILED_NATIVE_HOST`;
+}
+
+export function failedNativeObservation(raw, state, startedAtMs, finishedAtMs) {
+  assert.ok(typeof raw === "string" && Buffer.byteLength(raw) <= 16384, "bounded custody observation required");
+  const observation = JSON.parse(raw);
+  assert.deepEqual(Object.keys(observation).sort(), ["archiveSha256", "custody", "historicalAccountingQualified", "hostId", "metadataSha256", "observedAtMs", "roots", "schema", "snapshotSha256", "unit"].sort());
+  assert.equal(observation.schema, "benchmark-failed-native-host/v1");
+  assert.equal(observation.hostId, state.id); assert.equal(observation.unit, state.unit);
+  assert.equal(observation.custody, true); assert.equal(observation.historicalAccountingQualified, false);
+  for (const key of ["archiveSha256", "metadataSha256", "snapshotSha256"]) assert.match(observation[key], /^[a-f0-9]{64}$/);
+  assert.deepEqual(observation.roots.map((root) => root.path), [...failedNativeRoots(state), "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"]);
+  for (const root of observation.roots) {
+    assert.equal(typeof root.present, "boolean");
+    assert.deepEqual(Object.keys(root).sort(), (root.present ? ["bytes", "nodes", "path", "present", "treeSha256"] : ["path", "present"]).sort());
+    if (root.present) {
+      assert.match(root.treeSha256, /^[a-f0-9]{64}$/);
+      assert.ok(Number.isSafeInteger(root.nodes) && root.nodes >= 1 && root.nodes <= evidenceEnvelope.nodes);
+      assert.ok(Number.isSafeInteger(root.bytes) && root.bytes >= 0 && root.bytes <= evidenceEnvelope.content);
+    }
+  }
+  assert.equal(observation.roots[0].present, true);
+  assert.ok(observation.roots.slice(failedNativeRoots(state).length).every((root) => root.present));
+  assert.ok(Number.isSafeInteger(startedAtMs) && Number.isSafeInteger(finishedAtMs) && finishedAtMs >= startedAtMs
+    && finishedAtMs - startedAtMs <= 660000, "custody observation exceeded its local window");
+  assert.ok(Number.isSafeInteger(observation.observedAtMs) && observation.observedAtMs >= startedAtMs - 5000
+    && observation.observedAtMs <= finishedAtMs + 5000, "custody observation clock differs");
+  return observation;
+}
+
+export function verifyFailedNativeCustody(local, state, capture) {
+  failedNativeArchive(local, state);
+  assert.equal(capture.schema, "benchmark-failed-native-custody/v1");
+  assert.equal(capture.measuredCommit, state.commit);
+  assert.match(capture.controllerCommit, /^[a-f0-9]{40}$/);
+  assert.match(capture.reservationSha256, /^[a-f0-9]{64}$/);
+  const original = regular(join(local, "failed-native-reservation.json"), 1024 * 1024);
+  assert.equal(digest(original), capture.reservationSha256);
+  const prior = JSON.parse(original), current = { ...state };
+  assert.ok(["starting", "running"].includes(prior.status));
+  if (current.retirement) {
+    current.status = prior.status;
+    for (const key of ["retirement", "deletionIntentAt", "destroyedAt"]) delete current[key];
+  }
+  assert.deepEqual(current, prior, "original measured reservation changed");
+  assert.match(capture.evidence, /^custody-[A-Za-z0-9]+$/);
+  const observation = failedNativeObservation(JSON.stringify(capture.observation), state, capture.startedAtMs, capture.finishedAtMs);
+  assert.equal(capture.scriptSha256, digest(failedNativeScript(state)));
+  assert.equal(fileHash(join(local, "failed-native-results.tgz")), observation.archiveSha256, "custody archive changed");
+  const extracted = join(local, capture.evidence); physical(extracted);
+  assert.equal(treeHash(extracted), capture.evidenceSha256, "custody extraction changed");
+  const snapshot = regular(join(extracted, "campaign", "custody-snapshot.json"), 16384);
+  assert.equal(digest(snapshot), observation.snapshotSha256);
+  assert.deepEqual(JSON.parse(snapshot), { roots: observation.roots, metadataSha256: observation.metadataSha256 });
+  assert.equal(fileHash(join(extracted, "campaign", "custody-metadata.json")), observation.metadataSha256);
+  for (const [index, root] of observation.roots.slice(0, failedNativeRoots(state).length).entries()) {
+    if (root.present) assert.equal(treeHash(join(extracted, "campaign", `root-${index}`)), root.treeSha256, "custody root differs");
+    else assert.ok(!readdirSync(join(extracted, "campaign")).includes(`root-${index}`), "absent native root was invented");
+  }
+  for (const name of ["run.log", "host.txt", "exit-code"])
+    assert.equal(fileHash(join(extracted, name)), fileHash(join(local, state.evidence, name)), "failed metadata changed");
+  assert.equal(treeHash(join(extracted, "campaign", "root-0")), treeHash(join(local, state.evidence, "campaign")), "original campaign changed before custody");
+  return capture;
+}
+
+export function verifyFailedNativeRetirement(local, state, expectedSha256 = state.retirement.evidenceSha256) {
+  const bytes = regular(join(local, "failed-native-host.json"));
+  assert.match(expectedSha256, /^[a-f0-9]{64}$/);
+  assert.equal(digest(bytes), expectedSha256, "failed-native retirement receipt changed");
+  const record = JSON.parse(bytes);
+  assert.deepEqual(Object.keys(record).sort(), ["capture", "confirmation", "finishedAtMs", "rehash", "schema", "scriptSha256", "startedAtMs"].sort());
+  assert.equal(record.schema, "benchmark-failed-native-retirement/v1");
+  verifyFailedNativeCustody(local, state, record.capture);
+  assert.deepEqual(Object.keys(record.rehash).sort(), ["finishedAtMs", "observation", "scriptSha256", "startedAtMs"]);
+  const rehash = failedNativeObservation(JSON.stringify(record.rehash.observation), state, record.rehash.startedAtMs, record.rehash.finishedAtMs);
+  assert.equal(record.rehash.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256)));
+  const final = failedNativeObservation(JSON.stringify(record.confirmation), state, record.startedAtMs, record.finishedAtMs);
+  assert.equal(record.scriptSha256, digest(failedNativeScript(state, record.capture.observation.snapshotSha256, record.capture.observation)));
+  const withoutTime = ({ observedAtMs, ...rest }) => rest;
+  assert.deepEqual(withoutTime(rehash), withoutTime(record.capture.observation), "remote custody rehash differs");
+  assert.deepEqual(withoutTime(final), withoutTime(record.capture.observation), "predelete custody differs");
+  return record;
+}
 
 export function unusedHostScript(state) {
   const files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));

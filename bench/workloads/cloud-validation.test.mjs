@@ -229,6 +229,17 @@ test("unchanged native campaign API evaluates captured real sources and rejects 
   });
 });
 
+test("native replay uses captured observer writer bytes rather than a replaced checkout module", { timeout: 15000 }, async (t) => {
+  const h = await fakeNative(t, undefined, { realGraph: true });
+  const marker = join(h.input.folder, "unapproved-writer");
+  writeFileSync(join(h.repo, "bench/workloads/isolated/host-durable-writer.mjs"),
+    `import {writeFileSync} from "node:fs"; writeFileSync(${JSON.stringify(marker)}, "unapproved");`);
+  assert.deepEqual(await h.inspect(h.input), {
+    status: "invalid", controllerReady: false, qualified: false, deletionAuthorized: false, error: "saved-campaign-invalid",
+  });
+  assert.equal(existsSync(marker), false);
+});
+
 test("snapshot setup consumes the existing validation deadline rather than extending it", { timeout: 5000 }, async (t) => {
   const clock = t.mock.method(performance, "now");
   clock.mock.mockImplementationOnce(() => 0, 0);
