@@ -207,6 +207,15 @@ loading, is that stall: rerun the smoke in Firefox alone
 failure on the rerun, or the same step failing in Chromium or WebKit, as real. Nothing retries
 the step or waits longer for it.
 
+A Firefox page load that runs past its 30 s timeout on such a machine, with the stall report
+saying the browser held its requests, is the same kind of stall. On a workstation with all 16
+CPUs busy and 60 to 170 threads waiting for one, the server answered every request of such a load
+within a millisecond, through Docker Desktop's own port forwarding as through WSL's localhost
+relay; the page's own timing had its document in after 0.1 s and `DOMContentLoaded` 9 to 28 s
+later, and three Firefox instances loading pages at that moment stalled together
+([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
+Rerun it as above.
+
 The watchlist's waiting-submit cases press their buttons in the page (`button.click()`), so
 each submit runs before the test changes the form's values or releases its held answer. A
 loaded browser can acknowledge Playwright's click before dispatching that submit: waiting for
