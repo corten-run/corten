@@ -78,11 +78,13 @@ test("exact current built image identity is required, not generic source presenc
     assert.equal(binary, "docker"); assert.deepEqual(args.slice(0, 2), ["image", "inspect"]); assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1");
     const saved = images.find((i) => i.imageId === args[2]);
     return JSON.stringify([{ Id: saved.imageId, Config: { Labels: saved.labels, Entrypoint: saved.config.entrypoint,
-      Cmd: saved.config.cmd, Env: ["SECRET=not-retained"] }, RootFS: { Layers: [] } }]);
+      ...(saved.tool === "k6" ? {} : { Cmd: saved.config.cmd }), Env: ["SECRET=not-retained"] }, RootFS: { Layers: [] } }]);
   });
   syncBuiltinESMExports();
   try {
     const images = imageProof(s); assert.equal(images.length, 20); assert.ok(!JSON.stringify(images).includes("SECRET"));
+    assert.equal(JSON.parse(JSON.stringify(images)).find((image) => image.tool === "k6").config.cmd, null,
+      "Docker's omitted optional k6 Cmd must survive the audit subject as explicit null");
     for (const [owner, key] of [[s.apps.express.images[descriptor().payloads[0]], "execution"], [s.toolExecutions, "node"], [s.toolExecutions, "k6"]]) {
       const before = owner[key];
       owner[key] = { ...before, Cmd: ["/unreviewed/node", "--eval", "process.exit(1)"] };
