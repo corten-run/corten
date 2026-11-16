@@ -135,7 +135,11 @@ function stagedIntent(fleet) {
   assert.equal(intent.approvalSha256, digest(JSON.stringify(s)), "fleet-launch-intent-changed");
   assert.equal(s.schema, "benchmark-group-fleet-staged-approval/v1");
   assert.equal(s.action, "detach"); assert.equal(s.controllerCommit, fleet.manifest.commit);
-  assert.equal(s.stateRoot, fleet.root); assert.equal(s.requestedRoot, fleet.root); assert.equal(s.round, fleet.manifest.round);
+  assert.equal(s.stateRoot, fleet.root);
+  // The approved spelling may be a junction; it must still name this physical
+  // fleet, never a missing or retargeted alias. Keep the consumed subject intact.
+  assert.equal(fleetRoot(s.requestedRoot), fleet.root, "fleet-requested-root-changed");
+  assert.equal(s.round, fleet.manifest.round);
   assert.equal(s.manifestSha256, fleet.manifestSha256); assert.deepEqual(s.fleet, fleet.manifest);
   assert.deepEqual(s.records, {});
   assert.deepEqual(s.admission, { mode: "first-group-only", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });

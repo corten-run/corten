@@ -50,6 +50,11 @@ Use `--print-approval` for each fresh action, then supply its reviewed hash with
 `--approve-reviewed-merged-ready`; neither preview nor these commands grants operational
 approval. Historical fleets remain collectable, but legacy or consumed launch intents cannot
 acquire new remaining-admission authority.
+An accepted root alias remains bound to the same physical fleet: collection and remaining
+admission can use either spelling while the original requested path still resolves there.
+Removing or retargeting it refuses remaining admission, even via the physical path. Each
+invocation's requested spelling still requires its own exact approval; consumed intents are
+never rewritten to repair path identity.
 
 The [client-heavy runner](../client-heavy/README.md) builds all selected native
 applications, observes their actual DOM and resources, and gates a separate

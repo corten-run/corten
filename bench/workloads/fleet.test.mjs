@@ -1,6 +1,6 @@
 // Synthetic orchestration only: no provider, credentials, SSH or native benchmark.
 import assert from "node:assert/strict";
-import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { setImmediate as turn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
@@ -24,7 +24,7 @@ const committedSources = new Map(fleetWorkerPaths.map((path) => [path, readFileS
 function fixture(t, flags = {}) {
   const h = harness(t), output = [], calls = [], children = [], completions = [];
   let firstReport, firstJob;
-  const args = (mode) => ["r21", "--fleet-root", h.base, mode];
+  const args = (mode) => ["r21", "--fleet-root", flags.root ?? h.base, mode];
   const prepare = () => [...args("--prepare"), "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   const spawn = (binary, argv) => {
     calls.push([binary, argv]); assert.equal(binary, "git", "synthetic local boundary only");
@@ -296,6 +296,71 @@ test("bootstrap or a legacy consumed launch can never authorize remaining alloca
     assert.equal(p.children.length, 1); assert.ok(!existsSync(join(p.h.base, "remaining-intent.json")));
     // Historical manifests/intents do not lose collection support.
     assert.equal(await fleetMain([...p.args("--collect"), "--print-approval"], p.deps), 3);
+  }
+});
+
+test("junction-root remaining admission binds physical identity through either path and remains once-only", async (t) => {
+  for (const canonical of [false, true]) {
+    const p = fixture(t), alias = join(p.h.temp, "fleet-alias");
+    symlinkSync(p.h.base, alias, process.platform === "win32" ? "junction" : "dir"); p.flags.root = alias;
+    assert.equal(realpathSync(alias), p.h.base);
+    await fleetMain(p.prepare(), p.deps);
+    const initial = await p.approve("--detach"), subject = p.output.at(-1).subject;
+    assert.equal(subject.requestedRoot, alias); assert.equal(subject.stateRoot, p.h.base);
+    assert.equal(await fleetMain(initial, p.deps), 3); assert.deepEqual(p.children, [groupNames[0]]);
+    p.finishFirst(); p.children.length = 0;
+    const intentPath = join(p.h.base, "launch-intent.json"), intent = readFileSync(intentPath, "utf8");
+    const aliasApproval = await p.approve("--admit-remaining");
+    p.flags.root = p.h.base; const physicalApproval = await p.approve("--admit-remaining");
+    assert.notEqual(aliasApproval.at(-1), physicalApproval.at(-1), "each invocation retains its exact requested path binding");
+    await assert.rejects(fleetMain([...physicalApproval.slice(0, -1), aliasApproval.at(-1)], p.deps), /fleet-exact-approval-required/);
+    assert.equal(p.children.length, 0); assert.ok(!existsSync(join(p.h.base, "remaining-intent.json")));
+    assert.equal(await fleetMain(canonical ? physicalApproval : aliasApproval, p.deps), 3);
+    assert.deepEqual(p.children, groupNames.slice(1));
+    for (const root of [alias, p.h.base]) {
+      p.flags.root = root;
+      await assert.rejects(p.approve("--admit-remaining"), /remaining-already-attempted/);
+    }
+    assert.equal(readFileSync(intentPath, "utf8"), intent, "consumed initial intent is not rewritten");
+    assert.equal(p.children.length, groupNames.length - 1);
+  }
+});
+
+test("junction-root first-stage collection keeps untouched children deferred via alias or physical path", async (t) => {
+  const p = fixture(t), alias = join(p.h.temp, "fleet-alias");
+  symlinkSync(p.h.base, alias, process.platform === "win32" ? "junction" : "dir"); p.flags.root = alias;
+  await fleetMain(p.prepare(), p.deps); await fleetMain(await p.approve("--detach"), p.deps); p.finishFirst();
+  const intentPath = join(p.h.base, "launch-intent.json"), intent = readFileSync(intentPath, "utf8");
+  for (const root of [alias, p.h.base]) {
+    p.flags.root = root; const approved = await p.approve("--collect"), preview = p.output.at(-1);
+    assert.equal(preview.subject.stateRoot, p.h.base); assert.equal(preview.subject.requestedRoot, root);
+    assert.ok(preview.subject.jobs.slice(1).every((job) => job.outcome === "deferred" && !job.options));
+    p.children.length = 0; p.flags.child = async () => 0;
+    assert.equal(await fleetMain(approved, p.deps), 3); assert.deepEqual(p.children, [groupNames[0]]);
+    assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "deferred" && !row.error));
+  }
+  assert.equal(readFileSync(intentPath, "utf8"), intent);
+});
+
+test("saved junction identity cannot be removed, retargeted or substituted after remaining approval", async (t) => {
+  for (const kind of ["missing", "retarget", "inside-repo", "substitute-argv"]) {
+    const p = fixture(t), alias = join(p.h.temp, "fleet-alias"), other = join(p.h.temp, "other-fleet");
+    symlinkSync(p.h.base, alias, process.platform === "win32" ? "junction" : "dir"); p.flags.root = alias;
+    await fleetMain(p.prepare(), p.deps); await fleetMain(await p.approve("--detach"), p.deps); p.finishFirst();
+    const approved = await p.approve("--admit-remaining"), intentPath = join(p.h.base, "launch-intent.json");
+    const intent = readFileSync(intentPath, "utf8"); p.children.length = 0;
+    mkdirSync(other); writeFileSync(join(other, "fleet-r21.json"), readFileSync(join(p.h.base, "fleet-r21.json")));
+    if (kind === "substitute-argv") approved[approved.indexOf("--fleet-root") + 1] = other;
+    else {
+      unlinkSync(alias);
+      if (kind !== "missing") symlinkSync(kind === "inside-repo" ? p.h.repo : other, alias, process.platform === "win32" ? "junction" : "dir");
+      // Even using the unchanged physical root must not reinterpret a saved
+      // requested path that no longer resolves to its approved physical fleet.
+      approved[approved.indexOf("--fleet-root") + 1] = p.h.base;
+    }
+    await assert.rejects(fleetMain(approved, p.deps), undefined, kind);
+    assert.equal(p.children.length, 0, kind); assert.ok(!existsSync(join(p.h.base, "remaining-intent.json")), kind);
+    assert.equal(readFileSync(intentPath, "utf8"), intent);
   }
 });
 
