@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Show the grouped controller's closed failure stage and allowed provider detail
+  in direct CLI errors, without reflecting raw exceptions or changing recovery,
+  cleanup or benchmark acceptance rules.
+
 - A handler is given a form's control by its `#[derive(Fields)]` field,
   `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
   `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
@@ -1111,6 +1115,16 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,
+  so a `const` assertion only a binary's `main` reaches fails it as it fails `cargo build`: a
+  route that a bin-only app's `main` alone mounts by hand, outside its area or saying `patches`
+  with a `get` that answers a page, passed clippy and `cargo test`, which generate none of
+  `main`'s callees, and only `cargo build` refused it (design Limit 11). With the default
+  profiles the tests reuse the test targets the build compiled, so the check adds about one
+  compile of each binary and of each bench target; a `[profile.test]` that differs from
+  `[profile.dev]` has the tests compile their targets again
+  ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)).
 
 - A navigation under a `Pwa::network_only` prefix reaches the server once with the PWA's service
   worker in control. The worker turns navigation preload on and then declined these
