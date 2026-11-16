@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Verify the standard cloud-init instance selector by pinned descriptor and exact
+  owned host ID during failed-native custody. Keep all other paths link-free,
+  require matching instance identity and empty regular user data, and refuse
+  selector, ancestry or file replacement during each terminal proof.
+
 - Bound failed-native retirement proof age from the final SSH request's local
   start, including response delivery, and refuse expired DELETEs after asynchronous
   HTTPS socket/TLS setup without queuing a mutation before readiness.
