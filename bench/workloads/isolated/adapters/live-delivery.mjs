@@ -6,6 +6,8 @@ import { basename, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { verifyRound } from "../../../live/verify.mjs";
 import { groupNames } from "../../registry.mjs";
+import { deploymentSha256 } from "../../deployments.mjs";
+import { campaignSchema, groupCampaignSchema } from "../campaign-contract.mjs";
 import { readRegular, tree } from "../evidence.mjs";
 import { inspectLifetime } from "../host-lifetime.mjs";
 import { verifyHostBoundary } from "../host-observation.mjs";
@@ -47,9 +49,26 @@ function sourceHashes(files, entry) {
 
 function phaseProof(binding, folder, startedAt) {
   if (basename(folder) !== "native") return null;
-  const phase = dirname(folder), campaign = basename(dirname(phase)), { group, round } = binding.request;
+  const phase = dirname(folder), campaignRoot = dirname(phase), campaign = basename(campaignRoot), { group, round, commit } = binding.request;
   assert.match(campaign, new RegExp(`^${round}-[a-f0-9]{16}$`));
-  assert.equal(basename(phase), `${String(groupNames.indexOf(group)).padStart(2, "0")}-${group}-timing`);
+  // The outer collector validates the whole campaign. Replay this phase's exact
+  // membership too: dedicated campaigns start at zero, not the registry index.
+  const planPath = join(campaignRoot, "plan.json"), reservationPath = join(dirname(campaignRoot), ".host-attempt.json");
+  const planBytes = readRegular(planPath), reservationBytes = readRegular(reservationPath);
+  const plan = JSON.parse(planBytes), reservation = JSON.parse(reservationBytes);
+  assert.ok([campaignSchema, groupCampaignSchema].includes(plan.schema), "unknown campaign scope");
+  assert.equal(plan.round, round); assert.equal(plan.commit, commit);
+  const order = plan.schema === groupCampaignSchema ? [group] : groupNames;
+  assert.ok(isDeepStrictEqual(plan.order, order), "campaign group order differs");
+  assert.equal(plan.bindings.length, order.length);
+  const index = order.indexOf(group); assert.ok(index >= 0);
+  assert.ok(isDeepStrictEqual(plan.bindings[index], binding), "campaign phase binding differs");
+  const { campaignSha256, ...body } = plan;
+  sha(campaignSha256); assert.equal(campaignSha256, deploymentSha256(body));
+  assert.equal(reservation.schema, "benchmark-isolated-campaign-reservation/v1");
+  assert.equal(reservation.id, campaign); assert.equal(reservation.commit, commit);
+  assert.equal(reservation.campaignSha256, campaignSha256);
+  assert.equal(basename(phase), `${String(index).padStart(2, "0")}-${group}-timing`);
   const beforeTree = tree(phase), read = (name) => JSON.parse(readRegular(join(phase, name)));
   assert.ok(isDeepStrictEqual(read("native-manifest.json"), tree(folder)), "native manifest differs");
   const before = read("host-before.json"), after = read("host-after.json");
@@ -71,6 +90,7 @@ function phaseProof(binding, folder, startedAt) {
   assert.ok([0, 1].includes(result.code)); assert.equal(result.success, result.code === 0 && !result.cancelled && !result.forced);
   const browser = observation.identities.some((p) => p.type === "--type=renderer");
   assert.ok(isDeepStrictEqual(tree(phase), beforeTree), "external phase evidence mutated");
+  assert.ok(readRegular(planPath).equals(planBytes) && readRegular(reservationPath).equals(reservationBytes), "campaign membership mutated");
   return { complete: observation.status === "verified" && observation.cleanupComplete && browser, code: result.code };
 }
 
