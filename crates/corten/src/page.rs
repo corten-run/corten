@@ -2799,7 +2799,31 @@ pub(crate) struct AsIs;
 /// has no route for it. A [`Mode::Data`] request, every request on an `api` route and every
 /// failure of a JSON route ([`crate::JsonResult`]) gets the failure as JSON instead
 /// ([`crate::api`]). A request a [`crate::Caller`] sent to sign in is redirected there.
-pub(crate) async fn render_errors<S: crate::app::Steps>(
+pub(crate) fn render_errors<'a, S: crate::app::Steps>(
+    shared: &'a Arc<Shared>,
+    req: Request,
+    next: Next<'a, S>,
+    deadline: Option<std::time::Duration>,
+    signal: &'a crate::Signal,
+    api: Option<&'a crate::api::Mount>,
+    (mode, fetched): (Mode, bool),
+) -> impl Future<Output = Response> + Send + 'a {
+    // A write the runtime sent may answer its own page, which is whole for a runtime that draws one
+    // (#1370). Looked up only in an app with layout reads, and once: its `Req` reads the mark.
+    // Looked up before the future is made, so the request is moved into it once, as it was: a
+    // request borrowed in the future kept a slot of its own in each of its later states (240 bytes
+    // more on every whole document's and navigation's future), and read through a binding of its
+    // own it was moved twice more, each a copy of its head (`-Zprint-type-sizes` and callgrind).
+    let action_write = api.is_none()
+        && mode != Mode::Data
+        && !shared.layout_reads.is_empty()
+        && own_page_whole(mode, req.method(), req.headers());
+    errors_rendered(shared, req, next, deadline, signal, api, (mode, fetched), action_write)
+}
+
+/// [`render_errors`], once it knows whether the request is a write whose own page is whole.
+#[allow(clippy::too_many_arguments)]
+async fn errors_rendered<S: crate::app::Steps>(
     shared: &Arc<Shared>,
     req: Request,
     next: Next<'_, S>,
@@ -2807,22 +2831,12 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     signal: &crate::Signal,
     api: Option<&crate::api::Mount>,
     (mode, fetched): (Mode, bool),
+    action_write: bool,
 ) -> Response {
     if api.is_some() || mode == Mode::Data {
         let shape = api.and_then(|mount| mount.errors.as_ref());
         return crate::api::json_failure(run(req, next, deadline, signal).await, shared.dev, shape).await;
     }
-    // A write the runtime sent may answer its own page, which is whole for a runtime that draws one
-    // (#1370). Looked up only in an app with layout reads, and once: its `Req` reads the mark.
-    // Read through a binding of its own, which ends here: a request borrowed in this future keeps a
-    // slot of its own in each of its later states, 240 bytes more on every whole document's and
-    // navigation's future, which made a whole `GET` about 750 instructions dearer
-    // (`-Zprint-type-sizes`, DHAT and callgrind).
-    let (req, action_write) = {
-        let req = req;
-        let action_write = !shared.layout_reads.is_empty() && own_page_whole(mode, req.method(), req.headers());
-        (req, action_write)
-    };
     if shared.layout_reads.is_empty() || (mode.swaps() && !action_write) {
         return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
     }
