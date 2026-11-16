@@ -2715,7 +2715,10 @@ async fn a_page_that_waits_for_a_part_preloads_the_part_module() {
         let (status, _, body) = call_with(app(routes.clone(), None), "GET", "/", mode, None).await;
         assert_eq!(status, StatusCode::OK, "{mode:?} {body}");
         assert!(body.contains(&preload), "{mode:?}: {body}");
-        assert!(body.contains(r#"<p id="msg">Finding<template data-corten-read-now data-from="/saved"></template></p>"#), "{body}");
+        assert!(
+            body.contains(r#"<p id="msg">Finding<template data-corten-read-now data-from="/saved"></template></p>"#),
+            "{body}"
+        );
         let (_, _, plain) = call_with(app(routes.clone(), None), "GET", "/plain", mode, None).await;
         assert!(!plain.contains("part.js"), "{mode:?}: {plain}");
     }

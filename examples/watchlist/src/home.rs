@@ -594,7 +594,10 @@ mod tests {
         let read = app.get(&url::Home { picks: Some(true) }).await;
         let read = read.text();
         assert!(read.contains("<li>Halcyon Health (HLTH) 0.00%</li><li>Northgate Rail (NRTH) 0.00%</li></ul>"), "{read}");
-        assert!(!read.contains("data-corten-read-now") && !read.contains("?picks=true") && !read.contains("Finding picks"), "{read}");
+        assert!(
+            !read.contains("data-corten-read-now") && !read.contains("?picks=true") && !read.contains("Finding picks"),
+            "{read}"
+        );
         // A data client asks the same address for them; without it they are left out.
         let data = app.get(&url::Home { picks: Some(true) }).mode(Mode::Data).await;
         assert!(data.text().contains(r#""picks":[{"id":"HLTH","#), "{}", data.text());
