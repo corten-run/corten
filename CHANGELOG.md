@@ -14,6 +14,14 @@ Corten is pre-1.0, so any minor version may change the API.
   (`<input type="date">`), and `day.start(zone)` is where a day begins in a zone
   ([design Choice 55](docs/design.md#choice-local-date-time)).
 
+- Include the observer's durable writer in the fixed native replay source closure;
+  keep deny-unlisted imports and replay captured commit bytes, not checkout edits.
+
+- Verify the standard cloud-init instance selector by pinned descriptor and exact
+  owned host ID during failed-native custody. Keep all other paths link-free,
+  require matching instance identity and empty regular user data, and refuse
+  selector, ancestry or file replacement during each terminal proof.
+
 - Bound failed-native retirement proof age from the final SSH request's local
   start, including response delivery, and refuse expired DELETEs after asynchronous
   HTTPS socket/TLS setup without queuing a mutation before readiness.
@@ -24,6 +32,38 @@ Corten is pre-1.0, so any minor version may change the API.
   stream directory admission within global evidence budgets and carry the final
   proof's absolute expiry through private provider dispatch. Keep ordinary
   collection gates and uncertain-delete reconciliation unchanged.
+
+- Probe the marketplace JSON route's method rejection with POST, which the page
+  form implements, rather than requiring an app to implement DELETE somewhere.
+  Keep the JSON 405 requirement and all production qualification gates.
+
+- Copy stable installed dependency hardlinks into independent hardening evidence,
+  retaining source identity and mutation checks, bounded no-follow reads and
+  single-link saved evidence. Report bounded relative-path rejection diagnostics.
+  Pin snapshot output directories before creates/writes and retain output
+  identities through sealing, rejecting directory/junction and file replacement.
+  Refuse unqualified Linux output filesystems before creation, including WSL
+  DrvFS/9p where descriptor child paths can create through a replaced directory.
+
+- Keep asynchronous benchmark observer startup owned through cancellation and
+  early native exit; dispose abandoned setup without late capture or a terminal seal.
+
+- Keep benchmark host sampling off synchronous record flushes with one bounded
+  asynchronous filesystem FIFO. Preserve per-record file/directory durability
+  before referencing sample writes, strict continuity and cancellation gates;
+  do not seal unfinished or failed storage or reinterpret historical failures.
+
+- Resample complete benchmark host scopes within the existing one-second window
+  when process churn invalidates a census, and require matching recursive
+  membership bookends. Keep PID/start, executable, accounting, observer-error and
+  positive-empty cleanup gates; roll back executable captures from rejected
+  attempts and observations without closing earlier accepted inputs. Do not
+  reinterpret retained failed evidence.
+
+- Retain raw host process stat evidence and exempt only identity-bound Linux kernel
+  threads from grouped benchmark user-process cleanup. Prepare fresh disposable
+  hosts against firmware-service activation before baseline; keep new user-process
+  leaks and unproved historical inventories fail-closed.
 
 - Retain omitted optional Docker image/container command defaults as explicit null
   in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
