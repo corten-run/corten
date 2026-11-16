@@ -9,14 +9,14 @@ import { remoteFiles as productionFiles } from "./cloud-remote.mjs";
 
 const state = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" });
 const job = remoteFiles(state)["job.sh"];
-const start = job.indexOf("for unit in fwupd.service fwupd-refresh.service fwupd-refresh.timer; do");
-const end = job.indexOf("# The entry derives", start);
-assert.ok(start >= 0 && end > start);
-const preflight = job.slice(start, end);
 const units = ["fwupd.service", "fwupd-refresh.service", "fwupd-refresh.timer"];
 
 function execute(t, { failed = [], active, load = "masked", pid = "0", resetFails = false,
-  resetLoad = load, resetPid = pid, resetActive = "inactive" } = {}) {
+  resetLoad = load, resetPid = pid, resetActive = "inactive", queryFailAfter = "", script = job } = {}) {
+  const start = script.indexOf("for unit in fwupd.service fwupd-refresh.service fwupd-refresh.timer; do");
+  const end = script.indexOf("# The entry derives", start);
+  assert.ok(start >= 0 && end > start);
+  const preflight = script.slice(start, end);
   const root = mkdtempSync(join(tmpdir(), "corten-bootstrap-units-")); chmodSync(root, 0o700);
   t.after(() => rmSync(root, { recursive: true, force: true }));
   for (const unit of units) writeFileSync(join(root, unit), failed.includes(unit) ? "failed" : active ?? "inactive");
@@ -31,7 +31,8 @@ show)
     --property=ActiveState) cat "$TEST_ROOT/$2" ;;
     --property=MainPID) if test -e "$TEST_ROOT/reset-$2"; then printf '%s\\n' "$TEST_RESET_PID"; else printf '%s\\n' "$TEST_PID"; fi ;;
     *) exit 92 ;;
-  esac ;;
+  esac
+  if test -e "$TEST_ROOT/reset-$2" && test "$TEST_QUERY_FAIL" = "$3"; then exit 37; fi ;;
 reset-failed)
   printf '%s\\n' "$2" >> "$TEST_ROOT/resets"
   test "$TEST_RESET_FAILS" = no
@@ -42,13 +43,14 @@ esac
 `, { mode: 0o700 });
   const env = { PATH: `${root}:/usr/bin:/bin`, HOME: root, LANG: "C", TEST_ROOT: root,
       TEST_LOAD: load, TEST_PID: pid, TEST_RESET_FAILS: resetFails ? "yes" : "no",
-      TEST_RESET_LOAD: resetLoad, TEST_RESET_PID: resetPid, TEST_RESET_ACTIVE: resetActive };
+      TEST_RESET_LOAD: resetLoad, TEST_RESET_PID: resetPid, TEST_RESET_ACTIVE: resetActive,
+      TEST_QUERY_FAIL: queryFailAfter };
   const fixture = spawnSync(shim, ["show", units[0], "--property=LoadState", "--value"], {
     cwd: root, env, encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
   });
   assert.equal(fixture.error, undefined, "systemctl fixture must be executable; never fall back to the real host service");
   assert.equal(fixture.status, 0); assert.equal(fixture.stdout, `${load}\n`);
-  const result = spawnSync("/bin/bash", ["-c", `set -Eeuo pipefail\n${preflight}`], {
+  const result = spawnSync("/bin/bash", ["-c", `set -Eeuo pipefail\n${preflight}\nprintf 'NATIVE_ENTRY_REACHED\\n'`], {
     cwd: root, env,
     encoding: "utf8", timeout: 5000, maxBuffer: 64 * 1024,
   });
@@ -86,6 +88,13 @@ for (const [name, options] of Object.entries({
   assert.notEqual(result.status, 0); assert.deepEqual(result.resets, [units[0]]);
 });
 for (const [name, script] of [["contract", job], ["production", productionFiles(state)["job.sh"]]]) {
+  for (const property of ["LoadState", "ActiveState", "MainPID"]) {
+    test(`${name} preserves post-reset ${property} query failure with expected stdout`, { skip: process.platform !== "linux" }, t => {
+      const result = execute(t, { failed: [units[0]], queryFailAfter: `--property=${property}`, script });
+      assert.equal(result.status, 37);
+      assert.ok(!result.stdout.includes("NATIVE_ENTRY_REACHED"));
+    });
+  }
   test(`${name} job failure diagnostics identify stage and line without dumping the command or environment`, { skip: process.platform !== "linux" }, () => {
     const start = script.indexOf("bootstrap_error()"), trap = script.indexOf("trap 'bootstrap_error", start);
     assert.ok(start >= 0 && trap > start, "generated job must retain bounded failure diagnostics");

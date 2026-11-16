@@ -370,10 +370,15 @@ for unit in fwupd.service fwupd-refresh.service fwupd-refresh.timer; do
   esac
   # Masking stops activation but does not clear a stopped unit's failed state.
   # Reset only that state, then independently require the same strict boundary.
-  test "$(systemctl show "$unit" --property=LoadState --value)" = masked
+  load_state=$(systemctl show "$unit" --property=LoadState --value)
+  test "$load_state" = masked
   active_state=$(systemctl show "$unit" --property=ActiveState --value)
   test "$active_state" = inactive
-  case "$unit" in *.service) test "$(systemctl show "$unit" --property=MainPID --value)" = 0 ;; esac
+  case "$unit" in
+    *.service)
+      main_pid=$(systemctl show "$unit" --property=MainPID --value)
+      test "$main_pid" = 0 ;;
+  esac
 done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
