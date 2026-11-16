@@ -219,13 +219,13 @@ function fields(root) {
     /** @type {string[]} */
     const wrong = [];
     /** @type {ReturnType<typeof parseOn>} */
-    let calls;
+    let bound;
     try {
-      calls = parseOn(Element.prototype.getAttribute.call(el, "data-on") ?? "");
+      bound = parseOn(Element.prototype.getAttribute.call(el, "data-on") ?? "");
     } catch {
       continue; // The runtime reports an attribute it cannot read.
     }
-    for (const b of calls) {
+    for (const b of bound) {
       for (const arg of flat(b.args)) {
         if (arg.kind !== "~" || field(el, arg)) continue;
         const found = controls(el, arg.name);

@@ -4318,12 +4318,12 @@ rules something out.
     the handler's parameter is the control: `HTMLInputElement`, `HTMLSelectElement`,
     `HTMLTextAreaElement`, or `HTMLInputElement[]` for radios or checkboxes that share the name.
     A field passes only where the handler takes one of those, and text or another element does not
-    pass where it takes one; each is a `compile_fail` doctest on `FieldName`, and the script that
-    hands a field to a string parameter is an `@ts-expect-error` line in the type fixture. The
+    pass where it takes one; each is a `compile_fail` doctest on `FieldName`. The
     call writes `~` with the kind (`i`, `s`, `t`, `*`) and the posted name as a JSON string
     (`~i"parcels[1].weight"`), in `data-on`, a format only Corten's server and runtime read, so it
-    needs no standard ([Rule 10](#rule-standard-formats)). When the handler runs, the runtime takes
-    the form of the element with the `on:` (the form itself, the one it belongs to, `form=`
+    needs no standard ([Rule 10](#rule-standard-formats)). When the handler runs, the field
+    module (`corten-field`, `js/field.js`), which a page loads only when its handlers take a field,
+    as a format argument loads `corten-format`, takes the form of the element with the `on:` (the form itself, the one it belongs to, `form=`
     included, or the one around it), reads that form's own `elements` (so a control named
     `elements` cannot stand in for it), and gives the one control of the name with the kind's tag,
     or every input of it for a group; a control a patch replaced is the new one, as a ref's is.
@@ -4343,36 +4343,53 @@ rules something out.
     kind on the field (`#[fields(select)]`) so the compiler checks it: a concept on `Fields` that
     still does not see the markup another component writes, so the runtime check would stay.
     Finding the control once, when the handler connects: a patch that replaces it would leave the
-    handler with the old one. `RequiredWhen` keeps its name as text: its control may be a select,
+    handler with the old one. The lookup in the runtime every page loads, as this change first had
+    it: 204 bytes with gzip on every page (15,341 to 15,545), for a call few pages make, where a
+    module of its own costs every page 51 and only a page with a field 499 more and one request,
+    which its first load makes with its handlers' modules, as a module script of the page. `RequiredWhen` keeps its name as text: its control may be a select,
     radios or a checkbox, and it reads only the value, which no one element type covers.
 
-    What it costs: the runtime is 667 bytes larger raw, 204 with gzip (15,341 to 15,545) and 198
-    with brotli (13,846 to 14,044), paid once a release by every user; the lookup and its message
-    are most of it, the parser about 20 with gzip, and taking the browser's form owner, so that a
-    button whose `form=` names no form is in none, 26 of the 204. A field argument writes its posted name where a
+    What it costs, in the conflict order. Correctness gives up nothing: the control is the one the
+    form has when the handler runs, and a call whose form has another runs nothing rather than
+    hand the handler the wrong element. Performance: every page's runtime is 192 bytes larger raw,
+    51 with gzip (15,341 to 15,392) and 63 with brotli (13,846 to 13,909), paid once a release by
+    every user: the parser's `~` branch, about 20 with gzip, and loading the field module for a
+    call that takes one. The lookup and its message are that module, 778 bytes raw, 499 with gzip
+    and 413 with brotli as built, which only a page whose handlers take a field fetches, as one
+    more module script of the page; a page the runtime swaps in imports it with the page's
+    handler modules, and an event before it arrives gets the browser's default, as one before
+    those does. A field argument writes its posted name where a
     ref writes its own: a handler given four controls (an input, a select, a textarea and two
     radios) writes `data-on` of 58 bytes with fields against 30 with refs, but the form with refs
     also writes a `data-ref` on each control and a `data-scope` on its component, so the whole
     form is 266 bytes with fields against 331 with refs. Rendering a field writes its posted name as a string argument does;
-    the item page's `render_cost`, which draws no field, is unchanged: its bytes are the same
+    the item page's `render_cost`, which draws no field (so never notes the field module), is unchanged: its bytes are the same
     (7,772 for `<main>`, 9,236 for the document), and five alternated runs of each build gave
     build and render of `<main>` in 19.2 us (15.6 to 20.8) before and 18.4 us (16.0 to 21.0) after,
     each build's runs varying more than the two differ. The lookup is one pass
-    over the form's controls when the handler runs, reasoned, not measured.
+    over the form's controls when the handler runs, reasoned, not measured. Compile-time safety is
+    what the change buys: the name was already right as text (`f.weight.as_str()`), and now the
+    handler's parameter is the control, checked at the call.
 
-    Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
-    defaults, once each build; a field's `data-on` and markup against a ref's for the same four
+    Stands on: measured (the runtime's and the field module's minified sizes by Node's `zlib` gzip
+    and brotli at their defaults, once each build; a field's `data-on` and markup against a ref's for the same four
     controls, once; the item page's `render_cost`, five alternated runs of each release build); platform (a form's `elements`
     lists its controls in tree order, `form=` ones included, and a control's `localName` is its
     tag; the smoke's field checks in Chromium, Firefox and WebKit); reasoned (the posted name is
     unique within a form's post, so the form is where it names one control; the kind a form draws
-    is another component's markup, which no one `html!` sees); value (README Value 4: the field
-    is typed at the seam and its name is the one `Fields` writes; Value 5: behavior stays a
-    function the markup calls; the bytes are Value 1's, below correctness in the conflict order).
+    is another component's markup, which no one `html!` sees); value (in the README's conflict
+    order: correctness first (the control is found when the handler runs, and no other is given),
+    then performance (README Value 1: the lookup is a module only the pages that call it load, not
+    bytes every page pays for a call few make), then compile-time safety, which is what the
+    change buys (Value 4: the field is typed at the seam and its name is the one `Fields` writes),
+    with one way to do things (Value 5: behavior stays a function the markup calls, and a named
+    control of a form's `Fields` is always reached as its field, a ref being for every other
+    element)).
 
     Revisit when: `Fields` or `html!` comes to know the kind a form draws a field as, when the
     kind check moves to the compiler and the runtime's goes; an app needs a control outside any
-    form, which is a ref's; or a handler is measured spending time in the lookup.
+    form, which is a ref's; a handler is measured spending time in the lookup; or most pages come to
+    load the field module, when its bytes belong in the runtime.
 
     Last checked: 2026-11-15, a field's bytes against a ref's and the item page's `render_cost`
     (native release builds) on `a69607283` against `c9ed56785`; 2026-11-15, the runtime's size on
@@ -4874,5 +4891,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     more than one where the handler takes one, or one of another kind runs nothing and throws
     (`corten: shipping.fill takes field weight, and its form has no such control`), and `corten
     dev` reports it, with what the form has, when the page or a later draw puts the call on the
-    page, so the mistake shows on load rather than on the first event that calls it. It lifts when
+    page, so the mistake shows on load rather than on the first event that calls it. It checks
+    again for markup added to the page and a control that joins a form, not when a `name`,
+    `form` or `data-on` attribute changes or a control is removed, and it reports a call once, so
+    a mistake those make shows only as the runtime's error when the handler runs. It lifts when
     the kind a form draws for a field is known where the call is checked.

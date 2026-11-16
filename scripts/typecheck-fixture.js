@@ -41,13 +41,17 @@ export function keys(event, click, screen) {
   return key === "Control+s" || shortcut(event) === "p";
 }
 
-// A form field reaches its handler as the control its form draws (`js::weigh(f.weight)`, checked
-// against the parameter's element type when the crate compiles), never as a name to look up.
-/** @param {HTMLFormElement} form @param {HTMLInputElement} weight */
-export function weigh(form, weight) {
+// A form field reaches its handler as the control its form draws (`js::weigh(f.weight)`). That a
+// field passes only where the handler takes a control is checked when the crate compiles (the
+// `compile_fail` doctests on `FieldName`); this shows the script's side only: what it is given is
+// an element, which a function that takes text refuses.
+/** @param {string} name */
+const named = (name) => name.length;
+/** @param {HTMLInputElement} weight */
+export function weigh(weight) {
   weight.value = "2";
-  // @ts-expect-error A field is given as its control, which is not a name: nothing looks it up by text.
-  form.elements.namedItem(weight);
+  // @ts-expect-error A field is given as its control, not as its name.
+  return named(weight);
 }
 
 // The values a ref's elements give (`ref={row.with(cents)}`): the call is checked against the

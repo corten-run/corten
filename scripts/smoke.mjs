@@ -670,6 +670,10 @@ async function run(browser) {
         () => null,
       );
     check(
+      "a page whose handlers take a form field loads the field module",
+      await shipped.evaluate(() => performance.getEntriesByType("resource").some((e) => /\/corten-field\.js(\?|$)/.test(e.name))),
+    );
+    check(
       "a handler gets a form's fields as their controls, each of the kind it takes, from the form it is in",
       filled === "select,input,textarea,input,input,small,large|2|by air|true|small|2" &&
         served.includes(`data-on='change:ship_form.fill(~s"service",~i"weight",~t"note",~i"gift",~*"size",~i"parcels[1].weight",@out)'`),
@@ -3880,6 +3884,11 @@ async function run(browser) {
   // The formatter is a module of its own: the news page's handlers take no format, so it is not loaded.
   const formatLoaded = () => page.evaluate(() => performance.getEntriesByType("resource").some((e) => e.name.includes("/corten-format.js")));
   check("a page whose handlers take no format does not load the format module", !(await formatLoaded()));
+  // Nor the field module: none of its handlers takes a form field.
+  check(
+    "a page whose handlers take no form field does not load the field module",
+    !(await page.evaluate(() => performance.getEntriesByType("resource").some((e) => e.name.includes("/corten-field.js")))),
+  );
   // A visitor's header has no account link (the sign-in button is in its place), so the page gets one.
   await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-account" href="/account">Account</a>')));
   const entriesBefore = await page.evaluate(entriesWhileRecordingAddresses);

@@ -1,7 +1,9 @@
 // @ts-check
 // A form field a handler is given (`js::fill(f.weight)`, `~i"weight"` in `data-on`): found by its
-// name in the form of the element with the handler, when the handler runs. Bundled into
-// dist/corten.js, and served as written to `corten dev`'s checks (dev.js), so both find a field the
+// name in the form of the element with the handler, when the handler runs. Built into
+// dist/field.js, a module of its own that Corten serves with the app's scripts as `corten-field`
+// and that only a page whose handlers take a field loads, as a format argument loads
+// `corten-format`; served as written to `corten dev`'s checks (dev.js), so both find a field the
 // same way.
 
 /** The tag of each kind's controls: an input, select or textarea, or every input of the name. */
@@ -44,4 +46,17 @@ export function field(el, { control, name }) {
   const found = controls(el, name);
   const one = control !== "*";
   return found?.every((c) => c.localName === TAGS[control]) && (!one || found.length === 1) ? (one ? /** @type {Element} */ (found[0]) : found) : null;
+}
+
+/**
+ * What the runtime gives handler `call` for field argument `arg` of the element with it: the
+ * control (`field`), or an error. Short: `corten dev` tells what the form has instead, when the
+ * page draws the call.
+ * @param {Element} el @param {{ control: "i" | "s" | "t" | "*", name: string }} arg
+ * @param {{ module: string, name: string }} call
+ */
+export function given(el, arg, call) {
+  const found = field(el, arg);
+  if (!found) throw new Error(`corten: ${call.module}.${call.name} takes field ${arg.name}, and its form has no such control`);
+  return found;
 }

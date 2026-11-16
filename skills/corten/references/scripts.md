@@ -68,8 +68,9 @@ division: end statements with `;` and keep a division on the line it continues.
    and the parameter is the control: `HTMLInputElement` (an input or a checkbox),
    `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for radios or checkboxes
    sharing the name. The runtime finds it by name in the handler's form when the handler runs, so
-   the component that draws the field needs no ref. Never pass a field's name as text and look it
-   up with `form.elements.namedItem`. The compiler cannot see which control the form draws: a
+   the component that draws the field needs no ref. A named control of the form's `Fields` is
+   always passed this way, whoever draws it; a ref is for every other element. Never pass a
+   field's name as text and look it up with `form.elements.namedItem`. The compiler cannot see which control the form draws: a
    call whose form lacks it, or has another kind, throws, and `corten dev` reports it on draw.
 3. A wrong ref type, wrong event type, wrong value type or a handler the script does not export
    is a compile error at the call. `tsc --checkJs` checks the function bodies, with `strict`,

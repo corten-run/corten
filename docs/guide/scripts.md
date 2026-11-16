@@ -513,10 +513,11 @@ the two cannot drift.
 
 ## Form fields
 
-A form's controls are often drawn by a component the form shares with forms that have no script
-(a package's fields in two editors), which then has no refs to give one. A handler takes such a
-control as its field instead: the markup passes the `#[derive(Fields)]` name, as `name={..}` does,
-and the script's parameter is the control.
+A handler takes a form's control as its field: the markup passes the `#[derive(Fields)]` name,
+as `name={..}` does, and the script's parameter is the control. A named control of the form's
+`Fields` is always reached this way, whether the component with the handler draws it or another
+does (a package's fields that the form shares with forms that have no script, which has no refs
+to give one); a ref is for every other element.
 
 ```rust,ignore
 let f = Shipment::FIELDS;
@@ -562,9 +563,12 @@ calls it: `corten: shipping.fill takes field weight as one <input>, and its form
 ([design Limit 31](../design.md#limit-field-kind)). A group is an array, not the
 `RadioNodeList` a form's `elements.namedItem` gives: `namedItem` gives a list only for two or more
 controls of a name and the control itself for one, and a script cannot make one, so the handler
-could not count on its type. An element that is not one of the form's controls, or one the
-component draws itself, is a ref; so is an `<input type="image">`, which the browser leaves out of
-a form's controls since it is a submit button that posts `name.x` and `name.y`, never its field.
+could not count on its type. An element that is not a named control of the form's `Fields` is a
+ref: an `<output>`, a list, a button, a control outside any form; so is an `<input type="image">`,
+which the browser leaves out of a form's controls since it is a submit button that posts `name.x`
+and `name.y`, never its field. The page's handlers that take a field load a small module that finds
+it (`corten-field`, 0.5 kB gzipped), as a format argument loads `corten-format`; a page with none
+does not.
 
 ## Shared scripts
 

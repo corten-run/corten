@@ -2691,6 +2691,14 @@ pub(crate) const FORMAT_MODULE: &str = "corten-format";
 /// [`FORMAT_MODULE`]'s source.
 pub(crate) const FORMAT_JS: &str = include_str!("../js/dist/format.js");
 
+/// The module that finds the control a handler is given for a form field (`js/field.js`,
+/// minified into `js/dist/field.js`): served with the app's scripts, and loaded by the pages
+/// whose handlers take a field (`js::fill(f.weight)`), not by every page with the runtime.
+pub(crate) const FIELD_MODULE: &str = "corten-field";
+
+/// [`FIELD_MODULE`]'s source.
+pub(crate) const FIELD_JS: &str = include_str!("../js/dist/field.js");
+
 /// The module of `shortcut` for a script (`js/keys.js`, minified into `js/dist/keys.js`), which
 /// scripts import as `corten/keys`: served with the app's scripts when one imports it (the import
 /// map names it then), and preloaded with each script that does. Its name is the one
@@ -3276,6 +3284,8 @@ pub mod __private {
     /// `~i"weight"`: the field's name as posted (`rules[1].kind` in a row), as a JSON string.
     impl<T, Pl: crate::form::Place, P: ControlParam> Arg<P> for crate::form::FieldName<T, Pl> {
         fn write_arg(&self, _: &Ctx, out: &mut String) {
+            // The runtime finds the control with a module of its own, which this page now loads.
+            uses(FIELD_MODULE);
             out.push('~');
             out.push(P::KIND);
             out.push('"');
@@ -3348,7 +3358,7 @@ pub mod __private {
                 '<' => out.push_str("&lt;"),
                 '>' => out.push_str("&gt;"),
                 '\'' => out.push_str("&#39;"),
-                c if (c as u32) < 0x20 || c == '\u{2028}' || c == '\u{2029}' => {
+                c if needs_escape(c) => {
                     use std::fmt::Write;
                     let _ = write!(out, "\\u{:04x}", c as u32);
                 }
@@ -3357,9 +3367,14 @@ pub mod __private {
         }
     }
 
+    /// Whether [`json_chars`] writes `c` other than as it is.
+    fn needs_escape(c: char) -> bool {
+        matches!(c, '"' | '\\' | '&' | '<' | '>' | '\'' | '\u{2028}' | '\u{2029}') || (c as u32) < 0x20
+    }
+
     /// Whether [`json_chars`] writes `text` as it is.
     fn json_plain(text: &str) -> bool {
-        !text.chars().any(|c| matches!(c, '"' | '\\' | '&' | '<' | '>' | '\'' | '\u{2028}' | '\u{2029}') || (c as u32) < 0x20)
+        !text.chars().any(needs_escape)
     }
 
     /// Writes JSON text into `data-on`'s single-quoted attribute: its quotes as they are, and `&`,

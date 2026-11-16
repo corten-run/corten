@@ -13,7 +13,9 @@ Corten is pre-1.0, so any minor version may change the API.
   script needs no ref, and the script looks nothing up by a name as text. Text where a field
   belongs, and a field where the handler takes text or another element, do not compile; a call
   whose form lacks the control, or has one of another kind, throws, and `corten dev` reports it
-  when the page draws it. The runtime is 204 bytes larger with gzip
+  when the page draws it. The lookup is a module of its own (`corten-field`, 499 bytes with
+  gzip) that only a page whose handlers take a field loads; every page's runtime is 51 bytes
+  larger with gzip
   ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
 
 - Bound failed-native retirement proof age from the final SSH request's local
