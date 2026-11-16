@@ -78,7 +78,8 @@ A port collision is a failed start, not a reason to disable native CSRF checks o
 
 ## Observations
 
-The summary schema is `native-fullstack-browser/v1`. It retains the complete effective
+New summaries use `native-fullstack-browser/v2`; bounded historical inline v1 summaries
+remain read-only diagnostics, never upgraded qualification. The summary retains the complete effective
 `browser-journey-plan/v1`, settings, exact fixture hash, immutable image IDs/digests,
 source-commit labels (or explicitly unavailable), runner-file hashes, checkout commit/dirty
 state, Chromium executable hash/version, Playwright version, and container identity and
@@ -86,6 +87,15 @@ restart checks before/after each journey. An image tag is resolved once; executi
 immutable ID. A tag alone never establishes which source built it. Clean matching
 `run.corten.marketplace.commit`/`.dirty` or `run.corten.browser.commit`/`.dirty` labels
 are necessary for image/source correspondence, not proof of native feature parity.
+
+All ten contenders and 24 profiles remain in the summary, including failed, unsupported
+and not-run outcomes. Each observed cell's `evidence` is a bound root in the sealed
+[structured record store](NATIVE-V2.md#structured-records), not a second inline copy of
+its observations. Steps, lifecycle/retirement/harness-close journals, upstream snapshots,
+raw failures and independent response receipts are losslessly retained. Replay hydrates
+one cell at a time, verifies every referenced page, and recomputes the original canonical
+raw-case hashes incrementally. Neither a whole app's raw cells nor the entire run are
+serialized as one string. Native binary/source/tool blobs keep their exact byte hashes.
 
 Each step retains its dispatched action, independently extracted visible page, form binding
 discovered before submission, request method/public path/query/transport/status/input,
@@ -370,6 +380,24 @@ Post-harness journals must preserve the native prefix; their later close receipt
 charged to the pre-harness final browser boundary and cannot supply native cleanup proof.
 Links (including junctions, ancestors and hard links), network/device/ADS or
 traversal paths, non-regular files, extra/missing files and changing evidence are refused.
+File inventory still stops at 256 MiB/file and 1 GiB total, before blob contents are
+read. Canonical JSON parsing is bounded to 32 MiB, including outer summary/capture files;
+historical oversized inline summaries are rejected rather than allocated or rewritten.
+Structured pages additionally bound decoding work and expansion as described in the
+[storage contract](NATIVE-V2.md#structured-records). File seals are hashed in bounded chunks.
+
+The explicit large storage regression generates the complete current matrix incrementally:
+
+```sh
+BROWSER_RECORD_MATRIX_CONTROL=1 node --max-old-space-size=256 --test bench/fullstack-browser/large-records.test.mjs
+```
+
+Run it in a memory-bounded Linux environment. It exercises the production summary-save,
+cell-retention, record replay and strict export paths, with canonical logical cell bytes
+above the predecessor's string, file and aggregate limits. The safe predecessor red is
+the measured retained-inline byte/code-unit lower bound, not an attempted giant allocation.
+Every generated occurrence and failed/unsupported outcome is checked by independent raw
+hashes. This is a storage control, not native execution, benchmark timing or readiness proof.
 
 `outcome: "invalid"` (CLI exit 2) means malformed, inconsistent or stale derived evidence.
 `outcome: "blocked"` (exit 1) means structurally consistent diagnostics with missing or
