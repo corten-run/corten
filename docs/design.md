@@ -3796,7 +3796,8 @@ rules something out.
     with its message; not `cargo check`, clippy or rust-analyzer, which generate no code, nor a
     `cargo test` that generates nothing reaching the mount: `cargo test --lib` when no unit
     test reaches it, and `cargo test` when only a binary's `main` mounts the route (its test
-    build never generates `main`'s callees). Its error points into
+    build never generates `main`'s callees), which `corten check` covers by building every
+    target before its tests. Its error points into
     Corten's `mounted_with`, naming the route there (`mounted_with::<url::Status, AnyAnswer>`),
     not at the app's call: the note for a generic call names the call that instantiated the
     function holding the `const`, and `Area::route` cannot hold it itself, since its `Methods` is
@@ -3920,7 +3921,12 @@ rules something out.
     (`an_opaque_patch_answer_is_the_get_of_a_patches_route_in_its_module_and_mounted_by_hand`),
     an app's own answer that holds a patch refused as such a route's `get` (the
     `compile_fail,E0277` doctest on `PatchRoute`), the routes module's message still at the
-    handler's name (`tests/handler_message.rs`), on `89e355062`.
+    handler's name (`tests/handler_message.rs`), on `89e355062`; 2026-11-16, with Corten itself,
+    a `patches` route only a binary's `main` mounts with a `get` that answers a page passing
+    clippy, `cargo test` and `cargo check --bins` and refused with E0080 by `cargo build --bins`
+    and `cargo build --all-targets`, the same mount only an example's `main` reaches refused by
+    `cargo test`, and one only a bench's own `main` (`harness = false`) reaches passing `cargo test`
+    and refused by `cargo build --all-targets`, on `30bed57ed`.
 
 51. <a id="choice-msrv"></a>**The Rust floor moves for a needed dependency fix, not for freshness alone.**
     The minimum supported Rust version (MSRV) is the oldest compiler Corten promises to
@@ -4848,16 +4854,19 @@ by design; where it is known, a limit says what would lift it or why it is so.
     that says `patches`, mounted by hand or by its routes module, against the kind of the `get`
     handler it is given ([Choice 50](#choice-patch-routes)), and so is the shape of a hand-written
     `Route`'s path. Those assertions fail any build that generates the code that mounts the route:
-    `cargo build`, and `cargo test` (so `corten check`) when something it builds reaches the
-    mount, a test, a doctest or a library's own public non-generic code, which it builds for the
+    `cargo build`, and `cargo test` when something it builds reaches the mount, a test, a
+    doctest, an example or a library's own public non-generic code, which it builds for the
     doctests and the binaries, as the template's `app()` in its library is. `cargo test --lib`
     builds only the library's test binary, which generates what its unit tests reach, so it fails
     when a unit test reaches the mount and not otherwise. They do not fail `cargo check`, clippy
     or rust-analyzer, which generate no code, nor `cargo test` in a crate whose only mount is in a
-    binary's `main`, since a binary's test build never generates `main`'s callees; `corten check` passes such a
-    crate, and `cargo build` then refuses it
-    ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)
-    proposes that `corten check` build the binaries too). `Refused::sign_in`'s 401 to a
+    binary's `main`, since a binary's test build never generates `main`'s callees. `corten check`
+    builds every target (`cargo build --all-targets`) after clippy and before the tests, so it
+    fails such a crate as `cargo build` does, and one whose mount only a bench's own `main`
+    reaches
+    ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429));
+    a mount only a feature the check does not turn on reaches is evaluated only by a build with
+    that feature. `Refused::sign_in`'s 401 to a
     data client carries no `WWW-Authenticate`, short of RFC 9110 (15.5.2), since a session cookie
     has no HTTP authentication scheme to name; a lookup that also takes a token should answer a
     wrong one with `unauthorized`, which carries one.
