@@ -32,7 +32,13 @@ These are what the framework is built around. Code that breaks them fights the f
    explicit opt-out the compiler takes on trust: never use it for a path the app routes.
 2. **Markup is Rust.** Every element comes from `html!`. Scripts never build HTML from strings:
    they clone markup the server rendered (`<template ref={rest}>`, a view's `rows(..).push(..)`)
-   and move, show, hide or fill what is on the page.
+   and move, show, hide or fill what is on the page. `html!` refuses three kinds of markup a browser
+   parses differently from how it is written: an element inside a `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`,
+   `<xmp>`, `<noembed>` or `<noframes>` (put it beside, or write the text as a string), a
+   `<plaintext>` (write `<pre>`), and a `<div>`, `<p>`, `<span>` and the like straight in an
+   `<svg>` (wrap them in `<foreignObject>`) or a `<math>` (wrap them in `<mtext>`). HTML a browser
+   rearranges inside HTML still compiles (a `<div>` in a `<p>`, an `<a>` in an `<a>`, a `<div>`
+   straight in a `<table>`), so keep that nesting valid yourself; docs/design.md#choice-html-parse-refusals.
 3. **A patched fragment is a component** with an `id`, rendered by the page and by the patch, so
    the two cannot drift.
 4. **Work goes where it is fastest.** Sorting, filtering, selecting, totals, showing and hiding

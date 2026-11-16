@@ -268,6 +268,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- `corten::script::Keyed` and `corten::script::NoKey`: the fourth type parameter of `Ref`,
+  which says whether a ref's elements have a `key={..}`, so a handler parameter typed
+  `Map<string, El>` takes only a keyed ref. A component's prop for a parent's keyed ref names it
+  `Ref<El, NoRows, NoValue, Keyed>`; `Ref<El>` is `NoKey`
+  ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
+  [design Choice 46](docs/design.md#choice-ref-values)).
 - Bind native browser DOM evidence to bounded public reads, the actual document and
   network origin, with exact replay and separate semantic and apparatus lifetimes.
   Unsupported structure, private data, missing proof and uncertain cleanup remain
@@ -675,6 +681,63 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- **Breaking:** a handler parameter typed `Map<string, El>` takes only a ref whose every element
+  has a `key={..}`: a ref without keys no longer compiles there, and the error says to add `key={..}`,
+  where it compiled and the handler got a one-entry `Map`. A ref with a key on some elements and
+  not on others does not compile, whatever its handlers take (`El`, `El[]` or a `Map`). A ref
+  now carries in its fourth type parameter whether its elements have keys (`Keyed` or `NoKey`),
+  fixed by the markup as its value's kind is
+  ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
+  [design Choice 46](docs/design.md#choice-ref-values)).
+- Debug builds stop a render in which two elements of a ref in one render of its component have
+  keys the browser reads as equal (`key={true}` and `key=""` are one, and so are a carriage
+  return and a line feed), or a `key={..}` writes none (`None`), since the `Map` would hold one
+  entry for them. Whether it runs is `corten-run`'s debug-assertions setting, for every crate's
+  markup. Release builds do not check, and the runtime is unchanged.
+- The check counts the elements the runtime finds. It leaves out a `<template>`'s or a
+  `<noscript>`'s content, and what an expression or a component writes into an element a browser
+  reads as text (a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>`
+  outside an `<svg>` or in its `<foreignObject>`, `<desc>` or `<title>`). It leaves out a key
+  written with a reference Corten does not write (an app's own `AttrValue`). Where the markup
+  cannot know how a browser parses it, it lets a duplicate pass: in a `<template>` or an element
+  read as text at the top of a component's markup, which its parent may write into an `<svg>`,
+  and among a component's children, which the component may write in an `<svg>`'s `<desc>`
+  (unless they are in an `<svg>` of the children's own). Keys a view writes into a string of its
+  own (`html! { .. }.to_html()` or `children.to_html()` as an attribute's value) are not its
+  component's. A document's head tags, each copied into the page, are not checked against each
+  other or the body.
+- A spread of attribute pairs now skips `data-key`, as it skips `data-ref` and `data-ref-value`:
+  a key is `key={..}`'s to write. A `data-key=".."` written by hand beside a ref is still taken
+  as its key, a known limit: `html!` does not yet refuse it as it refuses `data-ref`.
+- **Breaking:** a component that puts a parent's ref on elements with a key names the ref's type
+  `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
+  `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
+  gets `key={..}` on each of its elements.
+- **Breaking:** three kinds of markup a browser parses differently from how it is written no
+  longer compile (an element in an element whose content is text, a `<plaintext>`, and an element
+  taken out of foreign content; HTML a browser rearranges inside HTML, such as a `<div>` in a
+  `<p>`, still compiles) where the markup shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
+  a `<p>`, a document's `<head>`), in an `<svg>`, its `<foreignObject>`, `<desc>` and
+  `<title>` included, in a `<math>`, and in its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (where
+  a `<mglyph>` or a `<malignmark>` stays MathML's) and an `<annotation-xml>` whose first
+  `encoding` is `text/html` or `application/xhtml+xml`
+  ([design Choice 54](docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
+  SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
+  put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
+  inside a `<script>` or a `<style>`: behavior goes in a `#[component(js)]`, styles in the
+  component's CSS file, and a data block (`<script type="text/x-template">`) writes its content as
+  a string literal, which a `<script>` or `<style>` writes as is. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
+  the HTML standard's rules for foreign content take out of an `<svg>` or a `<math>` (`<b>`,
+  `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a `<font>` with `color`,
+  `face` or `size`), written straight into one, or into an `<annotation-xml>` whose first
+  `encoding` is not an HTML one (or that has none), closed the `<svg>` or the MathML around it: put
+  it in a `<foreignObject>`, in a formula in an `<mtext>`, or give the `<annotation-xml>`
+  `encoding="text/html"` first. Inside an `<svg>`,
+  or a `<math>` outside those elements, a `<textarea>`, `<title>` or `<style>` belongs to the
+  drawing or the formula and holds elements. At the top of a component's markup, among a
+  component's children and in an `<annotation-xml>` whose `encoding` an expression or a spread may
+  write first, where the markup does not show how they are parsed, none of this is refused until
+  an element of the markup shows the context ([design Limit 30](docs/design.md#limit-markup-context)).
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the
