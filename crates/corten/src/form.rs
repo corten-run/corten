@@ -40,6 +40,28 @@
 //! }
 //! ```
 //!
+//! A choice the user may leave unpicked (radios drawn with none checked, which send nothing) is
+//! an `Option` of its enum: `None` when missing or blank, so the handler adds the field's message
+//! and the form is drawn again. A word the enum does not have came from no page of the app's and
+//! is refused:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[derive(Clone, Copy, Debug, PartialEq, UrlValue)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Basis { Observed, Manual }
+//!
+//! #[derive(Fields)]
+//! struct Pricing { basis: Option<Basis> }
+//!
+//! let read = |body: &[u8]| corten::form::from_bytes::<Pricing>(body).map(|p| p.basis);
+//! assert_eq!(read(b""), Ok(None), "no radio checked: nothing sent");
+//! assert_eq!(read(b"basis="), Ok(None), "a blank placeholder option");
+//! assert_eq!(read(b"basis=manual"), Ok(Some(Basis::Manual)));
+//! assert!(read(b"basis=guessed").is_err(), "a word no page offers");
+//! ```
+//!
 //! A list's filters are a GET form whose controls are named as its links write the parameters.
 //! One struct gives both, and it can borrow, so a page that writes many links copies nothing: its
 //! `FIELDS` name the form's controls and its `#[derive(Route)]` writes the links, both renamed by
