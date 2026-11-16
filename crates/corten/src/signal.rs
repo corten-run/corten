@@ -151,10 +151,9 @@ struct Inner {
     /// answers (#1370), here for the same reason: 0 for any other request, [`LATE`] until its
     /// route is reached, [`HEAD_KEPT`] once its route is reached (and, if its answer can be a page,
     /// has kept the request's head for it: [`crate::layout::at_late_route`]). A byte, in the
-    /// padding beside the others.
+    /// padding beside the others; its deadline is not kept here (`crate::layout::LATE_UNTIL`), as
+    /// any more would make every request's signal a larger allocation.
     late: AtomicU8,
-    /// Such a write's deadline, which the reads its page starts stop at, set with [`Inner::late`].
-    late_until: std::sync::OnceLock<Option<tokio::time::Instant>>,
 }
 
 /// [`Inner::late`]: a write whose own page is filled after it answers, its route not reached yet,
@@ -242,16 +241,9 @@ impl Signal {
     }
 
     /// A write the runtime sent, in an app with layout reads, whose own page is filled after it
-    /// answers (`page::render_errors`), so a page made with `Req` writes its places; its reads stop
-    /// at `until`, the request's deadline.
-    pub(crate) fn mark_late(&self, until: Option<tokio::time::Instant>) {
-        let _ = self.0.late_until.set(until);
+    /// answers (`page::render_errors`), so a page made with `Req` writes its places.
+    pub(crate) fn mark_late(&self) {
         self.0.late.store(LATE, Ordering::Relaxed);
-    }
-
-    /// The deadline [`Signal::mark_late`] was given.
-    pub(crate) fn late_until(&self) -> Option<tokio::time::Instant> {
-        self.0.late_until.get().copied().flatten()
     }
 
     /// Its route is reached, and keeps the head for a page it may answer with

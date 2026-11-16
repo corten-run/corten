@@ -596,7 +596,9 @@ pub(crate) fn at_late_route(
         return None;
     }
     let shared = signal.shared()?.clone();
-    let until = signal.late_until();
+    // Outside the write's scope (a middleware that runs the route on a task of its own) its reads
+    // have no deadline of their own, and the request's still ends it.
+    let until = LATE_UNTIL.try_with(|until| *until).ok().flatten();
     // Copied field by field from the request in place, rather than taken apart, cloned and put
     // back: a read is given the whole head (`LayoutRead::start` takes `&Parts`, and an app's read
     // may look at any of it), so the headers and extensions are cloned all the same.
@@ -607,6 +609,14 @@ pub(crate) fn at_late_route(
     kept.headers = req.headers().clone();
     kept.extensions = req.extensions().clone();
     Some((shared, until, kept))
+}
+
+tokio::task_local! {
+    /// A write's deadline, which the reads its own page starts stop at ([`at_late_route`]), set
+    /// around its middleware and route (`page::FillsLate`). Not on its `Signal`, where it would
+    /// make every request's signal a larger allocation (24 bytes more), nor a request extension,
+    /// which would grow the request's map of them for each such write.
+    pub(crate) static LATE_UNTIL: Option<tokio::time::Instant>;
 }
 
 /// `gives(CartCount)` on a route in a `#[corten::routes]` module: the layout reads its `GET`

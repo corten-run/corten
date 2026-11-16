@@ -2869,7 +2869,7 @@ fn late_write<'f, 's: 'f, 'n: 'f, 'g: 'f, S: crate::app::Steps + 'f>(
     asked: (Mode, bool),
     until: Option<tokio::time::Instant>,
 ) -> std::pin::Pin<Box<dyn Future<Output = Response> + Send + 'f>> {
-    signal.mark_late(until);
+    signal.mark_late();
     let next = FillsLate { next, shared, until };
     Box::pin(page_or_error(shared, req, next, deadline, signal, asked))
 }
@@ -2903,7 +2903,9 @@ pub(crate) struct FillsLate<'a, 'b, S: crate::app::Steps> {
 impl<S: crate::app::Steps> Answers for FillsLate<'_, '_, S> {
     fn answer(self, req: Request) -> impl Future<Output = Response> + Send {
         let FillsLate { next, shared, until } = self;
-        let answer = next.run(req);
+        // The route may be reached as the middleware is called or as it is polled.
+        let answer = crate::layout::LATE_UNTIL.sync_scope(until, || next.run(req));
+        let answer = crate::layout::LATE_UNTIL.scope(until, answer);
         async move {
             let res = answer.await;
             if res.extensions().get::<crate::layout::Pending>().is_none() {
