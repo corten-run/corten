@@ -3,6 +3,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { request as httpsRequest } from "node:https";
+import { ClientRequest, IncomingMessage } from "node:http";
+import { Socket } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { debuglog } from "node:util";
 import { url as inspectorUrl } from "node:inspector";
@@ -15,6 +17,9 @@ const stopped = (uncertain = false, diagnostic) => Object.assign(new Error("prov
   uncertain ? { controlUncertain: true } : {}, diagnostic ? { providerDiagnostic: diagnostic } : {});
 const positive = (value) => Number.isSafeInteger(value) && value > 0;
 const validContext = (value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(value);
+// Private object identity, never a caller-supplied property or public diagnostic.
+const closedAccountRequests = new WeakMap(), settledAccountFailures = new WeakSet();
+export const isSettledAccountFailure = (error) => settledAccountFailures.has(error);
 const diagnosticOption = /^--(?:inspect(?:-brk|-wait)?|trace-tls|tls-keylog|heapsnapshot-signal|heap-prof|cpu-prof|report-on-signal|report-on-fatalerror|report-uncaught-exception|trace-events-enabled|trace-event-categories|experimental-network-inspection)$/;
 function nodeOptionArgs(text) {
   // Match Node's ParseNodeOptionsEnvVar: spaces separate arguments outside
@@ -48,18 +53,65 @@ function privateDiagnostics() {
     throw new Error("provider diagnostics must be disabled");
 }
 
-function restRequest({ method, path, credential, body, timeout, interrupted = () => false, deleteProofExpiresAtMs }, connect = httpsRequest) {
+function restRequest({ method, path, credential, body, timeout, interrupted = () => false, deleteProofExpiresAtMs }, connect, resources) {
   return new Promise((resolve, reject) => {
-    let settled = false, req, timer, cancellation;
-    const finish = (error, result) => {
-      if (settled) return; settled = true; clearTimeout(timer); clearInterval(cancellation);
-      if (error) { req?.destroy(); reject(stopped(true)); } else resolve(result);
+    let settled = false, req, timer, cancellation, failureDetail = "internal-refusal";
+    const account = method === "GET" && path === "/v2/account", expires = Date.now() + timeout;
+    let lastTime = expires - timeout, outcome;
+    const withinBudget = () => {
+      const current = Date.now(), valid = current >= lastTime && current < expires && !interrupted();
+      lastTime = current; return valid;
+    };
+    const record = { requestClosed: false, socketClosed: false, socketSeen: false, responseClosed: false, responseSeen: false, native: false };
+    resources.live.add(record);
+    const changed = () => {
+      if (record.native && record.requestClosed && record.socketSeen && record.socketClosed && (!record.responseSeen || record.responseClosed)) {
+        resources.live.delete(record);
+        for (const notify of resources.notify) notify();
+      }
+    };
+    const complete = (proof) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); clearInterval(cancellation); resources.notify.delete(closed);
+      const { detail, result } = outcome;
+      if (detail) {
+        const error = stopped(true, account ? { code: "account-request", detail } : undefined);
+        if (proof) closedAccountRequests.set(error, lastTime);
+        reject(error);
+      } else {
+        if (proof) closedAccountRequests.set(result, lastTime);
+        resolve(result);
+      }
+    };
+    const closed = () => {
+      if (!outcome || resources.live.size) return;
+      if (withinBudget()) complete(true);
+      else { if (!outcome.detail) outcome = { detail: "internal-refusal" }; complete(false); }
+    };
+    const finish = (detail, result) => {
+      if (settled) return;
+      if (outcome) {
+        // Expiry/cancellation during closure must not turn a rejected read into
+        // proof, even if its transport later closes. Never renew the deadline.
+        if (["deadline", "cancelled", "internal-refusal"].includes(detail)) {
+          if (!outcome.detail) outcome = { detail, result };
+          complete(false);
+        }
+        return;
+      }
+      outcome = { detail, result };
+      if (detail) {
+        req?.destroy();
+      }
+      if (account && record.native && !["internal-refusal", "connect", "deadline", "cancelled"].includes(detail)) {
+        resources.notify.add(closed); closed();
+      } else complete(false);
     };
     try {
       privateDiagnostics();
       assert.ok(path.startsWith("/v2/") && !path.startsWith("//"));
       assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 900000);
-      assert.ok(!interrupted());
+      failureDetail = "cancelled"; assert.ok(!interrupted()); failureDetail = "internal-refusal";
       const input = body === undefined ? undefined : JSON.stringify(body);
       const fresh = () => {
         if (deleteProofExpiresAtMs === undefined) return;
@@ -68,34 +120,51 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
           && current < deleteProofExpiresAtMs && deleteProofExpiresAtMs - current <= 60000, "current retirement proof expired");
       };
       fresh();
+      failureDetail = "connect";
       req = connect(new URL(path, origin), { method, agent: false, rejectUnauthorized: true,
         headers: { authorization: `Bearer ${credential}`, accept: "application/json", ...(input === undefined ? {} : { "content-type": "application/json", "content-length": Buffer.byteLength(input) }) } }, (res) => {
+        record.responseSeen = true; record.native &&= res instanceof IncomingMessage;
+        res.once("close", () => { record.responseClosed = true; changed(); });
         const chunks = []; let bytes = 0;
         res.on("data", (chunk) => {
           bytes += chunk.length;
-          if (bytes > 16 * 1024 ** 2) { res.destroy(); finish(stopped(true)); } else chunks.push(chunk);
+          if (bytes > 16 * 1024 ** 2) { res.destroy(); finish("body-limit"); } else chunks.push(chunk);
         });
-        res.on("error", () => finish(stopped(true)));
-        res.on("aborted", () => finish(stopped(true)));
+        res.on("error", () => finish("response-error"));
+        res.on("aborted", () => finish("response-aborted"));
         res.on("end", () => {
-          if (settled) return;
+          if (settled || outcome) return;
+          let detail = "response-status";
           try {
             assert.ok(Number.isInteger(res.statusCode));
             // Error bodies are never parsed/returned: they can contain raw values.
+            detail = "invalid-json";
             const value = res.statusCode >= 200 && res.statusCode < 300 && bytes ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
             finish(null, { status: res.statusCode, value });
-          } catch { finish(stopped(true)); }
+          } catch { finish(detail); }
         });
       });
-      req.on("error", () => finish(stopped(true)));
-      timer = setTimeout(() => finish(stopped(true)), deleteProofExpiresAtMs === undefined ? timeout
-        : Math.min(timeout, Math.max(1, deleteProofExpiresAtMs - Date.now())));
+      record.native = req instanceof ClientRequest;
+      req.once("close", () => { record.requestClosed = true; changed(); });
+      req.once("socket", (socket) => {
+        record.socketSeen = true; record.native &&= socket instanceof Socket;
+        socket.once("close", () => { record.socketClosed = true; changed(); });
+      });
+      failureDetail = "internal-refusal";
+      req.on("error", () => finish("request-error"));
+      const remaining = Math.max(1, expires - Date.now());
+      timer = setTimeout(() => finish("deadline"), deleteProofExpiresAtMs === undefined ? remaining
+        : Math.min(remaining, Math.max(1, deleteProofExpiresAtMs - Date.now())));
       cancellation = setInterval(() => {
-        try { fresh(); if (interrupted()) finish(stopped(true)); } catch { finish(stopped(true)); }
+        try { fresh(); if (interrupted()) finish("cancelled"); } catch { finish("internal-refusal"); }
       }, 25);
       const send = () => {
         if (settled) return;
-        try { fresh(); assert.ok(!interrupted()); req.end(input); } catch { finish(stopped(true)); }
+        let detail = "internal-refusal";
+        try {
+          fresh(); detail = "cancelled"; assert.ok(!interrupted());
+          detail = "send"; req.end(input);
+        } catch { finish(detail); }
       };
       if (deleteProofExpiresAtMs === undefined) send();
       else {
@@ -107,17 +176,20 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
           else send();
         });
       }
-    } catch { finish(stopped(true)); }
+    } catch { finish(failureDetail); }
   });
 }
 
 // Production calls this only inside the clean credential worker. Dependency
 // injection is for synthetic controls, never an IPC/CLI option.
 export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsRequest,
-  request = (options) => restRequest(options, connect), interrupted = () => false, sleep = delay, now = Date.now } = {}) {
+  request, interrupted = () => false, sleep = delay, now = Date.now } = {}) {
   const env = controlEnvironment("doctl");
+  const resources = { live: new Set(), notify: new Set() };
+  request ??= (options) => restRequest(options, connect, resources);
+  let unsafe = false, mutationPending = false;
   let credential, context;
-  const consume = (selected) => {
+  const consume = (selected, timeout) => {
     privateDiagnostics();
     assert.ok(validContext(selected), "saved provider context required");
     if (context !== undefined) { assert.equal(selected, context, "provider context changed"); assert.ok(typeof credential === "string", "credential consumption unavailable"); return; }
@@ -128,7 +200,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       // it neither changes the default context nor refreshes/writes OAuth state.
       result = spawn("doctl", ["auth", "token", "--context", context, "--http-retry-max", "0", "--api-url", origin,
         "--interactive=false", "--trace=false", "--verbose=false"], { cwd: repo, shell: false, windowsHide: true,
-        encoding: "buffer", stdio: ["ignore", "pipe", "pipe"], timeout: 10000, killSignal: "SIGKILL", maxBuffer: 8192, env: { ...env } });
+        encoding: "buffer", stdio: ["ignore", "pipe", "pipe"], timeout: Math.min(10000, timeout), killSignal: "SIGKILL", maxBuffer: 8192, env: { ...env } });
       if (result.error || result.signal || !Number.isInteger(result.status)) throw stopped(true);
       if (result.status !== 0) throw stopped();
       const value = (Buffer.isBuffer(result.stdout) ? result.stdout.toString("utf8") : String(result.stdout ?? "")).replace(/\r?\n$/, "");
@@ -139,11 +211,15 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     finally { if (Buffer.isBuffer(result?.stdout)) result.stdout.fill(0); if (Buffer.isBuffer(result?.stderr)) result.stderr.fill(0); }
   };
   return async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
+    const started = now(), deadline = started + timeout;
     assert.ok(Array.isArray(args) && args.at(-2) === "--context", "saved provider context required");
     if (deleteProofExpiresAtMs !== undefined) assert.ok(args[2] === "delete" && positive(deleteProofExpiresAtMs));
-    consume(args.at(-1));
+    const consumptionBudget = Math.ceil(deadline - now());
+    if (!Number.isSafeInteger(consumptionBudget) || consumptionBudget <= 0 || consumptionBudget > timeout)
+      throw stopped(true, { code: "provider-credential" });
+    consume(args.at(-1), consumptionBudget);
     assert.ok(!interrupted(), "controller cancelled");
-    const command = args.slice(0, -2), deadline = now() + timeout;
+    const command = args.slice(0, -2);
     let code = "provider-command";
     let listTime = deadline - timeout;
     const readRemaining = () => {
@@ -163,12 +239,19 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       }
       try { response = await request({ method, path, body, credential, timeout: remaining, interrupted,
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }); }
-      catch { throw stopped(true); }
+      catch (error) {
+        const diagnostic = phase === "account" ? providerFailure(error) : undefined;
+        const failure = stopped(true, diagnostic?.code === "account-request" ? diagnostic : undefined);
+        if (phase === "account" && closedAccountRequests.has(error)) closedAccountRequests.set(failure, closedAccountRequests.get(error));
+        throw failure;
+      }
       try { await controlCheckpoint(interrupted); } catch { throw stopped(); }
       if (phase === "list" || phase === "get") readRemaining();
       if (response?.status !== expected) {
         const diagnostic = providerDiagnostic({ code: `${phase}-http`, httpStatus: response?.status }) ?? { code: `${phase}-http` };
-        throw Object.assign(stopped(false, diagnostic), { httpFailure: true });
+        const failure = Object.assign(stopped(false, diagnostic), { httpFailure: true });
+        if (phase === "account" && closedAccountRequests.has(response)) closedAccountRequests.set(failure, closedAccountRequests.get(response));
+        throw failure;
       }
       return response.value;
     };
@@ -250,6 +333,7 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
         assert.ok(/^corten-bench,corten-bench-groups,corten-bench-groups-run-[a-f0-9]{16}$/.test(command[13]));
         assert.equal(command[13], `corten-bench,corten-bench-groups,corten-bench-groups-run-${command[3].slice(-16)}`);
         const sshKey = Number(command[11]); assert.ok(positive(sshKey), "bounded numeric SSH key ID required");
+        mutationPending = true;
         const result = await call("create", "POST", "/v2/droplets", { name: command[3], size: host.size, region: host.region, image: host.image,
           ssh_keys: [sshKey], tags: command[13].split(",") }, 202);
         code = "create-response";
@@ -281,15 +365,29 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       } else {
         assert.equal(command.length, 5); assert.deepEqual(command.slice(0, 3), ["compute", "droplet", "delete"]); assert.equal(command[4], "--force");
         assert.ok(/^[1-9]\d*$/.test(command[3]));
+        mutationPending = true;
         await call("delete", "DELETE", `/v2/droplets/${command[3]}`, undefined, 204); value = null;
       }
       code = "provider-output";
       const stdout = value === null ? "" : JSON.stringify(value);
       assert.ok(!stdout.includes(credential), "private provider response refused");
       if (command[2] === "list" || command[2] === "get") readRemaining();
+      if (command[2] === "create" || command[2] === "delete") {
+        const current = now();
+        if (current >= started && current < deadline && !interrupted()) mutationPending = false;
+      }
       return { status: 0, stdout, stderr: "" };
     } catch (error) {
       const diagnostic = providerFailure(error) ?? { code };
+      const current = now();
+      if (closedAccountRequests.has(error)) {
+        if (!unsafe && !mutationPending && current >= closedAccountRequests.get(error)
+          && current >= started && current < deadline && !interrupted()) {
+          const failure = stopped(false, diagnostic); settledAccountFailures.add(failure); throw failure;
+        }
+        unsafe = true; throw stopped(true, diagnostic);
+      }
+      if (error?.controlUncertain) unsafe = true;
       if (error?.controlUncertain) throw stopped(true, diagnostic);
       if (allowFail && (error?.createSemanticFailure === true || error?.httpFailure
         && (command[2] !== "get" || diagnostic.code === "get-http" && diagnostic.httpStatus === 404)))
