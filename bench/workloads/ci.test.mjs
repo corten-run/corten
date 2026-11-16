@@ -68,6 +68,7 @@ test("real Linux controls have a required host job and cannot pass through fixtu
   assert.equal(step["continue-on-error"], undefined);
   assert.equal(step.run, 'sudo /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"');
   const driver = readFileSync(new URL("scripts/benchmark-kernel-ci.sh", root), "utf8");
+  assert.ok(driver.includes("bench/workloads/isolated/host-boundary.test.mjs"), "host boundary procfs controls must run on the native host");
   for (const required of ["supervisorBootstrap", "for suite in lifetime participant", "Delegate=cpu cpuset memory pids",
     "DelegateSubgroup=supervisor", "BROWSER_PARTICIPANT_NAMESPACE=matched", "BROWSER_PARTICIPANT_NAMESPACE=mismatched",
     "unshare --fork --pid --mount-proc", "# skipped 0", "# cancelled 0", "# fail 0", "--test-reporter=tap"])
