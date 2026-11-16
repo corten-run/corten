@@ -1095,13 +1095,19 @@ text) only to find where it ends, so a row holding an icon with a `<title>` is c
 other, but it reports no loss inside one. It reads a `<script>`'s text as the browser does, and a
 `<textarea>`'s, `<title>`'s, `<style>`'s, `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and
 `<noframes>`'s as text, and it ignores the end tag `html!` writes for a `<param>` or a
-`<basefont>`, as the browser does. Where it cannot follow a patch (an end tag left out in `raw`
-markup; an element HTML's wherever it lands written straight in an `<svg>` or `<math>`, which
-`html!` refuses, or a `</p>` or `</br>` there, which closes it; a `<!--` and a `<script` in a
-data block's text that carry the script past its first `</script>` and over an element, which
-may be text written for it or the patch's elements lost in it), it still reports a loss found
-before the element it cannot follow, and otherwise logs a warning naming where it stopped, since
-what follows was not checked. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
+`<basefont>`, as the browser does. It reports a loss only from the tokens it reads as the browser
+does, and stops at any other, which only markup placed with `raw` writes: an end tag left out,
+one written otherwise than `</name>` (`</div ignored>`) or one that closes no element open (a
+`</p>` or `</br>`, which in an `<svg>` or `<math>` closes it); an HTML element's start tag
+ending `/>`; a comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, `--!>` in
+it); a CDATA section outside an `<svg>` or `<math>`; an element HTML's wherever it lands written
+straight in an `<svg>` or `<math>`, which `html!` refuses; a `<!--` and a `<script` in a data
+block's text that carry the script past its first `</script>` and over an element, which may be
+text written for it or the patch's elements lost in it; and, in a `<form>` a table's reading
+would put in empty, any token before what it holds but a comment or a void element's end tag
+(`</input>`). There it still reports a loss found before, and otherwise logs a warning naming
+where it stopped, since what follows was not checked: markup written through `raw` is checked
+only as far as these rules reach. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
 a page's table takes apart too). A patch that
 begins with a `<col>` from an area's handler is refused even on a page that already has the area's
 stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know

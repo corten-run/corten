@@ -3861,6 +3861,53 @@ async fn a_patch_whose_script_text_carries_it_past_an_element_is_logged_in_debug
     );
 }
 
+/// Markup placed with `raw` that the parse check does not read as the browser does is checked only
+/// up to there, and a debug build logs where it stopped rather than refusing the patch: an end tag
+/// written `</div ignored>`, which closes the `<div>` so the row after it is kept (a refusal would
+/// be a false 500), and a `</bogus>` before a form's control, which a table's reading moves out of
+/// it (#1409).
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_patch_with_tokens_the_parse_check_does_not_read_is_sent_and_logged_in_debug_builds() {
+    use std::sync::Arc;
+    let routes = Table::new()
+        .route(
+            "/decorated",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <div id={MsgId}>{crate::raw(r#"</div ignored><tr id="kept"></tr>"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/form",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <div id={NoteEndId}>{crate::raw(r#"<form></bogus><input name="q"></form>"#)}</div>
+                })
+            }),
+        );
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let app = app(routes, None);
+    for (path, stopped) in [
+        ("/decorated", "the patch for /decorated read it only up to the end tag </div ignored>, which is not written </name>"),
+        (
+            "/form",
+            "the patch for /form read it only up to </bogus> in <form>, which the check of what a form holds does not read",
+        ),
+    ] {
+        let (status, _, body) = call_with(app.clone(), "POST", path, Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert!(text.contains(stopped), "{path}: {text}");
+    }
+}
+
 #[derive(crate::view::Id)]
 struct CostRowId(u32);
 

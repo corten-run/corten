@@ -6930,7 +6930,7 @@
         "p"
       ],
       "lost": null,
-      "unread": "</p> in <svg>, in an <svg> or <math>"
+      "unread": "</p>, which closes no element open"
     },
     {
       "html": "<p id=\"m\"></p><svg id=\"s\"><g></br><tr id=\"r\"></tr></g></svg>",
@@ -6940,7 +6940,7 @@
         "br"
       ],
       "lost": null,
-      "unread": "</br> in <g>, in an <svg> or <math>"
+      "unread": "</br>, which closes no element open"
     },
     {
       "html": "<p id=\"m\"></p><math id=\"x\"><mrow></P><tr id=\"r\"></tr></mrow></math>",
@@ -6950,7 +6950,7 @@
         "p"
       ],
       "lost": null,
-      "unread": "</P> in <mrow>, in an <svg> or <math>"
+      "unread": "</P>, which closes no element open"
     },
     {
       "html": "<svg id=\"s\"><foreignObject></p></foreignObject><desc></br></desc></svg>",
@@ -6968,7 +6968,7 @@
         ]
       },
       "lost": null,
-      "unread": "</p> in <foreignobject>, in an <svg> or <math>"
+      "unread": "</p>, which closes no element open"
     },
     {
       "html": "<math id=\"x\"><mi></p></mi><annotation-xml encoding=\"text/html\"></p></annotation-xml></math>",
@@ -6986,7 +6986,79 @@
         ]
       },
       "lost": null,
-      "unread": "</p> in <mi>, in an <svg> or <math>"
+      "unread": "</p>, which closes no element open"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><div id=\"d\"></div ignored><tr id=\"b\"></tr></div>",
+      "parsed": [
+        "tr#a",
+        "div#d",
+        "tr#b"
+      ],
+      "lost": null,
+      "unread": "the end tag </div ignored>, which is not written </name>"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><div id=\"d\"></div/><tr id=\"b\"></tr></div>",
+      "parsed": [
+        "tr#a",
+        "div#d",
+        "tr#b"
+      ],
+      "lost": null,
+      "unread": "the end tag </div/>, which is not written </name>"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><form id=\"f\"></input><input name=\"q\"></form>",
+      "parsed": [
+        "tr#r",
+        "form#f",
+        "input"
+      ],
+      "lost": "<form id=\"f\"> loses what it holds"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><form id=\"f\"></bogus><input name=\"q\"></form>",
+      "parsed": [
+        "tr#r",
+        "form#f",
+        "input"
+      ],
+      "lost": null,
+      "unread": "</bogus> in <form id=\"f\">, which the check of what a form holds does not read"
+    },
+    {
+      "html": "<tr id=\"a\"/><td id=\"b\"></td></tr>",
+      "parsed": [
+        "tr#a(td#b)"
+      ],
+      "lost": null,
+      "unread": "<tr id=\"a\"/>, an HTML element's start tag ending />"
+    },
+    {
+      "html": "<p id=\"p\"></p><!-- --!><tr id=\"r\"></tr>",
+      "parsed": [
+        "p#p"
+      ],
+      "lost": null,
+      "unread": "which a browser ends elsewhere than at its -->"
+    },
+    {
+      "html": "<p id=\"p\"></p><![CDATA[x]]><tr id=\"r\"></tr>",
+      "parsed": [
+        "p#p"
+      ],
+      "lost": null,
+      "unread": "the CDATA section"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><div id=\"b\"></p></br></div>",
+      "parsed": [
+        "tr#a",
+        "div#b(p,br)"
+      ],
+      "lost": null,
+      "unread": "</p>, which closes no element open"
     }
   ]
 }
