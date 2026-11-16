@@ -4753,6 +4753,11 @@ async function run(browser) {
         const out =
           phase === "headers" ? await sent : await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).then(() => true, () => false);
         await traverse("back");
+        // WebKit settles the newer traversal's `finished` (an AbortError) before its patch is drawn:
+        // the screen is read once it has drawn, or after 5 s.
+        await scope
+          .waitForFunction(() => document.querySelector("#smoke-scope output")?.textContent === "all", undefined, { timeout: 5000 })
+          .catch(() => {});
         const landed = { at: await at(), shown: await shown() };
         if (phase === "headers") release();
         else await scope.evaluate(() => /** @type {any} */ (window).__release());
