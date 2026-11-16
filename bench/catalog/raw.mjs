@@ -14,7 +14,8 @@ export const rawSchema = "catalog-saved-evidence/v2";
 export const upstreamImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
 export const checkerImage = `mcr.microsoft.com/playwright:v${JSON.parse(readFileSync(new URL("../../package.json", import.meta.url))).devDependencies["@playwright/test"]}-noble`;
 export function imageCommandEvidence(image) {
-  return { Entrypoint: image.Config.Entrypoint, Cmd: image.Config.Cmd };
+  assert.ok(image?.Config && typeof image.Config === "object" && !Array.isArray(image.Config), "image configuration missing");
+  return { Entrypoint: image.Config.Entrypoint ?? null, Cmd: image.Config.Cmd ?? null };
 }
 // Keep only fields used for replay, never unrelated image environment or health logs.
 export function checkBoundaryEvidence(info) {
@@ -23,7 +24,7 @@ export function checkBoundaryEvidence(info) {
     mounts: info.Mounts.map(({ Type, Source, Destination, RW }) => ({ Type, Source, Destination, RW })),
     State: Object.fromEntries(["Status", "Running", "OOMKilled", "Dead", "Paused", "Restarting", "ExitCode", "Error", "StartedAt", "FinishedAt"].map((key) => [key, info.State[key]])),
     HostConfig: Object.fromEntries(["NanoCpus", "CpusetCpus", "Memory", "NetworkMode"].map((key) => [key, info.HostConfig[key]])),
-    Config: { Entrypoint: info.Config.Entrypoint, Cmd: info.Config.Cmd, Labels: { "run.corten.catalog": info.Config.Labels?.["run.corten.catalog"] },
+    Config: { Entrypoint: info.Config.Entrypoint ?? null, Cmd: info.Config.Cmd ?? null, Labels: { "run.corten.catalog": info.Config.Labels?.["run.corten.catalog"] },
       Env: info.Config.Env?.filter((e) => ["CATALOG_SOURCE", "CATALOG_FIXTURE_PATH", "API_BASE"].includes(e.split("=")[0])) ?? [] } };
 }
 export function containerEvidence(info) {

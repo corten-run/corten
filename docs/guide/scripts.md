@@ -392,12 +392,57 @@ that take the group (a field typed `unknown` does not).
 
 **Keys.** `key={item.id}` on the elements of a ref (`data-key` in the page) lets a parameter
 typed `Map<string, HTMLTableCellElement>` get them by key, so rows from a [feed](live-data.md)
-find their cells without reading attributes:
+find their cells without reading attributes. Every element given the ref has a key or none does,
+and only a ref whose elements have one fits a `Map<string, ..>`: one without a key, on all its
+elements or on some, does not compile, and the error says to add `key={..}`. A ref with keys still
+fits `El` and `El[]`. A component that puts a parent's ref on keyed elements names its type
+`Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` (`corten::script::{Keyed, NoRows, NoValue}`).
 
 ```rust,ignore
 <td ref={qty} key={item.id}>{line.qty}</td>
 // on:connect={js::live(qty, url::Levels, signal)}, live(cells, feed, signal) with cells.get(level.id)
 ```
+
+A `Map` holds one element per key, so two elements of the ref with equal keys are one entry, the
+later in the page's order, and the other is out of the handler's reach. Keys are equal as the
+browser reads them (`getAttribute`): `key={true}` and `key=""` are both the empty string, a carriage
+return reads as a line feed, and `&amp;`, `&lt;`, `&gt;`, `&quot;` and `&#39;`, which Corten writes
+for `&`, `<`, `>`, `"` and `'`, are those characters. Debug builds stop a render in which two
+elements of a ref in one component have equal keys, or a `key={..}` writes none (a `None`), as they
+stop on a number past 2^53; release builds do not check. They count the elements the runtime finds,
+so an element in a `<template>`'s or a `<noscript>`'s content is not one of them, nor one an
+expression or a component writes into an element a browser reads as text (`<textarea>`, `<title>`,
+`<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`). An element written in one of those in the markup
+does not compile where the markup shows it is HTML, nor one in a `<script>` or a `<style>`, nor a
+`<plaintext>` (the browser would show its tags as text; [views](views.md),
+[design Choice 54](../design.md#choice-html-parse-refusals)). Inside an `<svg>` all
+of them are elements like any other, and what they hold is found, except in its `<foreignObject>`,
+`<desc>` or `<title>`, which hold HTML. A component's markup does not see an `<svg>` its parent
+writes it into, and a component's children do not see where the component writes them, so the keys
+in a `<template>`, `<noscript>`, `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
+`<noframes>` at the top of a component's markup (which its parent may write into an `<svg>`), or
+in one among a component's children (outside an `<svg>` the children write themselves), are not
+checked ([design Limit 30](../design.md#limit-markup-context)). Nor are those in one of them inside
+a `<math>` (outside its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>`, and an `<annotation-xml>`
+whose first `encoding` is `text/html` or `application/xhtml+xml`, or in a `<mglyph>` or `<malignmark>` in
+one of them), where it is MathML's and the runtime
+finds what it holds: where the check cannot be sure, it lets a duplicate pass rather than stop a correct render. Markup that is not correct is another matter:
+a browser moves an element written straight into a `<table>`'s rows (a `<span>` in a `<tr>`)
+out before the table, so when the table is a component's root the runtime does not find it there,
+while the check counts it where it is written and may stop on a duplicate the runtime does not see. A view written into a
+string of its own (`html! { .. }.to_html()` or `children.to_html()` as an attribute's value, which
+the browser reads as text) does not count toward its component's keys; a component rendered so
+checks its own. Corten writes a document's head tags that way too (each expression or component in
+`<head>` into a string it then copies into the page), so equal keys in two of them, or in one and
+the body, are not checked. They see what one render writes: rows a patch or a script adds later are the page's, so give every row a key of its
+own (an id, not a name two rows can share). A key an `AttrValue` of the app's writes with any other
+`&` (`&#128;`, `&nbsp;`) is not checked, since what a browser reads there follows rules of HTML's
+the check does not repeat.
+The check belongs to `corten-run`: it runs when that crate is built with debug assertions (as
+`cargo build` and `cargo test` build it), for every crate's markup, whatever the app's own crate is
+built with. A spread of attributes does not write `data-key`, as it does not write `data-ref`. A
+`data-key=".."` written by hand beside a ref is still taken as its key, a known limit that
+`html!` does not refuse yet; write `key={..}`.
 
 **A value for each element.** Rows a script compares (orders by price, filters by stock) carry what
 it compares with their ref: `ref={row.with(sort_cents(l))}` gives each row a value, and a parameter

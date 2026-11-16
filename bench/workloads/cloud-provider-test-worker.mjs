@@ -23,8 +23,8 @@ const server = createServer((socket) => socket.destroy());
 server.listen(0, "127.0.0.1"); await once(server, "listening");
 let created, clock = 0;
 const censusModes = ["shape", "total", "id", "duplicate", "links", "pages", "next", "count", "bounds"].map((predicate) => `list-${predicate}`);
-const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create", "withhold-close", "reflect", "post-link-failure",
-  "post-link-shape", "post-link-count", "post-link-id", "post-link-rel", "post-link-href-variant", "post-link-href-type",
+const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create", "withhold-close", "reflect", "post-invalid-action-id",
+  "post-link-shape", "post-link-count", "post-link-id", "post-link-rel", "post-link-href-variant", "post-link-href-type", "arbitrary-create-hints",
   "first-action-http-failure", "zero-resource-create", "first-action-invalid", "pending-create", "create-http-failure", "list-converges", "get-http-failure", ...censusModes].includes(mode) ? async ({ method, path, body, credential }) => {
   state.requests++; state.calls.push({ method, path, originalCredential: credential === "SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL" }); save();
   if (mode === "hang" || mode === "hang-create" && method === "POST") return new Promise(() => {});
@@ -53,14 +53,19 @@ const syntheticRequest = ["success", "scoped-create-link", "hang", "hang-create"
   if (method === "POST") {
     if (mode === "create-http-failure") return { status: 422, value: { raw: credential } };
     created = { id: 123, name: body.name, tags: body.tags, size_slug: body.size, region: { slug: body.region }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
-    const response = { status: 202, value: { droplet: created, links: { actions: [{ id: 456, rel: "create", href: mode === "post-link-failure" ? "https://synthetic.invalid/v2/actions/456" : "https://api.digitalocean.com/v2/actions/456" }] } } };
+    const response = { status: 202, value: { droplet: created, links: { actions: [{ id: 456, rel: "create", href: "https://api.digitalocean.com/v2/actions/456" }] } } };
     if (mode === "scoped-create-link") response.value.links.actions[0].href = "https://api.digitalocean.com/v2/droplets/123/actions/456";
     if (mode === "post-link-shape") response.value.links.actions = { raw: credential };
     if (mode === "post-link-count") response.value.links.actions = [];
-    if (mode === "post-link-id") response.value.links.actions[0].id = credential;
+    if (mode === "post-link-id" || mode === "post-invalid-action-id") response.value.links.actions[0].id = credential;
     if (mode === "post-link-rel") response.value.links.actions[0].rel = credential;
     if (mode === "post-link-href-variant") response.value.links.actions[0].href = "https://api.digitalocean.com:443/v2/actions/456";
     if (mode === "post-link-href-type") response.value.links.actions[0].href = { raw: credential };
+    if (mode === "arbitrary-create-hints") {
+      response.value.links.actions[0] = { id: 456, rel: [credential, { type: "delete" }],
+        href: `https://${credential}@foreign.invalid/v2/actions/999#private` };
+      response.value.droplet = { ...created, unused: { raw: credential } };
+    }
     return response;
   }
   if (mode === "first-action-http-failure") return { status: 403, value: { raw: credential } };
