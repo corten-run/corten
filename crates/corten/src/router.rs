@@ -687,8 +687,20 @@ impl Router {
     /// Only an app with access logging carries the matched name out through its stages.
     pub(crate) fn record_route(self, shared: bool) -> Self {
         let Inner::Routes(dispatch) = self.inner else { unreachable!("called before app layers") };
-        let recording: Arc<dyn Outer> =
-            if shared { Arc::new(Recording::<true>(dispatch)) } else { Arc::new(Recording::<false>(dispatch)) };
+        let mut paths = matchit::Router::new();
+        for entry in &dispatch.routes {
+            let name = match entry.written {
+                Some(name) => std::borrow::Cow::Borrowed(name),
+                None => std::borrow::Cow::Owned(entry.path.to_string()),
+            };
+            paths.insert(entry.path.as_ref(), name).expect("router paths were already validated");
+        }
+        let inner = Router { inner: Inner::Routes(dispatch), edge: false };
+        let recording: Arc<dyn Outer> = if shared {
+            Arc::new(Recording::<true> { inner, paths })
+        } else {
+            Arc::new(Recording::<false> { inner, paths })
+        };
         Router { inner: Inner::Layered(recording), edge: true }
     }
 
@@ -732,8 +744,7 @@ impl From<Table> for Router {
 }
 
 impl Dispatch {
-    // Keep normal dispatch inlined when the enabled logging wrapper adds another caller.
-    #[inline(always)]
+    #[inline]
     fn answer(&self, mut req: Request, edge: bool) -> RouterFuture {
         let mut fix = Fix::of(req.method(), edge);
         let path = req.uri().path();
@@ -875,30 +886,26 @@ impl tower_service::Service<Request> for Router {
     }
 }
 
-/// Only the enabled wrapper looks up a name for the log. Keeping that lookup here leaves
-/// normal dispatch exactly as it was, including its compiler's inlining choices.
-struct Recording<const SHARED: bool>(Arc<Dispatch>);
+/// An enabled-only name index keeps the normal matcher and dispatch's original call sites.
+struct Recording<const SHARED: bool> {
+    inner: Router,
+    paths: matchit::Router<std::borrow::Cow<'static, str>>,
+}
 
 impl<const SHARED: bool> Outer for Recording<SHARED> {
     fn call(&self, mut req: Request) -> Answering {
-        let matched = self.0.paths.at(req.uri().path()).ok().map(|found| {
-            let entry = &self.0.routes[*found.value];
-            match entry.written {
-                Some(name) => std::borrow::Cow::Borrowed(name),
-                None => std::borrow::Cow::Owned(entry.path.to_string()),
-            }
-        });
+        let matched = self.paths.at(req.uri().path()).ok().map(|found| found.value.clone());
         if SHARED {
             if let Some(shared) = req.extensions_mut().remove::<crate::access::Shared>() {
                 shared.set(matched);
             }
-            let answering = self.0.answer(req, false);
+            let answering = self.inner.answer(req);
             Box::pin(async move {
                 let Ok(res) = answering.await;
                 res
             })
         } else {
-            let answering = self.0.answer(req, false);
+            let answering = self.inner.answer(req);
             Box::pin(async move {
                 let Ok(mut res) = answering.await;
                 if let Some(matched) = matched {
