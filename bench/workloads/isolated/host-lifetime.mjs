@@ -122,9 +122,12 @@ function snapshot(path, executables, pending, lastSampleAt = null) {
   let race;
   for (;;) {
     try {
-      const observed = snapshotOnce(path, executables, pending);
-      if (race && performance.now() > deadline) throw race;
-      return observed;
+      const attempt = () => {
+        const observed = snapshotOnce(path, executables, pending);
+        if (race && performance.now() > deadline) throw race;
+        return observed;
+      };
+      return pending ? pending.transaction(attempt) : attempt();
     } catch (error) {
       const operation = observationOperations.get(error);
       const changed = error.code === "ERR_ASSERTION" && ["process-name-recheck", "snapshot-membership-recheck"].includes(operation);
@@ -161,6 +164,10 @@ function participantGroup(path, id) {
 
 /** Actual read-only Linux snapshot. Never reads a PID/path supplied by saved evidence. */
 export function captureBrowserParticipant(id, executables = new Map(), pending) {
+  const capture = () => readBrowserParticipant(id, executables, pending);
+  return pending ? pending.transaction(capture) : capture();
+}
+function readBrowserParticipant(id, executables, pending) {
   assert.equal(process.platform, "linux"); assert.match(id, containerId);
   const startedAt = Date.now();
   const inspect = () => {
@@ -244,6 +251,9 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
   function sample() {
+    return pending ? pending.transaction(collectSample) : collectSample();
+  }
+  function collectSample() {
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
     const observed = snapshot(path, executables, pending, lastSampleAt), initial = [], keys = new Set();

@@ -49,6 +49,17 @@ reads themselves are not interruptible; the unchanged saved-timestamp continuity
 gate independently rejects any oversized gap, even without an observer exception.
 Retries never clear a prior observer failure or replace positive empty-scope proof.
 
+Deferred executable captures are transactional: a rejected attempt closes only
+its newly pinned descriptors, not inputs referenced by earlier accepted samples.
+A complete census commits into the enclosing Docker observation, which must also
+pass its root identity and Docker bookends. Those captures commit to the command
+only after the enclosing sample passes all bounds and is admitted to the storage
+FIFO. Synchronous admission failure rolls back that sample's new captures.
+Rejected-only inputs are neither retained between retries nor hashed at finish.
+After admission, pending captures remain owned until finish: a later async write
+failure is sticky and prevents terminal publication rather than rolling back an
+already admitted sample and pretending earlier evidence alone is complete.
+
 These are sampled observations, not an event trace of every short-lived process.
 Cumulative cgroup accounting is reread even when exited members are absent from
 the accepted census. Nothing reconstructs an unobserved executable or repairs old
@@ -120,6 +131,11 @@ controls are not delegated-cgroup or host qualification. They test whole-snapsho
 discard, recursive membership changes, persistent missing reads, immediate
 permission/I/O failures, PID/start mismatches, monotonic retry exhaustion, and the
 separate accounting-only block for a coherent 1,909 ms gap.
+Pending-capture controls use real owned file descriptors with synthetic
+membership and Docker reads. They check descriptor bounds, earlier accepted
+inputs, final hash membership, enclosing-bookend and sample-write failures. Linux
+uses the actual inherited-descriptor digest helper; Windows emulates only that
+subprocess. These controls do not establish actual Docker/native qualification.
 
 The delegated Linux tests use real child PIDs and cgroups. Fault-injection cases exercise
 repeated interval errors, deadline exhaustion, strict process-name bookends,

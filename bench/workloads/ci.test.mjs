@@ -68,11 +68,27 @@ test("real Linux controls have a required host job and cannot pass through fixtu
   assert.equal(step["continue-on-error"], undefined);
   assert.equal(step.run, 'sudo /bin/bash scripts/benchmark-kernel-ci.sh "$(command -v node)" "$PWD"');
   const driver = readFileSync(new URL("scripts/benchmark-kernel-ci.sh", root), "utf8");
-  for (const required of ["supervisorBootstrap", "for suite in lifetime participant", "Delegate=cpu cpuset memory pids",
+  for (const required of ["supervisorBootstrap", "for suite in lifetime participant churn", "Delegate=cpu cpuset memory pids",
     "DelegateSubgroup=supervisor", "BROWSER_PARTICIPANT_NAMESPACE=matched", "BROWSER_PARTICIPANT_NAMESPACE=mismatched",
     "unshare --fork --pid --mount-proc", "# skipped 0", "# cancelled 0", "# fail 0", "--test-reporter=tap"])
     assert.ok(driver.includes(required), `native CI obligation missing: ${required}`);
   assert.ok(!driver.includes("continue-on-error") && !driver.includes("--privileged"));
+});
+
+test("native driver generates the actual churn invocation under the same no-skip gates", () => {
+  const driver = readFileSync(new URL("scripts/benchmark-kernel-ci.sh", root), "utf8");
+  const generator = /<<'JS'\n([\s\S]*?)\nJS\n/.exec(driver)?.[1]; assert.ok(generator);
+  const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+  for (const suite of ["lifetime", "participant", "churn"]) {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-", "corten-bench-groups-r999999999-0123456789abcdef.service", process.execPath, "/checkout", suite],
+      { cwd: root, env, input: generator, encoding: "utf8", windowsHide: true, timeout: 10000, maxBuffer: 1024 ** 2 });
+    assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
+    const path = `bench/workloads/isolated/host-${suite === "churn" ? "lifetime-churn" : `${suite}-linux`}.test.mjs`;
+    assert.ok(result.stdout.includes(`'${path}'`), result.stdout);
+    assert.ok(result.stdout.includes("--test --test-reporter=tap --test-concurrency=1"));
+  }
+  for (const line of ["grep -Fx '# fail 0'", "grep -Fx '# cancelled 0'", "grep -Fx '# skipped 0'"])
+    assert.ok(driver.includes(`${line} "$work/$suite.tap"`));
 });
 
 test("kernel preflight accepts systemd's degraded exit without accepting other host states", {
