@@ -13,6 +13,20 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
   Runtime behavior is unchanged.
 
+- Distinguish a failed benchmark account observation from uncertain worker lifetime
+  only after native request/response/socket closure, a bound terminal reply and
+  timely exit0. Preserve the failed operation and fresh cleanup proofs without
+  retries, worker reuse or repeated mutations; uncertain paths keep their locks.
+
+- Preserve closed rejection-site details for benchmark provider account requests
+  through private-worker diagnostics and cached teardown, without exposing native
+  errors or changing retries, credential use, acceptance or lifecycle locks.
+
+- Launch only the first complete official benchmark group initially; require its
+  replayed native evidence and confirmed cleanup before a separately approved,
+  once-only admission of the remaining dedicated group hosts. Keep deferred groups
+  visible, the complete registry mandatory and legacy collection available.
+
 - Show the grouped controller's closed failure stage and allowed provider detail
   in direct CLI errors, without reflecting raw exceptions or changing recovery,
   cleanup or benchmark acceptance rules.

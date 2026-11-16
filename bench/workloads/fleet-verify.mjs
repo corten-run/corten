@@ -25,7 +25,7 @@ export function readFleet(root, round) {
   roundName(round); physical(root);
   const path = join(root, `fleet-${round}.json`), bytes = regular(path, 1024 * 1024), manifest = validateFleet(JSON.parse(bytes));
   assert.equal(manifest.round, round);
-  const allowed = new Set([`fleet-${round}.json`, ".fleet-operation.lock", "launch-intent.json", "receipts", ...manifest.jobs.map((j) => j.group)]);
+  const allowed = new Set([`fleet-${round}.json`, ".fleet-operation.lock", "launch-intent.json", "remaining-intent.json", "receipts", ...manifest.jobs.map((j) => j.group)]);
   assert.ok(readdirSync(root).every((name) => allowed.has(name)), "fleet-root-members");
   return { root, path, bytes, manifest, manifestSha256: digest(bytes) };
 }
@@ -52,6 +52,51 @@ function evidenceSnapshot(job) {
   assert.equal(treeHash(extracted), s.evidenceSha256);
   assert.equal(digest(regular(join(job.local, "state.json"), 1024 * 1024)), job.stateSha256);
   return { stateSha256: job.stateSha256, archiveSha256: s.archiveSha256, evidenceSha256: s.evidenceSha256 };
+}
+
+// Read-only per-group replay, shared by final inspection and staged admission.
+// It does not inspect/ignore a root operation lock: its caller owns that policy.
+export function recheckCollectedGroup(fleet, snapshot) {
+  const job = readGroup(fleet, snapshot.group);
+  assert.equal(job.outcome, "available");
+  assert.ok(!present(join(job.stateRoot, ".groups-launch.lock")), "group-launch-active");
+  const { group, ...hashes } = snapshot;
+  assert.deepEqual(evidenceSnapshot(job), hashes, "group-evidence-changed");
+}
+export async function verifyCollectedGroup(fleet, group, { inspect, interrupted = () => false } = {}) {
+  const job = readGroup(fleet, group), { round, commit } = fleet.manifest;
+  assert.equal(job.outcome, "available");
+  const s = job.state;
+  assert.ok(s.status === "collected" && s.collectedAt, "group-not-collected");
+  assert.ok(!interrupted());
+  const hashes = evidenceSnapshot(job), folder = join(job.local, s.evidence, "campaign");
+  const report = await inspectCampaign(Object.freeze({ folder, round, commit }), { inspect, interrupted });
+  assert.ok(!interrupted());
+  campaignOutcome(report, s, s.exitCode);
+  assert.deepEqual(report.selection, s.selection);
+  assert.equal(report.campaign, s.validation.campaign); assert.equal(report.status, s.validation.status);
+  assert.equal(s.evidenceOutcome, report.status === "verified" ? "validated" : report.status);
+  const reservationBytes = regular(join(folder, ".host-attempt.json"), 1024 * 1024);
+  const reservation = JSON.parse(reservationBytes);
+  const plan = JSON.parse(regular(join(folder, report.campaign, "plan.json"), 16 * 1024 ** 2));
+  assert.equal(reservation.commit, commit); assert.equal(reservation.id, report.campaign);
+  assert.equal(reservation.campaignSha256, report.campaignSha256);
+  assert.equal(digest(reservationBytes), report.reservationSha256);
+  assert.equal(plan.commit, commit); assert.equal(plan.round, round);
+  assert.equal(plan.campaignSha256, report.campaignSha256); assert.equal(plan.sourceSha256, report.sourceSha256);
+  assert.equal(regular(join(job.local, s.evidence, "exit-code"), 16).toString("ascii"), `${s.exitCode}\n`);
+  const snapshot = { group, ...hashes };
+  recheckCollectedGroup(fleet, snapshot);
+  const outcome = !s.destroyedAt || !s.deletionIntentAt ? "cleanup-pending" : report.status === "verified" ? "verified" : report.status;
+  const row = { group, outcome, id: s.id, host: s.host,
+    hardwareEvidence: { artifact: `${group}/groups-${round}/${s.evidence}/host.txt`, sha256: fileHash(join(job.local, s.evidence, "host.txt")) },
+    nativeTimingEvidence: { artifact: `${group}/groups-${round}/${s.evidence}/campaign`, archiveTreeSha256: report.archiveTreeSha256,
+      scope: "saved-native-journal-and-raw-timings-not-cross-host-comparable" },
+    recordedTimes: { reservationCreatedAt: s.createdAt, collectedAt: s.collectedAt, ...(s.destroyedAt ? { destroyedAt: s.destroyedAt } : {}) },
+    timeScope: "reservation-and-collection-not-provider-billing-or-benchmark-elapsed", ...hashes,
+    campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256,
+    ...(report.status === "verified" ? { appOutcomes: report.groups[0].appOutcomes.map(({ app, outcome, comparisonEligible }) => ({ app, outcome, comparisonEligible })) } : {}) };
+  return { evidenceMode: inspect ? "synthetic-inspection" : "native-replay", row, snapshot };
 }
 
 // inspect is an in-process synthetic TEST seam only. The CLI never accepts code,
@@ -103,48 +148,15 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
         result.groups.push({ group, outcome: s.destroyedAt ? setup ? "setup-failed-retired" : "unused-retired" : "cleanup-pending", id: s.id }); continue;
       }
       if (s.status !== "collected" || !s.collectedAt) { result.groups.push({ group, outcome: "uncollected" }); continue; }
-      assert.ok(!interrupted());
-      const hashes = evidenceSnapshot(job), folder = join(job.local, s.evidence, "campaign");
-      // The existing bounded worker lazily imports the fixed native verifier,
-      // drains private output and confirms worker exit before consuming a report.
-      const report = await inspectCampaign(Object.freeze({ folder, round, commit }), { inspect, interrupted });
-      assert.ok(!interrupted());
-      campaignOutcome(report, s, s.exitCode);
-      assert.deepEqual(report.selection, s.selection);
-      assert.equal(report.campaign, s.validation.campaign); assert.equal(report.status, s.validation.status);
-      assert.equal(s.evidenceOutcome, report.status === "verified" ? "validated" : report.status);
-      // Native replay binds its source closure. Bind its public identities back
-      // to the saved plan/reservation too, never to a supplied summary receipt.
-      const reservation = JSON.parse(regular(join(folder, ".host-attempt.json"), 1024 * 1024));
-      const plan = JSON.parse(regular(join(folder, report.campaign, "plan.json"), 16 * 1024 ** 2));
-      assert.equal(reservation.commit, commit); assert.equal(reservation.id, report.campaign);
-      assert.equal(reservation.campaignSha256, report.campaignSha256);
-      assert.equal(digest(regular(join(folder, ".host-attempt.json"), 1024 * 1024)), report.reservationSha256);
-      assert.equal(plan.commit, commit); assert.equal(plan.round, round);
-      assert.equal(plan.campaignSha256, report.campaignSha256); assert.equal(plan.sourceSha256, report.sourceSha256);
-      const marker = regular(join(job.local, s.evidence, "exit-code"), 16).toString("ascii");
-      assert.equal(marker, `${s.exitCode}\n`);
-      assert.deepEqual(evidenceSnapshot(job), hashes);
-      snapshots.push({ job, hashes });
-      const outcome = !s.destroyedAt || !s.deletionIntentAt ? "cleanup-pending" : report.status === "verified" ? "verified" : report.status;
-      const hardwareEvidence = { artifact: `${group}/groups-${round}/${s.evidence}/host.txt`, sha256: fileHash(join(job.local, s.evidence, "host.txt")) };
-      result.groups.push({ group, outcome, id: s.id, host: s.host, hardwareEvidence,
-        nativeTimingEvidence: { artifact: `${group}/groups-${round}/${s.evidence}/campaign`, archiveTreeSha256: report.archiveTreeSha256,
-          scope: "saved-native-journal-and-raw-timings-not-cross-host-comparable" },
-        recordedTimes: { reservationCreatedAt: s.createdAt, collectedAt: s.collectedAt, ...(s.destroyedAt ? { destroyedAt: s.destroyedAt } : {}) },
-        timeScope: "reservation-and-collection-not-provider-billing-or-benchmark-elapsed", ...hashes, campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256,
-        ...(report.status === "verified" ? { appOutcomes: report.groups[0].appOutcomes.map(({ app, outcome, comparisonEligible }) => ({ app, outcome, comparisonEligible })) } : {}) });
+      const verified = await verifyCollectedGroup(fleet, group, { inspect, interrupted });
+      snapshots.push(verified.snapshot); result.groups.push(verified.row);
     } catch { result.groups.push({ group, outcome: "error", error: "group-evidence-invalid" }); }
   }
   try {
     assert.ok(!interrupted());
     assert.ok(!present(join(fleet.root, ".fleet-operation.lock")), "fleet-operation-active");
     assert.equal(readFleet(fleet.root, round).manifestSha256, fleet.manifestSha256);
-    for (const { job, hashes } of snapshots) {
-      const current = readGroup(fleet, job.group);
-      assert.equal(current.outcome, "available"); assert.equal(current.stateSha256, job.stateSha256);
-      assert.deepEqual(evidenceSnapshot(current), hashes);
-    }
+    for (const snapshot of snapshots) recheckCollectedGroup(fleet, snapshot);
     assert.ok(!duplicate);
   } catch { return { ...result, error: "fleet-evidence-changed-or-duplicated" }; }
   if (result.groups.every((g) => g.outcome === "verified")) result.status = "verified";

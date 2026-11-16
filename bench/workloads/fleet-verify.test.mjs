@@ -8,7 +8,7 @@ import { accountId, archive, commit, context, harness, syntheticInspection } fro
 import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { groupNames } from "./registry.mjs";
-import { verifyFleet, verifyFleetCli } from "./fleet-verify.mjs";
+import { readFleet, recheckCollectedGroup, verifyCollectedGroup, verifyFleet, verifyFleetCli } from "./fleet-verify.mjs";
 import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
 
 function fixture(t) {
@@ -68,6 +68,20 @@ test("all current groups replay individually; hardware/hash references and faile
     assert.match(row.timeScope, /not-provider-billing-or-benchmark-elapsed/);
   }
   assert.equal(treeHash(p.h.base), before, "inspection must be read-only");
+});
+
+test("shared group replay is read-only under caller custody; final verification still refuses the root lock", async (t) => {
+  const p = fixture(t), j = p.seed(groupNames[0]);
+  writeFileSync(join(p.h.base, ".fleet-operation.lock"), "SYNTHETIC-caller-custody");
+  const before = treeHash(p.h.base), fleet = readFleet(p.h.base, "r21");
+  const proof = await verifyCollectedGroup(fleet, groupNames[0], { inspect: p.inspect });
+  assert.equal(proof.row.outcome, "verified"); assert.equal(proof.evidenceMode, "synthetic-inspection");
+  assert.equal(treeHash(p.h.base), before);
+  const final = await p.verify(); assert.equal(final.status, "incomplete");
+  assert.equal(final.error, "fleet-evidence-changed-or-duplicated");
+  writeFileSync(join(p.h.base, groupNames[0], ".groups-launch.lock"), "SYNTHETIC-unsettled");
+  assert.throws(() => recheckCollectedGroup(fleet, proof.snapshot));
+  assert.equal(readFileSync(j.path, "utf8"), JSON.stringify(j.state));
 });
 
 test("missing, live, busy, recoverable and cleanup-pending groups keep a partial fleet incomplete", async (t) => {
