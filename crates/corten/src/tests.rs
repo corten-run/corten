@@ -3098,6 +3098,20 @@ async fn a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds(
     let (status, _, body) = plain_patch_send(&table, "POST", "/table", browser).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a hand-built route: {body}");
     assert!(body.contains("plain POST to /table "), "named by its path: {body}");
+    let navigation: &[(&str, &str)] = &[("accept", "text/html"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "document")];
+    let (status, _, body) = plain_patch_send(&router, "POST", "/note", navigation).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a browser's own form submission, with its fetch metadata: {body}");
+    // A page's own `fetch` that asks for HTML, and an `<iframe>`'s load: the patch is not shown as
+    // the tab's page, so it is sent.
+    for (headers, what) in [
+        (&[("accept", "text/html"), ("sec-fetch-mode", "cors"), ("sec-fetch-dest", "empty")][..], "a script's fetch"),
+        (&[("accept", "text/html"), ("sec-fetch-mode", "same-origin")][..], "a script's same-origin fetch"),
+        (&[("accept", "text/html"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "iframe")][..], "an iframe's load"),
+        (&[("accept", "*/*")][..], "a client that accepts anything, as a script's fetch does by default"),
+    ] {
+        let (status, headers, body) = plain_patch_send(&router, "POST", "/note", headers).await;
+        assert_eq!((status, headers.contains_key("corten-patch")), (StatusCode::OK, true), "{what}: {body}");
+    }
 
     let (status, headers, body) = plain_patch_send(&router, "POST", "/or", browser).await;
     assert_eq!((status, headers.contains_key("corten-shell")), (StatusCode::OK, true), "patch_or draws the page: {body}");

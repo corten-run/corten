@@ -2592,7 +2592,9 @@ fn page_where_no_page_is(res: Response, shared: &Shared, path: &str) -> Response
 /// matches it (a hand-built `Table`'s). The handler's cookies and `Clear-Site-Data` go out with
 /// the error page, as for [`page_where_no_page_is`].
 ///
-/// What it does not see: an `unstaged` route skips the stages this runs in; a fragment answered
+/// What it does not see: a request whose fetch metadata says it is not a top-level navigation
+/// ([`top_level`]: a page's own `fetch`, an `<iframe>`'s load), whose answer is not shown as the
+/// tab's page; an `unstaged` route skips the stages this runs in; a fragment answered
 /// without `corten-patch` (a response built by hand, or one put in place of the handler's through
 /// `DerefMut`) is not a patch to it; and a release build compiles none of it, so it never runs in
 /// a production image or a smoke test against one.
@@ -2609,6 +2611,17 @@ fn patch_where_a_page_belongs(res: Response, shared: &Shared, method: &http::Met
             "a browser's plain {method} to {route} (no data-patch, asking for HTML) was answered with a patch, which the browser shows as the whole page, with no layout, stylesheets or navigation: answer both with req.patch_or(view, || async {{ .. }}), which draws the page or a redirect when the runtime did not ask, or check req.mode == Mode::Action before req.patch"
         ),
     )
+}
+
+/// Whether a request's fetch metadata, where the browser sent it, says it is a top-level
+/// navigation (a link, a reload, a form the browser submits): `Sec-Fetch-Mode: navigate` to a
+/// `Sec-Fetch-Dest: document`. A page's own `fetch` (`cors`, `same-origin`) and an `<iframe>`'s
+/// load (`iframe`) are not, so what answers them is not shown as the tab's page. A client that
+/// sends neither (a router test, an HTTP library) is taken at its `Accept`.
+#[cfg(debug_assertions)]
+fn top_level(headers: &HeaderMap) -> bool {
+    headers.get("sec-fetch-mode").is_none_or(|mode| mode.as_bytes() == b"navigate")
+        && headers.get("sec-fetch-dest").is_none_or(|dest| dest.as_bytes() == b"document")
 }
 
 /// The error a debug build answers in place of `res`, an answer a browser would have shown wrongly.
@@ -2809,7 +2822,7 @@ async fn page_or_error<S: crate::app::Steps>(
     // A browser's plain request (a link, a reload, a form without JavaScript), which shows what
     // answers it as the whole document at the address it asked; its method, for what it is told.
     #[cfg(debug_assertions)]
-    let plain = (browser && !fetched && mode == Mode::Document).then(|| req.method().clone());
+    let plain = (browser && !fetched && mode == Mode::Document && top_level(req.headers())).then(|| req.method().clone());
     let res = run(req, next, deadline, signal).await;
     #[cfg(debug_assertions)]
     let res = refresh_header_is_an_error(res, shared.dev);
@@ -3205,7 +3218,7 @@ impl ReadAgain {
     ///         pub after: Option<&'a str>,
     ///     }
     /// }
-    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch(html! {}) }
+    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch_or(html! {}, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await }
     ///
     /// #[derive(Id)]
     /// struct AlertsId;
@@ -3232,7 +3245,7 @@ impl ReadAgain {
     /// #     #[route("/alerts", get = alerts, patches)]
     /// #     pub struct Alerts<'a> { pub after: Option<&'a str> }
     /// # }
-    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch(html! {}) }
+    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch_or(html! {}, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await }
     /// # use url::Alerts;
     /// #[derive(Id)]
     /// struct ListId;

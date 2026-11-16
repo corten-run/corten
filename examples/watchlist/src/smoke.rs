@@ -107,12 +107,26 @@ struct SmokeMoreId;
 /// The page: the triggers outside the dialog and the `<details>`, and the two their answers
 /// replace.
 async fn sheet_page(req: Req) -> HtmlResult {
+    sheet(&req, false, false)
+}
+
+/// The sheet's page with the dialog (`sheet_open`) or the `<details>` (`more_open`) drawn
+/// open, as a form that asks for one is answered without JavaScript.
+fn sheet(req: &Req, sheet_open: bool, more_open: bool) -> HtmlResult {
     req.page(html! {
-        <Layout req={&req} title="Sheet" viewer={None} head="">
+        <Layout req={req} title="Sheet" viewer={None} head="">
             <form method="get" action={url::OpenSheet} data-patch><button>"Preview"</button></form>
-            <dialog id={SmokeSheetId}></dialog>
+            if sheet_open {
+                <Sheet />
+            } else {
+                <dialog id={SmokeSheetId}></dialog>
+            }
             <form method="get" action={url::OpenMore} data-patch><button>"Unfold"</button></form>
-            <details id={SmokeMoreId}><summary>"More"</summary></details>
+            if more_open {
+                <More />
+            } else {
+                <details id={SmokeMoreId}><summary>"More"</summary></details>
+            }
         </Layout>
     })
 }
@@ -130,23 +144,26 @@ fn Sheet() -> impl Patch {
     }
 }
 
-/// Answers any form that asks with the dialog drawn open; without JavaScript, the sheet's page.
-async fn open_sheet(req: Req) -> HtmlResult {
-    req.patch_or(Sheet {}, || async { req.redirect(&url::SheetPage) }).await
+/// The `<details>` drawn open.
+#[component]
+fn More() -> impl Patch {
+    html! {
+        <details id={SmokeMoreId} open>
+            <summary>"More"</summary>
+            <p>"Unfolded"</p>
+        </details>
+    }
 }
 
-/// Answers with the `<details>` drawn open; without JavaScript, the sheet's page.
+/// Answers any form that asks with the dialog drawn open; without JavaScript, the sheet's page
+/// with it open.
+async fn open_sheet(req: Req) -> HtmlResult {
+    req.patch_or(Sheet {}, || async { sheet(&req, true, false) }).await
+}
+
+/// Answers with the `<details>` drawn open; without JavaScript, the sheet's page with it open.
 async fn open_more(req: Req) -> HtmlResult {
-    req.patch_or(
-        html! {
-            <details id={SmokeMoreId} open>
-                <summary>"More"</summary>
-                <p>"Unfolded"</p>
-            </details>
-        },
-        || async { req.redirect(&url::SheetPage) },
-    )
-    .await
+    req.patch_or(More {}, || async { sheet(&req, false, true) }).await
 }
 
 #[derive(Id)]
