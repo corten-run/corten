@@ -3008,7 +3008,9 @@ const POST_PAGE_BROWSER: &[(&str, &str)] = &[("accept", "text/html")];
 /// `any = ..` route (which answers `GET` too), an API's path (answered with a page's shell
 /// header; an API's requests never reach the check) and a path of Corten's own are not. The last
 /// two are paths the app's post-only `/{section}/save` matches, and at Corten's own only
-/// `NotPages`, read by the check itself, keeps the page from being taken for that route's.
+/// `NotPages`, read by the check itself, keeps the page from being taken for that route's. Fetch
+/// metadata that says a top-level navigation is checked; a page's own `fetch` and a form posted
+/// into an `<iframe>`, whose answers are not shown as the tab's page, are not.
 #[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_builds() {
@@ -3047,6 +3049,13 @@ async fn a_page_answering_a_post_to_a_path_with_no_get_is_an_error_in_debug_buil
     let patch = post_page_send(&router, "/save", &[("accept", "text/html"), ("corten", "action")]).await;
     assert_eq!(patch.0, StatusCode::OK, "the runtime's patch");
     assert_eq!(post_page_send(&router, "/save", &[]).await.0, StatusCode::OK, "not a browser");
+    let navigation: &[(&str, &str)] = &[("accept", "text/html"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "document")];
+    let (status, _, body) = post_page_send(&router, "/save", navigation).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a form the browser submits: {body}");
+    let fetch: &[(&str, &str)] = &[("accept", "text/html"), ("sec-fetch-mode", "cors"), ("sec-fetch-dest", "empty")];
+    assert_eq!(post_page_send(&router, "/save", fetch).await.0, StatusCode::OK, "a page's own fetch");
+    let iframe: &[(&str, &str)] = &[("accept", "text/html"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", "iframe")];
+    assert_eq!(post_page_send(&router, "/save", iframe).await.0, StatusCode::OK, "a form posted into an iframe");
 }
 
 /// A release build compiles none of the check: the same post is the page it drew.

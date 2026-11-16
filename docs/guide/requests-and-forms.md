@@ -213,10 +213,14 @@ handler's cookies and `Clear-Site-Data` go out with the error, as above. The run
 does not say which it answers, since one handler answers both from `req.mode`
 ([design Choice 57](../design.md#choice-plain-request-patch)). Both checks here leave out a request
 whose fetch metadata says it is not a top-level navigation (a page's own `fetch` that asks for
-HTML, an `<iframe>`'s load), whose answer the browser does not show as the tab's page. It does
-not see an `unstaged` route, a fragment answered without the patch's `corten-patch` header (a response built by hand,
-or one put in place of the handler's through `DerefMut`), or a release build, which compiles none
-of it.
+HTML, an `<iframe>`'s load), whose answer the browser does not show as the tab's page, and a
+relayed upstream answer ([a `Relay`](app.md#websockets-and-relays)), checked by the upstream.
+Browsers send fetch metadata only to a secure context (HTTPS or `localhost`), so a debug build
+opened over plain HTTP at another address (a phone on the LAN) gets none, and a page's own
+`fetch` that asks for HTML there is taken for a navigation and gets a false 500. The patch check
+does not see an `unstaged` route, a fragment answered without the patch's `corten-patch` header
+(a response built by hand, or one put in place of the handler's through `DerefMut`), or a
+release build, which compiles none of it.
 
 ### Several posts on one page
 
@@ -1051,7 +1055,7 @@ Rows known only from data (the fields of the items a write touched) are a `for` 
 patch's parts, with its `let`s and branches, as in a page:
 
 ```rust,ignore
-req.patch(html! {
+req.patch(html! {                                    // in Mode::Action, or through req.patch_or
     <QueueTotals queue={&queue} />
     for sku in &taken {
         let label = label_of(sku);

@@ -235,3 +235,32 @@ async fn reading(req: Req, Params(at): Params<url::Reading>) -> HtmlResult<corte
 async fn large() -> LiveResponse {
     corten::live(stream::once(async { LargeList {}.to_html() }).chain(stream::pending()))
 }
+
+#[cfg(test)]
+mod tests {
+    use corten::Mode;
+
+    use super::url;
+    use crate::market::Market;
+
+    /// The smoke's patches answer a browser without JavaScript with a page or a redirect, never the
+    /// bare fragment (which a debug build refuses with a 500): the styled note's form goes back to
+    /// the watchlist, and Preview and Unfold draw the sheet's page with the dialog or the
+    /// `<details>` open. The runtime's request still gets the patch.
+    #[tokio::test]
+    async fn the_smokes_patches_answer_a_plain_request_with_a_page_or_a_redirect() {
+        let app = crate::app::app(Market::new()).area(|area| url::area(area).components(super::COMPONENTS)).test();
+        let plain = app.post(&url::Styled).await;
+        assert_eq!(plain.status(), 303, "{}", plain.text());
+        assert_eq!(plain.headers()["location"], "/");
+        let patch = app.post(&url::Styled).mode(Mode::Action).await;
+        assert_eq!(patch.status(), 200, "{}", patch.text());
+        assert!(patch.headers().contains_key("corten-patch") && patch.text().contains(">Saved</p>"), "{}", patch.text());
+        let (sheet, more) = (app.get(&url::OpenSheet).await, app.get(&url::OpenMore).await);
+        for (to, open) in [(sheet, "<p>Preview</p>"), (more, "<p>Unfolded</p>")] {
+            assert_eq!(to.status(), 200, "{}", to.text());
+            assert!(!to.headers().contains_key("corten-patch"), "a page: {}", to.text());
+            assert!(to.text().contains(" open>") && to.text().contains(open), "drawn open: {}", to.text());
+        }
+    }
+}

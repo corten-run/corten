@@ -4600,12 +4600,25 @@ rules something out.
     page's own `fetch` that asks for HTML, an `<iframe>`'s load), whose answer is not shown as the
     tab's page; an `unstaged` route, which skips the stages it runs in; a fragment sent
     without `corten-patch` (a response built by hand, or one put in place of the handler's through
-    `DerefMut`), which is not a patch to it; and a release build. A request the runtime makes is
-    never checked, its `corten: page` fetch of a whole page included.
+    `DerefMut`), which is not a patch to it; a relayed upstream answer (a `Relay`'s), checked by
+    the upstream; and a release build. A request the runtime makes is
+    never checked, its `corten: page` fetch of a whole page included. Browsers send fetch metadata
+    only to a secure context (HTTPS or `localhost`), so a debug build opened over plain HTTP at
+    another address (a phone on the LAN) gets none, and both checks take a page's own `fetch` that
+    asks for `text/html` there for a navigation: a false 500, which opening the app over HTTPS or
+    at `localhost` avoids.
 
     Stands on: platform (a browser shows an HTML response to a navigation or a form submit as the
-    document, whatever its markup); reasoned (every patch-making method sets `corten-patch`
-    through one constructor, `html_response`, and the app cannot make an `HtmlResponse` but
+    document, whatever its markup); platform (the
+    [Fetch Metadata](https://www.w3.org/TR/fetch-metadata/) headers a browser sends, on which both
+    checks' "top-level navigation" stands: `Sec-Fetch-Mode: navigate` with
+    `Sec-Fetch-Dest: document` for a link, a reload or a form it submits, `navigate` with
+    `iframe` for a frame's load, `cors` (or `same-origin`) with `empty` for a page's `fetch`,
+    and none to a URL that is not potentially trustworthy, so none over plain HTTP except to
+    `localhost`; probed in Chromium 156: each of those values at `localhost`, and no
+    `Sec-Fetch-*` header at all over plain HTTP to the machine's LAN address. That a script cannot
+    set them is [Choice 11](#choice-corten-request-header)'s probe); reasoned (every
+    patch-making method sets `corten-patch` through one constructor, `html_response`, and the app cannot make an `HtmlResponse` but
     through `Req`);
     measured (callgrind, release, instructions per request through a route's `patch_or` in
     process, 1,200 requests less 200 over 1,000, with the `#[ignore]` test
@@ -4635,14 +4648,18 @@ rules something out.
     is enough; or an app needs a fragment answered to a top-level navigation on purpose, which
     would need a way to say so; or the runtime stops marking its own
     requests with the `corten` header ([Choice 11](#choice-corten-request-header)), on which "the
-    runtime did not fetch it" stands.
+    runtime did not fetch it" stands; or a browser changes the fetch metadata it sends (a
+    navigation without `navigate` and `document`, a frame or a script's fetch with them, or the
+    headers sent over plain HTTP too), on which "a top-level navigation" stands.
 
     Last checked: 2026-11-16, the router test
     `a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds` and its release
     counterpart (the release build's run with `--release`), on `855797ab6`; 2026-11-16, the callgrind runs on
     `4060b8b27` and, of the tests alone, on `019058f59`'s `tests.rs`; 2026-11-16, the reading of
     `html_response`'s callers in `crates/corten/src/page.rs` that the reasoned premise rests on, on
-    `855797ab6`.
+    `855797ab6`; 2026-11-16, the fetch metadata a page's navigation, form submit, `<iframe>` and
+    `fetch` (with `Accept: text/html`) send, probed in Chromium 156 at `localhost` and over plain
+    HTTP at a LAN address, against the Fetch Metadata Working Draft of 21 September 2026.
 
 ## Rules
 

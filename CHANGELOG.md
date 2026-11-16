@@ -808,8 +808,11 @@ Corten is pre-1.0, so any minor version may change the API.
   or return the patch only when `req.mode == Mode::Action`; a test that means the runtime's
   request sends `.mode(Mode::Action)`. A request whose fetch metadata says it is not a top-level
   navigation (`Sec-Fetch-Mode` other than `navigate`, as a page's own `fetch` sends, or
-  `Sec-Fetch-Dest` other than `document`, as an `<iframe>` sends) and an `unstaged` route are not
-  checked, by this check or by the one for a page at a path with no `GET`.
+  `Sec-Fetch-Dest` other than `document`, as an `<iframe>` sends), a relayed upstream answer
+  and an `unstaged` route are not checked, by this check or by the one for a page at a path with
+  no `GET`. Browsers send fetch metadata only over HTTPS or to `localhost`, so a debug build
+  opened over plain HTTP at a LAN address takes a page's own `fetch` that asks for HTML for a
+  navigation, a false 500.
   The watchlist's smoke-only styled-note route redirects without JavaScript, and its dialog and
   `<details>` routes draw the sheet page with them open
   ([#1423 A patch answering a browser's plain post is shown as the whole page, and the #1340 debug check only catches a page](https://github.com/corten-run/corten/issues/1423)).
