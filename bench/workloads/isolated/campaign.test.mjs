@@ -18,7 +18,7 @@ import { composePhase } from "./composition.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
-let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
+let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, pendingStarted, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
 const cpu = { app: { cpuset: "1", quota: 1 } };
 mock.module("./evidence.mjs", { namedExports: { ...evidence,
   physical: (path, ...rest) => evidence.physical(path === "/bench/campaign" ? root : path, ...rest),
@@ -137,7 +137,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
       child.close(invocation.includes("--check-only") ? 1 : mode === "process-fails" && native ? 9
         : mode === "complete" && group === "client-heavy" ? 2 : mode === "complete" && group === "live-delivery" ? 1 : 0);
     };
-    if (mode === "pending") release = finish; else finish();
+    if (mode === "pending") { release = finish; pendingStarted(); } else finish();
   });
 });
 const { createCampaign } = await import("./campaign.mjs");
@@ -266,9 +266,10 @@ test("one root, opaque handle, all nine fixed native commands and retained faile
 });
 test("overlapping advance and semantic retry are refused", async () => {
   const s = setup(), h = await begin(s); mode = "pending";
+  const started = new Promise((resolve) => { pendingStarted = resolve; });
   const pending = s.campaign.advance(h);
   await assert.rejects(s.campaign.advance(h), /already in progress/);
-  mode = "normal"; await new Promise((ok) => setImmediate(ok)); release(); await pending;
+  await started; mode = "normal"; release(); await pending;
   assert.equal(calls.length, 2);
 });
 

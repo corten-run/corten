@@ -2,6 +2,7 @@
 // They establish snapshot consistency, not native host qualification.
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
@@ -14,7 +15,7 @@ const parent = "/system.slice/corten-bench-groups-r21-0123456789abcdef.service";
 const stat = (pid, name = "node", start = pid * 10) => `${pid} (${name}) S ${[1, ...Array(17).fill(0), start, 0].join(" ")}`;
 const missing = (code = "ENOENT") => Object.assign(new Error("PRIVATE_NOT_RETAINED"), { code });
 
-function fixture(t, nativePids = []) {
+async function fixture(t, nativePids = []) {
   const original = Object.fromEntries(["readFileSync", "writeFileSync", "mkdirSync", "rmdirSync", "lstatSync", "statSync", "readlinkSync", "readdirSync", "fsyncSync"]
     .map((key) => [key, fs[key]]));
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
@@ -40,6 +41,15 @@ function fixture(t, nativePids = []) {
     if (platform.value === "win32" && fs.fstatSync(fd).isDirectory()) return;
     return original.fsyncSync(fd);
   });
+  if (platform.value === "win32") {
+    const open = fsp.open;
+    t.mock.method(fsp, "open", async (path, ...args) => {
+      if (fs.existsSync(path) && fs.statSync(path).isDirectory()) return {
+        async sync() {}, async close() {},
+      };
+      return open(path, ...args);
+    });
+  }
   t.mock.method(fs, "mkdirSync", (path, ...args) => {
     const text = String(path).replaceAll("\\", "/");
     if (text.startsWith("/sys/fs/cgroup/")) { f.scope = text.slice("/sys/fs/cgroup".length); return; }
@@ -93,19 +103,20 @@ function fixture(t, nativePids = []) {
       "cpuset.cpus.effective": "0-7\n", "memory.current": "10\n", "memory.peak": "20\n", "memory.max": "max\n", "memory.events": "oom_kill 0\n" }[key];
   });
   syncBuiltinESMExports();
-  const observer = beginLifetime({ campaign, binding, invocation, directory, command: 0, pid }); observer.attach(pid);
+  const observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid }); await observer.attach(pid);
+  const tick = f.tick; f.tick = async () => { tick(); await observer.drain(); };
   f.samples = () => original.readFileSync(join(directory, "samples.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   f.records = () => original.readdirSync(join(directory, "processes")).map((name) => JSON.parse(original.readFileSync(join(directory, "processes", name))));
-  f.finish = () => {
-    f.override = () => {}; f.members = []; f.children = []; observer.finish(result);
+  f.finish = async () => {
+    f.override = () => {}; f.members = []; f.children = []; await observer.finish(result);
     f.terminal = JSON.parse(original.readFileSync(join(directory, "terminal.json")));
     return inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result });
   };
   return f;
 }
 
-for (const operation of ["stat", "exe"]) test(`full snapshot recovers from six consecutive exited-PID ${operation} races`, (t) => {
-  const f = fixture(t); let exits = 0;
+for (const operation of ["stat", "exe"]) test(`full snapshot recovers from six consecutive exited-PID ${operation} races`, async (t) => {
+  const f = await fixture(t); let exits = 0;
   f.members = [4242, 5000];
   f.override = (path) => {
     if (path === `/proc/${5000 + exits}/${operation}` && exits < 6) {
@@ -113,112 +124,112 @@ for (const operation of ["stat", "exe"]) test(`full snapshot recovers from six c
     }
     if (path === "/proc/4242/cmdline") return Buffer.from(`--type=${exits < 6 ? "utility" : "renderer"}\0`);
   };
-  f.tick();
+  await f.tick();
   assert.equal(exits, 6); assert.equal(f.samples().length, 3);
   const accepted = f.samples().at(-1);
   assert.equal(accepted.groups[0].files["cpu.stat"], "usage_usec 16\n");
   assert.deepEqual(accepted.groups[0].files["cgroup.procs"], "4242\n5006\n");
   assert.ok(!f.records().some((p) => p.type === "--type=utility"), "discarded attempt metadata must not escape");
   assert.ok(!f.records().some((p) => processIdentity(p.stat).pid >= 5000 && processIdentity(p.stat).pid < 5006));
-  assert.equal(f.finish().status, "verified"); assert.equal(f.terminal.observerFailures.count, 0);
+  assert.equal((await f.finish()).status, "verified"); assert.equal(f.terminal.observerFailures.count, 0);
 });
 
-test("a closing recursive census rejects membership changes after local process bookends", (t) => {
-  const f = fixture(t); let changed = false;
+test("a closing recursive census rejects membership changes after local process bookends", async (t) => {
+  const f = await fixture(t); let changed = false;
   f.override = (path) => {
     if (!changed && path === `/sys/fs/cgroup${f.scope}/cgroup.procs` && f.reads.filter((p) => p === "/proc/4242/stat").length > 2) {
       changed = true; f.members.push(5000); f.children.push("child"); f.cpu++;
     }
   };
-  f.tick();
+  await f.tick();
   assert.equal(changed, true); const sample = f.samples().at(-1);
   assert.equal(sample.groups.length, 2); assert.equal(sample.groups[0].files["cpu.stat"], "usage_usec 11\n");
-  assert.equal(sample.processes.length, 2); assert.equal(f.finish().status, "verified");
+  assert.equal(sample.processes.length, 2); assert.equal((await f.finish()).status, "verified");
 });
 
-test("six name-only changes require seven complete attempts, not mixed identities", (t) => {
-  const f = fixture(t); let reads = 0;
+test("six name-only changes require seven complete attempts, not mixed identities", async (t) => {
+  const f = await fixture(t); let reads = 0;
   f.override = (path) => {
     if (path === "/proc/4242/stat") return stat(4242, `name-${Math.min(6, Math.floor(++reads / 2))}`);
   };
-  f.tick(); assert.equal(reads, 14);
+  await f.tick(); assert.equal(reads, 14);
   assert.ok(!f.records().some((p) => /^name-[0-5]$/.test(processIdentity(p.stat).comm)));
-  assert.equal(f.finish().status, "verified");
+  assert.equal((await f.finish()).status, "verified");
 });
 
-for (const code of ["EACCES", "EPERM", "EIO", "ENOENT", "ESRCH"]) test(`persistent ${code} cannot be hidden by a later clean empty scope`, (t) => {
-  const f = fixture(t); let reads = 0;
+for (const code of ["EACCES", "EPERM", "EIO", "ENOENT", "ESRCH"]) test(`persistent ${code} cannot be hidden by a later clean empty scope`, async (t) => {
+  const f = await fixture(t); let reads = 0;
   f.override = (path) => { if (path === "/proc/4242/stat") { reads++; throw missing(code); } };
-  f.tick();
+  await f.tick();
   assert.equal(f.samples().length, 2);
   if (!["ENOENT", "ESRCH"].includes(code)) assert.equal(reads, 1, "permission and I/O failures are not churn");
   assert.ok(f.clock <= 11001, "retries stay within the existing sample gap, not a new retry count");
-  assert.equal(f.finish().status, "blocked"); assert.equal(f.terminal.empty, true);
+  assert.equal((await f.finish()).status, "blocked"); assert.equal(f.terminal.empty, true);
   assert.equal(f.terminal.observerError, "host-observation-gap"); assert.equal(f.terminal.observerFailures.count, 1);
   assert.equal(f.terminal.observerFailures.first.code, code);
 });
 
-for (const change of ["pid", "start"]) test(`${change} bookend mismatch still fails immediately`, (t) => {
-  const f = fixture(t); let reads = 0;
+for (const change of ["pid", "start"]) test(`${change} bookend mismatch still fails immediately`, async (t) => {
+  const f = await fixture(t); let reads = 0;
   f.override = (path) => {
     if (path === "/proc/4242/stat") return ++reads === 1 ? stat(4242) : stat(change === "pid" ? 4243 : 4242, "node", change === "start" ? 42421 : 42420);
   };
-  f.tick(); assert.equal(reads, 2); assert.equal(f.finish().status, "blocked");
+  await f.tick(); assert.equal(reads, 2); assert.equal((await f.finish()).status, "blocked");
   assert.equal(f.terminal.observerFailures.first.operation, change === "pid" ? "process-pid-changed" : "process-start-changed");
 });
 
-test("an executable link missing for a still-listed PID is not silently treated as exit", (t) => {
-  const f = fixture(t);
+test("an executable link missing for a still-listed PID is not silently treated as exit", async (t) => {
+  const f = await fixture(t);
   f.override = (path) => { if (path === "/proc/4242/exe") throw missing(); };
-  f.tick(); assert.equal(f.samples().length, 2); assert.equal(f.finish().status, "blocked");
+  await f.tick(); assert.equal(f.samples().length, 2); assert.equal((await f.finish()).status, "blocked");
   assert.equal(f.terminal.observerFailures.first.operation, "executable-link");
 });
 
-test("non-process ENOENT is not retried as process churn", (t) => {
-  const f = fixture(t); let reads = 0;
+test("non-process ENOENT is not retried as process churn", async (t) => {
+  const f = await fixture(t); let reads = 0;
   f.override = (path) => {
     if (path === `/sys/fs/cgroup${f.scope}/cgroup.procs`) { reads++; throw missing(); }
   };
-  f.tick(); assert.equal(reads, 1); assert.equal(f.finish().status, "blocked");
+  await f.tick(); assert.equal(reads, 1); assert.equal((await f.finish()).status, "blocked");
 });
 
-test("backward wall-clock movement cannot renew a retry deadline", (t) => {
-  const f = fixture(t); let reads = 0;
+test("backward wall-clock movement cannot renew a retry deadline", async (t) => {
+  const f = await fixture(t); let reads = 0;
   f.override = (path) => {
     if (path === "/proc/4242/stat") { reads++; f.wallOffset -= 100; throw missing(); }
   };
-  f.tick(); assert.ok(reads <= 1001); assert.ok(f.clock <= 11000);
+  await f.tick(); assert.ok(reads <= 1001); assert.ok(f.clock <= 11000);
   f.wallOffset = 0;
-  assert.equal(f.finish().status, "blocked");
+  assert.equal((await f.finish()).status, "blocked");
 });
 
-test("a late sample gets only the remaining continuity budget and failure does not renew it", (t) => {
-  const f = fixture(t); let reads = 0;
+test("a late sample gets only the remaining continuity budget and failure does not renew it", async (t) => {
+  const f = await fixture(t); let reads = 0;
   f.clock += 950;
   f.override = (path) => { if (path === "/proc/4242/stat") { reads++; throw missing(); } };
-  f.tick(); assert.equal(f.clock, 11000); assert.equal(reads, 51);
-  f.tick(); assert.equal(f.clock, 11000); assert.equal(reads, 52);
-  assert.equal(f.samples().length, 2); assert.equal(f.finish().status, "blocked");
+  await f.tick(); assert.equal(f.clock, 11000); assert.equal(reads, 51);
+  await f.tick(); assert.equal(f.clock, 11000); assert.equal(reads, 52);
+  assert.equal(f.samples().length, 2); assert.equal((await f.finish()).status, "blocked");
   assert.equal(f.terminal.observerFailures.count, 2);
 });
 
-test("a coherent 1909ms sampling gap stays accounting-blocked without inventing an observer error", (t) => {
-  const f = fixture(t); f.clock += 1909; f.tick();
-  const proof = f.finish();
+test("a coherent 1909ms sampling gap stays accounting-blocked without inventing an observer error", async (t) => {
+  const f = await fixture(t); f.clock += 1909; await f.tick();
+  const proof = await f.finish();
   assert.equal(proof.status, "blocked"); assert.equal(proof.checks.accounting, false);
   for (const key of ["terminal", "empty", "observer", "unforced", "leader"]) assert.equal(proof.checks[key], true);
   assert.equal(f.terminal.observerError, null); assert.equal(f.terminal.observerFailures.count, 0);
 });
 
-test("a retry that runs past the one-second budget cannot publish a sample", (t) => {
-  const f = fixture(t); let raced = false;
+test("a retry that runs past the one-second budget cannot publish a sample", async (t) => {
+  const f = await fixture(t); let raced = false;
   f.override = (path) => {
     if (path === "/proc/4242/stat") {
       if (!raced) { raced = true; f.clock += 600; throw missing(); }
       f.clock += 600;
     }
   };
-  f.tick(); assert.equal(f.samples().length, 2); assert.equal(f.finish().status, "blocked");
+  await f.tick(); assert.equal(f.samples().length, 2); assert.equal((await f.finish()).status, "blocked");
 });
 
 for (const operation of ["stat", "exe"]) test(`native proc ${operation}: six real exits between census and process capture`, {
@@ -240,7 +251,7 @@ for (const operation of ["stat", "exe"]) test(`native proc ${operation}: six rea
       assert.ok(Number.isSafeInteger(pid) && pid > 0); targets.push(pid);
       liveTargets.set(pid, processIdentity(read(`/proc/${pid}/stat`, "utf8")).startTicks);
     }
-    const f = fixture(t, [leader.pid, ...targets]); f.members = [leader.pid, ...targets];
+    const f = await fixture(t, [leader.pid, ...targets]); f.members = [leader.pid, ...targets];
     let exits = 0;
     f.override = (path) => {
       const pid = Number(path.split("/")[2]);
@@ -253,10 +264,10 @@ for (const operation of ["stat", "exe"]) test(`native proc ${operation}: six rea
         // The original proc read now throws the real kernel ENOENT.
       }
     };
-    const started = now(); f.tick(); const elapsed = now() - started;
+    const started = now(); await f.tick(); const elapsed = now() - started;
     assert.equal(exits, 6); assert.equal(f.samples().length, 3);
     assert.equal(f.samples().at(-1).processes.length, 1);
-    assert.equal(f.finish().status, "verified"); assert.equal(f.terminal.observerFailures.count, 0);
+    assert.equal((await f.finish()).status, "verified"); assert.equal(f.terminal.observerFailures.count, 0);
     assert.ok(elapsed < 1000, `bounded native churn capture took ${elapsed}ms`);
     console.log(JSON.stringify({ control: "real-proc-synthetic-cgroup", operation, exits, elapsedMs: elapsed }));
   } finally {

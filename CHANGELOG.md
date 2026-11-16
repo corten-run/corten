@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Keep benchmark host sampling off synchronous record flushes with one bounded
+  asynchronous filesystem FIFO. Preserve per-record file/directory durability
+  before referencing sample writes, strict continuity and cancellation gates;
+  do not seal unfinished or failed storage or reinterpret historical failures.
+
 - Resample complete benchmark host scopes within the existing one-second window
   when process churn invalidates a census, and require matching recursive
   membership bookends. Keep PID/start, executable, accounting, observer-error and

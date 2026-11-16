@@ -23,7 +23,7 @@ test("actual delegated cgroup observes the gated Node child, accounting and posi
   let observer, pid, hashFinishedAt;
   try {
     const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env, log() {},
-      onStart(value) {
+      async onStart(value) {
         pid = value; const original = fs.readFileSync;
         const delayed = t.mock.method(fs, "readFileSync", function (path, ...args) {
           if (path === `/proc/${pid}/exe` && hashFinishedAt === undefined) {
@@ -33,11 +33,11 @@ test("actual delegated cgroup observes the gated Node child, accounting and posi
           return original.call(this, path, ...args);
         });
         syncBuiltinESMExports();
-        try { observer = beginLifetime({ campaign, binding, invocation, directory, command: 0, pid }); observer.attach(pid); }
+        try { observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid }); await observer.attach(pid); }
         finally { delayed.mock.restore(); syncBuiltinESMExports(); }
       } });
     assert.equal(result.success, true, JSON.stringify(result));
-    const manifest = observer.finish(result);
+    const manifest = await observer.finish(result);
     const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result });
     assert.equal(proof.status, "verified", JSON.stringify({ checks: proof.checks,
       gaps: proof.samples.slice(1).map((s, i) => s.at - proof.samples[i].at), terminal: JSON.parse(readFileSync(join(directory, "terminal.json"))) }));
@@ -61,10 +61,10 @@ test("actual SIGTERM delivery drains native finally and its real descendant; can
   try {
     const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env,
       signal: abort.signal, log(bytes) { output += bytes; if (output.includes("READY") && !timer) timer = setTimeout(() => abort.abort(), 350); },
-      onStart(value) { pid = value; observer = beginLifetime({ campaign, binding, invocation, directory, command: 1, pid }); observer.attach(pid); } });
+      async onStart(value) { pid = value; observer = await beginLifetime({ campaign, binding, invocation, directory, command: 1, pid }); await observer.attach(pid); } });
     assert.equal(result.terminal, true); assert.equal(result.cancelled, true); assert.equal(result.forced, false); assert.equal(result.success, false);
     assert.match(output, /HANDLED SIGTERM/); assert.match(output, /CLEANUP_EXECUTED/);
-    observer.finish(result);
+    await observer.finish(result);
     const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 1, pid, result });
     assert.equal(proof.status, "blocked"); assert.ok(proof.identities.length >= 2, "real native descendant observed");
     const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
@@ -91,8 +91,8 @@ for (const code of ["EIO", "ENOENT", "ERR_ASSERTION", "private-code"]) test(`int
   });
   try {
     const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env, log() {},
-      onStart(value) {
-        pid = value; observer = beginLifetime({ campaign, binding, invocation, directory, command: 2, pid }); observer.attach(pid);
+      async onStart(value) {
+        pid = value; observer = await beginLifetime({ campaign, binding, invocation, directory, command: 2, pid }); await observer.attach(pid);
         const original = fs.readFileSync;
         const fault = t.mock.method(fs, "readFileSync", function (path, ...args) {
           if (path === `/proc/${pid}/stat`) {
@@ -109,7 +109,7 @@ for (const code of ["EIO", "ENOENT", "ERR_ASSERTION", "private-code"]) test(`int
         try { for (let i = 0; i < 20; i++) tick(); }
         finally { fault.mock.restore(); syncBuiltinESMExports(); }
       } });
-    assert.equal(result.success, true, JSON.stringify(result)); observer.finish(result);
+    assert.equal(result.success, true, JSON.stringify(result)); await observer.finish(result);
     const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
     assert.equal(terminal.observerError, "host-observation-gap"); assert.equal(terminal.empty, true);
     const failures = terminal.observerFailures;
@@ -145,7 +145,7 @@ test("a final sample failure retains its operation without claiming an empty ter
   });
   try {
     const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env, log() {},
-      onStart(value) { pid = value; observer = beginLifetime({ campaign, binding, invocation, directory, command: 3, pid }); observer.attach(pid); } });
+      async onStart(value) { pid = value; observer = await beginLifetime({ campaign, binding, invocation, directory, command: 3, pid }); await observer.attach(pid); } });
     assert.equal(result.success, true, JSON.stringify(result));
     const context = JSON.parse(readFileSync(join(directory, "binding.json"))), original = fs.readFileSync;
     const fault = t.mock.method(fs, "readFileSync", function (path, ...args) {
@@ -153,7 +153,7 @@ test("a final sample failure retains its operation without claiming an empty ter
       return original.call(this, path, ...args);
     });
     syncBuiltinESMExports();
-    try { observer.finish(result); }
+    try { await observer.finish(result); }
     finally { fault.mock.restore(); syncBuiltinESMExports(); }
     const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
     assert.equal(terminal.terminal, false); assert.equal(terminal.empty, false);
@@ -182,8 +182,8 @@ test("actual short-lived descendant churn retains native identities and a positi
   try {
     const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env,
       log(bytes) { output += bytes; },
-      onStart(value) { pid = value; observer = beginLifetime({ campaign, binding, invocation, directory, command: 4, pid }); observer.attach(pid); } });
-    assert.equal(result.success, true, JSON.stringify(result)); observer.finish(result);
+      async onStart(value) { pid = value; observer = await beginLifetime({ campaign, binding, invocation, directory, command: 4, pid }); await observer.attach(pid); } });
+    assert.equal(result.success, true, JSON.stringify(result)); await observer.finish(result);
     const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 4, pid, result });
     const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
     assert.equal(proof.status, "verified", JSON.stringify({ checks: proof.checks, failures: terminal.observerFailures }));
@@ -206,11 +206,11 @@ test("an actual observer stall beyond one second remains blocked after clean nat
   let observer, pid;
   try {
     const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env, log() {},
-      onStart(value) {
-        pid = value; observer = beginLifetime({ campaign, binding, invocation, directory, command: 5, pid }); observer.attach(pid);
+      async onStart(value) {
+        pid = value; observer = await beginLifetime({ campaign, binding, invocation, directory, command: 5, pid }); await observer.attach(pid);
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1250);
       } });
-    assert.equal(result.success, true, JSON.stringify(result)); observer.finish(result);
+    assert.equal(result.success, true, JSON.stringify(result)); await observer.finish(result);
     const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 5, pid, result });
     const maxGap = Math.max(...proof.samples.slice(1).map((s, i) => s.at - proof.samples[i].at));
     assert.ok(maxGap >= 1250, `actual maximum sample gap was ${maxGap}ms`);
@@ -242,13 +242,14 @@ for (const scenario of [
   const campaign = `${unit[1]}-0000000000000007`, binding = { request: { group: "client-heavy", round: "observer-bookends", commit: "a".repeat(40) } };
   const invocation = { executable: "node", argv: ["bench/workloads/isolated/test-fixtures/host-lifetime-bookends.mjs", gate], shell: false };
   let observer, pid, tick, output = "", capture;
-  const originalInterval = globalThis.setInterval;
-  const interval = t.mock.method(globalThis, "setInterval", (callback, ...args) => {
-    tick = callback; return originalInterval(callback, ...args);
+  // Isolate this manual census while awaiting its append; periodic cadence and
+  // actual descendant churn are exercised separately above.
+  const interval = t.mock.method(globalThis, "setInterval", (callback) => {
+    tick = callback; return 1;
   });
   try {
     const result = await supervise(invocation, { cwd: fileURLToPath(new URL("../../../", import.meta.url)), env: process.env,
-      onStart(value) { pid = value; observer = beginLifetime({ campaign, binding, invocation, directory, command: 6, pid }); observer.attach(pid); },
+      async onStart(value) { pid = value; observer = await beginLifetime({ campaign, binding, invocation, directory, command: 6, pid }); await observer.attach(pid); },
       log(bytes) {
         output += bytes;
         const ready = /^BOOKENDS_READY (\d+) (\d+)$/m.exec(output);
@@ -292,10 +293,13 @@ for (const scenario of [
           return value;
         });
         syncBuiltinESMExports();
-        try { tick(); capture.after = samples(); }
-        finally { fault.mock.restore(); syncBuiltinESMExports(); fs.writeFileSync(gate, "finish"); }
+        capture.completed = (async () => {
+          try { tick(); await observer.drain(); capture.after = samples(); }
+          finally { fault.mock.restore(); syncBuiltinESMExports(); fs.writeFileSync(gate, "finish"); }
+        })();
+        capture.completed.catch(() => {});
       } });
-    assert.equal(result.success, true, JSON.stringify({ result, output })); observer.finish(result); assert.ok(capture);
+    assert.equal(result.success, true, JSON.stringify({ result, output })); await capture?.completed; await observer.finish(result); assert.ok(capture);
     const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
     const detail = JSON.stringify({ scenario: scenario.name, attempts: capture.attempts.length, before: capture.before,
       after: capture.after.length, failures: terminal.observerFailures });

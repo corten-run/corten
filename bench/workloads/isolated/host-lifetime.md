@@ -9,8 +9,9 @@ cannot clear either gate.
 
 `terminal.json` additionally retains `observerFailures` with a total `count` and only
 the `first` and `last` caught failures. Each entry records the catch phase, operation,
-allowlisted error code (or `unknown`), observation time, completed sample count and
-last successful sample timestamp. Operation names describe fixed collector steps,
+allowlisted error code (or `unknown`), observation time, admitted capture count and
+last successful capture timestamp. These counts do not certify storage completion.
+Operation names describe fixed collector steps,
 such as `process-stat`, `executable-link`, `process-name-recheck`, `cgroup-read`
 and `sample-write`. No error messages, stacks, paths, arguments, daemon output or
 arbitrary error properties are saved. Identity diagnostics distinguish PID, start-tick
@@ -54,12 +55,55 @@ the accepted census. Nothing reconstructs an unobserved executable or repairs ol
 evidence. The r21 process-read ENOENT records identify failed operations, not every
 native runner failure or the cause of an exception-free accounting gap.
 
+## Ordered Asynchronous Storage
+
+One in-process `fs/promises` FIFO writes initial process records and samples. It
+completely writes each exact initial PID/start/name/executable/cgroup/type record,
+fsyncs its file, closes it, fsyncs its directory and closes that descriptor before
+appending a sample that references it. Samples are never written ahead of their
+record dependencies, even when the kernel flushes un-fsynced appends on its own.
+There is no helper process, worker, custom message protocol or production I/O hook.
+
+The sampler retains its actual capture timestamps, 100 ms interval and independent
+one-second replay limit. It can capture ahead of storage without retimestamping
+rows at completion. The combined 256 MiB record/sample limit includes admitted but
+unfinished bytes. Additional queue limits are 8 MiB, 64 frames and 4,096 initial
+records, including the one in-flight frame. Overflow fails rather than waiting on
+the sampler, dropping a member or growing an unbounded queue. Storage uses at most
+two evidence FDs: the sample file and one record or directory. Queue payload and
+V8 heap limits are not claims about total process memory.
+
+`beginLifetime`, `attach` and `finish` are awaited. Attachment starts periodic
+capture before waiting for its initial record writes, keeping the native bootstrap
+gated until they finish. Finish stops capture, waits for every admitted frame,
+fsyncs/closes the sample file and its directory, and verifies exact initial record
+bytes before publishing terminal evidence. The terminal sample count must match
+completed appends. A private fsynced terminal file is renamed to the final name
+only after these steps; the caller receives a manifest only after namespace sync.
+
+Storage errors and the existing 30-second startup/frame/drain deadlines are sticky.
+A timeout cannot cancel an uninterruptible filesystem operation. Its FIFO retains
+ownership until the operation returns and cleanup is attempted; partial files and
+an unproven scope remain retained, with no terminal seal or cleanup claim. Neither
+an empty cgroup nor an eventual successful fsync clears a prior storage failure.
+Fully observed and flushed cancelled/forced evidence retains the old contract:
+it can be collected as explicitly nonqualifying evidence, never a clean success.
+A new abort during finish cannot seal an earlier contradictorily clean result.
+
+Queued raw bytes are **not yet durable**. Off-sampler capture enlarges the bounded
+pending-observation window compared with blocking capture. Power loss before a
+record's file and directory sync can lose that pending record; completed per-record
+syncs still happen during sampling, not only at finish. Durable orphan records may
+survive without a sample. Preterminal sample appends may be missing/torn after power
+loss, as before. No referencing append precedes its record flushes. A process-kill
+control tests interruption, not hardware power-loss durability or old failure causes.
+
 ## Checks
 
 Run portable replay tests with:
 
 ```sh
-node --test --test-concurrency=1 bench/workloads/isolated/host-lifetime-churn.test.mjs bench/workloads/isolated/host-lifetime.test.mjs
+node --test --test-concurrency=1 bench/workloads/isolated/host-lifetime-durability.test.mjs bench/workloads/isolated/host-lifetime-churn.test.mjs bench/workloads/isolated/host-lifetime.test.mjs
 ```
 
 Inside a fresh, explicitly owned delegated test unit with the layout described in
