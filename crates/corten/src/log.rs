@@ -438,7 +438,11 @@ mod tests {
                         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
                         req.page::<crate::ForOne>(html! {
                             <!DOCTYPE html>
-                            <html><head><title>"Not here"</title><Corten /></head>
+                            <html>
+                                <head>
+                                    <title>"Not here"</title>
+                                    <Corten />
+                                </head>
                                 <body><main>"Replacement error page"</main></body>
                             </html>
                         })
