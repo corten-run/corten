@@ -325,6 +325,17 @@ durable one-DELETE/confirmed-absence rules apply unchanged. Uncertainty means no
 DELETE. A retired reservation supports absence reconciliation only, not another
 DELETE. All preexisting operation locks remain exclusive.
 
+The authenticated original mixed subject also binds every captured source blob
+and contender build-context archive. Before accepting the wrapper extraction or
+later custody, the controller checks the manifest and snapshot hashes, the closed
+physical file inventory, each file's exact size and streamed hash, and every
+selected contender's context commitment. Equal wrapper and custody tree hashes
+alone are insufficient: both copies could omit the same referenced payload.
+Missing, altered or extra payloads block retirement before deletion intent.
+These preservation checks do not execute native source validators, rebuild an
+archive, grant audit approval or establish framework qualification. The focused
+portable regression command is `node --test bench/workloads/cloud-mixed-custody.test.mjs`.
+
 Focused portable guards run with `node --test bench/workloads/cloud-cancellation.test.mjs`.
 The explicit synthetic Linux harness is `test-fixtures/mixed-cancel-linux.mjs`:
 private disposable `/bench` tmpfs, read-only source and original 9f campaign blob
