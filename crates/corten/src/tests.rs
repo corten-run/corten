@@ -9851,9 +9851,12 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
                 {zone.field(f.zone)}
                 <label>
                     "Goes live, " {zone.name()}
-                    <input type="datetime-local" name={f.live_at}
+                    <input
+                        type="datetime-local"
+                        name={f.live_at}
                         min={zone.local(listed).and_then(LocalDateTime::ceil_minute)}
-                        value={typed.map_or(shown.map(|t| t.to_string()), |e| e.text().map(str::to_owned))}>
+                        value={typed.map_or(shown.map(|t| t.to_string()), |e| e.text().map(str::to_owned))}
+                    >
                 </label>
             </form>
         }
