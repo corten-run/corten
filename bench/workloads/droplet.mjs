@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, ownedDroplet, reservation, tags, terminalUnit, validateFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
 import { archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
-import { campaignOutcome, controllerState, full, providerAccount, providerFailure, validateOptions } from "./cloud-options.mjs";
+import { campaignOutcome, controllerFailure, controllerState, full, providerAccount, providerFailure, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
@@ -537,9 +537,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
 
 // Never print exception messages/stacks or provider output: assertions may echo raw evidence.
 export function publicError(error) {
-  const diagnostic = providerFailure(error);
+  const diagnostic = providerFailure(error), stage = controllerFailure(error);
+  const detail = diagnostic?.httpStatus !== undefined ? ` (HTTP ${diagnostic.httpStatus})`
+    : diagnostic?.detail !== undefined ? ` (${diagnostic.detail})` : "";
   return "Controller stopped; retained state/evidence requires inspection. Host/deletion state may be uncertain. Never relaunch."
-    + (diagnostic ? ` Provider failure: ${diagnostic.code}${diagnostic.httpStatus === undefined ? "" : ` (HTTP ${diagnostic.httpStatus})`}.` : "");
+    + (stage ? ` Controller stage: ${stage}.` : "")
+    + (diagnostic ? ` Provider failure: ${diagnostic.code}${detail}.` : "");
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   import("./cloud-production.mjs").then((native) => native.productionCli(process.argv.slice(2)))

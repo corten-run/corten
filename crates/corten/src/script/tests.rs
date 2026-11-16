@@ -54,6 +54,41 @@ fn Priced(t: Msg) -> impl Render {
     html! { <output ref={out} on:connect={shared::priced(out, t.js().number(), t.js().money(USD), when)}></output> }
 }
 
+/// A form's fields, which handlers are given as their controls: each kind, a row's field, and a
+/// name `#[serde(rename)]` gave a character `data-on` escapes.
+#[derive(Fields)]
+#[allow(dead_code)]
+struct Shipment {
+    weight: String,
+    format: String,
+    note: String,
+    size: String,
+    #[serde(rename = "it's")]
+    odd: String,
+    #[fields(rows)]
+    #[serde(default)]
+    parcels: std::collections::BTreeMap<String, Parcel>,
+}
+
+#[derive(Fields)]
+#[allow(dead_code)]
+struct Parcel {
+    weight: String,
+}
+
+/// Handlers given a form's fields, alone and in a group.
+#[component]
+fn Shipping<'a>(key: &'a String) -> impl Render {
+    let f = Shipment::FIELDS;
+    let parcel = shared::Parcel { weight: f.parcels.at(key).weight, sizes: f.odd };
+    html! {
+        <form>
+            <button type="button" on:click={shared::fill(f.weight, f.format, f.note, f.size)}>"Fill"</button>
+            <button type="button" on:click={shared::pack(parcel)}>"Pack"</button>
+        </form>
+    }
+}
+
 /// A `string[]` parameter takes a slice, an array or a `Vec` of strings, with no feature.
 #[component]
 fn Named<'a>(list: &'a [&'a str]) -> impl Render {
@@ -1384,6 +1419,49 @@ async fn a_page_loads_the_format_module_only_when_its_handlers_take_a_format() {
     assert!(source.contains("formatter") && source.contains(r#"name: "corten-format""#), "{source}");
 }
 
+/// What finds a field's control is a module of its own, as the formatter is: a page whose handlers
+/// take a field loads it with theirs, and a page whose handlers take none does not.
+#[tokio::test]
+async fn a_page_loads_the_field_module_only_when_its_handlers_take_a_field() {
+    use crate::body::Body;
+    use crate::router::{get, Table};
+    use http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let fetch = |app: crate::Router, uri: String| async move {
+        let res = app.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
+    };
+    let routes = Table::new()
+        .route(
+            "/shipping",
+            get(|req: crate::Req| async move {
+                crate::tests::TestPage::test_page(&req, "Shipping", Shipping { key: &String::from("a") })
+            }),
+        )
+        .route(
+            "/priced",
+            get(|req: crate::Req| async move {
+                crate::tests::TestPage::test_page(&req, "Priced", Priced { t: Msg::for_locale("en") })
+            }),
+        );
+    let app = || crate::App::new(Routes::from(routes.clone())).components(&[shared::COMPONENT]).router();
+    let shipping = fetch(app(), "/shipping".into()).await;
+    let field = shipping
+        .split(r#"<script type="module" src=""#)
+        .skip(1)
+        .map(|s| s.split('"').next().unwrap())
+        .find(|s| s.ends_with("/scripts/corten-field.js"))
+        .map(str::to_string)
+        .expect("the field module is a module script of the page");
+    assert!(shipping.contains("/scripts/shared.js") && !shipping.contains("corten-format"), "{shipping}");
+    let priced = fetch(app(), "/priced".into()).await;
+    assert!(priced.contains("/scripts/shared.js") && !priced.contains("corten-field"), "{priced}");
+    let source = fetch(app(), field).await;
+    assert!(source.contains("given") && source.contains(r#"name: "corten-field""#), "{source}");
+}
+
 script::script!(mod relayed = "relay.js");
 script::script!(mod chained = "chain.js");
 
@@ -1563,6 +1641,7 @@ fn handlers_write_the_shared_wire_vectors() {
         Count { t: Msg::for_locale("fr") }.to_html(),
         Priced { t: Msg::for_locale("en") }.to_html(),
         Priced { t: Msg::for_locale("fr") }.to_html(),
+        Shipping { key: &String::from("a b") }.to_html(),
     ];
     let mut written = Vec::new();
     for page in &pages {
