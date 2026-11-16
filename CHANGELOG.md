@@ -10,6 +10,13 @@ Corten is pre-1.0, so any minor version may change the API.
   final status, body bytes (or `"stream"`) and duration to response readiness. Off for existing
   apps; `corten new` enables it in the app it writes. Uses the existing subscriber and escaping.
 
+- The scripts guide gives `corten-format`'s size once, as built (3,005 bytes, 1,492 gzipped),
+  where it said 1.4 kB in one place and about 1 KB in another, and `corten/keys`'s as built too.
+  `npm run build:js` now writes the size a guide gives right after one of Corten's script modules
+  (`corten-format`, `corten-upload`, `corten/keys`, `corten/read`), as it writes the runtime's in
+  the README, and `npm run check` fails when one is not the built module's or is written another
+  way.
+
 - Fullstack browser benchmark evidence uses bounded, authenticated, deduplicated JSON
   records and incremental raw-case hashing instead of one growing inline summary. The
   complete matrix, raw observations, native settings, safety ceilings and proof gates
