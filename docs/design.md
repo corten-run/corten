@@ -3128,10 +3128,16 @@ rules something out.
     and takes its mark away when the read ends, unless a submit marked it since (whoever marked an
     element last clears it, as between a submit and a navigation). Every part still on the page
     when its read ends was not drawn, and is marked `data-corten-read-failed`: offline, the server
-    unreachable, an error page, a page, a patch without it, or a redirect. A read stops once one
-    of its parts leaves the page (a form's answer replaced it, a page was swapped in): its fetch
-    ends, its answer is not drawn over what is there now, even once its stylesheets load, and its
-    other parts are marked at once. A redirect (a sign-in's `corten-location`) is not followed: the
+    unreachable, an error page, a page, a patch without it, or a redirect. A read is its tag's: it
+    stops once one of its tags leaves the page (a form's answer replaced its part, a page was
+    swapped in, or a layout element kept in place, a live region, took new children with a new
+    tag): its fetch ends, its answer is not drawn over what is there now, even once its
+    stylesheets load or before the page is swept, its other parts are marked at once, and the new
+    tag is read anew while what it left (the part's busy mark, the failure mark) is the new read's.
+    A part a layout element holds as it was (its tag the same element) keeps its read, and one
+    whose read failed stays failed. If the module does not load (offline, a 503 for
+    `part.js`), the runtime marks each waiting part failed, so its link shows, as without
+    JavaScript. A redirect (a sign-in's `corten-location`) is not followed: the
     part is marked and its link, a navigation, follows it, as without JavaScript. Following it
     would take a user who is typing elsewhere on the page away unasked, from a read that only the
     page's own stage or extractor could redirect (the part side answers `HtmlResult<Patches>`,
@@ -3180,7 +3186,8 @@ rules something out.
     through its route's `Default`, `url::Home::default()`), and the address the link opens waits
     for the slow read wherever it is opened, with JavaScript too. Two cases are left with the line
     and no link: scripting is on but the runtime never runs (blocked by an extension or the CSP, or
-    failed to load), as the query follows whether scripts are on, not whether one ran
+    failed to load; the part module failing to load is not one, above), as the query follows
+    whether scripts are on, not whether one ran
     ([scripts guide](guide/scripts.md#a-control-only-the-script-makes-work)); and a read the server
     never answers, which stays busy as a form's submit does, since Corten sets no timeout of its
     own.
@@ -3244,7 +3251,12 @@ rules something out.
     test), a client navigation away leaving nothing marked, a page left whole and come back to with
     its part, a part in a layout element that is the page's, a part in a live region around
     `<main>` drawn in place by a write's page and by its read again with `<main>` unchanged, a
-    part a `<corten-live>` fragment draws and draws again, a prerendered page read once shown
+    part that is itself a live region kept in place with a new tag while its first read is held
+    (the new tag read, the first read cancelled and its late answer not drawn), a part a kept
+    element holds as it was keeping its read and a failed one staying failed, the part module
+    refused with a 503 and the part's link shown, a part a `<corten-live>` fragment draws and a
+    later fragment draws again while the first read is held (the first cancelled, the second
+    drawn), a prerendered page read once shown
     (`document.prerendering` and `prerenderingchange` stood in for: Playwright's headless Chromium
     156 did not prerender a Speculation Rules page in a probe), and `@media (scripting: none)` and
     `(scripting: enabled)` with JavaScript off and on (`javaScriptEnabled` in Playwright 1.64.1),

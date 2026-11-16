@@ -1146,14 +1146,22 @@ const PART_NOW = "template[data-corten-read-now][data-from]";
  * served beside the runtime), which only a page that waits for one loads: its head preloads the
  * module with the runtime, and a navigation's answer preloads it ({@link preload}). `asked`, the
  * tag of the read whose answer drew them, if any: then they are marked failed rather than read,
- * so one read's answer cannot start another (`docs/design.md#choice-slow-part-link`).
+ * so one read's answer cannot start another (`docs/design.md#choice-slow-part-link`). A module
+ * that does not load (offline, a 503) stays unloaded for the page and reads none: each part on the
+ * page is marked failed, so its link shows, as without JavaScript.
  * @param {Element[]} roots @param {Element} [asked]
  */
 function readNow(roots, asked) {
   if (roots.some((root) => queryOne(root, PART_NOW))) {
     import(new URL("part.js", import.meta.url).href).then(
       (/** @type {typeof import("./part.js")} */ part) => part.read(roots, !!asked, apply, signalOf, busyBy),
-      reportError,
+      (/** @type {unknown} */ error) => {
+        for (const tag of Array.from(document.querySelectorAll(PART_NOW))) {
+          const part = tag.parentElement;
+          if (part) elementOwn.setAttribute.call(part, "data-corten-read-failed", "");
+        }
+        reportError(error);
+      },
     );
   }
 }

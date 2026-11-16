@@ -9,7 +9,10 @@
 const PART_NOW = "template[data-corten-read-now][data-from]";
 /** The mark of a part no read will bring, where the app's CSS shows its link. */
 const FAILED = "data-corten-read-failed";
-/** The parts a read is on its way for: a layout element drawn again in place keeps them. */
+/**
+ * The tags a read is on its way for. A layout element kept and drawn again in place (a live region)
+ * keeps the part but takes new children: its new tag is read anew, and the old tag's read stops.
+ */
 const reading = new WeakSet();
 // Read through Element's and Node's own, as a form's controls may shadow them.
 const own = Element.prototype;
@@ -54,8 +57,8 @@ export function read(roots, chained, apply, signalOf, busyBy) {
     for (const tag of Array.from(own.querySelectorAll.call(root, PART_NOW))) {
       const part = tag.parentElement;
       // One a read is on its way for, or that one ended without, already has its read: a layout
-      // element drawn again in place (a live region) keeps what it held.
-      if (!part || !inPage(tag) || reading.has(part) || own.hasAttribute.call(part, FAILED)) continue;
+      // element that held it unchanged keeps it.
+      if (!part || !inPage(tag) || reading.has(tag) || own.hasAttribute.call(part, FAILED)) continue;
       if (chained || !own.hasAttribute.call(part, "id")) {
         if (!chained) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
         own.setAttribute.call(part, FAILED, "");
@@ -73,13 +76,15 @@ export function read(roots, chained, apply, signalOf, busyBy) {
 
 /**
  * One read of {@link read}: fetches `from` as a part read again is (`corten: action`) and draws
- * the patch it answers. Its parts are `aria-busy` until it ends. It stops once one of them leaves
- * the page (a form's answer replaced it, a page was swapped in): its fetch ends, and its answer
- * is not drawn over what is there now. Every part still on the page when it ends was not drawn
- * (offline, an error page, a page, a redirect, or a patch without it, or one of its parts left):
- * it is marked `data-corten-read-failed`, where the app's CSS shows the link a browser without
- * JavaScript gets, which follows a redirect as any navigation does. A read the browser ended by
- * hiding the page (the back-forward cache) is made again once the page is shown.
+ * the patch it answers. Its parts are `aria-busy` until it ends. It stops once one of its tags
+ * leaves the page (a form's answer replaced its part, a page was swapped in, or a layout element
+ * kept in place took new children): its fetch ends, and its answer is not drawn over what is there
+ * now. Every part whose tag is still on the page when it ends was not drawn (offline, an error
+ * page, a page, a redirect, or a patch without it, or another of its parts left): it is marked
+ * `data-corten-read-failed`, where the app's CSS shows the link a browser without JavaScript
+ * gets, which follows a redirect as any navigation does. A part whose tag left belongs to what
+ * replaced it, which this read does not mark. A read the browser ended by hiding the page (the
+ * back-forward cache) is made again once the page is shown.
  * @param {string} from @param {Element[]} tags @param {Element[]} parts @param {Apply} apply
  * @param {(el: Element) => AbortSignal} signalOf @param {WeakMap<Element, object>} busyBy
  */
@@ -88,9 +93,11 @@ async function readPart(from, tags, parts, apply, signalOf, busyBy) {
   const { signal } = stop;
   // Busy is this read's own: a submit that marks a part meanwhile keeps the mark it made.
   const mine = {};
+  for (const tag of tags) {
+    reading.add(tag);
+    signalOf(tag).addEventListener("abort", () => stop.abort(), { signal });
+  }
   for (const part of parts) {
-    reading.add(part);
-    signalOf(part).addEventListener("abort", () => stop.abort(), { signal });
     busyBy.set(part, mine);
     own.setAttribute.call(part, "aria-busy", "true");
   }
@@ -103,6 +110,9 @@ async function readPart(from, tags, parts, apply, signalOf, busyBy) {
     const res = await fetch(from, { headers: { corten: "action" }, signal });
     if (res.headers.has("corten-patch") && res.url !== "" && new URL(res.url).origin === location.origin) {
       const html = await res.text();
+      // A tag that left as the answer came (a layout element kept in place took new children)
+      // stops the read before the page is swept: its answer is for what is no longer there.
+      if (!tags.every(inPage)) stop.abort();
       await Promise.race([apply(html, signal, null, undefined, true, /** @type {Element} */ (tags[0])).catch(reportError), left]);
     } else if (res.ok && !res.headers.has("corten-location")) {
       // A success that is not a patch is the app's mistake (the route answered its page).
@@ -113,15 +123,13 @@ async function readPart(from, tags, parts, apply, signalOf, busyBy) {
     again = !signal.aborted && hidden !== at;
   }
   stop.abort();
-  for (const part of parts) {
-    reading.delete(part);
-    if (busyBy.get(part) === mine) own.removeAttribute.call(part, "aria-busy");
-  }
-  // Made again only for the same parts: one a form's answer replaced meanwhile is not read over,
+  for (const tag of tags) reading.delete(tag);
+  for (const part of parts) if (busyBy.get(part) === mine) own.removeAttribute.call(part, "aria-busy");
+  // Made again only for the same tags: a part a form's answer replaced meanwhile is not read over,
   // and the rest are marked failed, as when a part leaves while the read is on its way.
   const end = () => {
-    if (again && parts.every(inPage)) readPart(from, tags, parts, apply, signalOf, busyBy);
-    else for (const part of parts) if (inPage(part)) own.setAttribute.call(part, FAILED, "");
+    if (again && tags.every(inPage)) readPart(from, tags, parts, apply, signalOf, busyBy);
+    else for (const tag of tags) if (inPage(tag) && tag.parentElement) own.setAttribute.call(tag.parentElement, FAILED, "");
   };
   if (again && away) addEventListener("pageshow", end, { once: true });
   else end();

@@ -320,11 +320,14 @@ elsewhere on the page is not taken away. Only a patch that replaces or removes t
 answers it: a patch that leaves it where it was (an empty one, or one of other elements) marks it
 too. One of a shared read's parts replaced or removed while the read
 was on its way (a form's answer, a script) is not drawn over: the patch is not applied, and the
-parts still waiting are marked failed at once, so their links show. A browser without the
+parts still waiting are marked failed at once, so their links show. A part that is itself a live
+region around `<main>`, which a write's page draws in place with a new tag, has the new tag read
+and the old read stopped, so an older answer never lands over a newer one. If the part module
+(`part.js`) does not load, each waiting part is marked failed, so its link shows. A browser without the
 `scripting` media feature matches neither query and shows both. The query follows whether
 scripts are on, not whether the runtime ran
 ([A control only the script makes work](scripts.md#a-control-only-the-script-makes-work)): with
-the runtime blocked or failed, the line stays and the link is hidden. Following the link costs
+the runtime itself blocked or failed, the line stays and the link is hidden. Following the link costs
 one page with the slow read in it: `?picks=true` waits for the read wherever it is opened, with
 JavaScript too, so the link is `rel="nofollow"` and nothing else links there. A page with several
 slow parts reads them all in under one field, and a data client, which gets the page side, asks

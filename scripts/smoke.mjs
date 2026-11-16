@@ -1772,6 +1772,30 @@ async function run(browser) {
     await held.unrouteAll({ behavior: "ignoreErrors" });
     await held.context().close();
   }
+  // The part module does not load (a 503), though the page and the runtime do: no read starts, and
+  // the waiting part shows its link, as without JavaScript (#1400).
+  {
+    const unread = await (await browser.newContext()).newPage();
+    let partReads = 0;
+    await unread.route("**/part.js", (route) => route.fulfill({ status: 503, body: "" }));
+    await unread.route(`${base}/`, (route) => (route.request().headers().corten === "action" && partReads++, route.continue()));
+    await unread.goto(`${base}/`);
+    await unread.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+    const without = {
+      reads: partReads,
+      failed: await unread.getAttribute("#picks", "data-corten-read-failed"),
+      busy: await unread.getAttribute("#picks", "aria-busy"),
+      link: await unread.isVisible("#picks a"),
+      line: await unread.isVisible("#picks span"),
+    };
+    check(
+      "a slow part whose read module does not load shows its link, as without JavaScript",
+      without.reads === 0 && without.failed === "" && without.busy === null && without.link && !without.line,
+      JSON.stringify(without),
+    );
+    await unread.unrouteAll({ behavior: "ignoreErrors" });
+    await unread.context().close();
+  }
   // A page whose head asks to be read again (`ReadAgain`) and which waits for a slow part: the part
   // is read once, so it does not stop the page's own reads as a part read again would (#1400).
   {
@@ -4665,39 +4689,52 @@ async function run(browser) {
   await page.evaluate(() => document.querySelector("#once-live")?.remove());
 
   // A <corten-live> fragment that draws a part waiting (`ReadAgain::now`) has it read, as a form's
-  // answer does: one read a fragment, at the pace the server streams them, and a fragment that
-  // draws the part again ends the read the one before started, so only the last is drawn (#1400).
+  // answer does: one read a fragment, and a fragment that draws the part again ends the read the
+  // one before started. The second fragment comes once the first read is on its way (the stream
+  // drops and the reconnect brings it), the first read is held until the second is drawn, and then
+  // let through: it was cancelled, and the second stays drawn (#1400).
   {
     let fragmentReads = 0;
-    await page.route("**/live/fragment-part", (route) =>
-      route.fulfill({
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-        body:
-          'event: patch\ndata: <p id="fragment-a">Waiting 1<template data-corten-read-now data-from="/smoke/fragment-part"></template></p>\n\n' +
-          'event: patch\ndata: <p id="fragment-a">Waiting 2<template data-corten-read-now data-from="/smoke/fragment-part"></template></p>\n\n' +
-          "event: end\ndata: end\n\n",
-      }),
-    );
+    let streams = 0;
+    let firstCancelled = false;
+    /** @type {(value?: unknown) => void} */
+    let releaseFirst = () => {};
+    /** @type {(value?: unknown) => void} */
+    let sawFirst = () => {};
+    const firstSeen = new Promise((resolve) => (sawFirst = resolve));
+    // Only the first read is held, so a failed request to it is that read cancelled.
+    const onFailed = (/** @type {import("@playwright/test").Request} */ r) => r.url().endsWith("/smoke/fragment-part") && (firstCancelled = true);
+    page.on("requestfailed", onFailed);
+    const fragmentOf = (/** @type {number} */ n) => `event: patch\ndata: <p id="fragment-a">Waiting ${n}<template data-corten-read-now data-from="/smoke/fragment-part"></template></p>\n\n`;
+    await page.route("**/live/fragment-part", async (route) => {
+      if (++streams === 1) return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: `retry: 100\n${fragmentOf(1)}` });
+      await firstSeen;
+      return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: `${fragmentOf(2)}event: end\ndata: end\n\n` });
+    });
     await page.route("**/smoke/fragment-part", async (route) => {
       const n = ++fragmentReads;
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (n === 1) {
+        sawFirst();
+        await new Promise((resolve) => (releaseFirst = resolve));
+      }
       await route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: `<p id="fragment-a">Fragment part ${n}</p>` }).catch(() => {});
     });
     await page.evaluate(() =>
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<corten-live id="fragment-live" src="/live/fragment-part"><p id="fragment-a">Idle</p></corten-live>')),
     );
-    await page.waitForFunction(() => document.querySelector("#fragment-a")?.textContent?.startsWith("Fragment part"), null, { timeout: 5000 }).catch(() => {});
+    await page.waitForFunction(() => document.querySelector("#fragment-a")?.textContent === "Fragment part 2", null, { timeout: 5000 }).catch(() => {});
+    releaseFirst();
     await page.waitForTimeout(500);
     const fragment = await page.evaluate(() => {
       const el = document.getElementById("fragment-a");
       return { text: el?.textContent, failed: el?.getAttribute("data-corten-read-failed") ?? null, busy: el?.getAttribute("aria-busy") ?? null };
     });
     check(
-      "a part a <corten-live> fragment draws waiting is read, one read a fragment, and only the last fragment's is drawn",
-      fragment.text === `Fragment part ${fragmentReads}` && fragmentReads >= 1 && fragmentReads <= 2 && fragment.failed === null && fragment.busy === null,
-      JSON.stringify({ ...fragment, reads: fragmentReads }),
+      "a part a <corten-live> fragment draws waiting is read, one read a fragment, and a later fragment's read cancels the one before, whose late answer is not drawn",
+      fragment.text === "Fragment part 2" && fragmentReads === 2 && firstCancelled && fragment.failed === null && fragment.busy === null,
+      JSON.stringify({ ...fragment, reads: fragmentReads, streams, firstCancelled }),
     );
+    page.off("requestfailed", onFailed);
     await page.unroute("**/live/fragment-part");
     await page.unroute("**/smoke/fragment-part");
     await page.evaluate(() => document.querySelector("#fragment-live")?.remove());
@@ -6133,6 +6170,87 @@ async function run(browser) {
       await livePage.unrouteAll({ behavior: "ignoreErrors" });
       await livePage.context().close();
     } else for (const name of liveNames) skip(name, noSwaps);
+    // A waiting part that is itself a live region around <main>, kept and drawn again in place by a
+    // write's page with a new tag while its first read is held: the new tag is read, the first read
+    // is cancelled, and its answer, let through later, is not drawn over the newer one. Beside it in a
+    // kept element, a part the page draws as it was keeps its read on its way (not read twice), and
+    // one whose read failed stays failed (not read again) (#1400).
+    const keptNames = [
+      "a part that is a live region kept in place reads its new tag, and its first read is cancelled and not drawn",
+      "a part a write's page draws as it was in a kept element keeps its read on its way, not read twice",
+      "a part a write's page draws as it was in a kept element stays failed, not read again",
+    ];
+    if (swaps) {
+      const keptPage = await (await browser.newContext()).newPage();
+      let keptTurn = 0;
+      /** @type {Record<string, number>} */
+      const keptReads = { "region-old": 0, "region-new": 0, "kept-held": 0, "kept-failed": 0 };
+      /** @type {((value?: unknown) => void)[]} */
+      const releases = [];
+      let oldCancelled = false;
+      keptPage.on("requestfailed", (r) => r.url().endsWith("/smoke/region-old") && (oldCancelled = true));
+      const tagOf = (/** @type {string} */ from) => `<template data-corten-read-now data-from="/smoke/${from}"></template>`;
+      await keptPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET" || swapped(route.request())) return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const n = keptTurn++;
+          const box =
+            `<div id="kept-box"><p role="status">Turn ${n}</p><span id="kept-held">Waiting${tagOf("kept-held")}</span><span id="kept-failed">Waiting${tagOf("kept-failed")}</span></div>` +
+            `<p id="slow-region" role="status">Waiting ${n}${tagOf(n ? "region-new" : "region-old")}</p>`;
+          await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(/(<header\b[^>]*>)/, `$1${box}`) });
+        },
+      );
+      await keptPage.route("**/smoke/*", async (route) => {
+        const name = new URL(route.request().url()).pathname.slice("/smoke/".length);
+        if (!(name in keptReads)) return route.fallback();
+        keptReads[name] = (keptReads[name] ?? 0) + 1;
+        const patch = (/** @type {string} */ body) =>
+          route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body }).catch(() => {});
+        if (name === "kept-failed") return route.fulfill({ status: 500, body: "" });
+        if (name === "region-new") return patch('<p id="slow-region" role="status">New answer</p>');
+        await new Promise((resolve) => releases.push(resolve));
+        return patch(name === "kept-held" ? '<span id="kept-held">Held answer</span>' : '<p id="slow-region" role="status">Old answer</p>');
+      });
+      await keptPage.goto(`${base}/news#briefing`);
+      await keptPage.waitForSelector("#kept-failed[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+      for (let waited = 0; (keptReads["region-old"] === 0 || keptReads["kept-held"] === 0) && waited < 5000; waited += 100) await keptPage.waitForTimeout(100);
+      await keptPage.evaluate(() => {
+        /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+        /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+      });
+      await keptPage.waitForFunction(() => document.getElementById("slow-region")?.textContent === "New answer", null, { timeout: 5000 }).catch(() => {});
+      const turned = await keptPage.evaluate(() => document.querySelector("#kept-box p")?.textContent ?? "");
+      // Let the held reads through: the first region read's answer comes too late to be drawn.
+      for (const release of releases.splice(0)) release();
+      await keptPage.waitForTimeout(500);
+      const kept = await keptPage.evaluate(() => {
+        const at = (/** @type {string} */ id) => document.getElementById(id);
+        const region = at("slow-region");
+        return {
+          region: region?.textContent,
+          regionBusy: region?.getAttribute("aria-busy") ?? null,
+          regionFailed: region?.getAttribute("data-corten-read-failed") ?? null,
+          held: at("kept-held")?.textContent,
+          failed: at("kept-failed")?.getAttribute("data-corten-read-failed") ?? null,
+          failedText: at("kept-failed")?.textContent,
+        };
+      });
+      const keptSaw = JSON.stringify({ ...kept, turned, reads: keptReads, oldCancelled });
+      check(
+        keptNames[0],
+        turned === "Turn 1" && kept.region === "New answer" && kept.regionBusy === null && kept.regionFailed === null && keptReads["region-new"] === 1 && oldCancelled,
+        keptSaw,
+      );
+      check(keptNames[1], turned === "Turn 1" && keptReads["kept-held"] === 1 && kept.held === "Held answer", keptSaw);
+      check(keptNames[2], turned === "Turn 1" && keptReads["kept-failed"] === 1 && kept.failed === "" && kept.failedText === "Waiting", keptSaw);
+      await keptPage.unrouteAll({ behavior: "ignoreErrors" });
+      await keptPage.context().close();
+    } else for (const name of keptNames) skip(name, noSwaps);
     // A swap that keeps the user's place (data-keep-place) puts back a row in <main> where the user
     // scrolled it, and its current link is left there, out of view. The row is put in <main> on its
     // way from the server, its current link first.
