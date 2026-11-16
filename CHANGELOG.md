@@ -10,6 +10,8 @@ Corten is pre-1.0, so any minor version may change the API.
   preserve the wrapper's terminal archive and all nine contexts, and require
   separate terminal custody and fresh retirement guards without audit approval or
   source qualification. Retain uncertainty and prohibit repeated signal/DELETE.
+  Bind cancellation and mixed terminal custody to the original uploaded control
+  manifest, independently of later launch-template changes.
 
 - Include the observer's durable writer in the fixed native replay source closure;
   keep deny-unlisted imports and replay captured commit bytes, not checkout edits.

@@ -12,6 +12,8 @@ import { fleetPlan, host, reservation, tags } from "../cloud-contract.mjs";
 import { groupNames } from "../registry.mjs";
 import { mixedIntentRoot } from "../cloud-retirement.mjs";
 const keyBytes = "SYNTHETIC known_hosts DATA, no real key\n";
+const originalControls = JSON.parse(readFileSync(new URL("./mixed-original-controls.json", import.meta.url))).files;
+const originalHashes = Object.fromEntries(Object.entries(originalControls).map(([name, bytes]) => [name, local.digest(bytes)]));
 mock.module(new URL("../cloud-local.mjs", import.meta.url).href, { namedExports: { ...local, fileHash(path, ...rest) {
   if (path.endsWith("known_hosts")) {
     const bytes = local.regular(path); return bytes.toString() === keyBytes ? mixedWait.knownHostsSha256 : local.digest(bytes);
@@ -52,6 +54,8 @@ function fixture(t, flags = {}) {
       assert.ok(argv.includes("StrictHostKeyChecking=yes")); const script = argv.at(-1);
       if (script.includes("CORTEN_MIXED_CANCEL")) {
         assert.equal(script, mixedCancelScript(state));
+        const configLine = script.split("\n")[2];
+        assert.deepEqual(JSON.parse(JSON.parse(configLine.slice("c = json.loads(".length, -1))).files, originalHashes);
         verifyMixedCancellation(folder, saved());
         assert.ok(existsSync(join(folder, "operation.lock"))); counts.signals++;
         if (flags.lost) throw Object.assign(new Error("synthetic lost signal response"), { controlTreeUncertain: true });

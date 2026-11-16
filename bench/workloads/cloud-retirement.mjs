@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { quote } from "./cloud-transport.mjs";
-import { cancellationState, mixedDigest, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
+import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
 // This migration is not a general old-source collection or validation override.
 export const failedNativeCommit = "9f3d35884c67d90524f978d173fabeb3a17bc970";
@@ -87,7 +87,8 @@ export function failedNativeScript(state, captureSha256 = null, fence = null) {
     assert.equal(fence.snapshotSha256, captureSha256);
     assert.deepEqual(fence.roots.map((root) => root.path), [...roots, "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"]);
   }
-  const files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
+  const files = state.group === "mixed-production" ? originalMixedControls(state)
+    : Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
   const config = { roots, files, archiveSha256: state.archiveSha256, captureSha256, marker: `${JSON.stringify(bootstrapMarker(state))}\n`,
     requireMarker: state.bootstrapReady !== undefined, commit: state.commit, bounds: evidenceEnvelope, fence };
   return `/usr/bin/timeout 600 /usr/bin/python3 - ${quote(state.id)} ${quote(state.unit)} ${quote(JSON.stringify(config))} <<'CORTEN_FAILED_NATIVE_HOST'
