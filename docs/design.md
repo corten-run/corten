@@ -4031,9 +4031,11 @@ rules something out.
     and every redraw nobody asked for keep the user's. A `data-patch` submit answered with a whole
     page, not a patch, redraws `<main>` from the new markup, its dialogs and `<details>` as drawn,
     as on main, while the layout's elements outside `<main>` keep the user's. A dialog the user left open as the server
-    drew it, which new markup draws closed, is replaced closed with no `close` event and no focus
-    returned to its opener, as on main; doing that as the browser does is
-    [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455). A popover has no markup that shows it, so no answer can ask for one shown
+    drew it, which new markup draws closed, is closed as the browser closes one before it is
+    replaced ([Choice 56](#choice-patch-closes-dialog)). One the user opened stays open when an
+    answer draws it closed, also now that a patch's close is the browser's: the runtime cannot
+    tell an answer that means to close it from a redraw of the part around it, which draws it as
+    the server last drew it, and closing it there is the bug #84 fixed. A popover has no markup that shows it, so no answer can ask for one shown
     and it stays as the user left it. A non-modal dialog the user closes while the answer to a press
     outside it is on its way opens when the answer comes: the runtime knows the press, not what the
     user meant by the close after it. A script's `requestSubmit()` while focus is outside the
@@ -4046,11 +4048,11 @@ rules something out.
     element that says to open it, which the runtime honours: an answer could then say it, but it
     is a second way to open a dialog beside the markup's `open` and a concept of Corten's own,
     for what the press already says (README Value 5). Closing an open dialog with `close()` when
-    the answer draws it closed: it was tried and taken out, since `close()` queues its `close`
+    the answer draws it closed, in this change: it was tried and taken out, since `close()` queues its `close`
     event after the patch has detached the dialog (so a delegated `on:close` handler never hears
     it), closes nested modals outer-first (so focus lands on the page), and lets a `beforetoggle`
-    handler change the tree while the runtime walks it; doing it right is the issue linked above,
-    and the reopen does not need it. The pilot's workaround, a script that
+    handler change the tree while the runtime walks it; [Choice 56](#choice-patch-closes-dialog)
+    does it, for a dialog the user left as the server drew it. The pilot's workaround, a script that
     replaces the closed dialog with an empty element before each submit, is the per-page script
     this removes.
 
@@ -4078,10 +4080,10 @@ rules something out.
     state (a Refresh beside a sheet the user closed on purpose), which would call for a way to say
     so; the platform gets markup for a shown popover, when an answer could ask for one; or a
     press inside an element is found to ask for it open (a Show more in a `<details>` the user
-    folded), when the rule would need the submitter's intent rather than its place; or the issue
-    on closing an open dialog as the browser does is fixed, when an answer's close may be done as
-    the browser's and the case of an answer that closes what the user opened can be decided with
-    it.
+    folded), when the rule would need the submitter's intent rather than its place; or an app
+    needs an answer to close a dialog the user opened (a form in a dialog opened with
+    `command="show-modal"`, whose answer draws it closed), when a press inside it could ask for
+    its closed state as a press outside asks for its open one.
 
     Last checked: 2026-11-14, the smoke's dialog and `<details>` reopen checks failing with main's
     runtime (`e59c32c28`, the checks as at `c264af2ac`) and passing on `bf1b2eaa2`, and its
@@ -4097,7 +4099,12 @@ rules something out.
     them, every open-state check passing, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2,
     and the runtime's size against `8f11b7b35`; 2026-11-14, the smoke's check of a submit that
     waited for a write, its button moved outside the dialog by the write's answer, failing on
-    `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
+    `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines; 2026-11-16, the
+    condition on closing an open dialog as the browser does met by
+    [Choice 56](#choice-patch-closes-dialog), and the case of an answer that draws closed a
+    dialog the user opened decided as before: the smoke's open-state checks, the one that keeps
+    such a dialog open among them, passing on c0d6f302 in Chromium 156.0.8078.4, Firefox 157.0
+    and WebKit 27.2 (Playwright 1.64.1).
 
 53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
     in the address each form posts to, not by the pressed button's name in the body or a route per
@@ -4439,6 +4446,86 @@ rules something out.
     (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
     `f109794c6`.
 
+56. <a id="choice-patch-closes-dialog"></a>**A patch closes an open dialog it draws closed as the browser does, before replacing
+    it, and dispatches the dialog's `toggle` and `close` again on the element that replaces it.**
+    A dialog the user left open as the server drew it, which a patch's markup draws closed, takes
+    the markup's state ([Choice 52](#choice-asked-open-state)). The runtime replaced it closed:
+    no `close` event, so a `<dialog on:close={..}>` handler never ran, and focus fell to the page
+    instead of going back to the button that opened it
+    ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
+    Such a dialog is now closed with `close()` before the patch replaces it, so the browser does
+    what its close does: focus goes back to what had it before the dialog opened, and the dialog
+    leaves the top layer. Its `beforetoggle` comes at once, on the dialog still in the page, so
+    the document's listener hears it. Its `toggle` and `close` come in a later task, once the
+    patch has taken it off the page, where only a listener on the element itself hears them; so
+    the runtime listens once for each on that dialog and dispatches a copy (the same kind of
+    event, so a toggle keeps its states) on the element that took its place, when that one is in
+    the page and the old one is not. The app's delegated handlers hear one `toggle` and one
+    `close` on the dialog the page has, with the browser's timing; the copy is not trusted
+    (`isTrusted` is false), and a listener a script put on the old element hears the browser's
+    own. The dialogs are found first, in the walk that reads what the user opened, and closed
+    after it, before anything else reads the old element, so a `beforetoggle` handler that
+    changes the dialog (removes a field) changes what the rest of the patch reads rather than a
+    list it is walking. The one holding focus closes first, the innermost of those, then the rest
+    from the last in the page: nested modals each give focus back in turn, and a modal opened
+    from inside a sibling gives it back before the sibling closes. It is every patch's: a
+    `data-patch` answer, a `<corten-live>` fragment, a `ReadAgain` read and a script's
+    `patch()`, and a layout element drawn anew (one drawn in place already closed with
+    `close()`). It is only a dialog matched by its id (an anonymous one is replaced closed, [Limit 2](#limit-whole-element-patches)), left as the server drew it (one the user opened stays
+    open, [Choice 52](#choice-asked-open-state)), that the markup draws closed: a dialog a patch removes (`data-remove`, a
+    page swapped in) is removed, as the browser removes one, with no `close` event.
+
+    Not chosen: closing each dialog while walking the old element (the first attempt, in
+    [Choice 52](#choice-asked-open-state)'s review), which let a `beforetoggle` handler change the tree under the walk and
+    abort the patch, and closed nested modals outer-first, so focus landed on `<main>`; closing
+    in reverse page order alone, which fails a modal opened from inside an earlier sibling;
+    keeping the old dialog in the page until its `close` event, then replacing it, which would
+    end the patch a task or a frame after its answer (Chromium's `close` comes up to a frame
+    later), so a script awaiting `patch()` would see the old element; running the old element's
+    handlers when its `close` comes, which would give them an element and refs no longer on the
+    page, so what they write shows nothing; and closing the new element after the swap
+    (`showModal()`, then `close()`), which knows nothing of what had focus before the old one
+    opened, so focus could not go back to the opener.
+
+    What it costs: the runtime is 395 bytes larger raw, 170 with gzip (15,341 to 15,511) and 142
+    with brotli (13,846 to 13,988), paid once a release by every user. A patch looks a dialog up
+    in the new markup only when one in the old is open as the server drew it (usually none), and
+    pays two listeners and a `close()` for each it closes. No markup changes, so `render_cost`
+    cannot see it; the per-patch cost is reasoned, not measured.
+
+    Stands on: platform (HTML's dialog close: `close()` fires `beforetoggle` at once, queues
+    `toggle` and `close`, and, when focus is in the dialog, focuses the element that had it
+    before the dialog opened; and the engines: in Chromium, Firefox and WebKit a dialog closed
+    and at once replaced gets its `toggle` and `close` on the detached element, heard by a
+    listener on it and not by the document's, focus is on the opener right after `close()`, nested
+    modals closed outer-first leave focus in the inner one while inner-first gives it back to
+    the opener, and a `ToggleEvent` made by its constructor from another keeps its
+    `oldState` and `newState`); measured (the runtime's minified size by Node's `zlib` gzip and
+    brotli at their defaults, once each build; the smoke's checks of one modal and of nested
+    modals an answer draws closed, heard by delegated `on:toggle` and `on:close` handlers in
+    `examples/watchlist/src/smoke.rs`, failing with main's runtime and passing with this one);
+    reasoned (the element the page has is the dialog the app's handlers are for; one listener
+    each on a dialog being closed is the only way to learn when the browser's events come);
+    value (a close Corten does behaves as the browser's, one `close` and focus given back,
+    README Value 2, and correctness first, the conflict order's 1: a handler that never runs and
+    focus lost to the page are wrong output; checked in a browser with a delegated handler,
+    README Value 9).
+
+    Revisit when: an engine dispatches a detached dialog's `toggle` or `close` through the
+    document or stops sending them to it; the platform gives a way to move a dialog's focus
+    return to another element, when the new element could be closed instead; or an app's handler
+    needs the event the browser made (`isTrusted`), or one on the old element to be the only one.
+
+    Last checked: 2026-11-16, a one-off probe, not a repository check, in Chromium
+    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): a modal dialog with focus
+    inside closed and at once replaced, logging its `toggle` and `close` on the element and on
+    the document in the capture phase and the focused element after `close()`, nested modals
+    closed in each order, and a `ToggleEvent` copied through its constructor. To repeat it, open a
+    dialog with `showModal()` from a button, focus inside it, call `close()` then
+    `replaceWith()`, and log the events and `document.activeElement`; 2026-11-16, the smoke's
+    two checks failing with main's runtime (`ba77a51b0`) and passing on c0d6f302, in the same
+    three engines, and the runtime's size on c0d6f302 against `ba77a51b0`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -4545,8 +4632,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
    a redrawn element takes the new markup's state (a dialog the user closed opens again when the
    new markup draws it open, and one they opened closes when it draws it closed), and a
    `<details>` that moved takes another's state. A dialog the server drew open, which the user
-   closed and opened again, looks unchanged, so an answer that draws it closed closes it, without
-   a `close` event ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)). Other
+   closed and opened again, looks unchanged, so an answer that draws it closed closes it (as the
+   browser closes one, [Choice 56](#choice-patch-closes-dialog)); an anonymous one drawn closed
+   is replaced closed, with no `close` event. Other
    browser state inside a replaced element (scroll position) resets, so keep targets small.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that

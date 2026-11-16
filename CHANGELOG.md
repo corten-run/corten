@@ -1058,6 +1058,19 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A patch that draws closed a dialog the server drew open, which the user left open, closes it as
+  the browser closes one: before replacing it, so focus goes back to the button that opened it
+  rather than to the page, nested modals the innermost first. Its `toggle` and `close`, which the
+  browser sends to the old element once the patch has taken it off the page, are dispatched again
+  on the element that replaced it, so a delegated `<dialog on:close={..}>` handler hears one of
+  each (a copy, with `isTrusted` false; a listener a script put on the old element hears the
+  browser's). A `beforetoggle` handler that changes the dialog as it closes no longer stops the
+  patch. This holds for a `data-patch` answer, a `<corten-live>` fragment, a `ReadAgain` read and
+  `patch()`, for a dialog with an id; one the user opened still stays open when an answer draws it
+  closed. The runtime is 395 bytes larger minified (170 with gzip, 142 with brotli) (design
+  Choice 56,
+  [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
+
 - A `data-patch` answer that draws a dialog `open` opens it again after the user closed it, when
   the button that asked for it (or, with none, the focused control of the form, else the form) is
   outside the dialog: the element a submit's answer replaces opens then, as drawn, as the press is
