@@ -1026,6 +1026,13 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
+  // Another answer waiting for the same stylesheet may have been drawn just now, in this task:
+  // its removals are taken now, so a signal tied to an element it took away (a part's read whose
+  // tag it replaced) has aborted before this one is drawn.
+  if (signal) {
+    const pending = observer.takeRecords();
+    if (pending.length) observed(pending);
+  }
   if (signal?.aborted) return;
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];

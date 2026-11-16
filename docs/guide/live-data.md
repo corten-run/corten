@@ -322,7 +322,9 @@ too. One of a shared read's parts replaced or removed while the read
 was on its way (a form's answer, a script) is not drawn over: the patch is not applied, and the
 parts still waiting are marked failed at once, so their links show. A part that is itself a live
 region around `<main>`, which a write's page draws in place with a new tag, has the new tag read
-and the old read stopped, so an older answer never lands over a newer one. If the part module
+and the old read stopped, so an older answer never lands over a newer one, even one waiting for
+the same stylesheet; a kept part whose attributes the page draws again keeps its busy or failed
+mark. If the part module
 (`part.js`) does not load, each waiting part is marked failed, so its link shows. A browser without the
 `scripting` media feature matches neither query and shows both. The query follows whether
 scripts are on, not whether the runtime ran

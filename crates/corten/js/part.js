@@ -10,10 +10,18 @@ const PART_NOW = "template[data-corten-read-now][data-from]";
 /** The mark of a part no read will bring, where the app's CSS shows its link. */
 const FAILED = "data-corten-read-failed";
 /**
- * The tags a read is on its way for. A layout element kept and drawn again in place (a live region)
- * keeps the part but takes new children: its new tag is read anew, and the old tag's read stops.
+ * The tags a read is on its way for, each with the read's busy mark (its `busyBy` owner). A layout
+ * element kept and drawn again in place (a live region) keeps the part but takes new children: its
+ * new tag is read anew, and the old tag's read stops.
+ * @type {WeakMap<Element, object>}
  */
-const reading = new WeakSet();
+const reading = new WeakMap();
+/**
+ * The tags no read will bring their part for. A layout element that keeps a tag but draws its part
+ * again (the part's own attributes changed) takes away the marks the runtime put on it; those of
+ * a tag kept, this read's busy and this failure, are put back, and the tag is not read again.
+ */
+const failed = new WeakSet();
 // Read through Element's and Node's own, as a form's controls may shadow them.
 const own = Element.prototype;
 /** @param {Element} el */
@@ -56,11 +64,18 @@ export function read(roots, chained, apply, signalOf, busyBy) {
   for (const root of roots) {
     for (const tag of Array.from(own.querySelectorAll.call(root, PART_NOW))) {
       const part = tag.parentElement;
+      if (!part || !inPage(tag)) continue;
       // One a read is on its way for, or that one ended without, already has its read: a layout
-      // element that held it unchanged keeps it.
-      if (!part || !inPage(tag) || reading.has(tag) || own.hasAttribute.call(part, FAILED)) continue;
-      if (chained || !own.hasAttribute.call(part, "id")) {
-        if (!chained) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
+      // element that kept the tag keeps it, with its mark.
+      const mine = reading.get(tag);
+      if (mine) {
+        if (busyBy.get(part) === mine) own.setAttribute.call(part, "aria-busy", "true");
+        continue;
+      }
+      const ended = failed.has(tag) || own.hasAttribute.call(part, FAILED);
+      if (ended || chained || !own.hasAttribute.call(part, "id")) {
+        if (!ended && !chained) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
+        failed.add(tag);
         own.setAttribute.call(part, FAILED, "");
         continue;
       }
@@ -94,7 +109,7 @@ async function readPart(from, tags, parts, apply, signalOf, busyBy) {
   // Busy is this read's own: a submit that marks a part meanwhile keeps the mark it made.
   const mine = {};
   for (const tag of tags) {
-    reading.add(tag);
+    reading.set(tag, mine);
     signalOf(tag).addEventListener("abort", () => stop.abort(), { signal });
   }
   for (const part of parts) {
@@ -129,7 +144,11 @@ async function readPart(from, tags, parts, apply, signalOf, busyBy) {
   // and the rest are marked failed, as when a part leaves while the read is on its way.
   const end = () => {
     if (again && tags.every(inPage)) readPart(from, tags, parts, apply, signalOf, busyBy);
-    else for (const tag of tags) if (inPage(tag) && tag.parentElement) own.setAttribute.call(tag.parentElement, FAILED, "");
+    else {
+      for (const tag of tags) {
+        if (inPage(tag) && tag.parentElement) failed.add(tag), own.setAttribute.call(tag.parentElement, FAILED, "");
+      }
+    }
   };
   if (again && away) addEventListener("pageshow", end, { once: true });
   else end();

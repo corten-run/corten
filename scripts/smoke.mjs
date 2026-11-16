@@ -4825,17 +4825,24 @@ async function run(browser) {
     const fresh = document.createElement("p");
     fresh.id = "late-a";
     fresh.textContent = "Fresh";
-    document.getElementById("late-a")?.replaceWith(fresh);
+    // The part replaced, kept here: its read has ended once its busy mark is gone, which only the
+    // read's own end takes away (the stylesheet still held).
+    const old = document.getElementById("late-a");
+    (/** @type {any} */ (window)).__lateOld = old;
+    old?.replaceWith(fresh);
   });
-  await page.waitForFunction(() => !document.querySelector("#late-1 [aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+  const lateEnded = await page
+    .waitForFunction(() => !(/** @type {any} */ (window)).__lateOld?.hasAttribute("aria-busy"), null, { timeout: 3000 })
+    .then(() => true, () => false);
   const lateSettled = await page.evaluate(() => document.getElementById("late-1")?.innerHTML);
   releaseSheet();
   await page.waitForTimeout(300);
   check(
     "a part replaced while its read's stylesheet loads keeps what replaced it, and its read ends without waiting for the stylesheet",
-    (await page.textContent("#late-a")) === "Fresh" && (await page.$("#late-a[data-corten-read-failed], #late-1 [aria-busy]")) === null && lateSettled === '<p id="late-a">Fresh</p>',
-    `${lateSettled} then ${await page.evaluate(() => document.getElementById("late-1")?.innerHTML)}`,
+    lateEnded && (await page.textContent("#late-a")) === "Fresh" && (await page.$("#late-a[data-corten-read-failed], #late-1 [aria-busy]")) === null && lateSettled === '<p id="late-a">Fresh</p>',
+    `ended ${lateEnded}: ${lateSettled} then ${await page.evaluate(() => document.getElementById("late-1")?.innerHTML)}`,
   );
+  await page.evaluate(() => delete (/** @type {any} */ (window)).__lateOld);
   // The stylesheet stays in the head once loaded, as a section's does; the checks that count those
   // must not count it.
   await page.evaluate(() => {
@@ -4844,6 +4851,81 @@ async function run(browser) {
   });
   await page.unroute("**/smoke/late-part");
   await page.unroute("**/smoke/late-sheet.css");
+
+  // A newer patch (a script's) that replaces a part and links a stylesheet, and the part's read's
+  // answer, which links the same one, both waiting for it: once it loads, both go on in one task,
+  // the newer first, and the part's answer, for a part no longer there, is not drawn over it (#1400).
+  {
+    /** @type {(value?: unknown) => void} */
+    let releaseShared = () => {};
+    const sharedHeld = new Promise((resolve) => (releaseShared = resolve));
+    /** @type {(value?: unknown) => void} */
+    let sharedAsked = () => {};
+    const sharedSent = new Promise((resolve) => (sharedAsked = resolve));
+    /** @type {(value?: unknown) => void} */
+    let releasePart = () => {};
+    const partHeld = new Promise((resolve) => (releasePart = resolve));
+    /** @type {(value?: unknown) => void} */
+    let partAsked = () => {};
+    const partSent = new Promise((resolve) => (partAsked = resolve));
+    await page.route("**/smoke/shared-sheet.css", async (route) => {
+      sharedAsked();
+      await sharedHeld;
+      await route.fulfill({ status: 200, contentType: "text/css", body: "" }).catch(() => {});
+    });
+    await page.route("**/smoke/shared-part", async (route) => {
+      partAsked();
+      await partHeld;
+      await route
+        .fulfill({
+          status: 200,
+          headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
+          body: '<link rel="stylesheet" data-corten-style href="/smoke/shared-sheet.css"><p id="shared-a">Stale answer</p>',
+        })
+        .catch(() => {});
+    });
+    await page.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="shared-1"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="shared-1"><p id="shared-a">Waiting<template data-corten-read-now data-from="/smoke/shared-part"></template></p></div>'));
+    });
+    await Promise.race([partSent, page.waitForTimeout(5000)]);
+    // The newer patch first, waiting for the stylesheet; then the part's answer, waiting for it too.
+    await page.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      (/** @type {any} */ (window)).__sharedNewer = corten.patch(
+        __html('<link rel="stylesheet" data-corten-style href="/smoke/shared-sheet.css"><p id="shared-a">Newer answer</p>'),
+      );
+    });
+    await Promise.race([sharedSent, page.waitForTimeout(5000)]);
+    const answered = page.waitForResponse((r) => r.url().endsWith("/smoke/shared-part"), { timeout: 5000 }).catch(() => null);
+    releasePart();
+    await answered;
+    await page.waitForTimeout(300);
+    const before = await page.evaluate(() => document.getElementById("shared-a")?.textContent);
+    releaseShared();
+    await page.evaluate(() => (/** @type {any} */ (window)).__sharedNewer);
+    await page.waitForTimeout(300);
+    const shared = {
+      before,
+      ...(await page.evaluate(() => {
+        const el = document.getElementById("shared-a");
+        return { text: el?.textContent, busy: el?.getAttribute("aria-busy") ?? null, failed: el?.getAttribute("data-corten-read-failed") ?? null };
+      })),
+    };
+    check(
+      "a part's answer waiting for the stylesheet a newer patch that replaced the part also waits for is not drawn over it once the stylesheet loads",
+      shared.before === "Waiting" && shared.text === "Newer answer" && shared.busy === null && shared.failed === null,
+      JSON.stringify(shared),
+    );
+    await page.evaluate(() => {
+      delete (/** @type {any} */ (window)).__sharedNewer;
+      document.getElementById("shared-1")?.remove();
+      document.head.querySelector('link[href="/smoke/shared-sheet.css"]')?.remove();
+    });
+    await page.unroute("**/smoke/shared-part");
+    await page.unroute("**/smoke/shared-sheet.css");
+  }
 
   // A waiting part a patch appends (`data-append`): read as one the patch replaces is (#1400).
   let appendedReads = 0;
@@ -6174,17 +6256,21 @@ async function run(browser) {
     // write's page with a new tag while its first read is held: the new tag is read, the first read
     // is cancelled, and its answer, let through later, is not drawn over the newer one. Beside it in a
     // kept element, a part the page draws as it was keeps its read on its way (not read twice), and
-    // one whose read failed stays failed (not read again) (#1400).
+    // one whose read failed stays failed (not read again); and so does a part whose own attributes
+    // the page changes, its tag kept, which keeps its marks: busy while its read is held, or failed
+    // (#1400).
     const keptNames = [
       "a part that is a live region kept in place reads its new tag, and its first read is cancelled and not drawn",
       "a part a write's page draws as it was in a kept element keeps its read on its way, not read twice",
       "a part a write's page draws as it was in a kept element stays failed, not read again",
+      "a part whose own attributes a write's page changes in a kept element, its tag kept, stays busy while its read is on its way, not read twice",
+      "a part whose own attributes a write's page changes in a kept element, its tag kept, stays failed, not read again",
     ];
     if (swaps) {
       const keptPage = await (await browser.newContext()).newPage();
       let keptTurn = 0;
       /** @type {Record<string, number>} */
-      const keptReads = { "region-old": 0, "region-new": 0, "kept-held": 0, "kept-failed": 0 };
+      const keptReads = { "region-old": 0, "region-new": 0, "kept-held": 0, "kept-failed": 0, "turn-held": 0, "turn-failed": 0 };
       /** @type {((value?: unknown) => void)[]} */
       const releases = [];
       let oldCancelled = false;
@@ -6200,7 +6286,8 @@ async function run(browser) {
           delete headers["content-length"];
           const n = keptTurn++;
           const box =
-            `<div id="kept-box"><p role="status">Turn ${n}</p><span id="kept-held">Waiting${tagOf("kept-held")}</span><span id="kept-failed">Waiting${tagOf("kept-failed")}</span></div>` +
+            `<div id="kept-box"><p role="status">Turn ${n}</p><span id="kept-held">Waiting${tagOf("kept-held")}</span><span id="kept-failed">Waiting${tagOf("kept-failed")}</span>` +
+            `<span id="turn-held" data-turn="${n}">Waiting${tagOf("turn-held")}</span><span id="turn-failed" data-turn="${n}">Waiting${tagOf("turn-failed")}</span></div>` +
             `<p id="slow-region" role="status">Waiting ${n}${tagOf(n ? "region-new" : "region-old")}</p>`;
           await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(/(<header\b[^>]*>)/, `$1${box}`) });
         },
@@ -6211,20 +6298,33 @@ async function run(browser) {
         keptReads[name] = (keptReads[name] ?? 0) + 1;
         const patch = (/** @type {string} */ body) =>
           route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body }).catch(() => {});
-        if (name === "kept-failed") return route.fulfill({ status: 500, body: "" });
+        if (name === "kept-failed" || name === "turn-failed") return route.fulfill({ status: 500, body: "" });
         if (name === "region-new") return patch('<p id="slow-region" role="status">New answer</p>');
         await new Promise((resolve) => releases.push(resolve));
+        if (name === "turn-held") return patch('<span id="turn-held">Turn held answer</span>');
         return patch(name === "kept-held" ? '<span id="kept-held">Held answer</span>' : '<p id="slow-region" role="status">Old answer</p>');
       });
       await keptPage.goto(`${base}/news#briefing`);
       await keptPage.waitForSelector("#kept-failed[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
-      for (let waited = 0; (keptReads["region-old"] === 0 || keptReads["kept-held"] === 0) && waited < 5000; waited += 100) await keptPage.waitForTimeout(100);
+      await keptPage.waitForSelector("#turn-failed[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+      for (let waited = 0; (keptReads["region-old"] === 0 || keptReads["kept-held"] === 0 || keptReads["turn-held"] === 0) && waited < 5000; waited += 100) await keptPage.waitForTimeout(100);
       await keptPage.evaluate(() => {
         /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
         /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
       });
       await keptPage.waitForFunction(() => document.getElementById("slow-region")?.textContent === "New answer", null, { timeout: 5000 }).catch(() => {});
       const turned = await keptPage.evaluate(() => document.querySelector("#kept-box p")?.textContent ?? "");
+      // The parts whose attributes the write's page changed, before the held reads are let through.
+      await keptPage.waitForTimeout(300);
+      const turnedParts = await keptPage.evaluate(() => {
+        const at = (/** @type {string} */ id) => document.getElementById(id);
+        return {
+          turn: at("turn-held")?.getAttribute("data-turn"),
+          heldBusy: at("turn-held")?.getAttribute("aria-busy") ?? null,
+          failedMark: at("turn-failed")?.getAttribute("data-corten-read-failed") ?? null,
+          failedTurn: at("turn-failed")?.getAttribute("data-turn"),
+        };
+      });
       // Let the held reads through: the first region read's answer comes too late to be drawn.
       for (const release of releases.splice(0)) release();
       await keptPage.waitForTimeout(500);
@@ -6238,9 +6338,11 @@ async function run(browser) {
           held: at("kept-held")?.textContent,
           failed: at("kept-failed")?.getAttribute("data-corten-read-failed") ?? null,
           failedText: at("kept-failed")?.textContent,
+          turnHeld: at("turn-held")?.textContent,
+          turnFailed: at("turn-failed")?.getAttribute("data-corten-read-failed") ?? null,
         };
       });
-      const keptSaw = JSON.stringify({ ...kept, turned, reads: keptReads, oldCancelled });
+      const keptSaw = JSON.stringify({ ...kept, turned, turnedParts, reads: keptReads, oldCancelled });
       check(
         keptNames[0],
         turned === "Turn 1" && kept.region === "New answer" && kept.regionBusy === null && kept.regionFailed === null && keptReads["region-new"] === 1 && oldCancelled,
@@ -6248,6 +6350,12 @@ async function run(browser) {
       );
       check(keptNames[1], turned === "Turn 1" && keptReads["kept-held"] === 1 && kept.held === "Held answer", keptSaw);
       check(keptNames[2], turned === "Turn 1" && keptReads["kept-failed"] === 1 && kept.failed === "" && kept.failedText === "Waiting", keptSaw);
+      check(
+        keptNames[3],
+        turnedParts.turn === "1" && turnedParts.heldBusy === "true" && keptReads["turn-held"] === 1 && kept.turnHeld === "Turn held answer",
+        keptSaw,
+      );
+      check(keptNames[4], turnedParts.failedTurn === "1" && turnedParts.failedMark === "" && keptReads["turn-failed"] === 1 && kept.turnFailed === "", keptSaw);
       await keptPage.unrouteAll({ behavior: "ignoreErrors" });
       await keptPage.context().close();
     } else for (const name of keptNames) skip(name, noSwaps);

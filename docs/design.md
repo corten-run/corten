@@ -3134,8 +3134,13 @@ rules something out.
     tag): its fetch ends, its answer is not drawn over what is there now, even once its
     stylesheets load or before the page is swept, its other parts are marked at once, and the new
     tag is read anew while what it left (the part's busy mark, the failure mark) is the new read's.
-    A part a layout element holds as it was (its tag the same element) keeps its read, and one
-    whose read failed stays failed. If the module does not load (offline, a 503 for
+    Before an answer is drawn, once its stylesheets have loaded, the runtime takes the page's
+    removals not yet delivered to its observer, so an answer waiting for the same stylesheet as a
+    newer one that replaced the part, and so going on in the same task right after it, has stopped
+    by then. A part a layout element holds with the same tag element keeps its read, and one
+    whose read failed stays failed, even when the element draws the part's own attributes again
+    and so takes away the marks the runtime put on it: the module knows each tag's read and each
+    failed tag, and puts the busy or failed mark back rather than read it again. If the module does not load (offline, a 503 for
     `part.js`), the runtime marks each waiting part failed, so its link shows, as without
     JavaScript. A redirect (a sign-in's `corten-location`) is not followed: the
     part is marked and its link, a navigation, follows it, as without JavaScript. Following it
@@ -3253,7 +3258,11 @@ rules something out.
     `<main>` drawn in place by a write's page and by its read again with `<main>` unchanged, a
     part that is itself a live region kept in place with a new tag while its first read is held
     (the new tag read, the first read cancelled and its late answer not drawn), a part a kept
-    element holds as it was keeping its read and a failed one staying failed, the part module
+    element holds as it was keeping its read and a failed one staying failed, and the same with
+    the part's own attributes drawn again (busy while its read is held, or failed, and not read
+    twice), a part's answer and a newer patch that replaced the part waiting for one stylesheet
+    (the newer drawn, the answer not), a part replaced while its answer's stylesheet is held
+    ending its read before the stylesheet loads, the part module
     refused with a 503 and the part's link shown, a part a `<corten-live>` fragment draws and a
     later fragment draws again while the first read is held (the first cancelled, the second
     drawn), a prerendered page read once shown

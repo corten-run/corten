@@ -21,7 +21,8 @@ Corten is pre-1.0, so any minor version may change the API.
   read in, which follows a redirect as a navigation (a browser without JavaScript shows it
   already). A read is its tag's: a part that is a live region a write's page draws again in place
   with a new tag has the new tag read and the old read stopped, so an old answer never lands over
-  a newer one; and if the part module does not load, each waiting part is marked failed, so its
+  a newer one (even one waiting for the same stylesheet), and a kept part whose own attributes the
+  page draws again keeps its busy or failed mark; and if the part module does not load, each waiting part is marked failed, so its
   link shows. A read the back-forward cache ended is made again when the page is shown, and a
   prerendered page reads once it is shown. A part waiting in a part's answer is marked failed,
   not read, so reads do not chain, and a page whose head asks to be read again waits at most one
