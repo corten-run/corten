@@ -31,10 +31,10 @@ function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
   assert.ok(path && posix.isAbsolute(path) && !path.split("/").includes("..")); return path;
 }
-function readGroup(path) {
+function readGroup(path, keys = fields) {
   const actual = join(root, path);
   assert.ok(!lstatSync(actual).isSymbolicLink());
-  return { path, files: Object.fromEntries(fields.map((key) => {
+  return { path, files: Object.fromEntries(keys.map((key) => {
     try { return [key, readFileSync(join(actual, key), "utf8")]; }
     catch (error) { if (error.code === "ENOENT") return [key, null]; throw error; }
   })) };
@@ -66,13 +66,31 @@ function executableHash(at, executables) {
   if (!hash) { hash = observing("executable-hash", () => sha(readFileSync(`${at}/exe`))); executables.set(key, hash); }
   return hash;
 }
-function snapshot(path, executables, pending) {
-  const groups = [], processes = [];
+function scopeGroups(path, keys = fields) {
+  const groups = [];
   function walk(current) {
-    const group = observing("cgroup-read", () => readGroup(current)); groups.push(group);
+    const group = observing("cgroup-read", () => readGroup(current, keys)); groups.push(group);
+    for (const entry of observing("cgroup-children", () => readdirSync(join(root, current), { withFileTypes: true }))) {
+      observing("cgroup-child-type", () => assert.ok(!entry.isSymbolicLink()));
+      if (entry.isDirectory()) walk(posix.join(current, entry.name));
+    }
+  }
+  walk(path); return groups;
+}
+function membership(groups) {
+  const seen = new Set();
+  return groups.map((group) => [group.path, group.files["cgroup.procs"].trim().split("\n").filter(Boolean).map((pid) => {
+    assert.match(pid, /^[1-9]\d*$/); assert.ok(!seen.has(pid)); seen.add(pid); return pid;
+  }).sort()]).sort(([a], [b]) => a.localeCompare(b));
+}
+function snapshotOnce(path, executables, pending) {
+  const groups = scopeGroups(path), processes = [];
+  const before = observing("snapshot-membership", () => membership(groups));
+  for (const group of groups) {
+    const current = group.path;
     for (const pid of group.files["cgroup.procs"].trim().split("\n").filter(Boolean)) {
       assert.match(pid, /^[1-9]\d*$/);
-      // A racing exit is an observation gap, never silently omitted membership.
+      // A racing exit invalidates this entire census, never just this member.
       const at = `/proc/${pid}`, stat = observing("process-stat", () => readFileSync(`${at}/stat`, "utf8"));
       const identity = observing("process-identity", () => processIdentity(stat));
       const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid)) : { executableSha256: executableHash(at, executables) };
@@ -84,15 +102,40 @@ function snapshot(path, executables, pending) {
         : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
       observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
       if (pending) observing("executable-recheck", () => pending.recheck(identity.pid, executable));
+      else observing("executable-recheck", () => assert.equal(executableHash(at, executables), executable.executableSha256));
       processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
     }
-    for (const entry of observing("cgroup-children", () => readdirSync(join(root, current), { withFileTypes: true }))) {
-      observing("cgroup-child-type", () => assert.ok(!entry.isSymbolicLink()));
-      if (entry.isDirectory()) walk(posix.join(current, entry.name));
+  }
+  const after = observing("snapshot-membership", () => membership(scopeGroups(path, ["cgroup.procs"])));
+  observing("snapshot-membership-recheck", () => assert.deepEqual(after, before));
+  return { at: Date.now(), groups, processes };
+}
+const retryPause = new Int32Array(new SharedArrayBuffer(4));
+const processReads = new Set(["process-stat", "executable-link", "executable-stat", "executable-hash", "executable-capture",
+  "process-cgroup", "process-cmdline", "process-stat-recheck", "executable-recheck"]);
+function snapshot(path, executables, pending, lastSampleAt = null) {
+  // Spend only the time left in the existing continuity window. A monotonic
+  // deadline also bounds retries when the wall clock moves backwards.
+  const remaining = lastSampleAt === null ? maximumSampleGapMs : maximumSampleGapMs - (Date.now() - lastSampleAt);
+  const deadline = performance.now() + Math.max(0, Math.min(maximumSampleGapMs, remaining));
+  let race;
+  for (;;) {
+    try {
+      const observed = snapshotOnce(path, executables, pending);
+      if (race && performance.now() > deadline) throw race;
+      return observed;
+    } catch (error) {
+      const operation = observationOperations.get(error);
+      const changed = error.code === "ERR_ASSERTION" && ["process-name-recheck", "snapshot-membership-recheck"].includes(operation);
+      // ENOENT alone is not proof of exit. Only process reads are candidates;
+      // success still requires a fresh, complete census and every bookend.
+      const missing = ["ENOENT", "ESRCH"].includes(error.code) && processReads.has(operation);
+      const left = deadline - performance.now();
+      if ((!changed && !missing) || left <= 0) throw error;
+      race = error;
+      Atomics.wait(retryPause, 0, 0, Math.min(1, left));
     }
   }
-  walk(path);
-  return { at: Date.now(), groups, processes };
 }
 
 function docker(args) {
@@ -199,16 +242,7 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
   }
   function sample() {
     sampleOperation = "snapshot";
-    let observed;
-    for (let attempt = 0; ; attempt++) {
-      try { observed = snapshot(path, executables, pending); break; }
-      catch (error) {
-        // This tag is set only by the full bookend assertion after PID and
-        // start ticks matched. Discard the entire snapshot, not just that PID.
-        const changedName = error.code === "ERR_ASSERTION" && observationOperations.get(error) === "process-name-recheck";
-        if (attempt >= 2 || (!changedName && !["ENOENT", "ESRCH"].includes(error.code))) throw error;
-      }
-    }
+    const observed = snapshot(path, executables, pending, lastSampleAt);
     // Keep initial raw PID/start/executable/type observations once. Every live
     // sample independently re-reads those identities and records their references;
     // rapidly changing stat CPU fields are accounted by raw cgroup cpu.stat.

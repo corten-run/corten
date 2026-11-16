@@ -120,8 +120,9 @@ for (const code of ["EIO", "ENOENT", "ERR_ASSERTION", "private-code"]) test(`int
       assert.equal(entry.code, code === "private-code" ? "unknown" : code);
       assert.equal(entry.samples, 2); assert.ok(Number.isSafeInteger(entry.at) && entry.at >= entry.lastSampleAt);
     }
-    assert.equal(reads, code === "ENOENT" ? 60 : code === "ERR_ASSERTION" ? 120 : 20,
-      "comm-only failures exhaust the same three attempts; read-error retry bounds are unchanged");
+    if (code === "ENOENT" || code === "ERR_ASSERTION") assert.ok(reads >= 20,
+      "retryable consistency failures exhaust the time left in the continuity window");
+    else assert.equal(reads, 20, "nonretryable errors still fail on their first read");
     assert.ok(JSON.stringify(failures).length < 1000); assert.ok(!JSON.stringify(terminal).includes(marker));
     const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 2, pid, result });
     assert.equal(proof.status, "blocked"); assert.equal(proof.checks.observer, false);
@@ -226,14 +227,14 @@ test("an actual observer stall beyond one second remains blocked after clean nat
 for (const scenario of [
   { name: "permanent one-shot comm change", races: 1, attempts: 2, accepted: true },
   { name: "two comm changes", races: 2, attempts: 3, accepted: true },
-  { name: "three comm changes", races: 3, attempts: 3, operation: "process-name-recheck" },
-  { name: "ENOENT followed by two comm changes", races: 3, missingFirst: true, attempts: 3, operation: "process-name-recheck" },
+  { name: "six comm changes", races: 6, attempts: 7, accepted: true },
+  { name: "ENOENT followed by two comm changes", races: 3, missingFirst: true, attempts: 4, accepted: true },
   { name: "PID change", change: "pid", attempts: 1, operation: "process-pid-changed" },
   { name: "start-tick change", change: "start", attempts: 1, operation: "process-start-changed" },
   { name: "PID and comm change", change: "pid", races: 3, attempts: 1, operation: "process-pid-changed" },
   { name: "start-tick and comm change", change: "start", races: 3, attempts: 1, operation: "process-start-changed" },
   ...["ENOENT", "ESRCH", "EIO", "EACCES"].map((code) => ({ name: `${code} read error`, code,
-    attempts: ["ENOENT", "ESRCH"].includes(code) ? 3 : 1, operation: "process-stat" })),
+    attempts: ["ENOENT", "ESRCH"].includes(code) ? null : 1, operation: "process-stat" })),
 ]) test(`whole-snapshot bookends: ${scenario.name}`, {
   skip: !unit && "requires Linux in an explicitly owned delegated benchmark test unit", timeout: 15000,
 }, async (t) => {
@@ -261,7 +262,9 @@ for (const scenario of [
         capture.before = samples().length;
         const original = fs.readFileSync;
         const fault = t.mock.method(fs, "readFileSync", function (path, ...args) {
-          if (path === `${scope}/cgroup.procs`) capture.attempts.push({ stats: new Map(), cmdlines: new Map() });
+          // Accounting is read once per opening census, never by the closing
+          // membership-only census. Keep the native read order/values intact.
+          if (path === `${scope}/cpu.stat`) capture.attempts.push({ stats: new Map(), cmdlines: new Map() });
           const attempt = capture.attempts.at(-1), number = capture.attempts.length;
           const member = [first, raced].find((p) => path === `/proc/${p}/stat`);
           if (member) {
@@ -297,14 +300,16 @@ for (const scenario of [
     const detail = JSON.stringify({ scenario: scenario.name, attempts: capture.attempts.length, before: capture.before,
       after: capture.after.length, failures: terminal.observerFailures });
     assert.equal(capture.after.length, capture.before + (scenario.accepted ? 1 : 0), detail);
-    assert.equal(capture.attempts.length, scenario.attempts, detail); assert.equal(capture.cpu.length, scenario.attempts);
+    if (scenario.attempts === null) assert.ok(capture.attempts.length >= 1, detail);
+    else assert.equal(capture.attempts.length, scenario.attempts, detail);
+    assert.equal(capture.cpu.length, capture.attempts.length);
     for (const [index, attempt] of capture.attempts.entries()) {
       assert.equal(attempt.stats.get(capture.first).length, 2, "even previously completed members are reread from scratch");
       assert.equal(attempt.cmdlines.get(capture.first), 1, "earlier member metadata is reread, not carried between attempts");
       assert.equal(attempt.stats.get(capture.raced).length, scenario.code || scenario.missingFirst && index === 0 ? 1 : 2);
     }
     const records = fs.readdirSync(join(directory, "processes")).map((name) => JSON.parse(readFileSync(join(directory, "processes", name))));
-    for (let i = 1; i <= (scenario.accepted ? scenario.attempts - 1 : scenario.attempts); i++)
+    for (let i = 1; i <= capture.attempts.length - (scenario.accepted ? 1 : 0); i++)
       assert.ok(!records.some((p) => processIdentity(p.stat).comm === `snap-${i}`), "failed attempt records must not be saved");
     assert.ok(!records.some((p) => processIdentity(p.stat).comm === "name-v0"), "pre-change identity must not escape a failed snapshot");
     const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 6, pid, result });

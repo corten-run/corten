@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Resample complete benchmark host scopes within the existing one-second window
+  when process churn invalidates a census, and require matching recursive
+  membership bookends. Keep PID/start, executable, accounting, observer-error and
+  positive-empty cleanup gates; do not reinterpret retained failed evidence.
+
 - Publish synthetic benchmark fixtures with explicit readable file permissions
   and search-only bind roots, including under the private campaign umask. Keep
   neighboring evidence private and contender users/read-only mounts unchanged.
