@@ -1560,8 +1560,11 @@ impl Req {
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
         if fills {
             res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
-            if let Some(head) = early_head(&self.signal, self.early) {
-                res.extensions_mut().insert(crate::layout::EarlyHead(head));
+            // Looked for only when there is one: a page with places is otherwise every `GET`'s.
+            if self.early != 0 {
+                if let Some(head) = early_head(&self.signal, self.early) {
+                    res.extensions_mut().insert(crate::layout::EarlyHead(head));
+                }
             }
         }
         if !vars.is_empty() {
