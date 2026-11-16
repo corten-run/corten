@@ -5137,10 +5137,12 @@ async function run(browser) {
     const opened = await press("One", () => !!document.querySelector("#smoke-one:modal"));
     const shut = await press("Done", () => !document.querySelector("#smoke-one[open]") && document.querySelector("#smoke-one p")?.textContent === "Closed");
     const one = await after(2);
+    // `close()` queues `toggle` and `close` on different task sources, so their order is the
+    // engine's (Chromium has sent each first); one of each is what counts.
     check(
       "a patch that draws closed an open modal dialog the server drew closes it: its delegated handlers hear one toggle and one close, and focus goes back to its opener",
       opened && shut && one.focused === "One" && one.open.length === 0 && one.text === "Closed" && one.field &&
-        one.log.join("|") === "smoke-one toggle:closed on One|smoke-one close on One",
+        [...one.log].sort().join("|") === "smoke-one close on One|smoke-one toggle:closed on One",
       JSON.stringify({ opened, shut, ...one }),
     );
     const nestedOpen = await press("Nested", () => !!document.querySelector("#smoke-inner:modal") && !!document.querySelector("#smoke-outer:modal"));
