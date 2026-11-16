@@ -22,6 +22,32 @@ const literal = (value) => `json.loads(${JSON.stringify(JSON.stringify(value))})
 // Substitute only metadata/service observations. File descriptors, directory
 // traversal, tar creation, /proc, parent identity and process lifetimes are real.
 function observed(script, mode) {
+  if (mode.startsWith("budget-")) {
+    const bounds = mode === "budget-names" ? { nameBytes: 60 } : mode === "budget-members" ? { memberBytes: 80 } : { nodes: 32 };
+    script = script.replace("c = json.loads(raw_config)", `c = json.loads(raw_config)
+c['bounds'].update(${JSON.stringify(bounds)})
+original_listdir, original_scandir = os.listdir, os.scandir
+def checked_listdir(fd):
+    if isinstance(fd, int):
+        print('unbounded descriptor listdir', file=sys.stderr)
+        raise AssertionError('streaming admission required')
+    return original_listdir(fd)
+@contextlib.contextmanager
+def checked_scandir(fd):
+    with original_scandir(fd) as entries:
+        def stream():
+            previous = None
+            for entry in entries:
+                if isinstance(fd, int):
+                    current = (nodes, names, members)
+                    if previous is not None and not all(a > b for a, b in zip(current, previous)):
+                        print('enumerated another name before global admission', file=sys.stderr)
+                        raise AssertionError('admission before retaining/sort')
+                    previous = current
+                yield entry
+        yield stream()
+os.listdir, os.scandir = checked_listdir, checked_scandir`);
+  }
   const [header, rest] = script.split("<<'CORTEN_FAILED_NATIVE_HOST'\n"), program = rest.split("\nCORTEN_FAILED_NATIVE_HOST")[0];
   const config = { mode, program, id: state.id, unit: state.unit };
   return `${header}<<'CORTEN_FAILED_NATIVE_HOST'
@@ -105,6 +131,14 @@ if c['mode'] in ['live-process', 'exited-process']:
     p = subprocess.Popen(['/usr/bin/sleep', '20' if c['mode'] == 'live-process' else '0.01'], cwd='/bench')
     if c['mode'] == 'exited-process': p.wait(timeout=2)
 if c['mode'] == 'container': pathlib.Path('/run/docker.sock').touch()
+if c['mode'].startswith('budget-'):
+    target = native
+    if c['mode'] == 'budget-nested':
+        for index in range(10):
+            target = target / ('level-' + str(index))
+            target.mkdir()
+    for index in range(80):
+        (target / ('wide-' + str(index))).touch()
 SETUP
 # Bind the synthetic archive's actual bytes into the exact emitted configuration.
 /usr/bin/python3 - <<'PROGRAM'
@@ -153,7 +187,8 @@ printf '\\n'
 
 test("fixed recovery program on local Linux uses real safe file and terminal process controls", { skip: !enabled, timeout: 240000 }, async () => {
   const modes = ["idle", "exited-process", "absent", "live-process", "live-after-capture", "changed-after-capture", "changed-before-fence", "live-before-fence", "symlink", "dangling", "hardlink", "fifo",
-    "ancestor-symlink", "active", "pid", "restart", "unit-job", "wrong-unit", "exit-zero", "duplicate", "jobs", "cloud-init", "host-id", "container"];
+    "ancestor-symlink", "active", "pid", "restart", "unit-job", "wrong-unit", "exit-zero", "duplicate", "jobs", "cloud-init", "host-id", "container",
+    "budget-wide", "budget-nested", "budget-names", "budget-members"];
   for (const mode of modes) {
     const child = spawnSync("docker", ["run", "--rm", "-i", "--init", "--label", "agent.owner=codex", "--label", "agent.task=corten-bench-failed-retirement",
       "--network", "none", "--read-only", "--tmpfs", "/bench:rw", "--tmpfs", "/tmp:rw", "--tmpfs", "/etc/systemd/system:rw", "--tmpfs", "/run:rw",

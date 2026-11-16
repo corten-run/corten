@@ -136,7 +136,7 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
   let entered = false;
-  const authorizedRun = async (binary, argv, timeout, allowFail) => {
+  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs) => {
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
@@ -144,7 +144,7 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
       assert.equal((await productionPlan(options, { repo, run })).approvalSha256, approval, "locked action changed after approval");
       entered = true;
     }
-    return run(binary, argv, timeout, allowFail);
+    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs);
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,

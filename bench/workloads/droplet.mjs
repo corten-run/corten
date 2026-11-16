@@ -46,11 +46,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     durable(`${statePath}.tmp`, `${JSON.stringify(state, null, 2)}\n`);
     renameSync(`${statePath}.tmp`, statePath); syncDirectory(local);
   };
-  async function execute(binary, args, timeout = 60000, allowFail = false) {
-    const invoke = async (argv, permittedFailure = false) => {
+  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) {
+    if (deleteProofExpiresAtMs !== undefined) {
+      assert.equal(binary, "doctl"); assert.equal(args[2], "delete");
+      assert.ok(Number.isSafeInteger(deleteProofExpiresAtMs));
+    }
+    const invoke = async (argv, permittedFailure = false, expiry) => {
       check();
+      if (expiry !== undefined) {
+        const current = Date.now();
+        assert.ok(current < expiry && expiry - current <= 60000, "current retirement proof expired");
+      }
       let r;
-      try { r = await run(binary, argv, timeout, permittedFailure); }
+      try { r = await run(binary, argv, timeout, permittedFailure, expiry); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (r.controlTreeUncertain || r.controlUncertain) { preserveOperationLock = true; throw new Error("control uncertain; preserve locks"); }
       check();
@@ -64,7 +72,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(providerAccount(value), state.provider.accountId, "provider account identity changed; preserve uncertainty");
     };
     await account();
-    const result = await invoke(scoped(args), allowFail);
+    const result = await invoke(scoped(args), allowFail, deleteProofExpiresAtMs);
     await account(); // A changed context cannot supply absence/deletion authority.
     return result;
   }
@@ -403,6 +411,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         const withoutTime = ({ observedAtMs, ...rest }) => rest;
         assert.deepEqual(withoutTime(rehashObservation), withoutTime(capture.observation), "predelete custody differs");
         verifyFailedNativeCustody(local, state, capture);
+        const receiptPath = join(local, "failed-native-host.json");
+        let interruptedReceipt;
+        if (existsSync(receiptPath)) {
+          const prior = regular(receiptPath), hash = digest(prior);
+          // Verify against the actual measured state, without adopting an intent.
+          verifyFailedNativeRetirement(local, state, hash);
+          const history = join(local, `failed-native-host.interrupted-${hash}.json`);
+          if (existsSync(history)) assert.equal(digest(regular(history)), hash); else durable(history, prior);
+          interruptedReceipt = hash;
+        }
         // Full local verification can be expensive. Renew only the current host
         // proof afterwards, while checking all remote metadata is still exactly
         // the previously hashed inventory and the custody archive is unchanged.
@@ -411,21 +429,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         const confirmation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs);
         assert.deepEqual(withoutTime(confirmation), withoutTime(capture.observation), "final custody fence differs");
         await own(); check();
-        assert.ok(Date.now() >= finishedAtMs && Date.now() - finishedAtMs <= 60000, "current retirement proof expired");
+        const deleteProofExpiresAtMs = finishedAtMs + 60000;
+        assert.ok(Date.now() >= finishedAtMs && Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
         const receipt = { schema: "benchmark-failed-native-retirement/v1", capture, confirmation, scriptSha256: digest(script), startedAtMs, finishedAtMs,
           rehash: { observation: rehashObservation, scriptSha256: digest(rehashScript), startedAtMs: rehashStarted, finishedAtMs: rehashFinished } };
-        const receiptPath = join(local, "failed-native-host.json"), bytes = `${JSON.stringify(receipt, null, 2)}\n`;
-        if (existsSync(receiptPath)) {
+        const bytes = `${JSON.stringify(receipt, null, 2)}\n`;
+        if (interruptedReceipt !== undefined) {
           // Only this invocation's fresh proof can replace an interrupted receipt.
-          const prior = regular(receiptPath), hash = digest(prior);
-          verifyFailedNativeRetirement(local, { ...state, status: "retired", retirement: { kind: "native-failed", evidenceSha256: hash } });
-          const history = join(local, `failed-native-host.interrupted-${hash}.json`);
-          if (existsSync(history)) assert.equal(digest(regular(history)), hash); else durable(history, prior);
-          assert.equal(digest(regular(receiptPath)), hash); unlinkSync(receiptPath); syncDirectory(local);
+          assert.equal(digest(regular(receiptPath)), interruptedReceipt); unlinkSync(receiptPath); syncDirectory(local);
         }
         durable(receiptPath, bytes);
         Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
-        await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
+        await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
         assert.equal(await exactHost(), undefined, "deletion not confirmed; preserve intent without another DELETE");
         state.destroyedAt = new Date().toISOString(); save(); return 1;
       });

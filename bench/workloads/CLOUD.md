@@ -273,6 +273,8 @@ data, never a completed benchmark. The program validates and hashes filesystem
 metadata before reading evidence contents, opens every ancestor without following
 links, and rejects symlinks, hardlinks, special files and nonportable paths. It
 never executes a native script, validator, source checkout or downloaded evidence.
+Directory entries stream from owned descriptors, reserving the global node,
+name-byte and member-byte budgets before names are retained or sorted.
 
 The separate `failed-native-results.tgz` contains raw trees, metadata and file-hash
 inventories, and a root snapshot. The bounded existing archive reader verifies
@@ -291,7 +293,11 @@ process scan. Confirmation rehashes all roots and the custody archive, then
 local custody is checked again. A final fence requires the exact unchanged
 metadata inventory of every root, rehashes the custody archive and renews current
 quiescence before the fresh ownership/account check and 60-second deletion-proof
-deadline. Large local checks cannot consume that final freshness window. These are current retirement observations,
+deadline. Interrupted receipt rehashing also precedes the final fence. The absolute
+expiry accompanies only this failed-retirement DELETE through asynchronous account
+preflight and private-worker IPC, and is enforced again at private HTTP dispatch;
+it is never restarted or widened by a provider call. Large local checks cannot
+consume that final freshness window. These are current retirement observations,
 not a historical accounting or native qualification pass.
 
 `failed-native-host.json` records capture, fresh confirmation and their exact

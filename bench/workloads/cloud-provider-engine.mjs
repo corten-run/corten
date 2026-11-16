@@ -48,7 +48,7 @@ function privateDiagnostics() {
     throw new Error("provider diagnostics must be disabled");
 }
 
-function restRequest({ method, path, credential, body, timeout, interrupted = () => false }, connect = httpsRequest) {
+function restRequest({ method, path, credential, body, timeout, interrupted = () => false, deleteProofExpiresAtMs }, connect = httpsRequest) {
   return new Promise((resolve, reject) => {
     let settled = false, req, timer, cancellation;
     const finish = (error, result) => {
@@ -61,6 +61,13 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
       assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 900000);
       assert.ok(!interrupted());
       const input = body === undefined ? undefined : JSON.stringify(body);
+      const fresh = () => {
+        if (deleteProofExpiresAtMs === undefined) return;
+        const current = Date.now();
+        assert.ok(method === "DELETE" && Number.isSafeInteger(deleteProofExpiresAtMs)
+          && current < deleteProofExpiresAtMs && deleteProofExpiresAtMs - current <= 60000, "current retirement proof expired");
+      };
+      fresh();
       req = connect(new URL(path, origin), { method, agent: false, rejectUnauthorized: true,
         headers: { authorization: `Bearer ${credential}`, accept: "application/json", ...(input === undefined ? {} : { "content-type": "application/json", "content-length": Buffer.byteLength(input) }) } }, (res) => {
         const chunks = []; let bytes = 0;
@@ -83,6 +90,7 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
       req.on("error", () => finish(stopped(true)));
       timer = setTimeout(() => finish(stopped(true)), timeout);
       cancellation = setInterval(() => { if (interrupted()) finish(stopped(true)); }, 25);
+      fresh();
       req.end(input);
     } catch { finish(stopped(true)); }
   });
@@ -115,8 +123,9 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
     } catch (error) { throw stopped(error?.controlUncertain === true, { code: "provider-credential" }); }
     finally { if (Buffer.isBuffer(result?.stdout)) result.stdout.fill(0); if (Buffer.isBuffer(result?.stderr)) result.stderr.fill(0); }
   };
-  return async (args, timeout = 60000, allowFail = false) => {
+  return async (args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) => {
     assert.ok(Array.isArray(args) && args.at(-2) === "--context", "saved provider context required");
+    if (deleteProofExpiresAtMs !== undefined) assert.ok(args[2] === "delete" && positive(deleteProofExpiresAtMs));
     consume(args.at(-1));
     assert.ok(!interrupted(), "controller cancelled");
     const command = args.slice(0, -2), deadline = now() + timeout;
@@ -133,7 +142,12 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       if (interrupted() || remaining <= 0) throw stopped(true);
       code = `${phase}-request`;
       let response;
-      try { response = await request({ method, path, body, credential, timeout: remaining, interrupted }); }
+      if (deleteProofExpiresAtMs !== undefined) {
+        const current = now();
+        assert.ok(phase === "delete" && current < deleteProofExpiresAtMs && deleteProofExpiresAtMs - current <= 60000, "current retirement proof expired");
+      }
+      try { response = await request({ method, path, body, credential, timeout: remaining, interrupted,
+        ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }); }
       catch { throw stopped(true); }
       try { await controlCheckpoint(interrupted); } catch { throw stopped(); }
       if (phase === "list" || phase === "get") readRemaining();

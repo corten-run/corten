@@ -168,8 +168,16 @@ def quiet():
     assert os.readlink(parent / 'exe') == '/usr/bin/timeout'
 quiet()
 nodes, content, names, members = 0, 0, 0, 0
-def inventory(path, key=''):
-    global nodes, content, names, members
+def admit(key):
+    global nodes, names, members
+    assert key.count('/') < 60 and len(key) < 3800
+    assert nodes + 1 <= c['bounds']['nodes'] - 16
+    assert names + len(key.rsplit('/', 1)[-1]) <= c['bounds']['nameBytes'] and members + len(key) <= c['bounds']['memberBytes']
+    nodes += 1
+    names += len(key.rsplit('/', 1)[-1])
+    members += len(key)
+def inventory(path, key='', admitted=False):
+    global content
     try:
         fd = opened(path)
     except FileNotFoundError:
@@ -179,18 +187,20 @@ def inventory(path, key=''):
         s = os.fstat(fd)
         kind = 'd' if stat.S_ISDIR(s.st_mode) else 'f'
         assert kind == 'd' or stat.S_ISREG(s.st_mode) and s.st_nlink == 1
-        nodes += 1
-        names += len(key.rsplit('/', 1)[-1])
-        members += len(key)
-        assert nodes <= c['bounds']['nodes'] - 16 and names <= c['bounds']['nameBytes'] and members <= c['bounds']['memberBytes']
-        assert key.count('/') < 60 and len(key) < 3800
+        if not admitted:
+            admit(key)
         rows = [dict(key=key, kind=kind, metadata=info(s))]
         if kind == 'd':
-            children = sorted(os.listdir(fd))
-            for name in children:
-                assert name.isascii() and re.fullmatch(r'[][A-Za-z0-9_.@$%+-]+', name) and name not in ['.', '..']
-                assert len(name) <= 255 and not name.endswith('.') and not re.fullmatch(r'(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:[.].*)?', name)
-                child = inventory(path + '/' + name, key + '/' + name)
+            children = []
+            with os.scandir(fd) as entries:
+                for entry in entries:
+                    name = entry.name
+                    assert name.isascii() and re.fullmatch(r'[][A-Za-z0-9_.@$%+-]+', name) and name not in ['.', '..']
+                    assert len(name) <= 255 and not name.endswith('.') and not re.fullmatch(r'(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:[.].*)?', name)
+                    admit(key + '/' + name)
+                    children.append(name)
+            for name in sorted(children):
+                child = inventory(path + '/' + name, key + '/' + name, True)
                 assert child is not None
                 rows.extend(child)
         else:
@@ -368,9 +378,10 @@ export function verifyFailedNativeCustody(local, state, capture) {
   return capture;
 }
 
-export function verifyFailedNativeRetirement(local, state) {
+export function verifyFailedNativeRetirement(local, state, expectedSha256 = state.retirement.evidenceSha256) {
   const bytes = regular(join(local, "failed-native-host.json"));
-  assert.equal(digest(bytes), state.retirement.evidenceSha256, "failed-native retirement receipt changed");
+  assert.match(expectedSha256, /^[a-f0-9]{64}$/);
+  assert.equal(digest(bytes), expectedSha256, "failed-native retirement receipt changed");
   const record = JSON.parse(bytes);
   assert.deepEqual(Object.keys(record).sort(), ["capture", "confirmation", "finishedAtMs", "rehash", "schema", "scriptSha256", "startedAtMs"].sort());
   assert.equal(record.schema, "benchmark-failed-native-retirement/v1");

@@ -8,7 +8,9 @@ Corten is pre-1.0, so any minor version may change the API.
 - Add an explicitly approved r21 failed-native custody/retirement action, separate
   from benchmark qualification. Preserve original failure evidence and all reserved
   native roots before fresh terminal-host checks and one owned deletion attempt;
-  keep ordinary collection gates and uncertain-delete reconciliation unchanged.
+  stream directory admission within global evidence budgets and carry the final
+  proof's absolute expiry through private provider dispatch. Keep ordinary
+  collection gates and uncertain-delete reconciliation unchanged.
 
 - Publish synthetic benchmark fixtures with explicit readable file permissions
   and search-only bind roots, including under the private campaign umask. Keep

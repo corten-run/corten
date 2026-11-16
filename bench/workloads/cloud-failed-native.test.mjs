@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { accountId, archive, context, harness, metadata } from "./cloud-fixtures.mjs";
@@ -120,6 +122,64 @@ test("uncertain worker settlement after failed retirement keeps the operation lo
   await assert.rejects(r.task().retireFailedNative()); assert.equal(r.h.deletes, 1);
 });
 
+test("failed-native proof expiry survives the last asynchronous account preflight", async (t) => {
+  const flags = {}, r = await recoveryHarness(t, flags), realNow = Date.now;
+  let offset = 0, accounts = 0;
+  const delayedRun = async (binary, args, ...rest) => {
+    const result = await r.run(binary, args, ...rest);
+    if (r.probes === 3 && binary === "doctl" && args[0] === "account" && ++accounts === 3) {
+      await Promise.resolve(); offset = 61001;
+    }
+    return result;
+  };
+  Date.now = () => realNow() + offset;
+  try {
+    await assert.rejects(r.task({ run: delayedRun }).retireFailedNative(), /proof expired/);
+    assert.equal(r.h.deletes, 0);
+    assert.ok(r.h.saved().deletionIntentAt, "durable intent cannot be silently retried even when dispatch is refused");
+    await assert.rejects(r.task().retireFailedNative(), /no automatic repeated deletion/);
+    assert.equal(r.h.deletes, 0);
+  } finally { Date.now = realNow; }
+});
+
+test("interrupted receipt rehash spends no final proof window and recovery still enforces expiry", async (t) => {
+  for (const expire of [false, true]) {
+    const flags = {}, r = await recoveryHarness(t, flags), originalOpen = fs.openSync;
+    // Crash after receipt durability but before even opening the state-intent
+    // temporary file. No DELETE or durable intent exists to retry or clear.
+    fs.openSync = (...args) => {
+      if (args[0] === `${r.h.statePath}.tmp`) throw new Error("synthetic pre-intent interruption");
+      return originalOpen(...args);
+    };
+    syncBuiltinESMExports();
+    try { await assert.rejects(r.task().retireFailedNative(), /synthetic pre-intent interruption/); }
+    finally { fs.openSync = originalOpen; syncBuiltinESMExports(); }
+    assert.equal(r.h.deletes, 0); assert.deepEqual(readFileSync(r.h.statePath), r.originalState);
+    const receiptPath = join(r.h.local, "failed-native-host.json"), receipt = readFileSync(receiptPath);
+    const realNow = Date.now;
+    let offset = 0, receiptProbe, accounts = 0;
+    fs.openSync = (...args) => {
+      if (args[0] === receiptPath && receiptProbe === undefined) { receiptProbe = r.probes; offset += 61001; }
+      return originalOpen(...args);
+    };
+    syncBuiltinESMExports(); Date.now = () => realNow() + offset;
+    const delayedRun = async (binary, args, ...rest) => {
+      const result = await r.run(binary, args, ...rest);
+      if (expire && r.probes === 5 && binary === "doctl" && args[0] === "account" && ++accounts === 3) {
+        await Promise.resolve(); offset += 61001;
+      }
+      return result;
+    };
+    try {
+      if (expire) await assert.rejects(r.task({ run: delayedRun }).retireFailedNative(), /proof expired/);
+      else assert.equal(await r.task({ run: delayedRun }).retireFailedNative(), 1);
+      assert.equal(receiptProbe, 4, "expensive interrupted receipt verification must precede final fence (probe 5)");
+      assert.equal(r.h.deletes, expire ? 0 : 1);
+      assert.deepEqual(readFileSync(join(r.h.local, `failed-native-host.interrupted-${digest(receipt)}.json`)), receipt);
+    } finally { Date.now = realNow; fs.openSync = originalOpen; syncBuiltinESMExports(); }
+  }
+});
+
 test("explicit absent output is retained as absence, never a completed native result", async (t) => {
   const r = await recoveryHarness(t, { absentRoot: true });
   assert.equal(await r.task().retireFailedNative(), 1);
@@ -188,7 +248,9 @@ test("operator-gated production recovery rechecks merged source and exact locked
       return r.run(binary, copy, options.timeout);
     };
     const deps = { repo: r.h.repo, spawn, write: (s) => output.push(JSON.parse(s)),
-      providerFactory: () => Object.assign((argv, timeout, allowFail) => {
+      providerFactory: () => Object.assign((argv, timeout, allowFail, deleteProofExpiresAtMs) => {
+        if (argv[2] === "delete") assert.ok(Number.isSafeInteger(deleteProofExpiresAtMs)
+          && Date.now() < deleteProofExpiresAtMs && deleteProofExpiresAtMs - Date.now() <= 60000);
         calls.push(["provider", ...argv]); return r.run("doctl", argv, timeout, allowFail);
       }, { close: async () => { closed++; if (mode === "unsettled") throw new Error("synthetic provider close uncertain"); } }) };
     if (mode === "unsettled") {
