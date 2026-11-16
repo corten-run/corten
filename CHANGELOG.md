@@ -16,6 +16,10 @@ Corten is pre-1.0, so any minor version may change the API.
   proof's absolute expiry through private provider dispatch. Keep ordinary
   collection gates and uncertain-delete reconciliation unchanged.
 
+- Probe the marketplace JSON route's method rejection with POST, which the page
+  form implements, rather than requiring an app to implement DELETE somewhere.
+  Keep the JSON 405 requirement and all production qualification gates.
+
 - Retain omitted optional Docker image/container command defaults as explicit null
   in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
   Missing or malformed image configuration, malformed execution and substituted or missing
