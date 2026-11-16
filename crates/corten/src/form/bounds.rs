@@ -184,33 +184,47 @@ impl<T: Float> Bounds<T> {
 }
 
 impl<T: Numeric> Bounds<T> {
-    /// The step inside an exclusive end that the input says in its place, as digits and an
-    /// exponent and as the number it reads as. `None` for an end the input says as it is:
-    /// inclusive, with no step, or where the digits do not line up (the bounds then hold no value
-    /// near the end either).
-    fn inside(&self, last: bool) -> Option<((i128, i32), T)> {
+    /// The step inside an exclusive end that the input says in its place, as the number it reads
+    /// as and how it is written. `None` for an end the input says as it is: inclusive, with no
+    /// step, or where the digits do not line up (the bounds then hold no value near the end
+    /// either).
+    fn inside(&self, last: bool) -> Option<(T, Written)> {
         let step = self.step?;
         if (last && !self.below) || (!last && !self.above) {
             return None;
         }
-        T::step_inside(self.min, self.max, step, last)
+        // Above 0, the commonest exclusive end, the first step is the step itself, which reads as
+        // it is: nothing to search for or to write out digit by digit.
+        if !last && self.min == T::ZERO {
+            return (T::ZERO < step && step.is_finite()).then_some((step, Written::AsStep));
+        }
+        T::step_inside(self.min, self.max, step, last).map(|(decimal, value)| (value, Written::Decimal(decimal)))
     }
 
     /// The `min` and `max` the input says, as numbers: what corten-ui's `NumberField` disables
     /// its buttons at.
     #[doc(hidden)]
     pub fn drawn(&self) -> (T, T) {
-        let at = |last: bool, end: T| self.inside(last).map_or(end, |(_, value)| value);
+        let at = |last: bool, end: T| self.inside(last).map_or(end, |(value, _)| value);
         (at(false, self.min), at(true, self.max))
     }
+}
+
+/// How the input writes the step inside an exclusive end.
+enum Written {
+    /// As the step is written.
+    AsStep,
+    /// Exactly, as digits and an exponent.
+    Decimal((i128, i32)),
 }
 
 impl<T: Numeric> Attrs for Bounds<T> {
     fn render_attrs(&self, out: &mut String) {
         for (name, end, last) in [(" min", &self.min, false), (" max", &self.max, true)] {
             match self.inside(last) {
+                Some((step, Written::AsStep)) => quoted(name, &step, out),
                 // Digits and a point: nothing to escape.
-                Some((decimal, _)) => {
+                Some((_, Written::Decimal(decimal))) => {
                     out.push_str(name);
                     out.push_str("=\"");
                     write_decimal(decimal, out);
@@ -798,6 +812,22 @@ mod tests {
         assert_eq!(written((0, 3)), "0");
         assert_eq!(written((0, -3)), "0");
         assert_eq!(written((i128::MIN, -38)), "-1.70141183460469231731687303715884105728");
+    }
+
+    #[test]
+    fn above_zero_the_first_step_is_the_step_as_it_is_written() {
+        let drawn = |bounds: Bounds<f64>| {
+            let mut out = String::new();
+            bounds.render_attrs(&mut out);
+            (out, bounds.drawn().0)
+        };
+        assert_eq!(drawn(Bounds::new(0.0, 1.0).step(0.1).exclusive_min()), (r#" min="0.1" max="1" step="0.1""#.into(), 0.1));
+        assert_eq!(drawn(Bounds::new(-0.0, 1.0).step(1e-7).exclusive_min()).0, r#" min="0.0000001" max="1" step="0.0000001""#);
+        assert_eq!(drawn(Bounds::new(0.0, 1.0).step(5e-324).exclusive_min()).1, 5e-324);
+        // A step that holds nothing draws the end, as it does with an inclusive one.
+        for step in [0.0, -0.1, f64::INFINITY, f64::NAN] {
+            assert_eq!(drawn(Bounds::new(0.0, 1.0).step(step).exclusive_min()).1, 0.0, "{step}");
+        }
     }
 
     #[test]
