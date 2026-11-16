@@ -802,16 +802,16 @@ mod tests {
         };
         assert_eq!(written(&|o| 37.5f64.write_value(o)), "37.5");
         assert_eq!(written(&|o| 0.1f64.write_value(o)), "0.1");
-        assert_eq!(written(&|o| 1e-18f64.write_value(o)), "0.000000000000000001");
-        assert_eq!(written(&|o| 1e-19f64.write_value(o)), "1e-19");
+        assert_eq!(written(&|o| 1e-17f64.write_value(o)), "0.00000000000000001");
+        assert_eq!(written(&|o| 1e-18f64.write_value(o)), "1e-18");
         assert_eq!(written(&|o| 1e-20f64.write_value(o)), "1e-20");
         assert_eq!(written(&|o| (-1e-20f64).write_value(o)), "-1e-20");
         assert_eq!(written(&|o| 1e-20f32.write_value(o)), "1e-20");
         assert_eq!(written(&|o| 0.30000000000000004f64.write_value(o)), "0.30000000000000004");
         assert_eq!(written(&|o| 0.12345678901234568f64.write_value(o)), "0.12345678901234568");
         assert_eq!(written(&|o| 1.2345678901234567e-5f64.write_value(o)), "1.2345678901234567e-5");
-        assert_eq!(written(&|o| 1e18f64.write_value(o)), "1000000000000000000");
-        assert_eq!(written(&|o| 1e19f64.write_value(o)), "1e19");
+        assert_eq!(written(&|o| 1e17f64.write_value(o)), "100000000000000000");
+        assert_eq!(written(&|o| 1e18f64.write_value(o)), "1e18");
         assert_eq!(written(&|o| u64::MAX.write_value(o)), "18446744073709551615");
         // Each reads back as the same number.
         for v in [1e-20, 1.2345678901234567e-5, 5e-324, f64::MAX, -1e-300, 1.5e25] {
