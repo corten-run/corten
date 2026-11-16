@@ -11,9 +11,9 @@ class FakePage extends EventEmitter {
   calls = [];
   hydrated;
   error = new Error('page.waitForFunction: Timeout 30000ms exceeded.');
-  snapshot = { readyState: 'complete', hydratedType: 'undefined', hydratedAt: null, marketplace: true,
-    scripts: [{ src: 'http://user:password@private.invalid/pkg/item_page.js?token=hidden', type: 'module' }],
-    resources: [{ name: 'http://private.invalid/pkg/item_page.wasm?token=hidden', initiatorType: 'fetch', duration: 5, transferSize: 123 }] };
+  snapshot = { readyState: 'complete', hydratedType: 'undefined', hydratedAt: null, marketplace: true, scriptCount: 1, resourceCount: 1,
+    scripts: [{ resourceKind: 'js', type: 'module', external: true }],
+    resources: [{ resourceKind: 'wasm', initiatorType: 'fetch', duration: 5, transferSize: 123 }] };
   async waitForFunction(...args) {
     this.calls.push(args);
     assert.equal(args.length, 1, 'keep Playwright\'s existing default 30s gate, with no override');
@@ -34,6 +34,20 @@ function observer(page, overrides = {}) {
     container: 'compiled-alerts-leptos-fixture-123', artifactPath: 'ignored.json',
     write: async (_path, text) => saved.push(text), log: summary => summaries.push(summary), ...overrides });
   return { diagnostics, saved, summaries };
+}
+
+for (const [kind, canary] of [['console', 'html-canary'], ['pageerror', 'error-canary'], ['response', 'short-canary']]) {
+  test(`review regression: ${kind} must not retain private HTML or short path content`, async () => {
+    const page = new FakePage();
+    const { diagnostics, saved, summaries } = observer(page);
+    if (kind === 'console') page.emit('console', { type: () => 'error', text: () => '<div>html-canary</div>' });
+    if (kind === 'pageerror') page.emit('pageerror', { stack: 'hydration mismatch: expected <div>error-canary</div>' });
+    if (kind === 'response') page.emit('response', response(page, 'https://fixture.invalid/pkg/short-canary/app.js', 200));
+    await assert.rejects(diagnostics.wait(), error => error === page.error);
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].includes(canary), false, 'browser payload must not be retained');
+    assert.equal(JSON.stringify(summaries).includes(canary), false);
+  });
 }
 
 test('numeric hydration passes unchanged without snapshot, artifact or navigation', async () => {
@@ -72,13 +86,13 @@ test('readiness negative preserves the identical original error and captures the
     await assert.rejects(diagnostics.wait(), error => error === page.error);
     const raw = await readFile(artifactPath, 'utf8'), detail = JSON.parse(raw);
     assert.equal(detail.container, 'compiled-alerts-leptos-fixture-123');
-    assert.deepEqual(detail.navigation, { status: 200, path: '/marketplace/en-US/item_1' });
-    assert.ok(detail.events.some(event => event.kind === 'response' && event.path === '/pkg/item_page.wasm' && event.status === 404));
-    assert.ok(detail.events.some(event => event.kind === 'pageerror' && event.text.includes('src/marketplace_page.rs:42:7')));
+    assert.deepEqual(detail.navigation, { status: 200 });
+    assert.ok(detail.events.some(event => event.kind === 'response' && event.resourceKind === 'wasm' && event.status === 404));
+    assert.ok(detail.events.some(event => event.kind === 'pageerror' && event.errorClass === 'Error'));
     assert.equal(detail.state.hydratedType, 'undefined');
-    assert.equal(detail.state.scripts[0].path, '/pkg/item_page.js');
-    assert.equal(detail.state.resources[0].path, '/pkg/item_page.wasm');
-    assert.doesNotMatch(raw, /private\.invalid|password|token=|secret|https?:|user:/);
+    assert.equal(detail.state.scripts[0].resourceKind, 'js');
+    assert.equal(detail.state.resources[0].resourceKind, 'wasm');
+    assert.doesNotMatch(raw, /private\.invalid|password|token=|secret|https?:|user:|src\/marketplace_page.rs/);
     assert.equal(summaries.length, 1);
     assert.ok(Buffer.byteLength(JSON.stringify(summaries[0])) < 512);
     assert.equal(page.calls.filter(call => call[0] === 'snapshot').length, 1);
@@ -87,7 +101,7 @@ test('readiness negative preserves the identical original error and captures the
   } finally { await rm(folder, { recursive: true, force: true }); }
 });
 
-test('events, diagnostic text, resource lists and artifact bytes are capped and sanitized', async () => {
+test('event counts, resource lists and artifact bytes stay bounded without browser payloads', async () => {
   const page = new FakePage();
   const { diagnostics, saved } = observer(page);
   const secrets = [
@@ -110,7 +124,7 @@ test('events, diagnostic text, resource lists and artifact bytes are capped and 
   assert.ok(Buffer.byteLength(raw) <= diagnosticLimits.artifactBytes);
   assert.ok(detail.events.length <= diagnosticLimits.events);
   assert.ok(Buffer.byteLength(JSON.stringify(detail.events)) <= diagnosticLimits.eventBytes);
-  for (const event of detail.events) if (event.text) assert.ok(Buffer.byteLength(event.text) <= diagnosticLimits.textBytes);
+  for (const event of detail.events) { assert.equal(event.text, undefined); assert.equal(event.path, undefined); }
   assert.ok(detail.dropped > 0);
   assert.ok(detail.state.scripts.length <= diagnosticLimits.resources);
   assert.ok(detail.state.resources.length <= diagnosticLimits.resources);
@@ -142,7 +156,7 @@ test('actual snapshot function reads only bounded structural state, never HTML o
   for (const forbidden of ['cookie', 'body', 'documentElement', 'location']) Object.defineProperty(document, forbidden, {
     get: () => { assert.fail(`must not read document.${forbidden}`); },
   });
-  page.evaluate = async fn => runInNewContext(`(${fn})()`, { document, window: {}, performance: {
+  page.evaluate = async fn => runInNewContext(`(${fn})()`, { document, window: {}, URL, performance: {
     getEntriesByType: type => {
       assert.equal(type, 'resource');
       return Array(100).fill({ name: 'http://private.invalid/pkg/app.wasm?value=hidden', initiatorType: 'fetch', duration: 10, transferSize: 50 });
@@ -154,7 +168,33 @@ test('actual snapshot function reads only bounded structural state, never HTML o
   assert.equal(state.readyState, 'complete');
   assert.equal(state.scripts.length, diagnosticLimits.resources);
   assert.equal(state.resources.length, diagnosticLimits.resources);
+  assert.equal(state.scriptCount, 100);
+  assert.equal(state.resourceCount, 100);
+  assert.equal(state.scripts[0].resourceKind, 'js');
+  assert.equal(state.resources[0].resourceKind, 'wasm');
   assert.doesNotMatch(saved[0], /private\.invalid|hidden/);
+});
+
+test('browser snapshot projects categories and numbers before crossing the page boundary', async () => {
+  const page = new FakePage();
+  let snapshot;
+  page.evaluate = async fn => {
+    snapshot = runInNewContext(`(${fn})()`, { URL, window: { __hydratedAt: '<div>snapshot-canary</div>' },
+      document: { readyState: 'snapshot-canary', querySelector: () => null,
+        scripts: [{ src: 'https://fixture.invalid/pkg/short-canary/app.js', type: '<div>snapshot-canary</div>' }] },
+      performance: { getEntriesByType: () => [{ name: 'https://fixture.invalid/pkg/short-canary/app.wasm',
+        initiatorType: 'snapshot-canary', duration: '<div>snapshot-canary</div>', transferSize: Infinity }] },
+    });
+    assert.doesNotMatch(JSON.stringify(snapshot), /canary|https?:|\.invalid|<div>/);
+    return snapshot;
+  };
+  const { diagnostics, saved } = observer(page);
+  await assert.rejects(diagnostics.wait(), error => error === page.error);
+  assert.deepEqual(JSON.parse(JSON.stringify(snapshot)), { readyState: 'unknown', hydratedType: 'string', hydratedAt: null,
+    marketplace: false, scriptCount: 1, resourceCount: 1,
+    scripts: [{ resourceKind: 'js', type: 'other', external: true }],
+    resources: [{ resourceKind: 'wasm', initiatorType: 'other', duration: null, transferSize: null }] });
+  assert.deepEqual(JSON.parse(saved[0]).state, JSON.parse(JSON.stringify(snapshot)));
 });
 
 test('default diagnostic log is only a small JSON summary, never panic or asset text', async t => {
@@ -169,7 +209,8 @@ test('default diagnostic log is only a small JSON summary, never panic or asset 
   assert.ok(Buffer.byteLength(calls[0]) < 512);
   assert.equal(JSON.parse(calls[0]).saved, true);
   assert.doesNotMatch(calls[0], /panicked|src\/app.rs/);
-  assert.match(saved[0], /src\/app.rs:7:1: unexpected token/);
+  assert.doesNotMatch(saved[0], /panicked|src\/app.rs|unexpected token/);
+  assert.equal(JSON.parse(saved[0]).events[0].errorClass, 'Error');
 });
 
 test('broken event removal cannot mask the original hydration exception', async () => {
@@ -188,7 +229,82 @@ test('new navigation clears old events, and throwing event accessors are contain
   page.emit('pageerror', new Error('new navigation panic'));
   await assert.rejects(diagnostics.wait(), error => error === page.error);
   assert.doesNotMatch(saved[0], /old navigation/);
-  assert.match(saved[0], /new navigation panic/);
+  assert.doesNotMatch(saved[0], /new navigation panic/);
+  const detail = JSON.parse(saved[0]);
+  assert.equal(detail.navigationIndex, 2);
+  assert.equal(detail.dropped, 1);
+  assert.deepEqual(detail.events, [{ sequence: 1, kind: 'pageerror', errorClass: 'Error' }]);
+});
+
+test('iframe navigation cannot overwrite the failing main-frame status after reset', async () => {
+  const page = new FakePage();
+  const { diagnostics, saved } = observer(page);
+  page.emit('response', response(page, 'https://fixture.invalid/old-canary', 301, true));
+  diagnostics.reset();
+  page.emit('response', response(page, 'https://fixture.invalid/short-canary', 200, true));
+  page.emit('response', { ...response(page, 'https://fixture.invalid/frame-canary', 503, true), frame: () => ({}) });
+  await assert.rejects(diagnostics.wait(), error => error === page.error);
+  const detail = JSON.parse(saved[0]);
+  assert.equal(detail.navigationIndex, 2);
+  assert.deepEqual(detail.navigation, { status: 200 });
+  assert.deepEqual(detail.events, []);
+  assert.doesNotMatch(saved[0], /canary/);
+});
+
+test('closed diagnostic schema discards all unknown fields and variable browser strings', async () => {
+  const page = new FakePage();
+  page.error = { name: 'TimeoutError', message: '<div>original-canary</div>', stack: 'original-canary' };
+  page.snapshot = { readyState: '<div>state-canary</div>', hydratedType: 'state-canary', hydratedAt: 'state-canary', marketplace: 'state-canary',
+    scriptCount: 'state-canary', resourceCount: Infinity, HTML: '<div>state-canary</div>',
+    scripts: [{ resourceKind: 'state-canary', type: 'state-canary', external: 'state-canary', src: 'https://fixture.invalid/pkg/short-canary/app.js' }],
+    resources: [{ resourceKind: 'state-canary', initiatorType: 'state-canary', duration: 'state-canary', transferSize: NaN, name: 'https://fixture.invalid/pkg/short-canary/app.wasm' }] };
+  const { diagnostics, saved, summaries } = observer(page);
+  page.emit('response', response(page, 'https://fixture.invalid/short-canary', 200, true));
+  page.emit('console', { type: () => '<div>console-canary</div>', text: () => 'console-canary' });
+  page.emit('pageerror', { name: '<div>error-canary</div>', message: 'error-canary', stack: 'error-canary' });
+  page.emit('requestfailed', { url: () => 'https://fixture.invalid/pkg/short-canary/app.js', failure: () => ({ errorText: 'failure-canary' }) });
+  page.emit('response', response(page, 'https://fixture.invalid/pkg/short-canary/app.wasm', 503));
+  await assert.rejects(diagnostics.wait(), error => error === page.error);
+  const detail = JSON.parse(saved[0]);
+  const keys = (object, expected) => assert.deepEqual(Object.keys(object).sort(), expected.sort());
+  keys(detail, ['schema', 'app', 'source', 'profile', 'container', 'navigationIndex', 'navigation', 'errorClass', 'state', 'events', 'dropped']);
+  keys(detail.navigation, ['status']);
+  keys(detail.state, ['readyState', 'hydratedType', 'hydratedAt', 'marketplace', 'scriptCount', 'resourceCount', 'scripts', 'resources']);
+  keys(detail.state.scripts[0], ['resourceKind', 'type', 'external']);
+  keys(detail.state.resources[0], ['resourceKind', 'initiatorType', 'duration', 'transferSize']);
+  keys(detail.events[0], ['sequence', 'kind', 'level']);
+  keys(detail.events[1], ['sequence', 'kind', 'errorClass']);
+  keys(detail.events[2], ['sequence', 'kind', 'resourceKind']);
+  keys(detail.events[3], ['sequence', 'kind', 'resourceKind', 'status']);
+  keys(summaries[0], ['diagnostic', 'app', 'source', 'profile', 'navigationIndex', 'saved', 'events', 'dropped', 'bytes']);
+  assert.equal(detail.schema, 'compiled-alerts-hydration/v2');
+  assert.equal(detail.errorClass, 'TimeoutError');
+  assert.deepEqual(detail.events, [
+    { sequence: 1, kind: 'console', level: 'other' }, { sequence: 2, kind: 'pageerror', errorClass: 'unknown' },
+    { sequence: 3, kind: 'requestfailed', resourceKind: 'js' }, { sequence: 4, kind: 'response', resourceKind: 'wasm', status: 503 },
+  ]);
+  assert.deepEqual(detail.state, { readyState: 'unknown', hydratedType: 'unknown', hydratedAt: null, marketplace: false, scriptCount: null, resourceCount: null,
+    scripts: [{ resourceKind: 'other', type: 'other', external: false }],
+    resources: [{ resourceKind: 'other', initiatorType: 'other', duration: null, transferSize: null }] });
+  assert.doesNotMatch(saved[0] + JSON.stringify(summaries), /canary|\.invalid|https?:|<div>/);
+});
+
+test('diagnostics never read console text, error message/stack or request failure payloads', async () => {
+  const page = new FakePage();
+  const forbidden = () => { assert.fail('arbitrary diagnostic payload was read'); };
+  const original = { name: 'TimeoutError' }, pageError = { name: 'RuntimeError' };
+  for (const error of [original, pageError]) for (const key of ['message', 'stack', 'cause']) Object.defineProperty(error, key, { get: forbidden });
+  page.error = original;
+  const { diagnostics, saved } = observer(page);
+  page.emit('console', { type: () => 'error', text: forbidden, args: forbidden, location: forbidden });
+  page.emit('pageerror', pageError);
+  page.emit('requestfailed', { url: () => 'https://fixture.invalid/pkg/short-canary/app.wasm', failure: forbidden });
+  await assert.rejects(diagnostics.wait(), error => error === original);
+  const detail = JSON.parse(saved[0]);
+  assert.equal(detail.dropped, 0, 'forbidden getters must not merely be swallowed');
+  assert.equal(detail.errorClass, 'TimeoutError');
+  assert.deepEqual(detail.events, [{ sequence: 1, kind: 'console', level: 'error' },
+    { sequence: 2, kind: 'pageerror', errorClass: 'RuntimeError' }, { sequence: 3, kind: 'requestfailed', resourceKind: 'wasm' }]);
 });
 
 test('artifact destination is already collected by the catalog parity workflow', async () => {
