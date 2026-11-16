@@ -4824,8 +4824,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
 22. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary, which
-    the client chose along with the bytes. The search is `memchr`'s substring search, already in
-    axum's tree: linear, as a byte-by-byte search is, but 4.5 times as fast on plain bytes, 35 times
+    the client chose along with the bytes. The search is `memchr`'s substring search (no crates
+    under it): linear, as a byte-by-byte search is, but 4.5 times as fast on plain bytes, 35 times
     on `\r`, 23 times on `\r\n` and 2.3 times on the delimiter less its last byte, repeated (the
     search alone over 60 MiB, release, medians of 7, in 16 KiB pieces). The client picks the pieces
     too, and a piece has a cost of its own, kept small: what is held of a piece is joined to the
