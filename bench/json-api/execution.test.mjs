@@ -18,18 +18,53 @@ const substitutions = [
   ["effective arguments", (i) => { i.Args = ["--eval", "process.exit(1)"]; }],
   ["missing command", (i) => { delete i.Config.Cmd; }],
   ["missing entrypoint", (i) => { delete i.Config.Entrypoint; }],
+  ["null command", (i) => { i.Config.Cmd = null; }],
+  ["empty command", (i) => { i.Config.Cmd = []; }],
+  ["malformed command", (i) => { i.Config.Cmd = "node"; }],
+  ["null-byte command", (i) => { i.Config.Cmd = ["node\0evil"]; }],
+  ["missing configuration", (i) => { delete i.Config; }],
   ["missing effective path", (i) => { delete i.Path; }],
   ["missing effective arguments", (i) => { delete i.Args; }],
 ];
 
 for (const role of ["app", "upstream", "load", "probe"]) test(`actual JSON ${role} projection rejects substituted execution`, () => {
   const f = result(), p = descriptor().cases[0], expected = f.summary.apps.express.checks[p.key].identity;
+  f.summary.apps.express.images[p.payload].execution.Entrypoint = ["/native-entrypoint"];
   const context = { ...runtimeContext(f.summary, p), load: loadConfig(f.summary.options, "fixed") };
   const receive = (i) => role === "app" ? runtimeReceipt(i, expected, context) : participantReceipt(i, expected, context, role);
   assert.ok(receive(runtimeInfo(expected, context, role)), `${role} ordinary control`);
   for (const [name, mutate] of substitutions) {
     const info = runtimeInfo(expected, context, role); mutate(info);
     assert.throws(() => receive(info), `${role}: ${name} must not be discarded by the producer`);
+  }
+});
+
+test("omitted optional Docker image defaults normalize to null, not an invented command", () => {
+  for (const Config of [{ Entrypoint: ["k6"] }, { Entrypoint: ["k6"], Cmd: undefined }, { Entrypoint: ["k6"], Cmd: null },
+    { Cmd: ["node"] }, { Entrypoint: undefined, Cmd: ["node"] }, { Entrypoint: null, Cmd: ["node"] }]) {
+    const expected = { Entrypoint: Config.Entrypoint ?? null, Cmd: Config.Cmd ?? null };
+    assert.deepEqual(imageCommandEvidence({ Config }), expected);
+    assert.deepEqual(JSON.parse(JSON.stringify(imageCommandEvidence({ Config }))), expected);
+  }
+  for (const image of [undefined, {}, { Config: undefined }, { Config: null }, { Config: [] }, { Config: {} },
+    { Config: { Entrypoint: null, Cmd: null } }, { Config: { Entrypoint: "k6" } },
+    { Config: { Entrypoint: ["k6"], Cmd: "run" } }, { Config: { Entrypoint: ["k6"], Cmd: ["run\0evil"] } }]) {
+    assert.throws(() => imageCommandEvidence(image));
+  }
+});
+
+test("optional Docker container defaults match null only when the inspected image default is empty", () => {
+  const f = result(), p = descriptor().cases[0], expected = f.summary.apps.express.checks[p.key].identity;
+  for (const [execution, field] of [[{ Entrypoint: null, Cmd: ["/native/app"] }, "Entrypoint"],
+    [{ Entrypoint: ["/native/app"], Cmd: null }, "Cmd"]]) {
+    f.summary.apps.express.images[p.payload].execution = execution;
+    const context = runtimeContext(f.summary, p), info = runtimeInfo(expected, context);
+    delete info.Config[field];
+    const receipt = runtimeReceipt(info, expected, context);
+    assert.equal(receipt.configuration[field === "Cmd" ? "command" : "entrypoint"], null);
+    assert.deepEqual(receipt, runtimeReceipt({ ...info, Config: { ...info.Config, [field]: null } }, expected, context));
+    info.Config[field] = ["/substituted"];
+    assert.throws(() => runtimeReceipt(info, expected, context));
   }
 });
 

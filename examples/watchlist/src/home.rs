@@ -708,4 +708,131 @@ mod tests {
         assert!(patch.contains(r#"<option value="GLBX">Globex (GLBX)</option>"#), "{patch}");
         assert!(patch.contains("Stopped watching Globex."), "{patch}");
     }
+
+    /// Writes its children in an `<svg>`'s `<desc>`.
+    #[component]
+    fn Described(children: impl Render) -> impl Render {
+        html! { <desc>{children}</desc> }
+    }
+
+    /// Markup with every call the key check puts in what `html!` writes: cells keyed by
+    /// `key={..}`, one keyed by a static `key=".."`, a `<template>`'s, a `<noscript>`'s and a
+    /// `<textarea>`'s content, and a `<template>` among a component's children in an `<svg>`.
+    #[component]
+    fn KeyedMarkup<'a>(ids: &'a [String]) -> impl Render {
+        let (cell, total, mark) = refs();
+        html! {
+            <div>
+                <table>
+                    <tbody>
+                        for id in ids {
+                            <tr><td ref={cell} key={id.as_str()}>"1"</td></tr>
+                        }
+                    </tbody>
+                    <tfoot><tr><td ref={total} key="total">"2"</td></tr></tfoot>
+                </table>
+                <template>
+                    <table><tbody><tr><td ref={cell} key="row">"0"</td></tr></tbody></table>
+                </template>
+                <noscript><p>"Prices follow the market with JavaScript on."</p></noscript>
+                <textarea name="note">{ids.len()}</textarea>
+                <svg>
+                    <Described>
+                        <template><g ref={mark} key="row"></g></template>
+                    </Described>
+                </svg>
+            </div>
+        }
+    }
+
+    /// A document around `KeyedMarkup`: its head's `<title>` is the page's, in a document's head,
+    /// and a navigation asks for its parts (`Part::Swap`, `Part::Title`). It is written without
+    /// the doctype because it cannot have one: `html!` counts a `<!DOCTYPE html>` as a root beside
+    /// the `<html>`, and a component with refs renders one root element. That is a known limit (a
+    /// page without the doctype the standard requires renders in quirks mode), tracked in
+    /// https://github.com/corten-run/corten/issues/1489. Here it only renders the markup, whose
+    /// `<html>` holds the refs, so the document renders scoped, whole and in its parts; its `<main>` holds a keyed ref's element and a `<template>`
+    /// of its own, beside `KeyedMarkup`'s.
+    #[component]
+    fn KeyedDocument<'a>(title: &'a str, ids: &'a [String]) -> impl Document {
+        let lead = refs();
+        html! {
+            <html lang="en">
+                <head>
+                    <meta charset="utf-8">
+                    <title>{title}" | Watchlist"</title>
+                    <Corten />
+                </head>
+                <body>
+                    <main>
+                        <p ref={lead} key="lead">{title}</p>
+                        <template><p ref={lead} key="lead">{title}</p></template>
+                        <KeyedMarkup ids={ids} />
+                    </main>
+                </body>
+            </html>
+        }
+    }
+
+    #[inline(never)]
+    fn render_live_prices(stocks: &[Stock], rounds: usize) -> usize {
+        let t = Msg::default();
+        (0..rounds).map(|_| std::hint::black_box(LivePrices { stocks, t }.to_html()).len()).sum()
+    }
+
+    #[inline(never)]
+    fn render_keyed_markup(ids: &[String], rounds: usize) -> usize {
+        (0..rounds).map(|_| std::hint::black_box(KeyedMarkup { ids }.to_html()).len()).sum()
+    }
+
+    /// The whole document, then the parts a navigation asks for.
+    #[inline(never)]
+    fn render_keyed_document(ids: &[String], rounds: usize) -> usize {
+        let doc = KeyedDocument { title: "Prices", ids };
+        (0..rounds)
+            .map(|_| {
+                let mut out = doc.to_html();
+                for part in [corten::view::Part::Swap, corten::view::Part::Title] {
+                    corten::view::Document::render_part(&doc, &mut out, part);
+                }
+                std::hint::black_box(out).len()
+            })
+            .sum()
+    }
+
+    /// What the debug key check (`docs/design.md#choice-ref-values`) costs a release render, which
+    /// should be nothing: `LivePrices` with 50 rows, each with two keyed cells, `KeyedMarkup`, and
+    /// `KeyedDocument` around it, whole and in the parts a navigation asks for, 1,000 times each.
+    /// Instructions, from the release test binary under callgrind:
+    /// `cargo test --release -p watchlist --no-run`, then
+    /// `valgrind --tool=callgrind <test binary> --ignored --exact home::tests::key_check_cost`
+    /// and `callgrind_annotate --inclusive=yes` for `render_live_prices`, `render_keyed_markup`
+    /// and `render_keyed_document`. To compare with a commit before the check, copy this test and
+    /// the components above it into that commit's `home.rs`.
+    #[test]
+    #[ignore]
+    fn key_check_cost() {
+        let stocks: Vec<Stock> = (0..50u32)
+            .map(|n| Stock {
+                id: format!("S{n:03}"),
+                name: format!("Stock {n}"),
+                price_cents: 10_000 + n,
+                open_cents: 10_000,
+                change_bp: n as i32,
+                price: format!("$100.{n:02}"),
+                change: format!("+0.{n:02}%"),
+            })
+            .collect();
+        let ids: Vec<String> = stocks.iter().map(|s| s.id.clone()).collect();
+        let rounds = 1_000;
+        let prices = render_live_prices(&stocks, rounds);
+        let keyed = render_keyed_markup(&ids, rounds);
+        let document = render_keyed_document(&ids, rounds);
+        println!(
+            "LivePrices: {} bytes a render, KeyedMarkup: {} bytes a render, KeyedDocument: {} bytes a render",
+            prices / rounds,
+            keyed / rounds,
+            document / rounds
+        );
+    }
 }

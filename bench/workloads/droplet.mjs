@@ -11,7 +11,8 @@ import { archiveMembers, digest, durable, durableCopy, extractArchive, fileHash,
 import { campaignOutcome, controllerState, full, providerAccount, providerFailure, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript,
+  verifyFailedNativeCustody, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -23,7 +24,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now() } = {}) {
+  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleet = options.group === undefined ? undefined : validateFleet(JSON.parse(regular(options.fleet, 1024 * 1024)));
@@ -45,11 +46,19 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     durable(`${statePath}.tmp`, `${JSON.stringify(state, null, 2)}\n`);
     renameSync(`${statePath}.tmp`, statePath); syncDirectory(local);
   };
-  async function execute(binary, args, timeout = 60000, allowFail = false) {
-    const invoke = async (argv, permittedFailure = false) => {
+  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) {
+    if (deleteProofExpiresAtMs !== undefined) {
+      assert.equal(binary, "doctl"); assert.equal(args[2], "delete");
+      assert.ok(Number.isSafeInteger(deleteProofExpiresAtMs));
+    }
+    const invoke = async (argv, permittedFailure = false, expiry) => {
       check();
+      if (expiry !== undefined) {
+        const current = Date.now();
+        assert.ok(current < expiry && expiry - current <= 60000, "current retirement proof expired");
+      }
       let r;
-      try { r = await run(binary, argv, timeout, permittedFailure); }
+      try { r = await run(binary, argv, timeout, permittedFailure, expiry); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (r.controlTreeUncertain || r.controlUncertain) { preserveOperationLock = true; throw new Error("control uncertain; preserve locks"); }
       check();
@@ -63,7 +72,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.equal(providerAccount(value), state.provider.accountId, "provider account identity changed; preserve uncertainty");
     };
     await account();
-    const result = await invoke(scoped(args), allowFail);
+    const result = await invoke(scoped(args), allowFail, deleteProofExpiresAtMs);
     await account(); // A changed context cannot supply absence/deletion authority.
     return result;
   }
@@ -179,6 +188,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.deepEqual(record, expected, "retirement evidence differs");
   };
   const verifyRetirement = () => {
+    if (state.retirement.kind === "native-failed") return verifyFailedNativeRetirement(local, state);
     const bytes = regular(join(local, retirementFile(state.retirement.kind)), 4096);
     assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
     verifyRetirementRecord(bytes, state.retirement.kind);
@@ -271,6 +281,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             const diagnostic = providerFailure(created);
             throw Object.assign(new Error("create completion was not proved; allocation retained for recovery"), diagnostic ? { providerDiagnostic: diagnostic } : {});
           }
+          const completed = JSON.parse(created.stdout);
+          assert.ok(Array.isArray(completed) && completed.length === 1 && Number.isSafeInteger(completed[0]?.id)
+            && completed[0].id > 0 && String(completed[0].id) === state.id,
+          "completed create and owned host differ; preserve reservation without provisioning");
           let ready = false;
           for (let i = 0; i < 40; i++) {
             if ((await ssh("true", 30000, true)).status === 0) { ready = true; break; }
@@ -346,6 +360,91 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
         assert.equal(await exactHost(), undefined, "deletion not confirmed; host state uncertain");
         verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save(); return deletedCode();
+      });
+    },
+    async retireFailedNative() {
+      assert.equal(options.retireFailedNative, true, "explicit failed-native action required");
+      return locked(async () => {
+        assert.ok(recoveryApproval, "source-bound production recovery approval required");
+        full(recoveryApproval.controllerCommit, /[a-f0-9]{40}/, "merged repair source required");
+        assert.notEqual(recoveryApproval.controllerCommit, state.commit, "repair source must be distinct from measured source");
+        assert.equal(digest(regular(statePath, 1024 * 1024)), recoveryApproval.reservationSha256, "locked recovery reservation changed");
+        if (state.status === "retired") {
+          assert.equal(state.retirement.kind, "native-failed");
+          verifyFailedNativeRetirement(local, state);
+          assert.equal(await exactHost(), undefined, "delete outcome uncertain; no automatic repeated deletion");
+          state.destroyedAt ??= new Date().toISOString(); save(); return 1;
+        }
+        assert.ok(["starting", "running"].includes(state.status) && !state.deletionIntentAt && !state.collectedAt
+          && !state.validation && !state.evidenceOutcome && state.createIntentAt, "only an unqualified failed native reservation can recover");
+        failedNativeArchive(local, state);
+        const original = regular(statePath, 1024 * 1024), originalPath = join(local, "failed-native-reservation.json");
+        if (existsSync(originalPath)) assert.equal(digest(regular(originalPath, 1024 * 1024)), digest(original), "original reservation differs");
+        else durable(originalPath, original);
+        const capturePath = join(local, "failed-native-capture.json"), custodyArchive = join(local, "failed-native-results.tgz");
+        let capture;
+        if (existsSync(capturePath)) {
+          capture = verifyFailedNativeCustody(local, state, JSON.parse(regular(capturePath)));
+          assert.equal(capture.controllerCommit, recoveryApproval.controllerCommit, "custody controller source changed");
+        } else {
+          assert.ok(!existsSync(custodyArchive) && !existsSync(`${custodyArchive}.download`), "unrecorded custody retained; no automatic adoption");
+          const script = failedNativeScript(state), startedAtMs = Date.now();
+          const raw = (await ssh(script, 11 * 60000)).stdout, finishedAtMs = Date.now();
+          const observation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs);
+          const download = `${custodyArchive}.download`; durable(download, "");
+          await scp(`root@${state.ip}:/bench/failed-native-custody.tgz`, download);
+          durableCopy(download, `${custodyArchive}.synced`, observation.archiveSha256);
+          renameSync(`${custodyArchive}.synced`, custodyArchive); syncDirectory(local);
+          const extracted = mkdtempSync(join(local, "custody-"));
+          const hash = await extractArchive(custodyArchive, extracted, observation.archiveSha256); check();
+          capture = { schema: "benchmark-failed-native-custody/v1", measuredCommit: state.commit, controllerCommit: recoveryApproval.controllerCommit,
+            reservationSha256: digest(original), scriptSha256: digest(script), observation, startedAtMs, finishedAtMs,
+            evidence: basename(extracted), evidenceSha256: hash };
+          verifyFailedNativeCustody(local, state, capture); durable(capturePath, `${JSON.stringify(capture, null, 2)}\n`);
+        }
+        // Local custody verification precedes a fresh, full remote rehash and
+        // current-quiescence proof. Neither is historical native qualification.
+        verifyFailedNativeCustody(local, state, capture); check();
+        const rehashScript = failedNativeScript(state, capture.observation.snapshotSha256), rehashStarted = Date.now();
+        const rehashRaw = (await ssh(rehashScript, 11 * 60000)).stdout, rehashFinished = Date.now();
+        const rehashObservation = failedNativeObservation(rehashRaw, state, rehashStarted, rehashFinished);
+        const withoutTime = ({ observedAtMs, ...rest }) => rest;
+        assert.deepEqual(withoutTime(rehashObservation), withoutTime(capture.observation), "predelete custody differs");
+        verifyFailedNativeCustody(local, state, capture);
+        const receiptPath = join(local, "failed-native-host.json");
+        let interruptedReceipt;
+        if (existsSync(receiptPath)) {
+          const prior = regular(receiptPath), hash = digest(prior);
+          // Verify against the actual measured state, without adopting an intent.
+          verifyFailedNativeRetirement(local, state, hash);
+          const history = join(local, `failed-native-host.interrupted-${hash}.json`);
+          if (existsSync(history)) assert.equal(digest(regular(history)), hash); else durable(history, prior);
+          interruptedReceipt = hash;
+        }
+        // Full local verification can be expensive. Renew only the current host
+        // proof afterwards, while checking all remote metadata is still exactly
+        // the previously hashed inventory and the custody archive is unchanged.
+        const script = failedNativeScript(state, capture.observation.snapshotSha256, capture.observation), startedAtMs = Date.now();
+        const raw = (await ssh(script, 11 * 60000)).stdout, finishedAtMs = Date.now();
+        const confirmation = failedNativeObservation(raw, state, startedAtMs, finishedAtMs);
+        assert.deepEqual(withoutTime(confirmation), withoutTime(capture.observation), "final custody fence differs");
+        await own(); check();
+        // Bound the whole local fence operation, including SSH response delivery.
+        // Its start precedes the observation without relying on remote clock skew.
+        const deleteProofExpiresAtMs = startedAtMs + 60000;
+        assert.ok(Date.now() >= finishedAtMs && Date.now() < deleteProofExpiresAtMs, "current retirement proof expired");
+        const receipt = { schema: "benchmark-failed-native-retirement/v1", capture, confirmation, scriptSha256: digest(script), startedAtMs, finishedAtMs,
+          rehash: { observation: rehashObservation, scriptSha256: digest(rehashScript), startedAtMs: rehashStarted, finishedAtMs: rehashFinished } };
+        const bytes = `${JSON.stringify(receipt, null, 2)}\n`;
+        if (interruptedReceipt !== undefined) {
+          // Only this invocation's fresh proof can replace an interrupted receipt.
+          assert.equal(digest(regular(receiptPath)), interruptedReceipt); unlinkSync(receiptPath); syncDirectory(local);
+        }
+        durable(receiptPath, bytes);
+        Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
+        await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
+        assert.equal(await exactHost(), undefined, "deletion not confirmed; preserve intent without another DELETE");
+        state.destroyedAt = new Date().toISOString(); save(); return 1;
       });
     },
     async deliverAudit() {

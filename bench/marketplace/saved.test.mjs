@@ -3,7 +3,7 @@ import test from "node:test";
 import { summaryFixture, writeSavedFixture } from "./saved-fixture.mjs";
 import { validateSummary } from "./report.mjs";
 import { validateSaved } from "./validate.mjs";
-import { evidenceVersion, sourceTree } from "./raw-contract.mjs";
+import { containerReceipt, evidenceVersion, imageReceipt, sourceTree } from "./raw-contract.mjs";
 import { execFileSync, spawnSync } from "node:child_process";
 import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, truncateSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +22,40 @@ function temporary(t) {
 
 test("reproduction: a summary-only native round passes the historical summary reader", () => {
   assert.equal(validateSummary(summaryFixture("a".repeat(40))).complete, true);
+});
+
+test("marketplace Docker projections retain omitted optional defaults as null without replacing commands", () => {
+  for (const command of [{ Entrypoint: ["k6"] }, { Entrypoint: ["k6"], Cmd: null }, { Cmd: ["node"] }, { Entrypoint: null, Cmd: ["node"] }]) {
+    const image = { Config: command }, container = { Name: "/synthetic", Config: { ...command, Env: [] }, HostConfig: {}, Mounts: [] };
+    for (const receipt of [imageReceipt(image), containerReceipt(container)]) {
+      const saved = JSON.parse(JSON.stringify(receipt));
+      assert.equal(Object.hasOwn(saved, "cmd"), true); assert.equal(Object.hasOwn(saved, "entrypoint"), true);
+      assert.deepEqual(saved.cmd, command.Cmd ?? null); assert.deepEqual(saved.entrypoint, command.Entrypoint ?? null);
+    }
+  }
+  assert.throws(() => imageReceipt({}));
+  assert.throws(() => containerReceipt({ Name: "/synthetic" }));
+  for (const Cmd of ["node", ["node\0evil"], [1]]) {
+    assert.deepEqual(imageReceipt({ Config: { Cmd } }).cmd, Cmd, "malformed values must not normalize to an empty default");
+  }
+});
+
+test("marketplace checker image Config must be an object before optional defaults reach replay", async (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  writeSavedFixture(folder, commit, sourceTree(commit));
+  assert.ok(validateSaved(args));
+  const path = join(folder, "tools.json"), tools = JSON.parse(readFileSync(path)), original = tools.checker;
+  const projectAndReplay = (Config) => {
+    tools.checker = imageReceipt({ Id: original.id, Size: original.bytes, RepoDigests: original.repoDigests, Config });
+    writeFileSync(path, JSON.stringify(tools));
+    assert.ok(validateSaved(args));
+  };
+  for (const Config of [{}, { Entrypoint: null, Cmd: null }]) projectAndReplay(Config);
+  for (const Config of [undefined, null, [], "malformed", false, true, 0, 42]) {
+    await t.test(`reject ${JSON.stringify(Config) ?? "missing"}`, () => {
+      assert.throws(() => projectAndReplay(Config), /image configuration missing/);
+    });
+  }
 });
 
 test("native saved validation rejects summary-only, historical and malformed proof as invalid", (t) => {
@@ -96,6 +130,11 @@ test("hostile saved edits fail replay, even when the summary remains internally 
   change("fixture/corten/check-container.json", (v) => { v.memoryBytes = 2 ** 30; });
   change("fixture/corten/check-container.json", (v) => { v.mounts.push({ type: "bind", source: "/other/check.mjs", destination: "/repo/bench/marketplace/check.mjs", readOnly: true }); });
   change("tools.json", (v) => { v.k6.entrypoint = ["/bin/sh"]; });
+  for (const missing of [undefined, null, [], "node", ["node\0evil"]]) {
+    change(`${base}/fixed-receipt.json`, (v) => { v.load.cmd = missing; });
+    change("fixture/corten/check-container.json", (v) => { v.cmd = missing; });
+    change(`${base}/fixed-receipt.json`, (v) => { v.app.cmd = missing; });
+  }
   change(`${base}/fixed-clock.json`, (v) => { v.testRunDurationMs = 0.0015; });
   change(`${base}/fixed-receipt.json`, (v) => { v.load.state.FinishedAt = v.load.state.StartedAt; });
   change(`${base}/fixed-receipt.json`, (v) => { v.cpu.state.StartedAt = "2026-01-01T00:01:00Z"; });
