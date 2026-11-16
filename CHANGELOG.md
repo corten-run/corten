@@ -11,10 +11,34 @@ Corten is pre-1.0, so any minor version may change the API.
   JavaScript, so a filter or scope that redraws one part survives a reload, a bookmark and a
   shared link. Back and Forward between the entries such forms made read the patch again
   (`corten: action`, which the HTTP cache can answer) rather than the page, and an answer that
-  is not a patch is read as a page. `html!` refuses the mark on anything but a `<form>`, on a form
+  is not a patch, or a patch the runtime cannot draw whole, is read as a page. `html!` refuses
+  the mark on anything but a `<form>`, on a form
   without `data-patch` and on one that posts. Without the Navigation API the browser sends the
   form itself, a full load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
+
+- Publish synthetic benchmark fixtures with explicit readable file permissions
+  and search-only bind roots, including under the private campaign umask. Keep
+  neighboring evidence private and contender users/read-only mounts unchanged.
+
+- Document a bounded read-only export of live JSON/mixed audit subjects and
+  immutable snapshots for independent review, followed by the existing exact-
+  subject delivery and terminal collection. Include quota-backed private workspace
+  setup, metadata-first preflight, fresh snapshot destinations and clean Node
+  startup. No active-campaign collection or automatic approval is added;
+  target-host transport still needs qualification.
+
+- Replay live group phases using the saved campaign's exact scope and group order,
+  including ordinal zero on a dedicated host. Require the matching campaign plan,
+  selected binding and host reservation without relaxing native/lifetime seals.
+
+- Project benchmark create responses onto the positive droplet/action IDs rather
+  than gating on unused advisory link text. Fixed-origin action polling still
+  proves exact create completion; explicitly join its droplet ID to the freshly
+  observed owned host before provisioning. Keep one POST, original deadlines,
+  account/ownership, settlement and terminal-only cleanup gates unchanged.
+  Recheck the original absolute deadline before granting completed-action success;
+  late completion stays uncertain and cannot authorize provisioning.
 
 - A page's several writes are named posts of its own route, `#[route("/inventory", get = show,
   post(price) = set_price, post(photo) = add_photo)]`, so a screen with several writes declares
@@ -61,13 +85,13 @@ Corten is pre-1.0, so any minor version may change the API.
   by the original deadline and shared request limit; use exact-ID host observations
   after binding rather than repeated whole-account censuses.
 
-- Accept the documented droplet-scoped create action link only when both resource
-  and action IDs match. Completion still uses the fixed global action endpoint;
-  foreign or malformed hints and incomplete/misbound actions remain refused.
+- Earlier droplet-scoped create-link compatibility and href diagnostics are
+  retained as historical evidence. The current ID projection above replaces hint
+  spelling checks; incomplete or misbound authoritative actions remain refused.
 
-- Distinguish five benchmark provider create-link refusal predicates with closed
-  diagnostic codes, without forwarding rejected values or changing completion,
-  ownership, retry or cleanup gates. Checkpoint failures retain coarse phase codes.
+- Earlier create-link refusal diagnostics remain readable as historical evidence;
+  current refusals cover consumed IDs and authoritative action proofs rather than
+  unused link text. Checkpoint failures retain coarse phase codes.
 
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.
