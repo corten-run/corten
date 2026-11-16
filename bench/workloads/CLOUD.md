@@ -859,6 +859,17 @@ Classification survives cached teardown and failed create reconciliation; it is
 diagnostic only and changes no action schema, ownership proof, retry, deadline,
 approval, uncertainty or lock-release rule. Missing/invalid diagnostics remain
 generic errors, not evidence about the provider's response.
+For native account-request failures, the optional closed `detail` is the rejection
+site: `internal-refusal`, `connect`, `send`, `request-error`, `response-error`,
+`response-aborted`, `response-status`, `body-limit`, `invalid-json`, `deadline` or
+`cancelled`. These labels inspect no native exception fields: `connect` does not
+prove DNS/TLS failure or that a connection was established. Details survive the
+existing private-worker IPC and cached finalizer diagnostic; the direct CLI renders
+only the closed stage, detail and allowed HTTP status. Unknown, extra or accessor diagnostic fields
+are not forwarded. Other phases and unclassified failures retain their coarse
+codes. No detail changes retry, credential, acceptance, settlement or lock rules,
+and the original r21 account-request cause remains unknown. A final
+`provider-settlement` stage alone does not identify the original failing call.
 The adapter follows [DigitalOcean's create/action contract](https://github.com/digitalocean/openapi/blob/main/specification/resources/droplets/droplets_create.yml).
 SSH uses [OpenSSH's command/transfer rules](https://man.openbsd.org/ssh.1),
 [SFTP-by-default SCP](https://man.openbsd.org/scp.1).

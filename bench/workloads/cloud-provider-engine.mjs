@@ -50,16 +50,21 @@ function privateDiagnostics() {
 
 function restRequest({ method, path, credential, body, timeout, interrupted = () => false, deleteProofExpiresAtMs }, connect = httpsRequest) {
   return new Promise((resolve, reject) => {
-    let settled = false, req, timer, cancellation;
-    const finish = (error, result) => {
+    let settled = false, req, timer, cancellation, failureDetail = "internal-refusal";
+    const finish = (detail, result) => {
       if (settled) return; settled = true; clearTimeout(timer); clearInterval(cancellation);
-      if (error) { req?.destroy(); reject(stopped(true)); } else resolve(result);
+      if (detail) {
+        req?.destroy();
+        // Site labels only: never inspect native exception fields or infer a
+        // network cause. Other phases retain their existing coarse diagnostic.
+        reject(stopped(true, method === "GET" && path === "/v2/account" ? { code: "account-request", detail } : undefined));
+      } else resolve(result);
     };
     try {
       privateDiagnostics();
       assert.ok(path.startsWith("/v2/") && !path.startsWith("//"));
       assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 900000);
-      assert.ok(!interrupted());
+      failureDetail = "cancelled"; assert.ok(!interrupted()); failureDetail = "internal-refusal";
       const input = body === undefined ? undefined : JSON.stringify(body);
       const fresh = () => {
         if (deleteProofExpiresAtMs === undefined) return;
@@ -68,34 +73,42 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
           && current < deleteProofExpiresAtMs && deleteProofExpiresAtMs - current <= 60000, "current retirement proof expired");
       };
       fresh();
+      failureDetail = "connect";
       req = connect(new URL(path, origin), { method, agent: false, rejectUnauthorized: true,
         headers: { authorization: `Bearer ${credential}`, accept: "application/json", ...(input === undefined ? {} : { "content-type": "application/json", "content-length": Buffer.byteLength(input) }) } }, (res) => {
         const chunks = []; let bytes = 0;
         res.on("data", (chunk) => {
           bytes += chunk.length;
-          if (bytes > 16 * 1024 ** 2) { res.destroy(); finish(stopped(true)); } else chunks.push(chunk);
+          if (bytes > 16 * 1024 ** 2) { res.destroy(); finish("body-limit"); } else chunks.push(chunk);
         });
-        res.on("error", () => finish(stopped(true)));
-        res.on("aborted", () => finish(stopped(true)));
+        res.on("error", () => finish("response-error"));
+        res.on("aborted", () => finish("response-aborted"));
         res.on("end", () => {
           if (settled) return;
+          let detail = "response-status";
           try {
             assert.ok(Number.isInteger(res.statusCode));
             // Error bodies are never parsed/returned: they can contain raw values.
+            detail = "invalid-json";
             const value = res.statusCode >= 200 && res.statusCode < 300 && bytes ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null;
             finish(null, { status: res.statusCode, value });
-          } catch { finish(stopped(true)); }
+          } catch { finish(detail); }
         });
       });
-      req.on("error", () => finish(stopped(true)));
-      timer = setTimeout(() => finish(stopped(true)), deleteProofExpiresAtMs === undefined ? timeout
+      failureDetail = "internal-refusal";
+      req.on("error", () => finish("request-error"));
+      timer = setTimeout(() => finish("deadline"), deleteProofExpiresAtMs === undefined ? timeout
         : Math.min(timeout, Math.max(1, deleteProofExpiresAtMs - Date.now())));
       cancellation = setInterval(() => {
-        try { fresh(); if (interrupted()) finish(stopped(true)); } catch { finish(stopped(true)); }
+        try { fresh(); if (interrupted()) finish("cancelled"); } catch { finish("internal-refusal"); }
       }, 25);
       const send = () => {
         if (settled) return;
-        try { fresh(); assert.ok(!interrupted()); req.end(input); } catch { finish(stopped(true)); }
+        let detail = "internal-refusal";
+        try {
+          fresh(); detail = "cancelled"; assert.ok(!interrupted());
+          detail = "send"; req.end(input);
+        } catch { finish(detail); }
       };
       if (deleteProofExpiresAtMs === undefined) send();
       else {
@@ -107,7 +120,7 @@ function restRequest({ method, path, credential, body, timeout, interrupted = ()
           else send();
         });
       }
-    } catch { finish(stopped(true)); }
+    } catch { finish(failureDetail); }
   });
 }
 
@@ -163,7 +176,10 @@ export function createProviderEngine({ repo, spawn = spawnSync, connect = httpsR
       }
       try { response = await request({ method, path, body, credential, timeout: remaining, interrupted,
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }); }
-      catch { throw stopped(true); }
+      catch (error) {
+        const diagnostic = phase === "account" ? providerFailure(error) : undefined;
+        throw stopped(true, diagnostic?.code === "account-request" ? diagnostic : undefined);
+      }
       try { await controlCheckpoint(interrupted); } catch { throw stopped(); }
       if (phase === "list" || phase === "get") readRemaining();
       if (response?.status !== expected) {

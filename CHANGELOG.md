@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Preserve closed rejection-site details for benchmark provider account requests
+  through private-worker diagnostics and cached teardown, without exposing native
+  errors or changing retries, credential use, acceptance or lifecycle locks.
+
 - Launch only the first complete official benchmark group initially; require its
   replayed native evidence and confirmed cleanup before a separately approved,
   once-only admission of the remaining dedicated group hosts. Keep deferred groups
