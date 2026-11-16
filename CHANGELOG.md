@@ -27,7 +27,7 @@ Corten is pre-1.0, so any minor version may change the API.
   until the last has ended. An app with such a stream moves to this shape: drop the stream's route
   and handler, put `ReadAgain::now` naming the part where the `<corten-live>` was, and key the
   link's CSS on `[data-corten-read-failed]` instead of `corten-live[status="closed"]`. The
-  runtime grows by 1,242 bytes gzipped (15,341 on main, 16,583 with this). Choices 7 and 44 are
+  runtime grows by 1,244 bytes gzipped (15,341 on main, 16,585 with this). Choices 7 and 44 are
   rewritten: declarative shadow DOM places a part streamed later without a script only at a slot
   of a shadow tree around the page, as a child of a host still open, and `scripts/dsd-probe.mjs`
   checks it again

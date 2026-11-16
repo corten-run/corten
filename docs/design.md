@@ -3084,7 +3084,8 @@ rules something out.
     would no longer guard that tag's part) or with its tags at different addresses (a script
     sorted one part of a shared read: split into reads, each could draw over the other's part with
     another order; a read whose tags all moved to one address is read again there); a read stopped
-    stays stopped, even if its part is put back before its answer's stylesheets load, and so does a patch that draws a part
+    stays stopped, and its part shows its link, even if it is put back before its answer's
+    stylesheets load, and so does a patch that draws a part
     waiting for the address that patch answers, which would ask for itself again. A redirect (a sign-in's `corten-location`) is followed, as a
     form's is, by a read the page still waits for (not one whose part was replaced or whose address
     moved meanwhile, nor one a navigation started since has overtaken or that comes while one is on

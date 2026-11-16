@@ -5227,8 +5227,15 @@ async function run(browser) {
     await back.evaluate(() => document.getElementById("back-0")?.prepend(/** @type {any} */ (window).__backPart));
     releaseBackStyle();
     await back.waitForTimeout(600);
-    const backText = await back.textContent("#back-a");
-    check("a read stopped because its part left is not drawn when the same element is put back meanwhile", backStyleAsked && backText === "Waiting", `${backText}`);
+    const backPart = await back.evaluate(() => {
+      const el = document.getElementById("back-a");
+      return [el?.textContent, el?.hasAttribute("data-corten-read-failed"), el?.getAttribute("aria-busy") ?? null];
+    });
+    check(
+      "a read stopped because its part left is not drawn when the same element is put back meanwhile, which shows its link",
+      backStyleAsked && backPart[0] === "Waiting" && backPart[1] === true && backPart[2] === null,
+      JSON.stringify(backPart),
+    );
     await back.unrouteAll({ behavior: "ignoreErrors" });
     await back.context().close();
   }

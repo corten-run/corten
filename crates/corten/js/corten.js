@@ -1355,7 +1355,9 @@ async function readPartOnce(from, tags, waiting, visited, done) {
     if (drew || ended) return;
     ended = true;
     for (const el of waiting) unmarkBusy(el, mine);
-    if (page === swapped) for (const el of waiting) if (inPage(el)) markFailed(el);
+    // Every part it waited for, one taken out too: put back, it shows its link (a part a form's
+    // answer replaced is another element, not marked).
+    if (page === swapped) for (const el of waiting) markFailed(el);
   });
   let holding = tags.length + waiting.length;
   for (const el of tags) signalOf(el).addEventListener("abort", () => --holding || stop.abort(), { signal: done.signal });
