@@ -4108,7 +4108,8 @@ rules something out.
     answered by `req.patch_or`
     (`what_a_patch_or_request_costs`, release, jemalloc, 1,200 requests less 200), took 17,969.73,
     17,969.70 and 17,969.63 instructions on `c9ed56785` and 17,969.64, 17,969.70 and 17,969.65 on
-    `307d00bca`, alternated: the same. On the
+    `307d00bca`, and 17,973.88, 17,973.80 and 17,973.85 on `a3ee0c05f` and 17,973.81, 17,973.84
+    and 17,973.80 on `2d619cbb5`, alternated: the same. On the
     smoke's scope screen (a panel and 120 rows besides), Back and Forward between the form's
     entries asked 323 bytes of body, 1,196 on the wire with headers, against 11,077 and 1,586 for
     the page an app's own `pushState` made Back read; their times on a local server were the same
@@ -4139,7 +4140,8 @@ rules something out.
     156.0.8078.4 and Firefox 157.0, and twenty-three in WebKit 27.2, whose Playwright cannot answer
     a request with a 3xx (Playwright 1.64.1); 2026-11-15, the traversals'
     bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and the request
-    path's count on `307d00bca` against `c9ed56785`.
+    path's count on `307d00bca` against `c9ed56785`; 2026-11-15, the request path's count on
+    `2d619cbb5` against `a3ee0c05f`.
 
 ## Rules
 
