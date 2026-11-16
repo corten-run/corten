@@ -12,6 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
   attempts and observations without closing earlier accepted inputs. Do not
   reinterpret retained failed evidence.
 
+- Retain omitted optional Docker image/container command defaults as explicit null
+  in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
+  Missing or malformed image configuration, malformed execution and substituted or missing
+  required nonempty container commands remain invalid; no image or workload changes.
+
 - Publish synthetic benchmark fixtures with explicit readable file permissions
   and search-only bind roots, including under the private campaign umask. Keep
   neighboring evidence private and contender users/read-only mounts unchanged.
