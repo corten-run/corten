@@ -119,8 +119,11 @@ fn check_flags(args: &[String]) -> Result<bool, String> {
 /// target, each binary's `main` included, so the compiler evaluates a `const` assertion only a
 /// `main` reaches, such as a route `main` alone mounts (docs/design.md#limit-caller-types), as
 /// `cargo build` does: clippy generates no code, and a binary's test build never generates
-/// `main`'s callees. It builds the test targets too, which the tests then reuse, so cargo can
-/// compile a binary beside its test build rather than after it.
+/// `main`'s callees. It builds the test targets too, so cargo can compile a binary beside its
+/// test build rather than after it. With the default profiles (or a `[profile.test]` that
+/// matches `[profile.dev]`) the tests reuse those test targets; a test profile of its own makes
+/// the tests compile them again, and bench targets, which `cargo test` does not build, are
+/// built here too.
 const BUILD: [&str; 2] = ["build", "--all-targets"];
 
 /// `corten check`, its scripts' type check skipped with `skip`.
@@ -131,21 +134,30 @@ fn check(skip: bool) -> Result<(), String> {
     let scripts = scripts::plan(&root, skip)?;
     fmt::run(&["--check".to_string()])
         .and_then(|()| listed::check(&root))
-        .and_then(|()| cargo(&["clippy", "--all-targets", "--", "-D", "warnings"]))
-        .and_then(|()| cargo(&BUILD))
-        // The tests first: the one that writes `types/app.d.ts` brings it up to date (and fails,
-        // saying so, when it was stale) before `tsc` reads it, so a script that uses a new
-        // view or event is not refused for a declaration the check had not written yet. The
-        // scripts are checked whatever the tests did, so a failing test hides no script error.
-        .and_then(|()| {
-            let tests = cargo(&["test"]);
-            let scripts = scripts::run(scripts);
-            match (tests, scripts) {
-                (Ok(()), scripts) => scripts,
-                (Err(tests), Ok(())) => Err(tests),
-                (Err(tests), Err(scripts)) => Err(format!("{tests}, and {scripts}")),
-            }
-        })
+        .and_then(|()| lint_build_test(cargo, || scripts::run(scripts)))
+}
+
+/// `corten check`'s steps after format and the listed components: each Cargo step run with
+/// `run` (lint, then [`BUILD`], then the tests), then the scripts' type check with `scripts`.
+/// A failed step stops the ones after it, except that the scripts are checked whatever the tests
+/// did.
+fn lint_build_test(
+    mut run: impl FnMut(&[&str]) -> Result<(), String>,
+    scripts: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    run(&["clippy", "--all-targets", "--", "-D", "warnings"])?;
+    run(&BUILD)?;
+    // The tests first: the one that writes `types/app.d.ts` brings it up to date (and fails,
+    // saying so, when it was stale) before `tsc` reads it, so a script that uses a new view or
+    // event is not refused for a declaration the check had not written yet. The scripts are
+    // checked whatever the tests did, so a failing test hides no script error.
+    let tests = run(&["test"]);
+    let scripts = scripts();
+    match (tests, scripts) {
+        (Ok(()), scripts) => scripts,
+        (Err(tests), Ok(())) => Err(tests),
+        (Err(tests), Err(scripts)) => Err(format!("{tests}, and {scripts}")),
+    }
 }
 
 /// Runs `cargo <args>` in the current directory and fails when it does.
@@ -164,7 +176,8 @@ fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String>
 
 #[cfg(test)]
 mod tests {
-    use super::{BUILD, check_flags};
+    use super::{check_flags, lint_build_test};
+    use std::cell::RefCell;
 
     #[test]
     fn check_takes_only_the_flag_that_skips_script_types() {
@@ -172,6 +185,37 @@ mod tests {
         assert_eq!(check_flags(&["--no-script-types".to_string()]), Ok(true));
         assert!(check_flags(&["--skip".to_string()]).is_err());
         assert!(check_flags(&["--no-script-types".to_string(), "x".to_string()]).is_err());
+    }
+
+    /// The steps `lint_build_test` runs when those in `fail` fail, and its result. The scripts'
+    /// type check is the step `"script types"`.
+    fn steps(fail: &[&str]) -> (Vec<String>, Result<(), String>) {
+        let steps = RefCell::new(Vec::new());
+        let step = |step: String| {
+            let failed = fail.contains(&step.as_str());
+            steps.borrow_mut().push(step);
+            failed
+        };
+        let result = lint_build_test(
+            |args| if step(args.join(" ")) { Err(format!("cargo {} failed", args.join(" "))) } else { Ok(()) },
+            || if step("script types".to_string()) { Err("the scripts failed".to_string()) } else { Ok(()) },
+        );
+        (steps.into_inner(), result)
+    }
+
+    #[test]
+    fn the_check_builds_every_target_after_lint_and_before_the_tests() {
+        let lint = "clippy --all-targets -- -D warnings";
+        let build = "build --all-targets";
+        let all = [lint, build, "test", "script types"].map(String::from).to_vec();
+        assert_eq!(steps(&[]), (all.clone(), Ok(())));
+        // A failed build fails the check before the tests or the scripts run.
+        assert_eq!(steps(&[build]), (vec![lint.into(), build.into()], Err("cargo build --all-targets failed".into())));
+        // A failed lint stops the build too.
+        assert_eq!(steps(&[lint]).0, [lint]);
+        // A failed test still has the scripts checked, and both failures are reported.
+        assert_eq!(steps(&["test"]), (all.clone(), Err("cargo test failed".into())));
+        assert_eq!(steps(&["test", "script types"]), (all, Err("cargo test failed, and the scripts failed".into())));
     }
 
     #[test]
@@ -196,26 +240,26 @@ mod tests {
             std::fs::write(base.join("src/main.rs"), main).unwrap();
         };
         // In a target of its own: the one this test runs from is the outer build's.
-        let cargo = |args: &[&str]| {
-            std::process::Command::new("cargo")
+        let cargo = |args: &[&str]| -> Result<(), String> {
+            let out = std::process::Command::new("cargo")
                 .args(args)
                 .current_dir(&base)
                 .env("CARGO_TARGET_DIR", base.join("target"))
                 .output()
-                .unwrap()
+                .map_err(|e| e.to_string())?;
+            if out.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&out.stderr).into_owned()) }
         };
+        // The check's own steps, clippy left out: it generates no code, so it cannot refuse the
+        // crate, and the release job these tests also run in has none.
+        let check = || lint_build_test(|args| if args[0] == "clippy" { Ok(()) } else { cargo(args) }, || Ok(()));
         main("Page");
-        let tests = cargo(&["test"]);
-        assert!(tests.status.success(), "the tests alone pass it: {}", String::from_utf8_lossy(&tests.stderr));
-        let build = cargo(&BUILD);
-        let error = String::from_utf8_lossy(&build.stderr).into_owned();
-        assert!(!build.status.success(), "the check's build refuses it");
+        assert_eq!(cargo(&["test"]), Ok(()), "the tests alone pass it");
+        let error = check().expect_err("the check refuses it");
         assert!(error.contains("E0080") && error.contains("takes a get that answers a patch"), "{error}");
-        // With a `get` that answers a patch, the same crate builds: the assertion refused it.
+        // With a `get` that answers a patch, the same crate passes: the assertion refused it.
         main("Patch");
-        let build = cargo(&BUILD);
-        let error = String::from_utf8_lossy(&build.stderr).into_owned();
+        let result = check();
         let _ = std::fs::remove_dir_all(&base);
-        assert!(build.status.success(), "{error}");
+        assert_eq!(result, Ok(()));
     }
 }

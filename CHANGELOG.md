@@ -1069,10 +1069,10 @@ Corten is pre-1.0, so any minor version may change the API.
   so a `const` assertion only a binary's `main` reaches fails it as it fails `cargo build`: a
   route that a bin-only app's `main` alone mounts by hand, outside its area or saying `patches`
   with a `get` that answers a page, passed clippy and `cargo test`, which generate none of
-  `main`'s callees, and only `cargo build` refused it (design Limit 11). The tests reuse the test
-  targets the build compiled, so the check adds about one compile of each binary: cargo's build
-  and test steps took 135 s against 115 s from an empty target on the template, and 341 s
-  against 223 s on the bin-only card-market example, with 2 build jobs on a loaded machine
+  `main`'s callees, and only `cargo build` refused it (design Limit 11). With the default
+  profiles the tests reuse the test targets the build compiled, so the check adds about one
+  compile of each binary and of each bench target; a `[profile.test]` that differs from
+  `[profile.dev]` has the tests compile their targets again
   ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)).
 
 - A navigation under a `Pwa::network_only` prefix reaches the server once with the PWA's service
