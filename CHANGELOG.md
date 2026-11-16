@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Make the watchlist smoke's waiting-submit cases dispatch each press in the page before
+  changing fields or releasing held answers, so a loaded browser's early click acknowledgement
+  does not race their busy, send-count and renewed-key checks. Runtime behavior is unchanged.
+  Capture the first request before editing fields, and poll file output independently of
+  animation frames, with the same outcome deadline and forbidden-send checks.
+
 - Scope the official cloud checkout's public umask to Git source creation so
   unprivileged load generators can read committed benchmark scripts. Keep job,
   control and campaign state private, with real Linux Git/nonroot regression
