@@ -211,8 +211,8 @@ fn holds_shown(html: &str, from: usize) -> bool {
             return true;
         }
         let rest = &html[start..];
-        if rest.starts_with("<!--") {
-            at = rest[4..].find("-->").map_or(html.len(), |n| start + 4 + n + 3);
+        if let Some(comment) = rest.strip_prefix("<!--") {
+            at = comment.find("-->").map_or(html.len(), |n| start + 4 + n + 3);
             continue;
         }
         return rest.as_bytes().get(1).is_some_and(u8::is_ascii_alphabetic);
@@ -822,6 +822,11 @@ mod tests {
         };
         let mut i = 0;
         while let Some(at) = html.get(i..).and_then(|rest| rest.find('<')).map(|n| i + n) {
+            if let Some(comment) = html[at..].strip_prefix("<!--") {
+                // A comment is no element, and a parse lists none.
+                i = comment.find("-->").map_or(html.len(), |n| at + 4 + n + 3);
+                continue;
+            }
             if html[at..].starts_with("</") {
                 // It closes the element it names and those inside it whose end tags are left out.
                 let end = html[at..].find('>').map_or(html.len(), |n| at + n);
