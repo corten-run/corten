@@ -434,7 +434,7 @@ mod tests {
             use http_body_util::BodyExt;
             let router = access_app()
                 .error_page(
-                    |req: Req| async move {
+                    |_: crate::Failure, req: Req| async move {
                         tokio::time::sleep(std::time::Duration::from_millis(15)).await;
                         req.page::<crate::ForOne>(html! {
                             <!DOCTYPE html>
@@ -470,7 +470,7 @@ mod tests {
         let lines = access_lines(async {
             let routes = crate::router::Table::new().route(
                 "/stream",
-                crate::route::get(|| async {
+                crate::router::get(|| async {
                     crate::http::Body::from_stream(futures_util::stream::poll_fn(
                         |_| -> std::task::Poll<Option<Result<crate::http::Bytes, std::io::Error>>> {
                             panic!("logging must not poll a streamed body");
@@ -549,7 +549,7 @@ mod tests {
         let mut size = 0;
         let lines = access_lines(async {
             use http_body_util::BodyExt;
-            let routes = crate::router::Table::new().route("/large", crate::route::get(|| async { "x".repeat(4096) }));
+            let routes = crate::router::Table::new().route("/large", crate::router::get(|| async { "x".repeat(4096) }));
             let router = crate::App::new(crate::Routes::from(routes)).access_log(true).router();
             let res = access_call(router, "GET", "/large", &[("accept-encoding", "gzip")]).await;
             assert_eq!(res.headers()[http::header::CONTENT_ENCODING], "gzip");
