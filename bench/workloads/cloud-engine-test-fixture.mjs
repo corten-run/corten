@@ -6,4 +6,4 @@ import { after } from "node:test";
 const reportOnSignal = process.report.reportOnSignal;
 process.report.reportOnSignal = false;
 after(() => { process.report.reportOnSignal = reportOnSignal; });
-export const { createProviderEngine } = await import("./cloud-provider-engine.mjs");
+export const { createProviderEngine, isSettledAccountFailure } = await import("./cloud-provider-engine.mjs");

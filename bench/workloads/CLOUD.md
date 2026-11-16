@@ -23,6 +23,17 @@ views share evidence; they do not launch a second campaign.
 
 ## Public Source Permissions
 
+Fresh hosts and the CI tools image install stable upstream Git from the same
+Ubuntu Git maintainers' PPA. They fetch its public key over bounded HTTPS, require
+the exact primary fingerprint `F911AB184317630C59970973E363C90F8F1B6217`, and scope
+APT trust to that source with `signed-by`. This avoids the Launchpad metadata API
+whose truncated responses stopped image preparation before tests. A failed
+download, key parse or fingerprint check stops setup; distribution Git is not a
+fallback. The existing immutable-source Git capability check still runs.
+`git-ppa.test.mjs` executes both setup forms with local command fixtures, including
+wrong, extra and missing primary keys and failed downloads/parsing. This is not
+native framework or official-run qualification.
+
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
 runs only the fixed public Git clone, fetch and exact detached checkout in a
 `umask 022` subshell. Committed nonexecutable scripts are `0644` under `0755`
@@ -102,17 +113,39 @@ The launch intent is durable before any child starts and prevents a second launc
 including after partial failure. Each child has an independent state directory,
 operation lock, private credential worker and remote systemd unit.
 
-Admission is staged, not a simultaneous fleet allocation. The first required
-registry group must reach bound running state and emit the exact source-bound
-common-bootstrap marker after its tooling setup. Only then are the remaining
-required hosts admitted serially. Remote benchmark jobs overlap; their contenders,
-profiles and measurement parameters are unchanged. The marker precedes native
-entry and proves neither feature parity nor a group's performance evidence.
-Its observation is bounded to 45 minutes, checks cancellation and preserves the
-running host on timeout or an invalid observation. A failed admission or
-cancellation leaves every later group visibly `not-admitted`, not silently omitted
-or automatically retried. The complete reserved roster remains mandatory.
-Later groups must also be observed nonterminal before running admission is saved.
+Admission is staged, not a simultaneous fleet allocation. The first `--detach`
+approval launches only the first complete registry group. Untouched groups remain
+visibly deferred during initial launch and collection, and the fleet remains
+incomplete. The first group is an official measurement, not a separate setup-only
+run that would be repeated later. Its bound running state and common-bootstrap
+marker remain required launch observations, but cannot open the remaining fleet.
+The marker observation is bounded to 45 minutes, checks cancellation and preserves
+the running host on timeout or an invalid observation; it is not native parity or
+performance evidence.
+
+After collecting that same first group, preview and independently approve the
+separate remaining-admission action:
+
+```sh
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --admit-remaining --print-approval
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --admit-remaining --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+That action replays the first group's intrinsic native evidence, archive/tree
+hashes, complete selection, source/provenance and confirmed host deletion. Only
+the authoritative `verified` campaign can open it; valid failed or unsupported
+competitor outcomes are still retained under that contract. A synthetic inspector,
+bootstrap marker, status string or diagnostic receipt cannot substitute for native
+replay. The new approval binds the first evidence snapshot and every remaining
+child subject. Execution rechecks the snapshot under the fleet lock, consumes an
+exclusive remaining intent and rechecks before each child dispatch. Consumed or
+legacy launch intents cannot acquire this new admission authority.
+
+The remaining dedicated hosts are admitted serially while their remote benchmark
+jobs overlap. Contenders, profiles and measurement parameters are unchanged. A
+failed admission or cancellation leaves every later group visibly `not-admitted`,
+not silently omitted or automatically retried. The complete reserved roster
+remains mandatory. Later groups must also be observed nonterminal before running admission is saved.
 A job already terminal at that observation remains in its saved `starting` state
 for ordinary collection, rather than admitting another host from a false running
 claim. This does not discard a fast completed job's evidence or permit a restart.
@@ -153,6 +186,11 @@ The stage identifies the failing operation, not its cause or whether a host exis
 Only an own data property from that vocabulary crosses the worker boundary;
 unknown values and accessors are not forwarded. It adds no retry, cleanup or
 launch authority. Raw Git errors, URLs, arguments and stderr remain private.
+
+The direct CLI renders that same closed controller stage and the provider's
+allowlisted code-specific detail or HTTP status. It never prints a native error's
+message, stack, response or accessor. These labels identify the stopped operation,
+not its cause or successful cleanup; the retained state still governs recovery.
 
 Historical href diagnostics could classify a refused representation as
 `non-string`, `malformed-uri`, `credentials-or-fragment`, `foreign-origin`,
@@ -803,12 +841,35 @@ permitted by the [published action model](https://github.com/digitalocean/openap
 not observed responses from the failed r21 launch, whose initial create body was
 not retained; that launch's exact cause remains unconfirmed.
 Responses have a body bound and whole-request deadline; in-flight timeout,
-cancellation or malformed responses conservatively retain lifecycle locks.
+cancellation or unproved resource settlement conservatively retain lifecycle locks.
 Every provider-owning controller action awaits the same cached worker-close promise
 before releasing its operation lock, including early-return and error paths. Forced
 worker termination or uncertain shutdown retains the operation lock and any acquired
 root launch lock. The outer finalizer awaits that same settlement, not a new teardown
 after lock release. Ordinary confirmed shutdown releases the locks normally.
+The exact account command has one narrow terminal failure protocol, not a retry.
+After settled credential consumption, the private native request path observes
+actual `ClientRequest`, any `IncomingMessage`, and assigned socket close events.
+All requests dispatched by that engine must have closed; `destroy()`, `end`, an
+HTTP failure or a diagnostic label alone is not proof. Closure spends the original
+command deadline, including credential consumption; cancellation, expiry, reverse
+time, unknown resources and any unresolved prior mutation refuse this disposition.
+Only a privately identified failed account read can produce the exact-key
+`cloud-provider-account-failed/v2` reply: `nonce`, `sequence`,
+`disposition: resources-closed`, and its closed `diagnostic`. Success and other
+failures retain their existing result grammar. The parent requires the pending
+exact account command, its matching nonce/sequence, timely terminal proof and an
+observed exit0 without a signal before cached settlement may resolve. Terminal
+proof precedes expected disconnect/exit; an exit without proof, malformed or
+duplicate reply, forced close or cancellation stays uncertain.
+The original account operation still fails without an accepted identity, even
+with `allowFail`; this worker is terminal and cannot service another request.
+An HTTP refusal and a worker lifetime failure are different outcomes, not different
+authorities. Only this proved orderly failed read can release normal lifecycle
+locks; a later explicitly approved collect must independently re-prove ownership
+and unusedness. No POST/DELETE or failed enclosing operation is retried, and an
+existing deletion intent still permits only fresh absence reconciliation. Other
+commands, including a create's action GET, cannot use this terminal disposition.
 Provider failures may append a bounded phase code to the generic CLI error. The
 closed vocabulary in `cloud-options.mjs` distinguishes credential consumption,
 account/list/create/delete requests, create response/link validation, action
@@ -821,6 +882,17 @@ Classification survives cached teardown and failed create reconciliation; it is
 diagnostic only and changes no action schema, ownership proof, retry, deadline,
 approval, uncertainty or lock-release rule. Missing/invalid diagnostics remain
 generic errors, not evidence about the provider's response.
+For native account-request failures, the optional closed `detail` is the rejection
+site: `internal-refusal`, `connect`, `send`, `request-error`, `response-error`,
+`response-aborted`, `response-status`, `body-limit`, `invalid-json`, `deadline` or
+`cancelled`. These labels inspect no native exception fields: `connect` does not
+prove DNS/TLS failure or that a connection was established. Details survive the
+existing private-worker IPC and cached finalizer diagnostic; the direct CLI renders
+only the closed stage, detail and allowed HTTP status. Unknown, extra or accessor diagnostic fields
+are not forwarded. Other phases and unclassified failures retain their coarse
+codes. No detail changes retry, credential, acceptance, settlement or lock rules,
+and the original r21 account-request cause remains unknown. A final
+`provider-settlement` stage alone does not identify the original failing call.
 The adapter follows [DigitalOcean's create/action contract](https://github.com/digitalocean/openapi/blob/main/specification/resources/droplets/droplets_create.yml).
 SSH uses [OpenSSH's command/transfer rules](https://man.openbsd.org/ssh.1),
 [SFTP-by-default SCP](https://man.openbsd.org/scp.1).
@@ -841,6 +913,29 @@ Fresh disposable-host bootstrap runtime-masks `fwupd.service`,
 provisioning. It requires all three to remain masked and inactive before native
 entry, preventing firmware timer/D-Bus activation inside the baseline boundary.
 This preparation is not applied to existing hosts or replayed during collection.
+
+Masking does not clear a stopped unit's recorded failure. Before native entry,
+the bootstrap logs each fixed firmware unit's load state, active state and
+service PID. Only an already masked, stopped failed unit may have its failure
+state reset. Active or transitioning units, a live service PID and a missing
+mask still fail. After any reset, the mask, inactive state and zero service PID
+are checked again; reset failure is fatal. This does not exempt firmware or any
+other user process from native cleanup evidence.
+
+The generated job records a fixed preparation stage, source line and original
+exit code on command failure, never the failed command or an environment dump.
+The EXIT handler retains the original failure and packages the terminal logs.
+The production adapter also names campaign-directory, source-cleanliness and
+bootstrap-marker stages before native entry. These diagnostics do not convert
+failed setup into benchmark results. Run the Linux execution controls with:
+
+```sh
+node --max-old-space-size=256 --test --test-concurrency=1 bench/workloads/cloud-bootstrap-execution.test.mjs
+```
+
+Those controls execute the generated firmware checks with a local systemctl
+fixture, including refused live/unmasked states and failed post-reset checks.
+They do not provision a host or qualify a native campaign.
 
 Host inventories retain every PID/start/cgroup and the raw `/proc/PID/stat` read
 that supplied its identity. Only new identities with matching saved PID/start
