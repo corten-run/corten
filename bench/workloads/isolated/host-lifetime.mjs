@@ -202,7 +202,11 @@ function browserDocker(excluded, executables, pending) {
 }
 
 /** Own one fresh delegated child cgroup. No budgets, pinning or parent controls are changed. */
-export async function beginLifetime({ campaign, binding, invocation, directory, command, pid, signal }) {
+export async function beginLifetime({ campaign, binding, invocation, directory, command, pid, signal, startupSignal }) {
+  function checkStartup() {
+    signal?.throwIfAborted(); startupSignal?.throwIfAborted();
+  }
+  checkStartup();
   assert.equal(process.platform, "linux"); assert.match(campaign, /^r[1-9]\d*-[a-f0-9]{16}$/);
   assert.ok(Number.isSafeInteger(command) && command >= 0);
   assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
@@ -219,7 +223,13 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   for (const id of excluded) assert.match(id, containerId);
   const path = `${parent}/native-${command}-${randomBytes(8).toString("hex")}`;
   mkdirSync(join(root, path)); // Exclusive creation. Never adopt a saved or existing cgroup.
-  let context, writer;
+  let context, writer, pending = null, closed = false, timer;
+  const startupSignals = [...new Set([signal, startupSignal].filter(Boolean))];
+  function releaseStartup() { for (const value of startupSignals) value.removeEventListener("abort", dispose); }
+  function dispose() {
+    closed = true; clearInterval(timer); releaseStartup(); pending?.close(); writer?.abort();
+  }
+  for (const value of startupSignals) value.addEventListener("abort", dispose, { once: true });
   try {
     mkdirSync(directory, { mode: 0o700 });
     mkdirSync(join(directory, "processes"), { mode: 0o700 });
@@ -231,15 +241,16 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     ...(browser ? { dockerBaseline: [...excluded].sort(), leaderIdentity: processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")) } : {}) };
     durable(join(directory, "binding.json"), `${JSON.stringify(context, null, 2)}\n`);
     writer = hostDurableWriter(directory); await writer.ready();
+    checkStartup();
   } catch (error) {
     // No bootstrap has been attached yet. Only this exclusively created empty
     // kernel child is removable; retained partial disk evidence is not deleted.
-    if (writer) { writer.abort(); if (!writer.state().pendingOwnership) rmdirSync(join(root, path)); }
-    else rmdirSync(join(root, path));
+    dispose();
+    if (!startupSignals.some((value) => value.aborted) && !writer?.state().pendingOwnership) rmdirSync(join(root, path));
     throw error;
   }
-  const executables = new Map(), pending = browser ? participantExecutables() : null;
-  let samples = 0, closed = false, timer, observerError = null, attached = false;
+  const executables = new Map(); pending = browser ? participantExecutables() : null;
+  let samples = 0, observerError = null, attached = false;
   const observerFailures = { count: 0, first: null, last: null };
   let sampleOperation, lastSampleAt = null;
   function failure(phase, error) {
@@ -277,28 +288,35 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
   // attached boundary. Attach independently rechecks the executable cache key.
   try { executableHash(`/proc/${pid}`, executables); sample(); }
   catch (error) {
-    pending?.close(); writer.abort();
+    dispose();
     if (!writer.state().pendingOwnership) rmdirSync(join(root, path));
     throw error;
   }
   return Object.freeze({
     async attach(pid) {
-      assert.equal(attached, false); assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
-      assert.equal(pid, context.leaderPid);
-      if (browser) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
-      // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
-      writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
-      timer = setInterval(() => { try { sample(); } catch (error) {
-        observerError = "host-observation-gap"; failure("interval", error);
-        if (writer.error) clearInterval(timer);
-      } }, sampleIntervalMs);
-      await writer.drain();
+      try {
+        checkStartup(); assert.equal(closed, false);
+        assert.equal(attached, false); assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
+        assert.equal(pid, context.leaderPid);
+        if (browser) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
+        // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
+        writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
+        timer = setInterval(() => { try { sample(); } catch (error) {
+          observerError = "host-observation-gap"; failure("interval", error);
+          if (writer.error) clearInterval(timer);
+        } }, sampleIntervalMs);
+        await writer.drain();
+        checkStartup(); assert.equal(closed, false); releaseStartup();
+      } catch (error) { dispose(); throw error; }
     },
+    // Abandoned startup has no terminal proof. Pending I/O keeps its own FIFO
+    // ownership until it returns; disposal never claims that it was interrupted.
+    dispose,
     // Explicitly await appends in controls; enqueue/capture is not storage proof.
     drain() { return writer.drain(); },
     get pendingStorage() { return writer.settled; },
     async finish(result) {
-      assert.equal(closed, false); closed = true; clearInterval(timer);
+      assert.equal(closed, false); closed = true; clearInterval(timer); releaseStartup();
       let empty = false;
       try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
       catch (error) { observerError = "host-observation-gap"; failure("finish", error); }

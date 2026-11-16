@@ -92,6 +92,15 @@ bytes before publishing terminal evidence. The terminal sample count must match
 completed appends. A private fsynced terminal file is renamed to the final name
 only after these steps; the caller receives a manifest only after namespace sync.
 
+Observer setup remains owned by its command even if the gated native child exits
+or is cancelled while asynchronous storage is pending. Supervision supplies a
+startup AbortSignal and joins setup until it settles or the original 30-second
+startup deadline expires; child close never renews that deadline. Cancellation,
+early exit and setup failure forbid later attachment or timer creation. A late
+returned observer is disposed without a terminal seal, and pending filesystem I/O
+retains its FIFO ownership until it actually returns. Completed attachment releases
+the startup-only listeners, preserving normal drained-cancellation collection.
+
 Storage errors and the existing 30-second startup/frame/drain deadlines are sticky.
 A timeout cannot cancel an uninterruptible filesystem operation. Its FIFO retains
 ownership until the operation returns and cleanup is attempted; partial files and

@@ -96,11 +96,17 @@ export function createCampaign({ authorize }) {
         env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
           GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv }, signal,
         log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
-        async onStart(value) {
+        async onStart(value, startupSignal) {
           pid = value; event(c, "command-started", { pid });
-          observer = await beginLifetime({ campaign: c.handle.id, binding, invocation,
-            directory: join(c.directory, directory, `command-${number}-host`), command: number, pid, signal });
-          await observer.attach(pid);
+          try {
+            observer = await beginLifetime({ campaign: c.handle.id, binding, invocation,
+              directory: join(c.directory, directory, `command-${number}-host`), command: number, pid, signal, startupSignal });
+            startupSignal.throwIfAborted();
+            await observer.attach(pid);
+            startupSignal.throwIfAborted();
+          } catch (error) {
+            observer?.dispose(); observer = undefined; throw error;
+          }
         },
       });
     } finally { try { fsyncSync(fd); } finally { closeSync(fd); } }

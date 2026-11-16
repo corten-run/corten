@@ -19,6 +19,7 @@ import { composePhase } from "./composition.mjs";
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
 let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, pendingStarted, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
+let lifetimeStartup;
 const cpu = { app: { cpuset: "1", quota: 1 } };
 mock.module("./evidence.mjs", { namedExports: { ...evidence,
   physical: (path, ...rest) => evidence.physical(path === "/bench/campaign" ? root : path, ...rest),
@@ -69,14 +70,19 @@ mock.module("./host-observation.mjs", { namedExports: {
   verifyHostBoundary(before, after) { assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" }; },
 } });
 mock.module("./host-lifetime.mjs", { exports: {
-  beginLifetime({ directory, command }) {
+  beginLifetime({ directory, command, startupSignal }) {
+    const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
-    return { attach() {}, finish(result) {
+    const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result) {
       const checks = { accounting: true, terminal: result.terminal, empty: true, observer: true,
         unforced: !result.cancelled && !result.forced, leader: true };
       if (lifetimeFailure?.command === command) Object.assign(checks, lifetimeFailure.checks);
       writeFileSync(join(directory, "terminal.json"), JSON.stringify(checks)); return evidence.tree(directory);
     } };
+    if (!startup) return observer;
+    assert.ok(startupSignal instanceof AbortSignal);
+    startup.signal = startupSignal; startup.directory = directory; startup.enter();
+    return startup.gate.then(() => { if (startup.failure) throw new Error("PRIVATE_SETUP_FAILURE"); return observer; });
   },
   inspectLifetime(binding, invocation, directory, expected) {
     const checks = JSON.parse(readFileSync(join(directory, "terminal.json")));
@@ -120,7 +126,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
   assert.equal(options.env.GIT_NO_REPLACE_OBJECTS, "1"); assert.equal(options.env.GIT_NO_LAZY_FETCH, "1");
   const invocation = args.slice(1); calls.push(invocation); currentInvocation = invocation;
   assert.ok(!invocation[0].endsWith("report.mjs"), "never run a report against producer tree");
-  return fakeChild((child) => {
+  const child = fakeChild((child) => {
     const native = !invocation[0].endsWith("fixtures.mjs");
     const finish = () => {
       if (native) {
@@ -139,12 +145,21 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     };
     if (mode === "pending") { release = finish; pendingStarted(); } else finish();
   });
+  if (lifetimeStartup) {
+    lifetimeStartup.child = child;
+    const send = child.send.bind(child);
+    child.send = (message, callback) => {
+      if (message.type === "cancel") { callback?.(null); queueMicrotask(() => child.close(0)); return; }
+      return send(message, callback);
+    };
+  }
+  return child;
 });
 const { createCampaign } = await import("./campaign.mjs");
 const { validateCampaign: validateSavedCampaign } = await import("./campaign-verify.mjs");
 let round = 100;
 function setup(policy = () => true) {
-  round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null;
+  round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
     bindings: groupNames.map((group) => ({ request: { group, round: `test${round}`, commit: "a".repeat(40) }, selection: { apps: ["corten", "selected-failure"] },
@@ -170,6 +185,30 @@ const mixedDelivery = (subjectSha256) => ({ schema: "benchmark-mixed-audit-deliv
   bundle: { schema: "mixed-native-source-audits/v1", receipts: [] } });
 const submitPending = (campaign, handle, status) => status.auditGroup === "mixed-production"
   ? campaign.submitMixedAudit(handle, mixedDelivery(status.mixedAuditSubjectSha256)) : campaign.submitJsonAudit(handle, delivery(handle));
+
+for (const stop of ["cancel", "close"]) for (const failure of [false, true]) test(`campaign startup ${stop} disposes late ${failure ? "failed" : "returned"} setup and retains pending native root`, async () => {
+  const s = setupGroup("client-heavy"), h = await begin(s), controller = new AbortController();
+  let enter, release;
+  const entered = new Promise((resolve) => { enter = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  const owner = lifetimeStartup = { enter, gate, failure, attached: 0, disposed: 0 };
+  let returned = false;
+  const advancing = s.campaign.advance(h, { signal: controller.signal });
+  const rejected = assert.rejects(advancing, /lifetime or cleanup unproven/).then(() => { returned = true; });
+  try {
+    await entered;
+    if (stop === "cancel") controller.abort(); else owner.child.close(0);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(returned, false); assert.equal(owner.signal.aborted, true);
+    release(); await rejected;
+    assert.equal(owner.attached, 0); assert.equal(owner.disposed, failure ? 0 : 1);
+    assert.equal(existsSync(join(owner.directory, "terminal.json")), false);
+    const status = s.campaign.status(h);
+    assert.equal(status.state, "preserved-uncertain"); assert.equal(status.uncollectedNativeRoots.length, 1);
+    assert.equal(calls.length, 1);
+    await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
+  } finally { release(); await rejected; }
+});
 
 for (const group of groupNames) test(`${group}: one complete group runs and replays without inventing other groups`, async () => {
   const s = setupGroup(group), h = await begin(s); mode = "complete";

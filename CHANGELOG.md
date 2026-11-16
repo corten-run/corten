@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Keep asynchronous benchmark observer startup owned through cancellation and
+  early native exit; dispose abandoned setup without late capture or a terminal seal.
+
 - Keep benchmark host sampling off synchronous record flushes with one bounded
   asynchronous filesystem FIFO. Preserve per-record file/directory durability
   before referencing sample writes, strict continuity and cancellation gates;

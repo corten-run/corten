@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -9,10 +9,111 @@ import { test } from "node:test";
 import { hostDurableWriter, storageLimits } from "./host-durable-writer.mjs";
 import { ioError, record, storageControl } from "./test-fixtures/host-durable-writer-control.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
+import { beginLifetime } from "./host-lifetime.mjs";
+import { supervise } from "./process.mjs";
+import { fakeChild } from "./test-fixtures/process.mjs";
 
 const isRecord = (path) => path.endsWith(".json") && path.replaceAll("\\", "/").includes("/processes/");
 const isSamples = (path) => path.endsWith("samples.jsonl");
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+for (const mode of ["cancel", "deadline", "close", "exit"]) for (const failure of [false, true]) test(`startup ${mode} owns delayed sample open through ${failure ? "failure" : "success"} without late attachment`, { timeout: 5000 }, async (t) => {
+  const f = await samplingControl(t); await f.finish(); f.removed = false;
+  const directory = join(f.temporary, "abandoned-startup"), abort = new AbortController();
+  const pause = f.pause("open", isSamples), beforeOpen = f.before;
+  f.before = async (...args) => { await beforeOpen(...args); if (failure && args[0] === "open" && isSamples(args[1])) throw ioError(); };
+  let observer, setupFinished = false, setupSignal, intervals = 0, starts = 0;
+  const interval = globalThis.setInterval;
+  t.mock.method(globalThis, "setInterval", (...args) => { intervals++; return interval(...args); });
+  const child = fakeChild(() => { starts++; }); child.pid = 4242;
+  const send = child.send.bind(child);
+  child.send = (message, callback) => {
+    if (message.type === "cancel") { callback?.(null); queueMicrotask(() => child.close(0)); return; }
+    return send(message, callback);
+  };
+  t.mock.method(childProcess, "spawn", () => child);
+  let doneSetup;
+  const setupDone = new Promise((resolve) => { doneSetup = resolve; });
+  let returned = false;
+  const running = supervise({ executable: "node", argv: ["synthetic-startup"], shell: false }, {
+    cwd: tmpdir(), env: {}, signal: abort.signal, log() {},
+    async onStart(pid, ownedSignal) {
+      setupSignal = ownedSignal;
+      try {
+        observer = await beginLifetime({ campaign: "r21-0000000000000001",
+          binding: { request: { group: "client-heavy", round: "startup-control", commit: "a".repeat(40) } },
+          invocation: { executable: "node", argv: ["synthetic-startup"] }, directory, command: 1, pid,
+          signal: abort.signal, startupSignal: ownedSignal });
+        await observer.attach(pid);
+      } catch (error) { observer?.dispose(); throw error; }
+      finally { setupFinished = true; doneSetup(); }
+    },
+  }, mode === "deadline" ? { readyMs: 40, runMs: 10000, stopMs: 40, killMs: 40 } : undefined)
+    .then((result) => { returned = true; return result; });
+  try {
+    await pause.entered;
+    if (mode === "cancel") abort.abort();
+    if (mode === "close") child.close(0);
+    if (mode === "exit") { child.emit("exit", 0, null); child.stdout.end(); child.stderr.end(); }
+    if (mode === "deadline") {
+      const result = await running;
+      assert.equal(result.success, false); assert.equal(result.cancelled, true);
+      assert.equal(setupFinished, false, "deadline cannot pretend the outstanding open completed");
+      assert.match(result.error, /host observation setup/);
+    } else {
+      await delay(15); assert.equal(returned, false, "child exit/cancel must not detach a setup still inside its deadline");
+      assert.equal(setupFinished, false);
+    }
+    assert.equal(setupSignal.aborted, true); assert.equal(observer, undefined);
+    assert.equal(f.members.length, 0); assert.equal(intervals, 0);
+    pause.release(); await setupDone;
+    if (mode === "exit") child.emit("close", 0, null);
+    const result = await running;
+    assert.equal(result.success, false);
+    if (mode === "cancel") assert.equal(result.cancelled, true);
+    // A completed fs.open is followed by FIFO cleanup, not by attachment.
+    for (let i = 0; i < 100 && f.live.size; i++) await delay(1);
+    assert.equal(f.live.size, 0); assert.equal(observer, undefined);
+    assert.equal(starts, 0); assert.equal(intervals, 0); assert.equal(f.members.length, 0);
+    assert.equal(fs.existsSync(join(directory, "terminal.json")), false); assert.equal(f.removed, false);
+  } finally {
+    pause.release(); await setupDone;
+    if (mode === "exit") child.emit("close", 0, null);
+    await running;
+  }
+});
+
+test("an observer returned before attach is disposed when startup is cancelled", async (t) => {
+  const f = await samplingControl(t); await f.finish(); f.removed = false;
+  const abort = new AbortController(), directory = join(f.temporary, "pre-attach");
+  const observer = await beginLifetime({ campaign: "r21-0000000000000001",
+    binding: { request: { group: "client-heavy", round: "startup-control", commit: "a".repeat(40) } },
+    invocation: { executable: "node", argv: ["synthetic-startup"] }, directory, command: 1, pid: 4242, startupSignal: abort.signal });
+  abort.abort(); await assert.rejects(observer.attach(4242)); await observer.pendingStorage;
+  assert.equal(f.live.size, 0); assert.equal(f.members.length, 0);
+  assert.equal(fs.existsSync(join(directory, "terminal.json")), false); assert.equal(f.removed, false);
+});
+
+test("cancellation during initial attachment drain stops capture and retains pending fsync ownership", async (t) => {
+  const f = await samplingControl(t); await f.finish(); f.removed = false;
+  const abort = new AbortController(), directory = join(f.temporary, "attaching");
+  const observer = await beginLifetime({ campaign: "r21-0000000000000001",
+    binding: { request: { group: "client-heavy", round: "startup-control", commit: "a".repeat(40) } },
+    invocation: { executable: "node", argv: ["synthetic-startup"] }, directory, command: 1, pid: 4242, startupSignal: abort.signal });
+  const pause = f.pause("sync", isRecord), attaching = observer.attach(4242);
+  attaching.catch(() => {});
+  try {
+    await pause.entered; abort.abort();
+    const reads = f.procReads;
+    await delay(125); assert.equal(f.procReads, reads, "abandoned startup interval is stopped");
+    assert.ok(f.live.size > 0, "an outstanding fsync is still owned, not cancelled");
+    assert.equal(fs.existsSync(join(directory, "terminal.json")), false);
+    pause.release(); await assert.rejects(attaching); await observer.pendingStorage;
+    assert.equal(f.live.size, 0); assert.equal(f.removed, false);
+    await assert.rejects(observer.finish(f.result));
+    assert.equal(fs.existsSync(join(directory, "terminal.json")), false);
+  } finally { pause.release(); await attaching.catch(() => {}); await observer.pendingStorage; }
+});
 
 for (const step of ["write", "sync", "close", "directory-sync"]) test(`referencing samples cannot overtake a paused record ${step}`, {
   skip: process.platform === "win32" && step === "directory-sync" && "Windows does not fsync directories",
