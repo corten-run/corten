@@ -3122,9 +3122,16 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // Out: one a navigation cuts off from here, or that fails on its way, may be applied all the same.
     pending.went = true;
     const res = upload
-      ? await upload(url, method, /** @type {Record<string, string>} */ (init.headers), /** @type {FormData} */ (init.body), signal, ({ loaded, total, lengthComputable }) => {
-          if (!signal.aborted) formCall(form, "dispatchEvent", new ProgressEvent(PROGRESS, { loaded, total, lengthComputable }));
-        })
+      ? await upload(
+          url,
+          method,
+          /** @type {FormData} */ (init.body),
+          signal,
+          ({ loaded, total, lengthComputable }) => {
+            if (!signal.aborted) formCall(form, "dispatchEvent", new ProgressEvent(PROGRESS, { loaded, total, lengthComputable }));
+          },
+          /** @type {Record<string, string>} */ (init.headers),
+        )
       : await fetch(url, init);
     forget();
     // A whole answer below 500 is definitive: the write applied or was refused, and the form gets

@@ -519,8 +519,18 @@ rules something out.
    `Content-Location`); and the PWA's worker passes every request but a `GET` to the network
    (`pwa.rs`).
 
+   The preference is sent by the runtime and by the module it loads to send a progress upload
+   (`corten-upload`), and a server answers a module's address, whatever version it names, with its
+   own bytes, so across a deploy a runtime may load the other version's module. A module the runtime
+   loads keeps its signature compatible from one version to the next: the upload module keeps its
+   arguments in their old order and takes the runtime's headers last, so a runtime from before,
+   passing none, sends the action header alone and is answered with `<main>`, and a runtime from
+   after, handed the module from before, sends the upload without the preference and draws the
+   `<main>` it gets. The watchlist smoke checks both.
+
    Stands on: platform (no registered media type tells a navigation from an action; a script cannot
-   set `Sec-Fetch-*`, and data clients send none); reasoned (a media type parameter would mix the
+   set `Sec-Fetch-*`, and data clients send none; a server answers any version's module address with
+   its own bytes); reasoned (a media type parameter would mix the
    mode into content negotiation; RFC 7240: a server ignores a preference it does not
    know, `Preference-Applied` only where it is not apparent, `Vary` only where a cache's handling
    can vary; RFC 9110, 9.3.3 and RFC 9111, 4: a `POST`'s answer never answers a `POST`, and a `GET`
@@ -537,7 +547,10 @@ rules something out.
    `return`, `wait`, `handling` and others, none about what a client draws) read, the CORS
    safelist (`Accept`, `Accept-Language`, `Content-Language`, `Content-Type`, `Range`) checked,
    and the cost of reading it measured by callgrind on `914f4781e`, with and without the whole
-   line compared first (as `70b69a3db` has it), against `5d0bf7599`, three alternating rounds.
+   line compared first (as `70b69a3db` has it), against `5d0bf7599`, three alternating rounds;
+   2026-11-15, the upload module called with an older runtime's arguments and the runtime handed the
+   older module, by the watchlist smoke in Chromium, Firefox and WebKit, both failing with the
+   headers passed third (`3dc461f6e`).
 
 12. <a id="choice-own-prefetch"></a>**The runtime prefetches links itself, not with Speculation Rules or `rel="prefetch"`.** A
    navigation the runtime makes asks with `corten: nav` and gets the title, head tags and

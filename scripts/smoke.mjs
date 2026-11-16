@@ -6969,7 +6969,7 @@ async function run(browser) {
       /** @type {typeof import("../crates/corten/js/upload.js")} */
       const module = await import(url);
       const body = new FormData(/** @type {HTMLFormElement} */ (document.querySelector("main form[enctype]")));
-      const res = await module.upload(new URL("/account", location.href), "POST", { corten: "action", prefer: "corten-draws=whole" }, body, new AbortController().signal, () => {});
+      const res = await module.upload(new URL("/account", location.href), "POST", body, new AbortController().signal, () => {}, { corten: "action", prefer: "corten-draws=whole" });
       return { url: res.url, status: res.status, path: new URL(res.url, location.href).pathname };
     });
     await redirectContext.close();
@@ -6979,6 +6979,96 @@ async function run(browser) {
       JSON.stringify(answered),
     );
   }
+  // Across a deploy: the server answers any version's module address with its own bytes, so a tab
+  // opened before it may call this module, and a runtime loaded after it may be handed the module
+  // from before. Called as the runtime before `headers` was passed calls it (five arguments), the
+  // module sends the action header alone, so the server answers with <main>, which that runtime draws.
+  const deployContext = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext();
+  await deployContext.addCookies(await page.context().cookies());
+  const olderCaller = await deployContext.newPage();
+  /** @type {Record<string, string> | null} */
+  let olderSent = null;
+  await olderCaller.route(
+    atAccount,
+    uploads((route) => {
+      olderSent = route.request().headers();
+      return route.fulfill({ status: 200, contentType: "text/html", body: "<p>answered</p>" });
+    }),
+  );
+  await olderCaller.goto(`${base}/account`);
+  const olderCall = await olderCaller.evaluate(async () => {
+    const url = performance
+      .getEntriesByType("resource")
+      .map((e) => e.name)
+      .find((name) => /\/corten-upload\.js(\?|$)/.test(name));
+    if (!url) return "no module loaded";
+    /** @type {typeof import("../crates/corten/js/upload.js")} */
+    const module = await import(url);
+    const body = new FormData(/** @type {HTMLFormElement} */ (document.querySelector("main form[enctype]")));
+    try {
+      const res = await module.upload(new URL("/account", location.href), "POST", body, new AbortController().signal, () => {});
+      return `${res.status} ${await res.text()}`;
+    } catch (error) {
+      return `threw ${error}`;
+    }
+  });
+  const olderHeaders = /** @type {Record<string, string> | null} */ (olderSent);
+  check(
+    "the upload module called with an older runtime's arguments sends the action header alone and answers",
+    olderCall === "200 <p>answered</p>" && olderHeaders?.corten === "action" && olderHeaders.prefer === undefined,
+    JSON.stringify({ olderCall, corten: olderHeaders?.corten ?? null, prefer: olderHeaders?.prefer ?? null }),
+  );
+  // And this runtime handed the module from before `headers` was passed (its signature, sending the
+  // action header itself): the upload goes without the preference, and the <main> the server answers
+  // with is drawn.
+  const olderModule = await deployContext.newPage();
+  let olderServed = 0;
+  await olderModule.route("**/corten-upload*", (route) => {
+    olderServed += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: "text/javascript",
+      body: `export function upload(url, method, body, signal, progress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    xhr.setRequestHeader("corten", "action");
+    xhr.responseType = "arraybuffer";
+    xhr.upload.onprogress = progress;
+    xhr.onload = () => {
+      const headers = new Headers();
+      for (const line of xhr.getAllResponseHeaders().split("\\r\\n")) {
+        const colon = line.indexOf(":");
+        if (colon > 0) headers.append(line.slice(0, colon), line.slice(colon + 1).trim());
+      }
+      const res = new Response(xhr.response, { status: xhr.status, statusText: xhr.statusText, headers });
+      Object.defineProperty(res, "url", { value: xhr.responseURL });
+      resolve(res);
+    };
+    xhr.onerror = () => reject(new TypeError("upload failed"));
+    if (signal.aborted) return reject(signal.reason);
+    signal.addEventListener("abort", () => xhr.abort(), { once: true });
+    xhr.send(body);
+  });
+}
+`,
+    });
+  });
+  await olderModule.goto(`${base}/account`);
+  const olderRequest = olderModule.waitForRequest((req) => req.method() === "POST" && (req.headers()["content-type"] ?? "").startsWith("multipart/form-data"), { timeout: 8000 });
+  await olderModule.setInputFiles("main input[type=file]", [{ name: "page.png", mimeType: "image/png", buffer: Buffer.from("<script>alert(1)</script>") }]);
+  await olderModule.click("main form[enctype] button");
+  const olderAnswer = await olderModule
+    .waitForFunction(() => document.querySelector("#avatar-result")?.textContent, null, { timeout: 8000 })
+    .then((handle) => handle.jsonValue())
+    .catch(() => "");
+  const olderModuleHeaders = await olderRequest.then((req) => req.allHeaders()).catch(() => /** @type {Record<string, string>} */ ({}));
+  await deployContext.close();
+  check(
+    "this runtime handed the upload module from before sends the upload and draws the <main> it is answered with",
+    olderServed > 0 && String(olderAnswer).startsWith("That file is not a picture") && olderModuleHeaders.corten === "action" && olderModuleHeaders.prefer === undefined,
+    JSON.stringify({ served: olderServed, answer: olderAnswer, corten: olderModuleHeaders.corten ?? null, prefer: olderModuleHeaders.prefer ?? null }),
+  );
   // A navigation abandons an upload still waiting for its answer: no progress reaches the form after
   // it, nor its answer the page. In a context of its own (with the session's cookie), closed after,
   // since a request Playwright held and answered after the page let it go leaves the context's
