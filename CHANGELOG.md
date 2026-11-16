@@ -5,10 +5,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- `FeedUrl<Row>` now requires `Row` to resolve to the declarations `corten::types` generates
-  (`import("../types/app").Row`), as `ScreenUrl<Data>` does. A local typedef, an import from
-  another module, or an undeclared row name does not compile; generated imports and their
-  aliases keep the feed's row type tied to the server's.
+- The watchlist smoke's check that a submit which waited for a write the network failed is not
+  sent holds that write until the newer press is made, and presses both buttons in the page, where
+  it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the
+  failure, went out as a submit of its own and watched a stock that a later case then could not
+  select, which ended the run in a 30 s `selectOption` timeout
+  ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
+  Runtime behavior is unchanged.
 
 - Distinguish a failed benchmark account observation from uncertain worker lifetime
   only after native request/response/socket closure, a bound terminal reply and
@@ -27,6 +30,11 @@ Corten is pre-1.0, so any minor version may change the API.
 - Show the grouped controller's closed failure stage and allowed provider detail
   in direct CLI errors, without reflecting raw exceptions or changing recovery,
   cleanup or benchmark acceptance rules.
+
+- `FeedUrl<Row>` now requires `Row` to resolve to the declarations `corten::types` generates
+  (`import("../types/app").Row`), as `ScreenUrl<Data>` does. A local typedef, an import from
+  another module, or an undeclared row name does not compile; generated imports and their
+  aliases keep the feed's row type tied to the server's.
 
 - A handler is given a form's control by its `#[derive(Fields)]` field,
   `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
