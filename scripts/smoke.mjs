@@ -4815,7 +4815,8 @@ async function run(browser) {
        * `url` answered by `answer`, and says what was asked and drawn. `claim`: the page read draws
        * takes focus for its unmarked form's button as its content is put in `<main>`, as a page's
        * own script may.
-       * @param {string} button @param {string} search @param {import("@playwright/test").RouteFulfillOptions} answer
+       * @param {string} button @param {string} search
+       * @param {import("@playwright/test").RouteFulfillOptions | "abort"} answer `abort`: the request fails as a dropped network fails it
        * @param {boolean} [claim] @param {"header" | "blurred" | "main"} [start] where focus is
        *   before the traversal: the header's link, the body after the link (Tab would go on from
        *   it), or a control in `<main>`, which the page read takes away
@@ -4823,7 +4824,9 @@ async function run(browser) {
       const backFrom = async (button, search, answer, claim = false, start = "header") => {
         await answered(() => scope.getByRole("button", { name: button, exact: true }).click());
         const from = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === search;
-        await scope.route(from, (route) => (route.request().headers()["corten"] === "action" ? route.fulfill(answer) : route.continue()));
+        await scope.route(from, (route) =>
+          route.request().headers()["corten"] !== "action" ? route.continue() : answer === "abort" ? route.abort("failed") : route.fulfill(answer),
+        );
         asked.length = 0;
         // Focus outside the part, which a page read leaves at the document's start, as Back to any
         // other page does.
@@ -4925,6 +4928,46 @@ async function run(browser) {
         "Back to a data-address form's entry whose patch body is cut off reads the page instead",
         cut.at === "/smoke/scope?scope=day" && cut.shown === "day" && cut.asked.join() === "action ?scope=day,nav ?scope=day",
         JSON.stringify(cut),
+      );
+      // No answer at all (the network failed the request): the page is read.
+      const dropped = await backFrom("Week", "?scope=day", "abort");
+      check(
+        "Back to a data-address form's entry whose patch read gets no answer reads the page instead",
+        dropped.at === "/smoke/scope?scope=day" && dropped.shown === "day" && dropped.asked.join() === "action ?scope=day,nav ?scope=day" && dropped.focus === "body" && dropped.tab === firstTab,
+        JSON.stringify({ dropped, firstTab }),
+      );
+      // A patch with an element that has no place on the page is not drawn whole: the part it did
+      // draw is another entry's, and the page is read.
+      const unplaced = await backFrom("Week", "?scope=day", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
+        body: '<section id="smoke-scope"><p>Scope: <output>part</output></p></section><section id="smoke-nowhere"></section>',
+      });
+      check(
+        "Back to a data-address form's entry whose patch has an element with no place on the page reads the page instead",
+        unplaced.at === "/smoke/scope?scope=day" && unplaced.shown === "day" && unplaced.asked.join() === "action ?scope=day,nav ?scope=day" && unplaced.focus === "body" && unplaced.tab === firstTab,
+        JSON.stringify({ unplaced, firstTab }),
+      );
+      // A patch whose drawing throws: the page is read. Parsing the patch's markup is made to throw
+      // once.
+      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      await scope.evaluate(() => {
+        const proto = HTMLTemplateElement.prototype;
+        Object.defineProperty(proto, "innerHTML", {
+          configurable: true,
+          set() {
+            delete (/** @type {any} */ (proto)).innerHTML;
+            Object.assign(window, { __threw: true });
+            throw new TypeError("not drawn");
+          },
+        });
+      });
+      asked.length = 0;
+      const threw = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0), threw: await scope.evaluate(() => /** @type {any} */ (window).__threw === true) };
+      check(
+        "Back to a data-address form's entry whose patch throws as it is drawn reads the page instead",
+        threw.threw && threw.at === "/smoke/scope?scope=day" && threw.shown === "day" && threw.asked.join() === "action ?scope=day,nav ?scope=day",
+        JSON.stringify(threw),
       );
       // A `#fragment` of the form's `formaction` or `action` stays in the address, as the browser
       // keeps it for the form without JavaScript; Back between them reads the patch.

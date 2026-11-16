@@ -982,10 +982,10 @@ function modulesOf(node) {
  * @param {string} html
  * @param {AbortSignal} [signal] Nothing changes once it aborts.
  */
-export function patch(html, signal) {
+export async function patch(html, signal) {
   // Not through the runtime's policy: under Trusted Types a script's string is refused here as
   // at any other sink, so markup still comes only from the server.
-  return apply(html, signal, null, undefined, false);
+  await apply(html, signal, null, undefined, false);
 }
 
 /**
@@ -998,16 +998,18 @@ export function patch(html, signal) {
  * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
  *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
  *   it replaces takes ({@link opened})
+ * @returns {Promise<boolean>} whether every element of the patch found its place on the page
  */
 async function apply(html, signal, sent, took, own = true, asked, within) {
   const content = parse(html, own);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
-  if (signal?.aborted) return;
+  if (signal?.aborted) return false;
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
+  let whole = true;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
   for (const el of Array.from(content.children)) {
@@ -1023,8 +1025,10 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
       if (target) elementOwn.remove.call(target);
       if (up) focusNear(up);
     }
-    else if (!target) console.error(`corten: patch element <${el.localName}> needs an id that exists on the page`, el);
-    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
+    else if (!target) {
+      whole = false;
+      console.error(`corten: patch element <${el.localName}> needs an id that exists on the page`, el);
+    } else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
       put.push(...Array.from(el.content.children));
       serve(el.content);
       changedIn(target, ["a", id, Array.from(el.content.childNodes)]);
@@ -1045,6 +1049,7 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
     if (beside) beside.replaceWith(again);
     readPatchAgain(again, put);
   }
+  return whole;
 }
 
 /**
@@ -2725,7 +2730,8 @@ function address(to, patched) {
  * ({@link addressed}): the entry's address is read as the form read it (`corten: action`), so the
  * HTTP cache can answer it, and its patch is drawn. An answer that is not a whole 2xx patch from
  * here (a page, a redirect, an error, even one that carries a patch, none, a body cut off), or a
- * patch that cannot be drawn, is read again as a page, as for any other entry. The traversal's
+ * patch that cannot be drawn whole (it throws, or an element of it has no place on the page), is
+ * read again as a page, as for any other entry. The traversal's
  * signal ends it, as a newer
  * navigation does any visit; the screen stays, so the fields outside the patch keep what the user
  * typed, and the patch keeps a field they are editing as any patch does.
@@ -2757,16 +2763,13 @@ async function readAddress(url, signal) {
   const html = await res.text().catch(() => null);
   signal.throwIfAborted();
   if (html === null) return page();
-  // A patch that cannot be drawn leaves the screen another entry's: the page is read instead.
-  const drawn = await apply(html, signal, null).then(
-    () => true,
-    (e) => {
-      if (signal.aborted) throw e;
-      return false;
-    },
-  );
-  if (!drawn) return page();
+  // A patch not drawn whole leaves the screen (some of it) another entry's: the page is read instead.
+  const drawn = await apply(html, signal, null).catch((e) => {
+    if (signal.aborted) throw e;
+    return false;
+  });
   signal.throwIfAborted();
+  if (!drawn) return page();
   drawnFor = navigation?.currentEntry?.key ?? drawnFor;
 }
 // An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
@@ -3258,7 +3261,7 @@ customElements.define(
   class extends HTMLElement {
     /** @type {EventSource | null} */
     source = null;
-    /** Patches apply in the order they arrive, each after the modules it needs. */
+    /** Patches apply in the order they arrive, each after the modules it needs. @type {Promise<unknown>} */
     applied = Promise.resolve();
     connectedCallback() {
       const src = this.getAttribute("src");

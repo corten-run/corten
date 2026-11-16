@@ -1759,8 +1759,9 @@ reach what the screen shows, and a form that posts without an `action` sends to 
 Forward between the entries such forms made on the screen, and the one the first was sent from,
 read the entry's address as the form did (`corten: action`, which the browser's HTTP cache can
 answer) and draw its patch, leaving the rest of the screen as it is. An answer that is not a 2xx
-patch (a page, a redirect, an error) is read as a page, as any other entry is; so is every entry
-once another page has been swapped in or the page reloaded.
+patch (a page, a redirect, an error, none) or a patch the runtime cannot draw whole (an element
+of it with no place on the page) is read as a page, as any other entry is; so is every entry once
+another page has been swapped in or the page reloaded.
 
 ```rust,ignore
 #[component]
