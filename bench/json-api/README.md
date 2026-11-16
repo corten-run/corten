@@ -83,6 +83,10 @@ allowed set; additional root/executable/source overlays or image volumes are not
 Missing or contradictory observations fail closed.
 
 Actual image inspections retain `Entrypoint` and `Cmd`, without image environment values.
+Docker may omit either optional field; projections record that absence as explicit `null`,
+including in the independent audit subject. A missing `Config`, malformed command, or empty
+effective executable still fails. Container observations normalize the same optional absence
+only to `null`, never to a required nonempty command or entrypoint from the image or runner.
 Every app receipt must use that image's unmodified default execution; upstream, probe and
 load receipts must use their complete fixed native commands and inspected tool entrypoints.
 All roles retain and replay the container's actual `Config.Entrypoint`, `Config.Cmd`, `Path`
