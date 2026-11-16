@@ -8,6 +8,8 @@ Corten is pre-1.0, so any minor version may change the API.
 - Copy stable installed dependency hardlinks into independent hardening evidence,
   retaining source identity and mutation checks, bounded no-follow reads and
   single-link saved evidence. Report bounded relative-path rejection diagnostics.
+  Pin snapshot output directories before creates/writes and retain output
+  identities through sealing, rejecting directory/junction and file replacement.
 
 - Publish synthetic benchmark fixtures with explicit readable file permissions
   and search-only bind roots, including under the private campaign umask. Keep

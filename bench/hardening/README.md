@@ -31,6 +31,13 @@ identity before reading, and requires unchanged source identity, metadata and
 recursive membership bookends. Symlinks, special files and changing inputs fail
 closed. Linux traversal uses pinned directory descriptors and no-follow opens;
 Windows uses path bookends plus descriptor identity checks before content reads.
+Output creates are anchored to pinned directory descriptors on Linux. Windows
+temporarily pins the existing output parent while creating the root, then holds
+exclusive handles on active owned output directories to prevent rename/junction
+substitution before writes. Handles are bounded by traversal depth and released
+on success or failure. Output ancestor, directory and file identities are checked
+before writes and bookended around the read-only seal; byte-identical replacement
+trees are not accepted. Unrelated ancestor membership changes remain allowed.
 This is not an atomic filesystem snapshot: the installation must remain stable.
 Only the unused top-level `.bin` launchers are excluded. Rejections identify a
 bounded relative path (up to 64 characters), entry type, link count and reason,

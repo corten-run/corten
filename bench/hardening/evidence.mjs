@@ -75,7 +75,7 @@ export function snapshotDependencies(from, to) {
     : s.isDirectory() ? "directory" : s.isFIFO() ? "fifo" : "special";
   const reject = (reason, path = ".", stat, code) => {
     const detail = { path: path.slice(0, 64), reason, type: type(stat), nlink: stat ? String(stat.nlink) : null };
-    if (code) detail.fsCode = ["ENOENT", "ELOOP", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "EEXIST", "ENOTDIR"].includes(code) ? code : "unknown";
+    if (code) detail.fsCode = ["ENOENT", "ELOOP", "EACCES", "EPERM", "EBUSY", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "EEXIST", "ENOTDIR"].includes(code) ? code : "unknown";
     throw Object.assign(new Error(`dependency snapshot rejected ${JSON.stringify(detail)}`), { code: "ERR_DEPENDENCY_SNAPSHOT" });
   };
   const io = (path, action, reason = "input-io") => {
@@ -104,8 +104,44 @@ export function snapshotDependencies(from, to) {
   };
   if ([from, to].some((p) => p.replaceAll("\\", "/").startsWith("//")) || within(from, to) || within(to, from)) reject("unsafe-root");
   const ancestors = chain(from).map((full) => ({ full, stat: directory(full, ".") }));
-  for (const full of chain(dirname(to))) directory(full, ".");
-  io(".", () => mkdirSync(to, { mode: 0o700 }), "output-io");
+  const outputAncestors = chain(dirname(to)).map((full) => ({ full, stat: directory(full, ".") }));
+  const outputDirectories = new Map(), outputFiles = new Map();
+  const directoryKeys = ["dev", "ino", "mode", "uid", "gid", "birthtimeNs"];
+  // libuv UV_FS_O_EXLOCK (include/uv/win.h) is not in fs.constants. Windows
+  // exclusive directory handles deny rename/delete sharing but allow children.
+  const directoryFlags = constants.O_RDONLY | (process.platform === "win32" ? 0x10000000
+    : (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
+  const fdPath = (fd) => `${process.platform === "linux" ? "/proc/self/fd" : "/dev/fd"}/${fd}`;
+  const outputSame = (before, after, path, fields = directoryKeys) => {
+    if (type(before) !== type(after) || fields.some((key) => before[key] !== after[key])) reject("changed-output", path, after);
+  };
+  const guardOutput = (path = ".", complete = false) => {
+    for (const { full, stat } of outputAncestors) outputSame(stat, info(full, "."), ".");
+    const paths = [];
+    for (let at = path;; at = posix.dirname(at)) { paths.push(at); if (at === ".") break; }
+    for (const at of complete ? outputDirectories.keys() : paths) {
+      const entry = outputDirectories.get(at); if (!entry) continue;
+      outputSame(entry.stat, info(at === "." ? to : join(to, at), at), at, complete ? keys : directoryKeys);
+      if (entry.fd !== null) outputSame(entry.stat, io(at, () => fstatSync(entry.fd, { bigint: true })), at);
+    }
+    if (complete) for (const [at, stat] of outputFiles) outputSame(stat, info(join(to, at), at), at, keys);
+  };
+  const outputDirectoryPath = (path) => process.platform === "win32"
+    ? path === "." ? to : join(to, path) : fdPath(outputDirectories.get(path).fd);
+  const createOutputDirectory = (access, path) => {
+    guardOutput(path); io(path, () => mkdirSync(access, { mode: 0o700 }), "output-io");
+    const stat = directory(access, path);
+    const fd = io(path, () => openSync(access, directoryFlags), "output-io");
+    outputDirectories.set(path, { stat, fd });
+    outputSame(stat, io(path, () => fstatSync(fd, { bigint: true })), path);
+    guardOutput(path);
+  };
+  const closeOutputDirectory = (path) => {
+    const entry = outputDirectories.get(path);
+    if (entry?.fd !== null && entry?.fd !== undefined) {
+      const fd = entry.fd; entry.fd = null; io(path, () => closeSync(fd), "output-io");
+    }
+  };
   const guard = (path, baseline) => {
     // Ancestors outside the installation may legitimately gain unrelated files.
     for (const { full, stat } of ancestors) same(stat, info(full, "."), ".", ["dev", "ino", "mode"]);
@@ -120,19 +156,31 @@ export function snapshotDependencies(from, to) {
     try {
       same(before, io(path, () => fstatSync(fd, { bigint: true })), path);
       guard(path, baseline); same(before, info(join(from, path), path), path);
-      const output = io(path, () => openSync(join(to, path), "wx", 0o600), "output-io");
+      const target = join(outputDirectoryPath(posix.dirname(path)), posix.basename(path));
+      guardOutput(path);
+      const output = io(path, () => openSync(target, "wx", 0o600), "output-io");
       let bytes = 0; const hash = createHash("sha256");
       try {
+        const created = io(path, () => fstatSync(output, { bigint: true }));
+        if (!created.isFile() || created.nlink !== 1n) reject("changed-output", path, created);
+        const guardFile = () => {
+          guardOutput(path);
+          outputSame(created, io(path, () => fstatSync(output, { bigint: true })), path, [...directoryKeys, "nlink"]);
+          outputSame(created, info(join(to, path), path), path, [...directoryKeys, "nlink"]);
+        };
+        guardFile();
         for (;;) {
           const n = io(path, () => readSync(fd, buffer, 0, Math.min(buffer.length, Number(before.size) - bytes + 1), bytes));
           if (n === 0) break;
           bytes += n; if (BigInt(bytes) > before.size) reject("changed-input", path, before);
           hash.update(buffer.subarray(0, n));
           for (let at = 0; at < n;) {
+            guardFile();
             const written = io(path, () => writeSync(output, buffer, at, n - at), "output-io");
             if (written <= 0) reject("output-io", path); at += written;
           }
         }
+        guardFile(); outputFiles.set(path, io(path, () => fstatSync(output, { bigint: true })));
       } finally { io(path, () => closeSync(output), "output-io"); }
       if (BigInt(bytes) !== before.size) reject("changed-input", path, before);
       same(before, io(path, () => fstatSync(fd, { bigint: true })), path);
@@ -167,8 +215,10 @@ export function snapshotDependencies(from, to) {
           const input = join(dir, name), stat = info(input, child);
           if (stat.isSymbolicLink()) reject("linked-input", child, stat);
           if (stat.isDirectory()) {
-            if (copy) io(child, () => mkdirSync(join(to, child), { mode: 0o700 }), "output-io");
-            walk(input, child, depth + 1);
+            try {
+              if (copy) createOutputDirectory(join(outputDirectoryPath(path), name), child);
+              walk(input, child, depth + 1);
+            } finally { if (copy) closeOutputDirectory(child); }
           } else {
             if (!stat.isFile() || stat.nlink < 1n) reject("unsupported-entry", child, stat);
             total += stat.size;
@@ -183,16 +233,35 @@ export function snapshotDependencies(from, to) {
         }
         same(before, info(access, path), path);
         if (fd !== null) same(before, io(path, () => fstatSync(fd, { bigint: true })), path);
+        if (copy) {
+          guardOutput(path);
+          const entry = outputDirectories.get(path); entry.stat = io(path, () => fstatSync(entry.fd, { bigint: true }));
+        }
       } finally { if (fd !== null) io(path, () => closeSync(fd)); }
     };
     walk(from, ".", 0); guard(".", baseline);
     if (baseline && (baseline.size !== found.size || [...baseline.keys()].some((path) => !found.has(path)))) reject("changed-input");
     return found;
   };
-  const before = scan(); scan(before, true); scan(before);
-  rows.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
-  // Saved evidence remains single-link, independently owned and byte-identical.
-  io(".", () => assert.deepEqual(savedFiles(to), rows), "changed-output"); return rows;
+  const before = scan();
+  let parent = null;
+  try {
+    parent = io(".", () => openSync(dirname(to), directoryFlags), "output-io");
+    outputSame(outputAncestors.at(-1).stat, io(".", () => fstatSync(parent, { bigint: true })), ".");
+    createOutputDirectory(process.platform === "win32" ? to : join(fdPath(parent), posix.basename(to)), ".");
+    // The root now pins its ancestry on Windows. Do not retain an exclusive
+    // handle on a pre-existing parent during copying or read-only sealing.
+    if (process.platform === "win32") { const fd = parent; parent = null; io(".", () => closeSync(fd), "output-io"); }
+    scan(before, true); scan(before); guardOutput(".", true);
+    // Release Windows listing locks only after all writes are complete. Seal
+    // read-only, then recheck every retained destination identity and metadata.
+    closeOutputDirectory(".");
+    rows.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+    io(".", () => assert.deepEqual(savedFiles(to), rows), "changed-output"); guardOutput(".", true); return rows;
+  } finally {
+    for (const path of outputDirectories.keys()) closeOutputDirectory(path);
+    if (parent !== null) io(".", () => closeSync(parent), "output-io");
+  }
 }
 
 export async function buildNativeImage(docker, { context, runId, commit, source, tag, files, log }) {

@@ -8,7 +8,12 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { digest, savedFiles, snapshotDependencies } from "./evidence.mjs";
 
-const inputPath = (path, input) => path === input || String(path).startsWith("/proc/self/fd/") && fs.realpathSync(path) === input;
+const inputPath = (path, input) => {
+  if (path === input) return true;
+  if (!String(path).startsWith("/proc/self/fd/")) return false;
+  try { return fs.realpathSync(path) === input; }
+  catch (error) { if (error.code === "ENOENT") return false; throw error; }
+};
 
 function fixture(t) {
   const root = fs.mkdtempSync(join(tmpdir(), "hardening-dependencies-"));
