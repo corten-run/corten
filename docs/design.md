@@ -4322,8 +4322,11 @@ rules something out.
     (the methods that answer a patch, `patch_or`'s other side included, answer only as
     `AnyAnswer` or `Patches`, so none of them reaches `Screen<T>`); the same route mounted
     again by hand (`Area::route`, `Api::route`) takes only a `get` that answers a screen of
-    `T`, compared by `TypeId` when the app is built, since that comparison cannot be a `const`
-    on the Rust floor (README Value 4: what the compiler cannot see fails at startup); the route is then a handler
+    `T`, also checked when the crate compiles: the route's `Route::Data` is `HasData<T>`
+    (`NoData` for a route without data), and the handlers' kind must match it (`DataMatches`):
+    every kind matches `NoData`, and only `Screen<T>` matches `HasData<T>`. A `Route` written
+    by hand names its `Data` too, since a trait's associated type has no default on stable Rust,
+    a break for such an impl (none in the examples or the template; CHANGELOG, **Breaking:**); the route is then a handler
     argument of type `ScreenUrl<T>`, where `T` must come from the declarations `corten::types`
     writes (a type the script declares would match the Rust type by name alone; what is checked is
     the path the name is imported from, `types/app`, so a file written by hand at that path is not
@@ -4332,8 +4335,11 @@ rules something out.
     `T` by that declaration. The read is a `fetch` in the default cache mode, so the
     browser's HTTP cache does for it what it does for any `GET`: an answer it kept is asked about
     with its weak `ETag` and an unchanged one is a 304 with no body (while nothing else fetched
-    that URL in between: the browser keeps one answer per URL, so the page fetched there again
-    replaces the data's and the next read gets the whole answer), and a `Public` route's
+    that URL in between: the browser keeps one answer per URL, so the page fetched there again,
+    by a navigation or by the runtime's hover prefetch of a link to it
+    ([Choice 12](#choice-own-prefetch)), replaces the data's and the next read gets the whole
+    answer; a link whose click reads sits under `data-no-prefetch`, which also spares the server
+    drawing a page the click does not use), and a `Public` route's
     `max-age` lets a read within it make no request; `Vary: corten, accept` keeps the page's HTML
     from answering it. A redirect is not followed (`redirect: "manual"`): what answers before the
     handler or replaces its answer (an app's middleware sending a visitor to sign in) is not
@@ -4397,7 +4403,9 @@ rules something out.
     `redirect: "manual"` answers a redirect as an opaque answer without following it, a
     `ReadError` 0 with `redirected` in all three; Corten's sign-in refusal answers a data client
     401, which `a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors` tests);
-    reasoned (`read.js`'s own logic, which the smoke checks in the three engines with a stand-in
+    reasoned (a hover prefetch is a `fetch` of the link's URL, which takes the URL's one entry in
+    the browser's cache as a navigation does, so a read after it is answered whole: why a link
+    whose click reads sits under `data-no-prefetch`; `read.js`'s own logic, which the smoke checks in the three engines with a stand-in
     `fetch`, so not a browser probe: a 404 that arrives as the signal aborts rejects with the
     abort, a success that is not JSON with a `SyntaxError` cause and JSON that is not the
     envelope with a `TypeError` one; an app whose scripts do not import `corten/read` gets the same runtime and import
@@ -4405,7 +4413,8 @@ rules something out.
     declaration of `T`, so no script writes it, and a route whose handler can answer without a
     `T` does not compile, through `req.page`, a redirect or a patch-making method, which the
     `compile_fail` doctests on `Req::screen` and `PatchingKind` show, and mounted again by hand
-    with such a handler the app is not built, which the tests on a hand mount show; what
+    with such a handler it does not compile either, which the `compile_fail` doctests on
+    `Area::route` and `a_data_route_mounted_by_hand_with_a_page_handler_says_why` show; what
     middleware answers or a handler replaces through `DerefMut` is not checked, which is why a
     read follows no redirect; a script that meets one navigates to the URL, which the browser
     follows, where offline it would wait or say so, which is why a redirect is told apart); value (a rich screen in the browser is as possible as one the
@@ -4418,16 +4427,16 @@ rules something out.
     data when it loads in amounts where [Choice 45](#choice-data-on-single-quoted)'s block would
     pay (its Revisit when); Chromium or Firefox stops revalidating a read it kept, which the 304
     rests on; a `Req` method other than `req.screen` comes to answer as `Screen<T>`; or a
-    `req.screen` page's instructions a request move by more than 1%; or the Rust floor reaches a
-    version that compares a `TypeId` in a `const`, when a hand mount's check can move from
-    startup to the compiler.
+    `req.screen` page's instructions a request move by more than 1%; or stable Rust gives a trait's
+    associated type a default, when a `Route` written by hand need not name its `Data`.
 
     Last checked: 2026-11-15, the runtime's size, the instruction counts and the import-map entry
-    on `dea1788d2` and `4eb3d62d1`; 2026-11-15, the module's size, the hand mount's check (its
-    tests and the `Route::DATA` comparison in `mounted_with`) and the smoke's read checks on
+    on `dea1788d2` and `4eb3d62d1`; 2026-11-15, the module's size and the smoke's read checks on
     `c74c4fa83`; 2026-11-15, the module's size and the smoke's read checks again on
     `7664551c8`, the read checks in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
-    (Playwright 1.64.1).
+    (Playwright 1.64.1); 2026-11-16, the hand mount's check when the crate compiles
+    (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
+    `f109794c6`.
 
 ## Rules
 
