@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Distinguish a failed benchmark account observation from uncertain worker lifetime
+  only after native request/response/socket closure, a bound terminal reply and
+  timely exit0. Preserve the failed operation and fresh cleanup proofs without
+  retries, worker reuse or repeated mutations; uncertain paths keep their locks.
+
 - Preserve closed rejection-site details for benchmark provider account requests
   through private-worker diagnostics and cached teardown, without exposing native
   errors or changing retries, credential use, acceptance or lifecycle locks.

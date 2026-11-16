@@ -841,12 +841,35 @@ permitted by the [published action model](https://github.com/digitalocean/openap
 not observed responses from the failed r21 launch, whose initial create body was
 not retained; that launch's exact cause remains unconfirmed.
 Responses have a body bound and whole-request deadline; in-flight timeout,
-cancellation or malformed responses conservatively retain lifecycle locks.
+cancellation or unproved resource settlement conservatively retain lifecycle locks.
 Every provider-owning controller action awaits the same cached worker-close promise
 before releasing its operation lock, including early-return and error paths. Forced
 worker termination or uncertain shutdown retains the operation lock and any acquired
 root launch lock. The outer finalizer awaits that same settlement, not a new teardown
 after lock release. Ordinary confirmed shutdown releases the locks normally.
+The exact account command has one narrow terminal failure protocol, not a retry.
+After settled credential consumption, the private native request path observes
+actual `ClientRequest`, any `IncomingMessage`, and assigned socket close events.
+All requests dispatched by that engine must have closed; `destroy()`, `end`, an
+HTTP failure or a diagnostic label alone is not proof. Closure spends the original
+command deadline, including credential consumption; cancellation, expiry, reverse
+time, unknown resources and any unresolved prior mutation refuse this disposition.
+Only a privately identified failed account read can produce the exact-key
+`cloud-provider-account-failed/v2` reply: `nonce`, `sequence`,
+`disposition: resources-closed`, and its closed `diagnostic`. Success and other
+failures retain their existing result grammar. The parent requires the pending
+exact account command, its matching nonce/sequence, timely terminal proof and an
+observed exit0 without a signal before cached settlement may resolve. Terminal
+proof precedes expected disconnect/exit; an exit without proof, malformed or
+duplicate reply, forced close or cancellation stays uncertain.
+The original account operation still fails without an accepted identity, even
+with `allowFail`; this worker is terminal and cannot service another request.
+An HTTP refusal and a worker lifetime failure are different outcomes, not different
+authorities. Only this proved orderly failed read can release normal lifecycle
+locks; a later explicitly approved collect must independently re-prove ownership
+and unusedness. No POST/DELETE or failed enclosing operation is retried, and an
+existing deletion intent still permits only fresh absence reconciliation. Other
+commands, including a create's action GET, cannot use this terminal disposition.
 Provider failures may append a bounded phase code to the generic CLI error. The
 closed vocabulary in `cloud-options.mjs` distinguishes credential consumption,
 account/list/create/delete requests, create response/link validation, action
