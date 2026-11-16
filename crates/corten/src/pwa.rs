@@ -25,7 +25,7 @@
 //!   fails. The worker still answers it, with the request navigation preload already sent: were
 //!   it declined, the browser would drop that answer and send the request again, and a one-time
 //!   link would be redeemed twice. In a browser without navigation preload it is declined, which
-//!   sends it once.
+//!   sends it once (`docs/design.md#choice-network-only-preload`).
 //! - Versioned files (`/assets/{version}/...` and the runtime) are served cache-first, and only
 //!   responses marked `immutable` are stored, so a mismatched version is never cached. A request
 //!   for a range of one (a video seeking), or for the video or audio a player loads, is left to

@@ -4307,6 +4307,69 @@ rules something out.
     `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
     it, load such a page in the three engines and count the matches.
 
+55. <a id="choice-network-only-preload"></a>**The generated service worker answers a navigation
+    under a `network_only` prefix with the request navigation preload already sent, rather than
+    declining it.** The worker turns navigation preload on, so a page's request leaves while the
+    worker starts, and it declined every request under a `network_only` prefix (sign-in, checkout,
+    an OAuth callback, an agents' endpoint), so that nothing there was cached or given the offline
+    page. For a navigation the two did not fit: the browser sends the preload as the fetch event
+    starts, and when the worker does not call `respondWith` it drops the preload's answer and sends
+    the request again, so every network-only page was rendered twice and a one-time `GET` (an OAuth
+    `?code=`, a magic link) was redeemed twice, the user seeing the second answer
+    ([#1524 corten::pwa enables navigation preload but declines network-only navigations, so every navigation to a network_only path reaches the server twice](https://github.com/corten-run/corten/issues/1524)).
+    Such a navigation is now answered with `(await event.preloadResponse) || fetch(request)`: the
+    preload's answer when one was sent, one fetch when none was (preload not yet on). No cache is
+    read or written and no offline page is given, so offline it fails as a declined one did, with
+    the browser's error, and a failed preload is not sent again as a fetch, since it may have
+    reached the server. A redirect (the callback's 302 or 303 to a page) keeps its meaning: a
+    navigation's redirect mode is `manual`, so the answer is an opaque redirect the browser follows
+    itself, and the page it lands on is a navigation of its own, through the worker as any page.
+    Still declined: a network-only navigation in a browser without navigation preload
+    (`registration.navigationPreload` absent), where declining sends it once; a posted form, for
+    which no preload is sent; and every request there that is not a navigation. It costs every
+    client 294 bytes more of worker (2,871 to 3,165 as card-market serves it, 1,162 to 1,244 with
+    gzip at level 9), and a request no more on the server.
+
+    Not chosen: navigation preload off, so declining would be right (every navigation would wait
+    for the worker to start before its request leaves, to spare a case the worker can answer);
+    declining when no preload was sent (the worker must call `respondWith` before
+    `preloadResponse` settles, so it cannot tell); leaving it to the app's own `import_script`
+    listener (every app with a sign-in would rewrite the framework's worker); routing the prefixes
+    past the worker with the static routing API (`InstallEvent.addRoutes`, `source: "network"`),
+    which would start no worker and send no preload for them, but which only Chromium of the three
+    tested engines has.
+
+    Stands on: platform (the Service Workers standard's Handle Fetch: for a `GET` navigation with
+    navigation preload enabled the preload request is sent in parallel with the fetch event, and
+    when no handler calls `respondWith` the event's result is null and the navigation is fetched
+    again; a navigation's redirect mode is `manual`, so `respondWith` takes an opaque redirect for
+    it; and the engines: Chromium, Firefox and WebKit each run the generated worker with
+    navigation preload on, and of them only Chromium has `InstallEvent.addRoutes`); measured
+    (card-market's browser smoke, which counts on the server the requests one navigation sends
+    under the worker, run once with each worker, and a count of ten navigations of each kind in
+    each engine with each worker, the requests counted by the app (`SMOKE_ROUTES=1`): with the
+    worker that declined, a navigation to `/mcp` reached the server twice in Chromium (10 of 10)
+    and in WebKit (9 of 10, three times on the first), a one-time link twice in both (10 of 10),
+    and each once in Firefox; with this worker each reached it once in all three, 10 of 10; a
+    posted form and a page outside the prefixes reached it once in all three with either worker);
+    reasoned (where the preload has gone out, answering with it is the only answer that sends the
+    request once); value (correctness first: a navigation reaches the server once; then
+    performance: a network-only page is rendered once, from the request already in flight).
+
+    Revisit when: Firefox and WebKit ship `InstallEvent.addRoutes`, so the prefixes can be routed
+    past the worker in every tested engine; an engine reuses a declined navigation's preload, or
+    stops sending one; or an app needs a network-only navigation the worker does not see at all.
+
+    Last checked: 2026-11-16, the Service Workers Editor's Draft of 29 October 2026, built from
+    `w3c/ServiceWorker@57dfd24` (Handle Fetch, Create Fetch Event and Dispatch), read that day;
+    2026-11-16, card-market's smoke and the count
+    in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1) on Windows,
+    against a build of `f61cf6cfe` and one of it with `412a3b4c9`'s worker; 2026-11-16, a one-off
+    probe, not a repository check, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
+    (Playwright 1.64.1): a worker reporting whether its global has `InstallEvent.addRoutes`
+    (Chromium only) and navigation preload (all three). To repeat it, register a worker that
+    reads `"addRoutes" in InstallEvent.prototype` and `self.registration.navigationPreload`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

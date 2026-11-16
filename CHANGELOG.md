@@ -999,6 +999,19 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A navigation under a `Pwa::network_only` prefix reaches the server once with the PWA's service
+  worker in control. The worker turns navigation preload on and then declined these
+  navigations, so the browser dropped the preload's answer and sent the request again: every
+  network-only page was rendered twice, and a one-time `GET` (an OAuth callback's code, a magic
+  link) was redeemed twice, the user seeing the second answer. In card-market's smoke a
+  navigation to `/mcp` reached the server twice in Chromium and WebKit and once in Firefox; now
+  once in all three. The worker answers such a navigation with the request preload sent (or one
+  fetch when none was), with no cache and no offline page, and a redirect is followed by the
+  browser as before; a posted form, a browser without navigation preload and every other request
+  under the prefix are still left to the browser. The worker is 294 bytes larger (82 with gzip)
+  (design Choice 55,
+  [#1524 corten::pwa enables navigation preload but declines network-only navigations, so every navigation to a network_only path reaches the server twice](https://github.com/corten-run/corten/issues/1524)).
+
 - A `data-patch` answer that draws a dialog `open` opens it again after the user closed it, when
   the button that asked for it (or, with none, the focused control of the form, else the form) is
   outside the dialog: the element a submit's answer replaces opens then, as drawn, as the press is
