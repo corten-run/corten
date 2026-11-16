@@ -4373,7 +4373,7 @@ rules something out.
     insertion modes read again that day against `TEMPLATE_HEAD`, `TABLE_PARTS` and `patch_top`
     in `crates/corten-macros/src/html.rs`, and `scripts/smoke.mjs` loading the 497 shapes in
     `crates/corten/src/patch-parsing.json` (among them every refused shape, written first and
-    after each of the nine table parts) as a `<template>`'s content on @@SMOKE@@, which passed
+    after each of the nine table parts) as a `<template>`'s content on `0efb21078`, which passed
     in Chromium 156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), with Chromium
     and WebKit letting a leading `<title>`, `<base>`, `<basefont>`, `<bgsound>` or
     `<noframes>` decide; 2026-11-16, a one-off probe, not a repository check, in Chromium
