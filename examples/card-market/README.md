@@ -52,5 +52,8 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 | Design tokens (W3C format, dark and compact themes) | [`tokens/`](tokens/tokens.resolver.json), [`src/theme.rs`](src/theme.rs) |
 | The stylesheet, the demo cards' art, icons, the push handler, the grading clip and its captions | [`static/`](static) |
 
-The browser test of the production pieces: [`smoke.mjs`](smoke.mjs). The item page is the one
-the [full-stack benchmark](../../bench/fullstack) measures.
+The browser test of the production pieces: [`smoke.mjs`](smoke.mjs), against an image built with
+`--build-arg CARD_MARKET_SMOKE=1`, which builds in the test's own routes under `/smoke` and its
+count of the requests that reach the server there and at `/mcp` ([`src/smoke.rs`](src/smoke.rs));
+a deploy's image is built without it and cannot serve them. The item page is the one the
+[full-stack benchmark](../../bench/fullstack) measures.

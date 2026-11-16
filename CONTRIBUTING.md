@@ -128,7 +128,7 @@ docker rm -f corten-watchlist
 docker run -d --name corten-watchlist-dev -p 18483:8080 -e CORTEN_DEV=1 corten-watchlist
 node scripts/smoke-dev.mjs http://localhost:18483 corten-watchlist-dev
 docker rm -f corten-watchlist-dev
-docker build -f examples/card-market/Dockerfile -t corten-card-market .
+docker build --build-arg CARD_MARKET_SMOKE=1 -f examples/card-market/Dockerfile -t corten-card-market .
 docker run -d --name corten-card-market -p 18481:8080 -e ITEM_SOURCE=fixture -e FIXTURE_PATH=/fixtures/smoke.json -e AGENT_ORIGINS=http://127.0.0.1:18481 -e EMBED_ORIGINS=http://127.0.0.1:18481 -e PROXIES=172.16.0.0/12,192.168.0.0/16 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token -v "${PWD}/examples/card-market/fixtures:/fixtures:ro" corten-card-market
 node examples/card-market/smoke.mjs http://localhost:18481
 docker rm -f corten-card-market
@@ -206,6 +206,16 @@ loading, is that stall: rerun the smoke in Firefox alone
 (`node examples/ui-gallery/smoke.mjs <url> firefox`) once the machine is quiet, and treat a
 failure on the rerun, or the same step failing in Chromium or WebKit, as real. Nothing retries
 the step or waits longer for it.
+
+The watchlist's waiting-submit cases press their buttons in the page (`button.click()`), so
+each submit runs before the test changes the form's values or releases its held answer. A
+loaded browser can acknowledge Playwright's click before dispatching that submit: waiting for
+the answer alone does not prove that the first write used the old values or that the second
+press met it still pending. The cases still wait for their output condition, then check the
+busy mark sampled while the answer was held, the exact sends and the renewed submit key.
+The first request is captured before editing its fields; file output is polled on a timer,
+independent of animation frames. Neither the six-second outcome bound nor the window for
+detecting forbidden sends is extended.
 
 ## Cluster integration tests
 
