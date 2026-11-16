@@ -212,7 +212,11 @@ saying the browser held its requests, is the same kind of stall. On a workstatio
 CPUs busy and 60 to 170 threads waiting for one, the server answered every request of such a load
 within a millisecond, through Docker Desktop's own port forwarding as through WSL's localhost
 relay; the page's own timing had its document in after 0.1 s and `DOMContentLoaded` 9 to 28 s
-later, and three Firefox instances loading pages at that moment stalled together
+later. Firefox's network log of one such load had the document's whole answer in its parent
+process at once, then nothing from that process's main thread for 56 s while its socket thread
+went on reading, so the answer reached the page only then. Independent Firefox instances loading
+pages at the same moment stalled together, whether each page had a browser context of its own or
+not
 ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
 Rerun it as above.
 
