@@ -87,6 +87,9 @@ acceptance. Cycles, altered aliases, duplicate object members, unknown/missing p
 expansion bombs and cumulative excess fail closed. The existing 50,000-file, 256-MiB/file
 and 1-GiB/tree ceilings remain unchanged. Inventory and final outer seals use bounded
 chunk hashing, not whole-file hash allocations.
+Native worker/peer journal and execution-subject digests likewise stream canonical JSON
+including their original trailing newline. DOM transcript byte budgets are counted before
+materialization, including oversized shared graphs; their 32-MiB bound is unchanged.
 
 `native-fullstack-browser/v2` summaries bind each non-null cell root to
 `records["cell-<app>-<profile-index>"]`. The production save boundary refuses inline raw

@@ -85,6 +85,12 @@ export function updateJSON(hash, value) {
   if (parts.length) hash.update(parts.join("")); return hash;
 }
 export function jsonSha256(value) { return updateJSON(createHash("sha256"), value).digest("hex"); }
+export function encodedSha256(value) { return updateJSON(createHash("sha256"), value).update("\n").digest("hex"); }
+export function jsonByteLength(value, limit = Infinity) {
+  let bytes = 0;
+  for (const part of jsonParts(value)) { bytes += size(part); if (bytes > limit) break; }
+  return bytes;
+}
 
 export function encodeMetadata(value) {
   const chunks = []; let parts = [], length = 0, bytes = 1;
