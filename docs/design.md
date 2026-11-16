@@ -4439,7 +4439,7 @@ rules something out.
     (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
     `f109794c6`.
 
-57. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
+56. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
     what the post reads); a time the clocks skip or repeat is read as Temporal's default
     (`compatible`) reads it.** `<input type="datetime-local">` sends what the visitor's clock read
