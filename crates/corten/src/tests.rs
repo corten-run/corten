@@ -9762,33 +9762,30 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
     let secs =
         |at: Option<SystemTime>| at.map_or("none".into(), |at| at.duration_since(UNIX_EPOCH).unwrap().as_secs().to_string());
     let routes = Routes::from(
-        Table::new()
-            .route(
-                "/edit",
-                get(move |req: Req| async move {
-                    let (f, zone) = (Repair::FIELDS, FormZone::from(req.zone()));
-                    req.test_page(
-                        "Edit",
-                        html! {
-                            <form method="post" action="/save">
-                                {zone.field(f.zone)}
-                                <label>
-                                    "Goes live, " {zone.name()}
-                                    <input type="datetime-local" name={f.live_at} value={LocalDateTime::of(stored, &zone)}>
-                                </label>
-                            </form>
-                        },
-                    )
-                }),
-            )
-            .route(
-                "/save",
-                crate::router::post(move |req: Req, Form(posted): Form<Repair>| async move {
-                    // What the form was drawn in, and what the request's own zone would have read.
-                    let request = posted.live_at.value().and_then(|t| t.at(req.zone()));
-                    format!("{} {}", secs(posted.live_at.at(&posted.zone)), secs(request))
-                }),
-            ),
+        Table::new().route(
+            "/edit",
+            // The form posts to the page it is on, so it needs no action.
+            get(move |req: Req| async move {
+                let (f, zone) = (Repair::FIELDS, FormZone::from(req.zone()));
+                req.test_page(
+                    "Edit",
+                    html! {
+                        <form method="post">
+                            {zone.field(f.zone)}
+                            <label>
+                                "Goes live, " {zone.name()}
+                                <input type="datetime-local" name={f.live_at} value={LocalDateTime::of(stored, &zone)}>
+                            </label>
+                        </form>
+                    },
+                )
+            })
+            .post(move |req: Req, Form(posted): Form<Repair>| async move {
+                // What the form was drawn in, and what the request's own zone would have read.
+                let request = posted.live_at.value().and_then(|t| t.at(req.zone()));
+                format!("{} {}", secs(posted.live_at.at(&posted.zone)), secs(request))
+            }),
+        ),
     );
     let router = App::new(routes).client_zone().router();
     let send = |method: &'static str, uri: &'static str, body: &'static str, cookie: Option<&'static str>| {
@@ -9814,20 +9811,20 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
     assert!(page.contains("Goes live, UTC") && page.contains(r#"value="2026-11-13T20:05""#), "{page}");
     // Sent unchanged from that first page, by a browser that has reported Chicago since: the
     // instant it was drawn from, where the request's zone would have moved it six hours.
-    let (status, read) = send("POST", "/save", "live_at=2026-11-13T20%3A05&zone=UTC", chicago).await;
+    let (status, read) = send("POST", "/edit", "live_at=2026-11-13T20%3A05&zone=UTC", chicago).await;
     assert_eq!((status, read), (StatusCode::OK, format!("{at} {six_hours_on}")));
     // Without JavaScript: UTC both ways.
-    let (_, read) = send("POST", "/save", "live_at=2026-11-13T20%3A05&zone=UTC", None).await;
+    let (_, read) = send("POST", "/edit", "live_at=2026-11-13T20%3A05&zone=UTC", None).await;
     assert_eq!(read, format!("{at} {at}"));
 
     // Once the browser has reported its zone, the form is drawn in it and read back in it.
     let (_, page) = send("GET", "/edit", "", chicago).await;
     assert!(page.contains(r#"<input type="hidden" name="zone" value="America/Chicago">"#), "{page}");
     assert!(page.contains("Goes live, America/Chicago") && page.contains(r#"value="2026-11-13T14:05""#), "{page}");
-    let (_, read) = send("POST", "/save", "live_at=2026-11-13T14%3A05&zone=America%2FChicago", chicago).await;
+    let (_, read) = send("POST", "/edit", "live_at=2026-11-13T14%3A05&zone=America%2FChicago", chicago).await;
     assert_eq!(read, format!("{at} {at}"));
     // A post without the zone came from no page of the app's.
-    let (status, _) = send("POST", "/save", "live_at=2026-11-13T14%3A05", chicago).await;
+    let (status, _) = send("POST", "/edit", "live_at=2026-11-13T14%3A05", chicago).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
