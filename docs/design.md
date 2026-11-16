@@ -4465,8 +4465,9 @@ rules something out.
     which no preload is sent; and every request there that is not a navigation. An app's
     `import_script` listener that already answers such a navigation keeps its answer, and the
     worker's own `respondWith` then throws an `InvalidStateError` into the worker's console. It
-    costs every client 185 bytes more of worker (2,857 to 3,042 as card-market's image serves it,
-    1,153 to 1,183 with gzip at level 9), and a request no more on the server.
+    costs every client 185 bytes more of worker (2,857 to 3,042 uncompressed as card-market's
+    default image serves it, 1,153 to 1,183 with gzip at level 9), and a request no more on the
+    server.
 
     Not chosen: navigation preload off, so declining would be right (every navigation would wait
     for the worker to start before its request leaves, to spare a case the worker can answer);
@@ -4500,18 +4501,27 @@ rules something out.
     with the header. In the same probe a link to another site that redirects (302) into the
     network-only prefix, as an OAuth provider sends the user back, reached the callback once in
     all three with this worker (twice in Chromium and WebKit with the one that declined), with the
-    app's `SameSite=Lax` cookie, and landed on the page the callback redirected to; Firefox's
-    preload of it said `Sec-Fetch-Site: same-origin` where Chromium's and WebKit's said
-    `cross-site`; Corten reads that header only for writes, which no preload is);
+    app's `SameSite=Lax` cookie, and landed on the page the callback redirected to; a
+    `SameSite=Strict` cookie reached the callback with this worker exactly where it did with the
+    one that declined, so no engine sends it where it did not before: in Chromium when the link
+    was on one of the app's pages and not when it was on the other site's, in WebKit in both, and
+    in Firefox in neither; Firefox's preload of it said `Sec-Fetch-Site: same-origin` where its
+    declined navigation had said `cross-site`, as Chromium's and WebKit's still did; Corten reads
+    that header only for writes, which no preload is; and one fetch of `/service-worker.js` from
+    card-market's default image with `0c916b5a0`'s worker, against the same text with
+    `226b12b35`'s template in place of its own, the lines generated before the template being the
+    same, for the sizes);
     reasoned (where the preload has gone out, answering with it is the only answer that sends the
     request once); value (correctness first: a navigation reaches the server once; then
     performance: a network-only page is rendered once, from the request already in flight).
 
     Revisit when: Firefox and WebKit ship `InstallEvent.addRoutes`, so the prefixes can be routed
     past the worker in every tested engine; Chromium and WebKit reuse a declined navigation's
-    preload, or stop sending one for it as Firefox does, so declining would send it once; Corten
-    reads `Sec-Fetch-Site` on a `GET` navigation; or an app needs a network-only navigation the
-    worker does not see at all.
+    preload, or stop sending one for it as Firefox does, so declining would send it once; Corten,
+    or an app's own middleware (a Fetch-Metadata policy), reads `Sec-Fetch-Site` on a `GET`
+    navigation, which Firefox's preload of a cross-site one calls `same-origin`; an engine sends a
+    `SameSite=Strict` cookie on the preload of a navigation whose own request would not carry it;
+    or an app needs a network-only navigation the worker does not see at all.
 
     Last checked: 2026-11-16, the Service Workers Editor's Draft of 29 October 2026, built from
     `w3c/ServiceWorker@57dfd24` (Handle Fetch, Create Fetch Event and Dispatch), read that day;
@@ -4528,7 +4538,12 @@ rules something out.
     logs each request's `Service-Worker-Navigation-Preload`, `Cookie` and `Sec-Fetch-Site`, with a
     link to a server on another host that redirects (302) into `/auth/`. To repeat it, navigate
     under each worker to a page, to a page under the prefix and through that link, and count the
-    requests the server logs.
+    requests the server logs; 2026-11-16, that probe again with the workers of `0c916b5a0` and
+    `226b12b35` in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), with
+    a `SameSite=Strict` cookie beside the `Lax` one and the link also on a page of the other host,
+    logging which cookies each request to `/auth/` carried; 2026-11-16, the worker's sizes,
+    one fetch of `/service-worker.js` from card-market's default image built with `0c916b5a0`'s
+    worker, and the same text with `226b12b35`'s template in place of its own.
 
 ## Rules
 

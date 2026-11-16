@@ -1064,7 +1064,7 @@ Corten is pre-1.0, so any minor version may change the API.
   under the prefix are still left to the browser. An `import_script` listener that already answers
   such a navigation keeps its answer, and the worker's own listener now throws an
   `InvalidStateError` into the worker's console there. The worker is 185 bytes larger (30 with
-  gzip at level 9, as card-market serves it) (design Choice 56,
+  gzip at level 9) (design Choice 56,
   [#1524 corten::pwa enables navigation preload but declines network-only navigations, so every navigation to a network_only path reaches the server twice](https://github.com/corten-run/corten/issues/1524)).
 
 - A `data-patch` answer that draws a dialog `open` opens it again after the user closed it, when
