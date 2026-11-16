@@ -29,7 +29,7 @@ use corten::{
 use crate::{
     api, embeds, grading, items, mcp,
     model::{AlertInput, ItemView, set_alert},
-    routes, smoke,
+    routes,
     source::Source,
     text::Msg,
     views::{
@@ -104,11 +104,11 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
     let policy = Policy::new().report_to(&routes::CspReports);
     let policy = if std::env::var_os("HTTPS").is_some() { policy.hsts() } else { policy };
     let ready = source.clone();
-    // The browser test's own routes and its count of requests (`smoke.rs`), with `SMOKE_ROUTES=1`;
-    // a deploy leaves it unset.
-    let smoke = std::env::var("SMOKE_ROUTES").is_ok_and(|on| on == "1").then(smoke::Requests::default);
     let pwa = Pwa::new(manifest).import_script(views::Static::SW_PUSH_JS).network_only(mcp::Mcp::PATH);
-    let pwa = if smoke.is_some() { pwa.network_only(smoke::url::Once::PATH) } else { pwa };
+    // The browser test's own routes and its count of requests (`smoke.rs`), built in only for the
+    // test (`build.rs`), so a deploy's build cannot serve them.
+    #[cfg(smoke_routes)]
+    let (pwa, count) = (pwa.network_only(crate::smoke::url::Once::PATH), crate::smoke::Requests::default());
     let app = App::new(routes::router(source.clone()))
         .area(|area| items::area(area, source.clone()).middleware(limit.clone()))
         .area(|area| grading::area(area).components(&[ConditionGuide]))
@@ -121,10 +121,9 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
         .api(|routes| {
             let routes = mcp::api(routes).route::<mcp::Mcp>(tools).errors(rpc_failure);
             let routes = origins.split(',').filter(|o| !o.is_empty()).fold(routes, |routes, origin| routes.allow_origin(origin));
-            match &smoke {
-                Some(count) => routes.middleware(count.clone()),
-                None => routes,
-            }
+            #[cfg(smoke_routes)]
+            let routes = routes.middleware(count.clone());
+            routes
         })
         .error_page(views::error_page, ())
         .messages::<Msg>()
@@ -138,10 +137,9 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
             let source = ready.clone();
             async move { source.reachable().await }
         });
-    match smoke {
-        Some(count) => app.area(|area| smoke::url::area(area, count.clone()).middleware(count)),
-        None => app,
-    }
+    #[cfg(smoke_routes)]
+    let app = app.area(|area| crate::smoke::url::area(area, count.clone()).middleware(count));
+    app
 }
 
 /// What the JSON routes share: the items, and the partners that may set alerts.

@@ -14,13 +14,14 @@ const from = source.indexOf(START);
 const to = source.indexOf('\n"#;', from);
 const template = from >= 0 && to > from ? source.slice(from + START.length, to) : "";
 
-/** The worker as `worker_js` fills it, for an app whose versioned files are under `/assets/`. */
+/** The worker as `worker_js` fills it, for an app whose versioned files are under `/assets/`, with
+ * a network-only prefix of its own and one inside the cached `/assets/`. */
 const worker = template
   .replace("__IMPORTS__", "")
   .replace("__CACHE__", '"corten-v1"')
   .replace("__OFFLINE__", '"/offline"')
   .replace("__PRECACHE__", "[]")
-  .replace("__NETWORK_ONLY__", '["/api/"]')
+  .replace("__NETWORK_ONLY__", '["/api/", "/assets/private/"]')
   .replace("__CACHED__", '["/assets/", "/corten/"]');
 
 /**
@@ -105,6 +106,12 @@ test("other requests are not touched", () => {
   const answers = load();
   assert.equal(answers({ url: "/api/items" }), false, "a network-only prefix");
   assert.equal(answers({ url: "/items/1" }), false, "not a versioned file");
+});
+
+test("a request under a network-only prefix inside a cached one is left to the network", () => {
+  const answers = load();
+  assert.equal(answers({ url: "/assets/private/report.css", destination: "style" }), false, "network-only wins over cached");
+  assert.equal(answers({ url: "/assets/abc123/app.css", destination: "style" }), true, "the rest of the cached prefix is still cached");
 });
 
 test("a network-only navigation is the answer to the request navigation preload sent, and nothing else", async () => {

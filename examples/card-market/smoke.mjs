@@ -495,16 +495,16 @@ try {
     }
   }
   // Under the service worker, in each engine, a navigation reaches the server once, counted by the
-  // server (the app runs with SMOKE_ROUTES=1, src/smoke.rs): one to a network_only path (the MCP
-  // endpoint's 405), a one-time link there whose redirect lands on a page, a form posted to it, and
-  // a page the worker answers as any page. A worker that turns on navigation preload and then
+  // server (the image is built with CARD_MARKET_SMOKE=1, src/smoke.rs): one to a network_only path
+  // (the MCP endpoint's 405), a one-time link there whose redirect lands on a page, a form posted to
+  // it, and a page the worker answers as any page. A worker that turns on navigation preload and then
   // declines a navigation sends it twice: the browser drops the preload's answer and asks again
   // (#1524). Offline, a network-only navigation is the browser's network error, not the worker's
   // offline page, which a page still gets.
   /** The requests the server counted, by path and query. */
   const counted = async () => {
     const res = await fetch(`${base}/smoke/requests`);
-    if (!res.ok) throw new Error(`/smoke/requests is ${res.status}: run the app with -e SMOKE_ROUTES=1`);
+    if (!res.ok) throw new Error(`/smoke/requests is ${res.status}: build the image with --build-arg CARD_MARKET_SMOKE=1`);
     /** @type {Record<string, number>} */
     const seen = {};
     for (const line of (await res.text()).split("\n").filter(Boolean)) {
@@ -540,10 +540,9 @@ try {
         return { controlled: !!navigator.serviceWorker.controller, preload };
       });
       const under = `${name}: under the service worker (${JSON.stringify(worker)}),`;
-      if (!worker.controlled) {
-        skip(`${under} a navigation reaches the server once`, "no service worker controls the page in this engine");
-        continue;
-      }
+      // Every engine's worker controls the page; one that does not cannot have its requests counted.
+      check(`${under} a service worker controls the page`, worker.controlled, worker.controlled ? "controlled" : "no controller 10 s after loading /");
+      if (!worker.controlled) continue;
       /** @type {number | undefined} */
       let status;
       const mcp = await sentBy(async () => (status = (await sw.goto(`${base}/mcp`))?.status()));

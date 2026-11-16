@@ -1,5 +1,6 @@
 mod app;
 mod model;
+#[cfg(smoke_routes)]
 mod smoke;
 mod source;
 mod text;
