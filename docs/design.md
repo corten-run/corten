@@ -3116,8 +3116,8 @@ rules something out.
     patch's text) and imports the module, whose fetch the preload has already started, so the
     part's read waits for no round trip of its own after the first. Served beside the runtime, not
     with the app's scripts, so an app with no static files or components has it too. The runtime is
-    15,488 bytes gzipped and 13,984 brotli at `a1436d473` (15,341 and 13,846 on main) and the
-    module 986 and 860, where with the reads in the runtime it was 16,685 and 15,059 at
+    15,615 bytes gzipped and 14,088 brotli at `865853d9e` (15,407 and 13,925 on main at
+    `dbe1a34c7`) and the module 1,003 and 868, where with the reads in the runtime it was 16,685 and 15,059 at
     `cd6861c76` (Stands on); a page without a slow part fetches nothing more, except once, when a
     PWA's service worker installs and precaches the module with the runtime. A stub that started the fetch before
     the module arrived was not needed: the module is preloaded with the page that needs it.
@@ -3215,9 +3215,9 @@ rules something out.
     Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
     less than a marker Corten reads on every request); measured (`npm run build:js`'s
     `js/dist/corten.js` and `js/dist/part.js`, gzip level 6 and brotli level 11 by Node's
-    `zlib`: the runtime 15,488 and 13,984 bytes at `a1436d473` and the module 986 and 860, against
-    15,341 and 13,846 for the runtime on main at `2b33cd568` and 16,685 and 15,059 with the reads
-    in it at `cd6861c76`, so a page without a slow part loads 1,197 bytes gzipped fewer than it
+    `zlib`: the runtime 15,615 and 14,088 bytes at `865853d9e` and the module 1,003 and 868, against
+    15,407 and 13,925 for the runtime on main at `dbe1a34c7` and 16,685 and 15,059 with the reads
+    in it at `cd6861c76`, so a page without a slow part loads 1,070 bytes gzipped fewer than it
     would with them there); platform (with scripting off
     `@media (scripting: none)` matches and `(scripting: enabled)` does not, with it on the
     reverse; `aria-busy` means the element is being updated, WAI-ARIA 1.2); reasoned (a browser
