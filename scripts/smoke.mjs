@@ -4942,7 +4942,7 @@ async function run(browser) {
         JSON.stringify({ dropped, firstTab }),
       );
       // A patch with an element that has no place on the page is not drawn whole: the part it did
-      // draw is another entry's, and the page is read.
+      // draw is another entry's, and the page is read. So is an empty patch, which draws nothing.
       const unplaced = await backFrom("Week", "?scope=day", {
         status: 200,
         headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
@@ -4952,6 +4952,12 @@ async function run(browser) {
         "Back to a data-address form's entry whose patch has an element with no place on the page reads the page instead",
         unplaced.at === "/smoke/scope?scope=day" && unplaced.shown === "day" && unplaced.asked.join() === "action ?scope=day,nav ?scope=day" && unplaced.focus === "body" && unplaced.tab === firstTab,
         JSON.stringify({ unplaced, firstTab }),
+      );
+      const empty = await backFrom("Week", "?scope=day", { status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: "" });
+      check(
+        "Back to a data-address form's entry whose patch is empty reads the page instead",
+        empty.at === "/smoke/scope?scope=day" && empty.shown === "day" && empty.asked.join() === "action ?scope=day,nav ?scope=day" && empty.focus === "body" && empty.tab === firstTab,
+        JSON.stringify({ empty, firstTab }),
       );
       // A patch whose drawing throws: the page is read. Parsing the patch's markup is made to throw
       // once.

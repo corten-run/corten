@@ -4060,8 +4060,8 @@ rules something out.
     and a traversal between two of them reads the destination as the form did (`corten: action`,
     which the HTTP cache can answer) and applies its patch, the rest of the screen and the focus
     staying. Any other answer (a page, Corten's redirect, an error status even with a patch, no
-    answer, a body cut off) or a patch not drawn whole (it throws, or an element of it has no
-    place on the page) is read as a page, as every other entry is, focus going to the
+    answer, a body cut off) or a patch not drawn whole (it throws, is empty, or an element of it
+    has no place on the page) is read as a page, as every other entry is, focus going to the
     document's start unless the page gives it to a control, and so is every entry once another
     page is swapped in or the page reloads. So the route at each of those addresses
     answers its part with `req.patch_or`, drawing all the address changes; a route whose patch
@@ -4083,8 +4083,8 @@ rules something out.
     draft) was not chosen either: a reload would show another scope than the screen did, the error
     the mark is there to end, where a full load costs bytes (README conflict order 1 over 2).
 
-    What it costs: the runtime is 1,269 bytes larger raw, 390 with gzip (15,341 to 15,731) and
-    322 with brotli (13,846 to 14,168), paid once a release by every user. A GET `data-patch`
+    What it costs: the runtime is 1,286 bytes larger raw, 395 with gzip (15,341 to 15,736) and
+    329 with brotli (13,846 to 14,175), paid once a release by every user. A GET `data-patch`
     submit reads one attribute, a marked one's answer pushes an entry and forgets the entries it
     dropped, and a traversal looks two keys up in a set. Nothing changes on the server: `html!`'s
     output and the request path are as they were, and the check that refuses a misplaced mark runs

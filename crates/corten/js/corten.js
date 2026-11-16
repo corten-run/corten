@@ -998,7 +998,7 @@ export async function patch(html, signal) {
  * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
  *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
  *   it replaces takes ({@link opened})
- * @returns {Promise<boolean>} whether every element of the patch found its place on the page
+ * @returns {Promise<boolean>} whether the patch had elements and every one found its place on the page
  */
 async function apply(html, signal, sent, took, own = true, asked, within) {
   const content = parse(html, own);
@@ -1009,7 +1009,7 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
-  let whole = true;
+  let whole = content.children.length > 0;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
   for (const el of Array.from(content.children)) {
@@ -2730,8 +2730,8 @@ function address(to, patched) {
  * ({@link addressed}): the entry's address is read as the form read it (`corten: action`), so the
  * HTTP cache can answer it, and its patch is drawn. An answer that is not a whole 2xx patch from
  * here (a page, a redirect, an error, even one that carries a patch, none, a body cut off), or a
- * patch that cannot be drawn whole (it throws, or an element of it has no place on the page), is
- * read again as a page, as for any other entry. The traversal's
+ * patch that cannot be drawn whole (it throws, is empty, or an element of it has no place on the
+ * page), is read again as a page, as for any other entry. The traversal's
  * signal ends it, as a newer
  * navigation does any visit; the screen stays, so the fields outside the patch keep what the user
  * typed, and the patch keeps a field they are editing as any patch does.
