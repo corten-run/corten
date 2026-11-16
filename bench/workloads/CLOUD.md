@@ -113,17 +113,39 @@ The launch intent is durable before any child starts and prevents a second launc
 including after partial failure. Each child has an independent state directory,
 operation lock, private credential worker and remote systemd unit.
 
-Admission is staged, not a simultaneous fleet allocation. The first required
-registry group must reach bound running state and emit the exact source-bound
-common-bootstrap marker after its tooling setup. Only then are the remaining
-required hosts admitted serially. Remote benchmark jobs overlap; their contenders,
-profiles and measurement parameters are unchanged. The marker precedes native
-entry and proves neither feature parity nor a group's performance evidence.
-Its observation is bounded to 45 minutes, checks cancellation and preserves the
-running host on timeout or an invalid observation. A failed admission or
-cancellation leaves every later group visibly `not-admitted`, not silently omitted
-or automatically retried. The complete reserved roster remains mandatory.
-Later groups must also be observed nonterminal before running admission is saved.
+Admission is staged, not a simultaneous fleet allocation. The first `--detach`
+approval launches only the first complete registry group. Untouched groups remain
+visibly deferred during initial launch and collection, and the fleet remains
+incomplete. The first group is an official measurement, not a separate setup-only
+run that would be repeated later. Its bound running state and common-bootstrap
+marker remain required launch observations, but cannot open the remaining fleet.
+The marker observation is bounded to 45 minutes, checks cancellation and preserves
+the running host on timeout or an invalid observation; it is not native parity or
+performance evidence.
+
+After collecting that same first group, preview and independently approve the
+separate remaining-admission action:
+
+```sh
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --admit-remaining --print-approval
+node bench/workloads/fleet.mjs ROUND --fleet-root ABSOLUTE_ROOT --admit-remaining --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+That action replays the first group's intrinsic native evidence, archive/tree
+hashes, complete selection, source/provenance and confirmed host deletion. Only
+the authoritative `verified` campaign can open it; valid failed or unsupported
+competitor outcomes are still retained under that contract. A synthetic inspector,
+bootstrap marker, status string or diagnostic receipt cannot substitute for native
+replay. The new approval binds the first evidence snapshot and every remaining
+child subject. Execution rechecks the snapshot under the fleet lock, consumes an
+exclusive remaining intent and rechecks before each child dispatch. Consumed or
+legacy launch intents cannot acquire this new admission authority.
+
+The remaining dedicated hosts are admitted serially while their remote benchmark
+jobs overlap. Contenders, profiles and measurement parameters are unchanged. A
+failed admission or cancellation leaves every later group visibly `not-admitted`,
+not silently omitted or automatically retried. The complete reserved roster
+remains mandatory. Later groups must also be observed nonterminal before running admission is saved.
 A job already terminal at that observation remains in its saved `starting` state
 for ordinary collection, rather than admitting another host from a false running
 claim. This does not discard a fast completed job's evidence or permit a restart.

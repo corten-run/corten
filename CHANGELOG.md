@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Launch only the first complete official benchmark group initially; require its
+  replayed native evidence and confirmed cleanup before a separately approved,
+  once-only admission of the remaining dedicated group hosts. Keep deferred groups
+  visible, the complete registry mandatory and legacy collection available.
+
 - Show the grouped controller's closed failure stage and allowed provider detail
   in direct CLI errors, without reflecting raw exceptions or changing recovery,
   cleanup or benchmark acceptance rules.
