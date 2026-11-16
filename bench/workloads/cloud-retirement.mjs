@@ -1,7 +1,8 @@
 // Retirement evidence is separate from benchmark qualification. No operations on import.
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { quote } from "./cloud-transport.mjs";
@@ -29,6 +30,53 @@ export function mixedIntentRoot(path, root) {
   assert.equal(root.nodes, 1); assert.equal(root.bytes, bytes.length);
   assert.equal(root.treeSha256, digest(Buffer.concat([Buffer.from(`f\0\0${bytes.length}\0`), bytes])), "framed cancellation intent root changed");
   return JSON.parse(bytes);
+}
+// The caller authenticates the original plan and subject first. Hash the saved
+// payloads, not a rebuilt Git context or an executable native validator.
+function mixedCancelledCustody(directory, subject, binding) {
+  const { sourcesManifest: manifest } = subject, { sha256, ...body } = manifest;
+  assert.equal(mixedDigest(body), sha256, "mixed source manifest changed");
+  const { entries } = manifest.snapshot;
+  assert.ok(Array.isArray(entries) && entries.length <= evidenceEnvelope.nodes, "mixed source snapshot bound");
+  assert.equal(mixedDigest(entries), manifest.snapshot.sha256, "mixed source snapshot changed");
+  physical(directory);
+  assert.ok(isDeepStrictEqual(readdirSync(directory).sort(), ["blobs", "contexts"]), "mixed source root differs");
+  const saved = new Map(); let total = 0;
+  for (const entry of entries) {
+    assert.ok(!saved.has(entry.path), "duplicate mixed source snapshot path"); saved.set(entry.path, entry);
+    if (entry.type === "directory") {
+      assert.ok(["", "blobs", "contexts"].includes(entry.path), "unknown mixed source directory");
+      physical(entry.path ? join(directory, entry.path) : directory);
+    } else {
+      assert.equal(entry.type, "file");
+      assert.match(entry.path, /^(?:blobs\/[a-f0-9]{64}|contexts\/[a-z][a-z0-9-]*\.tar)$/);
+      assert.ok(Number.isSafeInteger(entry.bytes) && entry.bytes >= 0 && entry.bytes <= evidenceEnvelope.memberBytes, "mixed source file bound");
+      total += entry.bytes; assert.ok(total <= evidenceEnvelope.content, "mixed source content bound");
+      const path = join(directory, entry.path);
+      assert.equal(lstatSync(path).size, entry.bytes, "mixed source file size changed");
+      assert.equal(fileHash(path, entry.bytes), entry.sha256, "mixed source payload changed");
+    }
+  }
+  for (const name of ["", "blobs", "contexts"]) assert.equal(saved.get(name)?.type, "directory", "missing mixed source directory");
+  for (const name of ["blobs", "contexts"]) {
+    const names = entries.filter((e) => e.type === "file" && e.path.startsWith(`${name}/`)).map((e) => e.path.slice(name.length + 1)).sort();
+    assert.ok(isDeepStrictEqual(readdirSync(join(directory, name)).sort(), names), "mixed source inventory differs");
+  }
+  const blobs = new Set();
+  for (const file of manifest.files) {
+    assert.equal(file.storedAs, `blobs/${file.sha256}`);
+    const entry = saved.get(file.storedAs); assert.equal(entry?.type, "file", "mixed source blob missing from snapshot");
+    assert.equal(entry.sha256, file.sha256); assert.equal(entry.bytes, file.bytes); blobs.add(file.storedAs);
+  }
+  assert.equal(blobs.size, entries.filter((e) => e.path.startsWith("blobs/")).length, "unreferenced mixed source blob");
+  assert.ok(isDeepStrictEqual(subject.requests.map((r) => r.identity.app), binding.selection.apps), "mixed context contenders differ");
+  assert.equal(subject.bindingSha256, mixedDigest(binding), "mixed subject binding differs");
+  for (const request of subject.requests) {
+    const entry = saved.get(`contexts/${request.identity.app}.tar`);
+    assert.equal(entry?.type, "file", "mixed build context missing from snapshot");
+    assert.equal(entry.sha256, request.identity.contextArchiveSha256, "mixed build context differs");
+  }
+  assert.equal(subject.requests.length, entries.filter((e) => e.path.startsWith("contexts/")).length, "unreferenced mixed build context");
 }
 export function failedNativeArchive(local, state) {
   const roots = failedNativeRoots(state);
@@ -65,6 +113,7 @@ export function failedNativeArchive(local, state) {
     assert.equal(event.status.state, "blocked-review-needed");
     const subject = JSON.parse(regular(join(dir, "mixed-audit-subject.json"))), { subjectSha256, ...subjectBody } = subject;
     assert.equal(subjectSha256, mixedWait.subjectSha256); assert.equal(mixedDigest(subjectBody), subjectSha256);
+    mixedCancelledCustody(join(dir, "mixed-audit-sources"), subject, plan.bindings[0]);
     const reservation = JSON.parse(regular(join(folder, ".host-attempt.json")));
     assert.equal(reservation.id, campaign); assert.equal(reservation.campaignSha256, campaignSha256); assert.equal(reservation.commit, state.commit);
     assert.equal(halted.kind, "halted"); assert.equal(halted.sequence, 3); assert.equal(halted.campaign, campaign);
