@@ -1309,8 +1309,11 @@ impl Req {
         self.signal.set_locale(index);
     }
 
-    /// The visitor's time zone (`zones` feature, [`crate::App::client_zone`]), with its rules: a
-    /// date the user picked (`<input type="date">`) becomes the instant it means where they are.
+    /// The visitor's time zone (`zones` feature, [`crate::App::client_zone`]), with its rules: the
+    /// zone a page draws a form's dates and times in (`DrawZone::from(req.zone())`). The form sends
+    /// that zone back, and its post reads a picked date and time, or where a picked day
+    /// (`<input type="date">`) begins, in it (`day.start(&input.zone)`), not in the post's
+    /// `req.zone()`, which can differ from the page's ([`crate::form::FormZone`]).
     /// UTC until the browser has reported it (its first page) and for a name the tz database
     /// lacks. Looked up in the tz database at each call, so a handler keeps it. With
     /// [`crate::App::zoned_dates`] a page needs it for nothing else: while Corten renders the

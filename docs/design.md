@@ -4439,7 +4439,7 @@ rules something out.
     (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
     `f109794c6`.
 
-56. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
+57. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
     what the post reads); a time the clocks skip or repeat is read as Temporal's default
     (`compatible`) reads it.** `<input type="datetime-local">` sends what the visitor's clock read
@@ -4473,13 +4473,15 @@ rules something out.
     missing or names no zone, as any typed field a page writes itself). What the compiler checks,
     each with a `compile_fail` example: `Entry::at` and `LocalDateTime::at` take only a
     `FormZone`, so neither `req.zone()` nor a `DrawZone` reads a posted time; a `FormZone` has no
-    constructor but its `Deserialize`, so `FormZone::from(req.zone())` does not compile; and
+    constructor but its `Deserialize`, so it is made only from what a client sent (a form, a
+    query, JSON) and `FormZone::from(req.zone())` does not compile; and
     `field` takes only a `FormZone` field's name. What it does not check: that the form draws the
     hidden input at all (a form without it compiles, and its post is a 422), that a page draws the
     input and the times from the same `DrawZone`, and that a form drawn again is drawn in the
     posted zone rather than the request's. The zone is sent as a name that already exists: a tz
     database name (`America/Chicago`, `UTC`) or an offset (`-06:00`, to the minute and less than a
-    day, so an `Offset` of a day or more is drawn as `±23:59`).
+    day, so an `Offset` of a day or more is drawn as `±23:59`), one way for each zone: UTC is sent
+    as `UTC`, and `+00:00` or `-00:00` is refused.
 
     Without JavaScript the browser never reports its zone, so the form is drawn and read in UTC.
     The answer is to say so: the page shows `zone.name()` with the field (the guide's example draws
@@ -4500,29 +4502,39 @@ rules something out.
     occurrence of a repeated time, and a skipped time read at the UTC offset before the gap. It
     is also what `day.start(zone)` needs, since it gives the first instant of a day whose midnight
     is skipped or repeated. So an instant in the second of two repeated hours, drawn and sent back
-    unchanged, reads as the first: the form carries the zone, not the instant. An edit form draws
-    the stored instant to the minute (a `value` with seconds is off the steps a minute-rounded
-    `min` starts, and the browser would not send the form), and keeps the stored instant when the
-    field comes back equal to that drawn value, which the guide and `DrawZone`'s documentation
-    show and a test holds (Temporal's `ZonedDateTime.with` keeps the offset an edit started from,
-    `offset: 'prefer'`, for the same reason; here the handler holds the stored instant). A `min`
-    rounded up and a `max` rounded down keep every minute the input allows on a step; each reads
-    inside the handler's bounds except where the clocks skip or repeat a time near a bound, so the
-    handler's comparison stays the check. Reading asks the zone only for its offset
+    unchanged, reads as the first: the form carries the zone, not the instant. Every instant a form
+    draws, the stored `value`, the `min` and the `max`, is rounded down to the minute
+    (`floor_minute`): an input counts its steps from its `min`, so one with seconds is off every
+    step and the browser would not send the form, and rounding all of them down keeps their order,
+    so a stored time in the same minute as its `min` is not drawn before it. An edit form reads
+    the field with `Entry::at_keeping(&input.zone, stored)`, which is the stored instant when the
+    field comes back equal to the value drawn from it, so an unchanged field keeps its seconds and
+    its offset in a repeated hour (Temporal's `ZonedDateTime.with` keeps the offset an edit started
+    from, `offset: 'prefer'`, for the same reason). The input then allows the part of a minute
+    before a `min` with seconds, and a time the clocks skip or repeat near a bound reads outside
+    it, so the handler's comparison stays the check. Reading asks the zone only for its offset
     (`Zone::offset`), a day before and a day after the time and at the two instants those give, so
     it works for every zone a form is drawn in (`Utc`, an `Offset`, `req.zone()`'s `Visitor`)
     without the `zones` feature and adds no dependency; a zone whose offset changed twice within
-    two days would be read with the outer two. A test reads every zone in the bundled tz database
+    two days would be read with the outer two; where the platform has no instant a day away (its
+    first and last days), the nearest instant it has stands in, so `day.start(Utc)` is midnight
+    UTC on every day the platform has. A test reads every zone in the bundled tz database
     around every change of offset from 1970 to 2040, compares each reading with jiff's
-    `compatible()`, which finds the candidates in the database itself, and fails if any zone
-    changes its offset twice within two days.
+    `compatible()`, which finds the candidates in the database itself, fails if any zone
+    changes its offset twice within two days, and checks that each zone is sent by a name a
+    `FormZone` reads back.
 
     Not chosen: reading in the request's zone (`req.zone()`) with no zone in the form, which this
     Choice first did: it is right only when the draw and the post have the same zone, which a
     first page and its post do not. One type for the zone drawn and the zone posted, which this
     Choice did next: it had to be made from `req.zone()` to draw, so a post could make one from
     `req.zone()` too and read in it, and `LocalDateTime::at` took any zone; two types leave the
-    post only the zone it was sent. Carrying the drawn instant or each field's offset instead of
+    post only the zone it was sent. Rounding a `min` up to the minute, which this Choice did next:
+    a stored time in the same minute as its `min` (a few seconds after a listing) was drawn before
+    it, and the browser would not send the form, even with only another field changed. Keeping
+    the stored instant by a comparison each handler wrote, which this Choice showed before
+    `at_keeping`: a handler that left it out lost the stored seconds and, in a repeated hour, moved
+    an unchanged time by an hour. Carrying the drawn instant or each field's offset instead of
     the zone: a visitor who changes the time across a change of the clocks would be read at the
     offset of a time they did not pick. Reading or writing in the zone Corten writes dates in
     while it renders (`App::zoned_dates`), so a component would draw an input from an instant with
@@ -4557,7 +4569,8 @@ rules something out.
     exact; a form read in the zone it was drawn in reads back what the visitor saw, whichever
     request drew it; a clock reading that is no `Into<SystemTime>` and no `DateValue` cannot reach
     `t.date` or a field typed as an instant, and a reader that takes only a type with no
-    constructor but a post's cannot be given the request's zone); value (a standard's answer
+    constructor but deserializing what a client sent cannot be given the request's zone; rounding
+    every instant a form draws down keeps their order); value (a standard's answer
     before one of Corten's, HTML that works on its own, a mistake the compiler can catch is a
     compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
 
@@ -4566,8 +4579,9 @@ rules something out.
     changes of offset within two days (the all-zones test fails after a jiff-tzdb update); the
     runtime can redraw a first page's dates and times in the zone it reports, so a first page
     need not be in UTC; a way appears to tie a form's hidden zone input to its time fields at
-    compile time (a form type that draws both); or an app repeats the same instant bounds check on
-    many forms, when a `Bounds` for times would earn its place.
+    compile time (a form type that draws both); an app needs a time to the second in a form
+    (`step` under a minute), which drawing to the minute would cut; or an app repeats the same
+    instant bounds check on many forms, when a `Bounds` for times would earn its place.
 
     Last checked: 2026-11-15, the HTML standard's local dates and times microsyntax, its
     `datetime-local` state and its step base (Living Standard, last updated 14 November 2026),

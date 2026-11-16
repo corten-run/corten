@@ -444,9 +444,10 @@ post never reads in `req.zone()`: that is UTC on a browser's first page and in a
 the visitor's own zone on the post after it, so a form read in it would store a time moved by the
 visitor's offset.
 
-The compiler checks part of this: `Entry::at` and `LocalDateTime::at` take only a `FormZone`,
-which only a post makes (no `FormZone::from(req.zone())`, no `at(req.zone())`, no
-`at(&draw_zone)`); `zone.field` takes only a `FormZone` field's name; and an instant becomes an
+The compiler checks part of this: `Entry::at`, `Entry::at_keeping` and `LocalDateTime::at` take
+only a `FormZone`, which is made only by deserializing what a client sent (a form, a query), never
+from a zone (no `FormZone::from(req.zone())`, no `at(req.zone())`, no `at(&draw_zone)`);
+`zone.field` takes only a `FormZone` field's name; and an instant becomes an
 input's time only through a `DrawZone`. It does not check that the form draws the hidden input (a
 form without it compiles, and its post is a 422), that the input and the times come from the same
 `DrawZone`, or that a form drawn again uses the posted zone.
@@ -456,9 +457,7 @@ form without it compiles, and its post is a 422), that the input and the times c
 struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
 
 // The post: unchanged, the field keeps the stored instant; changed, it is read in the form's zone.
-let drawn = DrawZone::from(&input.zone).local(stored).map(LocalDateTime::floor_minute);
-let at = if input.live_at.value() == drawn { Some(stored) } else { input.live_at.at(&input.zone) };
-let Some(live_at) = at.filter(|at| *at >= listed && *at <= now) else {
+let Some(live_at) = input.live_at.at_keeping(&input.zone, stored).filter(|at| *at >= listed && *at <= now) else {
     errors.add(f.live_at, t.live_at_between(..));
     return req.invalid(&errors, ..).await; // the form drawn again with DrawZone::from(&input.zone)
 };
@@ -469,7 +468,7 @@ let Some(live_at) = at.filter(|at| *at >= listed && *at <= now) else {
 // <label>{t.goes_live(zone.name())}
 //   <input type="datetime-local" name={f.live_at}
 //       value={zone.local(stored).map(LocalDateTime::floor_minute)}  (&input.live_at when drawn again)
-//       min={zone.local(listed).and_then(LocalDateTime::ceil_minute)}
+//       min={zone.local(listed).map(LocalDateTime::floor_minute)}
 //       max={zone.local(now).map(LocalDateTime::floor_minute)}>
 // </label>
 ```
@@ -488,16 +487,20 @@ instant, before the clocks go back. So an instant in the repeated hour, drawn an
 unchanged, reads as the earlier one. An input counts its steps (a minute) from its `min`, else its
 `value`, so a `min` or `value` with seconds or a fraction of one is off a step and the form is not
 sent until the visitor picks a time on one (`corten dev` names such a control drawn with a value):
-round a `min` up to the minute and a `max` and a stored `value` down (`ceil_minute`,
-`floor_minute`). An edit form then keeps the stored instant, seconds and the second `01:30`
-included, by comparing the field with the value it drew, as above. Every minute the input allows
-then reads as an instant within the handler's `listed` and `now`, except where the clocks skip or
-repeat a time near a bound, so the handler's own comparison is the check.
+draw every instant rounded down to the minute (`floor_minute`), the `value`, the `min` and the
+`max`. Rounding all of them down keeps their order, so a stored time in the same minute as the
+`min` (stored a few seconds after the listing) is not drawn before it, which would stop the form
+being sent even when the visitor changes another field. An edit form reads the field with
+`at_keeping(&input.zone, stored)`, which is the stored instant, seconds and the second `01:30`
+included, when the field comes back as it was drawn. The input then allows the part of a minute
+before a `min` with seconds, and a time the clocks skip or repeat near a bound reads outside it,
+so the handler's own comparison is the check, and refuses those with the field's message.
 
 A `LocalDateTime` is not an instant, so `t.date` and a field typed as one do not take it. A day
 (`<input type="date">`) is an `Entry<Day>` in no zone, and `day.start(&input.zone)` is the instant
-it begins where the visitor is, in a form that carries its zone (`day.start(req.zone())` in a query
-that does not). A time of day alone (`<input type="time">`) names no day, so it has no reader; a date
+it begins where the visitor is, in the zone the form carries, a `GET` form's query included
+(`day.start(req.zone())` only for a day that comes with no form, such as a link's parameter). A
+time of day alone (`<input type="time">`) names no day, so it has no reader; a date
 and a time the user picks together are one `datetime-local`.
 
 `#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser

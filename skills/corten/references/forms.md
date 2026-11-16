@@ -198,16 +198,18 @@ picks (`<input type="datetime-local">`) is `when: Entry<LocalDateTime>` (`corten
 (`DrawZone::from(Utc)` on a `Public` page): `{zone.field(f.zone)}`, `zone.name()` by the field
 (without JavaScript it is `UTC`, and the visitor knows only if the page shows it),
 `value={zone.local(stored).map(LocalDateTime::floor_minute)}`,
-`min={zone.local(at).and_then(LocalDateTime::ceil_minute)}` and a `max` with `floor_minute`; the
-post reads `input.when.at(&input.zone)` (`None` for the field's message), never in `req.zone()`,
-which differs between a first page and its post (`Entry::at` takes only a `FormZone`, which only a
-post makes), and a refused post draws again in `DrawZone::from(&input.zone)` with
+`min={zone.local(at).map(LocalDateTime::floor_minute)}` and a `max` the same (every instant
+rounded down, so a stored time in its `min`'s minute is not drawn before it); the post reads
+`input.when.at(&input.zone)` (`None` for the field's message), never in `req.zone()`, which
+differs between a first page and its post (`Entry::at` takes only a `FormZone`, which is made only
+by deserializing what a client sent), and the handler's own bounds check refuses what the input
+let through, and a refused post draws again in `DrawZone::from(&input.zone)` with
 `value={&input.when}`. A form without `zone.field` compiles and its post is a 422. Never a
 `String` parsed by hand or an offset worked out with `Zone::offset`. A time the clocks skip moves
-forward by the gap and a repeated one is the earlier (Temporal's default), so an edit keeps its
-stored instant when `input.when.value()` equals
-`DrawZone::from(&input.zone).local(stored).map(LocalDateTime::floor_minute)`, the value it drew.
-A picked day is `Entry<Day>`, `day.start(&input.zone)` where it begins. A value the app stores and
+forward by the gap and a repeated one is the earlier (Temporal's default), so an edit form reads
+`input.when.at_keeping(&input.zone, stored)`, the stored instant when the field comes back as it
+was drawn. A picked day is `Entry<Day>`, `day.start(&input.zone)` where it begins (a `GET` form
+carries its zone too; `day.start(req.zone())` only for a day with no form, a link's parameter). A value the app stores and
 draws back into a number field must be one its `Bounds` hold (a ported screen's `min`/`step`
 never ran under `fetcher.submit`), or the browser will not send the form; `corten dev` names
 such a control in the console. A helper that takes a name of any field is generic over it

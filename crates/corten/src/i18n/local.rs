@@ -61,8 +61,9 @@ const DAY: i64 = 86_400_000;
 ///
 /// An instant drawn and read back is itself, except in an hour the clocks repeat: the second
 /// `01:30` (`07:30Z` in Chicago) is drawn as `01:30`, which reads as the first (`06:30Z`). A form
-/// that edits a stored instant keeps it when the field comes back as it was drawn, as
-/// [`DrawZone`](crate::form::DrawZone) shows.
+/// that edits a stored instant reads its field with
+/// [`Entry::at_keeping`](crate::form::Entry::at_keeping), which keeps the stored instant when the
+/// field comes back as it was drawn.
 ///
 /// It reads and writes HTML's syntax for a local date and time: a [`Day`], `T` (or a space) and
 /// the time to the minute, with seconds and up to three digits of a second when the input's
@@ -71,13 +72,15 @@ const DAY: i64 = 86_400_000;
 /// not zero. An input counts its steps (a minute unless `step` says otherwise) from its `min`,
 /// else its `value`, so a `min` or a `value` with seconds or a fraction of one puts every whole
 /// minute, or the value itself, off a step, and the form is not sent until the visitor picks a
-/// time that is on one (`corten dev` names such a control drawn with a value). Draw a `min`
-/// rounded up to the minute, and a `max` and a stored `value` rounded down
-/// ([`ceil_minute`](LocalDateTime::ceil_minute), [`floor_minute`](LocalDateTime::floor_minute)):
-/// every minute between them is then a step, and each one reads as an instant inside the bounds
-/// the handler compares with, except where the clocks skip or repeat a time near a bound (a
-/// skipped minute reads an hour later, a repeated one as its first instant), so the handler's own
-/// comparison is the check.
+/// time that is on one (`corten dev` names such a control drawn with a value). Draw each of them
+/// rounded down to the minute ([`floor_minute`](LocalDateTime::floor_minute)): the `value`, the
+/// `min` and the `max`. Each is then on a step, and a stored instant inside the handler's bounds
+/// is drawn inside the drawn ones, since rounding down keeps their order (a `min` rounded up would
+/// be after a stored value in the same minute, and the browser would not send the form). The
+/// input then allows the part of a minute before a `min`, and a time the clocks skip or repeat
+/// near a bound reads outside it (a skipped minute an hour later, a repeated one as its first
+/// instant), so the handler's own comparison is the check, and refuses those with the field's
+/// message.
 ///
 /// ```
 /// use corten::form::DrawZone;
@@ -85,10 +88,11 @@ const DAY: i64 = 86_400_000;
 ///
 /// let zone = DrawZone::from(Utc);
 /// let listed = parse_timestamp("2026-11-12T15:30:09.250Z").unwrap();
-/// let min = zone.local(listed).and_then(LocalDateTime::ceil_minute).unwrap();
-/// assert_eq!(min.to_string(), "2026-11-12T15:31");
-/// let max = zone.local(listed).unwrap().floor_minute();
-/// assert_eq!(max.to_string(), "2026-11-12T15:30");
+/// let stored = parse_timestamp("2026-11-12T15:30:40Z").unwrap(); // in the same minute
+/// let min = zone.local(listed).map(LocalDateTime::floor_minute).unwrap();
+/// let value = zone.local(stored).map(LocalDateTime::floor_minute).unwrap();
+/// assert_eq!((min.to_string(), value.to_string()), ("2026-11-12T15:30".into(), "2026-11-12T15:30".into()));
+/// assert!(min <= value, "the browser sends the form unchanged");
 /// ```
 ///
 /// A time on the clock is not an instant, so it is not written as one without its zone:
@@ -144,22 +148,10 @@ impl LocalDateTime {
         self.millis % 1000
     }
 
-    /// The minute it is in (`14:05:09` is `14:05`), for an input's `max`.
+    /// The minute it is in (`14:05:09` is `14:05`), for an input's `value`, `min` or `max`, which
+    /// count their steps in whole minutes.
     pub fn floor_minute(self) -> Self {
         LocalDateTime { millis: self.millis - self.millis % 60_000, ..self }
-    }
-
-    /// The first whole minute at or after it (`14:05:09` is `14:06`), for an input's `min`;
-    /// `None` past `9999-12-31T23:59`.
-    pub fn ceil_minute(self) -> Option<Self> {
-        let down = self.floor_minute();
-        if down == self {
-            return Some(self);
-        }
-        match down.millis + 60_000 {
-            next if i64::from(next) < DAY => Some(LocalDateTime { millis: next, ..self }),
-            _ => Day::from_days(self.day.days() + 1).map(LocalDateTime::midnight),
-        }
     }
 
     /// What the clock in `zone` reads at `at`, to the millisecond (rounded down); `None` outside
@@ -187,7 +179,11 @@ impl LocalDateTime {
         // The clock's reading as if it were UTC's; the instant is that minus the offset there.
         let local = self.day.days() * DAY + i64::from(self.millis);
         let offset = |utc: i64| instant(utc).map(|at| i64::from(zone.offset(at)) * 1000);
-        let (before, after) = (offset(local - DAY)?, offset(local + DAY)?);
+        // A day before the platform's first instant (1601-01-01 on Windows) or after its last
+        // has no offset to ask for; the nearest instant it has stands in, as no zone changes its
+        // offset there.
+        let before = offset(local - DAY).or_else(|| offset(local)).or_else(|| offset(local + DAY))?;
+        let after = offset(local + DAY).or_else(|| offset(local)).or_else(|| offset(local - DAY))?;
         // Whether the clock reads `local` at the instant it gives with offset `o`.
         let holds = |o: i64| offset(local - o) == Some(o);
         // Repeated: both hold, and the offset before is the larger, so its instant is the earlier.
@@ -461,6 +457,19 @@ mod tests {
         assert_eq!(Day::new(2026, 9, 2).unwrap().start(Utc), parse_timestamp("2026-09-02T00:00:00Z"));
     }
 
+    /// `day.start(Utc)` is the day's midnight UTC wherever the platform has that instant, as
+    /// `midnight_utc` gave, even where it lacks the day before (1601-01-01 is Windows' first day)
+    /// or the day after; and in a zone behind UTC as well.
+    #[test]
+    fn a_day_starts_at_midnight_utc_on_the_platforms_first_and_last_days() {
+        for (y, m, d) in [(1, 1, 1), (1601, 1, 1), (1601, 1, 2), (1970, 1, 1), (9999, 12, 31)] {
+            let day = Day::new(y, m, d).unwrap();
+            assert_eq!(day.start(Utc), instant(day.days() * DAY), "{y}-{m}-{d}");
+            let west = instant(day.days() * DAY + 6 * 3_600_000);
+            assert_eq!(day.start(Offset::hours(-6)), west, "{y}-{m}-{d} at -06:00");
+        }
+    }
+
     /// At real changes in the bundled tz database: a 30-minute change, a skipped day and a
     /// skipped midnight.
     #[cfg(feature = "zones")]
@@ -491,9 +500,10 @@ mod tests {
     }
 
     /// In every zone in the bundled tz database, around every change of offset from 1970 to 2040,
-    /// `at` gives the instant jiff's `compatible()` gives (Temporal's default) and `of` reads it back
-    /// as jiff's clock does; and no zone changes its offset twice within two days, which `at`'s
-    /// reading a day either side relies on.
+    /// `at` gives the instant jiff's `compatible()` gives (Temporal's default) and `clock` reads it
+    /// back as jiff's clock does; no zone changes its offset twice within two days, which `at`'s
+    /// reading a day either side relies on; and every zone is sent with a form by a name its post
+    /// reads back as the same zone.
     #[cfg(feature = "zones")]
     #[test]
     fn every_change_in_every_zone_reads_as_temporal_compatible_reads_it() {
@@ -507,6 +517,10 @@ mod tests {
             let (tz, zone) = (TimeZone::get(name).unwrap(), Visitor::named(name));
             assert!(zone.is_known(), "{name}");
             zones += 1;
+            // A form drawn in it sends it by a name its post reads back.
+            let drawn = crate::form::DrawZone::from(Visitor::named(name));
+            let posted = crate::form::FormZone::read(drawn.name());
+            assert_eq!(posted.as_ref().map(crate::form::DrawZone::from), Some(drawn), "{name} sent and read back");
             let mut last: Option<i64> = None;
             for change in tz.following(from).take_while(|c| c.timestamp() < until) {
                 let at = change.timestamp().as_millisecond();
@@ -541,18 +555,19 @@ mod tests {
     }
 
     #[test]
-    fn a_bound_is_rounded_to_the_minute_an_input_steps_by() {
-        for (text, down, up) in [
-            ("2026-11-13T14:05", "2026-11-13T14:05", Some("2026-11-13T14:05")),
-            ("2026-11-13T14:05:00.001", "2026-11-13T14:05", Some("2026-11-13T14:06")),
-            ("2026-11-13T14:05:59.999", "2026-11-13T14:05", Some("2026-11-13T14:06")),
-            ("2026-11-13T23:59:30", "2026-11-13T23:59", Some("2026-11-14T00:00")),
-            ("2026-12-31T23:59:59.999", "2026-12-31T23:59", Some("2027-01-01T00:00")),
-            ("9999-12-31T23:59:01", "9999-12-31T23:59", None),
+    fn a_time_is_drawn_to_the_minute_an_input_steps_by() {
+        for (text, down) in [
+            ("2026-11-13T14:05", "2026-11-13T14:05"),
+            ("2026-11-13T14:05:00.001", "2026-11-13T14:05"),
+            ("2026-11-13T14:05:59.999", "2026-11-13T14:05"),
+            ("2026-12-31T23:59:59.999", "2026-12-31T23:59"),
+            ("9999-12-31T23:59:01", "9999-12-31T23:59"),
         ] {
-            let t = read(text);
-            assert_eq!(t.floor_minute().to_string(), down, "{text}");
-            assert_eq!(t.ceil_minute().map(|t| t.to_string()).as_deref(), up, "{text}");
+            assert_eq!(read(text).floor_minute().to_string(), down, "{text}");
         }
+        // Rounding down keeps the order, so a stored time is never drawn before a bound it was
+        // after, even in the bound's own minute.
+        let (bound, stored) = (read("2026-11-13T14:05:09.250"), read("2026-11-13T14:05:40"));
+        assert!(bound.floor_minute() <= stored.floor_minute());
     }
 }

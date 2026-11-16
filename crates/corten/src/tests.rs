@@ -9843,7 +9843,7 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
         |at: Option<SystemTime>| at.map_or("none".into(), |at| at.duration_since(UNIX_EPOCH).unwrap().as_millis().to_string());
     // The form, as an edit page draws it: the stored instant to the minute, the step the input
     // counts by from its min, and the posted text as sent when a refusal draws it again.
-    let form = move |zone: &DrawZone, typed: Option<&Entry<LocalDateTime>>| {
+    let form = move |zone: &DrawZone, stored: SystemTime, typed: Option<&Entry<LocalDateTime>>| {
         let f = Repair::FIELDS;
         let shown = zone.local(stored).map(LocalDateTime::floor_minute);
         html! {
@@ -9854,7 +9854,7 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
                     <input
                         type="datetime-local"
                         name={f.live_at}
-                        min={zone.local(listed).and_then(LocalDateTime::ceil_minute)}
+                        min={zone.local(listed).map(LocalDateTime::floor_minute)}
                         value={typed.map_or(shown.map(|t| t.to_string()), |e| e.text().map(str::to_owned))}
                     >
                 </label>
@@ -9862,41 +9862,50 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
         }
         .to_html()
     };
-    // The post: an unchanged field keeps the stored instant; a field that does not read draws the
-    // form again in the zone it was sent in.
-    let save = move |req: Req, Form(input): Form<Repair>| async move {
-        let drawn = DrawZone::from(&input.zone).local(stored).map(LocalDateTime::floor_minute);
-        let at = if input.live_at.value() == drawn { Some(stored) } else { input.live_at.at(&input.zone) };
-        if at.is_none() {
-            return form(&DrawZone::from(&input.zone), Some(&input.live_at));
+    // The post: an unchanged field keeps the stored instant; a field that does not read, or reads
+    // before the listing, draws the form again in the zone it was sent in.
+    let save = move |stored: SystemTime| {
+        move |req: Req, Form(input): Form<Repair>| async move {
+            let at = input.live_at.at_keeping(&input.zone, stored).filter(|at| *at >= listed);
+            if at.is_none() {
+                return form(&DrawZone::from(&input.zone), stored, Some(&input.live_at));
+            }
+            // What the request's own zone would have read: the mistake the form's zone prevents.
+            let request = input.live_at.value().and_then(|t| t.read_in(req.zone()));
+            format!("{} {}", millis(at), millis(request))
         }
-        // What the request's own zone would have read: the mistake the form's zone prevents.
-        let request = input.live_at.value().and_then(|t| t.read_in(req.zone()));
-        format!("{} {}", millis(at), millis(request))
     };
-    let routes =
-        Routes::from(
-            Table::new()
-                // The form posts to the page it is on, so it needs no action.
-                .route(
-                    "/edit",
-                    get(move |req: Req| async move {
-                        req.test_page("Edit", crate::view::Raw(form(&DrawZone::from(req.zone()), None)))
-                    })
-                    .post(save),
-                )
-                // A Public page is the same for everyone, so it is drawn in UTC.
-                .route(
-                    "/public",
-                    get(move |req: Req| async move {
-                        Public::new(
-                            std::time::Duration::from_secs(60),
-                            req.test_page_for("Edit", crate::view::Raw(form(&DrawZone::from(Utc), None))),
-                        )
-                    })
-                    .post(save),
-                ),
-        );
+    // Stored in the minute the listing went up, after it.
+    let early = parse_timestamp("2026-11-12T15:30:29Z").unwrap();
+    let routes = Routes::from(
+        Table::new()
+            // The form posts to the page it is on, so it needs no action.
+            .route(
+                "/edit",
+                get(move |req: Req| async move {
+                    req.test_page("Edit", crate::view::Raw(form(&DrawZone::from(req.zone()), stored, None)))
+                })
+                .post(save(stored)),
+            )
+            .route(
+                "/early",
+                get(move |req: Req| async move {
+                    req.test_page("Edit", crate::view::Raw(form(&DrawZone::from(req.zone()), early, None)))
+                })
+                .post(save(early)),
+            )
+            // A Public page is the same for everyone, so it is drawn in UTC.
+            .route(
+                "/public",
+                get(move |req: Req| async move {
+                    Public::new(
+                        std::time::Duration::from_secs(60),
+                        req.test_page_for("Edit", crate::view::Raw(form(&DrawZone::from(Utc), stored, None))),
+                    )
+                })
+                .post(save(stored)),
+            ),
+    );
     let router = App::new(routes).client_zone().router();
     let send = |method: &'static str, uri: &'static str, body: &'static str, cookie: Option<&'static str>| {
         let router = router.clone();
@@ -9916,11 +9925,11 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
     let at = millis(Some(stored));
 
     // A browser's first page, and every page without JavaScript: drawn in UTC, and says so; the
-    // stored instant to the minute, and the min rounded up to one.
+    // stored instant and the min to the minute.
     let (_, _, page) = send("GET", "/edit", "", None).await;
     assert!(page.contains(r#"<input type="hidden" name="zone" value="UTC">"#), "{page}");
     assert!(page.contains("Goes live, UTC"), "{page}");
-    assert!(page.contains(r#"min="2026-11-12T15:31" value="2026-11-13T20:05""#), "{page}");
+    assert!(page.contains(r#"min="2026-11-12T15:30" value="2026-11-13T20:05""#), "{page}");
     // Sent unchanged from that first page by a browser that has reported Chicago since: the
     // stored instant, seconds and all, where the request's zone would have moved it six hours.
     let (status, _, read) = send("POST", "/edit", "live_at=2026-11-13T20%3A05&zone=UTC", chicago).await;
@@ -9942,7 +9951,7 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
     let (_, _, page) = send("GET", "/edit", "", chicago).await;
     assert!(page.contains(r#"<input type="hidden" name="zone" value="America/Chicago">"#), "{page}");
     assert!(page.contains("Goes live, America/Chicago"), "{page}");
-    assert!(page.contains(r#"min="2026-11-12T09:31" value="2026-11-13T14:05""#), "{page}");
+    assert!(page.contains(r#"min="2026-11-12T09:30" value="2026-11-13T14:05""#), "{page}");
     let (_, _, read) = send("POST", "/edit", "live_at=2026-11-13T14%3A05&zone=America%2FChicago", chicago).await;
     assert_eq!(read, format!("{at} {}", ms("2026-11-13T20:05:00Z")));
     // A post without the zone came from no page of the app's.
@@ -9956,6 +9965,17 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
     assert!(page.contains(r#"<input type="hidden" name="zone" value="UTC">"#) && page.contains("Goes live, UTC"), "{page}");
     let (_, _, read) = send("POST", "/public", "live_at=2026-11-13T20%3A06&zone=UTC", chicago).await;
     assert_eq!(read, format!("{} {}", ms("2026-11-13T20:06:00Z"), ms("2026-11-14T02:06:00Z")));
+
+    // Stored in the same minute as the min: drawn at it, not before it, so the browser sends the
+    // form unchanged, and the post keeps the stored instant.
+    let (_, _, page) = send("GET", "/early", "", None).await;
+    assert!(page.contains(r#"min="2026-11-12T15:30" value="2026-11-12T15:30""#), "{page}");
+    let (status, _, read) = send("POST", "/early", "live_at=2026-11-12T15%3A30&zone=UTC", None).await;
+    assert_eq!((status, read), (StatusCode::OK, format!("{} {}", millis(Some(early)), ms("2026-11-12T15:30:00Z"))));
+    // Picked at the min's minute on a form with nothing stored there, it is before the listing,
+    // and the handler's own comparison refuses it.
+    let (_, _, page) = send("POST", "/edit", "live_at=2026-11-12T15%3A30&zone=UTC", None).await;
+    assert!(page.contains(r#"value="2026-11-12T15:30""#) && page.contains("Goes live, UTC"), "{page}");
 }
 
 #[tokio::test]

@@ -177,7 +177,7 @@ pub(crate) fn whole_magnitude(w: &Written<'_>) -> Option<u128> {
 /// let view = html! {
 ///     {zone.field(f.zone)}
 ///     <input type="datetime-local" name={f.live_at} value={&repair.live_at}
-///         min={zone.local(listed).and_then(LocalDateTime::ceil_minute)}>
+///         min={zone.local(listed).map(LocalDateTime::floor_minute)}>
 /// };
 /// assert!(view.to_html().contains(r#"value="2026-11-13T14:05" min="2026-11-12T09:30""#));
 ///
@@ -285,7 +285,8 @@ impl Entry<LocalDateTime> {
     /// one they repeat is the earlier. `None` when it is blank or not a date and time, the
     /// field's message.
     ///
-    /// It takes only the form's zone, which comes only from the post, not the request's:
+    /// It takes only the form's zone, which is made only from what the client sent, not the
+    /// request's:
     /// `req.zone()` on the post may not be the zone the form was drawn in (UTC on a browser's first
     /// page), and reading in it would move the time by the visitor's offset.
     ///
@@ -309,6 +310,38 @@ impl Entry<LocalDateTime> {
     /// ```
     pub fn at(&self, zone: &FormZone) -> Option<SystemTime> {
         self.value?.at(zone)
+    }
+
+    /// The instant it reads as, as [`at`](Entry::at), except that a field sent back as an edit
+    /// form drew `stored` (`zone.local(stored).map(LocalDateTime::floor_minute)` in the
+    /// [`DrawZone`](crate::form::DrawZone) the form sent back) is `stored` itself. So an unchanged
+    /// field keeps the stored seconds the input could not show, and, in an hour the clocks repeat,
+    /// the second of the two `01:30`s, which `at` reads as the first.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    /// use corten::form::{DrawZone, FormZone};
+    /// use corten::i18n::{parse_timestamp, LocalDateTime, Utc};
+    ///
+    /// #[derive(Fields)]
+    /// struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
+    ///
+    /// let stored = parse_timestamp("2026-11-13T20:05:09.250Z").unwrap();
+    /// let drawn = DrawZone::from(Utc).local(stored).map(LocalDateTime::floor_minute);
+    /// assert_eq!(drawn.unwrap().to_string(), "2026-11-13T20:05");
+    ///
+    /// let same: Repair = corten::form::from_bytes(b"live_at=2026-11-13T20%3A05&zone=UTC").unwrap();
+    /// assert_eq!(same.live_at.at_keeping(&same.zone, stored), Some(stored));
+    /// let moved: Repair = corten::form::from_bytes(b"live_at=2026-11-13T20%3A06&zone=UTC").unwrap();
+    /// assert_eq!(moved.live_at.at_keeping(&moved.zone, stored), parse_timestamp("2026-11-13T20:06:00Z"));
+    /// ```
+    pub fn at_keeping(&self, zone: &FormZone, stored: SystemTime) -> Option<SystemTime> {
+        let drawn = crate::form::DrawZone::from(zone).local(stored).map(LocalDateTime::floor_minute);
+        if self.value.is_some() && self.value == drawn {
+            Some(stored)
+        } else {
+            self.at(zone)
+        }
     }
 }
 

@@ -44,13 +44,13 @@ use crate::view::{escape_into, Render};
 ///         {zone.field(f.zone)}
 ///         <label>"Goes live (" {zone.name()} ")"
 ///             <input type="datetime-local" name={f.live_at}
-///                 min={zone.local(listed).and_then(LocalDateTime::ceil_minute)}>
+///                 min={zone.local(listed).map(LocalDateTime::floor_minute)}>
 ///         </label>
 ///     </form>
 /// };
 /// let html = form.to_html();
 /// assert!(html.contains(r#"<input type="hidden" name="zone" value="-06:00">"#), "{html}");
-/// assert!(html.contains("Goes live (-06:00)") && html.contains(r#"min="2026-11-12T09:31""#), "{html}");
+/// assert!(html.contains("Goes live (-06:00)") && html.contains(r#"min="2026-11-12T09:30""#), "{html}");
 ///
 /// // The post reads in the zone the form came back with, whatever zone its request is in,
 /// let posted: Repair = corten::form::from_bytes(b"live_at=2026-11-13T14%3A05&zone=-06%3A00").unwrap();
@@ -59,12 +59,15 @@ use crate::view::{escape_into, Render};
 /// assert_eq!(DrawZone::from(&posted.zone).name(), "-06:00");
 /// ```
 ///
-/// An edit form draws the stored instant to the minute ([`LocalDateTime::floor_minute`]): an
-/// input counts its steps (a minute) from its `min`, so a `value` with seconds is off every step a
-/// `min` rounded to the minute starts, and the browser does not send the form until the visitor
-/// changes it. The post keeps the stored instant when the field comes back as it was drawn, so an
-/// unchanged field is not moved to its minute, nor, in an hour the clocks repeat, to the first of
-/// the two (the second `01:30` is drawn as `01:30`, which reads as the first):
+/// Every instant is drawn to the minute ([`LocalDateTime::floor_minute`]), the stored `value`, the
+/// `min` and the `max`: an input counts its steps (a minute) from its `min`, so one with seconds is
+/// off every step, and the browser does not send the form until the visitor changes it. Rounding
+/// all of them down keeps their order, so a stored instant in the same minute as its `min` is not
+/// drawn before it. The post reads an edited field with
+/// [`Entry::at_keeping`](crate::form::Entry::at_keeping), which keeps the stored instant when the
+/// field comes back as it was drawn, so an unchanged field is not moved to its minute, nor, in an
+/// hour the clocks repeat, to the first of the two (the second `01:30` is drawn as `01:30`, which
+/// reads as the first):
 ///
 /// ```
 /// # use corten::prelude::*;
@@ -72,19 +75,19 @@ use crate::view::{escape_into, Render};
 /// # use corten::i18n::{parse_timestamp, LocalDateTime, Utc};
 /// # #[derive(Fields)]
 /// # struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
+/// let listed = parse_timestamp("2026-11-13T20:05:01Z").unwrap();
 /// let stored = parse_timestamp("2026-11-13T20:05:09.250Z").unwrap();
-/// let shown = DrawZone::from(Utc).local(stored).map(LocalDateTime::floor_minute);
+/// let zone = DrawZone::from(Utc);
+/// let min = zone.local(listed).map(LocalDateTime::floor_minute);
+/// let shown = zone.local(stored).map(LocalDateTime::floor_minute);
+/// assert!(min <= shown, "the browser sends it unchanged");
 /// assert_eq!(shown.unwrap().to_string(), "2026-11-13T20:05");
 ///
 /// // The post: sent back as it was drawn, it is the stored instant.
-/// let read = |input: &Repair| {
-///     let drawn = DrawZone::from(&input.zone).local(stored).map(LocalDateTime::floor_minute);
-///     if input.live_at.value() == drawn { Some(stored) } else { input.live_at.at(&input.zone) }
-/// };
 /// let same: Repair = corten::form::from_bytes(b"live_at=2026-11-13T20%3A05&zone=UTC").unwrap();
-/// assert_eq!(read(&same), Some(stored));
+/// assert_eq!(same.live_at.at_keeping(&same.zone, stored), Some(stored));
 /// let moved: Repair = corten::form::from_bytes(b"live_at=2026-11-13T20%3A06&zone=UTC").unwrap();
-/// assert_eq!(read(&moved), parse_timestamp("2026-11-13T20:06:00Z"));
+/// assert_eq!(moved.live_at.at_keeping(&moved.zone, stored), parse_timestamp("2026-11-13T20:06:00Z"));
 /// ```
 ///
 /// [`field`](DrawZone::field) takes only a `FormZone` field's name:
@@ -100,8 +103,9 @@ use crate::view::{escape_into, Render};
 /// let _ = DrawZone::from(Utc).field(Repair::FIELDS.live_at);
 /// ```
 ///
-/// The compiler checks that a posted time is read only in a `FormZone`, that a `FormZone` comes
-/// only from a post, that the hidden input is a `FormZone` field, and that an instant is written
+/// The compiler checks that a posted time is read only in a `FormZone`, that a `FormZone` is made
+/// only by deserializing what a client sent (a form, a query), never from a zone, that the hidden
+/// input is a `FormZone` field, and that an instant is written
 /// as a field's time only through a `DrawZone`. It does not check that the form draws the hidden
 /// input (a form without it compiles, and its post is a 422), that the input and the times are
 /// drawn from the same `DrawZone`, nor that a form drawn again is drawn in the posted zone rather
@@ -113,11 +117,12 @@ pub struct DrawZone(Named);
 /// [`DrawZone::field`] writes): the only zone a posted date and time is read in
 /// ([`Entry::at`](crate::form::Entry::at), [`LocalDateTime::at`]), and, for a day the visitor
 /// picked, where it begins ([`Day::start`](crate::i18n::Day::start), `day.start(&input.zone)`).
-/// It is read from a post and from nothing else, so the zone of the request that posts it cannot
-/// stand in for it.
+/// It is made only by deserializing what a client sent (a form's post, a query, JSON), never from
+/// a zone, so the zone of the request that posts it cannot stand in for it.
 ///
 /// A zone that is none a [`DrawZone`] writes is a 422 naming the field, as any typed field a page
-/// writes itself: it came from no page of the app's. So is a post without it.
+/// writes itself: it came from no page of the app's. So is a post without it, and UTC written as
+/// an offset (`+00:00`), which a `DrawZone` writes as `UTC`: one zone is sent one way.
 ///
 /// ```
 /// # use corten::prelude::*;
@@ -125,7 +130,7 @@ pub struct DrawZone(Named);
 /// # use corten::i18n::LocalDateTime;
 /// # #[derive(Fields)]
 /// # struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
-/// for zone in ["", "Mars%2FOlympus", "%2B25%3A00", "-6", "utc"] {
+/// for zone in ["", "Mars%2FOlympus", "%2B25%3A00", "%2B00%3A00", "-6", "utc"] {
 ///     let body = format!("live_at=2026-11-13T14%3A05&zone={zone}");
 ///     assert!(corten::form::from_bytes::<Repair>(body.as_bytes()).is_err(), "{zone}");
 /// }
@@ -172,7 +177,8 @@ impl Named {
         if text == "UTC" {
             return Some(Named::utc());
         }
-        if let Some(east) = read_offset(text) {
+        // UTC is sent as `UTC`, never `+00:00`.
+        if let Some(east) = read_offset(text).filter(|east| *east != 0) {
             return Some(Named::offset(east));
         }
         // Only as the database writes it (jiff finds `america/chicago` too), so one zone is
@@ -249,10 +255,9 @@ impl DrawZone {
     }
 
     /// What the clock in this zone reads at `at`, to the millisecond (rounded down): the `value`,
-    /// `min` or `max` of an `<input type="datetime-local">`. Round a `min` up and a `max` or a
-    /// stored `value` down to the minute the input steps by ([`LocalDateTime::ceil_minute`],
-    /// [`LocalDateTime::floor_minute`]). `None` outside the years a [`Day`](crate::i18n::Day) has
-    /// (1 to 9999).
+    /// `min` or `max` of an `<input type="datetime-local">`. Round each down to the minute the
+    /// input steps by ([`LocalDateTime::floor_minute`]). `None` outside the years a
+    /// [`Day`](crate::i18n::Day) has (1 to 9999).
     pub fn local(&self, at: impl Into<SystemTime>) -> Option<LocalDateTime> {
         LocalDateTime::clock(at.into(), &self.0)
     }
@@ -386,7 +391,7 @@ mod tests {
             assert_eq!((read.to_string(), read.offset(UNIX_EPOCH)), (name.to_string(), zone.0.offset(UNIX_EPOCH)), "{name}");
             assert_eq!(DrawZone::from(&read), zone, "{name} is drawn again as it was");
         }
-        assert_eq!(FormZone::read("+00:00").unwrap().to_string(), "UTC");
+
         assert_eq!(DrawZone::from(Offset::seconds(-(3600 + 60 + 1))).0.offset(UNIX_EPOCH), -3660, "to the minute");
         for text in [
             "",
@@ -398,6 +403,8 @@ mod tests {
             "05:30",
             "+24:00",
             "+30:00",
+            "+00:00",
+            "-00:00",
             "+05:60",
             "+05:30:15",
             "+05:30:0",
@@ -438,8 +445,9 @@ mod tests {
         assert_eq!(drawn.to_string(), "2026-11-01T01:30");
         let posted = FormZone::read(zone.name()).unwrap();
         assert_eq!(drawn.at(&posted), parse_timestamp("2026-11-01T06:30:00Z"), "read alone: the first 01:30");
-        let shown = DrawZone::from(&posted).local(stored).map(LocalDateTime::floor_minute);
-        let kept = if Some(drawn) == shown { Some(stored) } else { drawn.at(&posted) };
-        assert_eq!(kept, Some(stored));
+        let field = crate::form::Entry::from(drawn);
+        assert_eq!(field.at_keeping(&posted, stored), Some(stored), "kept: the second");
+        let other = parse_timestamp("2026-11-01T06:30:00Z").unwrap();
+        assert_eq!(field.at_keeping(&posted, other), Some(other), "kept: the first, drawn the same");
     }
 }

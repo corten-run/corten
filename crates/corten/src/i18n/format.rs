@@ -1608,9 +1608,10 @@ impl Day {
 
     /// The day's first instant in `zone`, for something that needs an instant (a query's bound);
     /// writing it is `t.date(day, ..)`, not this. `day.start(Utc)` is its midnight UTC. A day the
-    /// visitor picked (`<input type="date">`) begins where they are: in a form that carries its
-    /// zone, the one it sends back (`day.start(&input.zone)`, a
-    /// [`FormZone`](crate::form::FormZone)), else the request's (`day.start(req.zone())`). Its
+    /// visitor picked (`<input type="date">`) begins where they are: in a form, the zone it sends
+    /// back (`day.start(&input.zone)`, a [`FormZone`](crate::form::FormZone), a `GET` form's query
+    /// included), and for a day that comes with no form (a link's parameter), the request's
+    /// (`day.start(req.zone())`). Its
     /// midnight, or, where the clocks skip midnight, the instant they skip to, as
     /// [`LocalDateTime::at`](super::LocalDateTime::at) reads `00:00`. `None` before the earliest
     /// `SystemTime` the platform has.

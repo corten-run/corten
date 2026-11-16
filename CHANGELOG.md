@@ -12,16 +12,18 @@ Corten is pre-1.0, so any minor version may change the API.
   `corten::form::DrawZone` (`DrawZone::from(req.zone())`, `DrawZone::from(Utc)` on a `Public`
   page, `DrawZone::from(&input.zone)` when a refused post is drawn again): `zone.field(f.zone)`
   writes the zone as a hidden input, `zone.name()` shows it (`UTC` without JavaScript), and
-  `zone.local(at)` writes an instant as the input's `value`, `min` or `max`, which
-  `ceil_minute` and `floor_minute` keep on the input's minute steps. The post reads the hidden
-  input as a `corten::form::FormZone` field, and `entry.at(&input.zone)` is the instant. The
-  compiler checks that a posted time is read only in a `FormZone` (not in `req.zone()` or a
-  `DrawZone`), that a `FormZone` comes only from a post, and that the hidden input is a
-  `FormZone` field; a form that leaves out the hidden input still compiles, and its post is a 422.
+  `zone.local(at)` writes an instant as the input's `value`, `min` or `max`, each drawn rounded
+  down to the input's minute steps with `floor_minute`. The post reads the hidden input as a
+  `corten::form::FormZone` field, and `entry.at(&input.zone)` is the instant;
+  `entry.at_keeping(&input.zone, stored)`, for an edit form, is `stored` when the field comes back
+  as it was drawn. The compiler checks that a posted time is read only in a `FormZone` (not in
+  `req.zone()` or a `DrawZone`), that a `FormZone` is made only by deserializing what a client
+  sent (a form, a query), never from a zone, and that the hidden input is a `FormZone` field; a
+  form that leaves out the hidden input still compiles, and its post is a 422.
   A skipped time moves forward by the gap and a repeated one is the earlier (Temporal's default,
   RFC 5545). `Entry` holds any sealed `corten::form::EntryValue` (a number, a `Day` for
   `<input type="date">`, or a `LocalDateTime`), and `day.start(zone)` is where a day begins in a
-  zone ([design Choice 56](docs/design.md#choice-local-date-time)).
+  zone ([design Choice 57](docs/design.md#choice-local-date-time)).
 
 - **Breaking (for `#![deny(warnings)]` builds):** `Day::midnight_utc` is deprecated for
   `day.start(Utc)`, the same instant, so a crate that denies warnings and calls it no longer
