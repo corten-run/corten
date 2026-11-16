@@ -4558,8 +4558,8 @@ rules something out.
     Ordinary enabled requests carry the route on the response without a per-request `Arc` or
     URI clone. Only an app with tower layers needs a shared route handoff: a layer can dispatch
     on another task and replace the whole response, defeating both response extensions and
-    task-local storage. The enabled wrapper alone repeats the route-name lookup, keeping
-    ordinary dispatch and its inlining unchanged; disabled dispatch has no recording branch.
+    task-local storage. The enabled wrapper alone repeats the route-name lookup; disabled
+    dispatch has no recording branch and stays inlined despite that extra caller.
 
     Not chosen: an app middleware, which cannot see early refusals or the response after
     the error page, conditional GET and compression; a tower layer each app writes, which

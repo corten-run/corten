@@ -732,7 +732,8 @@ impl From<Table> for Router {
 }
 
 impl Dispatch {
-    #[inline]
+    // Keep normal dispatch inlined when the enabled logging wrapper adds another caller.
+    #[inline(always)]
     fn answer(&self, mut req: Request, edge: bool) -> RouterFuture {
         let mut fix = Fix::of(req.method(), edge);
         let path = req.uri().path();
