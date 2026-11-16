@@ -82,6 +82,19 @@ test("actual strict page/Alice observations replay installed snapshot and preser
   } finally { assert.equal(dirname(resolve(root)), resolve(tmpdir())); rmSync(root, { recursive: true }); }
   t.diagnostic(`ordinary ${ordinary.observation.events.length} reads; Alice ${alice.observation.events.length} reads/${Buffer.byteLength(JSON.stringify(alice.observation))} bytes`);
 });
+test("accepted oversized DOM record is rejected by the existing JSON budget without whole-root serialization", async (t) => {
+  const f = await browserDOMFixture(t), { observation } = await f.read(), { root, store } = fixture(t);
+  const oversized = { ...observation, events: Array(2048).fill({ publicPadding: "x".repeat(32768) }) };
+  const ref = store.recordJSON("oversized-dom", oversized); store.seal();
+  const reader = openEvidence(root), decoded = reader.json(ref); reader.finish();
+  const stringify = JSON.stringify;
+  JSON.stringify = (value, ...args) => {
+    assert.ok(value !== decoded, "DOM budget must not stringify the whole accepted observation"); return stringify(value, ...args);
+  };
+  t.after(() => { JSON.stringify = stringify; });
+  assert.throws(() => replayBrowserDOM(decoded, expectation(decoded)), /DOM JSON exceeds bounds/);
+});
+
 test("native DOM adapter binds independent native frame and loader without changing standalone results", async (t) => {
   const f = await browserDOMFixture(t), { observation } = await f.read(), expected = expectation(observation);
   const session = await f.page.context().newCDPSession(f.page);

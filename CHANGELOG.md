@@ -5,6 +5,22 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Fullstack browser benchmark evidence uses bounded, authenticated, deduplicated JSON
+  records and incremental raw-case hashing instead of one growing inline summary. The
+  complete matrix, raw observations, native settings, safety ceilings and proof gates
+  are preserved; bounded historical summaries remain read-only diagnostics.
+
+- Scope the official cloud checkout's public umask to Git source creation so
+  unprivileged load generators can read committed benchmark scripts. Keep job,
+  control and campaign state private, with real Linux Git/nonroot regression
+  controls and unchanged source, correctness and measurement gates.
+
+- Make the watchlist smoke's waiting-submit cases dispatch each press in the page before
+  changing fields or releasing held answers, so a loaded browser's early click acknowledgement
+  does not race their busy, send-count and renewed-key checks. Runtime behavior is unchanged.
+  Capture the first request before editing fields, and poll file output independently of
+  animation frames, with the same outcome deadline and forbidden-send checks.
+
 - A script reads a screen's data typed, from the route that answers it, with
   `read(url, { signal })` from the new `corten/read` module. A route that says `data = T` in
   `#[route(..)]`, whose `get` handler returns `HtmlResult<corten::Screen<T>>` (which only

@@ -207,6 +207,16 @@ loading, is that stall: rerun the smoke in Firefox alone
 failure on the rerun, or the same step failing in Chromium or WebKit, as real. Nothing retries
 the step or waits longer for it.
 
+The watchlist's waiting-submit cases press their buttons in the page (`button.click()`), so
+each submit runs before the test changes the form's values or releases its held answer. A
+loaded browser can acknowledge Playwright's click before dispatching that submit: waiting for
+the answer alone does not prove that the first write used the old values or that the second
+press met it still pending. The cases still wait for their output condition, then check the
+busy mark sampled while the answer was held, the exact sends and the renewed submit key.
+The first request is captured before editing its fields; file output is polled on a timer,
+independent of animation frames. Neither the six-second outcome bound nor the window for
+detecting forbidden sends is extended.
+
 ## Cluster integration tests
 
 `corten-cluster`'s tests run against real Postgres and NATS JetStream when two variables are
