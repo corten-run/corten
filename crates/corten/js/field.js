@@ -17,7 +17,7 @@ export const LISTED = "button,fieldset,input,object,output,select,textarea";
  * belongs to (`form=` included), or none when its `form=` names no form, as a submit has it; else
  * the one around it. A `<label>` or `<legend>` is not a control: its `form` is the labelled
  * control's or the fieldset's, which `form=` may put in another form, so it takes the one around
- * it, as a `<ul>` does. Only a form's own members can be shadowed by a control's name (`form`,
+ * it, as a `<ul>` does, and so does a form-associated custom element, which is not listed. Only a form's own members can be shadowed by a control's name (`form`,
  * `closest`), and a form is taken first.
  * @param {Element} el @returns {HTMLFormElement | null}
  */
@@ -35,38 +35,57 @@ export function formOf(el) {
 export function controls(el, name) {
   const form = formOf(el);
   if (!form) return null;
-  const found = [];
-  // The form's own `elements`: a control named "elements" would be found in its place.
-  for (const c of /** @type {HTMLFormControlsCollection} */ (Reflect.get(HTMLFormElement.prototype, "elements", form))) {
-    if (Element.prototype.getAttribute.call(c, "name") === name) found.push(c);
-  }
-  return found;
+  // The form's own `elements` (a control named "elements" would be found in its place), by the
+  // browser's index of its names, which a walk over every control would cost a form of hundreds
+  // a millisecond a run. It also matches an id, which is not a posted name.
+  const elements = /** @type {HTMLFormControlsCollection} */ (Reflect.get(HTMLFormElement.prototype, "elements", form));
+  const hit = HTMLFormControlsCollection.prototype.namedItem.call(elements, name);
+  return (hit instanceof Element ? [hit] : [...(hit ?? [])]).filter((c) => Element.prototype.getAttribute.call(c, "name") === name);
 }
+
+/**
+ * What each kind of field argument gives its handler, the parameter type the compiler matched the
+ * call to: a form's controls are HTML elements, so the tag is the interface.
+ * @typedef {{ i: HTMLInputElement, s: HTMLSelectElement, t: HTMLTextAreaElement, "*": HTMLInputElement[] }} Given
+ */
 
 /**
  * What a field argument gives its handler: the one `<input>` (`i`), `<select>` (`s`) or
  * `<textarea>` (`t`) of its name in the form of `el`, or every `<input>` of it (`*`; none is an
- * empty list). A form's controls are HTML elements, so the tag is the interface the handler takes.
- * Anything else is null: a mistake the compiler could not see, since the markup that draws the
- * control may be another component's.
- * @param {Element} el @param {{ control: "i" | "s" | "t" | "*", name: string }} arg
- * @returns {Element | Element[] | null}
+ * empty list). Anything else is null: a mistake the compiler could not see, since the markup that
+ * draws the control may be another component's.
+ * @template {keyof Given} K
+ * @param {Element} el @param {{ control: K, name: string }} arg @returns {Given[K] | null}
  */
 export function field(el, { control, name }) {
   const found = controls(el, name);
   const one = control !== "*";
-  return found?.every((c) => c.localName === TAGS[control]) && (!one || found.length === 1) ? (one ? /** @type {Element} */ (found[0]) : found) : null;
+  if (!found?.every((c) => c.localName === TAGS[control]) || (one && found.length !== 1)) return null;
+  return /** @type {Given[K]} */ (/** @type {unknown} */ (one ? found[0] : found));
+}
+
+/**
+ * Why handler `call` is not given field argument `arg` of `el`: what it takes, and what the form
+ * has instead (none, more than one, or another kind) or that `el` is in no form. The runtime
+ * throws it when the handler runs, and `corten dev` reports it when the page draws the call.
+ * @param {Element} el @param {{ control: keyof Given, name: string }} arg
+ * @param {{ module: string, name: string }} call
+ */
+export function why(el, arg, call) {
+  const found = controls(el, arg.name);
+  const has = found ? `its form has ${found.map((c) => c.localName).join(", ") || "none"}` : "it is in no form";
+  return `${call.module}.${call.name} takes field ${arg.name} as ${arg.control === "*" ? "every" : "one"} <${TAGS[arg.control]}>, and ${has}`;
 }
 
 /**
  * What the runtime gives handler `call` for field argument `arg` of the element with it: the
- * control (`field`), or an error. Short: `corten dev` tells what the form has instead, when the
- * page draws the call.
- * @param {Element} el @param {{ control: "i" | "s" | "t" | "*", name: string }} arg
- * @param {{ module: string, name: string }} call
+ * control (`field`), or an error saying why not (`why`).
+ * @template {keyof Given} K
+ * @param {Element} el @param {{ control: K, name: string }} arg
+ * @param {{ module: string, name: string }} call @returns {Given[K]}
  */
 export function given(el, arg, call) {
   const found = field(el, arg);
-  if (!found) throw new Error(`corten: ${call.module}.${call.name} takes field ${arg.name}, and its form has no such control`);
+  if (!found) throw new Error(`corten: ${why(el, arg, call)}`);
   return found;
 }

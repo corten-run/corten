@@ -2,7 +2,7 @@
 // Loaded by the runtime under `corten dev` only, from /corten/dev.js, which only a dev server
 // serves, as written: what it reports costs a production page nothing.
 import { ready } from "corten";
-import { LISTED, TAGS, controls, field, formOf } from "./field.js";
+import { LISTED, field, formOf, why } from "./field.js";
 import { parseOn } from "./on.js";
 /** @import { Arg } from "./on.js" */
 
@@ -226,9 +226,7 @@ function fields(root) {
     for (const b of bound) {
       for (const arg of flat(b.args)) {
         if (arg.kind !== "~" || field(el, arg)) continue;
-        const found = controls(el, arg.name);
-        const has = found ? `its form has ${found.map((c) => c.localName).join(", ") || "none"}` : "it is in no form";
-        wrong.push(`${b.module}.${b.name} takes field ${arg.name} as ${arg.control === "*" ? "every" : "one"} <${TAGS[arg.control]}>, and ${has}`);
+        wrong.push(why(el, arg, b));
       }
     }
     if (!wrong.length) continue;

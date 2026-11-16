@@ -679,7 +679,7 @@ async function run(browser) {
         served.includes(`data-on='change:ship_form.fill(~s"service",~i"weight",~t"note",~i"gift",~*"size",~i"parcels[1].weight",@out)'`),
       `${filled} ${/data-on='change:[^']*'/.exec(served)?.[0] ?? "no data-on"}`,
     );
-    for (const [name, field] of [["Weigh the note", "note"], ["Weigh elsewhere", "weight"]]) {
+    for (const [name, field, has] of [["Weigh the note", "note", "its form has textarea"], ["Weigh elsewhere", "weight", "its form has none"]]) {
       const before = shipErrors.length;
       await shipped.getByRole("button", { name }).click();
       for (let waited = 0; shipErrors.length === before && waited < 5000; waited += 50) await shipped.waitForTimeout(50);
@@ -688,7 +688,7 @@ async function run(browser) {
       const said = shipErrors.slice(before);
       check(
         `a call given a form field its form does not have as the handler takes it runs nothing and says why (${name.toLowerCase()})`,
-        said.length === 1 && said[0].includes(`corten: ship_form.weigh takes field ${field}, and its form has no such control`) && (await shipped.inputValue('#ship-form [name="weight"]')) === "2",
+        said.length === 1 && said[0].includes(`corten: ship_form.weigh takes field ${field} as one <input>, and ${has}`) && (await shipped.inputValue('#ship-form [name="weight"]')) === "2",
         said.join(" | "),
       );
     }
@@ -710,7 +710,7 @@ async function run(browser) {
       const said = shipErrors.slice(before);
       check(
         "a call from a control whose form= names no form is given none of the form around it",
-        said.length === 1 && said[0].includes("corten: ship_form.weigh takes field gift, and its form has no such control") && (await shipped.inputValue('#ship-form [name="gift"]')) === "on",
+        said.length === 1 && said[0].includes("corten: ship_form.weigh takes field gift as one <input>, and it is in no form") && (await shipped.inputValue('#ship-form [name="gift"]')) === "on",
         said.join(" | "),
       );
     }
@@ -754,23 +754,26 @@ async function run(browser) {
       check("a handler given a group no control of its form has gets []", counts.startsWith("0,"), counts);
       check(
         "a call given a group whose name is its form's select runs nothing and says why",
-        counts.endsWith(",none") && said.length === 1 && said[0].includes("corten: ship_form.count takes field service, and its form has no such control"),
+        counts.endsWith(",none") && said.length === 1 && said[0].includes("corten: ship_form.count takes field service as every <input>, and its form has select"),
         `${counts} ${said.join(" | ")}`,
       );
     }
     // The control is found each time the handler runs: one a patch replaced is the new one, and
-    // the old one, gone from the page, is not touched.
+    // the old one, gone from the page, is not touched. It is found by its name, not its id: an
+    // element of the form whose id is the field's name (which the form's index of names also
+    // holds) is not a second control of it.
     const replaced = await shipped.evaluate(async () => {
       const old = /** @type {HTMLInputElement} */ (document.querySelector('#ship-form [name="weight"]'));
       const fresh = Object.assign(document.createElement("input"), { name: "weight", value: "1" });
       old.replaceWith(fresh);
+      fresh.after(Object.assign(document.createElement("output"), { id: "weight" }));
       const select = /** @type {HTMLSelectElement} */ (document.querySelector('#ship-form [name="service"]'));
       select.value = "ground";
       select.dispatchEvent(new Event("change", { bubbles: true }));
       await new Promise((done) => setTimeout(done, 100));
       return `${fresh.value},${old.value}`;
     });
-    check("a handler given a field gets the control its form has when it runs, not one a patch replaced", replaced === "9,2", replaced);
+    check("a handler given a field gets the control its form has when it runs, not one a patch replaced, nor an element whose id is its name", replaced === "9,2", replaced);
     await shipped.close();
   }
   // A script reads a screen's data with read() (corten/read), typed by its route's data = Reading:

@@ -4563,10 +4563,12 @@ rules something out.
     module (`corten-field`, `js/field.js`), which a page loads only when its handlers take a field,
     as a format argument loads `corten-format`, takes the form of the element with the `on:` (the form itself; for a control, the one it belongs
     to, `form=` included; else the one around it, so a `<label>` takes the form it is in, not its
-    control's, which `form=` may put elsewhere), reads that form's own `elements` (so a control named
-    `elements` cannot stand in for it), and gives the one control of the name with the kind's tag,
-    or every input of it for a group (`[]` for none); a control a patch replaced is the new one, as
-    a ref's is. Anything else runs nothing and throws. Whether the form draws the field as the kind the
+    control's, which `form=` may put elsewhere), reads that form's own `elements` by the browser's
+    index of its names (`namedItem`, so a control named `elements` or `namedItem` cannot stand in
+    for either), keeps the controls whose `name` is the field's (the index also holds ids), and
+    gives the one control of the name with the kind's tag, or every input of it for a group (`[]`
+    for none); a control a patch replaced is the new one, as a ref's is. Anything else runs nothing
+    and throws what the call takes and what the form has instead, in the words `corten dev` uses. Whether the form draws the field as the kind the
     handler takes cannot be known when the crate compiles ([Limit 32](#limit-field-kind)), so
     `corten dev` reports such a call, with what the form has, when a page or a later draw puts it
     on the page. Behavior is still a function the markup calls, and the field is an argument as a
@@ -4584,21 +4586,25 @@ rules something out.
     Finding the control once, when the handler connects: a patch that replaces it would leave the
     handler with the old one. The lookup in the runtime every page loads, as this change first had
     it: 204 bytes with gzip on every page (15,341 to 15,545), for a call few pages make, where a
-    module of its own costs every page 51 (80 with the load error's wording and the check that
-    keeps a handler's run from allocating, below) and only a page with a field 549 more and one
+    module of its own costs every page 51 (66 with the check that keeps a handler's run from
+    allocating, below) and only a page with a field 669 more and one
     request,
     which its first load makes with its handlers' modules, as a module script of the page. `RequiredWhen` keeps its name as text: its control may be a select,
-    radios or a checkbox, and it reads only the value, which no one element type covers.
+    radios or a checkbox, and it reads only the value, which no one element type covers. A walk
+    over every control of the form, as this change first had it: three fields took a run 600 to
+    980 us in a form of 500 controls, and 3.4 to 5.5 ms in one of 2,000 (below), against the
+    index's few. A load error that does not ask Corten's own modules whether their component is
+    listed in `App::components`: 14 bytes with gzip on every page, for a console message after a
+    server fails to serve one of them, so the hint stays as it is for every module.
 
     What it costs, in the conflict order. Correctness gives up nothing: the control is the one the
     form has when the handler runs, and a call whose form has another runs nothing rather than
-    hand the handler the wrong element. Performance: every page's runtime is 257 bytes larger raw,
-    80 with gzip (15,341 to 15,421) and 80 with brotli (13,846 to 13,926), paid once a release by
-    every user: the parser's `~` branch, about 20 with gzip, loading the field module for a call
-    that takes one, 14 with gzip, a load error for Corten's own modules that does not ask whether a
-    component is listed, and about 15, a handler's run that looks up a binding's other modules and
-    makes no closure or array when it has none, as before. The lookup and its message are that
-    module, 893 bytes raw, 549 with gzip and 456 with brotli as built, which only a page whose handlers take a field fetches, as one
+    hand the handler the wrong element. Performance: every page's runtime is 225 bytes larger raw,
+    66 with gzip (15,341 to 15,407) and 79 with brotli (13,846 to 13,925), paid once a release by
+    every user, chiefly for the parser's `~` branch (about 20 with gzip), loading the field module
+    for a call that takes one (14), and a handler's run that looks up a binding's other modules and
+    makes no closure or array when it has none, as before (about 15). The lookup and its message
+    are that module, 1,148 bytes raw, 669 with gzip and 573 with brotli as built, which only a page whose handlers take a field fetches, as one
     more module script of the page; a page the runtime swaps in imports it with the page's
     handler modules, and an event before it arrives gets the browser's default, as one before
     those does. A field argument writes its posted name where a
@@ -4610,17 +4616,23 @@ rules something out.
     (7,772 for `<main>`, 9,236 for the document), and five alternated runs of each build gave
     build and render of `<main>` in 19.2 us (18.0 to 21.7) on main and 20.4 us (18.0 to 22.8) on
     this change, each build's runs varying more than the two differ, as they did when this was
-    first measured (19.2 us, 15.6 to 20.8, against 18.4 us, 16.0 to 21.0). The lookup is one pass
-    over the form's controls when the handler runs, reasoned, not measured. Compile-time safety is
+    first measured (19.2 us, 15.6 to 20.8, against 18.4 us, 16.0 to 21.0). The lookup reads the
+    form's index of names: a handler given three fields (an input, a select and a textarea) spent
+    4 to 10 us a run finding them in a form of 50, 500 or 2,000 controls, in Chromium, Firefox and
+    WebKit alike, where a walk over every control spent 60 to 95 us at 50, 600 to 980 at 500 and
+    3.4 to 5.5 ms at 2,000. Compile-time safety is
     what the change buys: the name was already right as text (`f.weight.as_str()`), and now the
     handler's parameter is the control, checked at the call.
 
     Stands on: measured (the runtime's and the field module's minified sizes by Node's `zlib` gzip
     and brotli at their defaults, once each build; a field's `data-on` and markup against a ref's for the same four
-    controls, once; the item page's `render_cost`, five alternated runs of each release build); platform (a form's `elements`
+    controls, once; the item page's `render_cost`, five alternated runs of each release build; the lookup of three
+    fields in a form of 50, 500 and 2,000 controls against a walk over them, the median of 15
+    batches in each of the three engines, once); platform (a form's `elements`
     lists its controls in tree order, `form=` ones included, and a control's `localName` is its
-    tag; the smoke's field checks in Chromium, Firefox and WebKit); reasoned (the posted name is
-    unique within a form's post, so the form is where it names one control; the kind a form draws
+    tag; the smoke's field checks in Chromium, Firefox and WebKit); reasoned (a posted name
+    denotes one field of the form, a single control or the radios or checkboxes of a group that
+    share it, so the form is where a name finds that field's controls; the kind a form draws
     is another component's markup, which no one `html!` sees); value (in the README's conflict
     order: correctness first (the control is found when the handler runs, and no other is given),
     then performance (README Value 1: the lookup is a module only the pages that call it load, not
@@ -5154,10 +5166,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `html!` sees both the call and the control. A call that takes a single control (`i`, `s`,
     `t`) whose form has no control of the name, more than one, or one of another kind, or that
     takes a group (`*`) whose form has a control of the name that is not an input, runs nothing
-    and throws
-    (`corten: shipping.fill takes field weight, and its form has no such control`), and `corten
-    dev` reports it, with what the form has, when the page or a later draw puts the call on the
-    page, so the mistake shows on load rather than on the first event that calls it. A group with
+    and throws what it takes and what the form has instead
+    (`corten: shipping.fill takes field weight as one <input>, and its form has select`), and
+    `corten dev` reports the same when the page or a later draw puts the call on the page, so the
+    mistake shows on load rather than on the first event that calls it. A group with
     no control of the name is `[]` and is neither an error nor reported, since a form may leave
     out a group of radios. It checks again for markup added to the page and a control that joins a
     form, not when a `name`, `form` or `data-on` attribute changes or a control is removed, so a

@@ -7,6 +7,7 @@
 import { keep, subscribe } from "corten";
 import { shortcut } from "corten/keys";
 import { read, ReadError } from "corten/read";
+import { field } from "../crates/corten/js/field.js";
 import { rows, view } from "corten/views";
 // @ts-expect-error noUncheckedSideEffectImports: an import run only for its effects names a module that exists.
 import "./no-such-module.js";
@@ -42,17 +43,21 @@ export function keys(event, click, screen) {
   return key === "Control+s" || shortcut(event) === "p";
 }
 
-// A form field reaches its handler as the control its form draws (`js::weigh(f.weight)`). That a
-// field passes only where the handler takes a control is checked when the crate compiles (the
-// `compile_fail` doctests on `FieldName`); this shows the script's side only: what it is given is
-// an element, which a function that takes text refuses.
-/** @param {string} name */
-const named = (name) => name.length;
-/** @param {HTMLInputElement} weight */
-export function weigh(weight) {
-  weight.value = "2";
+// A form field reaches its handler as the control its form draws, of the kind the compiler matched
+// to the handler's parameter (`js::weigh(f.weight)`, for an `HTMLInputElement`, writes
+// `~i"weight"`; the `compile_fail` doctests on `FieldName` hold the call). The field module gives
+// each kind that parameter's type, and never the field's name.
+/** @param {Element} el */
+export function weigh(el) {
+  /** @type {HTMLInputElement | null} */ const weight = field(el, { control: "i", name: "weight" });
+  /** @type {HTMLInputElement[] | null} */ const sizes = field(el, { control: "*", name: "size" });
+  // @ts-expect-error A select's field is given as its HTMLSelectElement, not as an input.
+  /** @type {HTMLInputElement | null} */ const service = field(el, { control: "s", name: "service" });
   // @ts-expect-error A field is given as its control, not as its name.
-  return named(weight);
+  /** @type {string | null} */ const named = field(el, { control: "i", name: "weight" });
+  // @ts-expect-error A field's kind is one of i, s, t and *: a checkbox is an input.
+  field(el, { control: "c", name: "gift" });
+  return [weight, sizes, service, named];
 }
 
 // The values a ref's elements give (`ref={row.with(cents)}`): the call is checked against the

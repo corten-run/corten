@@ -557,8 +557,9 @@ The page gets `data-on='change:shipping.fill(~s"service",~i"weight",~*"size")'`.
 runs, the runtime finds the controls of that name in the form of the element with the `on:` (the
 form itself; for a control, the one it belongs to, `form=` included; else the one around it. A
 button whose `form=` names no form is in none, as its submit is, and a `<label>` or `<legend>`,
-which is not a control, takes the form around it, not the labelled control's), so a control a patch replaced is the
-new one. A field of a group or a row is passed the same way
+which is not a control, takes the form around it, not the labelled control's, as a form-associated custom
+element does), so a control a patch replaced is the new one. The lookup uses the form's own index of
+its controls' names, so it costs a run a few microseconds however many controls the form has. A field of a group or a row is passed the same way
 (`f.parcels.at(&1).weight`, `parcels[1].weight`), and so is one in a `@typedef` group. The name is
 the one `Fields` writes, so a renamed field is renamed in both places; text where a field belongs,
 and a field where the handler takes text or another element, do not compile.
@@ -568,19 +569,18 @@ What the compiler cannot see is the control. A field's name carries what it read
 that draws it may be another component's. So the runtime checks it: a call that takes one
 control (an input, select or textarea) whose form has none of that name, more than one, or one of
 another kind, and a call that takes a group whose form has a control of the name that is not an
-input, runs nothing and reports
-`corten: shipping.fill takes field weight, and its form has no such control`. A group with no
-control of the name is `[]`, as a group of radios the form left out is.
-Under `corten dev` the console says which as soon as the page draws such a call, before anything
-calls it: `corten: shipping.fill takes field weight as one <input>, and its form has select`
-([design Limit 32](../design.md#limit-field-kind)). A group is an array, not the
+input, runs nothing and throws what it takes and what the form has instead (none, more than one,
+another kind, or no form at all): `corten: shipping.fill takes field weight as one <input>, and its form has select`.
+A group with no control of the name is `[]`, as a group of radios the form left out is.
+Under `corten dev` the console says the same as soon as the page draws such a call, before
+anything calls it ([design Limit 32](../design.md#limit-field-kind)). A group is an array, not the
 `RadioNodeList` a form's `elements.namedItem` gives: `namedItem` gives a list only for two or more
 controls of a name and the control itself for one, and a script cannot make one, so the handler
 could not count on its type. Besides the cases above, a ref is an `<output>`, a list, a button, a
 control outside any form, and an `<input type="image">`,
 which the browser leaves out of a form's controls since it is a submit button that posts `name.x`
 and `name.y`, never its field. A page whose handlers take a field loads the module that finds it,
-`corten-field` (893 bytes, 549 gzipped), as a format argument loads `corten-format`; a page with
+`corten-field` (1,148 bytes, 669 gzipped), as a format argument loads `corten-format`; a page with
 none does not.
 
 ## Shared scripts
@@ -815,8 +815,8 @@ feed's callbacks.
 1. Markup is written in `html!`, never built from strings in a script. A script makes new
    elements by cloning markup the server rendered (a `<template ref={rest}>`, or a view's rows,
    `rows(..).push(items)`), and moves, shows, hides or writes the ones on the page.
-2. A script reaches the page only through its arguments: refs, `event`, `target`, `signal`,
-   `scope`, values. A handler that looks elements up by selector is a smell.
+2. A script reaches the page only through its arguments: refs, form fields, `event`, `target`,
+   `signal`, `scope`, values. A handler that looks elements up by selector is a smell.
 3. User-facing text lives in views, the view model or the catalog, never in scripts. Text that
    depends on what a script computed is a message the markup passes (below).
 4. Cleanup is `signal` alone: pass it to `addEventListener`, `fetch`, `subscribe` and `mount`.

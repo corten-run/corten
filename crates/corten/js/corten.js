@@ -161,7 +161,7 @@ function load(name) {
           const wait = Math.min(30_000, (failed.get(name)?.[0] ?? 250) * 2);
           failed.set(name, [wait, performance.now() + wait]);
           // Corten's own modules (`corten-format`) are served with any app's scripts: no component to list.
-          console.error(`corten: script module ${url} did not load${name.startsWith("corten-") ? "" : " (is its component in App::components?)"}`, error);
+          console.error(`corten: script module ${url} did not load (is its component in App::components?)`, error);
         },
       );
     if (modules.has(name)) pending = Promise.resolve();
