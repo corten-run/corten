@@ -133,6 +133,7 @@ export const validationPaths = Object.freeze([
   "bench/workloads/isolated/composition.mjs",
   "bench/workloads/isolated/contract.mjs",
   "bench/workloads/isolated/evidence.mjs",
+  "bench/workloads/isolated/host-durable-writer.mjs",
   "bench/workloads/isolated/host-lifetime.mjs",
   "bench/workloads/isolated/host-observation.mjs",
   "bench/workloads/isolated/json-staging.mjs",

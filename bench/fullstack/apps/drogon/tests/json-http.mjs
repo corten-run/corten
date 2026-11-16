@@ -108,7 +108,7 @@ try {
   writeFileSync(join(temp, 'items.json'), JSON.stringify({ legacy: { catalog_item_id: 'legacy', title: 'Old item' } }));
   for (const source of mode === 'before' ? ['api'] : ['fixture', 'api']) {
     const name = `corten-bench-parity-drogon-${process.pid}-${source}`;
-    docker('run', '-d', '--name', name, '--cpus', '1',
+    docker('run', '-d', '--name', name, '--cpus', '1', '--memory', '1g',
       '--label', 'agent.owner=codex', '--label', 'agent.task=corten-bench-parity-drogon',
       ...(process.platform === 'linux' ? ['--add-host', 'host.docker.internal:host-gateway'] : []),
       '-p', '127.0.0.1::8080', '-v', `${temp}:/fixtures:ro`, '-e', 'ITEM_SOURCE=fixture', '-e', 'FIXTURE_PATH=/fixtures/items.json',

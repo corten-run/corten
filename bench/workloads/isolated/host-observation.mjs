@@ -3,6 +3,19 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 
+function processStat(stat) {
+  if (typeof stat !== "string") return null;
+  const match = /^([1-9]\d*) \([\s\S]*\) [A-Za-z] ((?:-?\d+ )*-?\d+)\n?$/.exec(stat);
+  if (!match) return null;
+  const fields = match[2].split(" "), pid = Number(match[1]);
+  if (!Number.isSafeInteger(pid) || fields.length < 49 || !/^(0|[1-9]\d*)$/.test(fields[5])
+    || !/^(0|[1-9]\d*)$/.test(fields[18])) return null;
+  const flags = BigInt(fields[5]);
+  if (flags > 0xffffffffn) return null;
+  // Linux include/linux/sched.h PF_KTHREAD, exposed in /proc/PID/stat field 9.
+  return { pid, startTicks: fields[18], kernelThread: (flags & 0x00200000n) !== 0n };
+}
+
 // Fixed read-only probes. No provider access, cleanup, commands from metadata or caller hooks.
 export function dockerRead(args) {
   assert.ok(Array.isArray(args) && args.every((a) => typeof a === "string"));
@@ -19,8 +32,9 @@ export function observeHost() {
   const processes = [];
   for (const pid of readdirSync("/proc").filter((p) => /^\d+$/.test(p))) {
     try {
-      const stat = readFileSync(`/proc/${pid}/stat`, "utf8"), parts = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-      processes.push({ pid: Number(pid), startTicks: parts[19], cgroup: readFileSync(`/proc/${pid}/cgroup`, "utf8") });
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8"), identity = processStat(stat);
+      assert.ok(identity && identity.pid === Number(pid), "invalid host process stat");
+      processes.push({ pid: identity.pid, startTicks: identity.startTicks, stat, cgroup: readFileSync(`/proc/${pid}/cgroup`, "utf8") });
     } catch (error) { if (!["ENOENT", "ESRCH"].includes(error.code)) throw error; }
   }
   return { at: new Date().toISOString(), hostname: os.hostname(), bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(),
@@ -37,6 +51,11 @@ export function verifyHostBoundary(before, after) {
   assert.deepEqual(after.containers, before.containers, "native containers remain or baseline changed");
   assert.deepEqual(after.networks, before.networks, "native networks remain or baseline changed");
   const previous = new Set(before.processes.map((p) => `${p.pid}:${p.startTicks}`));
-  assert.deepEqual(after.processes.filter((p) => !previous.has(`${p.pid}:${p.startTicks}`)), [], "new persistent host processes remain");
+  const remaining = after.processes.filter((p) => {
+    if (previous.has(`${p.pid}:${p.startTicks}`)) return false;
+    const proof = processStat(p.stat);
+    return !(proof?.kernelThread && proof.pid === p.pid && proof.startTicks === p.startTicks);
+  });
+  assert.equal(remaining.length, 0, `new persistent host processes remain: ${remaining.length}`);
   return { cleanup: "observed-boundary-matched", isolation: "unverified" };
 }

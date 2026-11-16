@@ -288,3 +288,12 @@ A client that retries every 5xx by default retries these `501`s too, where it di
 standard resilience handler (Microsoft.Extensions.Http.Resilience) both handle any status of 500
 or more. Each takes a setting for which answers to retry; a client of the app that sends a method
 no route serves can leave 501 out of it.
+
+## Benchmark Hosts
+
+The grouped benchmark's [disposable-host preparation](../../bench/workloads/CLOUD.md#evidence-and-cleanup)
+holds firmware-update services outside the measurement boundary before baseline.
+Its cleanup check retains all process observations and exempts only kernel threads
+proved by saved Linux stat flags and matching PID/start identity. A new user-space
+daemon or application process still fails cleanup; later observations cannot repair
+an old failed run. This is benchmark-host preparation, not app deployment advice.
