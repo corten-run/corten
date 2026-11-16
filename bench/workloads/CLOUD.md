@@ -264,6 +264,80 @@ proof. Preview and exact approval bind both source identities, exact reservation
 bytes, original evidence hashes, physical state root and fixed custody roots.
 This exception does not permit a source override for collection, audit or launch.
 
+### Cancelled Mixed Wait
+
+The sole additional migration is the exact r21/9f mixed review wait described by
+`cloud-cancellation.mjs:mixedWait`. `--cancel-mixed-wait` is an exclusive action of
+the existing `cloud-production.mjs` CLI, not an audit option. Its local
+`--print-approval` binds the clean repair-controller commit, physical state root,
+exact reservation bytes, original account/context, host ID/IP, token/tag/unit,
+campaign/plan/subject, original journal event and unchanged original deadline
+`2026-11-16T23:57:08.811Z`. The operator's reason is retirement of the old
+unpublishable attempt while preserving all evidence, **not** a claim that seven
+source guarantees failed. Failed/unsupported rows can be legitimate native outcomes.
+No delivery, receipt, source qualification, successful collection or readiness is
+fabricated. The original measured source and all workload parameters remain fixed.
+
+After independent review, exact CI and merge, a separate explicit operator approval
+uses `--approve-reviewed-merged-ready` with that exact preview hash. This is not
+authorization provided by tests, this documentation or an unattended readiness
+flip. Production repeats its merged-main, loaded-source and locked-state checks;
+saved-context account/exact-ID/account and native known-hosts checks precede SSH.
+The fixed script checks every tracked source blob and uploaded control hash before
+starting a fresh 30-second dispatch anchor. It then verifies the metadata host,
+live unit/start identity, private unchanged review journal, no audit inbox,
+reservation PID, exact Node argv/cwd/UID/GID, parent Bash wrapper and cgroup.
+Both processes are held by real pidfds and rechecked before the signal.
+
+`mixed-cancel-reservation.json` and `mixed-cancel-intent.json` are exclusively
+created and synced locally before one signal request. The latter binds the reason,
+wait, repair source, reservation and emitted script. State retains their hashes.
+The remote script exclusively creates and syncs `/bench/mixed-cancel-intent.json`
+before its sole `pidfd_send_signal(SIGTERM)`. It cannot issue arbitrary commands,
+signal a process group, invoke `systemctl stop/kill`, restart, extend a deadline or
+retry. The original Bash wrapper stays alive to wait for the handled Node exit and
+run its existing EXIT trap/pack script. A signal acknowledgement returns 3, not
+terminal proof. The retained acknowledgement hash is recorded in state; custody
+must match its exact remote-intent bytes, PID/start ticks and original wait bytes.
+Any refusal or uncertainty after local intent retains the intent
+and operation lock; there is no automatic adoption, lock takeover or second signal.
+
+A separately approved `--retire-failed-native` observes that cancelled mixed unit
+once. If live it returns 3 without download or further signal. If terminal it
+downloads the **existing wrapper archive**, never reruns pack, and preserves the
+original bounded archive/extraction. Admission requires raw exit 2, the original
+plan/subject/wait, a subsequent real halted journal/result, not-run outcome, no
+audit advancement and no unaccounted pending native roots. Custody captures all
+`/bench/campaign` source/context/native artifacts (all nine contenders), the full
+reserved `bench/mixed-production/results/w21` root even when absent, and the remote
+cancellation intent. Only that bounded regular intent root uses the remote
+`f\0\0<size>\0<bytes>` framed digest; other roots still require directory hashing.
+Links, special files, altered hashes and omitted roots refuse. Existing full
+terminal/quiescence, account/exact-ID, metadata/rehash/fresh deletion fences and
+durable one-DELETE/confirmed-absence rules apply unchanged. Uncertainty means no
+DELETE. A retired reservation supports absence reconciliation only, not another
+DELETE. All preexisting operation locks remain exclusive.
+
+Focused portable guards run with `node --test bench/workloads/cloud-cancellation.test.mjs`.
+The explicit synthetic Linux harness is `test-fixtures/mixed-cancel-linux.mjs`:
+private disposable `/bench` tmpfs, read-only source and original 9f campaign blob
+at `/proof/old-campaign.mjs`, no network/socket/credentials. It uses real Git,
+`/proc` identity/start times, pidfds, the unchanged entry and original campaign
+stop/halt logic, original wrapper prefix/EXIT trap and pack script. Preparation,
+host/systemd/metadata observations, synthetic Git/wait identity and harness-only
+Node loader environment are declared fixture boundaries, not native qualification.
+It also invokes `test-fixtures/mixed-cancel-controller.mjs` with Node's test-only
+module-mock flag: only a synthetic known-hosts hash is substituted there, never a
+production argv/security override. The installed native verifier is imported
+unchanged with a real Git HEAD. For a Windows linked checkout, use a separate
+read-only standard bare Git object view of the exact committed source, with
+`GIT_DIR` and `GIT_WORK_TREE=/src`; verify its commit/tree and the read-only source
+against the sealed checkout first. This is metadata for real Git, not a Git stub,
+commit override in controller state, or permission to substitute a different
+source tree. No native qualification or production action is run by the harness.
+
+### Terminal Custody Fences
+
 The action retains the original `results.tgz` and `evidence-*` tree unchanged,
 and saves the original reservation bytes as `failed-native-reservation.json`.
 A fixed controller-owned Python program captures current `/bench/campaign`
@@ -418,7 +492,8 @@ approval cannot authorize deletion or receipt delivery.
 ## API
 
 `controller(options, {run, repo, sleep, inspect, interrupted})` returns `launch()`,
-`collect()`, `deliverAudit()`, a defensive-copy `state` getter and the local round
+`collect()`, `deliverAudit()`, `cancelMixedWait()`, `retireFailedNative()`,
+a defensive-copy `state` getter and the local round
 directory. `run(binary, argv, timeoutMs, allowFail)` returns a process result or a
 promise for one; every control call is awaited and cancellation is rechecked on
 return, not just before the call. It is not a shell or an adapter plugin.
