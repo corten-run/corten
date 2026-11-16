@@ -3108,7 +3108,7 @@ rules something out.
     A part read again stops its read, and its listener, when its part leaves the page (an answer
     that was its tag alone reads for the parts the tag it answered read for, all of a shared
     read's, and lasts while they and it are there; a form's or script's answer that is a tag alone,
-    which no read asked for, lasts while the page does), and its answer is checked again once its stylesheets have loaded, as a slow
+    which has no place on the page, lasts while the page does, and so do the answers to it), and its answer is checked again once its stylesheets have loaded, as a slow
     part's is: one whose address a script moved meanwhile is read again there. A read is over, and stops putting
     them off, when a part it waits for leaves the page (a form's answer replaced it): its fetch
     stops, its listeners go, and its other parts lose their busy mark and show their link at once,

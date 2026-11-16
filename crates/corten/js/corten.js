@@ -1100,11 +1100,12 @@ function partTagBeside(put) {
 function readPatchAgain(tag, put, asked) {
   const page = swapped;
   // An answer that is only its tag (a part with nothing new) reads for the same parts as the tag
-  // it answered (every part of a slow part's shared read), and lasts while they and it are there.
-  // One no read asked for (a form's or a script's answer) lasts while the page does, as before.
+  // it answered (every part of a slow part's shared read), and lasts while they are there, and the
+  // tag too when it took the answered one's place on the page. One that has no place there (a
+  // form's or a script's answer, and the answers to it) lasts while the page does, as before.
   const parts = (put.length ? put : (asked && readFor.get(asked)) || []).filter((el) => el !== tag && !matchesOf(el, PART_AGAIN));
   readFor.set(tag, parts);
-  const held = put.length ? put : asked ? [tag, ...parts] : [];
+  const held = put.length ? put : inPage(tag) ? [tag, ...parts] : parts;
   const here = () => page === swapped && held.every(inPage);
   // At least a second: a patch's own tag that says 0 (a script's, as `ReadAgain::now` is no patch)
   // would otherwise ask again at once, for as long as its answer does.

@@ -1496,8 +1496,17 @@ async function run(browser) {
       const body = (await res.text()).replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
       await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
     });
+    // Seen in the page, as the fetch's AbortError: Playwright's Firefox does not always report a
+    // routed request that is never answered as failed when the page stops it.
+    await orphan.addInitScript(() => {
+      const send = window.fetch;
+      window.fetch = function (input, init) {
+        const sent = send.call(this, input, init);
+        if (String(input).endsWith("/smoke/orphan")) sent.catch((error) => error?.name === "AbortError" && Object.assign(window, { __orphanStopped: true }));
+        return sent;
+      };
+    });
     let orphanStopped = false;
-    orphan.on("requestfailed", (r) => r.url().endsWith("/smoke/orphan") && (orphanStopped = true));
     let styleAsked = false;
     await orphan.route("**/smoke/never.css", () => void (styleAsked = true));
     // Never answered, or answered with a patch that links that stylesheet.
@@ -1524,8 +1533,10 @@ async function run(browser) {
       await corten.patch(__html('<p id="orphan-a">Drawn by a form</p>'));
     });
     loaded = true;
-    // Firefox may report the stopped fetch after the page's read has begun: wait for both.
-    for (let waited = 0; !(wholeReads && (stalled || orphanStopped)) && waited < 5000; waited += 100) await orphan.waitForTimeout(100);
+    for (let waited = 0; !(wholeReads && (stalled || orphanStopped)) && waited < 5000; waited += 100) {
+      await orphan.waitForTimeout(100);
+      orphanStopped = await orphan.evaluate(() => !!(/** @type {any} */ (window).__orphanStopped));
+    }
     check(
       stalled
         ? "and so does one whose answer waits for a stylesheet that never loads"
@@ -1672,18 +1683,19 @@ async function run(browser) {
     check("and so does a shared read's, answered with only its tag, when its second part alone is replaced", pairAsked && pairStopped, `asked ${pairAsked}, fetch stopped ${pairStopped}`);
     // A form's or a script's answer that is only a tag to read a part again, which no read asked
     // for, still reads it (while the page lasts, as before #1400).
+    // Its first read is answered with only another tag, the next with the part.
     let soloAsked = 0;
     await shared.route("**/smoke/tag-solo", (route) => {
       soloAsked += 1;
-      return route.fulfill(patchOf('<p id="tag-solo-a">Read</p>'));
+      return route.fulfill(patchOf(soloAsked === 1 ? '<template data-corten-read-again="1" data-from="/smoke/tag-solo"></template>' : '<p id="tag-solo-a">Read</p>'));
     });
     await shared.evaluate(async () => {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<p id="tag-solo-a">Waiting</p>'));
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
       await corten.patch(__html('<template data-corten-read-again="1" data-from="/smoke/tag-solo"></template>'));
     });
-    await shared.waitForFunction(() => document.getElementById("tag-solo-a")?.textContent === "Read", null, { timeout: 5000 }).catch(() => {});
-    check("a script's answer that is only a tag to read a part again reads it", soloAsked === 1 && (await shared.textContent("#tag-solo-a")) === "Read", `${soloAsked} reads`);
+    await shared.waitForFunction(() => document.getElementById("tag-solo-a")?.textContent === "Read", null, { timeout: 6000 }).catch(() => {});
+    check("a script's answer that is only a tag to read a part again reads it, through an answer that is only a tag too", soloAsked === 2 && (await shared.textContent("#tag-solo-a")) === "Read", `${soloAsked} reads`);
     await shared.unrouteAll({ behavior: "ignoreErrors" });
     await shared.context().close();
   }
