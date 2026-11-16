@@ -16,12 +16,12 @@ const enabled = process.env.CORTEN_FAILED_NATIVE_LINUX === "1";
 const tokens = Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")]));
 const fleet = fleetPlan({ round: "r21", commit: failedNativeCommit, token: "f".repeat(16), tokens, provider: { accountId, context }, sshKey: "42" });
 const state = { ...reservation({ round: "r21", commit: failedNativeCommit, token: tokens["catalog-page"], group: "catalog-page", fleet }),
-  status: "running", id: "123", ip: "192.0.2.10", archiveSha256: "a".repeat(64) };
+  status: "running", id: "619662725", ip: "192.0.2.10", archiveSha256: "a".repeat(64) };
 const literal = (value) => `json.loads(${JSON.stringify(JSON.stringify(value))})`;
 
 // Substitute only metadata/service observations. File descriptors, directory
 // traversal, tar creation, /proc, parent identity and process lifetimes are real.
-function observed(script, mode) {
+function observed(script, mode, cloudControl, phase) {
   if (mode.startsWith("budget-")) {
     const bounds = mode === "budget-names" ? { nameBytes: 60 } : mode === "budget-members" ? { memberBytes: 80 } : { nodes: 32 };
     script = script.replace("c = json.loads(raw_config)", `c = json.loads(raw_config)
@@ -49,15 +49,129 @@ def checked_scandir(fd):
 os.listdir, os.scandir = checked_listdir, checked_scandir`);
   }
   const [header, rest] = script.split("<<'CORTEN_FAILED_NATIVE_HOST'\n"), program = rest.split("\nCORTEN_FAILED_NATIVE_HOST")[0];
-  const config = { mode, program, id: state.id, unit: state.unit };
+  const config = { mode, program, id: state.id, unit: state.unit, cloudControl, phase };
   return `${header}<<'CORTEN_FAILED_NATIVE_HOST'
-import contextlib, io, json, subprocess, urllib.request
+import contextlib, io, json, os, pathlib, subprocess, urllib.request
 from unittest.mock import patch
 fixture = ${literal(config)}
+cloud = pathlib.Path('/var/lib/cloud')
+instance = cloud / 'instances' / fixture['id']
+selector, identity, userdata = cloud / 'instance', cloud / 'data/instance-id', instance / 'user-data.txt'
+control = fixture.get('cloudControl')
+case = control['case'] if control and control['phase'] == fixture['phase'] else None
+original_open, original_read, original_readlink = os.open, os.read, os.readlink
+cloud_checks, raced = 0, False
+
+def replace_selector(target):
+    selector.unlink()
+    selector.symlink_to(target, target_is_directory=True)
+
+def replace_directory(path):
+    path.rename(str(path) + '.old')
+    path.mkdir()
+
+def mutate(case):
+    if case == 'selector-missing': selector.unlink()
+    elif case == 'selector-directory':
+        selector.unlink()
+        selector.mkdir()
+    elif case == 'selector-file':
+        selector.unlink()
+        selector.touch()
+    elif case == 'selector-fifo':
+        selector.unlink()
+        os.mkfifo(selector)
+    elif case == 'selector-foreign':
+        foreign = cloud / 'instances/619662726'
+        foreign.mkdir()
+        (foreign / 'user-data.txt').touch()
+        replace_selector(foreign)
+    elif case == 'selector-escape': replace_selector('/tmp')
+    elif case == 'selector-relative': replace_selector('instances/' + fixture['id'])
+    elif case == 'selector-dotdot': replace_selector(str(instance.parent) + '/../instances/' + fixture['id'])
+    elif case == 'selector-dangling':
+        instance.rename(str(instance) + '.old')
+    elif case == 'selector-hardlink': os.link(selector, cloud / 'linked-selector', follow_symlinks=False)
+    elif case in ['cloud-symlink', 'target-symlink', 'instances-symlink', 'data-symlink']:
+        path = {'cloud-symlink': cloud, 'target-symlink': instance, 'instances-symlink': instance.parent, 'data-symlink': identity.parent}[case]
+        path.rename(str(path) + '.old')
+        path.symlink_to(str(path) + '.old', target_is_directory=True)
+    elif case in ['target-file', 'target-fifo']:
+        instance.rename(str(instance) + '.old')
+        if case == 'target-file': instance.touch()
+        else: os.mkfifo(instance)
+    elif case == 'id-missing': identity.unlink()
+    elif case in ['id-foreign', 'id-padded', 'id-oversize', 'id-empty', 'id-no-newline']:
+        identity.write_text({'id-foreign': '619662726', 'id-padded': ' ' + fixture['id'], 'id-oversize': 'x' * 65,
+            'id-empty': '', 'id-no-newline': fixture['id']}[case])
+    elif case in ['id-symlink', 'id-hardlink', 'id-fifo', 'id-directory']:
+        identity.unlink()
+        if case == 'id-symlink': identity.symlink_to(userdata)
+        elif case == 'id-hardlink': os.link(userdata, identity)
+        elif case == 'id-fifo': os.mkfifo(identity)
+        else: identity.mkdir()
+    elif case == 'userdata-nonempty': userdata.write_text('must not be ignored')
+    elif case == 'userdata-missing': userdata.unlink()
+    elif case in ['userdata-symlink', 'userdata-hardlink', 'userdata-fifo', 'userdata-directory']:
+        userdata.unlink()
+        if case == 'userdata-symlink': userdata.symlink_to('/dev/null')
+        elif case == 'userdata-hardlink':
+            (instance / 'empty').touch()
+            os.link(instance / 'empty', userdata)
+        elif case == 'userdata-fifo': os.mkfifo(userdata)
+        else: userdata.mkdir()
+    elif case == 'quiet-selector': replace_selector(instance)
+    elif case == 'quiet-target':
+        replace_directory(instance)
+        userdata.touch()
+    elif case == 'quiet-id':
+        identity.unlink()
+        identity.write_text(fixture['id'] + '\\n')
+    elif case == 'quiet-userdata':
+        userdata.unlink()
+        userdata.touch()
+    else: raise AssertionError('unknown cloud-init control')
+
+if case and not case.startswith(('race-', 'quiet-')): mutate(case)
+
+def checked_open(path, flags, *args, **kwargs):
+    global raced
+    if case == 'race-selector-open' and path == 'instance' and not raced:
+        raced = True
+        replace_selector(instance)
+    return original_open(path, flags, *args, **kwargs)
+
+def checked_readlink(path, *args, **kwargs):
+    global raced
+    value = original_readlink(path, *args, **kwargs)
+    if case == 'race-selector-readlink' and path == '' and not raced:
+        raced = True
+        replace_selector('/tmp')
+    return value
+
+def checked_read(fd, size):
+    global raced
+    value = original_read(fd, size)
+    if case and case.startswith('race-') and not raced and original_readlink('/proc/self/fd/' + str(fd)) == str(userdata):
+        raced = True
+        if case == 'race-selector-data': replace_selector('/tmp')
+        elif case == 'race-target':
+            replace_directory(instance)
+            userdata.touch()
+        elif case == 'race-ancestry': replace_directory(instance.parent)
+        elif case == 'race-data-ancestry': replace_directory(identity.parent)
+        elif case == 'race-id': identity.write_text('619662726')
+        elif case == 'race-userdata-write': userdata.write_text('arrived during empty read')
+        elif case == 'race-userdata-swap':
+            userdata.unlink()
+            userdata.touch()
+        else: raise AssertionError('unknown race control')
+    return value
 def metadata(url, timeout):
     assert url == 'http://169.254.169.254/metadata/v1/id' and timeout == 3
     return contextlib.closing(io.BytesIO(('124' if fixture['mode'] == 'host-id' else fixture['id']).encode()))
 def service(args, **kwargs):
+    global cloud_checks
     assert kwargs == dict(capture_output=True, text=True, timeout=5)
     if args[:2] == ['systemctl', 'show']:
         v = dict(Id=fixture['unit'], LoadState='loaded', FragmentPath='/etc/systemd/system/' + fixture['unit'], ActiveState='failed',
@@ -72,15 +186,22 @@ def service(args, **kwargs):
     elif args == ['systemctl', 'list-jobs', '--no-legend', '--no-pager']:
         value = '123 start' if fixture['mode'] == 'jobs' else ''
     elif args == ['cloud-init', 'status', '--format', 'json']:
+        cloud_checks += 1
+        if cloud_checks == 2 and case and case.startswith('quiet-'): mutate(case)
         value = json.dumps(dict(status='running' if fixture['mode'] == 'cloud-init' else 'done'))
     else:
         assert args == ['docker', 'ps', '--quiet', '--no-trunc']
         value = 'synthetic-running-container' if fixture['mode'] == 'container' else ''
     return subprocess.CompletedProcess(args, 0, stdout=value, stderr='')
-with patch.object(urllib.request, 'urlopen', metadata), patch.object(subprocess, 'run', service):
+with patch.object(urllib.request, 'urlopen', metadata), patch.object(subprocess, 'run', service), \\
+    patch.object(os, 'open', checked_open), patch.object(os, 'read', checked_read), patch.object(os, 'readlink', checked_readlink):
     try:
         exec(compile(fixture['program'], '<fixed-retirement-program>', 'exec'))
     except BaseException:
+        if case and case.startswith('race-') and not raced:
+            print('required race injection was not reached', file=sys.stderr)
+        if case and case.startswith('quiet-') and cloud_checks != 2:
+            print('required quiet reuse was not reached', file=sys.stderr)
         if fixture['mode'] in ['idle', 'exited-process', 'absent']:
             import traceback
             traceback.print_exc()
@@ -88,12 +209,12 @@ with patch.object(urllib.request, 'urlopen', metadata), patch.object(subprocess,
 CORTEN_FAILED_NATIVE_HOST`;
 }
 
-function control(mode) {
+function control(mode, cloudControl) {
   const config = { mode, state, files: remoteFiles(state), marker: `${JSON.stringify(bootstrapMarker(state))}\n`, roots: failedNativeRoots(state) };
-  const capture = observed(failedNativeScript(state), mode);
-  const confirm = observed(failedNativeScript(state, "e".repeat(64)), mode);
+  const capture = observed(failedNativeScript(state), mode, cloudControl, "capture");
+  const confirm = observed(failedNativeScript(state, "e".repeat(64)), mode, cloudControl, "rehash");
   const fence = observed(failedNativeScript(state, "e".repeat(64), { snapshotSha256: "e".repeat(64),
-    roots: [...failedNativeRoots(state), "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"].map((path) => ({ path })) }), mode);
+    roots: [...failedNativeRoots(state), "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"].map((path) => ({ path })) }), mode, cloudControl, "fence");
   return `set -u
 /usr/bin/python3 - <<'SETUP'
 import hashlib, json, os, pathlib, subprocess, time
@@ -131,6 +252,13 @@ if c['mode'] in ['live-process', 'exited-process']:
     p = subprocess.Popen(['/usr/bin/sleep', '20' if c['mode'] == 'live-process' else '0.01'], cwd='/bench')
     if c['mode'] == 'exited-process': p.wait(timeout=2)
 if c['mode'] == 'container': pathlib.Path('/run/docker.sock').touch()
+cloud = pathlib.Path('/var/lib/cloud')
+instance = cloud / 'instances' / c['state']['id']
+instance.mkdir(parents=True)
+(cloud / 'instance').symlink_to(instance, target_is_directory=True)
+(instance / 'user-data.txt').touch()
+(cloud / 'data').mkdir()
+(cloud / 'data/instance-id').write_text(c['state']['id'] + '\\n')
 if c['mode'].startswith('budget-'):
     target = native
     if c['mode'] == 'budget-nested':
@@ -185,15 +313,19 @@ printf '\\n'
 `;
 }
 
+function runControl(mode, cloudControl) {
+  return spawnSync("docker", ["run", "--pull=never", "--rm", "-i", "--init", "--memory=1g", "--pids-limit=64", "--label", "agent.owner=codex", "--label", "agent.task=corten-bench-cloud-init-custody",
+    "--network", "none", "--read-only", "--tmpfs", "/bench:rw", "--tmpfs", "/tmp:rw", "--tmpfs", "/etc/systemd/system:rw", "--tmpfs", "/run:rw",
+    "--tmpfs", "/var/lib:rw", "node@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496", "/bin/bash"],
+  { input: control(mode, cloudControl), encoding: "utf8", windowsHide: true, timeout: 20000, maxBuffer: 65536 });
+}
+
 test("fixed recovery program on local Linux uses real safe file and terminal process controls", { skip: !enabled, timeout: 240000 }, async () => {
   const modes = ["idle", "exited-process", "absent", "live-process", "live-after-capture", "changed-after-capture", "changed-before-fence", "live-before-fence", "symlink", "dangling", "hardlink", "fifo",
     "ancestor-symlink", "active", "pid", "restart", "unit-job", "wrong-unit", "exit-zero", "duplicate", "jobs", "cloud-init", "host-id", "container",
     "budget-wide", "budget-nested", "budget-names", "budget-members"];
   for (const mode of modes) {
-    const child = spawnSync("docker", ["run", "--rm", "-i", "--init", "--label", "agent.owner=codex", "--label", "agent.task=corten-bench-failed-retirement",
-      "--network", "none", "--read-only", "--tmpfs", "/bench:rw", "--tmpfs", "/tmp:rw", "--tmpfs", "/etc/systemd/system:rw", "--tmpfs", "/run:rw",
-      "node@sha256:9d266751ca3d7fdbe651c878ffd5ad0a42fed49a18c283509267c97f025b7496", "/bin/bash"],
-    { input: control(mode), encoding: "utf8", windowsHide: true, timeout: 20000, maxBuffer: 65536 });
+    const child = runControl(mode);
     assert.equal(child.error, undefined, mode); assert.equal(child.signal, null, mode); assert.equal(child.stderr, "", mode);
     const positive = ["idle", "exited-process", "absent"].includes(mode);
     assert.equal(child.status, positive ? 0 : 1, `${mode}: ${child.stdout}`);
@@ -218,6 +350,36 @@ test("fixed recovery program on local Linux uses real safe file and terminal pro
         assert.ok(local.startsWith(join(tmpdir(), "failed-native-linux-"))); rmSync(local, { recursive: true });
       }
       if (mode === "absent") assert.deepEqual(observations[1].roots[1], { path: failedNativeRoots(state)[1], present: false });
+    }
+  }
+});
+
+test("cloud-init selector stays bound through capture, rehash and fence on local Linux", { skip: !enabled, timeout: 480000 }, async (t) => {
+  for (const phase of ["capture", "rehash", "fence"]) {
+    for (const mode of ["id-no-newline", "selector-missing", "selector-directory", "selector-file", "selector-fifo", "selector-foreign", "selector-escape",
+      "selector-relative", "selector-dotdot", "selector-dangling", "selector-hardlink", "cloud-symlink", "target-symlink", "instances-symlink", "data-symlink",
+      "target-file", "target-fifo", "id-missing", "id-foreign", "id-padded", "id-oversize", "id-empty", "id-symlink", "id-hardlink", "id-fifo", "id-directory",
+      "userdata-nonempty", "userdata-missing", "userdata-symlink", "userdata-hardlink", "userdata-fifo", "userdata-directory",
+      "race-selector-open", "race-selector-readlink", "race-selector-data", "race-target", "race-ancestry", "race-data-ancestry", "race-id", "race-userdata-write", "race-userdata-swap",
+      "quiet-selector", "quiet-target", "quiet-id", "quiet-userdata"]) {
+      await t.test(`${phase}: ${mode}`, { timeout: 25000 }, () => {
+        const child = runControl("cloud-control", { phase, case: mode }), positive = mode === "id-no-newline";
+        assert.equal(child.error, undefined); assert.equal(child.signal, null); assert.equal(child.stderr, "");
+        assert.equal(child.status, positive ? 0 : 1, child.stdout);
+        const lines = child.stdout.trim().split("\n");
+        const bytes = positive ? Buffer.from(lines.pop(), "base64") : undefined;
+        const observations = lines.map((line) => JSON.parse(line));
+        assert.equal(observations.length, positive ? 3 : ["capture", "rehash", "fence"].indexOf(phase) + 1);
+        for (const o of observations.slice(0, -1)) assert.equal(o.custody, true);
+        if (positive) {
+          assert.equal(digest(bytes), observations[0].archiveSha256);
+          for (const o of observations) {
+            assert.equal(o.custody, true); assert.equal(o.historicalAccountingQualified, false);
+            assert.equal(o.snapshotSha256, observations[0].snapshotSha256);
+            assert.equal(o.archiveSha256, observations[0].archiveSha256);
+          }
+        } else assert.deepEqual(observations.at(-1), { schema: "benchmark-failed-native-host/v1", custody: false });
+      });
     }
   }
 });

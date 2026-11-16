@@ -109,6 +109,52 @@ def small(path, limit):
         return data
     finally:
         os.close(fd)
+cloud_binding = None
+
+def cloud_instance():
+    global cloud_binding
+    assert re.fullmatch(r'[1-9][0-9]*', host_id)
+    descriptors, entries = [], []
+    def entry(parent, name, flags):
+        before = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        fd = os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+        descriptors.append(fd)
+        assert info(before) == info(os.fstat(fd))
+        entries.append((parent, name, fd, info(before)))
+        return fd
+    def directory(parent, name):
+        return entry(parent, name, os.O_RDONLY | os.O_DIRECTORY)
+    def data(parent, name, limit):
+        fd = entry(parent, name, os.O_RDONLY)
+        s = os.fstat(fd)
+        assert stat.S_ISREG(s.st_mode) and s.st_nlink == 1 and s.st_size <= limit
+        value = os.read(fd, limit + 1)
+        assert len(value) == s.st_size and info(s) == info(os.fstat(fd))
+        return value
+    try:
+        cloud = directory(None, '/')
+        for name in ['var', 'lib', 'cloud']:
+            cloud = directory(cloud, name)
+        # Read the one supported selector as data through its own pinned inode.
+        # Never traverse it, and never extend opened()'s no-symlink policy.
+        selector = entry(cloud, 'instance', os.O_PATH)
+        s = os.fstat(selector)
+        assert stat.S_ISLNK(s.st_mode) and s.st_nlink == 1
+        assert os.readlink('', dir_fd=selector) == '/var/lib/cloud/instances/' + host_id
+        instance = directory(directory(cloud, 'instances'), host_id)
+        instance_id = data(directory(cloud, 'data'), 'instance-id', 64)
+        assert instance_id in [host_id.encode('ascii'), (host_id + '\\n').encode('ascii')]
+        assert data(instance, 'user-data.txt', 0) == b''
+        for parent, name, fd, before in reversed(entries):
+            assert before == info(os.fstat(fd)) == info(os.stat(name, dir_fd=parent, follow_symlinks=False))
+        binding = [before for parent, name, fd, before in entries]
+        if cloud_binding is not None:
+            assert binding == cloud_binding
+        cloud_binding = binding
+    finally:
+        for fd in reversed(descriptors):
+            os.close(fd)
+
 def command(args):
     r = subprocess.run(args, capture_output=True, text=True, timeout=5)
     assert r.returncode == 0
@@ -131,8 +177,7 @@ def quiet():
     assert v['ExecMainCode'] == '1' and v['ExecMainStatus'] == '2' and v['ExecMainStartTimestamp'].strip() not in ['', 'n/a']
     assert command(['systemctl', 'list-jobs', '--no-legend', '--no-pager']).strip() == ''
     assert json.loads(command(['cloud-init', 'status', '--format', 'json']))['status'] == 'done'
-    if os.path.lexists('/var/lib/cloud/instance/user-data.txt'):
-        assert small('/var/lib/cloud/instance/user-data.txt', 0) == b''
+    cloud_instance()
     for name, expected in c['files'].items():
         assert sha(small('/bench/' + name, 1048576)) == expected
     assert sha(small('/etc/systemd/system/' + unit, 1048576)) == c['files'][unit]
