@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import { records as marketplaceRecords } from '../../../marketplace/fixtures.mjs';
 import { records as catalogRecords } from '../../../catalog/fixtures.mjs';
 import { containerBase, startupFailure, writeFixtures } from './compiled-check.mjs';
+import { hydrationArtifactPath, observeHydration } from './hydration-diagnostics.mjs';
 
 const { chromium } = createRequire(import.meta.url)('@playwright/test');
 
@@ -133,8 +134,11 @@ try {
         assert.equal(rejected.headers()['set-cookie'], undefined, 'rejection must not create a session');
         assert.deepEqual(await read(), []);
         const page = await context.newPage();
+        const hydration = javaScriptEnabled ? observeHydration(page, {
+          app, source, profile, container: active, artifactPath: hydrationArtifactPath(app, source, profile),
+        }) : undefined;
         await page.goto(pageURL);
-        if (javaScriptEnabled) await page.waitForFunction(() => typeof window.__hydratedAt === 'number');
+        if (javaScriptEnabled) await hydration.wait();
         const form = page.locator('.marketplace__alert form');
         const email = `native-${javaScriptEnabled}@example.test`;
         await form.locator('[name=email]').fill(email);
@@ -155,8 +159,9 @@ try {
         assert.equal(cookie.httpOnly, true); assert.equal(cookie.sameSite, 'Lax');
         assert.equal(cookie.secure, false); assert.equal(cookie.expires, -1);
         assert.deepEqual(await read(other), [], 'fresh browser context has no alerts');
+        hydration?.reset();
         await page.goto(pageURL);
-        if (javaScriptEnabled) await page.waitForFunction(() => typeof window.__hydratedAt === 'number');
+        if (javaScriptEnabled) await hydration.wait();
         await page.locator('.marketplace__alert [name=email]').fill(email);
         await page.locator('.marketplace__alert [name=target_price]').fill('invalid');
         await page.locator('.marketplace__alert button').click();

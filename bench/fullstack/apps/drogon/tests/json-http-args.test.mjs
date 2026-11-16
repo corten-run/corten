@@ -58,7 +58,7 @@ if (process.argv[2] === '--probe') {
         args.splice(mappings[0], 2);
       }
       args[args.indexOf('--name') + 1] = '<container>';
-      assert.deepEqual(args, ['run', '-d', '--name', '<container>', '--cpus', '1',
+      assert.deepEqual(args, ['run', '-d', '--name', '<container>', '--cpus', '1', '--memory', '1g',
         '--label', 'agent.owner=codex', '--label', 'agent.task=corten-bench-parity-drogon',
         '-p', '127.0.0.1::8080', '-v', '/virtual/drogon-fixture:/fixtures:ro',
         '-e', 'ITEM_SOURCE=fixture', '-e', 'FIXTURE_PATH=/fixtures/items.json',
