@@ -113,10 +113,12 @@ impl FormZone {
         if let Some(east) = read_offset(text) {
             return Some(Offset::seconds(east).into());
         }
+        // Only as the database writes it (jiff finds `america/chicago` too), so one zone is
+        // sent one way, the way `field` draws it.
         #[cfg(feature = "zones")]
         if crate::client::zone_name(text) {
             let zone = crate::i18n::Visitor::named(text);
-            if zone.is_known() {
+            if zone.name() == Some(text) {
                 return Some(FormZone { name: text.into(), rules: Rules::Named(zone) });
             }
         }
@@ -275,6 +277,8 @@ mod tests {
         assert_eq!(FormZone::read("America/Chicago"), Some(chicago));
         // Not known (no zone reported yet): UTC, and said so.
         assert_eq!(FormZone::from(Visitor::default()).name(), "UTC");
-        assert!(FormZone::read("Mars/Olympus").is_none() && FormZone::read("../etc/passwd").is_none());
+        for text in ["Mars/Olympus", "../etc/passwd", "america/chicago", "utc", "Etc/Unknown"] {
+            assert!(FormZone::read(text).is_none(), "{text}");
+        }
     }
 }
