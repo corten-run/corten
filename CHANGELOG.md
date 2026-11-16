@@ -709,6 +709,16 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A debug build answers a browser's plain request (no `data-patch`, asking for HTML) that a
+  handler answered with `req.patch` or `req.patch_with_status` with a 500 that names the method
+  and the route and says to answer with `req.patch_or` or check `req.mode == Mode::Action`
+  first: the browser would show the fragment as the whole page, with no layout, stylesheets or
+  navigation. The handler's cookies and `Clear-Site-Data` go out with the error. The runtime's
+  `data-patch` fetch and a client that does not ask for HTML still get the patch, and a release
+  build compiles none of the check. The watchlist's smoke-only dialog, `<details>` and styled-note
+  routes answer their page's address with a redirect without JavaScript
+  ([#1423 A patch answering a browser's plain post is shown as the whole page, and the #1340 debug check only catches a page](https://github.com/corten-run/corten/issues/1423)).
+
 - **Breaking:** a handler parameter typed `Map<string, El>` takes only a ref whose every element
   has a `key={..}`: a ref without keys no longer compiles there, and the error says to add `key={..}`,
   where it compiled and the handler got a one-entry `Map`. A ref with a key on some elements and

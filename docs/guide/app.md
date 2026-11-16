@@ -563,7 +563,9 @@ What it sends is what the app's own pages send, typed the same way:
    GET form's checkbox (`?mine=on`, where a link writes `true`) is a `Local`.
 3. A request asks for HTML as a browser's page load does. `.mode(Mode::Action)` asks as the
    runtime's `data-patch` submit does, `Mode::Navigation` as its link, `Mode::Data` as a client
-   that wants JSON.
+   that wants JSON. So the same form posted without `.mode(..)` is the browser without JavaScript:
+   in a test (a debug build) a handler that answers it with a patch, or with a page at a path with
+   no `GET`, gets a 500 that says why ([Where a form posts](requests-and-forms.md#where-a-form-posts)).
 4. `.cookie(name, value)` sends a cookie (`answer.cookie(name)` reads one an answer set),
    `.header(name, value)` any other header, `.peer(ip)` the connection's address
    ([`ClientIp`](#the-clients-address)), and `Client::call(method, &route).body(type, bytes)` a body that

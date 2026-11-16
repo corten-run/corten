@@ -152,7 +152,7 @@ runs (the call throws when it is not; the type says it is always there), the val
 handler parameter typed `unknown` (any `ToJson`, ref or event; the script narrows it, and `tsc` holds it to
 that), that a route marked `link` in a routes module (or a plain `#[derive(Route)]` struct) is
 served by the API or area that should serve it (the app's tests cover that), that a `data-patch` form's handler answers
-a patch (one that answers its page gets the page swapped in, [requests guide](guide/requests-and-forms.md#request-modes)), that every component a page renders is listed in
+a patch (one that answers its page gets the page swapped in, [requests guide](guide/requests-and-forms.md#request-modes)), that a handler answers a patch only to the runtime (checked at run time in debug builds: a browser's plain request answered with one is a 500 that names the route, [requests guide](guide/requests-and-forms.md#where-a-form-posts)), that every component a page renders is listed in
 `App::components`, or in an area (`Area::components`) the page, or a patch's handler, is under (checked at run time in debug builds,
 a router test or `cargo run` as well as `corten dev`: the page fails and names it), that a CSS custom property a stylesheet reads exists (a misspelled `var()` falls
 back silently), a feed row's flattened field's members, its id type's own `Serialize` and `Deserialize`, or a row's that are not

@@ -4307,6 +4307,77 @@ rules something out.
     `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
     it, load such a page in the three engines and count the matches.
 
+55. <a id="choice-plain-request-patch"></a>**A patch answering a browser's plain request is a debug build's 500, not a
+    compile error: the handler's type cannot say which mode it answers.** `req.patch` and
+    `req.patch_with_status` answer whatever request reached the handler. The runtime's
+    `data-patch` fetch (`corten: action`) applies the fragment; a browser that asked by itself (a
+    form without JavaScript, a link, a reload) shows it as the whole document, with no layout,
+    stylesheets or navigation, and every test that sends the runtime's request passes. A debug
+    build now answers that request, a browser's (`text/html`) `Mode::Document` request the runtime
+    did not fetch, the same test the check for a page at a path with no `GET` makes
+    ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)), but for any method, with a 500 that names the method
+    and the route (its pattern from `#[corten::routes]`, else the request's path) and says to
+    answer with `req.patch_or` or check `req.mode == Mode::Action` first. It reads the
+    `corten-patch` header every patch-making method sets, after the handler and the app's own steps
+    and beside the other debug checks in `page_or_error`, and carries the handler's `Set-Cookie` and
+    `Clear-Site-Data` to the error as that check does. A release build compiles none of it: the
+    request's method is cloned for the message only under `debug_assertions`, and the release path
+    is the one it was (measured below).
+
+    A compile error was weighed first ([Rule 8](#rule-compile-errors)). What a handler answers is
+    decided by `req.mode`, a value of the request, and one handler answers both modes (Values 5),
+    so its type cannot be "patch" or "page". [Choice 50](#choice-patch-routes) gave the type what it
+    can carry, that a patch is among the answers (`HtmlResult<Patches>`), which a plain request may
+    still get from a handler that checks nothing; it does not say which request gets it
+    ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)). Not chosen: `req.patch` taking a proof
+    of the mode, a token only `if let Some(action) = req.action()` hands out (as
+    [`req.invalid_with`](#choice-patch-routes)'s form side gets a `FormPatch`). That would make an
+    unchecked patch a compile error, but it removes `req.mode == Mode::Action`, the documented way
+    a handler checks, from every handler that patches with a status or data of its own (the
+    watchlist's, the deck builder's, the guide's), changes the signature of the two methods every
+    such handler calls for a mistake the debug build now finds at the first plain request a test
+    sends, and is still stepped around by a handler that writes `req.mode` ([Choice 50](#choice-patch-routes) keeps that
+    the app's explicit override); that is a change to the handler API of its own, not this check.
+    Also not chosen: `dev.js` saying so on the page, which sees nothing when no JavaScript runs,
+    the one case this is about; and checking only a `POST`, as the #1340 check does: a `GET` route
+    whose handler answers only a patch (a dialog's form, a part read again by the runtime) is drawn
+    bare by a link or a reload the same way.
+
+    What it does not see: an `unstaged` route, which skips the stages it runs in; a fragment sent
+    without `corten-patch` (a response built by hand, or one put in place of the handler's through
+    `DerefMut`), which is not a patch to it; and a release build. A request the runtime makes is
+    never checked, its `corten: page` fetch of a whole page included.
+
+    Stands on: platform (a browser shows an HTML response to a navigation or a form submit as the
+    document, whatever its markup); reasoned (every patch-making method sets `corten-patch`
+    through one constructor, `html_response`, and the app cannot make an `HtmlResponse` but
+    through `Req`);
+    measured (callgrind, release, instructions per request through a route's `patch_or` in
+    process, 1,200 requests less 200 over 1,000, with the `#[ignore]` test
+    `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, alternate runs, the median
+    and the range: `55757d723` (before, six runs) against `55757d723` with only this change's
+    `crates/corten/src/page.rs` (three runs), the patch (`Mode::Action`) 17,969.79 (17,969.76 to
+    17,969.80) and 17,969.83 (17,969.83 to 17,969.87), the page (`Mode::Document`) 18,382.70
+    (18,382.68 to 18,382.82) and 18,382.72 (18,382.71 to 18,382.76), the same within a tenth of an
+    instruction; the whole change (three runs), whose other files are tests, an example and
+    documents, 17,974.49 (17,974.48 to 17,975.89) and 18,388.71 (18,388.59 to 18,388.78), about
+    five and six more, which the build with `page.rs` alone does not show: the rest adds tests to
+    the same test binary, and what moved was not traced; the counted page asks for no HTML, which in a release build reaches the
+    same code, since the check and the method it clones are not compiled there); value (Values 3, a
+    form works without JavaScript; Values 9, the developer sees it in a test).
+
+    Revisit when: an app needs a fragment answered to a plain request on purpose (a server that
+    answers an `<iframe>` or another program's fetch with HTML that is not a page), which would need
+    a way to say so; or a change to the handler API takes a proof of the mode for other reasons,
+    when the token above would make this a compile error; or the runtime stops marking its own
+    requests with the `corten` header ([Choice 11](#choice-corten-request-header)), on which "the
+    runtime did not fetch it" stands.
+
+    Last checked: 2026-11-16, the router test
+    `a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds` and its release
+    counterpart (the release build's run with `--release`), on `4060b8b27`, and the reading of
+    `html_response`'s callers in `crates/corten/src/page.rs` that the reasoned premise rests on.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

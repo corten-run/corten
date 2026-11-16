@@ -65,7 +65,7 @@ service is a server of the test's own, not Corten ([Testing an app](app.md#testi
 | `GET`, no `corten` header | first load, reload, no JavaScript | `req.page(doc)`: the app's layout with the page in it | renders HTML |
 | `GET` with `corten: nav` | runtime, same-origin link or back/forward | the same call: `<title>`, head tags and the page only | swaps `<main>` |
 | `GET` with `corten: page` | runtime, the page a write sends the browser to | the same call: the whole document, as a first load gets it (`req.mode` is `Mode::Document`) | swaps the page and draws its layout again |
-| `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `req.patch(view)` | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
+| `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `req.patch(view)` once `req.mode == Mode::Action` ([where a form posts](#where-a-form-posts)) | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
 | `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
 | any, `Accept: application/json` | native screen, agent, test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
@@ -196,6 +196,23 @@ a `Table` is not checked, and a page such a route serves at a path a post-only m
 matches is taken for that route's, a false 500; an `unstaged` route skips the stages the check
 runs in; an `any = ..` route answers `GET` too; and a release build compiles none of it, so it
 never runs in a production image or a smoke test against one.
+
+A patch is only for the runtime. `req.patch` and `req.patch_with_status` answer whatever request
+reached the handler, and a browser that asked by itself (a form without JavaScript, a link, a
+reload) shows the fragment as the whole page, with no layout, stylesheets or navigation, at the
+address it asked. So a handler answers a patch with `req.patch_or(view, || async { .. })`, whose
+other side draws the page or a redirect, or checks `req.mode == Mode::Action` before
+`req.patch`, as a patch with a status or data of its own does. A debug build answers a browser's
+plain request (no `data-patch`, asking for HTML, any method) that a handler answered with a patch
+with a 500 naming the method and the route (its pattern, or the path of a route given by hand) and
+what to answer instead, so an app's router test that sends the plain request fails there; the
+handler's cookies and `Clear-Site-Data` go out with the error, as above. The runtime's
+`data-patch` fetch and a client that does not ask for HTML still get the patch. The handler's type
+does not say which it answers, since one handler answers both from `req.mode`
+([design Choice 55](../design.md#choice-plain-request-patch)). It does not see an `unstaged`
+route, a fragment answered without the patch's `corten-patch` header (a response built by hand,
+or one put in place of the handler's through `DerefMut`), or a release build, which compiles none
+of it.
 
 ### Several posts on one page
 
