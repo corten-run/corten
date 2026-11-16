@@ -168,6 +168,9 @@ struct Shipment {
     #[serde(default)]
     gift: bool,
     size: String,
+    /// Drawn by no form: a group of it is empty.
+    #[serde(default)]
+    extras: Vec<String>,
     #[fields(rows)]
     #[serde(default)]
     parcels: std::collections::BTreeMap<u32, Parcel>,
@@ -197,9 +200,18 @@ fn PackageFields() -> impl Render {
 #[derive(Id)]
 struct ShipFormId;
 
+#[derive(Id)]
+struct LabelFormId;
+
+#[derive(Id)]
+struct JoinedId;
+
 /// Fills the package when the service changes, given the fields as their controls. The two
 /// buttons call a handler that takes an input with a field their form does not have as one: the
-/// note, a textarea, and the weight, in a form without it.
+/// note, a textarea, and the weight, in a form without it. The rest say which form a field is
+/// found in for an `on:` on the form itself, on a list inside it, on a button outside it that
+/// `form=` joins to it, and on a label in another form whose control `form=` joins to this one;
+/// and count a group no control has, and one whose name is the select's.
 #[component(js)]
 fn ShipForm() -> impl Render {
     let f = Shipment::FIELDS;
@@ -207,7 +219,7 @@ fn ShipForm() -> impl Render {
     let parcel = f.parcels.at(&1).weight;
     html! {
         <div>
-            <form id={ShipFormId}>
+            <form id={ShipFormId} on:dblclick={js::mark(f.weight, target)}>
                 <select name={f.service} on:change={js::fill(f.service, f.weight, f.note, f.gift, f.size, parcel, out)}>
                     <option value="ground">"Ground"</option>
                     <option value="air">"Air"</option>
@@ -215,8 +227,19 @@ fn ShipForm() -> impl Render {
                 <PackageFields />
                 <output ref={out}></output>
                 <button type="button" on:click={js::weigh(f.note)}>"Weigh the note"</button>
+                <ul on:click={js::mark(f.weight, target)}>
+                    <li>"Mark from the list"</li>
+                </ul>
+                <button type="button" on:click={js::count(f.extras, target)}>"Count extras"</button>
+                <button type="button" on:click={js::count(f.service, target)}>"Count services"</button>
             </form>
             <form><button type="button" on:click={js::weigh(f.weight)}>"Weigh elsewhere"</button></form>
+            <button type="button" form={ShipFormId} on:click={js::mark(f.weight, target)}>"Mark from outside"</button>
+            <form id={LabelFormId}>
+                <input name={f.weight} value="5">
+                <label for={JoinedId} on:click={js::mark(f.weight, target)}>"Mark from the label"</label>
+            </form>
+            <input id={JoinedId} type="checkbox" form={ShipFormId}>
         </div>
     }
 }

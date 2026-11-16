@@ -1,6 +1,7 @@
 // @ts-check
 // ShipForm (smoke.rs): a handler given a form's fields as its controls, which a component without
-// a script draws, and one whose calls name a field their form does not have as it takes it.
+// a script draws, one whose calls name a field their form does not have as it takes it, and two
+// that say which form a field was found in and how many controls a group has.
 
 /**
  * Fills the package for the service chosen, and writes what it was given into `out`: each
@@ -22,4 +23,17 @@ export function fill(service, weight, note, gift, sizes, parcel, out) {
 /** Never runs: each call gives it a field its form does not have as an input. @param {HTMLInputElement} weight */
 export function weigh(weight) {
   weight.value = "0";
+}
+
+/**
+ * Marks `target`, the element with the handler, with the id of the form its weight was found in.
+ * @param {HTMLInputElement} weight @param {HTMLElement} target
+ */
+export function mark(weight, target) {
+  target.dataset.form = weight.form?.id ?? "";
+}
+
+/** Marks `target` with how many controls the group has. @param {HTMLInputElement[]} group @param {HTMLElement} target */
+export function count(group, target) {
+  target.dataset.count = String(group.length);
 }

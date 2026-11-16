@@ -9,17 +9,22 @@
 /** The tag of each kind's controls: an input, select or textarea, or every input of the name. */
 export const TAGS = { i: "input", s: "select", t: "textarea", "*": "input" };
 
+/** The elements with a form owner, which `form=` can join to a form outside them. */
+export const LISTED = "button,fieldset,input,object,output,select,textarea";
+
 /**
- * The form of `el`: the form itself; the one the browser says it belongs to (a control's,
- * `form=` included); none when its `form=` names no form, as a submit has it; else the one around
- * it. Only a form's own members can be shadowed by a control's name (`form`, `closest`), and a
- * form is taken first.
+ * The form of `el`: the form itself; for a control (`LISTED`), the one the browser says it
+ * belongs to (`form=` included), or none when its `form=` names no form, as a submit has it; else
+ * the one around it. A `<label>` or `<legend>` is not a control: its `form` is the labelled
+ * control's or the fieldset's, which `form=` may put in another form, so it takes the one around
+ * it, as a `<ul>` does. Only a form's own members can be shadowed by a control's name (`form`,
+ * `closest`), and a form is taken first.
  * @param {Element} el @returns {HTMLFormElement | null}
  */
 export function formOf(el) {
   if (el instanceof HTMLFormElement) return el;
-  const owner = "form" in el ? /** @type {HTMLFormElement | null} */ (el.form) : null;
-  return owner ?? (el.hasAttribute("form") ? null : el.closest("form"));
+  if (!el.matches(LISTED)) return el.closest("form");
+  return /** @type {HTMLInputElement} */ (el).form ?? (el.hasAttribute("form") ? null : el.closest("form"));
 }
 
 /**
@@ -29,8 +34,13 @@ export function formOf(el) {
  */
 export function controls(el, name) {
   const form = formOf(el);
+  if (!form) return null;
+  const found = [];
   // The form's own `elements`: a control named "elements" would be found in its place.
-  return form && [.../** @type {HTMLFormControlsCollection} */ (Reflect.get(HTMLFormElement.prototype, "elements", form))].filter((c) => Element.prototype.getAttribute.call(c, "name") === name);
+  for (const c of /** @type {HTMLFormControlsCollection} */ (Reflect.get(HTMLFormElement.prototype, "elements", form))) {
+    if (Element.prototype.getAttribute.call(c, "name") === name) found.push(c);
+  }
+  return found;
 }
 
 /**

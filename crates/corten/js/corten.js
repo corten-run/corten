@@ -270,6 +270,9 @@ const needs = new WeakMap();
 /** The modules binding `b` needs: its own, and those of its arguments. @param {Binding} b */
 const needed = (b) => needs.get(b) ?? [b.module];
 
+/** Whether module `name` is in. @param {string} name */
+const isLoaded = (name) => modules.has(name);
+
 /** Whether an argument, or one in its group, is of kind `kind`. @param {string} kind @returns {(arg: Arg) => boolean} */
 const takes = (kind) => (arg) => arg.kind === kind || (arg.kind === "{" && arg.fields.some(([, part]) => takes(kind)(part)));
 
@@ -561,8 +564,9 @@ function connectWhenLoaded(el, binding, event, ready, signal) {
  */
 function run(el, binding, event) {
   const module = modules.get(binding.module);
-  const ready = () => needed(binding).every((name) => modules.has(name));
-  if (!module || !ready()) {
+  const extra = needs.get(binding);
+  if (!module || (extra && !extra.every(isLoaded))) {
+    const ready = () => needed(binding).every(isLoaded);
     // Another event gets the browser's default; a module that did not load is asked for again, so
     // the next one finds it.
     if (event.type === "connect") connectWhenLoaded(el, binding, event, ready, signalOf(el));

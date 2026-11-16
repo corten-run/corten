@@ -4455,8 +4455,9 @@ rules something out.
     (`~i"parcels[1].weight"`), in `data-on`, a format only Corten's server and runtime read, so it
     needs no standard ([Rule 10](#rule-standard-formats)). When the handler runs, the field
     module (`corten-field`, `js/field.js`), which a page loads only when its handlers take a field,
-    as a format argument loads `corten-format`, takes the form of the element with the `on:` (the form itself, the one it belongs to, `form=`
-    included, or the one around it), reads that form's own `elements` (so a control named
+    as a format argument loads `corten-format`, takes the form of the element with the `on:` (the form itself; for a control, the one it belongs
+    to, `form=` included; else the one around it, so a `<label>` takes the form it is in, not its
+    control's, which `form=` may put elsewhere), reads that form's own `elements` (so a control named
     `elements` cannot stand in for it), and gives the one control of the name with the kind's tag,
     or every input of it for a group (`[]` for none); a control a patch replaced is the new one, as
     a ref's is. Anything else runs nothing and throws. Whether the form draws the field as the kind the
@@ -4477,19 +4478,21 @@ rules something out.
     Finding the control once, when the handler connects: a patch that replaces it would leave the
     handler with the old one. The lookup in the runtime every page loads, as this change first had
     it: 204 bytes with gzip on every page (15,341 to 15,545), for a call few pages make, where a
-    module of its own costs every page 51 (65 with the load error's wording, below) and only a
-    page with a field 499 more and one request,
+    module of its own costs every page 51 (80 with the load error's wording and the check that
+    keeps a handler's run from allocating, below) and only a page with a field 549 more and one
+    request,
     which its first load makes with its handlers' modules, as a module script of the page. `RequiredWhen` keeps its name as text: its control may be a select,
     radios or a checkbox, and it reads only the value, which no one element type covers.
 
     What it costs, in the conflict order. Correctness gives up nothing: the control is the one the
     form has when the handler runs, and a call whose form has another runs nothing rather than
-    hand the handler the wrong element. Performance: every page's runtime is 224 bytes larger raw,
-    65 with gzip (15,341 to 15,406) and 64 with brotli (13,846 to 13,910), paid once a release by
+    hand the handler the wrong element. Performance: every page's runtime is 257 bytes larger raw,
+    80 with gzip (15,341 to 15,421) and 80 with brotli (13,846 to 13,926), paid once a release by
     every user: the parser's `~` branch, about 20 with gzip, loading the field module for a call
-    that takes one, and, 14 with gzip, a load error for Corten's own modules that does not ask
-    whether a component is listed. The lookup and its message are that module, 778 bytes raw, 499 with gzip
-    and 413 with brotli as built, which only a page whose handlers take a field fetches, as one
+    that takes one, 14 with gzip, a load error for Corten's own modules that does not ask whether a
+    component is listed, and about 15, a handler's run that looks up a binding's other modules and
+    makes no closure or array when it has none, as before. The lookup and its message are that
+    module, 893 bytes raw, 549 with gzip and 456 with brotli as built, which only a page whose handlers take a field fetches, as one
     more module script of the page; a page the runtime swaps in imports it with the page's
     handler modules, and an event before it arrives gets the browser's default, as one before
     those does. A field argument writes its posted name where a
@@ -5050,5 +5053,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     mistake those make shows only as the runtime's error when the handler runs. It reports a call
     once, when it is drawn: a call drawn before a later patch or script adds its control keeps that
     report in the console though the handler then finds the control, so a report on a page that
-    draws its controls after its calls is checked against the page as it is. It lifts when
-    the kind a form draws for a field is known where the call is checked.
+    draws its controls after its calls is checked against the page as it is. A call and its control
+    drawn in one `html!` expansion (a `<select name={f.service}>` given to a handler that takes an
+    input, in the same form) could be checked when the crate compiles, since the macro sees both;
+    it is not yet ([#1536 A form field's control kind is not checked at compile time when the call and the control are in the same html! expansion](https://github.com/corten-run/corten/issues/1536)),
+    and that would not reach the case this Choice is for, fields another component draws. It lifts
+    when the kind a form draws for a field is known where the call is checked.

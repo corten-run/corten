@@ -714,6 +714,50 @@ async function run(browser) {
         said.join(" | "),
       );
     }
+    // The form a field is found in: the form itself for an `on:` on it, the one around a list (a
+    // deck's lines), the one a button outside joins with `form=`, and the one around a label, not
+    // the form of the control it labels, which `form=` joins to the first.
+    {
+      await shipped.dispatchEvent("#ship-form", "dblclick");
+      await shipped.click("#ship-form ul li");
+      await shipped.getByRole("button", { name: "Mark from outside" }).click();
+      await shipped.getByText("Mark from the label").click();
+      const marks = await shipped
+        .waitForFunction(() => document.querySelectorAll("[data-form]").length === 4, undefined, { timeout: 5000 })
+        .then(
+          () => true,
+          () => false,
+        )
+        .then(() =>
+          shipped.evaluate(() =>
+            ["#ship-form", "#ship-form ul", 'button[form="ship-form"]', "#label-form label"].map((at) => document.querySelector(at)?.getAttribute("data-form") ?? "none").join(","),
+          ),
+        );
+      check(
+        "a field is found in the form an on: is on, the one around a list, the one a control outside joins with form=, and the one around a label, not its control's",
+        marks === "ship-form,ship-form,ship-form,label-form",
+        marks,
+      );
+    }
+    // A group no control of the form has is empty; one whose name is the form's select runs
+    // nothing and says why.
+    {
+      await shipped.getByRole("button", { name: "Count extras" }).click();
+      const before = shipErrors.length;
+      await shipped.getByRole("button", { name: "Count services" }).click();
+      for (let waited = 0; shipErrors.length === before && waited < 5000; waited += 50) await shipped.waitForTimeout(50);
+      await shipped.waitForTimeout(100);
+      const said = shipErrors.slice(before);
+      const counts = await shipped.evaluate(() =>
+        ["Count extras", "Count services"].map((name) => [...document.querySelectorAll("button")].find((b) => b.textContent === name)?.getAttribute("data-count") ?? "none").join(","),
+      );
+      check("a handler given a group no control of its form has gets []", counts.startsWith("0,"), counts);
+      check(
+        "a call given a group whose name is its form's select runs nothing and says why",
+        counts.endsWith(",none") && said.length === 1 && said[0].includes("corten: ship_form.count takes field service, and its form has no such control"),
+        `${counts} ${said.join(" | ")}`,
+      );
+    }
     // The control is found each time the handler runs: one a patch replaced is the new one, and
     // the old one, gone from the page, is not touched.
     const replaced = await shipped.evaluate(async () => {

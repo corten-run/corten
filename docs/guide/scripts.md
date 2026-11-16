@@ -523,7 +523,10 @@ than as its form's control of the name. That is one a handler outside the form r
 builder's hidden `version`, which its `on:connect` on the element around the form reads), one of
 several that share a name, read through the control around the event (`copies.closest()`, the
 count input of the deck line that changed), and a widget's own control (corten-ui's
-`NumberField`), which it draws for whatever field the app names, in a form or not.
+`NumberField`), which it draws for whatever field the app names, in a form or not. A `@typedef`
+group of refs that a handler outside the form also takes keeps its controls as refs for every
+handler that takes it, those inside the form too: the deck builder's `Parts` holds `version`, and
+its lines' `<ul>`, inside the form, takes `Parts` as `start` does.
 
 ```rust,ignore
 let f = Shipment::FIELDS;
@@ -552,8 +555,9 @@ export function fill(service, weight, sizes) {
 
 The page gets `data-on='change:shipping.fill(~s"service",~i"weight",~*"size")'`. When the handler
 runs, the runtime finds the controls of that name in the form of the element with the `on:` (the
-form itself, the one the element belongs to, `form=` included, or the one around it; a button
-whose `form=` names no form is in none, as its submit is), so a control a patch replaced is the
+form itself; for a control, the one it belongs to, `form=` included; else the one around it. A
+button whose `form=` names no form is in none, as its submit is, and a `<label>` or `<legend>`,
+which is not a control, takes the form around it, not the labelled control's), so a control a patch replaced is the
 new one. A field of a group or a row is passed the same way
 (`f.parcels.at(&1).weight`, `parcels[1].weight`), and so is one in a `@typedef` group. The name is
 the one `Fields` writes, so a renamed field is renamed in both places; text where a field belongs,

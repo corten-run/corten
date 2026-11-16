@@ -71,10 +71,14 @@ division: end statements with `;` and keep a division on the line it continues.
    the component that draws the field needs no ref. A handler in a form passes the form's control
    of a name this way, whoever draws it. A ref is for the handler's own elements: one a handler
    outside the form reads, one of several sharing a name read through the control around the
-   event (`copies.closest()`, a deck line's count), and a widget's own control. Never pass a
-   field's name as text and look it up with `form.elements.namedItem`. The compiler cannot see which control the form draws: a
-   call that takes a single control (an input, select or textarea) whose form lacks it, or has
-   another kind, throws, and `corten dev` reports it on draw; a group with none is `[]`.
+   event (`copies.closest()`, a deck line's count), and a widget's own control. A `@typedef` group
+   that a handler outside the form also takes keeps its controls as refs for every handler that
+   takes it, those inside the form too (the deck builder's `Parts`, which its lines' `<ul>` takes).
+   Never pass a field's name as text and look it up with `form.elements.namedItem`, unless only
+   its value is read whichever control the app drew: corten-ui's `RequiredWhen` takes
+   `control.as_str()` and reads the value of a select, radios, a checkbox or a text field. The compiler cannot see which control the form draws: a
+   call that takes a single control (an input, select or textarea) whose form lacks it, has more
+   than one, or has another kind, throws, and `corten dev` reports it on draw; a group with none is `[]`.
 3. A wrong ref type, wrong event type, wrong value type or a handler the script does not export
    is a compile error at the call. `tsc --checkJs` checks the function bodies, with `strict`,
    `noUncheckedIndexedAccess` (an element or record value read by index is `T | undefined`: read

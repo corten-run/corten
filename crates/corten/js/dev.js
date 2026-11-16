@@ -2,13 +2,11 @@
 // Loaded by the runtime under `corten dev` only, from /corten/dev.js, which only a dev server
 // serves, as written: what it reports costs a production page nothing.
 import { ready } from "corten";
-import { TAGS, controls, field, formOf } from "./field.js";
+import { LISTED, TAGS, controls, field, formOf } from "./field.js";
 import { parseOn } from "./on.js";
 /** @import { Arg } from "./on.js" */
 
 const CONTROLS = "input,select,textarea";
-// The elements with a form owner, which `form=` can join to a form outside them.
-const LISTED = "button,fieldset,input,object,output,select,textarea";
 // A region a screen reader announces as it changes: the live roles and aria-live, unless
 // aria-live="off" silences it (as it does a role's own politeness).
 const LIVE_ROLES = ["alert", "status", "log"];
