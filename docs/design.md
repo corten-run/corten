@@ -4118,8 +4118,8 @@ rules something out.
     back for gain the Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the
     mark goes.
 
-    Last checked: 2026-11-15, the runtime's size on `e0be99e67` against `c9ed56785`; 2026-11-15,
-    the smoke's fourteen checks of the mark passing with `e0be99e67`'s runtime in Chromium
+    Last checked: 2026-11-15, the runtime's size on `69345a021` against `c9ed56785`; 2026-11-15,
+    the smoke's seventeen checks of the mark passing with `69345a021`'s runtime in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1); 2026-11-15, the traversals'
     bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and the request
     path's count on `307d00bca` against `c9ed56785`.
