@@ -5151,6 +5151,120 @@ async function run(browser) {
     await split.unrouteAll({ behavior: "ignoreErrors" });
     await split.context().close();
   }
+  // Nor when one of its tags left while its other moved: read again for one tag, it would no longer
+  // guard the other's part, which a form's answer could then replace under it (#1400).
+  {
+    const kept = await (await browser.newContext()).newPage();
+    let releaseKept = () => {};
+    /** @type {string[]} */
+    const keptAsked = [];
+    await kept.route((url) => url.pathname === "/smoke/kept", async (route) => {
+      const url = new URL(route.request().url());
+      keptAsked.push(url.search);
+      if (!url.search) await new Promise((resolve) => (releaseKept = () => resolve(undefined)));
+      await route
+        .fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: '<p id="kept-a">Read</p><p id="kept-b">Read</p>' })
+        .catch(() => {});
+    });
+    await kept.goto(`${base}/`);
+    await kept.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="kept-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="kept-0"><p id="kept-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/kept" data-part="kept-a"></template><p id="kept-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/kept" data-part="kept-b"></template></div>',
+        ),
+      );
+    });
+    for (let waited = 0; !keptAsked.length && waited < 5000; waited += 50) await kept.waitForTimeout(50);
+    await kept.evaluate(() => {
+      document.querySelector('template[data-part="kept-b"]')?.remove();
+      document.querySelector('template[data-part="kept-a"]')?.setAttribute("data-from", "/smoke/kept?o=new");
+    });
+    releaseKept();
+    await kept.waitForSelector("#kept-b[data-corten-read-failed]", { state: "attached", timeout: 3000 }).catch(() => {});
+    await kept.waitForTimeout(500);
+    const keptParts = await kept.evaluate(() => ["kept-a", "kept-b"].map((id) => [document.getElementById(id)?.textContent, document.getElementById(id)?.hasAttribute("data-corten-read-failed")]));
+    check(
+      "two parts one read draws, one of whose tags left while the other moved, both show their link and are not read again",
+      keptParts.every(([text, failed]) => text === "Waiting" && failed) && keptAsked.length === 1,
+      JSON.stringify({ keptParts, keptAsked }),
+    );
+    await kept.unrouteAll({ behavior: "ignoreErrors" });
+    await kept.context().close();
+  }
+  // A read stopped because its part left, while its answer waited for a stylesheet, stays stopped
+  // when the same element is put back before the stylesheet loads: nothing is drawn over it.
+  {
+    const back = await (await browser.newContext()).newPage();
+    let releaseBackStyle = () => {};
+    let backStyleAsked = false;
+    await back.route("**/smoke/back.css", async (route) => {
+      backStyleAsked = true;
+      await new Promise((resolve) => (releaseBackStyle = () => resolve(undefined)));
+      await route.fulfill({ status: 200, headers: { "content-type": "text/css" }, body: "" }).catch(() => {});
+    });
+    await back.route("**/smoke/back-part", (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
+        body: '<link rel="stylesheet" href="/smoke/back.css" data-corten-style><p id="back-a">Read</p>',
+      }),
+    );
+    await back.goto(`${base}/`);
+    await back.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="back-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="back-0"><p id="back-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/back-part" data-part="back-a"></template></div>'));
+    });
+    for (let waited = 0; !backStyleAsked && waited < 5000; waited += 50) await back.waitForTimeout(50);
+    await back.evaluate(() => {
+      const part = /** @type {HTMLElement} */ (document.getElementById("back-a"));
+      Object.assign(window, { __backPart: part });
+      part.remove();
+    });
+    await back.waitForTimeout(300);
+    await back.evaluate(() => document.getElementById("back-0")?.prepend(/** @type {any} */ (window).__backPart));
+    releaseBackStyle();
+    await back.waitForTimeout(600);
+    const backText = await back.textContent("#back-a");
+    check("a read stopped because its part left is not drawn when the same element is put back meanwhile", backStyleAsked && backText === "Waiting", `${backText}`);
+    await back.unrouteAll({ behavior: "ignoreErrors" });
+    await back.context().close();
+  }
+  // A part's redirect the user's own link overtakes while its page is on its way leaves no unhandled
+  // rejection: that navigation's end is the link's (#1400).
+  if (swaps) {
+    const over = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const overErrors = [];
+    over.on("pageerror", (error) => overErrors.push(String(error)));
+    over.on("console", (m) => m.type() === "error" && m.text().startsWith("unhandled") && overErrors.push(m.text()));
+    await over.addInitScript(() => addEventListener("unhandledrejection", (event) => console.error("unhandled", String(event.reason))));
+    let heldAsked = false;
+    await over.route((url) => url.pathname === "/news" && url.searchParams.has("held"), () => void (heldAsked = true));
+    await over.route("**/smoke/over-part", (route) => route.fulfill({ status: 204, headers: { "corten-location": "/news?held=1", vary: "corten" } }));
+    await over.goto(`${base}/`);
+    const hasNavigation = await over.evaluate(() => "navigation" in window);
+    await over.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="over-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="over-0"><p id="over-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/over-part" data-part="over-a"></template></div>'));
+    });
+    for (let waited = 0; !heldAsked && waited < 5000; waited += 50) await over.waitForTimeout(50);
+    await over.evaluate(() => /** @type {HTMLAnchorElement | null} */ (document.querySelector('header nav a[href="/news"]'))?.click());
+    await over.waitForFunction(() => document.title === "News | Watchlist" && !location.search, null, { timeout: 5000 }).catch(() => {});
+    await over.waitForTimeout(300);
+    if (hasNavigation)
+      check(
+        "a part's redirect a link overtakes while its page is on its way leaves no unhandled rejection",
+        heldAsked && new URL(over.url()).search === "" && overErrors.length === 0,
+        `${over.url()}, held asked ${heldAsked}, ${JSON.stringify(overErrors)}`,
+      );
+    else skip("a part's redirect a link overtakes while its page is on its way leaves no unhandled rejection", "no Navigation API in this browser");
+    await over.unrouteAll({ behavior: "ignoreErrors" });
+    await over.context().close();
+  } else skip("a part's redirect a link overtakes while its page is on its way leaves no unhandled rejection", noSwaps);
 
   // A part's read depends only on the element its tag names (`data-part`): a cell beside it in
   // the same grid is not busy, and a patch of that cell, or of a live row beside a slow row in a

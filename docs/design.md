@@ -3080,9 +3080,11 @@ rules something out.
     without a patch (offline, the server unreachable, an error page, a page) marks it
     `data-corten-read-failed`, as does one whose parts were not all still there when its patch was
     ready to draw (one replaced or removed while it was on its way), which is not applied over
-    them, or whose tags a script gave different addresses meanwhile (one part of a shared read
-    sorted: split into reads, each could draw over the other's part with another order; a read
-    whose tags all moved to one address is read again there), and so does a patch that draws a part
+    them, or that would have to be made again without one of its tags (it left: the read again
+    would no longer guard that tag's part) or with its tags at different addresses (a script
+    sorted one part of a shared read: split into reads, each could draw over the other's part with
+    another order; a read whose tags all moved to one address is read again there); a read stopped
+    stays stopped, even if its part is put back before its answer's stylesheets load, and so does a patch that draws a part
     waiting for the address that patch answers, which would ask for itself again. A redirect (a sign-in's `corten-location`) is followed, as a
     form's is, by a read the page still waits for (not one whose part was replaced or whose address
     moved meanwhile, nor one a navigation started since has overtaken or that comes while one is on

@@ -1331,12 +1331,13 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   // over, and the rest are marked failed, as when a patch is not drawn over them.
   // A page the browser shows again is the one the user is on, whatever navigations it began
   // before (`fresh`): its read counts from then.
-  // Tags whose addresses a script made differ (one part of a shared read sorted) are not split
-  // into reads that could each draw over the other's parts: they are marked failed too.
+  // Only as the same read: all its tags still there (a read again finds its parts through them, so
+  // one gone would leave its part unguarded) at one address (tags a script gave different ones,
+  // one part of a shared read sorted, would split into reads that draw over each other's parts).
+  // Otherwise its parts are marked failed too.
   const retry = (fresh = false) => {
     if (page !== swapped) return;
-    const live = tags.filter(inPage);
-    if (waiting.every(inPage) && new Set(live.map((tag) => attrOf(tag, "data-from"))).size < 2) readNow(live, null, fresh ? visits : visited);
+    if (waiting.every(inPage) && tags.every(inPage) && new Set(tags.map((tag) => attrOf(tag, "data-from"))).size < 2) readNow(tags, null, fresh ? visits : visited);
     else for (const el of waiting) if (inPage(el)) markFailed(el);
   };
   // Busy is this read's own: a form among the parts submitted meanwhile keeps the submit's.
@@ -1393,7 +1394,8 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   if (res && to && here() && visits === visited && !navigation?.transition && !leavingPage) {
     for (const el of waiting) unmarkBusy(el, mine);
     const url = new URL(to, res.url).href;
-    if (navigation) go(url, { info: { [LOAD]: true } });
+    // A link the user follows meanwhile replaces it: nothing to report then.
+    if (navigation) go(url, { info: { [LOAD]: true } }).catch((/** @type {unknown} */ error) => (error instanceof DOMException && error.name === "AbortError") || reportError(error));
     else location.assign(url);
     return;
   }
@@ -1401,7 +1403,8 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   if (html === undefined && res?.ok && !to) console.error("corten: ReadAgain needs a patch from this origin, at", from, res);
   // apply reads `aborted` once, after the patch's modules and stylesheets load, right before it
   // changes anything: the check is made then, and says whether it drew.
-  const ask = { get aborted() { return !(drew = here()); } };
+  // Stopped is for good: a part removed and put back while the answer waited is not drawn over.
+  const ask = { get aborted() { return !(drew = !stop.signal.aborted && here()); } };
   const asked = /** @type {Element} */ (tags.find(inPage) ?? tags[0]);
   // An answer that is only its tag to read it again reads for all of this read's parts.
   readFor.set(asked, waiting);
