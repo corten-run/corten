@@ -1042,6 +1042,16 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,
+  so a `const` assertion only a binary's `main` reaches fails it as it fails `cargo build`: a
+  route that a bin-only app's `main` alone mounts by hand, outside its area or saying `patches`
+  with a `get` that answers a page, passed clippy and `cargo test`, which generate none of
+  `main`'s callees, and only `cargo build` refused it (design Limit 11). The tests reuse the test
+  targets the build compiled, so the check adds about one compile of each binary: cargo's build
+  and test steps took 135 s against 115 s from an empty target on the template, and 341 s
+  against 223 s on the bin-only card-market example, with 2 build jobs on a loaded machine
+  ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)).
+
 - A `data-patch` answer that draws a dialog `open` opens it again after the user closed it, when
   the button that asked for it (or, with none, the focused control of the form, else the form) is
   outside the dialog: the element a submit's answer replaces opens then, as drawn, as the press is

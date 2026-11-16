@@ -4,8 +4,9 @@
 //! - `corten dev` builds and runs the app, rebuilds and restarts it when a file changes (a failed
 //!   build keeps the running server), and open pages reload by themselves.
 //! - `corten build` builds the release binary. `corten check` runs format, a check that every
-//!   styled component is listed, lint and tests, then a type check of the app's scripts (with
-//!   TypeScript's `tsc`, which it needs unless told `--no-script-types`).
+//!   styled component is listed, lint, a build of every target and tests, then a type check of
+//!   the app's scripts (with TypeScript's `tsc`, which it needs unless told
+//!   `--no-script-types`).
 //! - `corten fmt` runs `cargo fmt` and lays out the markup in `html!`, which rustfmt leaves alone.
 //! - `corten ui` sets up the UI kit and copies its components into the app.
 
@@ -37,8 +38,9 @@ Usage:
   corten check [--no-script-types]
                    corten fmt --check; that every component with a stylesheet, script or
                    view is named in an array (a COMPONENTS list or .components(&[..]));
-                   cargo clippy -D warnings, cargo test, then a type
-                   check of the scripts in src/ and static/ (TypeScript's tsc, from
+                   cargo clippy -D warnings; cargo build --all-targets, so what only a
+                   binary's main mounts is checked as cargo build checks it; cargo test,
+                   then a type check of the scripts in src/ and static/ (TypeScript's tsc, from
                    node_modules or the PATH; an app with scripts fails without it)
                    against the types/app.d.ts the tests wrote. At a workspace root it checks
                    the scripts of each member that uses corten. --no-script-types skips that
@@ -113,6 +115,14 @@ fn check_flags(args: &[String]) -> Result<bool, String> {
     }
 }
 
+/// The build `corten check` runs between lint and the tests. It generates the code of every
+/// target, each binary's `main` included, so the compiler evaluates a `const` assertion only a
+/// `main` reaches, such as a route `main` alone mounts (docs/design.md#limit-caller-types), as
+/// `cargo build` does: clippy generates no code, and a binary's test build never generates
+/// `main`'s callees. It builds the test targets too, which the tests then reuse, so cargo can
+/// compile a binary beside its test build rather than after it.
+const BUILD: [&str; 2] = ["build", "--all-targets"];
+
 /// `corten check`, its scripts' type check skipped with `skip`.
 fn check(skip: bool) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -122,6 +132,7 @@ fn check(skip: bool) -> Result<(), String> {
     fmt::run(&["--check".to_string()])
         .and_then(|()| listed::check(&root))
         .and_then(|()| cargo(&["clippy", "--all-targets", "--", "-D", "warnings"]))
+        .and_then(|()| cargo(&BUILD))
         // The tests first: the one that writes `types/app.d.ts` brings it up to date (and fails,
         // saying so, when it was stale) before `tsc` reads it, so a script that uses a new
         // view or event is not refused for a declaration the check had not written yet. The
@@ -153,7 +164,7 @@ fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String>
 
 #[cfg(test)]
 mod tests {
-    use super::check_flags;
+    use super::{BUILD, check_flags};
 
     #[test]
     fn check_takes_only_the_flag_that_skips_script_types() {
@@ -161,5 +172,50 @@ mod tests {
         assert_eq!(check_flags(&["--no-script-types".to_string()]), Ok(true));
         assert!(check_flags(&["--skip".to_string()]).is_err());
         assert!(check_flags(&["--no-script-types".to_string(), "x".to_string()]).is_err());
+    }
+
+    #[test]
+    fn the_check_refuses_a_const_assertion_only_a_binarys_main_reaches() {
+        // A bin-only crate with the shape of a mount's check (docs/design.md#limit-caller-types):
+        // a `const` assertion in a generic function, reached from `main` alone, as a route `main`
+        // alone mounts with a `get` that answers a page where the route says `patches`.
+        let base = std::env::temp_dir().join(format!("corten-check-bins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("src")).unwrap();
+        let manifest = "[package]\nname = \"bin-only\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n";
+        std::fs::write(base.join("Cargo.toml"), manifest).unwrap();
+        let main = |answer: &str| {
+            let main = format!(
+                "trait Answer {{ const PATCH: bool; }}\n\
+                 struct Page;\nimpl Answer for Page {{ const PATCH: bool = false; }}\n\
+                 struct Patch;\nimpl Answer for Patch {{ const PATCH: bool = true; }}\n\
+                 fn mount<A: Answer>() {{\n    const {{ assert!(A::PATCH, \"a route that says patches takes a get that answers a patch\") }};\n}}\n\
+                 fn main() {{\n    mount::<{answer}>();\n}}\n\
+                 #[test]\nfn passes() {{}}\n"
+            );
+            std::fs::write(base.join("src/main.rs"), main).unwrap();
+        };
+        // In a target of its own: the one this test runs from is the outer build's.
+        let cargo = |args: &[&str]| {
+            std::process::Command::new("cargo")
+                .args(args)
+                .current_dir(&base)
+                .env("CARGO_TARGET_DIR", base.join("target"))
+                .output()
+                .unwrap()
+        };
+        main("Page");
+        let tests = cargo(&["test"]);
+        assert!(tests.status.success(), "the tests alone pass it: {}", String::from_utf8_lossy(&tests.stderr));
+        let build = cargo(&BUILD);
+        let error = String::from_utf8_lossy(&build.stderr).into_owned();
+        assert!(!build.status.success(), "the check's build refuses it");
+        assert!(error.contains("E0080") && error.contains("takes a get that answers a patch"), "{error}");
+        // With a `get` that answers a patch, the same crate builds: the assertion refused it.
+        main("Patch");
+        let build = cargo(&BUILD);
+        let error = String::from_utf8_lossy(&build.stderr).into_owned();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(build.status.success(), "{error}");
     }
 }
