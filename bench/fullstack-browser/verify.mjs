@@ -1,12 +1,14 @@
 // Offline, read-only replay of saved native diagnostics. Never a qualification waiver.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { constants, closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { constants, closeSync, existsSync, fstatSync, lstatSync, openSync, readFileSync, readSync, readdirSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { alertsFromReadback, candidates, nativeFailures, parseOptions, retainedFamilies, schema, settings, sha256, validateTargets } from "./contract.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
+import { recordSchema, cellReader, cellRecordName } from "./cell-records.mjs";
 import { reconcileRequests } from "./ledger.mjs";
 import { reconcileUpstream } from "./upstream.mjs";
 import { classifyNoJSRequests, validatePlatformRetirement, nativeNetworkRequests } from "./lifecycle.mjs";
@@ -92,8 +94,19 @@ function savedFiles(folder, native = false) {
     for (const entry of entries.values()) same(identity(inspect(entry.path)), entry.stat, "Evidence changed while validating");
     checkReparse();
   };
-  return { root, entries, unchanged, json(name, pretty = true) {
+  return { root, entries, unchanged, hash(name) {
+    const entry = entries.get(name); need(entry && !entry.directory, "Missing regular evidence hash member");
+    const fd = openSync(entry.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      same(identity(fstatSync(fd)), entry.stat, "Evidence changed before hashing");
+      const digest = createHash("sha256"), buffer = Buffer.alloc(64 * 1024); let at = 0;
+      while (at < entry.stat[2]) { const count = readSync(fd, buffer, 0, Math.min(buffer.length, entry.stat[2] - at), at); need(count > 0, "Truncated evidence hash member"); digest.update(buffer.subarray(0, count)); at += count; }
+      same(identity(fstatSync(fd)), entry.stat, "Evidence changed during hashing");
+      same(identity(lstatSync(entry.path)), entry.stat, "Evidence path changed during hashing"); return digest.digest("hex");
+    } finally { closeSync(fd); }
+  }, json(name, pretty = true) {
     const entry = entries.get(name); need(entry && !entry.directory, `Missing regular evidence file ${name}`);
+    need(entry.stat[2] <= 32 * 1024 ** 2, "Saved JSON exceeds bounded parser budget");
     const fd = openSync(entry.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
       same(identity(fstatSync(fd)), entry.stat, "Evidence file identity changed before read");
@@ -924,11 +937,13 @@ async function validateNativeV2(input) {
     exactKeys(input, ["folder", "round", "commit"], "Exactly folder, round and commit are required");
     need(/^w[1-9]\d*$/.test(input.round) && commitId.test(input.commit), "Explicit native round and commit required");
     const files = savedFiles(input.folder, true), summary = files.json("summary.json"), n = summary.native, reader = openEvidence(files.root);
+    const readCell = summary.schema === recordSchema ? cellReader(summary, reader) : (cell) => cell;
     need(n?.schema === "native-browser-run/v2", "Missing v2 producer envelope");
     exactKeys(n, ["schema", "source", "sourceBinding", "inputsBefore", "inputsAfter", "toolsBefore", "toolsAfter", "execution", "targets", "contexts", "browserTerminal", "manifest"], "Unknown native producer envelope field");
     same(n.manifest, reader.manifest, "Producer native manifest differs from sealed namespace");
     same(Object.keys(reader.manifest.records).sort(), ["source", "source-binding", "inputs-before", "inputs-after", "tools-before", "tools-after", "execution", "targets",
-      ...Object.keys(summary.builds).filter((app) => summary.builds[app].nativeContext).map((app) => `build-${app}`)].sort(), "Unknown/missing native record roots");
+      ...Object.keys(summary.builds).filter((app) => summary.builds[app].nativeContext).map((app) => `build-${app}`),
+      ...(summary.schema === recordSchema ? candidates.flatMap((app) => summary.cells[app].flatMap((cell, i) => cell.evidence === null ? [] : [cellRecordName(app, i)])) : [])].sort(), "Unknown/missing native record roots");
     const root = (key, record) => { same(n[key], reader.manifest.records[record], `Native root binding differs: ${record}`); return reader.json(n[key]); };
     const sourceReceipt = root("source", "source"), narrow = replaySource(reader, sourceReceipt, input.commit);
     // The core binding covers imported helpers as well as browser/build roots.
@@ -972,9 +987,10 @@ async function validateNativeV2(input) {
     }
     const contextsComplete = validateContextReceipts(n.contexts, n.browserTerminal, execution);
     if (!contextsComplete) block("native-context-terminal-incomplete");
-    const proof = { files, manifest: reader.manifest, sources, tools, targets, execution, readbacks: true, responses: true, lifetimes: new Map(), prerequisites: new Map() };
+    const proof = { files, manifest: reader.manifest, sources, tools, targets, execution, readCell, readbacks: true, responses: true, lifetimes: new Map(), prerequisites: new Map() };
     const contextIds = new Set(), readIds = new Set(), domObservers = new Set();
-    for (const app of candidates) for (const cell of summary.cells[app]) {
+    for (const app of candidates) for (const saved of summary.cells[app]) {
+      const cell = readCell(saved, app);
       const e = cell.evidence;
       if (!e) {
         const prerequisite = replayPrerequisite(cell, app, summary, execution, buildContexts);
@@ -1027,7 +1043,8 @@ async function validateNativeV2(input) {
     result.cleanupComplete = contextsComplete && execution.cleanupComplete && !summary.cleanupFailures.length;
     const manifest = reader.finish(); same(manifest, n.manifest, "Native store changed during replay");
     files.unchanged();
-    const outer = [...files.entries].filter(([, f]) => !f.directory).map(([path, f]) => ({ path, sha256: sha256(readFileSync(f.path)) }));
+    const outer = [...files.entries].filter(([, f]) => !f.directory).map(([path]) => ({ path, sha256: files.hash(path) }));
+    files.unchanged();
     if (!execution.blocked.length && sourcesComplete && result.cleanupComplete && execution.participants.every((p) => p.imageId && p.terminal)) result.hostSubject = {
       schema: "native-browser-host-subject/v2", executionWindow: execution.executionWindow, processWindows: execution.processWindows,
       toolIdentities, participants: execution.participants,
@@ -1052,7 +1069,8 @@ function replaySaved(input = {}, nativeProof = null) {
     const { folder, round, commit } = input;
     need(text(round) && /^w[1-9]\d*$/.test(round) && text(commit) && commitId.test(commit), "Explicit round wN and full lowercase producer commit ID required");
     const files = nativeProof?.files ?? savedFiles(folder), summary = files.json("summary.json"), records = files.json("marketplace.json", false);
-    same(summary.schema, schema, "Unknown raw summary schema"); same(summary.group, "fullstack-browser", "Wrong benchmark group");
+    need(summary.schema === schema || nativeProof && summary.schema === recordSchema, "Unknown raw summary schema"); same(summary.group, "fullstack-browser", "Wrong benchmark group");
+    const readCell = nativeProof?.readCell ?? ((cell) => cell);
     same(records, fixtureRecords(), "Saved numeric fixture differs from current canonical fixture");
     same(summary.fixtureSha256, sha256(JSON.stringify(records)), "Fixture hash mismatch");
     const plan = createBrowserPlan({ records }); same(summary.effectivePlan, plan, "Plan/profile inventory differs from current contract"); same(summary.settings, settings, "Saved options/settings differ from current native settings");
@@ -1123,14 +1141,14 @@ function replaySaved(input = {}, nativeProof = null) {
     for (const app of candidates) {
       const cells = summary.cells[app]; need(Array.isArray(cells), "Missing raw native profiles"); same(cells.map((c) => c?.case), plan.cases.map((p) => p.key), "Missing/extra/duplicate/out-of-order native profiles");
       for (const profile of plan.cases) {
-        const cell = cells.find((c) => c.case === profile.key);
+        const cell = readCell(cells.find((c) => c.case === profile.key), app);
         if (cell.outcome !== "not-run") need(options.apps.includes(app) && (!options.cases || options.cases.includes(profile.key)), "Native evidence outside selected run options");
         const reasons = [], derived = replayCell(cell, profile, app, summary, records, (r) => { if (!reasons.includes(r)) reasons.push(r); }, endpoints, nativeProof);
         if (reasons.length) block("Native matrix contains unqualified or missing proof");
         result.cells.push({ app, case: profile.key, outcome: cell.outcome, derived, blocked: reasons });
       }
     }
-    const exported = exportBrowserCaptures(summary, records);
+    const exported = exportBrowserCaptures(summary, records, readCell);
     for (const app of candidates) same(files.json(`captures/${app}.json`), exported.captures[app], `Strict capture differs from current raw projection: ${app}`);
     same(files.json("captures/manifest.json"), exported.manifest, "Strict manifest/hash/provenance differs from raw projection");
     const functional = Object.values(exported.manifest.reports).every((r) => r.validation.functionalPassed);
@@ -1138,8 +1156,11 @@ function replaySaved(input = {}, nativeProof = null) {
     const group = summary.complete && !code.dirty && !summary.failures.length && !summary.cleanupFailures.length && browser?.engine === "chromium" && candidates.every((app) => {
       const image = summary.images[app], report = exported.manifest.reports[app];
       return image?.imageSourceVerified === true && image.builtCommit === commit && image.builtDirty === "false" && !report.diagnostics.length && report.validation.functionalPassed
-        && summary.cells[app].every((c) => c.outcome === "captured" && c.qualificationPassed && c.evidence?.functionalChecksPassed && c.evidence.domChecksPassed && !c.evidence.failures.length && !c.evidence.gaps.length
-          && c.evidence.nativeCleanup?.outcome === "observed" && c.evidence.cleanup?.contextClosed === true && c.evidence.provenance?.stillSameProcess === true);
+        && summary.cells[app].every((saved) => {
+          const c = readCell(saved, app);
+          return c.outcome === "captured" && c.qualificationPassed && c.evidence?.functionalChecksPassed && c.evidence.domChecksPassed && !c.evidence.failures.length && !c.evidence.gaps.length
+            && c.evidence.nativeCleanup?.outcome === "observed" && c.evidence.cleanup?.contextClosed === true && c.evidence.provenance?.stillSameProcess === true;
+        });
     });
     same(summary.qualificationPassed, Boolean(group), "Group qualification summary differs from current complete-matrix derivation");
     same(summary.readyForLoad, false, "Saved native diagnostics cannot claim load readiness");

@@ -87,7 +87,7 @@ function inspectV2(binding, folder, native, result, block) {
   assert.equal(native.status, native.blocked.length ? "blocked" : native.qualificationPassed ? "verified" : "failed");
   const { group, round, commit } = binding.request, apps = binding.selection.apps, cases = binding.selection.definition.cases;
   const summary = JSON.parse(readFileSync(join(folder, "summary.json"), "utf8"));
-  assert.equal(summary.schema, "native-fullstack-browser/v1"); assert.equal(summary.native?.schema, "native-browser-run/v2");
+  assert.ok(["native-fullstack-browser/v1", "native-fullstack-browser/v2"].includes(summary.schema)); assert.equal(summary.native?.schema, "native-browser-run/v2");
   assert.equal(summary.group, group); assert.equal(summary.code.commit, commit); assert.equal(summary.options.round, round);
   assert.deepEqual(summary.options, binding.execution.effectiveOptions); assert.deepEqual(summary.options.apps, apps);
   assert.deepEqual(summary.settings, binding.execution.settings);

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { executionParticipant } from "../mixed-production/execution-evidence.mjs";
 import { definition } from "../workloads/registry.mjs";
 import { candidates } from "./contract.mjs";
-import { encoded, exact, sha256 } from "./native-evidence.mjs";
+import { exact } from "./native-evidence.mjs";
+import { encodedSha256 } from "./json-records.mjs";
 
 const kinds = ["container", "network", "image", "volume"];
 const idPattern = { container: /^[a-f0-9]{64}$/, network: /^[a-f0-9]{64}$/, image: /^sha256:[a-f0-9]{64}$/, volume: /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$/ };
@@ -225,5 +226,5 @@ export function replayExecution(reader, receipt) {
       window: p.role === "artifact" && p.createdObserved && p.terminal && !p.artifactExecuted || p.role !== "artifact" && commands.some((e) => e.operation === "start" && e.id === p.id && e.code !== 0)
         && p.terminal?.state.Running === false && p.terminal.state.Pid === 0 && !p.runningAt
         ? null : { startedAt: p.createdAt, endedAt: p.terminalAt ?? value.endedAt }, terminal: p.terminal ?? null })),
-    commands, cleanupComplete: terminalBlocked.length === 0, blocked, subjectSha256: sha256(encoded(value)) };
+    commands, cleanupComplete: terminalBlocked.length === 0, blocked, subjectSha256: encodedSha256(value) };
 }
