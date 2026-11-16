@@ -10,6 +10,7 @@ import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { validateFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
+import { failedNativeRoots } from "./cloud-retirement.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((p) => `bench/workloads/${p}`);
@@ -45,7 +46,7 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   const missing = [];
   for (const path of nativePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
-  let reservationSha256 = null, deliverySha256 = null, fleetSha256;
+  let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = validateFleet(JSON.parse(bytes));
     assert.equal(fleet.round, options.round); assert.equal(fleet.commit, head); assert.equal(fleet.sshKey, options.sshKey);
@@ -56,14 +57,23 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   else {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
     const saved = controllerState(JSON.parse(bytes), options.round);
-    assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
+    if (options.retireFailedNative) {
+      const roots = failedNativeRoots(saved);
+      assert.notEqual(saved.commit, head, "merged repair controller required");
+      await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+      assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.evidence && saved.fullGroupQualified === false, "preserved failed evidence required");
+      recovery = { measuredCommit: saved.commit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256, roots,
+        policy: "r21-9f-failed-native-custody-only-no-qualification" };
+    } else assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
     reservationSha256 = digest(bytes);
   }
   if (options.deliverAudit) deliverySha256 = digest(regular(resolve(options.deliverAudit), 16 * 1024 ** 2));
   assert.equal(resolveStateRoot(options.stateDir), physicalRequest, "state root changed during approval");
-  const subject = { action: options.detach ? "detach" : options.collect ? "collect" : "deliver-audit", controllerCommit: head,
+  const subject = { action: options.detach ? "detach" : options.collect ? "collect" : options.retireFailedNative ? "retire-failed-native" : "deliver-audit", controllerCommit: head,
     options, stateRoot: physicalRequest, reservationSha256, deliverySha256, ...(fleetSha256 ? { fleetSha256 } : {}),
-    declaration: "operator-approved-after-merged-independent-review-and-full-native-readiness" };
+    ...(recovery ? { recovery } : {}),
+    declaration: recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
+      : "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
@@ -103,6 +113,7 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   const plan = await productionPlan(options, { repo, run });
   if (preview) {
     write(JSON.stringify({ action: plan.subject.action, controllerCommit: plan.subject.controllerCommit, round: options.round,
+      ...(plan.subject.recovery ? { recovery: plan.subject.recovery, reservationSha256: plan.subject.reservationSha256 } : {}),
       approvalSha256: plan.approvalSha256, missing: plan.missing, fullGroupQualified: false }));
     return plan.missing.length ? 2 : 3; // Preview is never qualified execution success.
   }
@@ -137,11 +148,13 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
-    mergedHead: remoteHead, settle: () => providerRun.close() });
+    mergedHead: remoteHead, settle: () => providerRun.close(), ...(options.retireFailedNative ? {
+      recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256 },
+    } : {}) });
   let result;
-  stage = options.detach ? "controller-launch" : options.collect ? "controller-collect" : "controller-audit";
+  stage = options.detach ? "controller-launch" : options.collect ? "controller-collect" : options.retireFailedNative ? "controller-retirement" : "controller-audit";
   if (options.detach) { await task.launch(); result = 3; }
-  else result = options.collect ? await task.collect() : await task.deliverAudit();
+  else result = options.collect ? await task.collect() : options.retireFailedNative ? await task.retireFailedNative() : await task.deliverAudit();
   stage = "controller-checkpoint";
   await controlCheckpoint(interrupted);
   return result;

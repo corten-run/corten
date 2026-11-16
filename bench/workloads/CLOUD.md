@@ -252,6 +252,72 @@ Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.
 
+### Failed Native Custody And Retirement
+
+`--retire-failed-native` is a separate, deliberately approved recovery action,
+not a relaxation of `--collect` or native validation. Its migration policy supports
+only round r21 measured at `9f3d35884c67d90524f978d173fabeb3a17bc970`, for the
+eight nonmixed group reservations with preserved
+original archives/extractions and raw exit `2`. A different, clean repair-controller
+commit must descend from that source and pass the existing fresh merged-main
+proof. Preview and exact approval bind both source identities, exact reservation
+bytes, original evidence hashes, physical state root and fixed custody roots.
+This exception does not permit a source override for collection, audit or launch.
+
+The action retains the original `results.tgz` and `evidence-*` tree unchanged,
+and saves the original reservation bytes as `failed-native-reservation.json`.
+A fixed controller-owned Python program captures current `/bench/campaign`
+and every possible reserved native-output root for that group. JSON includes
+both preparation `j42` and timing `j43`, even if one is absent. Absence is explicit
+data, never a completed benchmark. The program validates and hashes filesystem
+metadata before reading evidence contents, opens every ancestor without following
+links, and rejects symlinks, hardlinks, special files and nonportable paths. It
+never executes a native script, validator, source checkout or downloaded evidence.
+
+The separate `failed-native-results.tgz` contains raw trees, metadata and file-hash
+inventories, and a root snapshot. The bounded existing archive reader verifies
+the download, extracts into a fresh `custody-*` directory and compares root and
+original-evidence hashes. `failed-native-capture.json` binds this custody to the
+measured reservation and repair controller. Intact recorded custody can resume
+with a fresh confirmation; unexplained partial downloads or remote captures are
+retained without automatic adoption or overwriting.
+
+Capture and final confirmation require the exact metadata host ID, source-bound
+uploaded controls and bootstrap marker, a loaded started terminal unit with
+`Restart=no`, `MainPID=0`, exit `2` and no unit job, no pending systemd jobs,
+completed cloud-init without user data, and no current benchmark process or
+running container. Only the probe's exact timeout parent is exempt from its
+process scan. Confirmation rehashes all roots and the custody archive, then
+local custody is checked again. A final fence requires the exact unchanged
+metadata inventory of every root, rehashes the custody archive and renews current
+quiescence before the fresh ownership/account check and 60-second deletion-proof
+deadline. Large local checks cannot consume that final freshness window. These are current retirement observations,
+not a historical accounting or native qualification pass.
+
+`failed-native-host.json` records capture, fresh confirmation and their exact
+script hashes before a durable `native-failed` retirement intent and one DELETE.
+The same private provider worker and pre-unlock settlement apply. A lost or
+uncertain deletion acknowledgement permits exact-ID absence reconciliation only,
+never another DELETE. Existing locks are never taken over or cleared by recovery.
+The saved measured commit and failure evidence remain unchanged; no validation,
+successful exit or collection result is invented. Fleet inspection reports
+`native-failed-retired` or `cleanup-pending`, never a qualified baseline.
+
+After independent review and merge, an operator previews the exact action with:
+
+```sh
+node bench/workloads/cloud-production.mjs r21 --state-dir ABSOLUTE_GROUP_STATE_ROOT --retire-failed-native --print-approval
+```
+
+Execution replaces `--print-approval` with the existing
+`--approve-reviewed-merged-ready EXACT_ACTION_SHA256` only after separate operator
+approval. Implementing or testing this action authorizes no provider operation.
+Synthetic controls run with `node --test bench/workloads/cloud-failed-native.test.mjs`.
+The opt-in `CORTEN_FAILED_NATIVE_LINUX=1` local test in
+`cloud-failed-native-linux.test.mjs` uses disposable, labeled, networkless containers
+with real file descriptors and `/proc`, substituting only service/metadata responses;
+it is not provider, systemd-host or native performance qualification.
+
 Large source bindings and evidence manifests are compared with exact strict
 equality without constructing assertion diffs. Invalid evidence still refuses;
 the error contains a bounded message rather than either complete manifest.
