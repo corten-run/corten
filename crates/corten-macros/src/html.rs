@@ -6,6 +6,8 @@
 
 use proc_macro::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 
+mod nesting;
+
 use crate::tokens::{
     compile_error, err, escape, is_ident, is_punct, literal, literal_text, parens, q, stream, string_value, Error,
 };
@@ -39,6 +41,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             mark_scope(&mut nodes, scope)?;
         }
         check_raw_text(&nodes, None)?;
+        nesting::check(&nodes)?;
         check_pages(&nodes)?;
         Ok(nodes)
     }) {
@@ -250,8 +253,11 @@ fn scope_marker(input: TokenStream) -> (Option<String>, TokenStream) {
 /// Puts `data-scope="name"` on the one root element.
 fn mark_scope(nodes: &mut [Node], scope: &str) -> Result<(), Error> {
     let mut roots = nodes.iter_mut().filter(|n| !matches!(n, Node::Let(_)));
-    match (roots.next(), roots.next()) {
-        (Some(Node::Element { attrs, .. }), None) => {
+    let first = roots.next();
+    let doctype = matches!(&first, Some(Node::Markup(text)) if text == "<!DOCTYPE html>");
+    let root = if doctype { roots.next() } else { first };
+    match (root, roots.next()) {
+        (Some(Node::Element { name, attrs, .. }), None) if !doctype || name == "html" => {
             attrs.insert(0, Attr::Static("data-scope".into(), scope.into()));
             Ok(())
         }
@@ -1353,6 +1359,7 @@ impl Cursor {
         }
         let mut attrs = Vec::new();
         let mut props = Vec::new();
+        let mut names = std::collections::HashSet::new();
         let self_closing = loop {
             let span = self.span();
             match self.peek().cloned() {
@@ -1415,6 +1422,23 @@ impl Cursor {
                 }
                 Some(TokenTree::Ident(_)) => {
                     let mut name = self.attr_name()?;
+                    let written = name.to_ascii_lowercase();
+                    if !names.insert(written.clone()) {
+                        let instead = if written == "style" {
+                            "give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}"
+                        } else {
+                            "write the attribute once, combining its values in one expression if needed"
+                        };
+                        return err(
+                            span,
+                            format!(
+                                "attribute {name} is written twice on this element: {instead}; a browser keeps only the first"
+                            ),
+                        );
+                    }
+                    if written == "data-key" {
+                        return err(span, "data-key is printed by Corten: write key={item.id} to give a keyed ref its key");
+                    }
                     // `key={item.id}` names an element in a keyed ref (a handler's `Map`).
                     if name == "key" {
                         name = "data-key".into();
@@ -1531,13 +1555,6 @@ impl Cursor {
                                     if let Some(path) = local_path(&lower, &text) {
                                         return err(value_span, refused_path(&name, path));
                                     }
-                                }
-                                // One `data-vars` per element: a browser keeps the first of two.
-                                if name == "style" && attrs.iter().any(|a| matches!(a, Attr::Expr(n, _) if n == "style")) {
-                                    return err(
-                                        span,
-                                        "one style={..} per element: give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}",
-                                    );
                                 }
                                 attrs.push(Attr::Expr(name, expr))
                             }

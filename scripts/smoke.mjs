@@ -396,6 +396,66 @@ async function parsesAsHtmlMeans(browser) {
       `<div><svg><rect width="4" height="4"></rect><p>Total</p></svg></div>`,
       () => !!document.querySelector("p") && !document.querySelector("svg p"),
     ],
+    [
+      "a block through phrasing content closes its paragraph (refused by html!)",
+      `<p data-scope="root"><span><div data-ref="detail">Detail</div></span></p>`,
+      () => !!document.querySelector("[data-ref=detail]") && !document.querySelector("[data-scope=root] [data-ref=detail]"),
+    ],
+    [
+      "a nested li without a list between closes the earlier item (refused by html!)",
+      `<ul><li id="outer"><span><li id="inner">Next</li></span></li></ul>`,
+      () => !!document.querySelector("ul > #inner") && !document.querySelector("#outer #inner"),
+    ],
+    [
+      "a nested definition closes the term (refused by html!)",
+      `<dl><dt id="term"><dd id="definition">Meaning</dd></dt></dl>`,
+      () => !!document.querySelector("dl > #definition") && !document.querySelector("#term #definition"),
+    ],
+    [
+      "a nested anchor closes the active anchor (refused by html!)",
+      `<div><a href="#one"><span><a href="#two">Two</a></span></a></div>`,
+      () => document.querySelectorAll("a").length === 2 && !document.querySelector("a a"),
+    ],
+    [
+      "a nested form start tag is ignored (refused by html!)",
+      `<div><form id="outer"><div><form id="inner"><input></form></div></form></div>`,
+      () => !!document.querySelector("#outer") && !document.querySelector("#inner"),
+    ],
+    [
+      "a nested button closes the earlier button (refused by html!)",
+      `<div><button id="outer"><span><button id="inner">Again</button></span></button></div>`,
+      () => !!document.querySelector("div > #inner") && !document.querySelector("#outer #inner"),
+    ],
+    [
+      "a directly nested heading closes the earlier heading (refused by html!)",
+      `<h1 id="outer"><h2 id="inner">Heading</h2></h1>`,
+      () => !!document.querySelector("body > #inner") && !document.querySelector("#outer #inner"),
+    ],
+    [
+      "a nested nobr in scope closes the earlier nobr (refused by html!)",
+      `<div><nobr id="outer"><span><nobr id="inner">Text</nobr></span></nobr></div>`,
+      () => !!document.querySelector("#inner") && !document.querySelector("#outer #inner"),
+    ],
+    [
+      "list, button, formatting and foreign-content boundaries keep the nested content",
+      `<div><ul><li><ul><li id="item">Nested</li></ul></li></ul><p><button><div id="block">Button</div></button></p><a><object><a id="link">Link</a></object></a><p><svg><foreignObject><div id="drawing">HTML</div></foreignObject></svg></p></div>`,
+      () => !!document.querySelector("li li#item") && !!document.querySelector("p button #block") && !!document.querySelector("a object a#link") && !!document.querySelector("p svg foreignObject #drawing"),
+    ],
+    [
+        "a caption's formatting marker separates its anchor from one around the table",
+        `<div><a href="#outer"><table><caption><a id="caption-link" href="#inner">Caption</a></caption></table></a></div>`,
+        () => !!document.querySelector("a table caption a#caption-link"),
+      ],
+      [
+      "a form in a template is independent of the outer form",
+      `<div><form><template><form id="inner"><input></form></template></form></div>`,
+      () => !!document.querySelector("template")?.content.querySelector("form#inner"),
+    ],
+    [
+      "duplicate attributes keep the first even when the names differ in case (refused by html!)",
+      `<input name="first" NAME="second">`,
+      () => document.querySelector("input")?.name === "first",
+    ],
   ];
   for (const [name, markup, keeps] of shapes) {
     await page.setContent(`<!DOCTYPE html><html><head><title>Shapes</title></head><body>${markup}</body></html>`);
@@ -601,6 +661,16 @@ async function run(browser) {
   }
 
   await page.goto(base);
+  {
+    const scoped = await browser.newPage();
+    await scoped.goto(`${base}/smoke/scoped`);
+    await scoped.waitForFunction(() => document.querySelector("output")?.value === "CSS1Compat");
+    check(
+      "a scoped document keeps its doctype, standards mode and working refs under html",
+      await scoped.evaluate(() => document.doctype?.name === "html" && document.documentElement.getAttribute("data-scope") === "scoped-page" && document.querySelector("output")?.closest("[data-scope]") === document.documentElement),
+    );
+    await scoped.close();
+  }
   // Without the Navigation API every navigation is a full page load, the documented fallback: the
   // checks of what a swap keeps check that instead, or are skipped.
   const swaps = await page.evaluate(() => "navigation" in window);

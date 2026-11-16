@@ -5,6 +5,17 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
+  its single root is the `<html>` element, so the page can render in standards mode.
+
+- **Breaking:** `html!` refuses duplicate written attribute names (case-insensitively, including
+  names with expression values), hand-written `data-key` (write `key={..}`), and visible HTML
+  nesting whose start tags close or discard an open element: blocks in paragraphs, nested list
+  and definition items without a boundary, active anchors, forms outside templates, buttons or
+  `nobr` still in scope, and directly nested headings. Diagnostics say what to change.
+  Spreads and nesting hidden by components, expressions or `raw` remain unchecked; this is not
+  a complete HTML validator ([views](docs/guide/views.md)).
+
 - The watchlist smoke's check that a submit which waited for a write the network failed is not
   sent holds that write until the newer press is made, and presses both buttons in the page, where
   it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the

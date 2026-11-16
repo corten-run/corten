@@ -265,12 +265,104 @@ use std::{
 /// relative path (`items/7`, `?page=2`) and a URL inside another attribute's text
 /// (`<meta http-equiv="refresh" content="0; url=/items">`). Write a route there too.
 ///
+/// An attribute name may be written only once per element, case-insensitively, including names
+/// whose values are expressions. A spread's names are not known here and are not checked:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <input name="first" NAME={"second"}> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <input disabled disabled> };
+/// ```
+///
+/// `data-key` is printed by Corten: give a keyed ref its key with `key={..}` instead:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn Row() -> impl Render {
+///     let row = refs();
+///     html! { <div ref={row} data-key="first"></div> }
+/// }
+/// ```
+///
+/// Literal nesting that makes the browser close or discard an open HTML element is refused.
+/// Put the elements beside one another, or use a container that can hold them (`<div>` rather
+/// than `<p>` for a block). The check follows literal elements through control flow, not through
+/// components, expressions or `raw`, and does not guess a namespace the markup does not show:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn Summary() -> impl Render {
+///     let detail = refs();
+///     html! { <p><div ref={detail}>"Detail"</div></p> }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><span>if true { <section>"Detail"</section> }</span></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <ul><li><span><li>"Next"</li></span></li></ul> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <dl><dt><dd>"Definition"</dd></dt></dl> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><a href="#one"><span><a href="#two">"Two"</a></span></a></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><form><div><form><input></form></div></form></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><button><span><button>"Again"</button></span></button></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <h1><h2>"Heading"</h2></h1> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><nobr><span><nobr>"Text"</nobr></span></nobr></div> };
+/// ```
+///
+/// The doctype is not a second root of a scoped document, but another element still is:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn BadDocument() -> impl Document {
+///     let lead = refs();
+///     html! {
+///         <!DOCTYPE html>
+///         <html><head><title>"Page"</title><Corten /></head><body><main><p ref={lead}>"Lead"</p></main></body></html>
+///         <div>"Outside the root"</div>
+///     }
+/// }
+/// ```
+///
 /// Three kinds of markup a browser parses differently from how it is written do not compile, where
 /// the markup shows how the browser parses it: an element inside one whose content a browser reads
 /// as text, a `<plaintext>`, and an element a browser takes out of an `<svg>` or a `<math>`.
-/// HTML a browser rearranges inside HTML (a `<div>` in a `<p>`, an `<a>` in an `<a>`, a
-/// `<form>` in a `<form>`, an `<li>` in an `<li>`, a `<div>` straight in a `<table>`)
-/// still compiles. An element written inside one whose content a browser parsing HTML reads as
+/// Table foster parenting (a `<div>` straight in a `<table>`) is not checked here.
+/// An element written inside one whose content a browser parsing HTML reads as
 /// text would show its tags as text, or put them in a field's value, rather than make an element.
 /// Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`, `<xmp>`, `<noembed>`
 /// and `<noframes>`, and `<plaintext>` itself does not compile (it makes the rest of the page
@@ -471,7 +563,7 @@ use std::{
 ///             <math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>
 ///             <math><svg><g></g></svg></math>
 ///             <math><annotation-xml encoding="text/html"><b>"x"</b></annotation-xml></math>
-///             <math><annotation-xml encoding="TEXT/HTML" encoding="x"><b>"x"</b></annotation-xml></math>
+///             <math><annotation-xml encoding="TEXT/HTML"><b>"x"</b></annotation-xml></math>
 ///             <math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>"x"</b></foreignObject></svg></annotation-xml></math>
 ///             <math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>
 ///             <math><annotation-xml encoding={encoding}><title><mrow></mrow></title></annotation-xml></math>
@@ -489,7 +581,7 @@ use std::{
 ///             r#"<math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>"#,
 ///             r#"<math><svg><g></g></svg></math>"#,
 ///             r#"<math><annotation-xml encoding="text/html"><b>x</b></annotation-xml></math>"#,
-///             r#"<math><annotation-xml encoding="TEXT/HTML" encoding="x"><b>x</b></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="TEXT/HTML"><b>x</b></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>x</b></foreignObject></svg></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math>"#,

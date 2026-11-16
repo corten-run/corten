@@ -243,6 +243,13 @@ Two `OfferList`s on one page never see each other's rows (a handler a component 
 nested copy of itself resolves to the nearest copy). The root can be any element, so a component
 can be a `<tr>` or an `<li>`.
 
+A document can put `<!DOCTYPE html>` before its `<html>` root too: the declaration is not a
+second element, and the browser needs it for standards mode. Literal HTML nesting that closes
+an element early (a `<div>` in a `<p>`, nested anchors or list items) is refused where the macro
+can see its HTML context, so a ref cannot silently move out of that root. Nesting hidden by a
+component, expression or `raw` is not checked; nor is table foster parenting. Keep the rendered
+tree inside its root ([views](views.md)).
+
 ## Handlers as props
 
 A child component takes a handler the parent decides, as a prop of type `Handler`, and puts it
@@ -442,8 +449,7 @@ the check does not repeat.
 The check belongs to `corten-run`: it runs when that crate is built with debug assertions (as
 `cargo build` and `cargo test` build it), for every crate's markup, whatever the app's own crate is
 built with. A spread of attributes does not write `data-key`, as it does not write `data-ref`. A
-`data-key=".."` written by hand beside a ref is still taken as its key, a known limit that
-`html!` does not refuse yet; write `key={..}`.
+`data-key=".."` written by hand is refused; write `key={..}`.
 
 **A value for each element.** Rows a script compares (orders by price, filters by stock) carry what
 it compares with their ref: `ref={row.with(sort_cents(l))}` gives each row a value, and a parameter

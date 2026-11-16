@@ -3257,10 +3257,11 @@ rules something out.
     `<span>` written straight into a `<tr>`, put before the `<table>`): when the table is a
     component's root, the moved element falls outside it, so the runtime does not find it there
     while the check counts it, and may stop on a duplicate the runtime does not see. Both are
-    markup a browser does not keep as written, not a correct render. A `data-key` written by hand
-    (`data-key="a"` beside the ref) is taken as the element's key, as `key="a"` is, though the
-    markup then names an attribute of Corten's as text, which `html!` refuses for `data-ref` and
-    `data-ref-value`; that is a known limit, not yet refused. The check decodes the five references
+    markup a browser does not keep as written, not a correct render. Literal HTML nesting whose
+    start tags close or discard an open element is now refused where the namespace is known
+    ([Choice 54](#choice-html-parse-refusals)); hidden nesting has the same component edge.
+    A `data-key` written by hand is refused like `data-ref` and `data-ref-value`: `key={..}`
+    is the one way to key an element. The check decodes the five references
     Corten's escapers write and no others, and leaves
     out a key written with any other `&` (only an app's own `AttrValue` writes one), since guessing
     at what a browser reads there would repeat HTML's character reference rules or stop correct
@@ -3390,12 +3391,11 @@ rules something out.
     the `Swap` and `Title` parts; 1,000 renders each), with the test copied into the base,
     counted 131,623,718, 13,703,103 and 27,893,110 instructions for the three in every run of both
     builds, wrote the same bytes (23,408, 2,976 and 6,370 a render) and compiled to the same
-    instructions to the line (2,416 lines each, addresses aside). A document with refs cannot
-    write its doctype: `html!` takes a `<!DOCTYPE html>` for a second root beside the `<html>`,
-    and a component with refs renders one root element, so the harness writes the document
-    without one. That is not a choice but a gap, tracked in
-    [#1489 A document component with refs, scope or keep cannot write `<!DOCTYPE html>`, because mark_scope counts it as a second root, so the page renders in quirks mode](https://github.com/corten-run/corten/issues/1489): the HTML standard requires the doctype, and a page without it renders in
-    quirks mode. Card-market's `render_cost`,
+    instructions to the line (2,416 lines each, addresses aside). That harness omitted the
+    doctype because the macro then counted it as a second root. A scoped document now accepts
+    one leading `<!DOCTYPE html>` before its `<html>` root. The declaration is not an element,
+    and without it the browser uses quirks mode. The historical counts above predate that fix.
+    Card-market's `render_cost`,
     on `6575d4d8c` against `72a37a87e` (no generated code has changed since), counted
     `ItemDetail`'s render at 2,372,754,748 instructions (median; 2,372,507,167 to 2,372,779,152)
     on the base and 2,372,745,747 (2,369,854,428 to 2,372,790,283) on the branch, each difference
@@ -4188,9 +4188,10 @@ rules something out.
     `bd92c7435`, which decodes `do`, against those of `dea1788d2`, every run within 2 of the
     others; 2026-11-15, the watchlist and ui-gallery smokes on `bd92c7435` in Chromium 156,
     Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
-54. <a id="choice-html-parse-refusals"></a>**`html!` refuses three kinds of markup a browser parses differently from how it
+54. <a id="choice-html-parse-refusals"></a>**`html!` refuses markup a browser parses differently from how it
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
-    taken out of foreign content), where the markup shows how a browser parses it, and acts
+    taken out of foreign content, and literal HTML nesting that closes or discards an open
+    element), where the markup shows how a browser parses it, and acts
     nowhere else.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
@@ -4234,25 +4235,25 @@ rules something out.
     holds HTML, so an `<a>` in an `<svg>`'s `<title>` or `<desc>` is not held to them, as before:
     moving them to the standard's integration points would refuse markup that compiled.
 
-    Not chosen: refusing HTML a browser rearranges inside HTML: a `<div>` in a `<p>` (the
-    `<p>` closes before it), an `<a>` in an `<a>` or a `<form>` in a `<form>`, an `<li>` in an
-    `<li>`, a `<div>` written straight into a `<table>` (moved before the table). Most of these
-    are decided by the elements open around the tag in the same markup, as the holder chain the
-    refused kinds follow is (a `<p>` open in button scope, an `<a>` among the active formatting
-    elements, a `<form>` already open, an `<li>` open with no special element but an `<address>`,
-    `<div>` or `<p>` between); only the `<table>` case needs the insertion modes (foster
-    parenting). They are left out for this change's size, not because the macro could not see
-    them: each is its own list from the standard (the tags that close a `<p>`, the scopes that
-    stop the search, the formatting elements the adoption agency reopens) with its own errors and
-    examples, and each has the same component edge as the refused kinds (a `<div>` at the top of
-    a component whose parent writes it in a `<p>`; [Limit 30](#limit-markup-context)). They
-    compile as before. A ref in such an element can land outside its component's scope, tracked
-    in [#1505 A ref inside an element the browser closes early (a div in a p) lands outside its component's scope, and nothing refuses or documents it](https://github.com/corten-run/corten/issues/1505), and the key check's limit for a table is in [Choice 46](#choice-ref-values).
-    Refusing an attribute written twice on one element, which a browser parses as the first:
-    this change reads the first `encoding` as a browser does rather than refuse the second,
-    because a duplicate attribute is a mistake on any element, not one of parsing context, and
-    refusing it touches every attribute `html!` writes, spreads included, so it belongs in a
-    change of its own, tracked in [#1504 html! accepts an attribute written twice on one element, which the browser parses as the first and drops the rest](https://github.com/corten-run/corten/issues/1504). Refusing where the markup does not show the context, which would refuse a
+    Literal ancestors also establish the start-tag rules for HTML nesting: a block in a `<p>`
+    closes a paragraph in button scope; an `<li>`, `<dd>` or `<dt>` closes an earlier item when
+    no special element but an `<address>`, `<div>` or `<p>` intervenes; an `<a>` acts on an
+    active anchor before the last formatting-list marker; a `<button>` or `<nobr>` closes an
+    earlier one in scope; a heading directly in a heading closes it; and an inner `<form>`
+    outside a `<template>` is ignored. These now fail at compile time, with or without refs,
+    since moved content can leave the component's scope. `html/nesting.rs` walks the parsed
+    nodes once with a stack of literal ancestors, preserving it through control-flow bodies
+    and starting a fresh unknown context for a component's children. It adds no render code.
+    Each rule keeps its own scope boundaries; a nested list in a `<ul>` and a form in a
+    `<template>` still compile. A duplicate written attribute name is refused case-insensitively,
+    with an expression value too; spreads remain opaque, so the first `encoding` rule still
+    matters when a spread precedes or follows a written one.
+
+    Not chosen: a complete HTML validator or table insertion-mode simulation. A `<div>` straight
+    in a `<table>` still compiles (foster parenting), as do the option and ruby implied-end-tag
+    cases, and a `<table>` in a `<p>`, whose closure depends on quirks mode, not just literal
+    ancestors. The key check's table limit is in [Choice 46](#choice-ref-values).
+    Refusing where the markup does not show the context, which would refuse a
     component's SVG fragment, valid wherever its parent writes it in an `<svg>`. Following the
     context across components, which the macro does not see: each component's render would
     report its namespace to the next, at a cost to every render for markup few apps write. A
@@ -4288,7 +4289,9 @@ rules something out.
     components ([Limit 30](#limit-markup-context)) would have to be weighed against its cost to
     every render.
 
-    Last checked: 2026-11-15, the HTML standard's tree construction (its tokenization states for
+    Last checked: 2026-11-16, the HTML standard's "in body" start-tag rules, scope boundaries,
+    special elements and active-formatting markers, read against `html/nesting.rs` in this
+    change based on `f5f2132aa`; 2026-11-15, the HTML standard's tree construction (its tokenization states for
     RCDATA, RAWTEXT, script data and PLAINTEXT, its HTML and MathML text integration points, its
     tree construction dispatcher, which keeps `<mglyph>` and `<malignmark>` MathML's at a text
     integration point and reads an `<svg>` in a MathML `<annotation-xml>` as SVG's, and its rules for parsing tokens in foreign content, which take the same
@@ -5145,9 +5148,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     form and a form a script adds are not seen. A patch is not read: the runtime applies it at the
     address the browser was already at.
 30. <a id="limit-markup-context"></a>An `html!` sees one component's markup, not what it lands in
-    or where a component writes its children, so `html!`'s refusals of three kinds of markup a
+    or where a component writes its children, so `html!`'s refusals of markup a
     browser parses differently from how it is written (an element in an element whose content is
-    text, a `<plaintext>`, an element taken out of foreign content;
+    text, a `<plaintext>`, an element taken out of foreign content, or literal HTML nesting
+    whose start tag closes or discards an open element;
     [Choice 54](#choice-html-parse-refusals)) and the debug check of a keyed ref's
     keys ([Choice 46](#choice-ref-values)) act only where that markup shows how a browser parses
     it, and where it does not they let a mistake pass rather than stop correct markup. At the top

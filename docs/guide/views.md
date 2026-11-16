@@ -26,9 +26,13 @@ render of that component reserves that size once (a 1-byte render right after a 
 | `<Card title="x" compact>children</Card>` | a component: a struct with those fields (`compact` is `true`), children in `children` |
 | `<>...</>`, `<!DOCTYPE html>`, `<input>` | fragments, the doctype, void elements without a closing tag |
 
-Three kinds of markup a browser parses differently from how it is written do not compile, where
-the markup shows how the browser parses it; HTML a browser rearranges inside HTML (a `<div>` in a
-`<p>`, an `<a>` in an `<a>`, a `<div>` straight in a `<table>`) still compiles. An element inside one whose content a browser reads as text (`<textarea>`,
+An attribute name is written once per element, case-insensitively: `name="a" NAME={b}` does
+not compile, even when one value might be absent. Combine values in one expression instead.
+Spreads can still write duplicate names: the macro cannot see their contents, and the browser
+keeps the first. `data-key` is Corten's output; write `key={item.id}`, not `data-key=".."`.
+
+Markup a browser parses differently from how it is written does not compile where
+the markup shows how the browser parses it. An element inside one whose content a browser reads as text (`<textarea>`,
 `<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`) would show as text: put it beside
 the element, or write text meant to show tags as a string (`"<b>"`). One inside a `<script>` or
 a `<style>` belongs in a `#[component(js)]` or the component's CSS file (a data block,
@@ -51,6 +55,21 @@ an expression or a spread may write first, it does not show, and nothing here is
 refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an
 `<svg>` compiles ([design Choice 54](../design.md#choice-html-parse-refusals),
 [Limit 30](../design.md#limit-markup-context)).
+
+The same rule applies to literal HTML nesting whose start tags close an open element: a block
+in a `<p>` (`<p><span><div>..</div></span></p>`), an `<li>` in an `<li>` without a list or
+another special element between, a `<dt>` or `<dd>` in either without such a boundary, an `<a>`
+in an active `<a>`, a `<button>` or `<nobr>` in one still in scope, a heading directly in a
+heading, and a `<form>` in an open form outside a `<template>`. Put the elements beside one
+another, use `<div>` rather than `<p>` around blocks, and wrap a nested list in `<ul>` or
+`<ol>`. This is checked even without refs: a ref in content the browser moves may leave its
+component's scope. Control-flow bodies and fragments retain the literal ancestor chain;
+components, their children, expressions and `raw` do not expose what they write or where they
+write it, so nesting across those boundaries is the app's to keep correct. A top-level `<a>`
+or `<form>` might be foreign content: wrap HTML fragments in an HTML element when their
+namespace needs to be established. This is not a complete HTML validator. It does not check
+table foster parenting (a `<div>` straight in a `<table>`), optional-end-tag rules for options
+or ruby, or a `<table>` in a `<p>` (which closes the paragraph only outside quirks mode).
 
 `#[component]` turns a function into a props struct and a `Render` impl, so the same
 component renders inside a page and on its own as a patch, and the two cannot drift. A view owns
@@ -84,6 +103,10 @@ The rest of a page's accessibility is an audit's to find in a browser ([app](app
 A page is a whole HTML document, built from components like everything else: the app's layout
 component with the page in it. `corten new` writes the layout in `src/views.rs`, and it is the
 app's to change; Corten adds nothing around it.
+
+Write `<!DOCTYPE html>` before `<html>` so the browser uses standards mode rather than quirks
+mode. A document component with refs, a `scope` argument or `keep` still has one root element:
+the doctype is a declaration, not another root, and `data-scope` goes on `<html>`.
 
 ```rust
 use corten::prelude::*;
