@@ -14,9 +14,6 @@ pub(crate) struct Access {
     path: String,
 }
 
-#[derive(Clone)]
-pub(crate) struct Matched(pub(crate) Cow<'static, str>);
-
 /// Only apps with tower layers need a shared handoff: a layer can dispatch on another task
 /// and replace the entire response, so neither a task-local nor response extensions suffice.
 #[derive(Clone, Default)]
@@ -35,17 +32,18 @@ impl Shared {
 pub(crate) fn answer(
     mut req: Request,
     shared: bool,
+    matched: impl FnOnce(&Request) -> Option<Cow<'static, str>>,
     next: impl FnOnce(Request) -> crate::router::RouterFuture,
 ) -> crate::router::Answering {
     if !tracing::event_enabled!(target: "corten::access", tracing::Level::INFO) {
         let answering = next(req);
         return Box::pin(async move {
-            let Ok(mut res) = answering.await;
-            res.extensions_mut().remove::<Matched>();
+            let Ok(res) = answering.await;
             res
         });
     }
     let access = Access::start(&req);
+    let matched = matched(&req);
     let route = shared.then(|| {
         let route = Shared::default();
         req.extensions_mut().insert(route.clone());
@@ -53,10 +51,10 @@ pub(crate) fn answer(
     });
     let answering = next(req);
     Box::pin(async move {
-        let Ok(mut res) = answering.await;
+        let Ok(res) = answering.await;
         let matched = match route {
             Some(route) => route.take(),
-            None => res.extensions_mut().remove::<Matched>().map(|matched| matched.0),
+            None => matched,
         };
         access.write(&res, matched);
         res

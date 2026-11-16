@@ -1585,8 +1585,8 @@ impl<M: Middleware> App<M> {
             staged(table, Layer { shared, bounds, policy, scopes, steps: Scoped(self.middleware) })
         };
         let access_shared = !self.layers.is_empty();
-        if self.access_log {
-            router = router.record_route(access_shared);
+        if self.access_log && access_shared {
+            router = router.record_route();
         }
         for wrap in self.layers {
             router = wrap(router);

@@ -684,9 +684,15 @@ impl Router {
         Router { inner: Inner::Routes(Arc::new(dispatch)), edge: true }
     }
 
-    /// Only an app with access logging carries the matched name out through its stages.
-    pub(crate) fn record_route(self, shared: bool) -> Self {
-        let Inner::Routes(dispatch) = self.inner else { unreachable!("called before app layers") };
+    /// A logging app with tower layers carries its matched name out through those layers.
+    pub(crate) fn record_route(self) -> Self {
+        let paths = self.access_paths();
+        let inner = Router { edge: false, ..self };
+        Router { inner: Inner::Layered(Arc::new(Recording { inner, paths })), edge: true }
+    }
+
+    fn access_paths(&self) -> matchit::Router<std::borrow::Cow<'static, str>> {
+        let Inner::Routes(dispatch) = &self.inner else { unreachable!("called before app layers") };
         let mut paths = matchit::Router::new();
         for entry in &dispatch.routes {
             let name = match entry.written {
@@ -695,16 +701,14 @@ impl Router {
             };
             paths.insert(entry.path.as_ref(), name).expect("router paths were already validated");
         }
-        let inner = Router { inner: Inner::Routes(dispatch), edge: false };
-        let recording: Arc<dyn Outer> =
-            if shared { Arc::new(Recording::<true> { inner, paths }) } else { Arc::new(Recording::<false> { inner, paths }) };
-        Router { inner: Inner::Layered(recording), edge: true }
+        paths
     }
 
     /// Outside the final HTTP fix as well as every app layer. Reuses the optional outer-service
     /// path, leaving a disabled app's future and its response untouched.
     pub(crate) fn access_log(self, shared: bool) -> Self {
-        Router { inner: Inner::Layered(Arc::new(AccessRouter { inner: self, shared })), edge: false }
+        let paths = (!shared).then(|| self.access_paths());
+        Router { inner: Inner::Layered(Arc::new(AccessRouter { inner: self, shared, paths })), edge: false }
     }
 
     /// This router inside `layer` ([`crate::App::layer`]).
@@ -884,33 +888,21 @@ impl tower_service::Service<Request> for Router {
 }
 
 /// An enabled-only name index keeps the normal matcher and dispatch's original call sites.
-struct Recording<const SHARED: bool> {
+struct Recording {
     inner: Router,
     paths: matchit::Router<std::borrow::Cow<'static, str>>,
 }
 
-impl<const SHARED: bool> Outer for Recording<SHARED> {
+impl Outer for Recording {
     fn call(&self, mut req: Request) -> Answering {
-        let matched = self.paths.at(req.uri().path()).ok().map(|found| found.value.clone());
-        if SHARED {
-            if let Some(shared) = req.extensions_mut().remove::<crate::access::Shared>() {
-                shared.set(matched);
-            }
-            let answering = self.inner.answer(req);
-            Box::pin(async move {
-                let Ok(res) = answering.await;
-                res
-            })
-        } else {
-            let answering = self.inner.answer(req);
-            Box::pin(async move {
-                let Ok(mut res) = answering.await;
-                if let Some(matched) = matched {
-                    res.extensions_mut().insert(crate::access::Matched(matched));
-                }
-                res
-            })
+        if let Some(shared) = req.extensions_mut().remove::<crate::access::Shared>() {
+            shared.set(self.paths.at(req.uri().path()).ok().map(|found| found.value.clone()));
         }
+        let answering = self.inner.answer(req);
+        Box::pin(async move {
+            let Ok(res) = answering.await;
+            res
+        })
     }
 }
 
@@ -918,11 +910,17 @@ impl<const SHARED: bool> Outer for Recording<SHARED> {
 struct AccessRouter {
     inner: Router,
     shared: bool,
+    paths: Option<matchit::Router<std::borrow::Cow<'static, str>>>,
 }
 
 impl Outer for AccessRouter {
     fn call(&self, req: Request) -> Answering {
-        crate::access::answer(req, self.shared, |req| self.inner.answer(req))
+        crate::access::answer(
+            req,
+            self.shared,
+            |req| self.paths.as_ref()?.at(req.uri().path()).ok().map(|found| found.value.clone()),
+            |req| self.inner.answer(req),
+        )
     }
 }
 

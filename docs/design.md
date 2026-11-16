@@ -4684,8 +4684,9 @@ rules something out.
     is ready, not at a close it may never reach. The existing subscriber still owns formatting,
     escaping and routing; no access-log format or dependency is added. With the switch off,
     no clock is read and no request metadata is retained for logging.
-    Ordinary enabled requests carry the route on the response without a per-request `Arc` or
-    URI clone. Only an app with tower layers needs a shared route handoff: a layer can dispatch
+    Ordinary enabled requests keep the route beside the answer's future, without a response
+    extension, second wrapper, per-request `Arc` or URI clone. Only an app with tower layers
+    needs a shared route handoff: a layer can dispatch
     on another task and replace the whole response, defeating both response extensions and
     task-local storage. The enabled wrapper repeats the route-name lookup in an index built
     only when enabled, separate from normal dispatch so its lookup keeps its original caller.
