@@ -5,6 +5,22 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A handler is given a form's control by its `#[derive(Fields)]` field,
+  `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
+  `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
+  radios or checkboxes that share the name. The runtime finds it by name in the handler's form
+  when the handler runs, so a component that draws the fields for forms with and without a
+  script needs no ref, and the script looks nothing up by a name as text. Text where a field
+  belongs, and a field where the handler takes text or another element, do not compile; a call
+  that takes a single control (an input, select or textarea) whose form lacks it, has more than
+  one of the name, or has one of another kind, throws, as does a group whose form has a control of
+  the name that is not an input, saying what the call takes and what the form has instead, and
+  `corten dev` reports the same when the page draws it (a group with none is `[]`). The lookup
+  is a module of its own (`corten-field`, 741 bytes with gzip) that only a page whose handlers take
+  a field loads, and reads the form's index of names, a few microseconds a run in a form of 2,000
+  controls; every page's runtime is 66 bytes larger with gzip
+  ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
+
 - Clear only an already stopped, masked firmware unit's failed state during
   fresh benchmark setup, then recheck the mask, inactive state and service PID.
   Record fixed setup stages, source lines and original failure codes without
@@ -1081,8 +1097,8 @@ Corten is pre-1.0, so any minor version may change the API.
   browser's). A `beforetoggle` handler that changes the dialog as it closes no longer stops the
   patch. This holds for a `data-patch` answer, a `<corten-live>` fragment, a `ReadAgain` read and
   `patch()`, for a dialog with an id; one the user opened still stays open when an answer draws it
-  closed. The runtime is 395 bytes larger minified (170 with gzip, 142 with brotli) (design
-  Choice 57,
+  closed. The runtime is 395 bytes larger minified (174 with gzip, 137 with brotli) (design
+  Choice 58,
   [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
 
 - A navigation under a `Pwa::network_only` prefix reaches the server once with the PWA's service

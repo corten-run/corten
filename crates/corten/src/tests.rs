@@ -1383,16 +1383,23 @@ async fn dev_mode_shows_errors_and_reloads_pages_when_the_server_restarts() {
     // Each server start has its own boot id; the page compares it to the one it was served with.
     assert!(!boot.is_empty() && events.contains(&format!("data: {boot}\n")), "{events}");
     // The checks a developer needs, which a production page never loads.
-    let (status, headers, script) = call_with(router, "GET", "/corten/dev.js", None, None).await;
+    let (status, headers, script) = call_with(router.clone(), "GET", "/corten/dev.js", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["content-type"], "text/javascript; charset=utf-8");
     assert_eq!(headers["cache-control"], "no-store");
     assert!(script.contains(r#"import { ready } from "corten";"#), "{script}");
+    // And the runtime's modules it imports, as written.
+    for (path, export) in [("/corten/on.js", "export function parseOn("), ("/corten/field.js", "export function field(")] {
+        let (status, headers, script) = call_with(router.clone(), "GET", path, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(headers["content-type"], "text/javascript; charset=utf-8", "{path}");
+        assert!(script.contains(export), "{path}: {script}");
+    }
 
     let prod = App::new(Routes::from(failing())).dev(false).router();
     let (_, _, body) = call(prod.clone(), "GET", None).await;
     assert!(!body.contains("database") && !body.contains("corten-dev"));
-    for path in ["/corten/dev", "/corten/dev.js"] {
+    for path in ["/corten/dev", "/corten/dev.js", "/corten/on.js", "/corten/field.js"] {
         let (status, _, _) = call_with(prod.clone(), "GET", path, None, None).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
     }

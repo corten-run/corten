@@ -54,6 +54,18 @@ export function priced(out, count, price, when) {
   out.textContent = `${count(1234)} at ${price(123450)}, ${when(0)}`;
 }
 
+/** @param {HTMLInputElement} weight @param {HTMLSelectElement} format @param {HTMLTextAreaElement} note @param {HTMLInputElement[]} sizes */
+export function fill(weight, format, note, sizes) {
+  weight.value = format.value + note.value + String(sizes.length);
+}
+
+/** @typedef {{ weight: HTMLInputElement, sizes: HTMLInputElement[] }} Parcel */
+
+/** @param {Parcel} parcel */
+export function pack(parcel) {
+  parcel.weight.value = String(parcel.sizes.filter((size) => size.checked).length);
+}
+
 /** @param {HTMLElement} el @param {unknown} listing */
 export function listed(el, listing) {
   el.title = Array.isArray(listing) ? String(listing.length) : "";
