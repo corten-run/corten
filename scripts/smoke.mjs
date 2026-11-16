@@ -6969,7 +6969,7 @@ async function run(browser) {
       /** @type {typeof import("../crates/corten/js/upload.js")} */
       const module = await import(url);
       const body = new FormData(/** @type {HTMLFormElement} */ (document.querySelector("main form[enctype]")));
-      const res = await module.upload(new URL("/account", location.href), "POST", body, new AbortController().signal, () => {});
+      const res = await module.upload(new URL("/account", location.href), "POST", { corten: "action", prefer: "corten-draws=whole" }, body, new AbortController().signal, () => {});
       return { url: res.url, status: res.status, path: new URL(res.url, location.href).pathname };
     });
     await redirectContext.close();
