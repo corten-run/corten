@@ -4510,8 +4510,16 @@ rules something out.
     (18,382.68 to 18,382.82) and 18,382.72 (18,382.71 to 18,382.76), the same within a tenth of an
     instruction; the whole change (three runs), whose other files are tests, an example and
     documents, 17,974.49 (17,974.48 to 17,975.89) and 18,388.71 (18,388.59 to 18,388.78), about
-    five and six more, which the build with `page.rs` alone does not show: the rest adds tests to
-    the same test binary, and what moved was not traced; the counted page asks for no HTML, which in a release build reaches the
+    five and six more, which the build with `page.rs` alone does not show. Those come from the
+    tests: `55757d723` with only `crates/corten/src/tests.rs` as at `019058f59` (three runs,
+    alternating with three of `55757d723` rebuilt) counts 17,975.85 (17,975.82 to 17,975.88)
+    and 18,388.76 (18,388.73 to 18,388.76) against 17,969.86 (17,969.78 to 17,969.86) and
+    18,382.79 (18,382.69 to 18,382.84), six more in each mode with no line of the request path
+    changed. `tests.rs` is `#[cfg(test)]`, compiled into the same test binary as the code it
+    counts, and the release profile builds that binary as one codegen unit with thin LTO, so more
+    tests in it can move what the optimizer inlines and lays out (reasoned; which functions moved
+    was not traced); an app's binary has no `tests.rs`.
+    The counted page asks for no HTML, which in a release build reaches the
     same code, since the check and the method it clones are not compiled there); value (Values 3, a
     form works without JavaScript; Values 9, the developer sees it in a test).
 
@@ -4525,8 +4533,10 @@ rules something out.
 
     Last checked: 2026-11-16, the router test
     `a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds` and its release
-    counterpart (the release build's run with `--release`), on `4060b8b27`, and the reading of
-    `html_response`'s callers in `crates/corten/src/page.rs` that the reasoned premise rests on.
+    counterpart (the release build's run with `--release`), on `855797ab6`; 2026-11-16, the callgrind runs on
+    `4060b8b27` and, of the tests alone, on `019058f59`'s `tests.rs`; 2026-11-16, the reading of
+    `html_response`'s callers in `crates/corten/src/page.rs` that the reasoned premise rests on, on
+    `855797ab6`.
 
 ## Rules
 
