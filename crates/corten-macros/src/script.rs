@@ -39,6 +39,9 @@ pub enum Param {
     Event(String),
     /// `FeedUrl<Level>`: the URL of a feed of the Rust type `Level` in the component's module.
     Feed(String),
+    /// `ScreenUrl<SetListing>`: the URL of a screen whose data is the Rust type `SetListing` in the
+    /// component's module.
+    Screen(String),
     /// A type `corten::types` generated, `import("../types/app").SortBy`: a value of the Rust type
     /// `SortBy` in the component's module.
     Generated(String),
@@ -266,6 +269,7 @@ fn param_path(param: &Param) -> TokenStream {
         // The `#[event]` type, in the module of the component or `script!` that reads the script.
         Param::Event(class) => format!("super::{class}").parse().expect("a type path parses"),
         Param::Feed(rows) => format!("::corten::script::ts::FeedUrl<super::{rows}>").parse().expect("a type path parses"),
+        Param::Screen(data) => format!("::corten::script::ts::ScreenUrl<super::{data}>").parse().expect("a type path parses"),
         Param::Generated(name) => format!("::corten::script::ts::Generated<super::{name}>").parse().expect("a type path parses"),
         Param::Unreadable(_) | Param::Refused(_) | Param::Any => q("::corten::script::ts::Any", &[]),
     }
@@ -466,8 +470,10 @@ fn without_comments(line: &str) -> String {
     out.trim_end().to_string()
 }
 
-/// The module `import { shortcut } from "corten/keys"` loads: corten's `KEYS_MODULE`.
-const KEYS: &str = "corten-keys";
+/// Corten's modules a script imports by name, each with the module it is served as (corten's
+/// `IMPORTED`): `corten/keys` (`shortcut`) and `corten/read` (`read`). Each is served only to apps
+/// with a listed script that imports it, and preloaded with that script like a sibling.
+const OWN: &[(&str, &str)] = &[("corten/keys", "corten-keys"), ("corten/read", "corten-read")];
 
 /// The module a static import names when it is a script of the same directory:
 /// `import { a } from "./stripe.js";` and `import "./stripe.js";` are `stripe`. Another path (a
@@ -506,6 +512,9 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
     // `@typedef {import("../types/app").SortBy} SortBy` and `@typedef {"a" | "b"} Mode`: a
     // handler parameter of that name is the type it names.
     let mut aliases: Vec<(String, String)> = Vec::new();
+    // `/** @import { SetListing } from "../types/app" */`: a name for a declaration
+    // `corten::types` writes, by the name it has there (local, declared).
+    let mut generated: Vec<(String, String)> = Vec::new();
     let mut imports: Vec<String> = Vec::new();
     let mut siblings: Vec<String> = Vec::new();
     let mut doc: Option<String> = None;
@@ -544,6 +553,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
                     "import typed events by name: /** @import { RowToggled } from \"corten/events\" */".into(),
                 ));
             }
+            generated.extend(jsdoc_generated_imports(&block));
             if let Some(names) = jsdoc_import(&block, "corten/events") {
                 for name in names {
                     let (class, local) =
@@ -593,12 +603,15 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
             if let Some(name) = sibling(&statement).filter(|n| !siblings.contains(n)) {
                 siblings.push(name);
             }
-            // `corten/keys` is served as the module `corten-keys` (corten's `KEYS_MODULE`), only
-            // to apps with a script that imports it, and preloaded with that script like a sibling.
-            if (statement.contains("\"corten/keys\"") || statement.contains("'corten/keys'"))
-                && !siblings.iter().any(|s| s == KEYS)
-            {
-                siblings.push(KEYS.to_string());
+            // `corten/keys` is served as the module `corten-keys` (and `corten/read` as
+            // `corten-read`), only to apps with a script that imports it, and preloaded with that
+            // script like a sibling.
+            for (specifier, module) in OWN {
+                if (statement.contains(&format!("\"{specifier}\"")) || statement.contains(&format!("'{specifier}'")))
+                    && !siblings.iter().any(|s| s == module)
+                {
+                    siblings.push(module.to_string());
+                }
             }
             if statement.contains("\"corten/events\"") || statement.contains("'corten/events'") {
                 let names = statement.split_once('{').and_then(|(_, rest)| rest.split_once('}')).map(|(names, _)| names);
@@ -697,9 +710,28 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         substitute(&resolve(ty), &mut |word| expanded.iter().find(|(local, _)| local == word).map(|(_, to)| to.clone()))
     };
     let plain_type = |ty: &str| {
-        // A view's or a row's name in `Holds<Row, ..>` and `FeedUrl<Level>` is the name itself.
+        // A view's, a row's or a screen's name in `Holds<Row, ..>`, `FeedUrl<Level>` and
+        // `ScreenUrl<SetListing>` is the name itself.
         let resolved = resolve(ty);
-        let ty = if resolved.starts_with("Holds<") || resolved.starts_with("FeedUrl<") { resolved } else { expand(ty) };
+        let named = ["Holds<", "FeedUrl<", "ScreenUrl<"].iter().any(|p| resolved.starts_with(p));
+        let ty = if named { resolved } else { expand(ty) };
+        // A screen's data is the declaration `corten::types` writes for the route's data, named
+        // there or through a `@typedef` of it: a type the script declares itself (a local
+        // `@typedef {{ .. }} SetListing`) would match the Rust type by its name alone, whatever
+        // its shape. The parameter names the Rust type the declaration was written from.
+        if let (Some(inner), Param::Screen(_)) =
+            (ty.strip_prefix("ScreenUrl<").and_then(|t| t.strip_suffix('>')), param_type(&ty))
+        {
+            let inner = inner.trim();
+            let resolved = resolve(inner);
+            let imported = generated.iter().find(|(local, _)| *local == resolved).map(|(_, name)| name.clone());
+            return match generated_name(&resolved).or(imported) {
+                Some(name) => Param::Screen(name),
+                None => Param::Unreadable(format!(
+                    "ScreenUrl<{inner}>: a screen's data is the declaration corten::types writes for the route's data, import(\"../types/app\").Name, written there, imported from there (/** @import {{ Name }} from \"../types/app\" */) or named by a @typedef of it (/** @typedef {{import(\"../types/app\").Name}} Name */); a type the script declares itself is matched by its name alone, whatever its shape"
+                )),
+            };
+        }
         match param_type(&ty) {
             Param::Any => event_of(&ty).map_or(Param::Any, Param::Event),
             other => other,
@@ -843,22 +875,27 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         handlers.push(Handler { name, params: list, doc });
     }
     // `import("corten/keys")` in a function body needs the module served too. Any quoted
-    // `corten/keys` counts, the rule corten's startup check applies to a served script.
-    if !siblings.iter().any(|s| s == KEYS) && names_keys(&crate::comments::strip(source)) {
-        siblings.push(KEYS.to_string());
+    // `corten/keys` counts, the rule corten's startup check applies to a served script; the same
+    // for `corten/read`.
+    let code = crate::comments::strip(source);
+    for (specifier, module) in OWN {
+        if !siblings.iter().any(|s| s == module) && names_module(&code, specifier) {
+            siblings.push(module.to_string());
+        }
     }
     Ok((handlers, groups, imports, siblings))
 }
 
-/// Whether a script's code (comments stripped) names `corten/keys` in quotes or backticks.
-fn names_keys(code: &str) -> bool {
-    ["\"corten/keys\"", "'corten/keys'", "`corten/keys`"].iter().any(|q| code.contains(q))
+/// Whether a script's code (comments stripped) names `specifier` (`corten/keys`) in quotes or
+/// backticks.
+fn names_module(code: &str, specifier: &str) -> bool {
+    ['"', '\'', '`'].iter().any(|q| code.contains(&format!("{q}{specifier}{q}")))
 }
 
 /// The first sibling a library's script imports by a name its prefix does not start, which the
-/// page would not find; `corten/keys` is Corten's and is exempt.
+/// page would not find; `corten/keys` and `corten/read` are Corten's and are exempt.
 fn unprefixed<'a>(prefix: &str, siblings: &'a [String]) -> Option<&'a str> {
-    siblings.iter().map(String::as_str).find(|s| *s != KEYS && !s.starts_with(&format!("{prefix}.")))
+    siblings.iter().map(String::as_str).find(|s| !OWN.iter().any(|(_, m)| s == m) && !s.starts_with(&format!("{prefix}.")))
 }
 
 /// Each alias written out, with the aliases inside it written out too: `Tabs = Tab[]` and
@@ -1260,7 +1297,7 @@ fn not_json(param: &Param) -> bool {
                 || path.starts_with("ts::Map")
                 || path == "ts::AbortSignal"
         }
-        Param::Event(_) | Param::Group(_) | Param::Feed(_) | Param::Unreadable(_) | Param::Refused(_) => true,
+        Param::Event(_) | Param::Group(_) | Param::Feed(_) | Param::Screen(_) | Param::Unreadable(_) | Param::Refused(_) => true,
         Param::Generated(_) | Param::Any => false,
     }
 }
@@ -1647,14 +1684,14 @@ const UNKNOWN: &str = "unknown";
 fn unchecked(ty: &str, expanded: &str, browser: bool) -> String {
     let shown = if expanded == ty { ty.to_string() } else { format!("{ty}, which is {expanded}") };
     if browser {
-        return format!("{shown}: no call can be checked against this type, so a wrong element, event or other value would compile; take one the scripts guide lists as checked: an element type, a union or a list of them (El[]), one event interface (for several events, the one they share, such as UIEvent or Event, narrowed in the script), AbortSignal, ElementId or ElementId[], FeedUrl<Row>, Holds<Row, El>, Map<string, El>, Map<El, number> (or string, or boolean), a message or a format, or a @typedef of these (a group) taken as it is, not in a list or with null; or take {UNKNOWN} and check the value in the script");
+        return format!("{shown}: no call can be checked against this type, so a wrong element, event or other value would compile; take one the scripts guide lists as checked: an element type, a union or a list of them (El[]), one event interface (for several events, the one they share, such as UIEvent or Event, narrowed in the script), AbortSignal, ElementId or ElementId[], FeedUrl<Row>, ScreenUrl<Data>, Holds<Row, El>, Map<string, El>, Map<El, number> (or string, or boolean), a message or a format, or a @typedef of these (a group) taken as it is, not in a list or with null; or take {UNKNOWN} and check the value in the script");
     }
     format!("{shown}: no call can be checked against this type, so a wrong argument would compile; declare a Rust type for the value (derive ToJson, add it with Types::add) and take its declaration, import(\"../types/app\").Name, use a type the scripts guide lists as checked, or take {UNKNOWN} and check the value in the script")
 }
 
 /// Names of values a handler takes that are not JSON, besides elements and events: the browser's
-/// (a node, a signal, a map of elements) and Corten's (an element id, a feed URL, a message, a
-/// format).
+/// (a node, a signal, a map of elements) and Corten's (an element id, a feed's or a screen's URL, a
+/// message, a format).
 const BROWSER: &[&str] = &[
     "EventTarget",
     "Node",
@@ -1662,6 +1699,7 @@ const BROWSER: &[&str] = &[
     "AbortSignal",
     "ElementId",
     "FeedUrl",
+    "ScreenUrl",
     "Holds",
     "Map",
     "Window",
@@ -1710,6 +1748,33 @@ fn jsdoc_import(block: &str, module: &str) -> Option<Vec<String>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// Each name a JSDoc `@import { A, B as C } from "../types/app"` in a block brings in from the
+/// declarations `corten::types` writes (a path ending in `types/app`, `.js` or `.d.ts` too), as
+/// (local, declared): `("A", "A")`, `("C", "B")`.
+fn jsdoc_generated_imports(block: &str) -> Vec<(String, String)> {
+    let block = jsdoc_text(block);
+    let mut out = Vec::new();
+    for (at, _) in block.match_indices("@import") {
+        let Some(rest) = block[at + "@import".len()..].trim_start().strip_prefix('{') else { continue };
+        let Some((names, after)) = rest.split_once('}') else { continue };
+        let Some(from) = after.trim_start().strip_prefix("from").map(str::trim_start) else { continue };
+        let Some(quote) = from.chars().next().filter(|c| matches!(c, '"' | '\'')) else { continue };
+        let Some((path, _)) = from[1..].split_once(quote) else { continue };
+        let path = path.strip_suffix(".js").or_else(|| path.strip_suffix(".d.ts")).unwrap_or(path);
+        if !generated_path(path) {
+            continue;
+        }
+        for name in names.split(',').map(|n| n.split_whitespace().collect::<Vec<_>>()) {
+            match name.as_slice() {
+                [declared] => out.push((declared.to_string(), declared.to_string())),
+                [declared, "as", local] => out.push((local.to_string(), declared.to_string())),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
 /// Whether a block has a JSDoc namespace import of `module`, `@import * as name from "module"`,
 /// read one `@import` at a time, each with its own `from` (a namespace import of another module
 /// beside a named import of this one is not one).
@@ -1748,24 +1813,35 @@ fn param_type(ty: &str) -> Param {
             _ => Param::Any,
         };
     }
-    // `FeedUrl<Level>` (corten): the URL of a feed of `Level` rows, a route with `rows = Level`.
-    // The rows are the Rust type of that name in the component's module, written plain or as the
-    // generated declaration it is (`import("../types/app").Level`).
-    if let Some(inner) = ty.strip_prefix("FeedUrl<").and_then(|t| t.strip_suffix('>')) {
-        let inner = inner.trim();
-        let rows = match inner.strip_prefix("import(") {
-            Some(rest) => rest.split_once(").").map_or("", |(_, name)| name.trim()),
-            None => inner,
-        };
-        let plain = rows.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && rows.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-        return if plain {
-            Param::Feed(rows.to_string())
-        } else {
-            Param::Unreadable(format!(
-                "FeedUrl<{inner}>: a feed's rows are one named type, FeedUrl<Level>, the Rust type Level in the component's module"
-            ))
-        };
+    // `FeedUrl<Level>` (corten): the URL of a feed of `Level` rows, a route with `rows = Level`;
+    // `ScreenUrl<SetListing>` (corten/read): the URL of a screen whose data is `SetListing`, a
+    // route with `data = SetListing`. Each names the Rust type of that name in the component's
+    // module, written plain or as the generated declaration it is (`import("../types/app").Level`).
+    // Each: the prefix, the parameter it makes, and why a form it cannot read is refused.
+    type Url = (&'static str, fn(String) -> Param, &'static str);
+    let urls: [Url; 2] = [
+        (
+            "FeedUrl<",
+            Param::Feed,
+            "a feed's rows are one named type, FeedUrl<Level>, the Rust type Level in the component's module",
+        ),
+        (
+            "ScreenUrl<",
+            Param::Screen,
+            "a screen's data is one named type, ScreenUrl<SetListing>, the Rust type SetListing in the component's module",
+        ),
+    ];
+    for (url, named, why) in urls {
+        if let Some(inner) = ty.strip_prefix(url).and_then(|t| t.strip_suffix('>')) {
+            let inner = inner.trim();
+            let name = match inner.strip_prefix("import(") {
+                Some(rest) => rest.split_once(").").map_or("", |(_, name)| name.trim()),
+                None => inner,
+            };
+            let plain = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+            return if plain { named(name.to_string()) } else { Param::Unreadable(format!("{url}{inner}>: {why}")) };
+        }
     }
     // `import("../types/app").SortBy`: a declaration `corten::types` generated from the Rust type
     // of that name.
@@ -2251,6 +2327,53 @@ function helper() {}
     }
 
     #[test]
+    fn a_screen_url_names_its_data_by_the_rust_type_or_does_not_compile() {
+        let (handlers, _) = parse(
+            "/** @typedef {import(\"../types/app\").Listing} Listing */\n/** @param {ScreenUrl<Listing>} a @param {ScreenUrl<import(\"../types/app\").Listing>} b */\nexport function f(a, b) {}",
+        )
+        .unwrap();
+        assert_eq!(handlers[0].params[0].1, Param::Screen("Listing".into()), "a screen of an alias");
+        assert_eq!(
+            handlers[0].params[1].1,
+            Param::Screen("Listing".into()),
+            "the generated declaration, imported where it is used"
+        );
+        let (handlers, _) = parse(
+            "/** @typedef {import(\"../types/app\").Listing} Data */\n/** @param {ScreenUrl<Data>} a */\nexport function f(a) {}",
+        )
+        .unwrap();
+        assert_eq!(handlers[0].params[0].1, Param::Screen("Listing".into()), "the Rust type an alias names");
+        // Imported by name from the declarations, at any depth, renamed or through a typedef.
+        let (handlers, _) = parse(
+            "/**\n * @import { Listing, Order as Bought } from \"../types/app\"\n * @import { Step } from '../../types/app.js'\n */\n/** @typedef {Bought} Shown */\n/** @param {ScreenUrl<Listing>} a @param {ScreenUrl<Bought>} b @param {ScreenUrl<Step>} c @param {ScreenUrl<Shown>} d */\nexport function f(a, b, c, d) {}",
+        )
+        .unwrap();
+        for (n, name) in ["Listing", "Order", "Step", "Order"].into_iter().enumerate() {
+            assert_eq!(handlers[0].params[n].1, Param::Screen(name.into()), "parameter {n}");
+        }
+        for ty in ["ScreenUrl<Listing[]>", "ScreenUrl<Listing | null>", "ScreenUrl<>"] {
+            let why = refusal(&format!("/** @param {{{ty}}} a */\nexport function f(a) {{}}"));
+            assert!(why.contains("a screen's data is one named type"), "{ty}: {why}");
+        }
+        // A name that is not the generated declaration matches the Rust type by its name alone,
+        // whatever its shape: a type of the script's own, or one never declared.
+        for source in [
+            "/** @typedef {{ name: string }} Listing */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @typedef {import(\"./listing.js\").Listing} Listing */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @import { Listing } from \"./listing.js\" */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @import { Listing } from \"../mytypes/app\" */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+            "/** @import { Order } from \"../types/app\" */\n/** @param {ScreenUrl<Listing>} a */\nexport function f(a) {}",
+        ] {
+            let why = refusal(source);
+            assert!(why.contains("the declaration corten::types writes for the route's data"), "{source}: {why}");
+        }
+        // In another shape (with null, in a list) it is a browser value no call is checked against.
+        let why = refusal("/** @param {ScreenUrl<Listing> | null} a */\nexport function f(a) {}");
+        assert!(why.contains("FeedUrl<Row>, ScreenUrl<Data>"), "{why}");
+    }
+
+    #[test]
     fn a_generated_type_is_the_rust_type_and_a_literal_union_does_not_compile() {
         let (handlers, _) = parse(
             "/** @typedef {import(\"../types/app\").SortBy} SortBy */\n/** @param {SortBy} a @param {import(\"../../types/app.js\").Step} b @param {import(\"./other\").Thing} c */\nexport function f(a, b, c) {}",
@@ -2648,6 +2771,7 @@ export function toggled(event, sel, c, level, done, cleared, n) {}
     /// `import()` of it makes it one of the script's imports, and one in a comment does not.
     #[test]
     fn a_script_that_imports_corten_keys_has_it_among_its_imports() {
+        const KEYS: &str = "corten-keys";
         let fixed = "import { shortcut } from \"corten/keys\";\nexport function f() {}\n";
         assert_eq!(parse_all(fixed).unwrap().3, [KEYS]);
         let late = "export async function f() {\n  const { shortcut } = await import('corten/keys');\n}\n";
@@ -2663,11 +2787,25 @@ export function toggled(event, sel, c, level, done, cleared, n) {}
         assert_eq!(parse_all(ticked).unwrap().3, [KEYS]);
     }
 
+    /// `corten/read` is served the same way: only to apps whose listed scripts import it.
+    #[test]
+    fn a_script_that_imports_corten_read_has_it_among_its_imports() {
+        let fixed = "import { read } from \"corten/read\";\nexport function f() {}\n";
+        assert_eq!(parse_all(fixed).unwrap().3, ["corten-read"]);
+        let late = "export async function f() {\n  const { read } = await import('corten/read');\n}\n";
+        assert_eq!(parse_all(late).unwrap().3, ["corten-read"]);
+        let both = "import { shortcut } from \"corten/keys\";\nimport { read, ReadError } from \"corten/read\";\nexport function f() {}\n";
+        assert_eq!(parse_all(both).unwrap().3, ["corten-keys", "corten-read"]);
+        // A type imported in JSDoc alone loads nothing.
+        let typed = "/** @import { ScreenUrl } from \"corten/read\" */\nexport function f() {}\n";
+        assert!(parse_all(typed).unwrap().3.is_empty());
+    }
+
     #[test]
     fn a_library_script_may_import_corten_keys_but_not_a_sibling_without_its_prefix() {
         let names = |s: &[&str]| s.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(unprefixed("ui", &names(&["ui.listbox", KEYS])), None);
-        assert_eq!(unprefixed("ui", &names(&[KEYS, "listbox"])), Some("listbox"));
+        assert_eq!(unprefixed("ui", &names(&["ui.listbox", "corten-keys", "corten-read"])), None);
+        assert_eq!(unprefixed("ui", &names(&["corten-keys", "listbox"])), Some("listbox"));
         assert_eq!(unprefixed("ui", &names(&["uix.listbox"])), Some("uix.listbox"));
     }
 }

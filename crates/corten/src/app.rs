@@ -110,6 +110,7 @@ impl<P: Prefix> Area<P> {
     ///
     /// struct Item;
     /// impl corten::Route for Item {
+    ///     type Data = corten::route::NoData;
     ///     const PATH: &'static str = "/admin/a|b";
     ///     fn write_href(&self, out: &mut String, _: bool) {
     ///         out.push_str("/admin/a|b");
@@ -131,6 +132,7 @@ impl<P: Prefix> Area<P> {
     ///
     /// struct Item;
     /// impl corten::Route for Item {
+    ///     type Data = corten::route::NoData;
     ///     const PATH: &'static str = "/admin/a/../b";
     ///     fn write_href(&self, out: &mut String, _: bool) {
     ///         out.push_str("/admin/b");
@@ -140,7 +142,130 @@ impl<P: Prefix> Area<P> {
     /// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Item>(get(|| async { "item" })));
     /// # let _ = app.router();
     /// ```
-    pub fn route<R: TypedRoute>(mut self, methods: Methods<(), impl crate::answer::AnswerKind>) -> Self {
+    ///
+    /// A route that says `data = T` (its `Route::Data` is `HasData<T>`) takes only a `get` that
+    /// answers a screen of `T`, here as in its routes module, so mounted again by hand with one that
+    /// answers a page, whose read would get no data, it does not compile:
+    ///
+    #[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+    #[cfg_attr(not(feature = "json"), doc = "```ignore")]
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct Order { id: u32 }
+    ///
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/admin/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// fn doc(title: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{title}</title><Corten /></head><body><main>{title}</main></body></html> }
+    /// }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&SetListing { name: "All".into() }, doc("Sets"))
+    /// }
+    ///
+    /// async fn mounted(req: Req) -> HtmlResult {
+    ///     req.page(doc("Sets"))
+    /// }
+    ///
+    /// fn main() {
+    ///     let _ = (sets, url::router);
+    ///     let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>(get(mounted)));
+    ///     let _ = app.router();
+    /// }
+    /// ```
+    ///
+    /// Nor with one that answers a screen of other data, which a script's `ScreenUrl<SetListing>`
+    /// would take for the route's:
+    ///
+    #[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+    #[cfg_attr(not(feature = "json"), doc = "```ignore")]
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct Order { id: u32 }
+    ///
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/admin/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// fn doc(title: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{title}</title><Corten /></head><body><main>{title}</main></body></html> }
+    /// }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&SetListing { name: "All".into() }, doc("Sets"))
+    /// }
+    ///
+    /// async fn mounted(req: Req) -> HtmlResult<corten::Screen<Order>> {
+    ///     req.screen(&Order { id: 7 }, doc("Order"))
+    /// }
+    ///
+    /// fn main() {
+    ///     let _ = (sets, url::router);
+    ///     let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>(get(mounted)));
+    ///     let _ = app.router();
+    /// }
+    /// ```
+    ///
+    /// With a `get` that answers a screen of `SetListing` it compiles, as the same app with
+    /// `get(sets)`:
+    ///
+    #[cfg_attr(feature = "json", doc = "```")]
+    #[cfg_attr(not(feature = "json"), doc = "```ignore")]
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/admin/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// fn doc(title: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{title}</title><Corten /></head><body><main>{title}</main></body></html> }
+    /// }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&SetListing { name: "All".into() }, doc("Sets"))
+    /// }
+    ///
+    /// fn main() {
+    ///     let _ = url::router;
+    ///     let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>(get(sets)));
+    ///     let _ = app.router();
+    /// }
+    /// ```
+    pub fn route<R: TypedRoute>(
+        mut self,
+        methods: Methods<(), impl crate::answer::AnswerKind + crate::route::__private::DataMatches<R::Data>>,
+    ) -> Self {
         crate::route::mounted_with::<R, _, _>(&methods);
         self.place::<R>(methods.1);
         if let Some(companion) = methods.2 {

@@ -374,13 +374,14 @@ fn jsconfig(root: &Path, runtime: &Path) -> String {
     "moduleResolution": "bundler",
     "lib": ["es2022", "dom", "dom.iterable"],
     "types": [],
-    "paths": {{ "corten": [{runtime}], "corten/keys": [{keys}] }}
+    "paths": {{ "corten": [{runtime}], "corten/keys": [{keys}], "corten/read": [{read}] }}
   }},
   "include": [{include}]
 }}
 "#,
         runtime = path(runtime.join("corten.js")),
-        keys = path(runtime.join("keys.js"))
+        keys = path(runtime.join("keys.js")),
+        read = path(runtime.join("read.js"))
     )
 }
 
@@ -704,7 +705,7 @@ mod tests {
         let config = jsconfig(Path::new("/apps/shop"), Path::new("/reg/corten-0.1.0/js"));
         assert!(
             config.contains(
-                r#""paths": { "corten": ["/reg/corten-0.1.0/js/corten.js"], "corten/keys": ["/reg/corten-0.1.0/js/keys.js"] }"#
+                r#""paths": { "corten": ["/reg/corten-0.1.0/js/corten.js"], "corten/keys": ["/reg/corten-0.1.0/js/keys.js"], "corten/read": ["/reg/corten-0.1.0/js/read.js"] }"#
             ),
             "{config}"
         );

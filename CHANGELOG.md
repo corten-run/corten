@@ -5,6 +5,45 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A script reads a screen's data typed, from the route that answers it, with
+  `read(url, { signal })` from the new `corten/read` module. A route that says `data = T` in
+  `#[route(..)]`, whose `get` handler returns `HtmlResult<corten::Screen<T>>` (which only
+  `req.screen` makes, given a `T` or a reference, `Box`, `Rc` or `Arc` of one), is a handler
+  argument of type `ScreenUrl<T>`. The parameter must name the declaration `corten::types` writes:
+  `import("../types/app").T`, `@import { T } from "../types/app"` or a `@typedef` of either; a
+  type the script declares itself does not compile. `read()` asks the route with
+  `Accept: application/json` through the browser's HTTP cache (an unchanged answer is a 304) and
+  resolves to its `data`, typed as `T`. A route says `data` without `patches` or `rows`, and
+  the same route mounted again by hand (`Area::route`, `Api::route`) with a `get` that answers a
+  page or other data does not compile. `read()` follows no redirect. It rejects with a
+  `ReadError`: `status` is the answer's (a signed-out `Caller`'s or `Refused::sign_in`'s 401
+  included), or 0 when there was none it could use, with `redirected` true for a redirect the app
+  wrote itself, else with the error as `cause` (offline, a `SyntaxError` for a success that is
+  not JSON, a `TypeError` for JSON that is not a screen's). Once `signal` aborts it rejects with
+  its reason, even after a failed answer. The module (749 bytes, 486 with gzip, 409 with brotli)
+  is served and preloaded only for apps whose scripts import it; the runtime is unchanged. A
+  static script's import of `corten/keys` or `corten/read` is now looked for outside its
+  comments, so a `corten/keys` named only in a comment no longer stops the app
+  ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
+
+- **Breaking:** `req.screen` and `req.screen_with_status` take a type parameter for the answer's
+  kind, `<For, Kind, T>`, so a call that names their types with a turbofish names three. Where
+  `req.screen::<ForOne, _>(&data, doc)` was written, write
+  `req.screen::<ForOne, corten::AnyAnswer, _>(&data, doc)` (or leave the types to the handler's
+  return type). Calls without a turbofish are unchanged, except a `req.screen(..)` given straight
+  to `Public::new` or `NoStore::new` where no return type names the answer (a closure), which
+  fails with E0283 and names the kind the same way, `req.screen::<_, corten::AnyAnswer, _>(..)`.
+  `req.patch`, `patch_with_status`, `patch_or`, `invalid` and `invalid_with` answer only as
+  `AnyAnswer` or `Patches` (the sealed `corten::answer::PatchingKind`), so a handler that returns
+  `HtmlResult<Screen<T>>` cannot answer through them, and code of an app's own that is generic
+  over an answer's kind and calls them bounds it `K: corten::answer::PatchingKind`. A `Route`
+  written by hand (`impl corten::Route for ..`, not `#[derive(Route)]`) names what its screen
+  answers a data client: add `type Data = corten::route::NoData;` to the impl. Code of an app's
+  own that is generic over a route and mounts handlers at it (`area.route::<R>(methods)`,
+  `api.route::<R>(methods)`) bounds it `R: corten::Route<Data = corten::route::NoData>`, a route
+  that names no data (E0277 otherwise)
+  ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
+
 - Verify the cancelled mixed campaign's captured source blobs and every selected
   build context against its original authenticated subject before retirement;
   refuse equally incomplete wrapper and custody copies without deletion intent.
