@@ -197,7 +197,9 @@ rules something out.
    one object argument), and any value of a Rust type through its generated declaration; a type
    it cannot check a call against, a set of names written as string literals, any other JSON
    shape or an element or event in another shape, refuses the call rather than taking anything,
-   and only `unknown` takes any argument, since it claims nothing the call does not check);
+   and only `unknown` takes any argument but a form field (which needs the control's type to know
+   what to find, [Choice 57](#choice-field-arguments)), since it claims nothing the call does not
+   check);
    platform (apps require TypeScript 6.0 or later for the runtime's Navigation API DOM types;
    TypeScript 7.0.2 is pinned for framework CI to match npm's newest stable release installed by
    the getting-started guide. It checks JSDoc types as it checks annotations, except where
@@ -4545,7 +4547,134 @@ rules something out.
     one fetch of `/service-worker.js` from card-market's default image built with `0c916b5a0`'s
     worker, and the same text with `226b12b35`'s template in place of its own.
 
-57. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
+57. <a id="choice-field-arguments"></a>**A handler is given a form's control by its `#[derive(Fields)]` field, which
+    the runtime finds by name in the handler's form when the handler runs.** A component that
+    draws a form's fields for forms with a script and without one (a package's fields in two
+    editors) has no refs to give the script, since refs do not reach outside a component, so a
+    script reached a control by `form.elements.namedItem("weight")`: a field name as text the
+    compiler did not check, of a type the script had to narrow
+    ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
+    Now the markup passes the field, `on:change={js::fill(f.service, f.weight, f.size)}`, and
+    the handler's parameter is the control: `HTMLInputElement`, `HTMLSelectElement`,
+    `HTMLTextAreaElement`, or `HTMLInputElement[]` for radios or checkboxes that share the name.
+    A field passes only where the handler takes one of those, and text or another element does not
+    pass where it takes one; each is a `compile_fail` doctest on `FieldName`. The
+    call writes `~` with the kind (`i`, `s`, `t`, `*`) and the posted name as a JSON string
+    (`~i"parcels[1].weight"`), in `data-on`, a format only Corten's server and runtime read, so it
+    needs no standard ([Rule 10](#rule-standard-formats)). When the handler runs, the field
+    module (`corten-field`, `js/field.js`), which a page loads only when its handlers take a field,
+    as a format argument loads `corten-format`, takes the form of the element with the `on:` (the form itself; for a control, the one it belongs
+    to, `form=` included, a form-associated custom element's too; else the one around it, so a `<label>` takes the form it is in, not its
+    control's, which `form=` may put elsewhere), reads that form's own `elements` by the browser's
+    index of its names (`namedItem`, so a control named `elements` or `namedItem` cannot stand in
+    for either), keeps the controls whose `name` is the field's (the index also holds ids), and
+    gives the one control of the name with the kind's tag, or every input of it for a group (`[]`
+    for none); a control a patch replaced is the new one, as a ref's is. Anything else runs nothing
+    and throws what the call takes and what the form has instead, in the words `corten dev` uses. Whether the form draws the field as the kind the
+    handler takes cannot be known when the crate compiles ([Limit 32](#limit-field-kind)), so
+    `corten dev` reports such a call, with what the form has, when a page or a later draw puts it
+    on the page. Behavior is still a function the markup calls, and the field is an argument as a
+    ref is: no second way to attach behavior, and nothing to learn but the parameter's type.
+
+    Not chosen: the field's name as text, `js::fill(f.weight.as_str())`, which is how a script
+    was given one before (corten-ui's `RequiredWhen` passes its control so): the name is right, but
+    the script still looks it up by a string and narrows what it finds, which is the issue. A
+    `RadioNodeList`, as `namedItem` gives: it gives a list only for two or more controls of a name
+    and the control itself for one, and a script cannot make one, so a handler could not count on
+    its type. Requiring refs: the component that draws the fields would take refs from every form
+    that uses it, with or without a script, and a ref does not cross a component's edge. Marking the
+    kind on the field (`#[fields(select)]`) so the compiler checks it: a concept on `Fields` that
+    still does not see the markup another component writes, so the runtime check would stay.
+    Finding the control once, when the handler connects: a patch that replaces it would leave the
+    handler with the old one. The lookup in the runtime every page loads, as this change first had
+    it: 204 bytes with gzip on every page (15,341 to 15,545), for a call few pages make, where a
+    module of its own costs every page 51 (66 with the check that keeps a handler's run from
+    allocating, below) and only a page with a field 741 more and one
+    request,
+    which its first load makes with its handlers' modules, as a module script of the page. `RequiredWhen` keeps its name as text: its control may be a select,
+    radios or a checkbox, and it reads only the value, which no one element type covers. A walk
+    over every control of the form, as this change first had it: three fields took a run 600 to
+    980 us in a form of 500 controls, and 3.4 to 5.5 ms in one of 2,000 (below), against the
+    index's few. A load error that does not ask Corten's own modules whether their component is
+    listed in `App::components`: 14 bytes with gzip on every page, for a console message after a
+    server fails to serve one of them, so the hint stays as it is for every module.
+
+    What it costs, in the conflict order. Correctness gives up nothing: the control is the one the
+    form has when the handler runs, and a call whose form has another runs nothing rather than
+    hand the handler the wrong element. Performance: every page's runtime is 225 bytes larger raw,
+    66 with gzip (15,341 to 15,407) and 79 with brotli (13,846 to 13,925), paid once a release by
+    every user, chiefly for the parser's `~` branch (about 20 with gzip), loading the field module
+    for a call that takes one (14), and a handler's run that looks up a binding's other modules and
+    makes no closure or array when it has none, as before (about 15). The lookup and its message
+    are that module, 1,340 bytes raw, 741 with gzip and 640 with brotli as built (as the watchlist
+    serves it, with the line Corten appends, 1,551 bytes, 838 with its gzip and 716 with its
+    brotli, and an 82-byte script tag in the page), which only a page whose handlers take a field fetches, as one
+    more module script of the page; a page the runtime swaps in imports it with the page's
+    handler modules, and an event before it arrives gets the browser's default, as one before
+    those does. A field argument writes its posted name where a
+    ref writes its own: a handler given four controls (an input, a select, a textarea and two
+    radios) writes `data-on` of 58 bytes with fields against 30 with refs, but the form with refs
+    also writes a `data-ref` on each control and a `data-scope` on its component, so the whole
+    form is 266 bytes with fields against 331 with refs. Rendering a field writes its posted name as a string argument does;
+    the item page's `render_cost`, which draws no field (so never notes the field module), is unchanged: its bytes are the same
+    (7,772 for `<main>`, 9,236 for the document), and five alternated runs of each build gave
+    build and render of `<main>` in 19.2 us (18.0 to 21.7) on main and 20.4 us (18.0 to 22.8) on
+    this change, each build's runs varying more than the two differ, as they did when this was
+    first measured (19.2 us, 15.6 to 20.8, against 18.4 us, 16.0 to 21.0). The lookup reads the
+    form's index of names: a handler given three fields (an input, a select and a textarea) spent
+    4 to 10 us a run finding them in a form of 50, 500 or 2,000 controls, in Chromium, Firefox and
+    WebKit alike, where a walk over every control spent 60 to 95 us at 50, 600 to 980 at 500 and
+    3.4 to 5.5 ms at 2,000. Compile-time safety is
+    what the change buys: the name was already right as text (`f.weight.as_str()`), and now the
+    handler's parameter is the control, checked at the call.
+
+    Stands on: measured (the runtime's and the field module's minified sizes by Node's `zlib` gzip
+    and brotli at their defaults, once each build, and the module as the watchlist serves it, once;
+    a field's `data-on` and markup against a ref's for the same four
+    controls, once; the item page's `render_cost`, five alternated runs of each release build; the lookup of three
+    fields in a form of 50, 500 and 2,000 controls against a walk over them, the median of 15
+    batches in each of the three engines, once); platform (a form's `elements`
+    lists its controls in tree order, `form=` ones included, and a control's `localName` is its
+    tag; the smoke's field checks in Chromium, Firefox and WebKit); reasoned (a posted name
+    denotes one field of the form, a single control or the radios or checkboxes of a group that
+    share it, so the form is where a name finds that field's controls; the kind a form draws
+    is another component's markup, which no one `html!` sees); value (in the README's conflict
+    order: correctness first (the control is found when the handler runs, and no other is given),
+    then performance (README Value 1: the lookup is a module only the pages that call it load, not
+    bytes every page pays for a call few make), then compile-time safety, which is what the
+    change buys (Value 4: the field is typed at the seam and its name is the one `Fields` writes),
+    with one way to do things (Value 5: behavior stays a function the markup calls, and a handler
+    in a form reaches the form's control of a name as its field, whichever component draws it,
+    while a ref names an element of the handler's own component, a control among them when the
+    handler is outside the form, reads one of several that share a name through the control around
+    the event, or is a widget's that draws its own)).
+
+    Revisit when: `Fields` or `html!` comes to know the kind a form draws a field as, when the
+    kind check moves to the compiler and the runtime's goes; an app needs a control outside any
+    form, which is a ref's; a handler is measured spending time in the lookup; or most pages come to
+    load the field module, when its bytes belong in the runtime.
+
+    Last checked: 2026-11-15, a field's bytes against a ref's and the item page's `render_cost`
+    (native release builds) on `a69607283` against `c9ed56785`; 2026-11-15, the runtime's and the field module's sizes on `0a5e18c29`
+    against `1c72b0379`, and the smoke's field checks on it, the field module's loading among
+    them, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), and
+    `corten dev`'s reports of a mismatched field in Chromium 156.0.8078.4; 2026-11-16, the runtime's size on `03283dcb3` against `1c72b0379`, and the
+    smoke's retries of the field and format modules answered 503 and a link to a page that takes a
+    field, on it, in the same three engines; 2026-11-16, the smoke's field and retry checks in the
+    same three engines and `corten dev`'s reports, on `e5e260bd6`, which merges main's `read()`;
+    2026-11-16, the item page's `render_cost` (native release builds) on `f7fc2e5ee` against
+    `226b12b35`, the runtime's and the field module's sizes on it, and the smoke's checks of the form
+    a field is found in, an empty group and a group named for a select, in the same three engines,
+    and `corten dev`'s reports, on it; 2026-11-16, the runtime's and the field module's sizes, the
+    lookup of three fields in forms of 50, 500 and 2,000 controls against a walk over them in
+    Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2, the smoke's field checks in the same three
+    engines (an element whose id is a field's name among them), and `corten dev`'s reports in their
+    new words, on `1b6fc2f11`; 2026-11-16, the field module's sizes as built and as the watchlist
+    serves it, the smoke's field checks in the same three engines (a form-associated custom
+    element's `form=` among them, which the field module of `037bb827b` fails in each), and
+    `corten dev`'s reports, on `98e7ca184`.
+
+59. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
     what the post reads); a time the clocks skip or repeat is read as Temporal's default
     (`compatible`) reads it.** `<input type="datetime-local">` sends what the visitor's clock read
@@ -4715,8 +4844,9 @@ rules something out.
    two cannot drift. It is declared `-> impl Patch`, and its markup's top-level elements each have
    a `#[derive(Id)]` id, which the compiler checks (`view::Patch`), so no patch loses an element in
    the browser.
-3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, `event`, `target`, `signal`,
-   `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
+3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, form fields (a form's
+   control by its `#[derive(Fields)]` name, found in the handler's form,
+   [Choice 57](#choice-field-arguments)), `event`, `target`, `signal`, `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
    running handler's component's own. (Three exceptions: `CopyButton` copies an element outside
    its component, which it is given as a typed `Id` value and finds by that id, since refs do
    not reach outside a component; `RelativeTime` keeps the page's relative times in its
@@ -5184,6 +5314,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     the drawing's. Following the parsing context across components would lift this: each
     component's render would tell the next what it is written into, at a cost to every render,
     for markup few apps write.
+
 31. <a id="limit-read-redirect"></a>A script's `read()` follows no redirect and cannot see where one
     goes. It asks with `redirect: "manual"`, since the target is another route's answer and not
     the route's data, and the browser hands it an opaque answer with no `Location`, so it rejects
@@ -5194,3 +5325,29 @@ by design; where it is known, a limit says what would lift it or why it is so.
     to sign in does it with `Refused::sign_in`, and a script reads that as a 401. A script that
     meets either navigates to the URL, and the browser follows the redirect or the sign-in
     ([Choice 55](#choice-screen-read)).
+
+32. <a id="limit-field-kind"></a>A form field given to a handler (`js::fill(f.weight)`) is checked
+    against the handler's parameter when the crate compiles, but whether its form draws that
+    control is checked only when the handler runs ([Choice 57](#choice-field-arguments)). A
+    field's name carries what it reads (`FieldName<Condition>`), not whether a form draws it as a
+    select or as radios, a call may name a field no control on the page has, and the markup that
+    draws the control may be another component's, often in another crate, so no one expansion of
+    `html!` sees both the call and the control. A call that takes a single control (`i`, `s`,
+    `t`) whose form has no control of the name, more than one, or one of another kind, or that
+    takes a group (`*`) whose form has a control of the name that is not an input, runs nothing
+    and throws what it takes and what the form has instead
+    (`corten: shipping.fill takes field weight as one <input>, and its form has select`), and
+    `corten dev` reports the same when the page or a later draw puts the call on the page, so the
+    mistake shows on load rather than on the first event that calls it. A group with
+    no control of the name is `[]` and is neither an error nor reported, since a form may leave
+    out a group of radios. It checks again for markup added to the page and a control that joins a
+    form, not when a `name`, `form` or `data-on` attribute changes or a control is removed, so a
+    mistake those make shows only as the runtime's error when the handler runs. It reports a call
+    once, when it is drawn: a call drawn before a later patch or script adds its control keeps that
+    report in the console though the handler then finds the control, so a report on a page that
+    draws its controls after its calls is checked against the page as it is. A call and its control
+    drawn in one `html!` expansion (a `<select name={f.service}>` given to a handler that takes an
+    input, in the same form) could be checked when the crate compiles, since the macro sees both;
+    it is not yet ([#1536 A form field's control kind is not checked at compile time when the call and the control are in the same html! expansion](https://github.com/corten-run/corten/issues/1536)),
+    and that would not reach the case this Choice is for, fields another component draws. It lifts
+    when the kind a form draws for a field is known where the call is checked.

@@ -151,16 +151,17 @@ test("fresh-host mask failure or reactivation aborts the shell before native ent
       [unit, "not-found", "inactive", 0, false], [unit, "masked", "failed", 0, false],
       [unit, "masked", "inactive", 0, false, "LoadState"],
       [unit, "masked", "inactive", 0, false, "ActiveState"],
+      ...(unit.endsWith(".service") ? [[unit, "masked", "inactive", 0, false, "MainPID"]] : []),
     ])]) {
     const script = `set -euo pipefail
 systemctl() {
   if test "$1" = mask; then return ${maskCode}; fi
   test "$1" = show
   if test "$2" = '${target}'; then
-    case "$3" in --property=LoadState) printf '%s\\n' '${load}';; --property=ActiveState) printf '%s\\n' '${active}';; *) return 2;; esac
+    case "$3" in --property=LoadState) printf '%s\\n' '${load}';; --property=ActiveState) printf '%s\\n' '${active}';; --property=MainPID) printf '%s\\n' 0;; *) return 2;; esac
     if test "$3" = '--property=${failedProperty}'; then return 1; fi
   else
-    case "$3" in --property=LoadState) printf '%s\\n' masked;; --property=ActiveState) printf '%s\\n' inactive;; *) return 2;; esac
+    case "$3" in --property=LoadState) printf '%s\\n' masked;; --property=ActiveState) printf '%s\\n' inactive;; --property=MainPID) printf '%s\\n' 0;; *) return 2;; esac
   fi
 }
 ${mask}

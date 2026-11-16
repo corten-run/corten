@@ -148,6 +148,84 @@ try {
   });
   check("dev mode does not report a value the user typed", (await marker) && !(await Promise.race([moved, Promise.resolve(false)])));
   await drawn.close();
+  // A handler given a form field its form does not have as the handler takes it (the compiler
+  // cannot see the control, which another component may draw) is reported when the page draws
+  // it, before any event calls it, and when a later draw adds one; one whose fields fit is not.
+  // The dev server mounts no smoke routes, so the calls are drawn into its home page, as
+  // `ship_form` (examples/watchlist/src/smoke.rs) writes them.
+  const shipped = await browser.newPage();
+  /** @type {string[]} */
+  const fieldErrors = [];
+  shipped.on("console", (m) => m.type() === "error" && m.text().includes(" takes field ") && fieldErrors.push(m.text()));
+  await shipped.route(base + "/", async (route) => {
+    const res = await route.fetch();
+    const forms = [
+      '<form id="ship"><input name="weight"><textarea name="note"></textarea>',
+      '<input type="radio" name="size" value="s"><input type="radio" name="size" value="l">',
+      `<button type="button" data-on='click:ship_form.fill(~i"weight",~t"note",~*"size")'>Fill</button>`,
+      `<button type="button" data-on='click:ship_form.weigh(~i"note")'>Weigh the note</button></form>`,
+      `<form><button type="button" data-on='click:ship_form.weigh(~i"weight")'>Weigh elsewhere</button></form>`,
+      `<button type="button" data-on='click:ship_form.weigh(~i"weight")'>Weigh outside</button>`,
+    ].join("");
+    await route.fulfill({ response: res, body: (await res.text()).replace("</body>", `${forms}</body>`) });
+  });
+  await shipped.goto(base + "/");
+  for (let waited = 0; fieldErrors.length < 3 && waited < 10000; waited += 100) await shipped.waitForTimeout(100);
+  /** @param {string} message */
+  const reported = (message) => fieldErrors.some((e) => e.startsWith(message));
+  check(
+    "dev mode reports a handler given a form field its form does not have as it takes it, as the page draws it",
+    fieldErrors.length === 3 &&
+      reported("corten: ship_form.weigh takes field note as one <input>, and its form has textarea") &&
+      reported("corten: ship_form.weigh takes field weight as one <input>, and its form has none") &&
+      reported("corten: ship_form.weigh takes field weight as one <input>, and it is in no form"),
+    fieldErrors.join(" | "),
+  );
+  await shipped.evaluate(() => {
+    // Built from elements, not markup, as a patch would draw it.
+    const later = document.createElement("button");
+    later.type = "button";
+    later.setAttribute("data-on", 'click:ship_form.weigh(~i"size")');
+    document.getElementById("ship")?.append(later);
+  });
+  for (let waited = 0; fieldErrors.length < 4 && waited < 10000; waited += 100) await shipped.waitForTimeout(100);
+  check(
+    "dev mode reports such a field a later draw adds, and not the call whose fields fit",
+    fieldErrors.length === 4 &&
+      !!fieldErrors[3]?.startsWith("corten: ship_form.weigh takes field size as one <input>, and its form has input, input") &&
+      !fieldErrors.some((e) => e.includes("ship_form.fill")),
+    fieldErrors.join(" | "),
+  );
+  // A form whose controls are named as the element methods the check calls is still checked.
+  await shipped.evaluate(() => {
+    const form = document.createElement("form");
+    for (const name of ["closest", "matches", "getAttribute", "querySelectorAll"]) form.append(Object.assign(document.createElement("input"), { name }));
+    const later = document.createElement("button");
+    later.type = "button";
+    later.setAttribute("data-on", 'click:ship_form.weigh(~t"closest")');
+    form.append(later);
+    document.body.append(form);
+  });
+  for (let waited = 0; fieldErrors.length < 5 && waited < 10000; waited += 100) await shipped.waitForTimeout(100);
+  check(
+    "dev mode checks a later form whose controls are named closest, matches and the like",
+    !!fieldErrors[4]?.startsWith("corten: ship_form.weigh takes field closest as one <textarea>, and its form has input"),
+    fieldErrors.join(" | "),
+  );
+  // A control drawn outside a form and joined to it with `form=` rechecks that form's calls: a
+  // second weight makes the one `fill` takes ambiguous.
+  await shipped.evaluate(() => {
+    const extra = Object.assign(document.createElement("input"), { name: "weight" });
+    extra.setAttribute("form", "ship");
+    document.body.append(extra);
+  });
+  for (let waited = 0; fieldErrors.length < 6 && waited < 10000; waited += 100) await shipped.waitForTimeout(100);
+  check(
+    "dev mode rechecks a form's calls when a control joins it from outside with form=",
+    !!fieldErrors[5]?.startsWith("corten: ship_form.fill takes field weight as one <input>, and its form has input, input"),
+    fieldErrors.join(" | "),
+  );
+  await shipped.close();
   // Bounded: a blocking call holds the event loop, so the stall watchdog could not stop it.
   execFileSync("docker", ["restart", "-t", "1", container], { stdio: "ignore", timeout: 60_000 });
   await page.waitForFunction((b) => document.querySelector('meta[name="corten-dev"]')?.getAttribute("content") !== b, boot, { timeout: 20000 }).catch(() => {});
