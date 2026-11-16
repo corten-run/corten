@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Scope the official cloud checkout's public umask to Git source creation so
+  unprivileged load generators can read committed benchmark scripts. Keep job,
+  control and campaign state private, with real Linux Git/nonroot regression
+  controls and unchanged source, correctness and measurement gates.
+
 - Verify the cancelled mixed campaign's captured source blobs and every selected
   build context against its original authenticated subject before retirement;
   refuse equally incomplete wrapper and custody copies without deletion intent.
