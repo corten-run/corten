@@ -714,7 +714,7 @@ impl Router {
     #[inline]
     fn answer(&self, req: Request) -> RouterFuture {
         match &self.inner {
-            Inner::Routes(dispatch) => dispatch.answer::<false, false>(req, self.edge),
+            Inner::Routes(dispatch) => dispatch.answer(req, self.edge),
             Inner::Layered(outer) => {
                 let fix = self.edge.then(|| Fix::of(req.method(), true));
                 RouterFuture { answering: outer.call(req), fix }
@@ -733,10 +733,10 @@ impl From<Table> for Router {
 
 impl Dispatch {
     #[inline]
-    fn answer<const RECORD: bool, const SHARED: bool>(&self, mut req: Request, edge: bool) -> RouterFuture {
+    fn answer(&self, mut req: Request, edge: bool) -> RouterFuture {
         let mut fix = Fix::of(req.method(), edge);
         let path = req.uri().path();
-        let (route, allow, stages, matched, written) = match self.paths.at(path) {
+        let (route, allow, stages, matched) = match self.paths.at(path) {
             Ok(found) => {
                 let entry = &self.routes[*found.value];
                 let matched = MatchedPath::new(&entry.path, req.uri(), &found.params);
@@ -746,31 +746,11 @@ impl Dispatch {
                     Some(written) if !crate::route::routes_path(written, path) => (&self.not_found, None),
                     _ => entry.pick(req.method(), self),
                 };
-                (route, allow, entry.stages.as_ref(), Some(matched), entry.written)
+                (route, allow, entry.stages.as_ref(), Some(matched))
             }
-            Err(_) => (&self.not_found, None, self.stages.as_ref(), None, None),
+            Err(_) => (&self.not_found, None, self.stages.as_ref(), None),
         };
         fix.allow = allow.cloned();
-        let record = if RECORD {
-            matched.as_ref().map(|matched| {
-                // App routes have a static spelling. Generated routes alone copy their name;
-                // no request clones a route Arc just for logging.
-                match written {
-                    Some(name) => std::borrow::Cow::Borrowed(name),
-                    None => std::borrow::Cow::Owned(matched.as_str().to_owned()),
-                }
-            })
-        } else {
-            None
-        };
-        let record = if SHARED {
-            if let Some(shared) = req.extensions_mut().remove::<crate::access::Shared>() {
-                shared.set(record);
-            }
-            None
-        } else {
-            record
-        };
         if let Some(matched) = matched {
             req.extensions_mut().insert(matched);
         }
@@ -778,18 +758,7 @@ impl Dispatch {
             Some(stages) => stages.clone().run(req, route),
             None => route.call(req),
         };
-        if RECORD && !SHARED {
-            let answering = Box::pin(async move {
-                let mut res = fix.apply(answering.await);
-                if let Some(matched) = record {
-                    res.extensions_mut().insert(crate::access::Matched(matched));
-                }
-                res
-            });
-            RouterFuture { answering, fix: None }
-        } else {
-            RouterFuture { answering, fix: Some(fix) }
-        }
+        RouterFuture { answering, fix: Some(fix) }
     }
 
     /// The answer to a method the route has no handler for: its `405`, with its `Allow`, when some
@@ -905,19 +874,37 @@ impl tower_service::Service<Request> for Router {
     }
 }
 
-/// The route-name specialization, selected once when access logging is enabled.
+/// Only the enabled wrapper looks up a name for the log. Keeping that lookup here leaves
+/// normal dispatch exactly as it was, including its compiler's inlining choices.
 struct Recording<const SHARED: bool>(Arc<Dispatch>);
 
 impl<const SHARED: bool> Outer for Recording<SHARED> {
-    fn call(&self, req: Request) -> Answering {
-        let answering = self.0.answer::<true, SHARED>(req, false);
+    fn call(&self, mut req: Request) -> Answering {
+        let matched = self.0.paths.at(req.uri().path()).ok().map(|found| {
+            let entry = &self.0.routes[*found.value];
+            match entry.written {
+                Some(name) => std::borrow::Cow::Borrowed(name),
+                None => std::borrow::Cow::Owned(entry.path.to_string()),
+            }
+        });
         if SHARED {
+            if let Some(shared) = req.extensions_mut().remove::<crate::access::Shared>() {
+                shared.set(matched);
+            }
+            let answering = self.0.answer(req, false);
             Box::pin(async move {
                 let Ok(res) = answering.await;
                 res
             })
         } else {
-            answering.answering
+            let answering = self.0.answer(req, false);
+            Box::pin(async move {
+                let Ok(mut res) = answering.await;
+                if let Some(matched) = matched {
+                    res.extensions_mut().insert(crate::access::Matched(matched));
+                }
+                res
+            })
         }
     }
 }
