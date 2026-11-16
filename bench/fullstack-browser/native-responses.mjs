@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { retainJSONResponse, replayDOMReads } from "../mixed-production/response-evidence.mjs";
-import { exact, encoded, sha256 } from "./native-evidence.mjs";
+import { exact, sha256 } from "./native-evidence.mjs";
 import { replayBrowserDOM } from "./native-browser-dom.mjs";
 
 function bindingShape(value) {
@@ -29,11 +29,11 @@ export function retainPublicAsset(store, body, binding, contentType) {
 export function retainDOMProjection(store, transcript, binding) {
   bindingShape(binding); assert.equal(transcript.readPath, binding.path);
   const page = replayDOMReads(transcript);
-  return { schema: "native-browser-response/v2", type: "public-dom-read-projection", binding, body: store.blob(encoded(transcript)), page };
+  return { schema: "native-browser-response/v2", type: "public-dom-read-projection", binding, body: store.json(transcript), page };
 }
 export function retainBrowserDOMProjection(store, observation, expectedIdentity, nativeDocument) {
   const result = replayBrowserDOM(observation, expectedIdentity, nativeDocument);
-  return { schema: "native-browser-response/v2", type: "public-browser-dom-observation", identity: expectedIdentity, body: store.blob(encoded(observation)), result };
+  return { schema: "native-browser-response/v2", type: "public-browser-dom-observation", identity: expectedIdentity, body: store.json(observation), result };
 }
 export function replayResponse(reader, receipt, binding, nativeDocument) {
   if (receipt.type === "public-browser-dom-observation") {
