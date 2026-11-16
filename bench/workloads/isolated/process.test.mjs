@@ -54,6 +54,20 @@ test("ready IPC cannot extend a hung observation setup to the native runtime dea
   assert.equal(starts, 0); assert.equal(result.cancelled, true); assert.equal(result.success, false);
 });
 
+test("an early child close retains setup ownership only until its original deadline", { timeout: 3000 }, async (t) => {
+  const child = fakeChild(() => { throw new Error("native code must remain gated"); });
+  t.mock.method(childProcess, "spawn", () => child);
+  let release, startupSignal, completed = false;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const result = await supervise(plan("never"), { cwd, env: {}, log() {}, async onStart(_pid, signal) {
+    startupSignal = signal; child.close(0); await gate; completed = true;
+  } }, { readyMs: 20, runMs: 10000, stopMs: 20, killMs: 20 });
+  assert.equal(result.success, false); assert.equal(result.terminal, true);
+  assert.equal(startupSignal.aborted, true); assert.equal(completed, false);
+  assert.match(result.error, /closed before host observation setup/);
+  release(); await new Promise((resolve) => setImmediate(resolve)); assert.equal(completed, true);
+});
+
 test("handshake/runtime/forced shutdown are bounded and never success", { timeout: 3000 }, async (t) => {
   assert.equal(limits.stopMs, 120000);
   const short = { readyMs: 10, runMs: 10, stopMs: 10, killMs: 10 };
