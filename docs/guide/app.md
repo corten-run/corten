@@ -564,7 +564,12 @@ What it sends is what the app's own pages send, typed the same way:
    GET form's checkbox (`?mine=on`, where a link writes `true`) is a `Local`.
 3. A request asks for HTML as a browser's page load does. `.mode(Mode::Action)` asks as the
    runtime's `data-patch` submit does, `Mode::Navigation` as its link, `Mode::Data` as a client
-   that wants JSON.
+   that wants JSON. `Mode::Action` sends `Prefer: corten-draws=whole` as the runtime does, so a
+   write that answers its own page (`req.page(..)`) is answered with the whole document, layout
+   and layout reads included ([Choice 54](../design.md#choice-write-own-page-whole)). To ask as a
+   runtime from before that, which is answered with `<main>`, add
+   `.header(HeaderName::from_static("prefer"), "corten-draws=main")` (`corten::http::HeaderName`):
+   a preference the test sets is sent first, and the first is the one read.
 4. `.cookie(name, value)` sends a cookie (`answer.cookie(name)` reads one an answer set),
    `.header(name, value)` any other header, `.peer(ip)` the connection's address
    ([`ClientIp`](#the-clients-address)), and `Client::call(method, &route).body(type, bytes)` a body that
