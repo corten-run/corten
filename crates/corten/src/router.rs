@@ -684,6 +684,20 @@ impl Router {
         Router { inner: Inner::Routes(Arc::new(dispatch)), edge: true }
     }
 
+    /// Only an app with access logging carries the matched name out through its stages.
+    pub(crate) fn record_route(self, shared: bool) -> Self {
+        let Inner::Routes(dispatch) = self.inner else { unreachable!("called before app layers") };
+        let recording: Arc<dyn Outer> =
+            if shared { Arc::new(Recording::<true>(dispatch)) } else { Arc::new(Recording::<false>(dispatch)) };
+        Router { inner: Inner::Layered(recording), edge: true }
+    }
+
+    /// Outside the final HTTP fix as well as every app layer. Reuses the optional outer-service
+    /// path, leaving a disabled app's future and its response untouched.
+    pub(crate) fn access_log(self, shared: bool) -> Self {
+        Router { inner: Inner::Layered(Arc::new(AccessRouter { inner: self, shared })), edge: false }
+    }
+
     /// This router inside `layer` ([`crate::App::layer`]).
     pub(crate) fn layer<L>(self, layer: L) -> Router
     where
@@ -700,7 +714,7 @@ impl Router {
     #[inline]
     fn answer(&self, req: Request) -> RouterFuture {
         match &self.inner {
-            Inner::Routes(dispatch) => dispatch.answer(req, self.edge),
+            Inner::Routes(dispatch) => dispatch.answer::<false, false>(req, self.edge),
             Inner::Layered(outer) => {
                 let fix = self.edge.then(|| Fix::of(req.method(), true));
                 RouterFuture { answering: outer.call(req), fix }
@@ -719,10 +733,10 @@ impl From<Table> for Router {
 
 impl Dispatch {
     #[inline]
-    fn answer(&self, mut req: Request, edge: bool) -> RouterFuture {
+    fn answer<const RECORD: bool, const SHARED: bool>(&self, mut req: Request, edge: bool) -> RouterFuture {
         let mut fix = Fix::of(req.method(), edge);
         let path = req.uri().path();
-        let (route, allow, stages, matched) = match self.paths.at(path) {
+        let (route, allow, stages, matched, written) = match self.paths.at(path) {
             Ok(found) => {
                 let entry = &self.routes[*found.value];
                 let matched = MatchedPath::new(&entry.path, req.uri(), &found.params);
@@ -732,11 +746,31 @@ impl Dispatch {
                     Some(written) if !crate::route::routes_path(written, path) => (&self.not_found, None),
                     _ => entry.pick(req.method(), self),
                 };
-                (route, allow, entry.stages.as_ref(), Some(matched))
+                (route, allow, entry.stages.as_ref(), Some(matched), entry.written)
             }
-            Err(_) => (&self.not_found, None, self.stages.as_ref(), None),
+            Err(_) => (&self.not_found, None, self.stages.as_ref(), None, None),
         };
         fix.allow = allow.cloned();
+        let record = if RECORD {
+            matched.as_ref().map(|matched| {
+                // App routes have a static spelling. Generated routes alone copy their name;
+                // no request clones a route Arc just for logging.
+                match written {
+                    Some(name) => std::borrow::Cow::Borrowed(name),
+                    None => std::borrow::Cow::Owned(matched.as_str().to_owned()),
+                }
+            })
+        } else {
+            None
+        };
+        let record = if SHARED {
+            if let Some(shared) = req.extensions_mut().remove::<crate::access::Shared>() {
+                shared.set(record);
+            }
+            None
+        } else {
+            record
+        };
         if let Some(matched) = matched {
             req.extensions_mut().insert(matched);
         }
@@ -744,7 +778,18 @@ impl Dispatch {
             Some(stages) => stages.clone().run(req, route),
             None => route.call(req),
         };
-        RouterFuture { answering, fix: Some(fix) }
+        if RECORD && !SHARED {
+            let answering = Box::pin(async move {
+                let mut res = fix.apply(answering.await);
+                if let Some(matched) = record {
+                    res.extensions_mut().insert(crate::access::Matched(matched));
+                }
+                res
+            });
+            RouterFuture { answering, fix: None }
+        } else {
+            RouterFuture { answering, fix: Some(fix) }
+        }
     }
 
     /// The answer to a method the route has no handler for: its `405`, with its `Allow`, when some
@@ -857,6 +902,35 @@ impl tower_service::Service<Request> for Router {
     #[inline]
     fn call(&mut self, req: Request) -> RouterFuture {
         self.answer(req)
+    }
+}
+
+/// The route-name specialization, selected once when access logging is enabled.
+struct Recording<const SHARED: bool>(Arc<Dispatch>);
+
+impl<const SHARED: bool> Outer for Recording<SHARED> {
+    fn call(&self, req: Request) -> Answering {
+        let answering = self.0.answer::<true, SHARED>(req, false);
+        if SHARED {
+            Box::pin(async move {
+                let Ok(res) = answering.await;
+                res
+            })
+        } else {
+            answering.answering
+        }
+    }
+}
+
+/// Logging alone, without cloning a service or retaining a URI for each request.
+struct AccessRouter {
+    inner: Router,
+    shared: bool,
+}
+
+impl Outer for AccessRouter {
+    fn call(&self, req: Request) -> Answering {
+        crate::access::answer(req, self.shared, |req| self.inner.answer(req))
     }
 }
 

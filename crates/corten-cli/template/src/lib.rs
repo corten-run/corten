@@ -24,6 +24,7 @@ pub mod url {
 /// to change them.
 pub fn app() -> App {
     App::new(url::router())
+        .access_log(true)
         .assets(views::Static)
         .error_page(views::error_page, ())
         .components(&[views::ClickCounter])

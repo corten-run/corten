@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `App::access_log(true)` writes one tracing `INFO` event with target `corten::access` after
+  every stage and app layer, with method, path without the query, matched route when present,
+  final status, body bytes (or `"stream"`) and duration to response readiness. Off for existing
+  apps; `corten new` enables it in the app it writes. Uses the existing subscriber and escaping.
+
 - Scope the official cloud checkout's public umask to Git source creation so
   unprivileged load generators can read committed benchmark scripts. Keep job,
   control and campaign state private, with real Linux Git/nonroot regression

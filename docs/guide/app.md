@@ -32,6 +32,7 @@ not remove that requirement.
 | Request bodies | `Json`, `Form`, `String` and `Bytes` read at most 2 MiB, and an `Upload` keeps as much unless its handler sets `upload.limit(bytes)`; over it, a 413 | `.body_limit(bytes)`; `Area::body_limit`, `Api::body_limit` (the innermost prefix that sets one decides); a proxy in front sizes its own body limit from it (nginx's `client_max_body_size`, [Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
+| Access logs | off; `corten new` turns them on in the app it writes | `.access_log(true)`: one `INFO` event per response, target `corten::access`, after every stage and app layer ([below](#access-logs)); `.access_log(false)` for an app that logs only at its proxy |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
 | A route outside all of the above | none: every route gets every default here | `unstaged` on one route's `#[route(..)]`: no same-origin check, middleware, security headers, cache rule, deadline or error page, for an answer the same for everyone who can reach it; the host check stays ([below](#a-route-outside-the-stages)) |
@@ -170,6 +171,28 @@ caller its handler read (if any), the deploy and the layout that rendered it (wh
 document is written), and when a navigation or a form answer arrives with a different key
 (sign-in, sign-out, a new release, a page in another layout), the runtime loads the whole
 document, so the layout is never stale.
+
+## Access logs
+
+Set `.access_log(true)` on `App` to write one event for each response through the tracing
+subscriber the app already uses. Under `serve`, feature `log` installs Corten's subscriber when
+none is set; `router()` and `test()` do not install one. No new log format or dependency is
+needed, and the subscriber's control-character escaping stays in force. An existing app stays
+quiet unless it sets the switch; `corten new` writes `.access_log(true)` into its app setup.
+
+The event is `INFO` with target `corten::access`. Its fields are `method`, `path` without the
+query, `route` when a route matched (its pattern, such as `/items/{id}`), `status`, `bytes` and
+`duration`. The status and bytes describe the final response, after the host and cross-site
+checks, the error page, a conditional `304`, compression, the app's tower layers and the router's
+final HTTP handling (`HEAD` has zero body bytes). `duration` is the elapsed time until that
+response is ready, including the error page's waits, not the time to transmit the body.
+`bytes` is the final body's known size, or the string `"stream"` when its size is unknown;
+logging never consumes a stream or waits for it to close. A connection rejected before it
+reaches the router, such as a head too large for the HTTP parser, has no access event.
+
+An app with its own subscriber can filter or route `corten::access` as it does other tracing
+targets. `.access_log(false)` removes request logging, including its clock reads and path copy;
+use it when the proxy's logs are enough.
 
 ## Host names
 
@@ -898,6 +921,10 @@ before it (a route that says `unstaged` goes through none;
    `304 Not Modified` in place of the body when the client already has it
    ([design Limit 21](../design.md#limit-etag)), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
+
+Access logging (`App::access_log`) is outside this order, and outside `App::layer`: it sees the
+finished response, including refusals that never reached a middleware and an error page or
+`304` that replaced what the middleware saw. An `unstaged` route is logged too when enabled.
 
 A step of the app's own is a `Middleware`, given once to `App::middleware`; several are a tuple,
 run in order:

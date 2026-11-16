@@ -4439,6 +4439,40 @@ rules something out.
     (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
     `f109794c6`.
 
+56. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, enabled by the new-app template,
+    and an event through the existing tracing subscriber after the response is finished.**
+    `App::access_log(true)` emits an `INFO` event with target `corten::access`, with method,
+    path without the query, matched route when present, final status, final body's known size
+    (or `"stream"`) and elapsed time until the response is ready. It sees the host check's
+    `421`, cross-site refusals, error-page replacements, conditional `304`s, compression and
+    app layers. It never polls a body to count it, so a live stream is logged when its answer
+    is ready, not at a close it may never reach. The existing subscriber still owns formatting,
+    escaping and routing; no access-log format or dependency is added. With the switch off,
+    no clock is read and no request metadata is retained for logging.
+    Ordinary enabled requests carry the route on the response without a per-request `Arc` or
+    URI clone. Only an app with tower layers needs a shared route handoff: a layer can dispatch
+    on another task and replace the whole response, defeating both response extensions and
+    task-local storage. The disabled dispatch has no recording branch.
+
+    Not chosen: an app middleware, which cannot see early refusals or the response after
+    the error page, conditional GET and compression; a tower layer each app writes, which
+    repeats framework knowledge and dependencies; always-on logging, which changes existing
+    apps and charges apps that already log at their proxy; a separate text format such as
+    Common Log Format, which makes logs a second output channel beside tracing; or wrapping
+    every body to count bytes and time to close, which costs streams for a different measure.
+
+    Stands on: reasoned (only the outer router boundary sees the final response, and unknown-size
+    bodies cannot be counted without polling them); bet (new apps benefit from a request line,
+    while some deployments need only proxy logs); value (README Values 1, 6 and 7: request
+    logging is explicit, shares the existing subscriber and adds no dependency).
+
+    Revisit when: an app needs body-completion timing or actual streamed byte counts rather than
+    response-readiness timing and a stream marker, or a tracing event cannot express the fields
+    an operator needs without a separate log format.
+
+    Last checked: 2026-11-16, the request stages, final HTTP handling and subscriber boundaries
+    read at `226b12b35`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

@@ -509,6 +509,7 @@ pub struct App<M = ()> {
     finishing: Arc<Finishing>,
     connections: Connections,
     layers: Vec<Box<dyn FnOnce(Router) -> Router + Send>>,
+    access_log: bool,
     /// The values only the layout shows ([`App::layout_read`]).
     layout_reads: Vec<Arc<dyn crate::layout::Erased>>,
     middleware: M,
@@ -641,6 +642,7 @@ impl App {
             finishing: Arc::default(),
             connections: Connections::default(),
             layers: Vec::new(),
+            access_log: false,
             layout_reads: Vec::new(),
             middleware: (),
         }
@@ -681,6 +683,7 @@ impl App {
             finishing: self.finishing,
             connections: self.connections,
             layers: self.layers,
+            access_log: self.access_log,
             layout_reads: self.layout_reads,
             middleware,
         }
@@ -688,6 +691,18 @@ impl App {
 }
 
 impl<M: Middleware> App<M> {
+    /// Writes one `INFO` event with target `corten::access` for each response, outside every
+    /// stage and app layer. Off unless set; `corten new` enables it in the app it writes.
+    ///
+    /// Fields are `method`, `path` (never the query), `route` when matched, `status`, `bytes`
+    /// (the final body's known size, or `"stream"`), and `duration` (time to the finished
+    /// response, not time to send its body). Uses the app's tracing subscriber, including
+    /// Corten's default one under `serve`; no subscriber is installed by `router` or `test`.
+    pub fn access_log(mut self, enabled: bool) -> Self {
+        self.access_log = enabled;
+        self
+    }
+
     /// A part of the app under `P::PREFIX`, with its own routes and, if it needs them, its own
     /// stylesheet, given by `build`: `.area(admin::area)` for a `#[corten::routes(area = Admin)]`
     /// module (`P` is inferred from it), with `.area(|area| admin::area(area).components(&[..]))`
@@ -1561,10 +1576,18 @@ impl<M: Middleware> App<M> {
         } else {
             staged(table, Layer { shared, bounds, policy, scopes, steps: Scoped(self.middleware) })
         };
+        let access_shared = !self.layers.is_empty();
+        if self.access_log {
+            router = router.record_route(access_shared);
+        }
         for wrap in self.layers {
             router = wrap(router);
         }
-        router
+        if self.access_log {
+            router.access_log(access_shared)
+        } else {
+            router
+        }
     }
 }
 

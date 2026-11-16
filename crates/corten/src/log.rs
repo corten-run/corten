@@ -254,7 +254,7 @@ mod tests {
         }
     }
 
-    fn ours(color: bool, f: impl Fn()) -> Vec<String> {
+    fn ours(color: bool, f: impl FnOnce()) -> Vec<String> {
         let out = Shared::default();
         let sink = out.clone();
         let write = Box::new(move |l: &[u8]| sink.0.lock().unwrap().extend_from_slice(l));
@@ -344,6 +344,291 @@ mod tests {
         assert_eq!(lines.len(), 1, "{lines:#?}");
         let escaped = "x\\r\\n2026-01-01T00:00:00.000000Z ERROR forged\\x0e\\x1b[2J\tend";
         assert_eq!(lines[0], format!("  WARN {escaped} host={escaped} quoted={:?}", forged));
+    }
+
+    #[crate::routes]
+    mod access_test_url {
+        #[route("/items/{id}", get = access_test_item)]
+        pub struct Item {
+            pub id: u32,
+        }
+    }
+
+    async fn access_test_item(_: crate::Params<access_test_url::Item>) -> &'static str {
+        "item"
+    }
+
+    fn access_app() -> crate::App {
+        crate::App::new(access_test_url::router()).access_log(true).middleware(())
+    }
+
+    async fn access_call(router: crate::Router, method: &str, path: &str, headers: &[(&str, &str)]) -> crate::http::Response {
+        use tower::ServiceExt;
+        let mut req = crate::http::Request::builder().method(method).uri(path).header("host", "localhost");
+        for (name, value) in headers {
+            req = req.header(*name, *value);
+        }
+        router.oneshot(req.body(crate::http::Body::empty()).unwrap()).await.unwrap()
+    }
+
+    fn access_lines(f: impl std::future::Future<Output = ()>) -> Vec<String> {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        ours(false, || runtime.block_on(f)).into_iter().filter(|line| line.contains("corten: request ")).collect()
+    }
+
+    #[test]
+    fn access_log_sees_host_and_cross_site_refusals() {
+        let mut sizes = Vec::new();
+        let lines = access_lines(async {
+            use http_body_util::BodyExt;
+            let router = access_app().router();
+            let req = crate::http::Request::builder()
+                .uri("/items/7?token=secret")
+                .header("host", "rebound.attacker.example")
+                .body(crate::http::Body::empty())
+                .unwrap();
+            use tower::ServiceExt;
+            let res = router.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), http::StatusCode::MISDIRECTED_REQUEST);
+            sizes.push(res.into_body().collect().await.unwrap().to_bytes().len());
+            let res = access_call(router, "POST", "/items/7?token=secret", &[("sec-fetch-site", "cross-site")]).await;
+            assert_eq!(res.status(), http::StatusCode::FORBIDDEN);
+            sizes.push(res.into_body().collect().await.unwrap().to_bytes().len());
+        });
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        for (line, size) in lines.iter().zip(sizes) {
+            assert!(line.contains("path=\"/items/7\"") && line.contains("route=\"/items/{id}\""), "{line}");
+            assert!(line.contains(&format!("bytes={size} ")) && line.contains("duration="), "{line}");
+            assert!(!line.contains("token") && !line.contains("secret"), "{line}");
+        }
+        assert!(lines[0].contains("method=GET") && lines[0].contains("status=421"), "{}", lines[0]);
+        assert!(lines[1].contains("method=POST") && lines[1].contains("status=403"), "{}", lines[1]);
+    }
+
+    #[test]
+    fn access_log_sees_a_304_and_a_head_with_no_body() {
+        let lines = access_lines(async {
+            use http_body_util::BodyExt;
+            let router = access_app().router();
+            let res = access_call(router.clone(), "GET", "/items/7", &[]).await;
+            let tag = res.headers()[http::header::ETAG].to_str().unwrap().to_owned();
+            assert_eq!(res.into_body().collect().await.unwrap().to_bytes().len(), 4);
+            let res = access_call(router.clone(), "GET", "/items/7", &[("if-none-match", &tag)]).await;
+            assert_eq!(res.status(), http::StatusCode::NOT_MODIFIED);
+            assert!(res.into_body().collect().await.unwrap().to_bytes().is_empty());
+            let res = access_call(router, "HEAD", "/items/7", &[]).await;
+            assert_eq!(res.headers()[http::header::CONTENT_LENGTH], "4");
+            assert!(res.into_body().collect().await.unwrap().to_bytes().is_empty());
+        });
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[0].contains("status=200 bytes=4 "), "{}", lines[0]);
+        assert!(lines[1].contains("status=304 bytes=0 "), "{}", lines[1]);
+        assert!(lines[2].contains("method=HEAD") && lines[2].contains("status=200 bytes=0 "), "{}", lines[2]);
+    }
+
+    #[test]
+    fn access_log_sees_the_replacement_error_page_and_its_wait() {
+        let mut size = 0;
+        let lines = access_lines(async {
+            use crate::prelude::*;
+            use http_body_util::BodyExt;
+            let router = access_app()
+                .error_page(
+                    |req: Req| async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+                        req.page::<crate::ForOne>(html! {
+                            <!DOCTYPE html>
+                            <html><head><title>"Not here"</title><Corten /></head>
+                                <body><main>"Replacement error page"</main></body>
+                            </html>
+                        })
+                    },
+                    (),
+                )
+                .router();
+            let res = access_call(router, "GET", "/missing?secret=gone", &[]).await;
+            assert_eq!(res.status(), http::StatusCode::NOT_FOUND);
+            let bytes = res.into_body().collect().await.unwrap().to_bytes();
+            assert!(std::str::from_utf8(&bytes).unwrap().contains("Replacement error page"));
+            size = bytes.len();
+        });
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let line = &lines[0];
+        assert!(line.contains(&format!("status=404 bytes={size} ")), "{line}");
+        assert!(!line.contains("route=") && !line.contains("secret"), "{line}");
+        let duration = line.split_once("duration=").unwrap().1;
+        let elapsed = duration.strip_suffix("ms").map(|n| n.parse::<f64>().unwrap());
+        assert!(
+            elapsed.is_some_and(|ms| ms >= 15.0)
+                || duration.strip_suffix('s').is_some_and(|n| n.parse::<f64>().is_ok_and(|s| s >= 0.015)),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn access_log_marks_a_stream_without_polling_it() {
+        let lines = access_lines(async {
+            let routes = crate::router::Table::new().route(
+                "/stream",
+                crate::route::get(|| async {
+                    crate::http::Body::from_stream(futures_util::stream::poll_fn(
+                        |_| -> std::task::Poll<Option<Result<crate::http::Bytes, std::io::Error>>> {
+                            panic!("logging must not poll a streamed body");
+                        },
+                    ))
+                }),
+            );
+            let router = crate::App::new(crate::Routes::from(routes)).access_log(true).router();
+            let res = access_call(router, "GET", "/stream", &[]).await;
+            assert_eq!(res.status(), http::StatusCode::OK);
+            assert!(http_body::Body::size_hint(res.body()).exact().is_none());
+        });
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("status=200 bytes=\"stream\" "), "{}", lines[0]);
+    }
+
+    #[test]
+    fn access_log_is_outside_app_layers_and_can_be_disabled() {
+        let lines = access_lines(async {
+            let layer = tower::util::MapResponseLayer::new(|mut res: crate::http::Response| {
+                *res.status_mut() = http::StatusCode::CREATED;
+                *res.body_mut() = crate::http::Body::from("layer's answer");
+                res
+            });
+            let res = access_call(access_app().layer(layer).router(), "GET", "/items/7", &[]).await;
+            assert_eq!(res.status(), http::StatusCode::CREATED);
+            assert_eq!(res.headers()[http::header::CONTENT_LENGTH], "14");
+            access_call(access_app().access_log(false).router(), "GET", "/items/7", &[]).await;
+            access_call(crate::App::new(crate::Routes::new()).router(), "GET", "/missing", &[]).await;
+        });
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("status=201 bytes=14 "), "{}", lines[0]);
+    }
+
+    #[test]
+    fn access_log_keeps_the_route_across_a_spawned_layer_replacing_the_response() {
+        let lines = access_lines(async {
+            use crate::response::IntoResponse;
+            use tower::ServiceExt;
+            let layer = tower::layer::layer_fn(|inner: crate::Router| {
+                tower::service_fn(move |req| {
+                    let inner = inner.clone();
+                    async move {
+                        let res = tokio::spawn(async move { inner.oneshot(req).await }).await.unwrap()?;
+                        assert_eq!(res.status(), http::StatusCode::OK);
+                        Ok::<_, std::convert::Infallible>((http::StatusCode::CREATED, "replacement").into_response())
+                    }
+                })
+            });
+            access_call(access_app().layer(layer).router(), "GET", "/items/7", &[]).await;
+        });
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("route=\"/items/{id}\" status=201 bytes=11 "), "{}", lines[0]);
+    }
+
+    #[test]
+    fn access_log_counts_no_content_for_http_statuses_without_it() {
+        let lines = access_lines(async {
+            for status in [http::StatusCode::NO_CONTENT, http::StatusCode::NOT_MODIFIED, http::StatusCode::SWITCHING_PROTOCOLS] {
+                let layer = tower::util::MapResponseLayer::new(move |mut res: crate::http::Response| {
+                    *res.status_mut() = status;
+                    res
+                });
+                access_call(access_app().layer(layer).router(), "GET", "/items/7", &[]).await;
+            }
+        });
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        for (line, status) in lines.iter().zip([204, 304, 101]) {
+            assert!(line.contains(&format!("status={status} bytes=0 ")), "{line}");
+        }
+    }
+
+    #[cfg(feature = "compress")]
+    #[test]
+    fn access_log_counts_the_compressed_body() {
+        let mut size = 0;
+        let lines = access_lines(async {
+            use http_body_util::BodyExt;
+            let routes = crate::router::Table::new().route("/large", crate::route::get(|| async { "x".repeat(4096) }));
+            let router = crate::App::new(crate::Routes::from(routes)).access_log(true).router();
+            let res = access_call(router, "GET", "/large", &[("accept-encoding", "gzip")]).await;
+            assert_eq!(res.headers()[http::header::CONTENT_ENCODING], "gzip");
+            size = res.into_body().collect().await.unwrap().to_bytes().len();
+            assert!(size < 4096);
+        });
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains(&format!("status=200 bytes={size} ")), "{}", lines[0]);
+    }
+
+    #[test]
+    fn access_log_uses_its_target_and_the_route_actually_dispatched() {
+        let out = Shared::default();
+        let sink = out.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_target(true)
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || sink.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                let rewrite = tower::util::MapRequestLayer::new(|mut req: crate::http::Request| {
+                    *req.uri_mut() = http::Uri::from_static("/items/9");
+                    req
+                });
+                access_call(access_app().layer(rewrite).router(), "GET", "/old?token=secret", &[]).await;
+            });
+        });
+        let lines = out.lines();
+        let line = lines.iter().find(|line| line.contains("corten: request ")).unwrap();
+        assert!(line.contains("INFO corten::access:") && line.contains("path=\"/old\""), "{line}");
+        assert!(line.contains("route=\"/items/{id}\"") && !line.contains("secret"), "{line}");
+    }
+
+    #[crate::routes]
+    mod access_url {
+        #[route("/items/{id}/edit", get = access_item)]
+        pub struct Item {
+            pub id: u32,
+        }
+    }
+
+    async fn access_item(at: crate::Params<access_url::Item>) -> String {
+        format!("item {}", at.id)
+    }
+
+    /// CONTRIBUTING's request-path instruction count, with Corten's own subscriber writing to
+    /// a sink. Run the release test binary under callgrind with `ACCESS_REQUESTS=1200` and 200,
+    /// then subtract and divide by 1,000. `ACCESS_LOG=1` enables logging, `ACCESS_TARGET=missing`
+    /// selects the 404. No socket or fixture is needed.
+    #[test]
+    #[ignore]
+    fn what_an_access_request_costs() {
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let requests: usize = std::env::var("ACCESS_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let enabled = std::env::var("ACCESS_LOG").is_ok_and(|v| v == "1");
+        let missing = std::env::var("ACCESS_TARGET").is_ok_and(|v| v == "missing");
+        let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
+        let router = crate::App::new(access_url::router()).access_log(enabled).router();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let write = Box::new(|line: &[u8]| {
+            std::hint::black_box(line);
+        });
+        tracing::subscriber::with_default(Stdout { color: false, write }, || {
+            runtime.block_on(async {
+                for _ in 0..requests {
+                    let req = crate::http::Request::get(path).body(crate::http::Body::empty()).unwrap();
+                    let res = router.clone().oneshot(req).await.unwrap();
+                    assert_eq!(res.status().as_u16(), if missing { 404 } else { 200 });
+                    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+                    if !missing {
+                        assert_eq!(bytes.as_ref(), b"item 7");
+                    }
+                }
+            });
+        });
     }
 
     /// Refused only by `a_refused_link_is_logged_once_by_this_subscriber`, which needs the first
