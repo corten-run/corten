@@ -747,6 +747,7 @@ impl From<Table> for Router {
 impl Dispatch {
     #[inline]
     fn answer(&self, mut req: Request, edge: bool) -> RouterFuture {
+        let mut fix = Fix::of(req.method(), edge);
         let path = req.uri().path();
         let (route, allow, stages, matched) = match self.paths.at(path) {
             Ok(found) => {
@@ -762,8 +763,6 @@ impl Dispatch {
             }
             Err(_) => (&self.not_found, None, self.stages.as_ref(), None),
         };
-        // Keep the final HTTP fix out of the matcher's live values.
-        let mut fix = Fix::of(req.method(), edge);
         fix.allow = allow.cloned();
         if let Some(matched) = matched {
             req.extensions_mut().insert(matched);
