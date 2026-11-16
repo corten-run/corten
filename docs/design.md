@@ -4133,9 +4133,10 @@ rules something out.
     back for gain the Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the
     mark goes.
 
-    Last checked: 2026-11-15, the runtime's size on `c5a975f61` against `c9ed56785`; 2026-11-15,
-    the smoke's twenty checks of the mark passing with `c5a975f61`'s runtime in Chromium
-    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1); 2026-11-15, the traversals'
+    Last checked: 2026-11-15, the runtime's size on `2615ea777` against `c9ed56785`; 2026-11-15,
+    the smoke's twenty-four checks of the mark passing with `2615ea777`'s runtime in Chromium
+    156.0.8078.4 and Firefox 157.0, and twenty-three in WebKit 27.2, whose Playwright cannot answer
+    a request with a 3xx (Playwright 1.64.1); 2026-11-15, the traversals'
     bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and the request
     path's count on `307d00bca` against `c9ed56785`.
 

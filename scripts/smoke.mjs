@@ -5149,28 +5149,33 @@ async function run(browser) {
       );
       // A redirect (3xx) of the form's request: the address is where it went, with the
       // `#fragment` of the form's `formaction`, which the redirect's `Location` does not name.
-      const monthAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=month";
-      await scope.route(monthAsked, (route) =>
-        route.request().headers()["corten"] === "action" ? route.fulfill({ status: 303, headers: { location: "/smoke/scope?scope=day" } }) : route.continue(),
-      );
-      const beforeMove = await index();
-      asked.length = 0;
-      await answered(() => scope.getByRole("button", { name: "Month", exact: true }).click());
-      await scope.unroute(monthAsked);
-      const redirected = {
-        at: await scope.evaluate(() => location.pathname + location.search + location.hash),
-        added: (await index()) - beforeMove,
-        shown: await shown(),
-        asked: asked.splice(0),
-      };
-      const redirectedBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
-      check(
-        "a data-address form's request redirected (3xx) puts the address it went to in history, with its formaction's #fragment",
-        redirected.at === "/smoke/scope?scope=day#smoke-scope" && redirected.added === 1 && redirected.shown === "day" &&
-          redirected.asked.join() === "action ?scope=month,action ?scope=day" &&
-          redirectedBack.at === "/smoke/scope?scope=week" && redirectedBack.shown === "week" && redirectedBack.asked.join() === "action ?scope=week",
-        JSON.stringify({ redirected, redirectedBack }),
-      );
+      const movedName = "a data-address form's request redirected (3xx) puts the address it went to in history, with its formaction's #fragment";
+      // Playwright's WebKit cannot answer a request with a redirect ("Cannot fulfill with redirect status").
+      if (engine === "webkit") skip(movedName, "Playwright's WebKit cannot fulfill a request with a 3xx");
+      else {
+        const monthAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=month";
+        await scope.route(monthAsked, (route) =>
+          route.request().headers()["corten"] === "action" ? route.fulfill({ status: 303, headers: { location: "/smoke/scope?scope=day" } }) : route.continue(),
+        );
+        const beforeMove = await index();
+        asked.length = 0;
+        await answered(() => scope.getByRole("button", { name: "Month", exact: true }).click());
+        await scope.unroute(monthAsked);
+        const redirected = {
+          at: await scope.evaluate(() => location.pathname + location.search + location.hash),
+          added: (await index()) - beforeMove,
+          shown: await shown(),
+          asked: asked.splice(0),
+        };
+        const redirectedBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
+        check(
+          movedName,
+          redirected.at === "/smoke/scope?scope=day#smoke-scope" && redirected.added === 1 && redirected.shown === "day" &&
+            redirected.asked.join() === "action ?scope=month,action ?scope=day" &&
+            redirectedBack.at === "/smoke/scope?scope=week" && redirectedBack.shown === "week" && redirectedBack.asked.join() === "action ?scope=week",
+          JSON.stringify({ redirected, redirectedBack }),
+        );
+      }
       // A `#fragment` of the form's `formaction` or `action` stays in the address, as the browser
       // keeps it for the form without JavaScript; Back between them reads the patch.
       const whole = () => scope.evaluate(() => location.pathname + location.search + location.hash);
