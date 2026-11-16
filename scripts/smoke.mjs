@@ -1560,7 +1560,9 @@ async function run(browser) {
       if (route.request().headers().corten === "action") {
         partReads++;
         if (never) return new Promise(() => {});
-        await new Promise((resolve) => setTimeout(resolve, 1200));
+        // With the route's own 600 ms (`PICKS_TAKE`), about 1.1 s: slower than the page's 1 s
+        // interval, with room before two.
+        await new Promise((resolve) => setTimeout(resolve, 500));
         return route.continue().catch(() => {});
       }
       const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
@@ -1639,17 +1641,19 @@ async function run(browser) {
   // keep a page in the cache, so the browser's two events are dispatched here (#1400).
   {
     const hidden = await (await browser.newContext()).newPage();
-    /** @type {Record<string, number>} */
+    /** Reads asked once the page is shown again. @type {Record<string, number>} */
     const hiddenAsked = {};
     /** @type {(() => void)[]} */
     const hiddenHeld = [];
+    let shown = false;
     await hidden.route("**/smoke/hidden-*", async (route) => {
       const name = new URL(route.request().url()).pathname.slice("/smoke/".length);
-      hiddenAsked[name] = (hiddenAsked[name] ?? 0) + 1;
-      if (hiddenAsked[name] === 1) {
+      // Every read until the page is shown fails, a request WebKit sends again after an abort too.
+      if (!shown) {
         await new Promise((resolve) => hiddenHeld.push(() => resolve(undefined)));
         return route.abort().catch(() => {});
       }
+      hiddenAsked[name] = (hiddenAsked[name] ?? 0) + 1;
       await route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: `<p id="${name}">Read when shown</p>` }).catch(() => {});
     });
     await hidden.goto(`${base}/`);
@@ -1666,12 +1670,16 @@ async function run(browser) {
     // Both reads end while the page is hidden, so each waits to be made again when it is shown; a
     // form's answer then replaces one of their parts before it is.
     await hidden.evaluate(() => dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
-    for (const release of hiddenHeld) release();
-    await hidden.waitForTimeout(400);
+    for (let waited = 0; waited < 400; waited += 50) {
+      for (const release of hiddenHeld.splice(0)) release();
+      await hidden.waitForTimeout(50);
+    }
     await hidden.evaluate(async () => {
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
       await corten.patch(__html('<p id="hidden-b">Drawn by a form</p>'));
     });
+    for (const release of hiddenHeld.splice(0)) release();
+    shown = true;
     await hidden.evaluate(() => dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
     await hidden.waitForFunction(() => document.getElementById("hidden-a")?.textContent === "Read when shown", null, { timeout: 5000 }).catch(() => {});
     await hidden.waitForTimeout(300);
@@ -1683,12 +1691,12 @@ async function run(browser) {
     );
     check(
       "a part whose read ended when the browser hid the page is read again once it is shown",
-      after[0][0] === "Read when shown" && after[0][1] === null && hiddenAsked["hidden-a"] === 2,
+      after[0][0] === "Read when shown" && after[0][1] === null && hiddenAsked["hidden-a"] === 1,
       JSON.stringify({ after, hiddenAsked }),
     );
     check(
       "but not a part a form's answer replaced while the page was hidden",
-      after[1][0] === "Drawn by a form" && after[1][1] === null && after[1][2] === null && hiddenAsked["hidden-b"] === 1,
+      after[1][0] === "Drawn by a form" && after[1][1] === null && after[1][2] === null && !hiddenAsked["hidden-b"],
       JSON.stringify({ after, hiddenAsked }),
     );
     await hidden.unrouteAll({ behavior: "ignoreErrors" });
