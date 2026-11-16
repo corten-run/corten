@@ -5,6 +5,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Read a date and time a visitor picks (`<input type="datetime-local">`) as the instant it
+  names in their zone: `corten::i18n::LocalDateTime` reads and writes HTML's local date and time
+  syntax, `Entry<LocalDateTime>` keeps the text as sent (as `Entry<u32>` does) and
+  `entry.at(req.zone())` gives the instant, a skipped time moved forward by the gap and a
+  repeated one the earlier (Temporal's default, RFC 5545); `LocalDateTime::of(at, zone)` draws
+  an instant as the input's `value`, `min` or `max`. `Entry` also holds a `Day`
+  (`<input type="date">`), and `day.start(zone)` is where a day begins in a zone
+  ([design Choice 55](docs/design.md#choice-local-date-time)).
+
 - Bound failed-native retirement proof age from the final SSH request's local
   start, including response delivery, and refuse expired DELETEs after asynchronous
   HTTPS socket/TLS setup without queuing a mutation before readiness.

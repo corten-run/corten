@@ -214,6 +214,9 @@
 //!   (`req.zone()`); `.zone(z)` takes a [`Zone`]: an [`Offset`], or a zone with daylight
 //!   saving time that gives its offset at the instant (`Visitor`). Another zone is written as its
 //!   offset (`GMT-5`).
+//! - A date and time a person picked (`<input type="datetime-local">`) is a [`LocalDateTime`],
+//!   what their clock read: no instant until [`LocalDateTime::at`] reads it in a zone, and
+//!   [`LocalDateTime::of`] writes an instant back as the input's value there.
 //! - `t.date(at, MonthStyle)`: the month and year without the day (`Short` is `Mar 2026`, `Long`
 //!   `March 2026`), in the locale's order and words, for a "Member since" line or a release
 //!   month. It has no time, so `t.date_time` does not take one.
@@ -359,8 +362,10 @@ mod display_digits;
 mod format;
 #[cfg(feature = "log")]
 pub(crate) use format::civil_from_days;
+mod local;
 mod visitor;
 
+pub use local::{InvalidLocalDateTime, LocalDateTime};
 pub(crate) use visitor::Scope;
 #[cfg(feature = "zones")]
 pub use visitor::Visitor;

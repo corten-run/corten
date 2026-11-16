@@ -1610,6 +1610,26 @@ impl Day {
             Err(_) => UNIX_EPOCH.checked_sub(Duration::from_secs(seconds.unsigned_abs())),
         }
     }
+
+    /// The day's first instant in `zone`: where a picked day (`<input type="date">`) begins for
+    /// the person who picked it (`day.start(req.zone())`), for a query's bound. Its midnight, or,
+    /// where the clocks skip midnight, the instant they skip to, as
+    /// [`LocalDateTime::at`](super::LocalDateTime::at) reads `00:00`. `None` before the earliest
+    /// `SystemTime` the platform has.
+    pub fn start(self, zone: impl Zone) -> Option<SystemTime> {
+        super::LocalDateTime::midnight(self).at(zone)
+    }
+
+    /// Days since 1970-01-01.
+    pub(super) fn days(self) -> i64 {
+        i64::from(self.days)
+    }
+
+    /// The day `days` after 1970-01-01, or `None` outside the years `Day::new` takes.
+    pub(super) fn from_days(days: i64) -> Option<Day> {
+        let days = i32::try_from(days).ok()?;
+        (1..=9999).contains(&civil_from_days(i64::from(days)).0).then_some(Day { days })
+    }
 }
 
 fn days_in_month(year: i64, month: u32) -> u32 {

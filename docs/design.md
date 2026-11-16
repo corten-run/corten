@@ -4307,6 +4307,83 @@ rules something out.
     `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
     it, load such a page in the three engines and count the matches.
 
+55. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, which becomes
+    an instant only in a zone the handler names, and a time the clocks skip or repeat is read as
+    Temporal's default (`compatible`) reads it.** `<input type="datetime-local">` sends what the
+    visitor's clock read (`2026-11-13T14:05`), with no offset. Corten wrote an instant in the
+    visitor's zone (`t.date_time`) but read none back, so an app took the field as a `String`,
+    parsed it, and found the instant with `Zone::offset`, whose offset is the instant's, the one
+    being found: each app corrected its own guess and decided on its own what a time the clocks
+    skip or repeat means, and one that got it wrong stored the wrong instant
+    ([#1421 A datetime-local field has no typed reader: each app parses the visitor's local time and resolves its zone offset itself](https://github.com/corten-run/corten/issues/1421)).
+    Now `corten::i18n::LocalDateTime` reads and writes HTML's local date and time syntax, and an
+    `Entry<LocalDateTime>` field keeps the text as sent, as `Entry<u32>` does, with
+    `entry.at(zone)` the instant (`None` for the field's message). `LocalDateTime::of(at, zone)`
+    writes an instant as the input's `value`, `min` or `max` in the same zone. A `LocalDateTime`
+    is not an instant (no `Into<SystemTime>`, not a `DateValue`), so a clock reading is not
+    written or stored as one without its zone (a `compile_fail` example on the type). `Entry`
+    now holds a sealed `EntryValue` (a number, a `Day` or a `LocalDateTime`) rather than numbers
+    alone, so `<input type="date">` became `Entry<Day>` at no further cost, and `day.start(zone)`
+    is where a picked day begins there (its midnight, or the instant the clocks skip to).
+
+    A skipped time (`02:30` on the morning the clocks go from 2 to 3) moves forward by the gap,
+    and a repeated one (`01:30` on the night they go back) is the earlier instant. That is
+    Temporal's default disambiguation, `compatible`, which its documentation says is what legacy
+    `Date` does, and RFC 5545 (iCalendar) section 3.3.5 prescribes the same: the first
+    occurrence of a repeated time, and a skipped time read at the UTC offset before the gap. It
+    is also what `day.start(zone)` needs, since it gives the first instant of a day whose midnight
+    is skipped or repeated. `at` asks the zone only for its offset (`Zone::offset`), a day before
+    and a day after the time and at the two instants those give, so it works for every `Zone`
+    (`Utc`, an `Offset`, `req.zone()`'s `Visitor`, an app's own) without the `zones` feature and
+    adds no dependency; a zone whose offset changed twice within two days would be read with the
+    outer two offsets, which no zone in the tests does. A test compares it with jiff's
+    `compatible()`, which finds the candidates in the tz database itself, around every change from
+    1970 to 2040 in ten zones that move their clocks in different ways (30 minutes, at midnight,
+    a whole day, two hours).
+
+    Not chosen: reading or writing in the zone Corten writes dates in while it renders
+    (`App::zoned_dates`), so a component would draw an input from an instant with no zone, as
+    `t.date_time` does: the handler reads the form before any render, outside that zone, and an
+    app that learns zones without `zoned_dates` would draw in UTC and read in the visitor's zone;
+    one zone value passed to both keeps them the same. Temporal's other answers (`earlier`,
+    `later`, `reject`) as options: one answer is one way to do it, and no app has asked which of
+    two `01:30`s a visitor meant. `<input type="time">`: a time of day names no day, so it is no
+    instant in any zone, and a type for it would be a new concept no app has needed; an app with
+    a date and a time posts one `datetime-local`. A `Bounds` for times (`min`, `max` and `step`
+    written once for the input and the handler): a time's bounds are mostly instants known only
+    at the request (now, when a listing went up), so the handler compares instants; `min` with
+    seconds puts every whole minute off the input's step (HTML counts steps from `min`), which
+    the type's documentation says and `corten dev` names when the input is drawn with a value.
+    JSON for `LocalDateTime`: an
+    API sends an instant with its offset (RFC 3339, `parse_timestamp`).
+
+    Stands on: platform (the HTML standard's valid local date and time string, `T` or a space
+    between a date and a time of `HH:MM` with optional seconds and one to three fraction digits,
+    its valid normalized form, which an `<input type="datetime-local">`'s value sanitization
+    gives and its picker sets, and its step base, `min` before `value`; Temporal's
+    `disambiguation: "compatible"`, `earlier` for a repeated time and `later` for a skipped one
+    (its spec's `DisambiguatePossibleEpochNanoseconds`); RFC 5545 section 3.3.5; jiff 0.2.38
+    and its bundled tz database, jiff-tzdb 0.1.9, whose `compatible()` agrees with `at` in
+    `every_change_reads_as_temporal_compatible_reads_it`); reasoned (a zone whose offset changes
+    at most once in any two days has, for a time on its clock, its candidates at the time minus
+    the offset a day before or a day after, and a time the clock skips has neither, so both reads
+    are exact; a clock reading that is no `Into<SystemTime>` and no `DateValue` cannot reach
+    `t.date` or a field typed as an instant); value (a standard's answer before one of Corten's,
+    a mistake the compiler can catch is a compile error, one way to do each thing and a small
+    surface: Values 2, 4, 5 and 6).
+
+    Revisit when: an app needs to ask a visitor which of two repeated times they meant, or to
+    refuse a skipped one; an app needs a time of day alone; the tz database gives a zone two
+    changes within two days (the comparison test fails); or an app repeats the same instant
+    bounds check on many forms, when a `Bounds` for times would earn its place.
+
+    Last checked: 2026-11-15, the HTML standard's local dates and times microsyntax, its
+    `datetime-local` state and its step base (Living Standard, last updated 14 November 2026),
+    Temporal's `ZonedDateTime` documentation for `disambiguation` and its spec's
+    `DisambiguatePossibleEpochNanoseconds`, and RFC 5545 section 3.3.5, read that day, against
+    `1c72b0379`; 2026-11-15, jiff 0.2.38 and jiff-tzdb 0.1.9 (`Cargo.lock`),
+    the comparison test run on this change.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
