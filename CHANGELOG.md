@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Probe the marketplace JSON route's method rejection with POST, which the page
+  form implements, rather than requiring an app to implement DELETE somewhere.
+  Keep the JSON 405 requirement and all production qualification gates.
+
 - Publish synthetic benchmark fixtures with explicit readable file permissions
   and search-only bind roots, including under the private campaign umask. Keep
   neighboring evidence private and contender users/read-only mounts unchanged.

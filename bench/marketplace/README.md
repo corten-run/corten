@@ -7,6 +7,9 @@ before timing; every admitted app must then pass both Docker/browser gates befor
 No framework, including axum or Corten, gets unconditional admission. See
 [framework groups](nightly.md#framework-groups) for requirements, candidate pools and limits.
 An omitted adapter was not tested; an excluded candidate has capability evidence, not timing.
+The JSON wrong-method probe uses POST, which the page form implements but the
+read-only JSON route does not. It still requires a JSON 405 response; a method
+implemented nowhere in an app may correctly return 501 and is not this test.
 The first validated v2 production baseline is [historical r20](#results). Passing the formatting-capture checker alone
 never qualifies an app for load testing.
 

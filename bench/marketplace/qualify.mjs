@@ -36,7 +36,9 @@ export async function qualify({ base, source, upstream, probe = nativeProbe }) {
   for (const key of ["pageBr", "jsonBr", "jsonGzip"]) assert.equal(probes[key].status, 200, `${key}: healthy content request failed during qualification`);
   probes.page404 = request("/marketplace/en-US/missing");
   probes.json404 = request("/api/marketplace/missing");
-  probes.json405 = request(json, {}, "DELETE");
+  // POST is implemented by the native page form but not this read-only endpoint.
+  // An unrelated method implemented nowhere may correctly return 501 instead.
+  probes.json405 = request(json, {}, "POST");
   probes.head = request(json, {}, "HEAD");
   probes.badHost = request(page, { host: "unrecognized.invalid" });
   probes.bigHead = request(page, { "x-qualification": "x".repeat(65536) });
