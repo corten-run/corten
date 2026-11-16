@@ -4397,7 +4397,10 @@ rules something out.
     among them an `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and `<noframes>`'s markup kept as text
     after a `<tr>`, and the shapes the debug check stops at (a `</p>` or `</br>` in an `<svg>` or
     `<math>`, Firefox taking one in a `<foreignObject>` or `<mi>` out of it, and a script whose
-    text carries it past its first `</script>` over a `<p>`); 2026-11-16, a one-off probe, not a repository check, in Chromium
+    text carries it past its first `</script>` over a `<p>`); 2026-11-16, the same check of the 790
+    shapes there on `b02b1c706`, among them an end tag written `</div ignored>` and a `<tr/>`, which
+    the browsers read otherwise than as written and the debug check stops at, and a `<form>` whose
+    `</input>` before its control the browsers ignore; 2026-11-16, a one-off probe, not a repository check, in Chromium
     156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): each kind of the third shape (a `<table>` at the top level, in a `<div>` and in a
     `<label>`'s `<span>`; a `<form>` holding a `<div>` or a `<p>`, one in a `<div>`, and one
     holding a `<label>`'s `<span>`), after each of the eight first table parts but `<col>`, parsed
