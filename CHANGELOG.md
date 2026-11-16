@@ -34,6 +34,13 @@ Corten is pre-1.0, so any minor version may change the API.
   build is unchanged
   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 
+- Clear only an already stopped, masked firmware unit's failed state during
+  fresh benchmark setup, then recheck the mask, inactive state and service PID.
+  Record fixed setup stages, source lines and original failure codes without
+  dumping commands or environment; keep native cleanup and measurement gates.
+  Install stable upstream Git from its fingerprint-verified, signed Ubuntu PPA
+  directly in CI and fresh hosts, avoiding truncated Launchpad metadata API reads.
+
 - The scripts guide gives `corten-format`'s size once, as built (3,005 bytes, 1,492 gzipped),
   where it said 1.4 kB in one place and about 1 KB in another, and `corten/keys`'s as built too.
   `npm run build:js` now writes the size a guide gives right after one of Corten's script modules
