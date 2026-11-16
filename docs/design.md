@@ -4055,7 +4055,9 @@ rules something out.
     the runtime pushes the request's URL, the redirect's when there was one, with the `#fragment`
     of the form's `action` or `formaction`, as the browser does for the form without JavaScript
     (a fragment a redirect's `Location` names itself is not seen, as `fetch` does not show it, the
-    same as for a link the runtime follows); the same address again adds no entry. The runtime
+    same as for a link the runtime follows); the same address again adds no entry. A patch it
+    cannot draw whole (an empty one, or one with an element that has no place on the page) is
+    followed by a read of the page at the address, as the browser loads it. The runtime
     keeps, in memory, the entries of the screen such forms made and the one each was sent from,
     and a traversal between two of them reads the destination as the form did (`corten: action`,
     which the HTTP cache can answer) and applies its patch, the rest of the screen and the focus
@@ -4083,8 +4085,8 @@ rules something out.
     draft) was not chosen either: a reload would show another scope than the screen did, the error
     the mark is there to end, where a full load costs bytes (README conflict order 1 over 2).
 
-    What it costs: the runtime is 1,286 bytes larger raw, 395 with gzip (15,341 to 15,736) and
-    329 with brotli (13,846 to 14,175), paid once a release by every user. A GET `data-patch`
+    What it costs: the runtime is 1,343 bytes larger raw, 413 with gzip (15,341 to 15,754) and
+    337 with brotli (13,846 to 14,183), paid once a release by every user. A GET `data-patch`
     submit reads one attribute, a marked one's answer pushes an entry and forgets the entries it
     dropped, and a traversal looks two keys up in a set. Nothing changes on the server: `html!`'s
     output and the request path are as they were, and the check that refuses a misplaced mark runs

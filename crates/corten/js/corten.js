@@ -3157,20 +3157,27 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       signal.throwIfAborted();
       const patched = res.headers.has("corten-patch");
       let drawn = true;
-      if (patched) await apply(body, signal, sent, res.ok, true, undefined, within);
+      if (patched) drawn = await apply(body, signal, sent, res.ok, true, undefined, within);
       else {
         const notice = noticeOf(res);
         drawn = await swapPage(body, signal, false, notice);
         announce(notice);
       }
       signal.throwIfAborted();
-      if (addressing && drawn) {
+      if (addressing) {
         // The address the form asked for, its `#fragment` too, which the browser keeps for the
         // form without JavaScript, across a redirect whose `Location` names none. `fetch` shows no
         // fragment of a redirect's own, as a link's redirect does not ({@link interceptVisit}).
         const to = new URL(res.url);
         to.hash ||= url.hash;
-        address(to.href, patched);
+        if (drawn) address(to.href, patched);
+        else if (patched) {
+          // A patch not drawn whole leaves a screen that is not the address's: the page at it is
+          // read, as the browser loads it for the form without JavaScript (an entry of its own, none
+          // when it is the address already). It keeps the marks until it is drawn.
+          submits.delete(form);
+          go(to.href, { info: { [LOAD]: true, [SOURCE]: submitter ?? form } });
+        }
       }
       if (res.status === 422) focusInvalid(form);
       // Sent after an answer that took the write (2xx) or refused only its input (422). Not after a

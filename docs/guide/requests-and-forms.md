@@ -1755,7 +1755,9 @@ screen. Mark it `data-address` as well, and its answer is the page at the addres
 once the patch is drawn, that address is in the address bar, in a new history entry (none when it
 is the address already), as the browser leaves it after the same form without JavaScript, a
 `#fragment` of its `action` or `formaction` included. A reload, a bookmark and a shared link then
-reach what the screen shows, and a form that posts without an `action` sends to it. Back and
+reach what the screen shows, and a form that posts without an `action` sends to it. A patch the
+runtime cannot draw whole (an empty one, or one with an element that has no place on the page)
+is followed by a read of the page at that address, as the browser loads it. Back and
 Forward between the entries such forms made on the screen, and the one the first was sent from,
 read the entry's address as the form did (`corten: action`, which the browser's HTTP cache can
 answer) and draw its patch, leaving the rest of the screen as it is. An answer that is not a 2xx

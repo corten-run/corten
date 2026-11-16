@@ -4725,13 +4725,15 @@ async function run(browser) {
         /** @type {() => void} */
         let release = () => {};
         const held = new Promise((resolve) => (release = () => resolve(undefined)));
+        /** The held request let go on: its route's `continue` has ended. */
+        let continued = Promise.resolve();
         let first = true;
         if (phase === "headers")
           await scope.route(own, async (route) => {
             if (!first || route.request().headers()["corten"] !== "action") return route.continue();
             first = false;
-            await held;
-            await route.continue().catch(() => {});
+            continued = held.then(() => route.continue().catch(() => {}));
+            await continued;
           });
         else
           await scope.evaluate(() => {
@@ -4739,12 +4741,16 @@ async function run(browser) {
             /** @type {(value?: unknown) => void} */
             let letGo = () => {};
             const waiting = new Promise((resolve) => (letGo = resolve));
-            Object.assign(window, { __release: letGo, __reading: false });
+            Object.assign(window, { __release: letGo, __reading: false, __read: false });
             Response.prototype.text = function () {
               if (!this.headers.has("corten-patch")) return text.call(this);
               Response.prototype.text = text;
               Object.assign(window, { __reading: true });
-              return waiting.then(() => text.call(this));
+              return waiting.then(async () => {
+                const read = await text.call(this);
+                Object.assign(window, { __read: true });
+                return read;
+              });
             };
           });
         asked.length = 0;
@@ -4759,9 +4765,15 @@ async function run(browser) {
           .waitForFunction(() => document.querySelector("#smoke-scope output")?.textContent === "all", undefined, { timeout: 5000 })
           .catch(() => {});
         const landed = { at: await at(), shown: await shown() };
-        if (phase === "headers") release();
-        else await scope.evaluate(() => /** @type {any} */ (window).__release());
-        await scope.waitForTimeout(300);
+        // The old answer let go, and seen through: its request's end, or its body read.
+        if (phase === "headers") {
+          release();
+          await continued;
+        } else {
+          await scope.evaluate(() => /** @type {any} */ (window).__release());
+          await scope.waitForFunction(() => /** @type {any} */ (window).__read, undefined, { timeout: 5000 }).catch(() => {});
+        }
+        await scope.waitForTimeout(100);
         if (phase === "headers") await scope.unroute(own);
         const result = { out, start, landed, after: { at: await at(), shown: await shown() }, asked: asked.splice(0) };
         // Forward to Week, where the checks below start.
@@ -4979,6 +4991,83 @@ async function run(browser) {
         "Back to a data-address form's entry whose patch throws as it is drawn reads the page instead",
         threw.threw && threw.at === "/smoke/scope?scope=day" && threw.shown === "day" && threw.asked.join() === "action ?scope=day,nav ?scope=day",
         JSON.stringify(threw),
+      );
+      // A form's own patch not drawn whole (empty, or with an element that has no place on the
+      // page): the page at the address it asked for is read, in an entry of its own, as the browser
+      // loads it for the form without JavaScript.
+      /** @param {string} body */
+      const firstSent = async (body) => {
+        const week = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=week";
+        await scope.route(week, (route) =>
+          route.request().headers()["corten"] === "action"
+            ? route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body })
+            : route.continue(),
+        );
+        const from = await index();
+        asked.length = 0;
+        const drawn = await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+        await scope.unroute(week);
+        // The page read draws the scope after the patch drew what it could.
+        await scope.waitForFunction(() => document.querySelector("#smoke-scope output")?.textContent === "week", undefined, { timeout: 5000 }).catch(() => {});
+        const result = { drawn, at: await at(), added: (await index()) - from, shown: await shown(), asked: asked.splice(0) };
+        // Back to Day, where the next one starts.
+        await traverse("back");
+        return result;
+      };
+      const emptySent = await firstSent("");
+      const unplacedSent = await firstSent('<section id="smoke-scope"><p>Scope: <output>part</output></p></section><section id="smoke-nowhere"></section>');
+      const readWhole = (/** @type {Awaited<ReturnType<typeof firstSent>>} */ s) =>
+        s.drawn && s.at === "/smoke/scope?scope=week" && s.added === 1 && s.shown === "week" && s.asked.join() === "action ?scope=week,nav ?scope=week";
+      check(
+        "a data-address form's patch that is empty or has an element with no place on the page reads the page at its address",
+        readWhole(emptySent) && readWhole(unplacedSent) && (await at()) === "/smoke/scope?scope=day",
+        JSON.stringify({ emptySent, unplacedSent, at: await at() }),
+      );
+      // A submit still on its way when Back is pressed is dropped: Back's entry is drawn, and the
+      // form's answer, let go after it, draws nothing and puts no address in history.
+      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      await scope.evaluate(() => {
+        const text = Response.prototype.text;
+        /** @type {(value?: unknown) => void} */
+        let letGo = () => {};
+        const waiting = new Promise((resolve) => (letGo = resolve));
+        Object.assign(window, { __release: letGo, __reading: false, __read: false });
+        Response.prototype.text = function () {
+          if (!this.headers.has("corten-patch")) return text.call(this);
+          Response.prototype.text = text;
+          Object.assign(window, { __reading: true });
+          return waiting.then(async () => {
+            const read = await text.call(this);
+            Object.assign(window, { __read: true });
+            return read;
+          });
+        };
+      });
+      asked.length = 0;
+      await scope.getByRole("button", { name: "Month", exact: true }).click();
+      const heldMonth = await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).then(() => true, () => false);
+      const leftFor = await traverse("back");
+      await scope.waitForFunction(() => document.querySelector("#smoke-scope output")?.textContent === "day", undefined, { timeout: 5000 }).catch(() => {});
+      await scope.evaluate(() => /** @type {any} */ (window).__release());
+      const seen = await scope.waitForFunction(() => /** @type {any} */ (window).__read, undefined, { timeout: 5000 }).then(() => true, () => false);
+      await scope.waitForTimeout(100);
+      const dropped = {
+        heldMonth,
+        seen,
+        leftFor,
+        at: await scope.evaluate(() => location.pathname + location.search + location.hash),
+        shown: await shown(),
+        asked: asked.splice(0),
+        ahead: await scope.evaluate(() => {
+          const nav = /** @type {any} */ (window).navigation;
+          return nav.entries()[nav.currentEntry.index + 1]?.url ?? "";
+        }),
+      };
+      check(
+        "a data-address form's submit on its way when Back is pressed draws nothing and puts no address in history",
+        dropped.heldMonth && dropped.seen && dropped.at === "/smoke/scope?scope=day" && dropped.shown === "day" &&
+          dropped.asked.join() === "action ?scope=month,action ?scope=day" && dropped.ahead.endsWith("/smoke/scope?scope=week"),
+        JSON.stringify(dropped),
       );
       // A `#fragment` of the form's `formaction` or `action` stays in the address, as the browser
       // keeps it for the form without JavaScript; Back between them reads the patch.

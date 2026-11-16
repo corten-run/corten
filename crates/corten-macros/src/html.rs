@@ -2388,7 +2388,9 @@ mod tests {
     fn data_address_is_refused_where_the_runtime_would_never_change_the_address() {
         let bare = |n: &str| Attr::Bare(n.into());
         let method = |m: &str| Attr::Static("method".into(), m.into());
-        let why = |is_form, attrs: Vec<Attr>| address_unsent(is_form, &attrs).map(|w| w.split(':').nth(1).unwrap_or_default().trim().to_owned());
+        let why = |is_form, attrs: Vec<Attr>| {
+            address_unsent(is_form, &attrs).map(|w| w.split(':').nth(1).unwrap_or_default().trim().to_owned())
+        };
         assert_eq!(why(true, vec![bare("data-patch"), bare("data-address")]), None);
         assert_eq!(why(true, vec![method("GET"), bare("data-patch"), bare("data-address")]), None);
         assert_eq!(why(true, vec![method("get")]), None, "no mark, nothing to say");
