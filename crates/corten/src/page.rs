@@ -1037,8 +1037,10 @@ pub struct Req {
     /// For a write the runtime sent whose own page is filled after it answers, taken where no route
     /// kept the head for it (the app's or an area's middleware before the route, a route given by
     /// hand): the request's head as it was then, which a page this makes carries, so its reads
-    /// start from it (`layout::fill_made_early`).
-    early: Option<Arc<Parts>>,
+    /// start from it (`layout::fill_made_early`). Its number among the heads kept on the request's
+    /// signal ([`EarlyHeads`]), 0 for none: a byte in the padding, where the head itself made
+    /// every `Req` 8 bytes larger, which every request that takes one paid in a copy.
+    early: u8,
     shared: Arc<Shared>,
     signal: crate::Signal,
     /// A debug build's: the request is to a route with named posts, at one of their addresses
@@ -1221,10 +1223,34 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
         // (middleware before the route, a route given by hand): a page made with it is filled from
         // this head, as a page route's is from the one it kept (#1370).
         if req.fills && req.write && req.signal.late_write() == Some(false) {
-            req.early = Some(Arc::new(parts.clone()));
+            req.early = keep_early_head(&req.signal, parts.clone());
         }
         Ok(req)
     }
+}
+
+/// The heads `Req`s taken before a late write's route kept ([`Req::early`]), on its signal.
+type EarlyHeads = std::sync::Mutex<Vec<Arc<Parts>>>;
+
+/// Keeps `head` among the request's early heads, and gives its number (from 1).
+fn keep_early_head(signal: &crate::Signal, head: Parts) -> u8 {
+    let cell = signal.found::<EarlyHeads>();
+    let _ = cell.set(EarlyHeads::default());
+    let Some(heads) = cell.get() else { return 0 };
+    let mut heads = heads.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    // A request takes `Req` a few times at most; past 255 the last number is reused.
+    if heads.len() < usize::from(u8::MAX) {
+        heads.push(Arc::new(head));
+    }
+    heads.len() as u8
+}
+
+/// The early head numbered `at` ([`keep_early_head`]), none for 0.
+fn early_head(signal: &crate::Signal, at: u8) -> Option<Arc<Parts>> {
+    let at = usize::from(at).checked_sub(1)?;
+    let cell = signal.found::<EarlyHeads>();
+    let heads = cell.get()?.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    heads.get(at).cloned()
 }
 
 impl Req {
@@ -1262,7 +1288,7 @@ impl Req {
             // A whole document's `GET` looks at its extensions alone: only a write is ever marked.
             fills: !shared.layout_reads.is_empty()
                 && (extensions.get::<crate::layout::StartHere>().is_some() || (write && signal.late_write().is_some())),
-            early: None,
+            early: 0,
             shared,
             signal,
             #[cfg(debug_assertions)]
@@ -1534,8 +1560,8 @@ impl Req {
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
         if fills {
             res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
-            if let Some(head) = &self.early {
-                res.extensions_mut().insert(crate::layout::EarlyHead(head.clone()));
+            if let Some(head) = early_head(&self.signal, self.early) {
+                res.extensions_mut().insert(crate::layout::EarlyHead(head));
             }
         }
         if !vars.is_empty() {

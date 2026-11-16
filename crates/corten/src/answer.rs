@@ -2289,13 +2289,17 @@ where
         } else {
             crate::layout::at_late_route(&req, page)
         };
-        let answer = futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>);
+        // Each answer is made where it is returned: made first and then moved into its variant, the
+        // handler's future (which holds the request) was copied twice more on every request
+        // (callgrind, a whole `GET`).
         match late {
-            None => futures_util::future::Either::Left(answer),
+            None => futures_util::future::Either::Left(futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>)),
             // Boxed, so every other request's future stays the size it was.
-            Some(late) => futures_util::future::Either::Right(
-                Box::pin(crate::layout::fill_after(late, answer)) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>
-            ),
+            Some(late) => futures_util::future::Either::Right(Box::pin(crate::layout::fill_after(
+                late,
+                futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>),
+            ))
+                as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>),
         }
     }
 }
