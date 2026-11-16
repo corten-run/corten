@@ -14,6 +14,11 @@ serde_json = { version = "1", features = ["raw_value"] }
 # Already in Corten's tree: the CSP reports the browser sends are logged.
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
+[features]
+# The browser test's own routes and its count of requests (src/smoke.rs), for `cargo clippy` and
+# `cargo test --all-features`. Its image turns them on with `CARD_MARKET_SMOKE=1` (build.rs).
+smoke = []
+
 [dev-dependencies]
 # Only for the `render_cost`, `route_loop` and `tool_cost` benchmarks, which time requests through
 # the router itself, beside axum alone; the tests send theirs with `app.test()`.
