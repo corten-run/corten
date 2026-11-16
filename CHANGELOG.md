@@ -33,6 +33,10 @@ Corten is pre-1.0, so any minor version may change the API.
   checks it again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+- Save bounded, structural same-page browser diagnostics when native compiled
+  alert hydration checks fail. Retain only closed categories and numbers, not
+  browser text or URL paths; keep readiness gates and their errors unchanged.
+
 - Include the observer's durable writer in the fixed native replay source closure;
   keep deny-unlisted imports and replay captured commit bytes, not checkout edits.
 
