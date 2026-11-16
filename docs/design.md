@@ -4606,7 +4606,9 @@ rules something out.
     every user, chiefly for the parser's `~` branch (about 20 with gzip), loading the field module
     for a call that takes one (14), and a handler's run that looks up a binding's other modules and
     makes no closure or array when it has none, as before (about 15). The lookup and its message
-    are that module, 1,340 bytes raw, 741 with gzip and 640 with brotli as built, which only a page whose handlers take a field fetches, as one
+    are that module, 1,340 bytes raw, 741 with gzip and 640 with brotli as built (as the watchlist
+    serves it, with the line Corten appends, 1,551 bytes, 838 with its gzip and 716 with its
+    brotli, and an 82-byte script tag in the page), which only a page whose handlers take a field fetches, as one
     more module script of the page; a page the runtime swaps in imports it with the page's
     handler modules, and an event before it arrives gets the browser's default, as one before
     those does. A field argument writes its posted name where a
@@ -4627,7 +4629,8 @@ rules something out.
     handler's parameter is the control, checked at the call.
 
     Stands on: measured (the runtime's and the field module's minified sizes by Node's `zlib` gzip
-    and brotli at their defaults, once each build; a field's `data-on` and markup against a ref's for the same four
+    and brotli at their defaults, once each build, and the module as the watchlist serves it, once;
+    a field's `data-on` and markup against a ref's for the same four
     controls, once; the item page's `render_cost`, five alternated runs of each release build; the lookup of three
     fields in a form of 50, 500 and 2,000 controls against a walk over them, the median of 15
     batches in each of the three engines, once); platform (a form's `elements`
@@ -4666,7 +4669,10 @@ rules something out.
     lookup of three fields in forms of 50, 500 and 2,000 controls against a walk over them in
     Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2, the smoke's field checks in the same three
     engines (an element whose id is a field's name among them), and `corten dev`'s reports in their
-    new words, on `1b6fc2f11`.
+    new words, on `1b6fc2f11`; 2026-11-16, the field module's sizes as built and as the watchlist
+    serves it, the smoke's field checks in the same three engines (a form-associated custom
+    element's `form=` among them, which the field module of `037bb827b` fails in each), and
+    `corten dev`'s reports, on `98e7ca184`.
 
 ## Rules
 
