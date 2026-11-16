@@ -130,8 +130,8 @@ test("fresh bootstrap masks firmware activation before provisioning and checks q
   assert.ok(mask > job.indexOf("cloud-init status --wait") && mask < job.indexOf("apt-get update"));
   const check = job.indexOf('for unit in fwupd.service fwupd-refresh.service fwupd-refresh.timer; do');
   assert.ok(check > job.indexOf("rustc --version") && check < job.indexOf("node bench/workloads/isolated/campaign-entry.mjs"));
-  assert.ok(job.includes('test "$(systemctl show "$unit" --property=LoadState --value)" = masked'));
-  assert.ok(job.includes('test "$(systemctl show "$unit" --property=ActiveState --value)" = inactive'));
+  assert.ok(job.includes('load_state=$(systemctl show "$unit" --property=LoadState --value)\n  test "$load_state" = masked'));
+  assert.ok(job.includes('active_state=$(systemctl show "$unit" --property=ActiveState --value)\n  test "$active_state" = inactive'));
   assert.ok(!job.split("\n").find((line) => line.startsWith("systemctl mask")).includes("|| true"));
 });
 
@@ -144,11 +144,13 @@ test("fresh-host mask failure or reactivation aborts the shell before native ent
   const start = job.indexOf("for unit in fwupd.service "), end = job.indexOf("\ndone", start);
   assert.ok(start >= 0 && end > start);
   const check = job.slice(start, end + "\ndone".length);
-  for (const [target, load, active, maskCode, accepted] of [["", "masked", "inactive", 0, true],
+  for (const [target, load, active, maskCode, accepted, failedProperty = ""] of [["", "masked", "inactive", 0, true],
     ["", "masked", "inactive", 1, false],
     ...["fwupd.service", "fwupd-refresh.service", "fwupd-refresh.timer"].flatMap((unit) => [
       [unit, "loaded", "inactive", 0, false], [unit, "masked", "active", 0, false],
       [unit, "not-found", "inactive", 0, false], [unit, "masked", "failed", 0, false],
+      [unit, "masked", "inactive", 0, false, "LoadState"],
+      [unit, "masked", "inactive", 0, false, "ActiveState"],
     ])]) {
     const script = `set -euo pipefail
 systemctl() {
@@ -156,6 +158,7 @@ systemctl() {
   test "$1" = show
   if test "$2" = '${target}'; then
     case "$3" in --property=LoadState) printf '%s\\n' '${load}';; --property=ActiveState) printf '%s\\n' '${active}';; *) return 2;; esac
+    if test "$3" = '--property=${failedProperty}'; then return 1; fi
   else
     case "$3" in --property=LoadState) printf '%s\\n' masked;; --property=ActiveState) printf '%s\\n' inactive;; *) return 2;; esac
   fi
@@ -166,7 +169,7 @@ printf 'native-entry\\n'
 `;
     const result = spawnSync("/bin/bash", ["-c", script], { encoding: "utf8", timeout: 10000, maxBuffer: 1024 ** 2 });
     assert.equal(result.error, undefined);
-    assert.equal(result.status === 0, accepted, `${target}:${load}:${active}:${maskCode}`);
+    assert.equal(result.status === 0, accepted, `${target}:${load}:${active}:${maskCode}:${failedProperty}`);
     assert.equal(result.stdout.includes("native-entry"), accepted);
   }
 });

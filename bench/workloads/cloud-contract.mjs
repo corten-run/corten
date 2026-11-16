@@ -337,8 +337,10 @@ timeout 900 bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh
 export PATH=/root/.cargo/bin:$PATH
 { docker --version; node --version; npm --version; rustc --version; cargo --version; } >> /bench/host.txt
 for unit in fwupd.service fwupd-refresh.service fwupd-refresh.timer; do
-  test "$(systemctl show "$unit" --property=LoadState --value)" = masked
-  test "$(systemctl show "$unit" --property=ActiveState --value)" = inactive
+  load_state=$(systemctl show "$unit" --property=LoadState --value)
+  test "$load_state" = masked
+  active_state=$(systemctl show "$unit" --property=ActiveState --value)
+  test "$active_state" = inactive
 done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
