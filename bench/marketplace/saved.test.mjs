@@ -40,6 +40,24 @@ test("marketplace Docker projections retain omitted optional defaults as null wi
   }
 });
 
+test("marketplace checker image Config must be an object before optional defaults reach replay", async (t) => {
+  const folder = temporary(t), args = { folder, round: "r17", commit };
+  writeSavedFixture(folder, commit, sourceTree(commit));
+  assert.ok(validateSaved(args));
+  const path = join(folder, "tools.json"), tools = JSON.parse(readFileSync(path)), original = tools.checker;
+  const projectAndReplay = (Config) => {
+    tools.checker = imageReceipt({ Id: original.id, Size: original.bytes, RepoDigests: original.repoDigests, Config });
+    writeFileSync(path, JSON.stringify(tools));
+    assert.ok(validateSaved(args));
+  };
+  for (const Config of [{}, { Entrypoint: null, Cmd: null }]) projectAndReplay(Config);
+  for (const Config of [undefined, null, [], "malformed", false, true, 0, 42]) {
+    await t.test(`reject ${JSON.stringify(Config) ?? "missing"}`, () => {
+      assert.throws(() => projectAndReplay(Config), /image configuration missing/);
+    });
+  }
+});
+
 test("native saved validation rejects summary-only, historical and malformed proof as invalid", (t) => {
   const folder = temporary(t), args = { folder, round: "r17", commit };
   writeFileSync(join(folder, "summary.json"), JSON.stringify(summaryFixture(commit)));

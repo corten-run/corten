@@ -20,6 +20,7 @@ export function containerReceipt(i) {
     mounts: i.Mounts.map((m) => ({ type: m.Type, name: m.Name, source: m.Source, destination: m.Destination, readOnly: !m.RW })) };
 }
 export function imageReceipt(i) {
+  assert.ok(i?.Config && typeof i.Config === "object" && !Array.isArray(i.Config), "image configuration missing");
   return { id: i.Id, bytes: i.Size, labels: Object.fromEntries(Object.entries(i.Config.Labels ?? {}).filter(([k]) => k.startsWith("run.corten.marketplace."))),
     cmd: i.Config.Cmd ?? null, entrypoint: i.Config.Entrypoint ?? null, repoDigests: i.RepoDigests ?? [] };
 }

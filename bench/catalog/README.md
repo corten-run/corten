@@ -142,7 +142,9 @@ local framework without the marketplace's localized model. Catalog image tags ar
 ### Explicit catalog-page group
 
 Image and checker-boundary projections retain optional Docker `Entrypoint` and `Cmd`
-as explicit `null` when omitted. Replay still requires the inspected image defaults,
+as explicit `null` when omitted. Image projection first requires a non-null, non-array
+configuration object; malformed configuration cannot become null defaults.
+Replay still requires the inspected image defaults,
 the full native checker/upstream commands, and the exact effective executable/arguments;
 an omitted observation cannot stand in for a required nonempty command.
 

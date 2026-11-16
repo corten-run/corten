@@ -13,7 +13,7 @@ import { aggregate, cpuSettings, expectedPageChecks, parseArgs, phases, readLoad
 import { records } from "./fixtures.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
 import { inspectCatalog } from "./report.mjs";
-import { rawSchema, replayCatalog, containerEvidence, upstreamImage, checkerImage, imageCommandEvidence, checkBoundaryEvidence } from "./raw.mjs";
+import { rawSchema, replayCatalog, containerEvidence, upstreamImage, checkerImage, imageCommandEvidence, checkBoundaryEvidence, verifyCheckBoundary } from "./raw.mjs";
 import { recordAttemptSchema } from "./record-attempt.mjs";
 import { inspectNative } from "../workloads/isolated/native-replay.mjs";
 import { sampleStats, summarizeSamples } from "./stats.mjs";
@@ -196,6 +196,20 @@ test("catalog boundary projection retains actual image and container execution w
   assert.deepEqual(imageCommandEvidence({ Config: { ...info.Config, Env: ["SYNTHETIC_PRIVATE_SENTINEL"] } }),
     { Entrypoint: info.Config.Entrypoint, Cmd: info.Config.Cmd });
   assert.ok(!JSON.stringify(projected).includes("SYNTHETIC_PRIVATE_SENTINEL"));
+});
+
+test("catalog checker image Config must be an object before optional defaults reach replay", async (t) => {
+  const f = failedFixture(), proof = f.reader.readJson(boundaryFile);
+  const projectAndReplay = (Config) => {
+    f.summary.tools.checker.execution = JSON.parse(JSON.stringify(imageCommandEvidence({ Config })));
+    verifyCheckBoundary(proof, f.summary, "corten", "fixture", true);
+  };
+  for (const Config of [{}, { Entrypoint: null, Cmd: null }]) projectAndReplay(Config);
+  for (const Config of [undefined, null, [], "malformed", false, true, 0, 42]) {
+    await t.test(`reject ${JSON.stringify(Config) ?? "missing"}`, () => {
+      assert.throws(() => projectAndReplay(Config), /image configuration missing/);
+    });
+  }
 });
 
 test("catalog optional Docker defaults are retained as null through projection and replay", () => {
