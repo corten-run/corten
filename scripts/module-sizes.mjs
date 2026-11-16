@@ -9,6 +9,7 @@ import { gzipped } from "./readme-size.mjs";
 /** Each module a guide may give a size for, by the name a script imports or the page loads. */
 export const MODULES = {
   "corten-format": "format.js",
+  "corten-field": "field.js",
   "corten-part": "part.js",
   "corten-upload": "upload.js",
   "corten/keys": "keys.js",

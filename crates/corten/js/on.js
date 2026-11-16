@@ -7,7 +7,7 @@
  * One handler call of a `data-on` attribute: `click:cart_line.confirm($e,@dialog,"Lamp")`, and
  * the component it belongs to when a parent passed it to a child (`..(@form/save)/form`).
  * @typedef {{ type: string, module: string, name: string, args: Arg[], home: string | null }} Binding
- * @typedef {{ kind: "@" | "*" | "#" | "=" | "^", owner: string | null, name: string } | { kind: "$e" | "$t" | "$s" | "$c", owner: string | null } | { kind: "v", value: unknown } | { kind: "{", fields: [string, Arg][] } | { kind: "%", parts: string[] } | { kind: "f", spec: import("./format.js").Spec }} Arg
+ * @typedef {{ kind: "@" | "*" | "#" | "=" | "^", owner: string | null, name: string } | { kind: "$e" | "$t" | "$s" | "$c", owner: string | null } | { kind: "~", control: "i" | "s" | "t" | "*", name: string } | { kind: "v", value: unknown } | { kind: "{", fields: [string, Arg][] } | { kind: "%", parts: string[] } | { kind: "f", spec: import("./format.js").Spec }} Arg
  */
 
 /**
@@ -16,7 +16,8 @@
  * one by its `data-key`: `#rows`, every one with its `data-ref-value`: `=rows`, the one around
  * the event's target: `^rows`, another component's: `@offer-list/rows`), the browser's values
  * (`$e` event, `$t` the element with the attribute, `$s` its signal, `$c` the component's root,
- * `$c/offer-list`), a group of arguments (`{rows:*row,all:@all}`), a message for the handler to
+ * `$c/offer-list`), a form field by its name (`~i"weight"`: the one input, select (`s`) or
+ * textarea (`t`) of that name in the handler's form, or every input of it, `~*"size"`), a group of arguments (`{rows:*row,all:@all}`), a message for the handler to
  * fill in (`%["","count"," selected"]`: text and argument names alternating), a format
  * (`%{"z":"0",..}`, format.js), or JSON. A module name may have dots (`ui.combo_box`).
  * @param {string} source
@@ -80,6 +81,7 @@ function parseArg(text) {
     const slash = text.indexOf("/");
     return slash < 0 ? { kind: c, owner: null, name: text.slice(1) } : { kind: c, owner: text.slice(1, slash), name: text.slice(slash + 1) };
   }
+  if (c === "~") return { kind: c, control: /** @type {"i" | "s" | "t" | "*"} */ (text[1]), name: JSON.parse(text.slice(2)) };
   if (c === "$") {
     const kind = /** @type {"$e" | "$t" | "$s" | "$c"} */ (text.slice(0, 2));
     return { kind, owner: text[2] === "/" ? text.slice(3) : null };

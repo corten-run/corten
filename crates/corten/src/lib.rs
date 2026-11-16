@@ -825,6 +825,11 @@ pub(crate) const PART_JS: &str = include_str!("../js/dist/part.js");
 /// The runtime's checks under `corten dev` (`js/dev.js`), served at `/corten/dev.js` by a dev
 /// server only.
 pub(crate) const DEV_JS: &str = include_str!("../js/dev.js");
+/// The runtime's `data-on` parser (`js/on.js`), which `dev.js` imports, at `/corten/on.js`.
+pub(crate) const DEV_ON_JS: &str = include_str!("../js/on.js");
+/// How the runtime finds a form field a handler is given (`js/field.js`), which `dev.js` imports,
+/// at `/corten/field.js`.
+pub(crate) const DEV_FIELD_JS: &str = include_str!("../js/field.js");
 
 /// FNV-1a, 64 bit: a stable content hash for versioned URLs (not for security).
 pub(crate) mod fnv {
