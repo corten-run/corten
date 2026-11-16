@@ -55,6 +55,9 @@
 //! - Void elements (`<input>`, `<br>`, `<img>`, ...) need no closing tag; other elements close
 //!   with `</name>` or `/>`. `<>...</>` groups nodes. `<!DOCTYPE html>` is allowed.
 //! - Text inside `<script>` and `<style>` is written as is.
+//! - An element written inside one whose content a browser parsing HTML reads as text
+//!   (`<textarea>`, an HTML `<title>`, `<script>`, `<style>`), or one a browser takes out of an
+//!   `<svg>` (`<div>`, `<p>`) written straight into it, does not compile: see [`html!`].
 
 use std::{
     borrow::Cow,
@@ -261,6 +264,241 @@ use std::{
 /// (`href={("/items/", &id)}`) and a `&str` compile, as do a spread, a component's prop, a
 /// relative path (`items/7`, `?page=2`) and a URL inside another attribute's text
 /// (`<meta http-equiv="refresh" content="0; url=/items">`). Write a route there too.
+///
+/// Three kinds of markup a browser parses differently from how it is written do not compile, where
+/// the markup shows how the browser parses it: an element inside one whose content a browser reads
+/// as text, a `<plaintext>`, and an element a browser takes out of an `<svg>` or a `<math>`.
+/// HTML a browser rearranges inside HTML (a `<div>` in a `<p>`, an `<a>` in an `<a>`, a
+/// `<form>` in a `<form>`, an `<li>` in an `<li>`, a `<div>` straight in a `<table>`)
+/// still compiles. An element written inside one whose content a browser parsing HTML reads as
+/// text would show its tags as text, or put them in a field's value, rather than make an element.
+/// Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`, `<xmp>`, `<noembed>`
+/// and `<noframes>`, and `<plaintext>` itself does not compile (it makes the rest of the page
+/// text, its end tag included). That holds under an element that is HTML's wherever it lands (a
+/// `<div>`, a `<p>`, a document's `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and
+/// `<title>`, which hold HTML, a `<title>` nested in an `<svg>`'s `<title>` included, and in a
+/// `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (but for a `<mglyph>` or a
+/// `<malignmark>` in them, which stay MathML's) and an `<annotation-xml>` whose first `encoding`
+/// is `text/html` or `application/xhtml+xml`, which hold HTML too:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><textarea name="note"><b>"Draft"</b></textarea></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><title>"Shop "<span>"3"</span></title></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><title>if true { <em>"New"</em> }</title></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><desc><title><span>"Chart"</span></title></desc></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><title><title><span>"Chart"</span></title></title></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><foreignObject><textarea name="note"><b>"Draft"</b></textarea></foreignObject></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><mi><title><b>"x"</b></title></mi></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml encoding="text/html"><title><b>"x"</b></title></annotation-xml></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><plaintext>"Raw"</plaintext></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><script type="text/x-template"><b>"Draft"</b></script></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><style><b>"Draft"</b></style></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><iframe title="Preview"><b>"Draft"</b></iframe></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><xmp><b>"Draft"</b></xmp></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noembed><b>"Draft"</b></noembed></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><noframes><b>"Draft"</b></noframes></div> };
+/// ```
+///
+/// Nor does an element the HTML standard's rules for foreign content take out of an `<svg>` or a
+/// `<math>` (`<b>`, `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a
+/// `<font>` with `color`, `face` or `size`) written straight into one, or into an
+/// `<annotation-xml>` whose first `encoding` is not an HTML one (or that has none), which holds MathML:
+/// the browser closes the `<svg>` or the MathML elements before it, so it and what follows land
+/// outside them. HTML in a drawing goes in a `<foreignObject>`, and in a formula in an `<mtext>`:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><rect width="4" height="4" /><p>"Total"</p></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><g><font color="red">"Total"</font></g></svg> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><mrow><div>"x"</div></mrow></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml><div>"x"</div></annotation-xml></math></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml encoding="application/mathml+xml"><div>"x"</div></annotation-xml></math></p> };
+/// ```
+///
+/// A browser keeps the first of an attribute written twice, so an `<annotation-xml>` whose first
+/// `encoding` is not an HTML one holds MathML, whatever follows:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><math><annotation-xml encoding="x" encoding="text/html"><div>"x"</div></annotation-xml></math></p> };
+/// ```
+///
+/// Text and expressions in a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
+/// `<noframes>` compile, written escaped (which a `<textarea>` and a `<title>` read back). In a
+/// `<script>` or a `<style>` text is written as is and an expression does not compile, so a data
+/// block (`<script type="text/x-template">`) gives its markup as a string literal. What an
+/// `<svg>` holds compiles too: its `<textarea>` and `<style>` are SVG's elements, whose
+/// children are elements, and its `<title>` holds HTML; so does a `<math>`'s, outside its text
+/// integration points, a `<title>` in a `<mglyph>` or `<malignmark>` there, and an
+/// `<annotation-xml>`'s whose first `encoding` is not an HTML one (or that has none), which holds
+/// MathML and where an `<svg>` is SVG's. Where the markup does not show how it is parsed, at the
+/// top of a component's markup (whose parent may write it into an `<svg>`), among a component's
+/// children (which go where it writes them) and in an `<annotation-xml>` whose `encoding` an
+/// expression or a spread may write first, none of this is refused, so a component that draws
+/// an SVG fragment without its `<svg>` compiles:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[component]
+/// fn Bar() -> impl Render {
+///     html! { <rect width="4" height="42"><title>"Sales "<b>"42"</b></title></rect> }
+/// }
+///
+/// fn main() {
+///     let draft = "<b>Draft</b>";
+///     let view = html! {
+///         <div>
+///             <textarea name="note">{draft}</textarea>
+///             <svg><title><span>"Chart"</span></title><style><g></g></style><textarea><g></g></textarea><Bar /></svg>
+///         </div>
+///     };
+///     assert_eq!(
+///         view.to_html(),
+///         concat!(
+///             r#"<div><textarea name="note">&lt;b&gt;Draft&lt;/b&gt;</textarea>"#,
+///             r#"<svg><title><span>Chart</span></title><style><g></g></style><textarea><g></g></textarea>"#,
+///             r#"<rect width="4" height="42"><title>Sales <b>42</b></title></rect></svg></div>"#,
+///         )
+///     );
+/// }
+/// ```
+///
+/// So do a data block, a component's children (which `Wrap` writes into an `<svg>`), a
+/// `<math>` with text in its `<mi>`, a `<div>` in its `<mtext>` and a `<title>` holding
+/// elements in a `<mglyph>` and a `<malignmark>` there, an `<svg>` straight in a `<math>`
+/// (MathML's, as a browser reads it), an `<annotation-xml>` holding HTML (its first `encoding`
+/// `text/html`, in any letter case), ones with a MathML `encoding` and with none holding a MathML
+/// `<title>` and an `<svg>` with HTML in its `<foreignObject>`, one whose `encoding` an
+/// expression writes and one where a spread comes before the written `encoding` (which the
+/// markup does not show, so nothing in them is refused; this spread writes `text/html` first,
+/// the one a browser keeps), and a link named by `aria-label` in an `<svg>`'s `<title>` whose
+/// `href` may write nothing (the accessible-name and `href` checks keep their older rule: they
+/// look at nothing in an `<svg>` but what its `<foreignObject>` holds):
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[component]
+/// fn Wrap(children: impl Render) -> impl Render {
+///     html! { <svg>{children}</svg> }
+/// }
+///
+/// fn main() {
+///     let home: Option<&str> = Some("#top");
+///     let encoding = "application/mathml+xml";
+///     let html_encoding = [("encoding", "text/html")];
+///     let view = html! {
+///         <div>
+///             <script type="text/x-template">"<b>Draft</b>"</script>
+///             <Wrap><title>"a"<b>"b"</b></title></Wrap>
+///             <math><mrow><mi>"x"</mi></mrow></math>
+///             <math><mtext><div>"x"</div></mtext></math>
+///             <math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>
+///             <math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>
+///             <math><svg><g></g></svg></math>
+///             <math><annotation-xml encoding="text/html"><b>"x"</b></annotation-xml></math>
+///             <math><annotation-xml encoding="TEXT/HTML" encoding="x"><b>"x"</b></annotation-xml></math>
+///             <math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>"x"</b></foreignObject></svg></annotation-xml></math>
+///             <math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>
+///             <math><annotation-xml encoding={encoding}><title><mrow></mrow></title></annotation-xml></math>
+///             <math><annotation-xml {..html_encoding} encoding="x"><div>"x"</div></annotation-xml></math>
+///             <svg><title><a aria-label="Home" href={home}>"x"</a></title></svg>
+///         </div>
+///     };
+///     assert_eq!(
+///         view.to_html(),
+///         concat!(
+///             r#"<div><script type="text/x-template"><b>Draft</b></script>"#,
+///             r#"<svg><title>a<b>b</b></title></svg><math><mrow><mi>x</mi></mrow></math>"#,
+///             r#"<math><mtext><div>x</div></mtext></math>"#,
+///             r#"<math><mi><mglyph><title><mrow></mrow></title></mglyph></mi></math>"#,
+///             r#"<math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>"#,
+///             r#"<math><svg><g></g></svg></math>"#,
+///             r#"<math><annotation-xml encoding="text/html"><b>x</b></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="TEXT/HTML" encoding="x"><b>x</b></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>x</b></foreignObject></svg></annotation-xml></math>"#,
+///             r#"<math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="text/html" encoding="x"><div>x</div></annotation-xml></math>"#,
+///             r##"<svg><title><a aria-label="Home" href="#top">x</a></title></svg></div>"##,
+///         )
+///     );
+/// }
+/// ```
 pub use corten_macros::html;
 
 /// Turns a function into a component: a struct with one field per parameter, which `html!`
@@ -1650,18 +1888,19 @@ impl<T: Attrs> Attrs for Option<T> {
 }
 
 /// The attributes a spread of pairs skips, compared as whole names in any case: the script
-/// wiring, `data-ref`, `data-ref-value`, `data-on` and `data-scope`, which only `ref=`, `on:` and a
-/// component's root write, and `data-vars`, which only `style={..}` writes. These are not every
-/// name `html!` refuses written by hand: `data-nav`, `data-nav-group` and `data-corten-page` still
-/// pass through a spread.
-const PRINTED_BY_CORTEN: [&str; 5] = ["data-vars", "data-ref", "data-ref-value", "data-on", "data-scope"];
+/// wiring, `data-ref`, `data-ref-value`, `data-key`, `data-on` and `data-scope`, which only `ref=`,
+/// `key=`, `on:` and a component's root write, and `data-vars`, which only `style={..}` writes.
+/// These are not every name `html!` refuses written by hand: `data-nav`, `data-nav-group` and
+/// `data-corten-page` still pass through a spread.
+const PRINTED_BY_CORTEN: [&str; 6] = ["data-vars", "data-ref", "data-ref-value", "data-key", "data-on", "data-scope"];
 
 /// `[("data-id", id), ("title", title)]`: each pair as an attribute. Names come from the app's
 /// code; a name with characters an attribute name cannot have is skipped, and so are the names in
-/// `PRINTED_BY_CORTEN`: the script wiring (`data-ref`, `data-ref-value`, `data-on`, `data-scope`),
-/// so a spread cannot hand a script a value its ref's type does not hold, and `data-vars` (a full
-/// page's style block has rules for its values alone). Each pair costs at most five comparisons,
-/// each one a length check before any bytes; spreads of other kinds compare nothing.
+/// `PRINTED_BY_CORTEN`: the script wiring (`data-ref`, `data-ref-value`, `data-key`, `data-on`,
+/// `data-scope`), so a spread cannot hand a script a value or a key its ref's type does not hold,
+/// and `data-vars` (a full page's style block has rules for its values alone). Each pair costs at
+/// most six comparisons, each one a length check before any bytes; spreads of other kinds compare
+/// nothing.
 impl<N: AsRef<str>, V: AttrValue> Attrs for [(N, V)] {
     fn render_attrs(&self, out: &mut String) {
         for (name, value) in self {
@@ -1721,6 +1960,48 @@ pub mod __private {
         #[inline]
         fn __named_href(&self) {}
     }
+
+    /// The value of a URL attribute that is not a form's address (`href`, `src`, `ping`): a page's
+    /// post's address (`route::Action`), which only a form sends to, does not compile there
+    /// (`IsPost` picks it before `NotPostAny`).
+    pub struct NotPost<'a, T: ?Sized>(pub &'a T);
+
+    pub trait NotPostOwn {
+        fn __not_post(&self)
+        where
+            Self: PostNotLink;
+    }
+
+    impl<T: IsPost + ?Sized> NotPostOwn for NotPost<'_, T> {
+        #[inline]
+        fn __not_post(&self)
+        where
+            Self: PostNotLink,
+        {
+        }
+    }
+
+    pub trait NotPostAny {
+        fn __not_post(&self);
+    }
+
+    impl<T: ?Sized> NotPostAny for &NotPost<'_, T> {
+        #[inline]
+        fn __not_post(&self) {}
+    }
+
+    /// A page's post's address, or a value that may hold one.
+    pub trait IsPost {}
+    impl<R: ?Sized> IsPost for crate::route::Action<'_, R> {}
+    impl<T: IsPost> IsPost for Option<T> {}
+    impl<T: IsPost + ?Sized> IsPost for &T {}
+
+    #[diagnostic::on_unimplemented(
+        message = "a page's post's address is where a form sends, not a link or a file to load",
+        label = "a post's address (page.save()) here",
+        note = "write it as a form's action or a button's formaction, <form method=\"post\" action={{page.save()}}>, and link to the page itself, href={{page}}"
+    )]
+    pub trait PostNotLink {}
 
     /// An attribute value that may write nothing.
     pub trait MayWriteNone {}

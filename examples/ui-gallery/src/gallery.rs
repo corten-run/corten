@@ -313,6 +313,8 @@ pub fn Gallery<'a>(
     let shown_tab = Some(tab).filter(|t| *t != MarketTab::Listings);
     let shown_period = Some(period).filter(|p| *p != Period::Month);
     let sales = earlier.then_some(SalesPage::Earlier);
+    // The view drawn, which the draft's writes are sent from and come back to.
+    let here = url::Home { tab: shown_tab, sale: sale.then_some(Sale::Last), period: shown_period, sold, sales };
     let at = move |tab| url::Home { tab, sale: None, period: shown_period, sold, sales };
     let (week, month) = (
         url::Home { tab: shown_tab, sale: None, period: Some(Period::Week), sold, sales },
@@ -579,12 +581,12 @@ pub fn Gallery<'a>(
                     <header class={CardHeader {}}><h2>"Draft"</h2></header>
                     <div class={CardContent {}}>
                         <div class={Buttons}>
-                            <form method="post" action={url::Save} data-patch>
+                            <form method="post" action={here.save()} data-patch>
                                 <button class={Button { variant: ButtonVariant::Secondary, size: ButtonSize::Md }}>
                                     "Save draft"
                                 </button>
                             </form>
-                            <form method="post" action={url::Publish} data-patch>
+                            <form method="post" action={here.publish()} data-patch>
                                 <button class={Button { variant: ButtonVariant::Secondary, size: ButtonSize::Md }}>
                                     "Publish"
                                 </button>
@@ -600,14 +602,14 @@ pub fn Gallery<'a>(
                             <DropdownMenu trigger={MenuTrigger::Text}>
                                 <MenuButton id={ActionsId} label="More actions">
                                     <a role="menuitem" href={url::Help}>"Help"</a>
-                                    <form method="post" action={url::Archive} data-patch>
+                                    <form method="post" action={here.archive()} data-patch>
                                         <button role="menuitem">"Archive"</button>
                                     </form>
                                     <button type="button" role="menuitem" disabled>"Delete"</button>
                                     <button type="button" role="menuitem" command="show-modal" commandfor={RenameId}>
                                         "Rename…"
                                     </button>
-                                    <form method="post" action={url::Watch} data-patch>
+                                    <form method="post" action={here.watch()} data-patch>
                                         <button role="menuitem">"Watch"</button>
                                     </form>
                                 </MenuButton>
@@ -675,7 +677,7 @@ pub fn Gallery<'a>(
                 </section>
             </div>
         </div>
-        {rename}
+        {RenameDialog { here, name: rename.name, errors: rename.errors }}
         <SalesDialog />
         if sale {
             <SaleSheet />
@@ -841,9 +843,10 @@ pub struct RenameId;
 /// Naming the draft, in a modal dialog. Refused, the server draws it open with the error, as the
 /// form's patch or in the page a post without the runtime answers with, and `dialog::modal`
 /// makes it modal again when it joins the page. A rename that gets no answer is said in the
-/// dialog (`dialog::failed`), where the page's toaster would be covered.
+/// dialog (`dialog::failed`), where the page's toaster would be covered. `here` is the view of
+/// the draft it is drawn in (the gallery sets it), which the rename is sent from and comes back to.
 #[component(css = Gallery)]
-pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
+pub fn RenameDialog<'a>(here: url::Home, name: &'a str, errors: &'a Errors) -> impl Patch {
     let f = RenameForm::FIELDS;
     let e = errors.within(RenameId);
     let said = refs();
@@ -860,7 +863,7 @@ pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
             <FailedAlert said={said} emphasis={AlertEmphasis::Soft}>
                 <p>"That did not go through, and may not have been saved. Check and try again."</p>
             </FailedAlert>
-            <form class={Rename} method="post" action={url::Rename} data-patch>
+            <form class={Rename} method="post" action={here.rename()} data-patch>
                 <FormAlert errors={errors} emphasis={AlertEmphasis::Soft} />
                 <Field id={e.id(f.name)} label="Name" hint="" error={e.message(f.name)}>
                     <input class={Input {}} value={name} {..e.control(f.name)}>

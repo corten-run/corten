@@ -16,6 +16,66 @@ Corten is pre-1.0, so any minor version may change the API.
   when the page draws it. The runtime is 204 bytes larger with gzip
   ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
 
+- Bound failed-native retirement proof age from the final SSH request's local
+  start, including response delivery, and refuse expired DELETEs after asynchronous
+  HTTPS socket/TLS setup without queuing a mutation before readiness.
+
+- Add an explicitly approved r21 failed-native custody/retirement action, separate
+  from benchmark qualification. Preserve original failure evidence and all reserved
+  native roots before fresh terminal-host checks and one owned deletion attempt;
+  stream directory admission within global evidence budgets and carry the final
+  proof's absolute expiry through private provider dispatch. Keep ordinary
+  collection gates and uncertain-delete reconciliation unchanged.
+
+- Retain omitted optional Docker image/container command defaults as explicit null
+  in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
+  Missing or malformed image configuration, malformed execution and substituted or missing
+  required nonempty container commands remain invalid; no image or workload changes.
+
+- Publish synthetic benchmark fixtures with explicit readable file permissions
+  and search-only bind roots, including under the private campaign umask. Keep
+  neighboring evidence private and contender users/read-only mounts unchanged.
+
+- Document a bounded read-only export of live JSON/mixed audit subjects and
+  immutable snapshots for independent review, followed by the existing exact-
+  subject delivery and terminal collection. Include quota-backed private workspace
+  setup, metadata-first preflight, fresh snapshot destinations and clean Node
+  startup. No active-campaign collection or automatic approval is added;
+  target-host transport still needs qualification.
+
+- Replay live group phases using the saved campaign's exact scope and group order,
+  including ordinal zero on a dedicated host. Require the matching campaign plan,
+  selected binding and host reservation without relaxing native/lifetime seals.
+
+- Project benchmark create responses onto the positive droplet/action IDs rather
+  than gating on unused advisory link text. Fixed-origin action polling still
+  proves exact create completion; explicitly join its droplet ID to the freshly
+  observed owned host before provisioning. Keep one POST, original deadlines,
+  account/ownership, settlement and terminal-only cleanup gates unchanged.
+  Recheck the original absolute deadline before granting completed-action success;
+  late completion stays uncertain and cannot authorize provisioning.
+
+- A page's several writes are named posts of its own route, `#[route("/inventory", get = show,
+  post(price) = set_price, post(photo) = add_photo)]`, so a screen with several writes declares
+  its query set once instead of on a route per write to redirect back to the same view
+  ([#1403](https://github.com/corten-run/corten/issues/1403)). The routes module gives the route a
+  method per name, `action={at.price()}` or a button's `formaction={at.photo()}`, whose address is
+  the page's own with `do=price`; the router chooses the handler from the address alone, so a
+  urlencoded form and a multipart upload are chosen alike and the handler's extractor still owns
+  the body. A post with no `do` goes to the plain `post`; an unknown name, `do` sent twice or no
+  `do` without a plain `post` is a 400; a `GET` of a post's address draws the page. A name with
+  no handler, two handlers for one name, a route with posts but no `get` or in an API's module, a
+  query parameter named `do`, and a redirect to a post's address do not compile. A debug build
+  answers a page of a route with named posts, drawn at a `do` address, with a post form that has no
+  `action` with a 500 (docs/design.md, Choice 53 and Limit 29). The watchlist's account page and
+  the ui-gallery's draft use them.
+
+- Preserve closed production-controller failure stages through fleet workers and
+  saved receipts, distinguishing pre-reservation source and Git failures from
+  launch, collection and teardown without forwarding raw errors or changing gates.
+  Refuse later-host admission when its service is already terminal; preserve its
+  started identity and evidence for collection instead of saving a false running state.
+
 - A form's row can hold rows, and a map: `#[fields(rows)] #[serde(default)] conditions:
   BTreeMap<u32, Condition>` in the type of a form's rows names
   `f.rules.at(&1).conditions.at(&0).kind`, posted `rules[1].conditions[0].kind`, reads it into
@@ -40,13 +100,13 @@ Corten is pre-1.0, so any minor version may change the API.
   by the original deadline and shared request limit; use exact-ID host observations
   after binding rather than repeated whole-account censuses.
 
-- Accept the documented droplet-scoped create action link only when both resource
-  and action IDs match. Completion still uses the fixed global action endpoint;
-  foreign or malformed hints and incomplete/misbound actions remain refused.
+- Earlier droplet-scoped create-link compatibility and href diagnostics are
+  retained as historical evidence. The current ID projection above replaces hint
+  spelling checks; incomplete or misbound authoritative actions remain refused.
 
-- Distinguish five benchmark provider create-link refusal predicates with closed
-  diagnostic codes, without forwarding rejected values or changing completion,
-  ownership, retry or cleanup gates. Checkpoint failures retain coarse phase codes.
+- Earlier create-link refusal diagnostics remain readable as historical evidence;
+  current refusals cover consumed IDs and authoritative action proofs rather than
+  unused link text. Checkpoint failures retain coarse phase codes.
 
 - **Breaking:** Apps with scripts require TypeScript 6.0 or later. `corten check` names an
   older installed compiler and the minimum version before checking the runtime's DOM types.
@@ -207,6 +267,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- `corten::script::Keyed` and `corten::script::NoKey`: the fourth type parameter of `Ref`,
+  which says whether a ref's elements have a `key={..}`, so a handler parameter typed
+  `Map<string, El>` takes only a keyed ref. A component's prop for a parent's keyed ref names it
+  `Ref<El, NoRows, NoValue, Keyed>`; `Ref<El>` is `NoKey`
+  ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
+  [design Choice 46](docs/design.md#choice-ref-values)).
 - Bind native browser DOM evidence to bounded public reads, the actual document and
   network origin, with exact replay and separate semantic and apparatus lifetimes.
   Unsupported structure, private data, missing proof and uncertain cleanup remain
@@ -614,6 +680,63 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- **Breaking:** a handler parameter typed `Map<string, El>` takes only a ref whose every element
+  has a `key={..}`: a ref without keys no longer compiles there, and the error says to add `key={..}`,
+  where it compiled and the handler got a one-entry `Map`. A ref with a key on some elements and
+  not on others does not compile, whatever its handlers take (`El`, `El[]` or a `Map`). A ref
+  now carries in its fourth type parameter whether its elements have keys (`Keyed` or `NoKey`),
+  fixed by the markup as its value's kind is
+  ([#1329 A `Map<string, ..>` handler parameter accepts a ref whose elements have no `key=`, so a forgotten key compiles and the handler gets a one-entry `Map`](https://github.com/corten-run/corten/issues/1329),
+  [design Choice 46](docs/design.md#choice-ref-values)).
+- Debug builds stop a render in which two elements of a ref in one render of its component have
+  keys the browser reads as equal (`key={true}` and `key=""` are one, and so are a carriage
+  return and a line feed), or a `key={..}` writes none (`None`), since the `Map` would hold one
+  entry for them. Whether it runs is `corten-run`'s debug-assertions setting, for every crate's
+  markup. Release builds do not check, and the runtime is unchanged.
+- The check counts the elements the runtime finds. It leaves out a `<template>`'s or a
+  `<noscript>`'s content, and what an expression or a component writes into an element a browser
+  reads as text (a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>`
+  outside an `<svg>` or in its `<foreignObject>`, `<desc>` or `<title>`). It leaves out a key
+  written with a reference Corten does not write (an app's own `AttrValue`). Where the markup
+  cannot know how a browser parses it, it lets a duplicate pass: in a `<template>` or an element
+  read as text at the top of a component's markup, which its parent may write into an `<svg>`,
+  and among a component's children, which the component may write in an `<svg>`'s `<desc>`
+  (unless they are in an `<svg>` of the children's own). Keys a view writes into a string of its
+  own (`html! { .. }.to_html()` or `children.to_html()` as an attribute's value) are not its
+  component's. A document's head tags, each copied into the page, are not checked against each
+  other or the body.
+- A spread of attribute pairs now skips `data-key`, as it skips `data-ref` and `data-ref-value`:
+  a key is `key={..}`'s to write. A `data-key=".."` written by hand beside a ref is still taken
+  as its key, a known limit: `html!` does not yet refuse it as it refuses `data-ref`.
+- **Breaking:** a component that puts a parent's ref on elements with a key names the ref's type
+  `Ref<el::HTMLTableCellElement, NoRows, NoValue, Keyed>` where it wrote
+  `Ref<el::HTMLTableCellElement>`, and a ref that a `Map<string, El>` handler took with no keys
+  gets `key={..}` on each of its elements.
+- **Breaking:** three kinds of markup a browser parses differently from how it is written no
+  longer compile (an element in an element whose content is text, a `<plaintext>`, and an element
+  taken out of foreign content; HTML a browser rearranges inside HTML, such as a `<div>` in a
+  `<p>`, still compiles) where the markup shows how the browser parses it: under an element that is HTML's wherever it lands (a `<div>`,
+  a `<p>`, a document's `<head>`), in an `<svg>`, its `<foreignObject>`, `<desc>` and
+  `<title>` included, in a `<math>`, and in its `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (where
+  a `<mglyph>` or a `<malignmark>` stays MathML's) and an `<annotation-xml>` whose first
+  `encoding` is `text/html` or `application/xhtml+xml`
+  ([design Choice 54](docs/design.md#choice-html-parse-refusals)). An element inside a `<textarea>`, `<title>` (a `<title>` nested in an
+  SVG `<title>` too), `<iframe>`, `<xmp>`, `<noembed>` or `<noframes>` was text to the browser:
+  put the element beside it, or write text meant to show tags as a string (`"<b>"`). An element
+  inside a `<script>` or a `<style>`: behavior goes in a `#[component(js)]`, styles in the
+  component's CSS file, and a data block (`<script type="text/x-template">`) writes its content as
+  a string literal, which a `<script>` or `<style>` writes as is. A `<plaintext>` made the rest of the page text: write `<pre>`. An element
+  the HTML standard's rules for foreign content take out of an `<svg>` or a `<math>` (`<b>`,
+  `<div>`, `<p>`, `<span>`, `<table>` and the others it lists, and a `<font>` with `color`,
+  `face` or `size`), written straight into one, or into an `<annotation-xml>` whose first
+  `encoding` is not an HTML one (or that has none), closed the `<svg>` or the MathML around it: put
+  it in a `<foreignObject>`, in a formula in an `<mtext>`, or give the `<annotation-xml>`
+  `encoding="text/html"` first. Inside an `<svg>`,
+  or a `<math>` outside those elements, a `<textarea>`, `<title>` or `<style>` belongs to the
+  drawing or the formula and holds elements. At the top of a component's markup, among a
+  component's children and in an `<annotation-xml>` whose `encoding` an expression or a spread may
+  write first, where the markup does not show how they are parsed, none of this is refused until
+  an element of the markup shows the context ([design Limit 30](docs/design.md#limit-markup-context)).
 - `ReadAgain::from` takes only a route that says `patches` in its routes module, whose `get`
   handler returns `HtmlResult<Patches>`: an answer only `req.patch`, `req.patch_with_status`,
   `req.patch_or`, `req.invalid` and `req.invalid_with` make, so the handler's answer to the

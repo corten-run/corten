@@ -5,11 +5,12 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { controller, publicError } from "./droplet.mjs";
 import { digest, regular, resolveStateRoot } from "./cloud-local.mjs";
-import { controllerState, full, parseDropletArgs } from "./cloud-options.mjs";
+import { controllerState, full, parseDropletArgs, providerFailure } from "./cloud-options.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { validateFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
+import { failedNativeRoots } from "./cloud-retirement.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((p) => `bench/workloads/${p}`);
@@ -45,7 +46,7 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   const missing = [];
   for (const path of nativePaths)
     if ((await run("git", ["cat-file", "-e", `${head}:${path}`], 60000, true)).status !== 0) missing.push(path);
-  let reservationSha256 = null, deliverySha256 = null, fleetSha256;
+  let reservationSha256 = null, deliverySha256 = null, fleetSha256, recovery;
   if (options.group !== undefined) {
     const bytes = regular(resolve(options.fleet), 1024 * 1024), fleet = validateFleet(JSON.parse(bytes));
     assert.equal(fleet.round, options.round); assert.equal(fleet.commit, head); assert.equal(fleet.sshKey, options.sshKey);
@@ -56,14 +57,23 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   else {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
     const saved = controllerState(JSON.parse(bytes), options.round);
-    assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
+    if (options.retireFailedNative) {
+      const roots = failedNativeRoots(saved);
+      assert.notEqual(saved.commit, head, "merged repair controller required");
+      await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+      assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.evidence && saved.fullGroupQualified === false, "preserved failed evidence required");
+      recovery = { measuredCommit: saved.commit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256, roots,
+        policy: "r21-9f-failed-native-custody-only-no-qualification" };
+    } else assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
     reservationSha256 = digest(bytes);
   }
   if (options.deliverAudit) deliverySha256 = digest(regular(resolve(options.deliverAudit), 16 * 1024 ** 2));
   assert.equal(resolveStateRoot(options.stateDir), physicalRequest, "state root changed during approval");
-  const subject = { action: options.detach ? "detach" : options.collect ? "collect" : "deliver-audit", controllerCommit: head,
+  const subject = { action: options.detach ? "detach" : options.collect ? "collect" : options.retireFailedNative ? "retire-failed-native" : "deliver-audit", controllerCommit: head,
     options, stateRoot: physicalRequest, reservationSha256, deliverySha256, ...(fleetSha256 ? { fleetSha256 } : {}),
-    declaration: "operator-approved-after-merged-independent-review-and-full-native-readiness" };
+    ...(recovery ? { recovery } : {}),
+    declaration: recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
+      : "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
@@ -71,6 +81,25 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   const { options, approval, preview } = parseProductionArgs(args);
   const processRun = shellTransport({ repo, spawn });
   const providerRun = providerFactory({ repo, interrupted });
+  let stage = "source-plan";
+  const mark = (error, value) => {
+    // Keep the original internal failure and uncertainty flags. Only this closed
+    // phase value may cross the worker boundary, never its message or arguments.
+    if (error && typeof error === "object") {
+      try { Object.defineProperty(error, "controllerStage", { value, configurable: true }); }
+      catch {
+        const message = Object.getOwnPropertyDescriptor(error, "message")?.value;
+        const wrapped = new Error(typeof message === "string" ? message : "controller operation failed", { cause: error });
+        wrapped.controllerStage = value;
+        for (const flag of ["controlTreeUncertain", "controlUncertain"])
+          if (Object.getOwnPropertyDescriptor(error, flag)?.value === true) wrapped[flag] = true;
+        const diagnostic = providerFailure(error);
+        if (diagnostic) wrapped.providerDiagnostic = diagnostic;
+        return wrapped;
+      }
+    }
+    return error;
+  };
   try {
   const run = async (...args) => {
     await controlCheckpoint(interrupted);
@@ -84,24 +113,30 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   const plan = await productionPlan(options, { repo, run });
   if (preview) {
     write(JSON.stringify({ action: plan.subject.action, controllerCommit: plan.subject.controllerCommit, round: options.round,
+      ...(plan.subject.recovery ? { recovery: plan.subject.recovery, reservationSha256: plan.subject.reservationSha256 } : {}),
       approvalSha256: plan.approvalSha256, missing: plan.missing, fullGroupQualified: false }));
     return plan.missing.length ? 2 : 3; // Preview is never qualified execution success.
   }
+  stage = "exact-approval";
   assert.equal(approval, plan.approvalSha256, "explicit operator-approved exact action required");
   assert.deepEqual(plan.missing, [], "native campaign integration missing; do not allocate");
   assert.ok(!interrupted(), "cancelled before approval");
   // Each parallel controller observes main independently, but must not race a
   // shared reference or FETCH_HEAD. Fetch only that exact advertised object.
+  stage = "remote-main-advertisement";
   const advertisement = (await run("git", ["ls-remote", "--exit-code", "--refs", sourceUrl, "refs/heads/main"], 120000)).stdout;
   full(advertisement, /[a-f0-9]{40}\trefs\/heads\/main\n/, "remote main advertisement unavailable or ambiguous");
   const remoteHead = advertisement.slice(0, 40);
+  stage = "remote-main-fetch";
   await run("git", ["fetch", "--no-tags", "--no-write-fetch-head", "--refmap=", sourceUrl, remoteHead], 120000);
+  stage = "remote-main-ancestry";
   await run("git", ["merge-base", "--is-ancestor", plan.subject.controllerCommit, remoteHead]);
+  stage = "source-recheck";
   const repeated = await productionPlan(options, { repo, run });
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
   let entered = false;
-  const authorizedRun = async (binary, argv, timeout, allowFail) => {
+  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs) => {
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
@@ -109,16 +144,25 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
       assert.equal((await productionPlan(options, { repo, run })).approvalSha256, approval, "locked action changed after approval");
       entered = true;
     }
-    return run(binary, argv, timeout, allowFail);
+    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs);
   };
+  stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
-    mergedHead: remoteHead, settle: () => providerRun.close() });
+    mergedHead: remoteHead, settle: () => providerRun.close(), ...(options.retireFailedNative ? {
+      recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256 },
+    } : {}) });
   let result;
+  stage = options.detach ? "controller-launch" : options.collect ? "controller-collect" : options.retireFailedNative ? "controller-retirement" : "controller-audit";
   if (options.detach) { await task.launch(); result = 3; }
-  else result = options.collect ? await task.collect() : await task.deliverAudit();
+  else result = options.collect ? await task.collect() : options.retireFailedNative ? await task.retireFailedNative() : await task.deliverAudit();
+  stage = "controller-checkpoint";
   await controlCheckpoint(interrupted);
   return result;
-  } finally { await providerRun.close(); }
+  } catch (error) { throw mark(error, stage); }
+  finally {
+    try { await providerRun.close(); }
+    catch (error) { throw mark(error, "provider-settlement"); }
+  }
 }
 
 export function productionSignals() {

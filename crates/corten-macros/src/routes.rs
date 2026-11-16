@@ -38,6 +38,8 @@ struct Routed {
     unstaged: Option<Span>,
     /// `patches`: its `get` handler answers a patch whenever the runtime asks, where it is written.
     patches: Option<Span>,
+    /// `post(sku) = set_sku`: each action's name with the path of its handler, as written.
+    actions: Vec<(Ident, TokenStream)>,
 }
 
 /// Which of a route's handlers answer as `NoStore` would make them: none, every one (`no_store`),
@@ -84,6 +86,8 @@ struct Serves {
     unstaged: Option<Span>,
     /// `patches`: its `get` answers `HtmlResult<Patches>`; where it is written.
     patches: Option<Span>,
+    /// `post(sku) = set_sku`: the page's named posts, each sent to its address with `do=sku`.
+    actions: Vec<(Ident, TokenStream)>,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -164,6 +168,14 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     let TokenTree::Ident(module) = tokens[tokens.len() - 2].clone() else { unreachable!("is_mod checked") };
     let area = matches!(within, Some((Kind::Area, _)));
     let (mut items, routed) = scan(body.stream(), prefix_name.as_deref(), area, document_name.as_deref())?;
+    if matches!(within, Some((Kind::Api, _))) {
+        if let Some((action, _)) = routed.iter().flat_map(|r| &r.actions).next() {
+            return err(
+                action.span(),
+                "an API's routes draw no page, so none has a page's named posts: give the write a route of its own, post = ..",
+            );
+        }
+    }
     // The document's route: one of the module's, serving nothing but the document.
     let mut document = None;
     if let (Some(name), Some(given)) = (&document_name, &openapi) {
@@ -192,7 +204,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     // written inside the module is the same mistake.
     let (imported, defined) = used_names(body.stream());
     let named = names_outside_routes(body.stream());
-    for (_, handler) in routed.iter().flat_map(|r| &r.handlers) {
+    for (_, handler) in routed.iter().flat_map(|r| r.handlers.iter().chain(&r.actions)) {
         let Some(TokenTree::Ident(first)) = handler.clone().into_iter().next() else { continue };
         let first = first.to_string();
         if let Some(name) = imported.iter().find(|i| i.to_string() == first && named.iter().filter(|n| **n == first).count() == 1)
@@ -307,7 +319,14 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             _ => q("()", &[]),
         };
         let mut methods = TokenStream::new();
-        for (i, (method, handler)) in route.handlers.iter().enumerate() {
+        // The route's handlers, then its actions, each checked as a `post` handler is.
+        let all = route
+            .handlers
+            .iter()
+            .map(|(method, handler)| (method.clone(), None, handler))
+            .chain(route.actions.iter().map(|(action, handler)| (Ident::new("post", action.span()), Some(action), handler)));
+        for (i, (method, action, handler)) in all.enumerate() {
+            let method = &method;
             let at = handler.clone().into_iter().last().map_or(method.span(), |t| t.span());
             // The rows the route names are its `get`'s; every other handler serves no feed.
             let rows = match &route.rows {
@@ -382,6 +401,13 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             }
             let mut call = call;
             call.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, handler.clone()))]);
+            // An action's handler is the route's post for its `do`.
+            if let Some(action) = action {
+                call = q(
+                    "::corten::Methods::__named(__A0, __A1)",
+                    &[call, TokenTree::Literal(proc_macro::Literal::string(&action.to_string())).into()],
+                );
+            }
             if route.patches.is_some() && method.to_string() == "get" {
                 let mut check = respan(
                     q("const _: () = ::corten::route::__private::patches::<_, _, __A0>", std::slice::from_ref(&state_ty)),
@@ -477,6 +503,32 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 impl ::corten::route::__private::FeedRows<__A1> for __A0 {}",
                 &[ty, rows.clone()],
             ));
+        }
+        // Each action's address, a method of the route named for it: `page.save()`, for a form's
+        // `action` or a button's `formaction` (`scan` refused actions on a route it cannot name).
+        if let (false, Some(args)) = (route.actions.is_empty(), &route.args) {
+            let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
+            let mut addresses = TokenStream::new();
+            for (action, handler) in &route.actions {
+                let doc = format!(
+                    " Where this page's post `{action}` goes (`post({action}) = {}`): the page's own address with `do={action}`, for a form's `action` or a button's `formaction`. Not a link, and nothing redirects to it.",
+                    handler.to_string().replace(' ', "")
+                );
+                addresses.extend(q(
+                    "#[doc = __A0]
+                    #[inline]
+                    #[allow(dead_code)]
+                    pub fn __A1(&self) -> ::corten::route::Action<'_, Self> {
+                        ::corten::route::Action::__new(self, __A2)
+                    }",
+                    &[
+                        TokenTree::Literal(proc_macro::Literal::string(&doc)).into(),
+                        TokenTree::Ident(action.clone()).into(),
+                        TokenTree::Literal(proc_macro::Literal::string(&action.to_string())).into(),
+                    ],
+                ));
+            }
+            feeds.extend(q("#[automatically_derived] impl __A0 { __A1 }", &[ty, addresses]));
         }
         // A route that says `patches`, its `get` handler checked above: what `ReadAgain::from`
         // takes.
@@ -854,6 +906,19 @@ fn scan(
                             return err(at, format!("gives(..) names the layout reads {name}'s GET page gives itself, and it has no get or any: #[route(\"{path}\", get = .., gives(CartCount))]"));
                         }
                     }
+                    // An action is one of a page's posts, sent to the page's own address: a route with
+                    // one draws that page.
+                    if let Some((action, _)) = serves.actions.first() {
+                        if !serves.handlers.iter().any(|(m, _)| m.to_string() == "get") {
+                            return err(
+                                action.span(),
+                                format!("post({action}) = .. is one of {name}'s page's posts, sent to the page's own address, and it has no get to draw that page: #[route(\"{path}\", get = show, post({action}) = ..)], or a post-only route of its own, post = .."),
+                            );
+                        }
+                        if serves.unstaged.is_some() {
+                            return err(action.span(), format!("unstaged serves {name} with no same-origin check, so it answers reads only: serve post({action}) on a route without unstaged"));
+                        }
+                    }
                     if serves.no_store.said() && serves.handlers.is_empty() {
                         return err(span, format!("no_store says what {name}'s handlers answer, and it has none: #[route(\"{path}\", get = .., no_store)]"));
                     }
@@ -966,6 +1031,7 @@ fn scan(
                             gives: Vec::new(),
                             unstaged: None,
                             patches: None,
+                            actions: Vec::new(),
                         });
                         start = None;
                         docs.clear();
@@ -986,6 +1052,12 @@ fn scan(
                                 format!("{name} has a type parameter, so it cannot say patches: give its fields concrete types"),
                             );
                         }
+                    }
+                    if let (Some((action, _)), None) = (serves.actions.first(), &args) {
+                        return err(
+                            action.span(),
+                            format!("{name} has a type parameter, so its actions' addresses cannot be named: give its fields concrete types"),
+                        );
                     }
                     if let Some(rows) = &serves.rows {
                         let at = rows.clone().into_iter().last().map_or(span, |t| t.span());
@@ -1017,6 +1089,7 @@ fn scan(
                         gives: serves.gives,
                         unstaged: serves.unstaged,
                         patches: serves.patches,
+                        actions: serves.actions,
                     });
                 }
             }
@@ -1184,17 +1257,40 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                         "any = .. serves every method, so it is the route's only handler: #[route(\"/{*rest}\", any = relay)]",
                     );
                 }
-                if handler.iter().any(|t| is_punct(Some(t), '<')) {
+                serves.handlers.push((method.clone(), handler_path(&key, method.span(), handler)?));
+            }
+            // `post(sku) = set_sku`: one of the page's posts, sent to its address with `do=sku`.
+            [TokenTree::Ident(method), TokenTree::Group(named), TokenTree::Punct(eq), handler @ ..]
+                if eq.as_char() == '=' && named.delimiter() == Delimiter::Parenthesis =>
+            {
+                if method.to_string() != "post" {
                     return err(
-                        handler[0].span(),
-                        format!("{key} = names a handler without type arguments: a generic handler's route is picked by the Params it takes, and a route without a parameter takes a handler of its own ({key} = relay_here) that calls the shared code"),
+                        method.span(),
+                        format!("only a post names an action, which a form sends to the page's own address: #[route(\"{path}\", get = show, post(sku) = set_sku)]"),
                     );
                 }
-                if handler.is_empty() || !is_path(handler) {
-                    let span = handler.first().map_or(method.span(), TokenTree::span);
-                    return err(span, format!("name a handler function: {key} = show (a path, not a closure)"));
+                let inside: Vec<TokenTree> = named.stream().into_iter().collect();
+                let [TokenTree::Ident(action)] = inside.as_slice() else {
+                    return err(named.span(), format!("post(..) names one action, a word: #[route(\"{path}\", get = show, post(sku) = set_sku)]"));
+                };
+                let text = action.to_string();
+                if text.starts_with("r#") || RESERVED_ACTIONS.contains(&text.as_str()) {
+                    return err(
+                        action.span(),
+                        format!("{text} cannot name an action: the route's {text}() would be the action's address, not what a route's {text}() is; name it for what it does, post(save_draft) = .."),
+                    );
                 }
-                serves.handlers.push((method.clone(), stream(handler.iter().cloned())));
+                if !text.is_ascii() {
+                    return err(
+                        action.span(),
+                        format!("{text} cannot name an action: its address carries the name as written, which a browser sends percent-encoded; name it in ASCII"),
+                    );
+                }
+                if serves.actions.iter().any(|(a, _)| a.to_string() == text) {
+                    return err(action.span(), format!("post({text}) is named twice: a page has one handler per action"));
+                }
+                let key = format!("post({text})");
+                serves.actions.push((action.clone(), handler_path(&key, method.span(), handler)?));
             }
             // `gives(CartCount, Unread)`: the layout reads the route's `GET` page gives itself.
             [TokenTree::Ident(key), TokenTree::Group(list)]
@@ -1239,15 +1335,17 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             _ => {
                 return err(
                     part[0].span(),
-                    "expected a handler (get = show), rows = .., prefetch = .., no_store, no_store(post), gives(CartCount), unstaged or patches",
+                    "expected a handler (get = show, post(sku) = set_sku), rows = .., prefetch = .., no_store, no_store(post), gives(CartCount), unstaged or patches",
                 )
             }
         }
     }
-    // Each method `no_store(..)` names is one the route has a handler for.
+    // Each method `no_store(..)` names is one the route has a handler for (`post` covers its
+    // actions too).
     if let NoStore::Only(methods) = &serves.no_store {
         for method in methods {
-            if !serves.handlers.iter().any(|(m, _)| m.to_string() == method.to_string()) {
+            let named = method.to_string() == "post" && !serves.actions.is_empty();
+            if !named && !serves.handlers.iter().any(|(m, _)| m.to_string() == method.to_string()) {
                 return err(method.span(), format!("no_store({method}) names a method this route has no handler for: #[route(\"{path}\", {method} = .., no_store({method}))]"));
             }
         }
@@ -1267,17 +1365,41 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
     }
     // `patches`, right after the path, for `#[derive(Route)]`: the route's `Route::PATCHES`, which
     // `Area::route` and `Api::route` hold the `get` they are given to.
+    // `actions` likewise, for its check that no query parameter of its own is `do`.
+    let mut marked: Vec<TokenTree> = Vec::new();
     if serves.patches.is_some() {
-        let mut marked: Vec<TokenTree> = q(", __patches", &[]).into_iter().collect();
-        marked.append(&mut keep);
-        keep = marked;
+        marked.extend(q(", __patches", &[]));
     }
+    if !serves.actions.is_empty() {
+        marked.extend(q(", __actions", &[]));
+    }
+    marked.append(&mut keep);
+    keep = marked;
     let mut cut_args = Group::new(Delimiter::Parenthesis, stream(std::iter::once(TokenTree::Literal(lit.clone())).chain(keep)));
     cut_args.set_span(attr.span());
     let mut cut = Group::new(Delimiter::Bracket, stream([TokenTree::Ident(name.clone()), TokenTree::Group(cut_args)]));
     cut.set_span(attr.span());
     Ok(Some((path.to_string(), lit.span(), serves, cut)))
 }
+
+/// A handler as `key = ..` names it: a function's path, without type arguments.
+fn handler_path(key: &str, at: Span, handler: &[TokenTree]) -> Result<TokenStream, Error> {
+    if handler.iter().any(|t| is_punct(Some(t), '<')) {
+        return err(
+            handler[0].span(),
+            format!("{key} = names a handler without type arguments: a generic handler's route is picked by the Params it takes, and a route without a parameter takes a handler of its own ({key} = relay_here) that calls the shared code"),
+        );
+    }
+    if handler.is_empty() || !is_path(handler) {
+        let span = handler.first().map_or(at, TokenTree::span);
+        return err(span, format!("name a handler function: {key} = show (a path, not a closure)"));
+    }
+    Ok(stream(handler.iter().cloned()))
+}
+
+/// Names an action cannot have: the route's own methods (`Route`, `Render`, `AttrValue`,
+/// `Display`), which the action's method of the same name would hide.
+const RESERVED_ACTIONS: &[&str] = &["href", "at", "may_prefetch", "write_href", "render", "write_attr", "fmt", "to_string"];
 
 /// `show`, `items::show`, `crate::items::show`, `::items::show`: identifiers joined by `::`.
 pub(crate) fn is_path(tokens: &[TokenTree]) -> bool {

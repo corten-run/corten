@@ -75,6 +75,10 @@ Its observation is bounded to 45 minutes, checks cancellation and preserves the
 running host on timeout or an invalid observation. A failed admission or
 cancellation leaves every later group visibly `not-admitted`, not silently omitted
 or automatically retried. The complete reserved roster remains mandatory.
+Later groups must also be observed nonterminal before running admission is saved.
+A job already terminal at that observation remains in its saved `starting` state
+for ordinary collection, rather than admitting another host from a false running
+claim. This does not discard a fast completed job's evidence or permit a restart.
 
 Each production controller runs on a separate worker event loop. Worker entry and
 dependency modules execute captured, hash-checked source bytes with a deny-unlisted
@@ -93,17 +97,27 @@ mean control uncertainty. Diagnostics do not prove host absence, acknowledge a
 mutation, permit a retry or authorize cleanup; saved reservations, launch intents
 and the existing settlement/lock rules remain authoritative.
 
-Create-link refusals distinguish five closed predicate codes: `create-link-shape`
-(actions is not an array), `create-link-count` (not exactly one entry),
-`create-link-id` (missing or invalid positive safe-integer ID), `create-link-rel`
-(supplied relation differs) and `create-link-href` (supplied URL differs).
+Create-link refusals distinguish three consumed-field predicates:
+`create-link-shape` (actions is not an array), `create-link-count` (not exactly one
+entry) and `create-link-id` (missing or invalid positive safe-integer ID).
 Only a failing predicate emits its subcode; deadline/cancellation checkpoints keep
-their coarse phase codes, including `create-link`. No rejected provider values are
-retained or forwarded. These diagnostics do not identify the cause of historical
-failures whose rejected responses were not retained, or change any acceptance,
-completion, ownership, retry or cleanup gate.
+their coarse phase codes, including `create-link`. Historical `create-link-rel`
+and `create-link-href` diagnostics remain readable but are no longer emitted:
+the create response is an ID projection, not a full validator of unused metadata.
+No rejected provider values are retained or forwarded, and old diagnostics do not
+establish the cause of an unretained response.
 
-The href diagnostic can additionally classify a refused representation as
+Failures inside the production composition also retain one closed `controllerStage`
+code: `source-plan`, `exact-approval`, `remote-main-advertisement`,
+`remote-main-fetch`, `remote-main-ancestry`, `source-recheck`,
+`controller-construction`, `controller-launch`, `controller-collect`,
+`controller-audit`, `controller-checkpoint` or `provider-settlement`.
+The stage identifies the failing operation, not its cause or whether a host exists.
+Only an own data property from that vocabulary crosses the worker boundary;
+unknown values and accessors are not forwarded. It adds no retry, cleanup or
+launch authority. Raw Git errors, URLs, arguments and stderr remain private.
+
+Historical href diagnostics could classify a refused representation as
 `non-string`, `malformed-uri`, `credentials-or-fragment`, `foreign-origin`,
 `semantically-same-canonical-uri`, `query-or-trailing-slash` or
 `wrong-action-or-resource`. These are a closed vocabulary, never the rejected URL,
@@ -112,16 +126,20 @@ Count refusals similarly retain only `total-changed` or
 `terminal-count-mismatch`. Historical failures without these observations remain
 unexplained; a synthetic reproduction does not establish their cause.
 
-When present, a create action's `href` must exactly match one of the provider's
-two documented action routes: `https://api.digitalocean.com/v2/actions/<action-id>`
-or `https://api.digitalocean.com/v2/droplets/<created-droplet-id>/actions/<action-id>`.
-The latter must bind both IDs; foreign origins, credentials, other resources,
-queries, fragments and noncanonical spellings remain refused. These are advisory
-identity checks, not URLs to fetch: completion still uses only the fixed global
-action GET and verifies its exact ID, type, resource and completed status.
-The [published action endpoint contract](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/droplets/dropletActions_get.yml)
-supports this second route; it does not establish what any unretained failed
-response contained or prove a historical failure's cause.
+Create completion consumes only the positive safe-integer droplet ID and unique
+positive safe-integer action ID from the bounded JSON response. Advisory `rel` and
+`href` values are not read, parsed, followed, logged or forwarded. Ignoring unused
+metadata does not declare it schema-conformant: a malformed URI is still malformed.
+It also grants no authority. Requests use only the fixed HTTPS origin and a
+canonical action path constructed from the numeric ID. The authoritative action
+response must match that ID, type `create`, resource type `droplet`, and, when
+completed, the POST's exact droplet ID. Pending null/zero resource IDs never prove
+completion; even a matching completed response must be observed before the original
+absolute deadline, otherwise control uncertainty is retained. Before any provisioning
+SSH, the controller explicitly joins this
+completed-action/POST host ID to the freshly observed owned reservation host ID.
+Wrong IDs, account, ownership, action status, timeout and cancellation still fail
+closed without repeating POST. No optional hint can select another host or route.
 
 Collection reuses only saved identities and independently collects terminal hosts:
 
@@ -233,6 +251,81 @@ a reason to strand a terminal host whose entry failed before writing any data.
 Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.
+
+### Failed Native Custody And Retirement
+
+`--retire-failed-native` is a separate, deliberately approved recovery action,
+not a relaxation of `--collect` or native validation. Its migration policy supports
+only round r21 measured at `9f3d35884c67d90524f978d173fabeb3a17bc970`, for the
+eight nonmixed group reservations with preserved
+original archives/extractions and raw exit `2`. A different, clean repair-controller
+commit must descend from that source and pass the existing fresh merged-main
+proof. Preview and exact approval bind both source identities, exact reservation
+bytes, original evidence hashes, physical state root and fixed custody roots.
+This exception does not permit a source override for collection, audit or launch.
+
+The action retains the original `results.tgz` and `evidence-*` tree unchanged,
+and saves the original reservation bytes as `failed-native-reservation.json`.
+A fixed controller-owned Python program captures current `/bench/campaign`
+and every possible reserved native-output root for that group. JSON includes
+both preparation `j42` and timing `j43`, even if one is absent. Absence is explicit
+data, never a completed benchmark. The program validates and hashes filesystem
+metadata before reading evidence contents, opens every ancestor without following
+links, and rejects symlinks, hardlinks, special files and nonportable paths. It
+never executes a native script, validator, source checkout or downloaded evidence.
+Directory entries stream from owned descriptors, reserving the global node,
+name-byte and member-byte budgets before names are retained or sorted.
+
+The separate `failed-native-results.tgz` contains raw trees, metadata and file-hash
+inventories, and a root snapshot. The bounded existing archive reader verifies
+the download, extracts into a fresh `custody-*` directory and compares root and
+original-evidence hashes. `failed-native-capture.json` binds this custody to the
+measured reservation and repair controller. Intact recorded custody can resume
+with a fresh confirmation; unexplained partial downloads or remote captures are
+retained without automatic adoption or overwriting.
+
+Capture and final confirmation require the exact metadata host ID, source-bound
+uploaded controls and bootstrap marker, a loaded started terminal unit with
+`Restart=no`, `MainPID=0`, exit `2` and no unit job, no pending systemd jobs,
+completed cloud-init without user data, and no current benchmark process or
+running container. Only the probe's exact timeout parent is exempt from its
+process scan. Confirmation rehashes all roots and the custody archive, then
+local custody is checked again. A final fence requires the exact unchanged
+metadata inventory of every root, rehashes the custody archive and renews current
+quiescence before the fresh ownership/account check. The 60-second deletion-proof
+window starts locally before the final fence request, conservatively including
+remote work and SSH response delivery without relying on remote clock skew.
+Interrupted receipt rehashing also precedes the final fence. The absolute
+expiry accompanies only this failed-retirement DELETE through asynchronous account
+preflight and private-worker IPC. Private HTTP dispatch keeps DELETE unbuffered
+until socket/TLS readiness, rechecks expiry before sending, and destroys an unsent
+request at expiry. It is never restarted or widened by a provider call. Large local
+checks cannot consume that final freshness window. These are current retirement observations,
+not a historical accounting or native qualification pass.
+
+`failed-native-host.json` records capture, fresh confirmation and their exact
+script hashes before a durable `native-failed` retirement intent and one DELETE.
+The same private provider worker and pre-unlock settlement apply. A lost or
+uncertain deletion acknowledgement permits exact-ID absence reconciliation only,
+never another DELETE. Existing locks are never taken over or cleared by recovery.
+The saved measured commit and failure evidence remain unchanged; no validation,
+successful exit or collection result is invented. Fleet inspection reports
+`native-failed-retired` or `cleanup-pending`, never a qualified baseline.
+
+After independent review and merge, an operator previews the exact action with:
+
+```sh
+node bench/workloads/cloud-production.mjs r21 --state-dir ABSOLUTE_GROUP_STATE_ROOT --retire-failed-native --print-approval
+```
+
+Execution replaces `--print-approval` with the existing
+`--approve-reviewed-merged-ready EXACT_ACTION_SHA256` only after separate operator
+approval. Implementing or testing this action authorizes no provider operation.
+Synthetic controls run with `node --test bench/workloads/cloud-failed-native.test.mjs`.
+The opt-in `CORTEN_FAILED_NATIVE_LINUX=1` local test in
+`cloud-failed-native-linux.test.mjs` uses disposable, labeled, networkless containers
+with real file descriptors and `/proc`, substituting only service/metadata responses;
+it is not provider, systemd-host or native performance qualification.
 
 Large source bindings and evidence manifests are compared with exact strict
 equality without constructing assertion diffs. Invalid evidence still refuses;
@@ -542,13 +635,18 @@ An `in-progress` create action may have `resource_id: null` or numeric zero;
 both remain pending, not ownership or completion proof. Completion still requires
 the exact positive droplet ID returned by the single POST, the matching action
 ID/type/resource type. The POST must still return exactly one action link with a
-positive safe-integer ID. Its advisory `rel` and `href` fields may be absent, as
-the [published action-link schema](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/shared/models/action_link.yml)
-permits; when present they must be `create` and the exact fixed-origin action URL.
+positive safe-integer ID. Its advisory `rel` and `href` fields are not consumed.
+The [published action-link schema](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/shared/models/action_link.yml)
+describes these optional fields, but this adapter deliberately validates only its
+consumed projection, not every property of that schema. It does not call malformed
+metadata a valid URI or use it as a fallback destination.
 Polling constructs `/v2/actions/ID` from the numeric ID, never fetches `href`, and
 requires the authoritative response to prove the action ID, create type, droplet
-resource type, exact POST droplet ID and completed status. This agrees with
-[godo's ID-based linked-action lookup](https://github.com/digitalocean/godo/blob/147424adb9525690e45ac36401d993b8c71e6ebc/links.go#L114-L117).
+resource type, exact POST droplet ID and completed status. Only the validated
+droplet ID is returned across provider IPC. The controller requires that ID to
+equal the fresh owned-host ID before any provisioning SSH. Numeric linked-action
+lookup also exists in
+[godo's ID-based linked-action lookup](https://github.com/digitalocean/godo/blob/147424adb9525690e45ac36401d993b8c71e6ebc/links.go).
 The [broader response schema](https://github.com/digitalocean/openapi/blob/998192821fe95ee79e41f577933601d009179dcf/specification/resources/droplets/responses/droplet_create.yml)
 permits missing actions or IDs, but those still fail
 closed here: without a unique numeric action ID this adapter cannot prove
@@ -736,6 +834,459 @@ An existing/racing inbox is never overwritten. Failure preserves the attempt and
 bytes, not automatic retry authority. The native live process owns full receipt
 and source/image validation; this transport never resumes it from serialized JSON.
 Real OS behavior of that publication step remains an integration/host check.
+
+### Read-Only Review Export
+
+The subject is produced **after launch**, not by a prelaunch source review. JSON
+waits after its check-only build and captures actual built-image identities;
+mixed waits before building and captures committed source and deterministic build
+contexts. `collect` returns 3 for a live unit **before downloading anything**.
+Do not collect, package a terminal archive, stop, restart, signal or change the
+job to obtain review bytes. There is no controller export CLI mode. The following
+is an explicitly authorized operator read-only inspection using existing host
+access, not a new approval mechanism or permission to launch/deliver/delete.
+
+1. Obtain operator authorization for reading one exact saved reservation, its
+   waiting campaign and the paths below into a new private local directory outside
+   the checkout and controller state. Serialize with the reservation's operator:
+   no concurrent collect, delivery or state editing; never remove an operation
+   lock. Use the measured, reviewed checkout, not a newer collector. Read the
+   child's `groups-ROUND/state.json` through its verified physical state root;
+   validate it with `cloud-options.mjs::controllerState`.
+   For a fleet, use that group's saved child state root, not the fleet root or a
+   sibling. Retain its exact bytes locally; require `starting`/`running`, a bound
+   ID/IP, no collection/deletion intent and no previous audit attempt for this
+   group (including legacy JSON `auditIntent`). The reservation token is the
+   ownership nonce, **not** the campaign ID's independently generated suffix.
+2. Before **each** SSH/SFTP session, re-establish the same saved account/context
+   and exact provider ID, name, run/shared tags, size, region and unique public IP
+   using the existing read-only ownership checks (`providerAccount` before/after
+   the exact-ID observation, then `cloud-contract.mjs::ownedDroplet`, with the
+   controller's additional unique-public-IP check). Never select by name alone,
+   reuse an old census or infer ownership from an IP. Use the saved private
+   `known_hosts`; require its already recorded host key (`StrictHostKeyChecking=yes`),
+   batch authentication, no client config, agent forwarding, local hooks, port
+   forwarding or multiplexing, and the same controlled environment as the existing
+   transport. Do not export credentials, process environments or raw image `Env`.
+   Missing host-key/ownership evidence stops this procedure, not a first-contact
+   accept or a switch to another host.
+3. Through that bounded read-only SSH session, save `systemctl show` for the exact
+   saved unit with `Id`, `LoadState`, `FragmentPath`, `ActiveState`, `Restart`,
+   `MainPID`, `ExecMainCode` and `ExecMainStartTimestamp`. Require the expected
+   loaded unit/path, `Restart=no`, active state and nonzero MainPID. Read
+   `/bench/bootstrap-ready.json` and `/bench/campaign/.host-attempt.json` to obtain
+   the exact campaign ID. In that campaign directory identify the **latest**
+   five-digit journal event, not merely an older `review-needed` event. Require
+   its status to be `blocked-review-needed` for the requested group, with the
+   expected campaign/round/plan hash, subject field and group-specific inbox.
+   Refuse an existing delivery inbox. Record the unit observation and latest
+   event name/bytes before transfer. Bound each observation to 30 seconds and
+   16 MiB of output; do not poll until a different state looks acceptable.
+
+Only these fixed review paths are allowed, relative to that campaign directory:
+
+| Group | Subject | Immutable snapshot | Waiting journal kind |
+| --- | --- | --- | --- |
+| `json-api` | `json-audit-subject.json` | `audit-sources/` (`blobs/SHA256`) | `review-needed` |
+| `mixed-production` | `mixed-audit-subject.json` | `mixed-audit-sources/` (`blobs/SHA256`, `contexts/APP.tar`) | `mixed-review-needed` |
+
+The snapshot is `subject.sourcesManifest.snapshot`, not the mutable working tree
+or a freshly regenerated context. JSON also binds `nativeManifest`, `images` and
+the complete `identities` in the subject; mixed binds ordered `requests`, each
+context archive hash and its build-input inventory. Neither review scope implies
+the other's built-image or source qualification. Native preparation results, if
+the reviewer needs them, require a separately scoped read-only export matching
+JSON's `nativeManifest`; they are not supplied by this minimal source export.
+
+4. Preflight the fixed paths on the owned host: physical directories, same entry
+   UID, private control files, regular single-link files, no symlinks, special
+   files or case-colliding names. Admit only `blobs/[a-f0-9]{64}` and, for mixed,
+   the selected apps' `contexts/APP.tar` from the sealed snapshot. Check the full
+   snapshot against its manifest before transfer. Use a private local filesystem
+   with a 1 GiB quota for this export, at most 100,000 entries and 256 MiB per
+   file, and a 180-second transfer deadline. These are conservative **inspection
+   limits**, not campaign/measurement overrides or evidence of actual size. If
+   the snapshot exceeds them, stop and retain the host; do not truncate it or
+   silently enlarge the limits. A timeout/partial transfer is untrusted evidence,
+   never permission to restart the job or overwrite an earlier local attempt.
+
+Use a Linux operator workstation with Node 24+, OpenSSH, GNU `timeout`, util-linux
+`mount`/`findmnt`/`prlimit`, and explicit local administrator permission to mount **one new
+local tmpfs**. This does not grant permission to modify a remote mount or unit.
+Allow up to 1 GiB of local memory/swap for evidence; tmpfs is not encrypted storage.
+Run as the inspecting user, without `set -x`, terminal recording or credential
+logging. Existing authentication and the verified known-hosts file stay in their
+existing locations, read-only; never copy them into the workspace. If these local
+permissions/resources are unavailable, stop, rather than using an unbounded folder.
+Use the trusted system Node binary, not a shell alias or an inherited Node startup
+configuration. The task-local `audit_node` below starts **every local Node command
+in this procedure**, including validation and controller preview/delivery, in a
+fresh allowlisted environment. It drops `NODE_OPTIONS`, `NODE_PATH`, preload/loader
+settings and other inherited startup variables before Node starts. Only approved
+system tool paths, locale, Git safety settings and existing credential/configuration
+locations survive; credential contents are neither copied nor logged. The existing
+saved account/context and host-key checks still apply. Do not run a bare `node`
+first to construct the clean environment.
+
+From the trusted measured checkout, provision a unique private workspace. The
+mount has both a kernel byte quota and an inode quota; a per-process file limit
+alone would not bound a recursive download. Keep this shell and its variables for
+the remaining steps. Nothing here changes campaign or measurement settings.
+
+```sh
+set -eu
+umask 077
+AUDIT_PATH=/usr/local/bin:/usr/bin:/bin
+AUDIT_NODE=/usr/local/bin/node
+test -x "$AUDIT_NODE" || AUDIT_NODE=/usr/bin/node
+test -x "$AUDIT_NODE"
+readonly AUDIT_PATH AUDIT_NODE
+audit_node() {
+  /usr/bin/env -i PATH="$AUDIT_PATH" HOME="$HOME" \
+    XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
+    LANG=C.UTF-8 TZ=UTC GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 \
+    "$AUDIT_NODE" "$@"
+}
+AUDIT_UID=$(id -u)
+AUDIT_GID=$(id -g)
+WORK_PARENT=$(mktemp -d /tmp/corten-audit.XXXXXXXX)
+test "$(realpath -e -- "$WORK_PARENT")" = "$WORK_PARENT"
+WORK="$WORK_PARENT/work"
+mkdir -m 700 -- "$WORK"
+sudo mount -t tmpfs -o "size=1073741824,nr_inodes=100000,mode=0700,uid=$AUDIT_UID,gid=$AUDIT_GID,nodev,nosuid,noexec" tmpfs "$WORK"
+test "$(findmnt -n -o FSTYPE --mountpoint "$WORK")" = tmpfs
+audit_node --input-type=module - "$WORK" <<'JS'
+import assert from 'node:assert/strict';
+import { lstatSync, readdirSync, statfsSync } from 'node:fs';
+import { physical } from './bench/workloads/isolated/evidence.mjs';
+const root = physical(process.argv[2]), info = lstatSync(root), fs = statfsSync(root);
+assert.equal(info.uid, process.getuid()); assert.equal(info.mode & 0o777, 0o700);
+assert.equal(fs.type, 0x01021994); // Linux TMPFS_MAGIC.
+assert.ok(fs.blocks * fs.bsize > 0 && fs.blocks * fs.bsize <= 1073741824);
+assert.ok(fs.files > 0 && fs.files <= 100000); assert.deepEqual(readdirSync(root), []);
+JS
+EXPORT="$WORK/export"
+mkdir -m 700 -- "$EXPORT"
+```
+
+Prepare this **trusted operator script locally**, not from downloaded evidence.
+It is streamed on stdin to the existing measured `/bench/repo` checkout; it creates
+no remote file and does not import source blobs or unpack contexts. `remote` mode
+requires the entry UID (root), fixed `/bench` paths, the latest waiting event and
+an absent inbox. `local` mode requires this user's private quota-backed export.
+Both modes check UID, permissions, types, links, names and sizes **before any file
+content is read**. Directory enumeration is incremental and capped, including the
+journal census. Controls are capped at 16 MiB each (bootstrap: 1 KiB), all files
+at 256 MiB, and the complete requested copy at 1 GiB / 100,000 entries. The sealed
+files must remain unchanged throughout inspection; changes fail, not authorize a
+second attempt. These are read-only inspections, not an atomic filesystem freeze.
+
+```sh
+cat > "$WORK/preflight.mjs" <<'JS'
+import assert from 'node:assert/strict';
+import { lstatSync, opendirSync, statfsSync } from 'node:fs';
+import { join } from 'node:path';
+import { isIP } from 'node:net';
+import { isDeepStrictEqual } from 'node:util';
+import { deploymentSha256 } from './bench/workloads/deployments.mjs';
+import { digest, physical, readRegular, tree } from './bench/workloads/isolated/evidence.mjs';
+try {
+  const [mode, root, round, commit, campaign, group, token, planHash, subjectHash, waitEvent, ip, knownHosts] = process.argv.slice(2);
+  assert.ok(['validate', 'remote', 'local'].includes(mode));
+  assert.ok(['json-api', 'mixed-production'].includes(group));
+  assert.match(round, /^r[1-9][0-9]*$/); assert.match(commit, /^[a-f0-9]{40}$/);
+  assert.match(token, /^[a-f0-9]{16}$/);
+  assert.match(campaign, new RegExp(`^${round}-[a-f0-9]{16}$`));
+  for (const hash of [planHash, subjectHash]) assert.match(hash, /^[a-f0-9]{64}$/);
+  const remote = mode === 'remote', mixed = group === 'mixed-production', prefix = mixed ? 'mixed' : 'json';
+  const kind = mixed ? 'mixed-review-needed' : 'review-needed';
+  assert.match(waitEvent, new RegExp(`^[0-9]{5}-${kind}\\.json$`));
+  if (mode === 'validate') {
+    assert.equal(root, '/bench'); assert.equal(isIP(ip), 4);
+    assert.ok(knownHosts.startsWith('/') && !/["'\\\r\n$%]/.test(knownHosts));
+    physical(knownHosts, false); const s = lstatSync(knownHosts);
+    assert.equal(s.uid, process.getuid()); assert.equal(s.nlink, 1); assert.equal(s.mode & 0o077, 0);
+    process.exit(0);
+  }
+  const uid = process.getuid(), maxEntries = 100000, maxFile = 256 * 2 ** 20, maxTotal = 2 ** 30;
+  physical(root);
+  if (remote) { assert.equal(root, '/bench'); assert.equal(uid, 0); }
+  else {
+    const fs = statfsSync(root);
+    assert.equal(fs.type, 0x01021994);
+    assert.ok(fs.blocks * fs.bsize > 0 && fs.blocks * fs.bsize <= maxTotal);
+    assert.ok(fs.files > 0 && fs.files <= maxEntries);
+  }
+  function directory(path, privateMode = true) {
+    physical(path); const s = lstatSync(path);
+    assert.equal(s.uid, uid); assert.equal(s.mode & (privateMode ? 0o077 : 0o022), 0);
+  }
+  directory(root, !remote);
+  const base = remote ? join(root, 'campaign', campaign) : root;
+  if (remote) { directory(join(root, 'campaign')); directory(base); }
+  const paths = {
+    bootstrap: join(root, 'bootstrap-ready.json'),
+    reservation: remote ? join(root, 'campaign', '.host-attempt.json') : join(root, 'reservation.json'),
+    plan: join(base, 'plan.json'), event: join(base, remote ? waitEvent : 'wait-event.json'),
+    subject: join(base, `${prefix}-audit-subject.json`) };
+  const sources = join(base, mixed ? 'mixed-audit-sources' : 'audit-sources');
+  function names(path, visit) {
+    const dir = opendirSync(path); let count = 0;
+    try { for (let e; (e = dir.readSync());) { assert.ok(++count <= maxEntries, 'directory entry limit'); visit(e.name); } }
+    finally { dir.closeSync(); }
+  }
+  function waiting() {
+    assert.equal(lstatSync(join(base, `${prefix}-audit-delivery.json`), { throwIfNoEntry: false }), undefined);
+    let latest = '';
+    names(base, name => { if (/^[0-9]{5}-/.test(name) && name > latest) latest = name; });
+    assert.equal(latest, waitEvent, 'waiting journal advanced');
+  }
+  if (remote) waiting();
+  else {
+    const allowed = new Set(['bootstrap-ready.json', 'reservation.json', 'plan.json', 'wait-event.json',
+      `${prefix}-audit-subject.json`, mixed ? 'mixed-audit-sources' : 'audit-sources']);
+    names(root, name => assert.ok(allowed.has(name), 'unexpected export entry'));
+  }
+  const records = new Map(), folded = new Set(); let entries = 0, total = 0;
+  const stamp = s => [s.dev, s.ino, s.uid, s.mode, s.nlink, s.size, s.mtimeMs, s.ctimeMs];
+  function admit(path, type, cap = maxFile) {
+    assert.ok(++entries <= maxEntries, 'copy entry limit'); physical(join(path, '..'));
+    const s = lstatSync(path);
+    assert.equal(s.uid, uid); assert.equal(s.mode & 0o077, 0);
+    assert.ok(!s.isSymbolicLink() && (type === 'directory' ? s.isDirectory() : s.isFile()), 'link/type');
+    if (type === 'file') {
+      assert.equal(s.nlink, 1); assert.ok(Number.isSafeInteger(s.size) && s.size >= 0 && s.size <= cap, 'file size limit');
+      total += s.size; assert.ok(total <= maxTotal, 'copy byte limit');
+    }
+    records.set(path, stamp(s));
+  }
+  for (const [key, path] of Object.entries(paths)) admit(path, 'file', key === 'bootstrap' ? 1024 : 16 * 2 ** 20);
+  function walk(path, key = '') {
+    const lower = key.toLowerCase(); assert.ok(!folded.has(lower), 'case collision'); folded.add(lower);
+    const isDir = ['', 'blobs', ...(mixed ? ['contexts'] : [])].includes(key);
+    assert.ok(isDir || /^blobs\/[a-f0-9]{64}$/.test(key) || (mixed && /^contexts\/[a-z][a-z0-9-]*\.tar$/.test(key)), 'snapshot path');
+    admit(path, isDir ? 'directory' : 'file');
+    if (isDir) names(path, name => walk(join(path, name), key ? `${key}/${name}` : name));
+  }
+  walk(sources); // Complete metadata/size census before readRegular/tree allocations.
+  function unchanged(path) { assert.deepEqual(stamp(lstatSync(path)), records.get(path), 'evidence metadata changed'); }
+  const controls = {};
+  const read = key => { unchanged(paths[key]); const bytes = readRegular(paths[key]); unchanged(paths[key]);
+    controls[key] = digest(bytes); return JSON.parse(bytes); };
+  const reservation = read('reservation'), plan = read('plan');
+  const { campaignSha256, ...planBody } = plan;
+  assert.equal(campaignSha256, planHash); assert.equal(deploymentSha256(planBody), planHash);
+  assert.equal(plan.round, round); assert.equal(plan.commit, commit); assert.ok(plan.order.includes(group));
+  assert.equal(reservation.id, campaign); assert.equal(reservation.commit, commit);
+  assert.equal(reservation.campaignSha256, planHash);
+  assert.deepEqual(read('bootstrap'), { schema: 'benchmark-common-bootstrap/v1',
+    round, commit, token, group: plan.order.length === 1 ? group : 'all' });
+  const event = read('event'), status = event.status;
+  assert.equal(event.kind, kind); assert.equal(event.campaign, campaign); assert.equal(event.round, round);
+  assert.equal(event.campaignSha256, planHash); assert.equal(event.sequence, Number(waitEvent.slice(0, 5)));
+  assert.equal(status.campaign, campaign); assert.equal(status.round, round);
+  assert.equal(status.campaignSha256, planHash); assert.equal(status.state, 'blocked-review-needed');
+  assert.equal(status.auditGroup, group); assert.equal(status.auditInbox, `${campaign}/${prefix}-audit-delivery.json`);
+  assert.equal(status[mixed ? 'mixedAuditSubjectSha256' : 'auditSubjectSha256'], subjectHash);
+  const started = Date.parse(event.at);
+  assert.ok(Number.isFinite(started) && started <= Date.now() && Date.now() < started + 24 * 60 * 60 * 1000);
+  const subject = read('subject'), { subjectSha256, ...body } = subject;
+  assert.equal(subjectSha256, subjectHash); assert.equal(deploymentSha256(body), subjectHash);
+  assert.equal(subject.schema, `benchmark-${prefix}-audit-subject/v1`);
+  assert.equal(subject.campaignSha256, planHash); assert.equal(subject.commit, commit);
+  const binding = plan.bindings.find(b => b.request.group === group); assert.ok(binding);
+  assert.equal(subject.round, mixed ? binding.request.round : `j${2 * Number(round.slice(1))}`);
+  if (mixed) assert.equal(subject.bindingSha256, deploymentSha256(binding));
+  else assert.equal(subject.sourceSha256, plan.sourceSha256);
+  const { sha256, ...manifest } = subject.sourcesManifest;
+  assert.equal(deploymentSha256(manifest), sha256);
+  assert.ok(Array.isArray(manifest.files) && manifest.files.length <= maxEntries);
+  const allowedFiles = new Set();
+  for (const file of manifest.files) {
+    assert.match(file.sha256, /^[a-f0-9]{64}$/); assert.equal(file.storedAs, `blobs/${file.sha256}`);
+    assert.ok(Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= maxFile);
+    allowedFiles.add(file.storedAs);
+    const path = join(sources, file.storedAs); unchanged(path);
+    const bytes = readRegular(path); unchanged(path);
+    assert.equal(bytes.length, file.bytes); assert.equal(digest(bytes), file.sha256);
+  }
+  if (mixed) {
+    assert.deepEqual(subject.requests.map(r => r.identity.app), binding.selection.apps);
+    for (const request of subject.requests) {
+      assert.match(request.identity.app, /^[a-z][a-z0-9-]*$/);
+      const key = `contexts/${request.identity.app}.tar`, path = join(sources, key); allowedFiles.add(key);
+      unchanged(path); assert.equal(digest(readRegular(path)), request.identity.contextArchiveSha256); unchanged(path);
+    }
+  }
+  for (const path of records.keys()) {
+    unchanged(path);
+    if (path.startsWith(sources + '/')) {
+      const key = path.slice(sources.length + 1);
+      assert.ok(['blobs', ...(mixed ? ['contexts'] : [])].includes(key) || allowedFiles.has(key), 'unreferenced snapshot file');
+    }
+  }
+  assert.ok(isDeepStrictEqual(tree(sources), manifest.snapshot), 'snapshot differs');
+  for (const path of records.keys()) unchanged(path);
+  directory(root, !remote);
+  if (remote) { directory(join(root, 'campaign')); directory(base); }
+  if (remote) waiting();
+  console.log(JSON.stringify({ subjectSha256, snapshotSha256: manifest.snapshot.sha256,
+    controlsSha256: deploymentSha256(controls), entries, bytes: total }));
+} catch {
+  console.error('Review preflight refused; preserve workspace, state and host.'); process.exitCode = 2;
+}
+JS
+```
+
+After step 2's fresh provider/ownership observation, execute that script on the
+exact host. `COMMIT`, `TOKEN`, `PLAN_SHA256` and `SUBJECT_SHA256` are the independently
+observed expected values, not automatically trusted fields from a downloaded
+subject. `validate` mode checks remote arguments locally before a remote command
+is constructed; `GROUP` must be one of the two table rows. This makes the
+single-quoted remote arguments literal, not shell input. Use the same reviewed checkout locally and
+remotely. The command verifies the remote HEAD and tracked source before importing
+the existing readers, clears Node/shell injection variables, bounds remote work
+to 30 seconds plus a five-second kill grace, and emits only small integrity hashes
+and counts. No credential, environment dump or raw source goes into these records.
+
+```sh
+remote_preflight() {
+  audit_node --input-type=module - validate /bench "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
+    "$TOKEN" "$PLAN_SHA256" "$SUBJECT_SHA256" "$WAIT_EVENT" "$IP" "$KNOWN_HOSTS" < "$WORK/preflight.mjs"
+  env -i PATH="$AUDIT_PATH" HOME="$HOME" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
+  timeout 45 ssh -F none -oBatchMode=yes -oStrictHostKeyChecking=yes \
+  -oUserKnownHostsFile="\"$KNOWN_HOSTS\"" -oConnectTimeout=15 \
+  -oForwardAgent=no -oClearAllForwardings=yes -oPermitLocalCommand=no \
+  -oControlMaster=no -oControlPath=none "root@$IP" \
+  "exec /usr/bin/env -i PATH=/usr/local/bin:/usr/bin:/bin HOME=/root LANG=C.UTF-8 TZ=UTC GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1 GIT_TERMINAL_PROMPT=0 /usr/bin/timeout -k 5 30 /bin/sh -c 'cd /bench/repo && test \"\$(git rev-parse HEAD)\" = \"\$2\" && git --no-optional-locks -c core.fsmonitor=false diff --no-ext-diff --no-textconv --quiet \"\$2\" -- && exec node --input-type=module - remote /bench \"\$@\"' sh '$ROUND' '$COMMIT' '$CAMPAIGN' '$GROUP' '$TOKEN' '$PLAN_SHA256' '$SUBJECT_SHA256' '$WAIT_EVENT'" \
+  < "$WORK/preflight.mjs"
+}
+test ! -e "$WORK/before.json"
+remote_preflight > "$WORK/before.json"
+```
+
+After that successful preflight and another step 2 observation, use this **download-only**
+SFTP batch. `IP`, `UNIT`, `ROUND`, `CAMPAIGN`, `WAIT_EVENT`, `SUBJECT`, `SNAPSHOT`,
+`KNOWN_HOSTS` and `EXPORT` are explicitly checked values from steps 1-4, not paths
+selected by a receipt. Validate the campaign as `ROUND-[a-f0-9]{16}` and the event
+as five digits plus the table's exact waiting kind and `.json`; choose subject
+and snapshot from the table. Local paths must be absolute physical paths without
+quotes, backslashes, newlines or SSH expansion characters (`$`, `%`). `EXPORT`
+must be fresh, mode 0700, quota-limited, and disjoint from state and checkout;
+use `umask 077`. In particular, **the snapshot destination must not exist**:
+OpenSSH `get -R` adds basename nesting when its destination already exists.
+Do not precreate it or reuse an earlier attempt. The shell variables below contain
+no credential material. The empty-directory test includes dangling symlinks.
+`prlimit` enforces the 256 MiB per-file write limit during transfer too; a growing
+remote file fails this inspection, not the waiting job.
+
+```sh
+case "$GROUP" in
+  json-api) SUBJECT=json-audit-subject.json; SNAPSHOT=audit-sources ;;
+  mixed-production) SUBJECT=mixed-audit-subject.json; SNAPSHOT=mixed-audit-sources ;;
+  *) exit 2 ;;
+esac
+audit_node --input-type=module - "$EXPORT" <<'JS'
+import assert from 'node:assert/strict';
+import { opendirSync } from 'node:fs';
+const dir = opendirSync(process.argv[2]);
+try { assert.equal(dir.readSync(), null, 'export is not fresh'); } finally { dir.closeSync(); }
+JS
+test ! -e "$EXPORT/$SNAPSHOT" && test ! -L "$EXPORT/$SNAPSHOT"
+env -i PATH="$AUDIT_PATH" HOME="$HOME" SSH_AUTH_SOCK="${SSH_AUTH_SOCK-}" \
+prlimit --fsize=268435456:268435456 -- timeout 180 sftp -F none -oBatchMode=yes -oStrictHostKeyChecking=yes \
+  -oUserKnownHostsFile="\"$KNOWN_HOSTS\"" -oConnectTimeout=15 \
+  -oServerAliveInterval=15 -oServerAliveCountMax=2 \
+  -oForwardAgent=no -oClearAllForwardings=yes -oPermitLocalCommand=no \
+  -oControlMaster=no -oControlPath=none -b - "root@$IP" <<EOF
+get /bench/bootstrap-ready.json "$EXPORT/bootstrap-ready.json"
+get /bench/campaign/.host-attempt.json "$EXPORT/reservation.json"
+get /bench/campaign/$CAMPAIGN/plan.json "$EXPORT/plan.json"
+get /bench/campaign/$CAMPAIGN/$WAIT_EVENT "$EXPORT/wait-event.json"
+get /bench/campaign/$CAMPAIGN/$SUBJECT "$EXPORT/$SUBJECT"
+get -R /bench/campaign/$CAMPAIGN/$SNAPSHOT "$EXPORT/$SNAPSHOT"
+EOF
+```
+
+The batch contains no `put`, `mkdir`, `rename`, removal or remote shell escape.
+No remote archive or controller-state file is created. Enforce the local quota
+and preflight before recursive transfer, not just a size check after downloading.
+Keep partial attempts separate; never merge them with a later download.
+
+5. Recheck ownership and the same live unit, latest event name/bytes, reservation,
+   plan, subject, snapshot and unchanged local controller state **after** transfer.
+   Require equality with the first
+   observations and an absent inbox. If the job exited, advanced, expired or any
+   byte/identity changed, the copy cannot support delivery. Preserve it as a
+   failed inspection; use ordinary collection only when independently terminal.
+   The entry's existing 24-hour review wait and the unit's 48-hour lifetime keep
+   running during inspection/review. Never extend either deadline. Require review
+   to finish before the earlier deadline; do not treat a still-active stopping
+   unit or an old waiting event as fresh authority.
+
+After step 5's fresh ownership/unit observations, run the **same** remote preflight
+again, then inspect locally from the trusted checkout. Only the script's input
+mode/root changes; the expected identity stays fixed. Byte-for-byte equality of
+the small summaries binds the before/after control bytes, full snapshot and local
+copy. Neither hashing nor a successful comparison is independent audit approval.
+
+```sh
+test ! -e "$WORK/after.json" && test ! -e "$WORK/local.json"
+remote_preflight > "$WORK/after.json"
+audit_node --input-type=module - local "$EXPORT" "$ROUND" "$COMMIT" "$CAMPAIGN" "$GROUP" \
+  "$TOKEN" "$PLAN_SHA256" "$SUBJECT_SHA256" "$WAIT_EVENT" \
+  < "$WORK/preflight.mjs" > "$WORK/local.json"
+cmp -- "$WORK/before.json" "$WORK/after.json"
+cmp -- "$WORK/before.json" "$WORK/local.json"
+```
+
+6. Give a fresh independent reviewer the verified subject, complete snapshot and
+   applicable native audit contract (`isolated/json-staging.mjs` plus
+   `json-api/contract.mjs`, or `isolated/mixed-staging.mjs` plus the mixed native
+   build-context contract). Source names are data in `sourcesManifest.files`;
+   read their `storedAs` blobs, never reconstruct paths from untrusted names or
+   run package/build hooks. Contexts are retained byte-for-byte and hashed as tar
+   files; inspect their content only in a separately bounded offline sandbox with
+   traversal/link/special-file rejection, no credentials or host mounts. The
+   reviewer must inspect semantics, every required native receipt identity and
+   source claim, not just endorse matching hashes. JSON's exact image identities
+   cannot be replaced by a prelaunch/source-only receipt. Mixed's scope is
+   committed source/context, **not** a review of a subsequently built image.
+   Unresolved findings or insufficient evidence mean no approved delivery.
+7. Only after independent review and explicit operator approval of this exact
+   subject, use the existing delivery command against the **same child state
+   root**, group and campaign. Preview and independently approve its exact action
+   hash; never automatically feed preview output into execution:
+
+```sh
+audit_node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROOT --deliver-audit ABSOLUTE_REVIEW_FILE --audit-group GROUP --campaign CAMPAIGN --approve-subject REVIEWED_SUBJECT_SHA256 --print-approval
+audit_node bench/workloads/cloud-production.mjs ROUND --state-dir SAME_CHILD_ROOT --deliver-audit ABSOLUTE_REVIEW_FILE --audit-group GROUP --campaign CAMPAIGN --approve-subject REVIEWED_SUBJECT_SHA256 --approve-reviewed-merged-ready REVIEWED_ACTION_SHA256
+```
+
+Delivery still rechecks live ownership, waiting group/inbox, nonce-bound state and
+exact canonical subject, records its single durable attempt and cannot overwrite
+an inbox. The live process, not the exported JSON, accepts the full native receipt
+and advances. A delivery result of 3 is not qualification; a failed/uncertain
+attempt is not automatic retry authority. Observe normally, then use the existing
+separately approved `--collect` only after the exact unit is terminal. Terminal
+archive integrity, native replay, exit agreement and cleanup/deletion gates remain
+unchanged. This manual export does not exercise or qualify those operations;
+real target-host transport and review-to-delivery composition still need verification.
+
+Keep the tmpfs mounted while inspection/review needs its bytes, including after a
+failed or partial transfer. Do not reuse it for another attempt. After the owning
+operator has explicitly retired this local copy (and retained any required evidence
+through a separately authorized bounded destination), release **only this unique
+local mount**. This discards its contents; there is no automatic exit trap that
+could erase failure evidence, recursive deletion, lazy unmount or remote cleanup:
+
+```sh
+test "$(realpath -e -- "$WORK")" = "$WORK_PARENT/work"
+test "$(findmnt -n -o FSTYPE --mountpoint "$WORK")" = tmpfs
+sudo umount -- "$WORK"
+rmdir -- "$WORK"
+rmdir -- "$WORK_PARENT"
+```
 
 ## Readiness And Verification
 

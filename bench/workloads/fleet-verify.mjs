@@ -7,7 +7,7 @@ import { roundName, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript } from "./cloud-retirement.mjs";
+import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -82,6 +82,10 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
       if (job.outcome !== "available") { result.groups.push({ group, outcome: job.outcome }); continue; }
       const s = job.state;
       if (s.status === "retired") {
+        if (s.retirement.kind === "native-failed") {
+          verifyFailedNativeRetirement(job.local, s);
+          result.groups.push({ group, outcome: s.destroyedAt ? "native-failed-retired" : "cleanup-pending", id: s.id }); continue;
+        }
         const setup = s.retirement.kind === "setup-failed";
         const bytes = regular(join(job.local, setup ? "failed-setup-host.json" : "unused-host.json"), 4096), record = JSON.parse(bytes);
         assert.equal(digest(bytes), s.retirement.evidenceSha256);

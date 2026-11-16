@@ -14,7 +14,7 @@ import { payload } from "./probe.mjs";
 import { emissionIdentity } from "./receipts.mjs";
 import { trackedImageBuild, trackedNetworkCreate, requireSourceControl, failureKind, terminalHealthPaths, collectTerminalHealth, ownedCleanupObservation, ownedContainerRecorder, ownedResourceCleanup } from "./lifecycle.mjs";
 import { nativeBuildContext } from "../mixed-production/build-context.mjs";
-import { records } from "../marketplace/fixtures.mjs";
+import { records, writeFixture } from "../marketplace/fixtures.mjs";
 import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
 
@@ -72,7 +72,7 @@ export async function run(args) {
   const installedDependencies = resolve(repo, options.nodeModules), dependencies = join(folder, "dependencies");
   const tools = {};
   const images = new Map();
-  const fixtureDir = join(folder, "fixtures"); mkdirSync(fixtureDir); json(join(fixtureDir, "marketplace.json"), records());
+  const fixtureDir = join(folder, "fixtures"); mkdirSync(fixtureDir); writeFixture(join(fixtureDir, "marketplace.json"), JSON.stringify(records(), null, 2) + "\n");
   const fixture = ["-v", `${fixtureDir}:/fixtures:ro`];
   const checkout = async () => ({ commit: await command("git", ["rev-parse", "HEAD"]), dirty: await command("git", ["status", "--porcelain", "--untracked-files=all"]) });
   async function sourceHash(app) {

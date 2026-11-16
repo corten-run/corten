@@ -108,6 +108,31 @@ test("group launch permits exact siblings but reserves only this group's complet
   await assert.rejects(h.task({}, options).launch()); assert.equal(h.creates, 1);
 });
 
+test("a terminal later group cannot be saved as running admission and remains collectable", async (t) => {
+  const { h, options } = configured(t);
+  options.group = groupNames[1]; h.flags.active = false;
+  await assert.rejects(h.task({}, options).launch(), /group ended before running admission/);
+  assert.equal(h.saved().status, "starting"); assert.equal(h.saved().group, groupNames[1]);
+  assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
+  const report = syntheticInspection("verified");
+  report.schema = "benchmark-isolated-group-campaign-inspection/v1";
+  report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
+  report.groups = report.groups.filter((row) => row.group === options.group);
+  h.setArchive(archive([...metadata().map((row) => row.name === "exit-code" ? { ...row, body: "0\n" } : row),
+    { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]));
+  assert.equal(await h.task({ inspect: async () => report }).collect(), 0);
+  assert.equal(h.saved().status, "collected"); assert.ok(h.saved().destroyedAt);
+  assert.equal(h.saved().fullGroupQualified, false);
+  assert.equal(h.creates, 1); assert.equal(h.deletes, 1);
+});
+
+test("a nonterminal later group retains ordinary running admission", async (t) => {
+  const { h, options } = configured(t); options.group = groupNames[1];
+  await h.task({}, options).launch();
+  assert.equal(h.saved().status, "running"); assert.equal(h.saved().group, groupNames[1]);
+  assert.equal(h.saved().bootstrapReady, undefined); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+});
+
 test("foreign benchmark, own preexisting host, or fleet/account tampering cannot create", async (t) => {
   for (const mode of ["foreign", "own", "changed-account", "changed-fleet"]) {
     const { h, fleet, options, path } = configured(t);
