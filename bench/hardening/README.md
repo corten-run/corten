@@ -21,7 +21,21 @@ the CLI string array including the mandatory local development round `wN`.
 The returned and persisted summary schema is `native-hardening-run/v1`.
 `--out` optionally selects a fresh subdirectory under `bench/hardening/results`.
 `--node-modules` can name an existing dependency installation (the pinned
-Playwright version is checked); it is mounted read-only, not installed or changed.
+Playwright version is checked). Stable regular installed files, including esbuild's
+postinstall hardlinks, are copied into a fresh private evidence tree and mounted
+read-only. The installed tree is not changed; copied files are independent and
+single-link. Saved evidence still rejects hardlinks.
+
+The copy preflights the existing depth, entry and byte bounds, checks descriptor
+identity before reading, and requires unchanged source identity, metadata and
+recursive membership bookends. Symlinks, special files and changing inputs fail
+closed. Linux traversal uses pinned directory descriptors and no-follow opens;
+Windows uses path bookends plus descriptor identity checks before content reads.
+This is not an atomic filesystem snapshot: the installation must remain stable.
+Only the unused top-level `.bin` launchers are excluded. Rejections identify a
+bounded relative path (up to 64 characters), entry type, link count and reason,
+with fixed public I/O codes rather than absolute paths or file contents.
+
 No options select a smaller benchmark group. `--verify-app`, `--verify-source`,
 `--verify-case` and `--verify-phase` select bounded apparatus verification only.
 Every other cell remains `not-run`, and verification mode cannot set `groupReady`.

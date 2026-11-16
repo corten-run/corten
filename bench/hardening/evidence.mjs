@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { constants, closeSync, fstatSync, openSync, readSync, writeSync, readFileSync, readdirSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative, isAbsolute, posix, win32 } from "node:path";
@@ -70,22 +70,129 @@ export function savedFiles(root, excluded = []) {
   walk(root); return files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 }
 export function snapshotDependencies(from, to) {
-  mkdirSync(to);
-  const copy = (source, target, top = false) => {
-    for (const name of readdirSync(source).sort()) {
-      // These executable links are not used: all native workers call Node and
-      // absolute JS entrypoints, never npm/npx or node_modules/.bin commands.
-      if (top && name === ".bin") continue;
-      const input = join(source, name), output = join(target, name), stat = lstatSync(input);
-      assert.ok(!stat.isSymbolicLink(), "linked installed dependency input");
-      if (stat.isDirectory()) { mkdirSync(output); copy(input, output); }
-      else {
-        assert.ok(stat.isFile() && stat.nlink === 1); const body = readFileSync(input);
-        writeFileSync(output, body, { flag: "wx" }); assert.equal(digest(readFileSync(input)), digest(body), "dependency changed during snapshot");
-      }
-    }
+  from = resolve(from); to = resolve(to);
+  const type = (s) => !s ? "unknown" : s.isSymbolicLink() ? "symlink" : s.isFile() ? "file"
+    : s.isDirectory() ? "directory" : s.isFIFO() ? "fifo" : "special";
+  const reject = (reason, path = ".", stat, code) => {
+    const detail = { path: path.slice(0, 64), reason, type: type(stat), nlink: stat ? String(stat.nlink) : null };
+    if (code) detail.fsCode = ["ENOENT", "ELOOP", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "EEXIST", "ENOTDIR"].includes(code) ? code : "unknown";
+    throw Object.assign(new Error(`dependency snapshot rejected ${JSON.stringify(detail)}`), { code: "ERR_DEPENDENCY_SNAPSHOT" });
   };
-  copy(from, to, true); return savedFiles(to);
+  const io = (path, action, reason = "input-io") => {
+    try { return action(); }
+    catch (error) { if (error.code === "ERR_DEPENDENCY_SNAPSHOT") throw error; reject(reason, path, undefined, error.code); }
+  };
+  const info = (full, path) => io(path, () => lstatSync(full, { bigint: true }));
+  const keys = ["dev", "ino", "mode", "uid", "gid", "size", "nlink", "mtimeNs", "ctimeNs", "birthtimeNs"];
+  const same = (before, after, path, fields = keys) => {
+    if (after.isSymbolicLink()) reject("linked-input", path, after);
+    if (type(before) !== type(after) || fields.some((key) => before[key] !== after[key])) reject("changed-input", path, after);
+  };
+  const chain = (full) => {
+    const paths = [];
+    for (let path = full;; path = dirname(path)) { paths.unshift(path); if (path === dirname(path)) return paths; }
+  };
+  const directory = (full, path) => {
+    const stat = info(full, path);
+    if (stat.isSymbolicLink()) reject("linked-input", path, stat);
+    if (!stat.isDirectory()) reject("unsupported-entry", path, stat);
+    return stat;
+  };
+  const within = (root, path) => {
+    const delta = relative(root, path).replaceAll("\\", "/");
+    return !isAbsolute(delta) && delta !== ".." && !delta.startsWith("../");
+  };
+  if ([from, to].some((p) => p.replaceAll("\\", "/").startsWith("//")) || within(from, to) || within(to, from)) reject("unsafe-root");
+  const ancestors = chain(from).map((full) => ({ full, stat: directory(full, ".") }));
+  for (const full of chain(dirname(to))) directory(full, ".");
+  io(".", () => mkdirSync(to, { mode: 0o700 }), "output-io");
+  const guard = (path, baseline) => {
+    // Ancestors outside the installation may legitimately gain unrelated files.
+    for (const { full, stat } of ancestors) same(stat, info(full, "."), ".", ["dev", "ino", "mode"]);
+    for (let at = posix.dirname(path); baseline && at !== "."; at = posix.dirname(at))
+      same(baseline.get(at), info(join(from, at), at), at);
+    if (baseline) same(baseline.get("."), info(from, "."), ".");
+  };
+  const noFollow = (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0);
+  const rows = [], buffer = Buffer.alloc(1024 * 1024);
+  const copyFile = (input, path, before, baseline) => {
+    const fd = io(path, () => openSync(input, constants.O_RDONLY | noFollow));
+    try {
+      same(before, io(path, () => fstatSync(fd, { bigint: true })), path);
+      guard(path, baseline); same(before, info(join(from, path), path), path);
+      const output = io(path, () => openSync(join(to, path), "wx", 0o600), "output-io");
+      let bytes = 0; const hash = createHash("sha256");
+      try {
+        for (;;) {
+          const n = io(path, () => readSync(fd, buffer, 0, Math.min(buffer.length, Number(before.size) - bytes + 1), bytes));
+          if (n === 0) break;
+          bytes += n; if (BigInt(bytes) > before.size) reject("changed-input", path, before);
+          hash.update(buffer.subarray(0, n));
+          for (let at = 0; at < n;) {
+            const written = io(path, () => writeSync(output, buffer, at, n - at), "output-io");
+            if (written <= 0) reject("output-io", path); at += written;
+          }
+        }
+      } finally { io(path, () => closeSync(output), "output-io"); }
+      if (BigInt(bytes) !== before.size) reject("changed-input", path, before);
+      same(before, io(path, () => fstatSync(fd, { bigint: true })), path);
+      same(before, info(join(from, path), path), path); guard(path, baseline);
+      rows.push({ path, bytes, sha256: hash.digest("hex") });
+    } finally { io(path, () => closeSync(fd)); }
+  };
+  const scan = (baseline, copy = false) => {
+    const found = new Map(), seen = new Set(); let entries = 0, total = 0n;
+    const walk = (access, path, depth) => {
+      if (depth > 64) reject("depth-bound", path);
+      const before = directory(access, path); found.set(path, before);
+      if (baseline) {
+        if (!baseline.has(path)) reject("changed-input", path, before);
+        same(baseline.get(path), before, path);
+      }
+      // Linux traversal is anchored to owned directory descriptors. Windows
+      // uses path bookends and verifies the opened file identity before reads.
+      const fd = process.platform === "linux" ? io(path, () => openSync(access, constants.O_RDONLY | noFollow | constants.O_DIRECTORY)) : null;
+      try {
+        if (fd !== null) same(before, io(path, () => fstatSync(fd, { bigint: true })), path);
+        guard(path, baseline);
+        const dir = fd === null ? access : `/proc/self/fd/${fd}`;
+        for (const name of io(path, () => readdirSync(dir)).sort()) {
+          // Native workers use absolute JS entrypoints, never top-level .bin.
+          if (path === "." && name === ".bin") continue;
+          const child = path === "." ? name : `${path}/${name}`;
+          if (++entries > 200000) reject("entry-bound", child);
+          if (!name || name === "." || name === ".." || /[\\/:"<>|?*\x00-\x1f\x7f]/.test(name) || /[. ]$/.test(name)
+            || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name) || seen.has(child.toLowerCase())) reject("unsafe-name", child);
+          seen.add(child.toLowerCase());
+          const input = join(dir, name), stat = info(input, child);
+          if (stat.isSymbolicLink()) reject("linked-input", child, stat);
+          if (stat.isDirectory()) {
+            if (copy) io(child, () => mkdirSync(join(to, child), { mode: 0o700 }), "output-io");
+            walk(input, child, depth + 1);
+          } else {
+            if (!stat.isFile() || stat.nlink < 1n) reject("unsupported-entry", child, stat);
+            total += stat.size;
+            if (stat.size < 0n || stat.size > 512n * 1024n ** 2n || total > 4n * 1024n ** 3n) reject("byte-bound", child, stat);
+            found.set(child, stat);
+            if (baseline) {
+              if (!baseline.has(child)) reject("changed-input", child, stat);
+              same(baseline.get(child), stat, child);
+            }
+            if (copy) copyFile(input, child, stat, baseline);
+          }
+        }
+        same(before, info(access, path), path);
+        if (fd !== null) same(before, io(path, () => fstatSync(fd, { bigint: true })), path);
+      } finally { if (fd !== null) io(path, () => closeSync(fd)); }
+    };
+    walk(from, ".", 0); guard(".", baseline);
+    if (baseline && (baseline.size !== found.size || [...baseline.keys()].some((path) => !found.has(path)))) reject("changed-input");
+    return found;
+  };
+  const before = scan(); scan(before, true); scan(before);
+  rows.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+  // Saved evidence remains single-link, independently owned and byte-identical.
+  io(".", () => assert.deepEqual(savedFiles(to), rows), "changed-output"); return rows;
 }
 
 export async function buildNativeImage(docker, { context, runId, commit, source, tag, files, log }) {
