@@ -189,13 +189,20 @@ test("census predicate diagnostics isolate refusals without reflecting provider 
 });
 
 test("census predicate diagnostics never replace coarse deadline or cancellation phases", async () => {
-  for (const [stopAt, cancel, code] of [[4, false, "list-response"], [5, false, "provider-output"], [4, true, "list-response"]]) {
-    let ticks = 0, cancelled = false, requests = 0;
-    const run = providerTransport({ repo: resolve("."), spawn, now() {
-      if (++ticks < stopAt) return 0;
-      if (cancel) { cancelled = true; return 0; } return 1000;
-    }, interrupted: () => cancelled, request() { requests++; return censusPage([], 0); } });
-    await assert.rejects(run(list, 1000), (error) => error.providerDiagnostic?.code === code && error.controlUncertain === true);
+  for (const [code, cancel] of [["list-response", false], ["provider-output", false], ["list-response", true]]) {
+    let clock = 0, cancelled = false, requests = 0, boundaryReached = false;
+    const stop = () => { boundaryReached = true; if (cancel) cancelled = true; else clock = 1000; };
+    const response = censusPage([{ id: 1 }], 1);
+    // Synthetic data hooks stop at validation or serialization, not at an
+    // incidental ordinal clock read (including credential budget samples).
+    if (code === "list-response") Object.defineProperty(response.value.links, "pages", { get() { stop(); return undefined; } });
+    else response.value.droplets[0].toJSON = () => { stop(); return { id: 1 }; };
+    const run = providerTransport({ repo: resolve("."), spawn, now: () => clock,
+      interrupted: () => cancelled, request() { requests++; return response; } });
+    await assert.rejects(run(list, 1000), (error) => {
+      assert.deepEqual(error.providerDiagnostic, { code }); assert.equal(error.controlUncertain, true); return true;
+    });
+    assert.equal(boundaryReached, true);
     assert.equal(requests, 1);
   }
   const h = censusFixture([{ response: censusPage([], 1), cost: 400 }, { response: censusPage([], 0), cost: 600 }]);
