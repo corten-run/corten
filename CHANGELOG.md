@@ -17,6 +17,11 @@ Corten is pre-1.0, so any minor version may change the API.
   attempts and observations without closing earlier accepted inputs. Do not
   reinterpret retained failed evidence.
 
+- Retain raw host process stat evidence and exempt only identity-bound Linux kernel
+  threads from grouped benchmark user-process cleanup. Prepare fresh disposable
+  hosts against firmware-service activation before baseline; keep new user-process
+  leaks and unproved historical inventories fail-closed.
+
 - Retain omitted optional Docker image/container command defaults as explicit null
   in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
   Missing or malformed image configuration, malformed execution and substituted or missing

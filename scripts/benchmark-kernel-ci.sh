@@ -39,6 +39,14 @@ id=$(docker run -d --pull=never --network none --label agent.owner=codex --label
   --cpus 1 --memory 1g "$image" node -e 'setInterval(()=>{},1000)')
 [[ "$id" =~ ^[a-f0-9]{64}$ ]]
 
+# Inspect real host procfs and real storage outside a private PID namespace.
+"$node" --max-old-space-size=256 --experimental-test-module-mocks --test --test-reporter=tap --test-concurrency=1 \
+  bench/workloads/isolated/host-boundary.test.mjs \
+  bench/workloads/isolated/host-lifetime-durability.test.mjs | tee "$work/storage-boundary.tap"
+grep -Fx '# fail 0' "$work/storage-boundary.tap"
+grep -Fx '# cancelled 0' "$work/storage-boundary.tap"
+grep -Fx '# skipped 0' "$work/storage-boundary.tap"
+
 # Generate only fixed fixture invocations with the actual production bootstrap.
 # No evidence-selected commands, budget changes, existing units or benchmark work.
 for suite in lifetime participant churn; do
