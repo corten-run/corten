@@ -998,14 +998,18 @@ export async function patch(html, signal) {
  * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
  *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
  *   it replaces takes ({@link opened})
- * @returns {Promise<boolean>} whether the patch had elements and every one found its place on the page
+ * @param {boolean} [addressed] the patch is the page at an address (`data-address`): one that adds
+ *   to an element (`data-append`) is not, and is not drawn
+ * @returns {Promise<boolean>} whether the patch had elements and every one found its place on the
+ *   page (a stylesheet link is not one: {@link stylesOf} takes it out first)
  */
-async function apply(html, signal, sent, took, own = true, asked, within) {
+async function apply(html, signal, sent, took, own = true, asked, within, addressed = false) {
   const content = parse(html, own);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
   if (signal?.aborted) return false;
+  if (addressed && Array.from(content.children).some((el) => el instanceof HTMLTemplateElement && hasAttr(el, "data-append"))) return false;
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
@@ -1462,14 +1466,15 @@ function focusNear(el, root, fresh) {
  * @param {{ apply: () => void } | null} [layout] what changes around `<main>`, drawn in the same
  *   frame as the page ({@link swapDocument})
  * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
+ * @param {string} [at] the address a `data-address` form asked for, which a full load instead loads
  * @returns {Promise<boolean>} false when it loaded the page in full instead
  */
-async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html)) {
+async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html), at = "") {
   preload(content);
   const [, styled] = await Promise.all([modulesOf(content), stylesOf(content)]);
   signal?.throwIfAborted();
   if (!styled) {
-    reload(notice);
+    reload(notice, at);
     return false;
   }
   const main = document.querySelector("main");
@@ -1487,7 +1492,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
       const id = idOf(part);
       const old = id ? document.getElementById(id) : null;
       if (!old || main.contains(old)) {
-        reload(notice);
+        reload(notice, at);
         return false;
       }
       elementOwn.remove.call(part);
@@ -2543,8 +2548,10 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     // Back and forward: the browser puts the user back where they were on that entry.
     if (event.navigationType === "traverse") {
       // Between two entries of this page that a `data-address` form's patch drew: its patch again,
-      // the rest of the page and the focus staying.
-      const patch = addressed.has(event.destination.key) && addressed.has(navigation?.currentEntry?.key ?? "");
+      // the rest of the page and the focus staying. Only at the same path: another route's
+      // patch is not this screen's.
+      const patch =
+        addressed.has(event.destination.key) && addressed.has(navigation?.currentEntry?.key ?? "") && url.pathname === location.pathname;
       event.intercept({
         focusReset: patch ? "manual" : "after-transition",
         handler: () => (patch ? readAddress(url, event.signal) : visit(url, event.signal, redirected, false, undefined, undefined, stale)),
@@ -2717,12 +2724,16 @@ const addressed = new Set();
 function address(to, patched) {
   const from = navigation?.currentEntry?.key;
   if (to === location.href) return;
-  if (patched && from) addressed.add(from);
+  // The entry it was sent from shows the same screen only at the same path: another route's
+  // patch drawn into this page is not what that route's page draws.
+  if (patched && from && new URL(to).pathname === location.pathname) addressed.add(from);
   history.pushState(null, "", to);
   addressed.add(navigation?.currentEntry?.key ?? "");
   // The entries the new one dropped (those it was ahead of) are forgotten.
   const live = new Set(navigation?.entries().map((e) => e.key));
   for (const key of addressed) if (!live.has(key)) addressed.delete(key);
+  // A nav link to the new address is the current one, as a navigation marks it.
+  markCurrent();
 }
 
 /**
@@ -2764,7 +2775,7 @@ async function readAddress(url, signal) {
   signal.throwIfAborted();
   if (html === null) return page();
   // A patch not drawn whole leaves the screen (some of it) another entry's: the page is read instead.
-  const drawn = await apply(html, signal, null).catch((e) => {
+  const drawn = await apply(html, signal, null, undefined, true, undefined, undefined, true).catch((e) => {
     if (signal.aborted) throw e;
     return false;
   });
@@ -2962,9 +2973,11 @@ let left = 0;
  * Loads the page again from the server, with the notice of the answer it takes the place of: kept
  * for that page's load, for as long as its cookie would have lasted (not one a read again sent
  * back, which the user has seen).
- * @param {Notice} [notice]
+ * @param {Notice} [notice] @param {string} [at] an address to load instead, in an entry of its own
+ *   (a `data-address` form's), as the browser loads a form's
  */
-function reload(notice = null) {
+function reload(notice = null, at = "") {
+  if (at && at !== location.href) history.pushState(null, "", at);
   left += 1;
   if (notice && !notice.has("r")) {
     try {
@@ -3133,6 +3146,13 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // Only the submit still in flight for the form renews its key: a newer one of the same form
     // (which aborted this one) went with this key, and its answer is still to come.
     const renew = () => res.status < 500 && submits.get(form)?.controller === controller && renewSubmitKeys(form);
+    // The address a `data-address` form asked for, its `#fragment` too, which the browser keeps
+    // for the form without JavaScript, across a redirect whose `Location` names none. `fetch`
+    // shows no fragment of a redirect's own, as a link's redirect does not ({@link interceptVisit}).
+    // A `Response` a script made has no URL: the request's stands in (it is not drawn anyway).
+    const at = new URL(res.url || url);
+    at.hash ||= url.hash;
+    const atAddress = addressing ? at.href : "";
     const location_ = res.headers.get("corten-location");
     if (location_) {
       renew();
@@ -3150,33 +3170,34 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       }
     } else if (fromHere(res.url) && res.headers.has("corten-page") && shellChanged(res)) {
       renew();
-      reload(noticeOf(res));
+      // A marked form's answer loads in full at the address it asked for, as without JavaScript.
+      reload(noticeOf(res), atAddress);
     } else if (fromHere(res.url) && (res.headers.has("corten-patch") || res.headers.has("corten-page"))) {
       const body = await res.text();
       renew();
       signal.throwIfAborted();
       const patched = res.headers.has("corten-patch");
       let drawn = true;
-      if (patched) drawn = await apply(body, signal, sent, res.ok, true, undefined, within);
+      if (patched)
+        // One that throws as it is drawn is not drawn whole either, for a marked form: its page is read.
+        drawn = await apply(body, signal, sent, res.ok, true, undefined, within, addressing).catch((e) => {
+          if (signal.aborted || !addressing) throw e;
+          return false;
+        });
       else {
         const notice = noticeOf(res);
-        drawn = await swapPage(body, signal, false, notice);
+        drawn = await swapPage(body, signal, false, notice, null, undefined, atAddress);
         announce(notice);
       }
       signal.throwIfAborted();
       if (addressing) {
-        // The address the form asked for, its `#fragment` too, which the browser keeps for the
-        // form without JavaScript, across a redirect whose `Location` names none. `fetch` shows no
-        // fragment of a redirect's own, as a link's redirect does not ({@link interceptVisit}).
-        const to = new URL(res.url);
-        to.hash ||= url.hash;
-        if (drawn) address(to.href, patched);
+        if (drawn) address(at.href, patched);
         else if (patched) {
           // A patch not drawn whole leaves a screen that is not the address's: the page at it is
           // read, as the browser loads it for the form without JavaScript (an entry of its own, none
           // when it is the address already). It keeps the marks until it is drawn.
           submits.delete(form);
-          go(to.href, { info: { [LOAD]: true, [SOURCE]: submitter ?? form } });
+          go(at.href, { info: { [LOAD]: true, [SOURCE]: submitter ?? form } });
         }
       }
       if (res.status === 422) focusInvalid(form);

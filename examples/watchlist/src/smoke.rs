@@ -51,6 +51,15 @@ pub mod url {
         #[route(query)]
         pub q: super::ScopeQuery,
     }
+
+    /// The scope's panel at another address than the screen's: a marked form sent there puts
+    /// that address in history, and Back from it reads the screen's page, not a patch.
+    #[route("/smoke/scope-elsewhere", get = scope_elsewhere)]
+    #[derive(Default)]
+    pub struct ScopeElsewhere {
+        #[route(query)]
+        pub q: super::ScopeQuery,
+    }
 }
 
 /// The components the smoke's pages draw.
@@ -168,7 +177,8 @@ struct SmokeScopeId;
 /// The scope's panel with its form, one patch, so the form always shows the scope the panel does.
 /// The form is marked `data-address`: once its answer is drawn, the address is the one it asked
 /// for, and Back and Forward read this patch again. A button's `formaction`, and another marked
-/// form's `action`, name a place on the page, which the address keeps.
+/// form's `action`, name a place on the page, which the address keeps; another button's is
+/// another route's.
 #[component]
 fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
     let f = ScopeQuery::FIELDS;
@@ -179,6 +189,7 @@ fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
                 <button name={f.scope} value="day">"Day"</button>
                 <button name={f.scope} value="week">"Week"</button>
                 <button name={f.scope} value="month" formaction={here.at(SmokeScopeId)}>"Month"</button>
+                <button name={f.scope} value="far" formaction={url::ScopeElsewhere::default()}>"Elsewhere"</button>
             </form>
             <form method="get" action={here.at(SmokeScopeId)} data-patch data-address>
                 <button name={f.scope} value="quarter">"Quarter"</button>
@@ -192,6 +203,8 @@ fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
 /// leaves the address, and the rest of the screen, which a change of scope does not draw again.
 async fn scope_page(req: Req, Params(at): Params<url::Scope>) -> HtmlResult {
     let scope = at.q.scope.as_deref().unwrap_or("all");
+    let (here, elsewhere) = (url::Scope::default(), url::ScopeElsewhere::default());
+    let (here_link, elsewhere_link) = (req.nav(&here), req.nav(&elsewhere));
     req.patch_or(html! { <ScopePanel scope={scope} /> }, || async {
         req.page(html! {
             <Layout req={&req} title="Scope" viewer={None} head="">
@@ -199,11 +212,28 @@ async fn scope_page(req: Req, Params(at): Params<url::Scope>) -> HtmlResult {
                 <form method="get" action={url::Scope::default()} data-patch>
                     <button name={ScopeQuery::FIELDS.scope} value="year">"Year, in place"</button>
                 </form>
+                <nav>
+                    <a {..here_link}>"Scope"</a>
+                    <a {..elsewhere_link}>"Elsewhere"</a>
+                </nav>
                 <ol>
                     for i in 0..120 {
                         <li>"Row "{i}" of the rest of the screen, which a change of scope does not draw again."</li>
                     }
                 </ol>
+            </Layout>
+        })
+    })
+    .await
+}
+
+/// The scope's panel at another address, or its page there.
+async fn scope_elsewhere(req: Req, Params(at): Params<url::ScopeElsewhere>) -> HtmlResult {
+    let scope = at.q.scope.as_deref().unwrap_or("all");
+    req.patch_or(html! { <ScopePanel scope={scope} /> }, || async {
+        req.page(html! {
+            <Layout req={&req} title="Elsewhere" viewer={None} head="">
+                <ScopePanel scope={scope} />
             </Layout>
         })
     })

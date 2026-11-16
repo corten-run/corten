@@ -1756,14 +1756,16 @@ once the patch is drawn, that address is in the address bar, in a new history en
 is the address already), as the browser leaves it after the same form without JavaScript, a
 `#fragment` of its `action` or `formaction` included. A reload, a bookmark and a shared link then
 reach what the screen shows, and a form that posts without an `action` sends to it. A patch the
-runtime cannot draw whole (an empty one, or one with an element that has no place on the page)
-is followed by a read of the page at that address, as the browser loads it. Back and
-Forward between the entries such forms made on the screen, and the one the first was sent from,
-read the entry's address as the form did (`corten: action`, which the browser's HTTP cache can
+runtime cannot draw whole (an empty one, one with an element that has no place on the page, or
+one that adds to an element) is followed by a read of the page at that address, as the browser
+loads it. Back and Forward between the entries such forms made on the screen at the screen's
+path, and the one the first was sent from, read the entry's address as the form did
+(`corten: action`, which the browser's HTTP cache can
 answer) and draw its patch, leaving the rest of the screen as it is. An answer that is not a 2xx
-patch (a page, a redirect, an error, none) or a patch the runtime cannot draw whole (an empty one,
-or one with an element that has no place on the page) is read as a page, as any other entry is;
-so is every entry once another page has been swapped in or the page reloaded.
+patch (a page, a redirect, an error, none) or a patch the runtime cannot draw whole is read as a
+page, as any other entry is; so is an entry of a form whose `action` is another route's (its
+patch drawn into this screen is not that route's page), and every entry once another page has
+been swapped in or the page reloaded.
 
 ```rust,ignore
 #[component]
@@ -1786,13 +1788,15 @@ Back asks it at every address the forms put in the address bar and at the one th
 so the patch draws everything an address changes: the part, and the form with it, whose controls
 then show the scope the part does, except a field the user changed and did not send, which keeps
 what they typed as in any patch ([Limit 2](../design.md#limit-whole-element-patches)). A route
-whose patch adds to the page (`view::Append`, Load more's) is not one to mark: Back would add the
-rows again. The page's other links and forms keep the address they were drawn with; one that
-should carry the scope is drawn by the same patch, or keeps the address's query (`keep_query`).
+whose patch adds to the page (`view::Append`, Load more's) is not one to mark: the runtime does
+not draw such a patch for a marked form and reads the page at the address instead, so a marked
+Load more would load a page each time. The page's other links and forms keep the address they
+were drawn with; one that should carry the scope is drawn by the same patch, or keeps the
+address's query (`keep_query`).
 The mark needs the Navigation API
 ([Limit 1](../design.md#limit-navigation-api)); without it the browser sends the form itself and
 loads the page at its address, as without JavaScript. `html!` refuses `data-address` on anything
-but a `<form>`, on a form without `data-patch`, and on one whose `method` posts; a
+but a `<form>`, on a form without `data-patch`, and on one whose `method` is `post` or `dialog`; a
 `formmethod="post"` button in a marked form posts as it would in any other, and leaves the
 address.
 

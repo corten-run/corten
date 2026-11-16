@@ -4056,18 +4056,26 @@ rules something out.
     of the form's `action` or `formaction`, as the browser does for the form without JavaScript
     (a fragment a redirect's `Location` names itself is not seen, as `fetch` does not show it, the
     same as for a link the runtime follows); the same address again adds no entry. A patch it
-    cannot draw whole (an empty one, or one with an element that has no place on the page) is
-    followed by a read of the page at the address, as the browser loads it. The runtime
-    keeps, in memory, the entries of the screen such forms made and the one each was sent from,
-    and a traversal between two of them reads the destination as the form did (`corten: action`,
-    which the HTTP cache can answer) and applies its patch, the rest of the screen and the focus
-    staying. Any other answer (a page, Corten's redirect, an error status even with a patch, no
-    answer, a body cut off) or a patch not drawn whole (it throws, is empty, or an element of it
-    has no place on the page) is read as a page, as every other entry is, focus going to the
+    cannot draw whole (it throws, is empty, has an element with no place on the page, or adds to
+    one, `data-append`, which no address's page is) is followed by a read of the page at the
+    address, as the browser loads it; a page answer that has to load in full (its layout changed,
+    or its stylesheet failed) loads at the address too. An error status's patch (a 422's, a 5xx's)
+    is drawn and its address pushed, as the browser shows an error page at the form's address. A
+    nav link to the new address is marked current, as for a navigation. The runtime keeps, in
+    memory, the entries of the screen such forms made, and the one each was sent from when the
+    form's address has its path, and a traversal between two of them at the same path reads the
+    destination as the form did (`corten: action`, which the HTTP cache can answer) and applies
+    its patch, the rest of the screen and the focus staying; a form sent to another route's address
+    makes no patch entry of the screen's, since that route's patch drawn into this screen is not
+    what that route's page draws. Any other answer (a page, Corten's redirect, an error status
+    even with a patch, no answer, a body cut off) or a patch not drawn whole (as above) is read as
+    a page, as every other entry is, focus going to the
     document's start unless the page gives it to a control, and so is every entry once another
     page is swapped in or the page reloads. So the route at each of those addresses
     answers its part with `req.patch_or`, drawing all the address changes; a route whose patch
-    appends (Load more) is not one to mark. Without the Navigation API
+    appends (Load more) is not one to mark. Entries live in memory: a page restored from the
+    back/forward cache keeps them with the rest of its script state, and one loaded again has none,
+    so its entries are read as pages. Without the Navigation API
     ([Limit 1](#limit-navigation-api)) the runtime leaves a marked GET form to the browser, which
     loads the page at its address, as without JavaScript.
 
@@ -4085,10 +4093,15 @@ rules something out.
     draft) was not chosen either: a reload would show another scope than the screen did, the error
     the mark is there to end, where a full load costs bytes (README conflict order 1 over 2).
 
-    What it costs: the runtime is 1,343 bytes larger raw, 413 with gzip (15,341 to 15,754) and
-    337 with brotli (13,846 to 14,183), paid once a release by every user. A GET `data-patch`
-    submit reads one attribute, a marked one's answer pushes an entry and forgets the entries it
-    dropped, and a traversal looks two keys up in a set. Nothing changes on the server: `html!`'s
+    What it costs: the runtime is 1,687 bytes larger raw, 506 with gzip (15,341 to 15,847) and
+    427 with brotli (13,846 to 14,273), paid once a release by every user; of that, refusing a
+    patch that appends is 123 raw, 23 gzip and 31 brotli. A GET `data-patch`
+    submit reads one attribute, a marked one's answer pushes an entry, forgets the entries it
+    dropped and marks the current nav link, and a traversal looks two keys up in a set. A
+    traversal whose patch read is answered by anything but a patch (a page, a redirect, an error)
+    or cannot be drawn whole costs a second round trip, the page read after it, as does a first
+    submit whose patch cannot be drawn whole; both are a route that does not draw its part as the
+    guide asks, or a failure. Nothing changes on the server: `html!`'s
     output and the request path are as they were, and the check that refuses a misplaced mark runs
     when the markup compiles. The request a marked form and its Back send, a `corten: action` GET
     answered by `req.patch_or`
