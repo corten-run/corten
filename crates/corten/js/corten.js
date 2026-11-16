@@ -1083,10 +1083,12 @@ function partTagBeside(put) {
   for (const el of put) {
     const id = idOf(el);
     if (!id || !el.parentElement) continue;
-    // Its own: not a slow part's tag (`data-part`, a read still on its way), nor one read again
-    // for other parts beside it (another part's answer put it there).
+    // Its own: the slow part's tag that named it (its read ended when the patch replaced it), or
+    // one read again for it; not another part's of either kind.
     const tag = Array.from(childrenOf(el.parentElement)).find(
-      (sibling) => matchesOf(sibling, PART_AGAIN) && !hasAttr(sibling, "data-part") && (readFor.get(sibling)?.some((part) => idOf(part) === id) ?? true),
+      (sibling) =>
+        matchesOf(sibling, PART_AGAIN) &&
+        (hasAttr(sibling, "data-part") ? attrOf(sibling, "data-part") === id : (readFor.get(sibling)?.some((part) => idOf(part) === id) ?? true)),
     );
     if (tag) return tag;
   }

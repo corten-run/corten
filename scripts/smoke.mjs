@@ -5158,6 +5158,13 @@ async function run(browser) {
     const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
     await ind.route("**/smoke/ind-a-first", (route) => route.fulfill(patchOf('<p id="ind-a">A</p><template data-corten-read-again="30" data-from="/smoke/ind-a-poll"></template>')));
     await ind.route("**/smoke/ind-b-first", () => {});
+    /** @type {string[]} */
+    const indAsked = [];
+    await ind.route((url) => url.pathname === "/smoke/ind-b-poll", (route) => {
+      const search = new URL(route.request().url()).search;
+      indAsked.push(search);
+      return route.fulfill(patchOf(`<p id="ind-b">B ${search}</p>`));
+    });
     await ind.goto(`${base}/`);
     await ind.evaluate(async () => {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="ind-0"></div>'));
@@ -5171,13 +5178,17 @@ async function run(browser) {
     await ind.waitForSelector('template[data-from="/smoke/ind-a-poll"]', { state: "attached", timeout: 5000 }).catch(() => {});
     await ind.evaluate(async () => {
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-      await corten.patch(__html('<p id="ind-b">B by a form</p><template data-corten-read-again="30" data-from="/smoke/ind-b-poll"></template>'));
+      await corten.patch(__html('<p id="ind-b">B by a form</p><template data-corten-read-again="1" data-from="/smoke/ind-b-poll"></template>'));
     });
     const indTags = await ind.evaluate(() => Array.from(document.querySelectorAll("#ind-0 > template")).map((tag) => tag.getAttribute("data-from")));
+    // A sort of B before its poll changes the address it reads, on the page.
+    await ind.evaluate(() => document.querySelector('#ind-0 > template[data-from="/smoke/ind-b-poll"]')?.setAttribute("data-from", "/smoke/ind-b-poll?o=2"));
+    await ind.waitForFunction(() => document.getElementById("ind-b")?.textContent?.startsWith("B ?"), null, { timeout: 5000 }).catch(() => {});
+    const indB = await ind.textContent("#ind-b");
     check(
-      "a form's answer for one of two parts beside each other, with a tag to read it again, leaves the other's tag in place",
-      indTags.includes("/smoke/ind-a-poll") && indTags.includes("/smoke/ind-b-first"),
-      JSON.stringify(indTags),
+      "a form's answer for one of two parts beside each other puts its tag to read it again in its own part's place, not the other's, where a sort reaches it",
+      indTags.join() === "/smoke/ind-a-poll,/smoke/ind-b-poll" && indAsked.join() === "?o=2" && indB === "B ?o=2",
+      JSON.stringify({ indTags, indAsked, indB }),
     );
     await ind.unrouteAll({ behavior: "ignoreErrors" });
     await ind.context().close();
