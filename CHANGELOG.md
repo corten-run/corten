@@ -1065,6 +1065,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- The forms guide no longer pairs a radio group with a plain enum field: a radio group drawn
+  with none checked sends nothing, so its field is `Option<Enum>` and the handler adds the
+  field's message when it is `None`, which redraws the form with the message without JavaScript;
+  a `<select>`, or radios drawn with one checked, stays the enum. A word the page never offers is
+  still a 422. A doctest and a router test hold the reading and the redraw
+  ([#1413 An enum form field that is missing or holds an unknown word fails the whole form with a 422, where a string field could draw a message on the field](https://github.com/corten-run/corten/issues/1413)).
+
 - Benchmark deployment refreshes target the newest stable framework, runtime and build
   tools rather than LTS alone. Record incompatible inputs without forcing dependencies,
   silently downgrading them or removing selected contenders; qualify new inputs afresh.
