@@ -252,6 +252,95 @@ Setup retirement permits only that exact source-bound marker, preserving an
 already-recorded bootstrap observation. A foreign, malformed, symlinked or
 missing previously observed marker refuses, as does any native campaign data.
 
+### Failed Native Custody And Retirement
+
+`--retire-failed-native` is a separate, deliberately approved recovery action,
+not a relaxation of `--collect` or native validation. Its migration policy supports
+only round r21 measured at `9f3d35884c67d90524f978d173fabeb3a17bc970`, for the
+eight nonmixed group reservations with preserved
+original archives/extractions and raw exit `2`. A different, clean repair-controller
+commit must descend from that source and pass the existing fresh merged-main
+proof. Preview and exact approval bind both source identities, exact reservation
+bytes, original evidence hashes, physical state root and fixed custody roots.
+This exception does not permit a source override for collection, audit or launch.
+
+The action retains the original `results.tgz` and `evidence-*` tree unchanged,
+and saves the original reservation bytes as `failed-native-reservation.json`.
+A fixed controller-owned Python program captures current `/bench/campaign`
+and every possible reserved native-output root for that group. JSON includes
+both preparation `j42` and timing `j43`, even if one is absent. Absence is explicit
+data, never a completed benchmark. The program validates and hashes filesystem
+metadata before reading evidence contents, opens every ancestor without following
+links, and rejects symlinks, hardlinks, special files and nonportable paths. It
+never executes a native script, validator, source checkout or downloaded evidence.
+Directory entries stream from owned descriptors, reserving the global node,
+name-byte and member-byte budgets before names are retained or sorted.
+
+The separate `failed-native-results.tgz` contains raw trees, metadata and file-hash
+inventories, and a root snapshot. The bounded existing archive reader verifies
+the download, extracts into a fresh `custody-*` directory and compares root and
+original-evidence hashes. `failed-native-capture.json` binds this custody to the
+measured reservation and repair controller. Intact recorded custody can resume
+with a fresh confirmation; unexplained partial downloads or remote captures are
+retained without automatic adoption or overwriting.
+
+Capture and final confirmation require the exact metadata host ID, source-bound
+uploaded controls and bootstrap marker, a loaded started terminal unit with
+`Restart=no`, `MainPID=0`, exit `2` and no unit job, no pending systemd jobs,
+completed cloud-init without user data, and no current benchmark process or
+running container. The cloud-init selector must be the single-link symlink
+`/var/lib/cloud/instance` with exact absolute target
+`/var/lib/cloud/instances/<owned-host-ID>`. The probe reads that pinned link as
+data, never traverses it, and opens the canonical instance and every ancestor
+without following links. `/var/lib/cloud/data/instance-id` must be a single-link
+regular file containing the exact host ID, with at most one final newline;
+`user-data.txt` in the canonical instance must be present, single-link, regular
+and empty. Descriptor and path identities are checked before and after reading,
+and must remain unchanged when quiescence is checked again in each capture,
+rehash and fence invocation. Missing, foreign or relative selectors and linked,
+special or replaced canonical paths refuse custody; this exception never permits
+benchmark-input links or arbitrary cloud-init layouts. Only the probe's exact
+timeout parent is exempt from its
+process scan. Confirmation rehashes all roots and the custody archive, then
+local custody is checked again. A final fence requires the exact unchanged
+metadata inventory of every root, rehashes the custody archive and renews current
+quiescence before the fresh ownership/account check. The 60-second deletion-proof
+window starts locally before the final fence request, conservatively including
+remote work and SSH response delivery without relying on remote clock skew.
+Interrupted receipt rehashing also precedes the final fence. The absolute
+expiry accompanies only this failed-retirement DELETE through asynchronous account
+preflight and private-worker IPC. Private HTTP dispatch keeps DELETE unbuffered
+until socket/TLS readiness, rechecks expiry before sending, and destroys an unsent
+request at expiry. It is never restarted or widened by a provider call. Large local
+checks cannot consume that final freshness window. These are current retirement observations,
+not a historical accounting or native qualification pass.
+
+`failed-native-host.json` records capture, fresh confirmation and their exact
+script hashes before a durable `native-failed` retirement intent and one DELETE.
+The same private provider worker and pre-unlock settlement apply. A lost or
+uncertain deletion acknowledgement permits exact-ID absence reconciliation only,
+never another DELETE. Existing locks are never taken over or cleared by recovery.
+The saved measured commit and failure evidence remain unchanged; no validation,
+successful exit or collection result is invented. Fleet inspection reports
+`native-failed-retired` or `cleanup-pending`, never a qualified baseline.
+
+After independent review and merge, an operator previews the exact action with:
+
+```sh
+node bench/workloads/cloud-production.mjs r21 --state-dir ABSOLUTE_GROUP_STATE_ROOT --retire-failed-native --print-approval
+```
+
+Execution replaces `--print-approval` with the existing
+`--approve-reviewed-merged-ready EXACT_ACTION_SHA256` only after separate operator
+approval. Implementing or testing this action authorizes no provider operation.
+Synthetic controls run with `node --test bench/workloads/cloud-failed-native.test.mjs`.
+The opt-in `CORTEN_FAILED_NATIVE_LINUX=1` local test in
+`cloud-failed-native-linux.test.mjs` uses disposable, labeled, networkless containers
+with real file descriptors and `/proc`, substituting only service/metadata responses;
+it includes the standard cloud-init selector layout and deterministic real-path
+replacement controls at capture, rehash and fence. It is not provider,
+systemd-host or native performance qualification.
+
 Large source bindings and evidence manifests are compared with exact strict
 equality without constructing assertion diffs. Invalid evidence still refuses;
 the error contains a bounded message rather than either complete manifest.
@@ -363,7 +452,9 @@ their injected process promises; production keeps its existing bounded calls.
 The fixed default validator runs in a separate local worker, never downloaded
 code. `cloud-validation-snapshot.mjs` reads its fixed project-module closure from
 immutable Git blobs at the approved installed commit, with bounded no-lazy-fetch
-reads. The fixed TypeScript bundle is captured once and checked against its pinned
+reads. The closure includes the observer's durable writer; transitive observer
+imports use those captured bytes under the same deny-unlisted loader.
+The fixed TypeScript bundle is captured once and checked against its pinned
 package hash. The nested worker executes captured entry bytes and installs a
 deny-unlisted loader before project or package code evaluates; it never reopens
 mutable executable paths or falls back to a package loader. The snapshot helper is
@@ -614,6 +705,21 @@ An SSH timeout never proves a remote command stopped. No recovery path stops a
 running unit, retries a start or allocates a replacement.
 
 ## Evidence And Cleanup
+
+Fresh disposable-host bootstrap runtime-masks `fwupd.service`,
+`fwupd-refresh.service` and `fwupd-refresh.timer` after cloud-init and before
+provisioning. It requires all three to remain masked and inactive before native
+entry, preventing firmware timer/D-Bus activation inside the baseline boundary.
+This preparation is not applied to existing hosts or replayed during collection.
+
+Host inventories retain every PID/start/cgroup and the raw `/proc/PID/stat` read
+that supplied its identity. Only new identities with matching saved PID/start
+fields and Linux's `PF_KTHREAD` flag are exempt from the user-process cleanup
+comparison. Names, parent PIDs and claimed kernel booleans are not proof; absent,
+malformed or identity-mismatched stat data cannot excuse a new process. New user
+daemons, including fwupd, and application leaks still fail. Container, network,
+boot, participant and lifetime/resource gates are unchanged. Old inventories do
+not acquire proof from later observations: failed historical r21 stays invalid.
 
 Collection hashes the remote archive, reserves a download destination, preserves
 interrupted bytes and verifies SHA256 before extraction. A separate synced copy is

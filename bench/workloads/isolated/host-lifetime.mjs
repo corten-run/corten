@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, readlinkSync, rmdirSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
 import { join, posix } from "node:path";
-import { durable, readRegular, tree } from "./evidence.mjs";
+import { durable, readRegular, syncDirectory, tree } from "./evidence.mjs";
+import { hostDurableWriter } from "./host-durable-writer.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
 import { executableReference, participantExecutables } from "./participant-executables.mjs";
 
@@ -31,10 +32,10 @@ function groupPath(text) {
   const path = /^0::([^\n]+)\n?$/.exec(text)?.[1];
   assert.ok(path && posix.isAbsolute(path) && !path.split("/").includes("..")); return path;
 }
-function readGroup(path) {
+function readGroup(path, keys = fields) {
   const actual = join(root, path);
   assert.ok(!lstatSync(actual).isSymbolicLink());
-  return { path, files: Object.fromEntries(fields.map((key) => {
+  return { path, files: Object.fromEntries(keys.map((key) => {
     try { return [key, readFileSync(join(actual, key), "utf8")]; }
     catch (error) { if (error.code === "ENOENT") return [key, null]; throw error; }
   })) };
@@ -66,13 +67,31 @@ function executableHash(at, executables) {
   if (!hash) { hash = observing("executable-hash", () => sha(readFileSync(`${at}/exe`))); executables.set(key, hash); }
   return hash;
 }
-function snapshot(path, executables, pending) {
-  const groups = [], processes = [];
+function scopeGroups(path, keys = fields) {
+  const groups = [];
   function walk(current) {
-    const group = observing("cgroup-read", () => readGroup(current)); groups.push(group);
+    const group = observing("cgroup-read", () => readGroup(current, keys)); groups.push(group);
+    for (const entry of observing("cgroup-children", () => readdirSync(join(root, current), { withFileTypes: true }))) {
+      observing("cgroup-child-type", () => assert.ok(!entry.isSymbolicLink()));
+      if (entry.isDirectory()) walk(posix.join(current, entry.name));
+    }
+  }
+  walk(path); return groups;
+}
+function membership(groups) {
+  const seen = new Set();
+  return groups.map((group) => [group.path, group.files["cgroup.procs"].trim().split("\n").filter(Boolean).map((pid) => {
+    assert.match(pid, /^[1-9]\d*$/); assert.ok(!seen.has(pid)); seen.add(pid); return pid;
+  }).sort()]).sort(([a], [b]) => a.localeCompare(b));
+}
+function snapshotOnce(path, executables, pending) {
+  const groups = scopeGroups(path), processes = [];
+  const before = observing("snapshot-membership", () => membership(groups));
+  for (const group of groups) {
+    const current = group.path;
     for (const pid of group.files["cgroup.procs"].trim().split("\n").filter(Boolean)) {
       assert.match(pid, /^[1-9]\d*$/);
-      // A racing exit is an observation gap, never silently omitted membership.
+      // A racing exit invalidates this entire census, never just this member.
       const at = `/proc/${pid}`, stat = observing("process-stat", () => readFileSync(`${at}/stat`, "utf8"));
       const identity = observing("process-identity", () => processIdentity(stat));
       const executable = pending ? observing("executable-capture", () => pending.capture(identity.pid)) : { executableSha256: executableHash(at, executables) };
@@ -84,15 +103,43 @@ function snapshot(path, executables, pending) {
         : rechecked.startTicks !== identity.startTicks ? "process-start-changed" : "process-name-recheck";
       observing(recheckOperation, () => assert.deepEqual(rechecked, identity));
       if (pending) observing("executable-recheck", () => pending.recheck(identity.pid, executable));
+      else observing("executable-recheck", () => assert.equal(executableHash(at, executables), executable.executableSha256));
       processes.push({ stat, cgroup, ...executable, type }); // No environment or arbitrary arguments.
     }
-    for (const entry of observing("cgroup-children", () => readdirSync(join(root, current), { withFileTypes: true }))) {
-      observing("cgroup-child-type", () => assert.ok(!entry.isSymbolicLink()));
-      if (entry.isDirectory()) walk(posix.join(current, entry.name));
+  }
+  const after = observing("snapshot-membership", () => membership(scopeGroups(path, ["cgroup.procs"])));
+  observing("snapshot-membership-recheck", () => assert.deepEqual(after, before));
+  return { at: Date.now(), groups, processes };
+}
+const retryPause = new Int32Array(new SharedArrayBuffer(4));
+const processReads = new Set(["process-stat", "executable-link", "executable-stat", "executable-hash", "executable-capture",
+  "process-cgroup", "process-cmdline", "process-stat-recheck", "executable-recheck"]);
+function snapshot(path, executables, pending, lastSampleAt = null) {
+  // Spend only the time left in the existing continuity window. A monotonic
+  // deadline also bounds retries when the wall clock moves backwards.
+  const remaining = lastSampleAt === null ? maximumSampleGapMs : maximumSampleGapMs - (Date.now() - lastSampleAt);
+  const deadline = performance.now() + Math.max(0, Math.min(maximumSampleGapMs, remaining));
+  let race;
+  for (;;) {
+    try {
+      const attempt = () => {
+        const observed = snapshotOnce(path, executables, pending);
+        if (race && performance.now() > deadline) throw race;
+        return observed;
+      };
+      return pending ? pending.transaction(attempt) : attempt();
+    } catch (error) {
+      const operation = observationOperations.get(error);
+      const changed = error.code === "ERR_ASSERTION" && ["process-name-recheck", "snapshot-membership-recheck"].includes(operation);
+      // ENOENT alone is not proof of exit. Only process reads are candidates;
+      // success still requires a fresh, complete census and every bookend.
+      const missing = ["ENOENT", "ESRCH"].includes(error.code) && processReads.has(operation);
+      const left = deadline - performance.now();
+      if ((!changed && !missing) || left <= 0) throw error;
+      race = error;
+      Atomics.wait(retryPause, 0, 0, Math.min(1, left));
     }
   }
-  walk(path);
-  return { at: Date.now(), groups, processes };
 }
 
 function docker(args) {
@@ -117,6 +164,10 @@ function participantGroup(path, id) {
 
 /** Actual read-only Linux snapshot. Never reads a PID/path supplied by saved evidence. */
 export function captureBrowserParticipant(id, executables = new Map(), pending) {
+  const capture = () => readBrowserParticipant(id, executables, pending);
+  return pending ? pending.transaction(capture) : capture();
+}
+function readBrowserParticipant(id, executables, pending) {
   assert.equal(process.platform, "linux"); assert.match(id, containerId);
   const startedAt = Date.now();
   const inspect = () => {
@@ -151,7 +202,11 @@ function browserDocker(excluded, executables, pending) {
 }
 
 /** Own one fresh delegated child cgroup. No budgets, pinning or parent controls are changed. */
-export function beginLifetime({ campaign, binding, invocation, directory, command, pid }) {
+export async function beginLifetime({ campaign, binding, invocation, directory, command, pid, signal, startupSignal }) {
+  function checkStartup() {
+    signal?.throwIfAborted(); startupSignal?.throwIfAborted();
+  }
+  checkStartup();
   assert.equal(process.platform, "linux"); assert.match(campaign, /^r[1-9]\d*-[a-f0-9]{16}$/);
   assert.ok(Number.isSafeInteger(command) && command >= 0);
   assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
@@ -168,7 +223,13 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
   for (const id of excluded) assert.match(id, containerId);
   const path = `${parent}/native-${command}-${randomBytes(8).toString("hex")}`;
   mkdirSync(join(root, path)); // Exclusive creation. Never adopt a saved or existing cgroup.
-  let context, fd;
+  let context, writer, pending = null, closed = false, timer;
+  const startupSignals = [...new Set([signal, startupSignal].filter(Boolean))];
+  function releaseStartup() { for (const value of startupSignals) value.removeEventListener("abort", dispose); }
+  function dispose() {
+    closed = true; clearInterval(timer); releaseStartup(); pending?.close(); writer?.abort();
+  }
+  for (const value of startupSignals) value.addEventListener("abort", dispose, { once: true });
   try {
     mkdirSync(directory, { mode: 0o700 });
     mkdirSync(join(directory, "processes"), { mode: 0o700 });
@@ -179,14 +240,17 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
     cpuInfo: readFileSync("/proc/cpuinfo", "utf8"), memoryInfo: readFileSync("/proc/meminfo", "utf8"),
     ...(browser ? { dockerBaseline: [...excluded].sort(), leaderIdentity: processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")) } : {}) };
     durable(join(directory, "binding.json"), `${JSON.stringify(context, null, 2)}\n`);
-    fd = openSync(join(directory, "samples.jsonl"), "wx", 0o600);
+    writer = hostDurableWriter(directory); await writer.ready();
+    checkStartup();
   } catch (error) {
     // No bootstrap has been attached yet. Only this exclusively created empty
     // kernel child is removable; retained partial disk evidence is not deleted.
-    rmdirSync(join(root, path)); throw error;
+    dispose();
+    if (!startupSignals.some((value) => value.aborted) && !writer?.state().pendingOwnership) rmdirSync(join(root, path));
+    throw error;
   }
-  const executables = new Map(), records = new Set(), pending = browser ? participantExecutables() : null;
-  let bytes = 0, samples = 0, closed = false, timer, observerError = null, attached = false;
+  const executables = new Map(); pending = browser ? participantExecutables() : null;
+  let samples = 0, observerError = null, attached = false;
   const observerFailures = { count: 0, first: null, last: null };
   let sampleOperation, lastSampleAt = null;
   function failure(phase, error) {
@@ -198,67 +262,94 @@ export function beginLifetime({ campaign, binding, invocation, directory, comman
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
   function sample() {
+    return pending ? pending.transaction(collectSample) : collectSample();
+  }
+  function collectSample() {
     sampleOperation = "snapshot";
-    let observed;
-    for (let attempt = 0; ; attempt++) {
-      try { observed = snapshot(path, executables, pending); break; }
-      catch (error) {
-        // This tag is set only by the full bookend assertion after PID and
-        // start ticks matched. Discard the entire snapshot, not just that PID.
-        const changedName = error.code === "ERR_ASSERTION" && observationOperations.get(error) === "process-name-recheck";
-        if (attempt >= 2 || (!changedName && !["ENOENT", "ESRCH"].includes(error.code))) throw error;
-      }
-    }
+    if (writer.error) throw writer.error;
+    const observed = snapshot(path, executables, pending, lastSampleAt), initial = [], keys = new Set();
     // Keep initial raw PID/start/executable/type observations once. Every live
     // sample independently re-reads those identities and records their references;
     // rapidly changing stat CPU fields are accounted by raw cgroup cpu.stat.
     sampleOperation = "process-record";
     observed.processes = observed.processes.map((p) => {
       const key = processRecordKey(p);
-      if (!records.has(key)) {
-        const value = serial(p); bytes += Buffer.byteLength(value);
-        assert.ok(bytes <= 256 * 2 ** 20, "host observation byte bound exceeded");
-        durable(join(directory, "processes", `${key}.json`), value); records.add(key);
-      }
+      if (!writer.has(key) && !keys.has(key)) { initial.push({ key, value: serial(p) }); keys.add(key); }
       return key;
     });
     sampleOperation = "docker-inventory";
     if (browser) observed.docker = browserDocker(excluded, executables, pending);
     sampleOperation = "sample-write";
-    const value = serial(observed); bytes += Buffer.byteLength(value);
-    assert.ok(bytes <= 256 * 2 ** 20, "host observation byte bound exceeded");
-    const data = Buffer.from(value); let offset = 0;
-    while (offset < data.length) { const n = writeSync(fd, data, offset); assert.ok(n > 0); offset += n; }
+    writer.enqueue(initial, serial(observed));
     samples++; lastSampleAt = observed.at;
   }
   // The fresh bootstrap still waits for IPC outside this empty command scope.
   // Hash its actual executable before sampling starts, not across the empty-to-
   // attached boundary. Attach independently rechecks the executable cache key.
   try { executableHash(`/proc/${pid}`, executables); sample(); }
-  catch (error) { pending?.close(); closeSync(fd); rmdirSync(join(root, path)); throw error; }
+  catch (error) {
+    dispose();
+    if (!writer.state().pendingOwnership) rmdirSync(join(root, path));
+    throw error;
+  }
   return Object.freeze({
-    attach(pid) {
-      assert.equal(attached, false); assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
-      assert.equal(pid, context.leaderPid);
-      if (browser) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
-      // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
-      writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
-      timer = setInterval(() => { try { sample(); } catch (error) { observerError = "host-observation-gap"; failure("interval", error); } }, sampleIntervalMs);
+    async attach(pid) {
+      try {
+        checkStartup(); assert.equal(closed, false);
+        assert.equal(attached, false); assert.ok(Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid);
+        assert.equal(pid, context.leaderPid);
+        if (browser) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
+        // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
+        writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
+        timer = setInterval(() => { try { sample(); } catch (error) {
+          observerError = "host-observation-gap"; failure("interval", error);
+          if (writer.error) clearInterval(timer);
+        } }, sampleIntervalMs);
+        await writer.drain();
+        checkStartup(); assert.equal(closed, false); releaseStartup();
+      } catch (error) { dispose(); throw error; }
     },
-    finish(result) {
-      assert.equal(closed, false); closed = true; clearInterval(timer);
+    // Abandoned startup has no terminal proof. Pending I/O keeps its own FIFO
+    // ownership until it returns; disposal never claims that it was interrupted.
+    dispose,
+    // Explicitly await appends in controls; enqueue/capture is not storage proof.
+    drain() { return writer.drain(); },
+    get pendingStorage() { return writer.settled; },
+    async finish(result) {
+      assert.equal(closed, false); closed = true; clearInterval(timer); releaseStartup();
       let empty = false;
       try { sample(); sampleOperation = "terminal-empty"; empty = readGroup(path).files["cgroup.events"].split("\n").includes("populated 0"); }
       catch (error) { observerError = "host-observation-gap"; failure("finish", error); }
+      let stored;
+      try { stored = await writer.finish(); assert.equal(stored.samples, samples); }
+      catch (error) { pending?.close(); throw error; }
       if (pending) {
         sampleOperation = "executable-proof";
         try { durable(join(directory, "executables.json"), serial(pending.finish())); }
         catch (error) { observerError = "host-executable-proof-incomplete"; failure("executables", error); }
       }
-      try { fsyncSync(fd); } finally { closeSync(fd); }
+      // An already-cancelled, fully drained command keeps its old nonqualifying
+      // evidence contract. A new abort during asynchronous finish cannot seal
+      // an earlier, contradictorily clean command result.
+      assert.ok(!signal?.aborted || result.cancelled || result.forced, "host observation cancelled during storage drain");
       const terminal = result.terminal && empty;
-      durable(join(directory, "terminal.json"), `${JSON.stringify({ terminal, attached, empty, samples, observerError, observerFailures,
-        command: result, bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), ancestors: parents(parent) }, null, 2)}\n`);
+      const staged = join(directory, "terminal.pending.json"), published = join(directory, "terminal.json");
+      let identity;
+      try {
+        durable(staged, `${JSON.stringify({ terminal, attached, empty, samples, observerError, observerFailures,
+          command: result, bootId: readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim(), ancestors: parents(parent) }, null, 2)}\n`);
+        identity = lstatSync(staged);
+        assert.equal(lstatSync(published, { throwIfNoEntry: false }), undefined);
+        renameSync(staged, published); syncDirectory(directory);
+      } catch {
+        const current = lstatSync(published, { throwIfNoEntry: false });
+        // Withdraw only our own publication, never a substituted/foreign file.
+        if (identity && current?.dev === identity.dev && current.ino === identity.ino
+          && !lstatSync(staged, { throwIfNoEntry: false })) {
+          try { renameSync(published, staged); syncDirectory(directory); } catch { /* Retain unproven ownership. */ }
+        }
+        throw new Error("host observation terminal storage incomplete");
+      }
       if (empty) rmdirSync(join(root, path)); // Own empty child only; never recursive cleanup.
       return tree(directory);
     },

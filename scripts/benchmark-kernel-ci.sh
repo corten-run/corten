@@ -39,20 +39,30 @@ id=$(docker run -d --pull=never --network none --label agent.owner=codex --label
   --cpus 1 --memory 1g "$image" node -e 'setInterval(()=>{},1000)')
 [[ "$id" =~ ^[a-f0-9]{64}$ ]]
 
+# Inspect real host procfs and real storage outside a private PID namespace.
+"$node" --max-old-space-size=256 --experimental-test-module-mocks --test --test-reporter=tap --test-concurrency=1 \
+  bench/workloads/isolated/host-boundary.test.mjs \
+  bench/workloads/isolated/host-lifetime-durability.test.mjs | tee "$work/storage-boundary.tap"
+grep -Fx '# fail 0' "$work/storage-boundary.tap"
+grep -Fx '# cancelled 0' "$work/storage-boundary.tap"
+grep -Fx '# skipped 0' "$work/storage-boundary.tap"
+
 # Generate only fixed fixture invocations with the actual production bootstrap.
 # No evidence-selected commands, budget changes, existing units or benchmark work.
-for suite in lifetime participant; do
+for suite in lifetime participant churn; do
   unit="corten-bench-groups-r999999999-$nonce.service"
   test "$(systemctl show "$unit" --property=LoadState --value)" = not-found
   "$node" --input-type=module - "$unit" "$node" "$checkout" "$suite" > "$work/unit.sh" <<'JS'
 import {supervisorBootstrap} from './bench/workloads/cloud-contract.mjs';
 const [unit,node,checkout,suite] = process.argv.slice(2);
-if (!['lifetime','participant'].includes(suite)) throw Error('Unknown fixture');
+if (!['lifetime','participant','churn'].includes(suite)) throw Error('Unknown fixture');
+const file = suite === 'churn' ? 'bench/workloads/isolated/host-lifetime-churn.test.mjs'
+  : `bench/workloads/isolated/host-${suite}-linux.test.mjs`;
 const quote = s => `'${s.replaceAll("'", "'\\''")}'`;
 console.log('#!/bin/bash\nset -euo pipefail');
 console.log(supervisorBootstrap(unit));
 console.log(`cd ${quote(checkout)}`);
-console.log(`exec ${quote(node)} --test --test-reporter=tap --test-concurrency=1 ${quote(`bench/workloads/isolated/host-${suite}-linux.test.mjs`)}`);
+console.log(`exec ${quote(node)} --test --test-reporter=tap --test-concurrency=1 ${quote(file)}`);
 JS
   systemd-run --quiet --wait --pipe --collect --unit "$unit" \
     --property='Delegate=cpu cpuset memory pids' --property=DelegateSubgroup=supervisor \

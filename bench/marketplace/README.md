@@ -7,6 +7,9 @@ before timing; every admitted app must then pass both Docker/browser gates befor
 No framework, including axum or Corten, gets unconditional admission. See
 [framework groups](nightly.md#framework-groups) for requirements, candidate pools and limits.
 An omitted adapter was not tested; an excluded candidate has capability evidence, not timing.
+The JSON wrong-method probe uses POST, which the page form implements but the
+read-only JSON route does not. It still requires a JSON 405 response; a method
+implemented nowhere in an app may correctly return 501 and is not this test.
 The first validated v2 production baseline is [historical r20](#results). Passing the formatting-capture checker alone
 never qualifies an app for load testing.
 
@@ -304,6 +307,11 @@ receipts fail closed; do not backfill them with inferred observations.
 The v3 receipts also retain the selected immutable k6 manifest, platform and actual
 executable version in both the summary and raw tool observation. Earlier versions
 without that identity remain historical, not newly qualified v3 measurements.
+Image and container projections retain omitted optional Docker `Entrypoint`/`Cmd`
+as explicit `null`. Image projection first requires a non-null, non-array configuration
+object; malformed configuration cannot become null defaults.
+They do not invent command arguments: replay still requires
+every nonempty image default and fixed native invocation exactly.
 
 The replay checks both sources, every localized page and neutral JSON profile/pass/phase,
 exact per-pass metrics and aggregates, raw qualification and browser/content gate results,

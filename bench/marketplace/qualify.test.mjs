@@ -28,6 +28,7 @@ function probeFixture(controls) {
     if (path.endsWith("/missing")) return path.startsWith("/api") ? p.json404 : p.page404;
     if (headers.host === "unrecognized.invalid") return p.badHost;
     if (headers["x-qualification"]) return p.bigHead;
+    if (path.startsWith("/api") && method === "POST") return p.json405;
     if (method === "POST") return headers.origin !== "http://localhost:8080" ? p.crossSite : input.body.length > 2 ** 20 ? p.bigBody : p.ownPost;
     if (method === "DELETE") return p.json405;
     if (method === "HEAD") return p.head;
@@ -37,6 +38,34 @@ function probeFixture(controls) {
     return path.startsWith("/api") ? p.json : p.page;
   } };
 }
+test("JSON method qualification uses the page's supported POST, not a globally unimplemented method", async () => {
+  for (const source of ["fixture", "api"]) await withControl(async (upstream, controls) => {
+    const fixture = probeFixture(controls);
+    const q = await qualify({ base: "http://localhost:8080", source, upstream, probe(script, input) {
+      // A server may answer 501 for a method implemented by none of its routes.
+      if (input.method === "DELETE") return { status: 501, ms: 1, bodyLength: 1, headers: { "content-type": "application/problem+json" } };
+      return fixture.probe(script, input);
+    } });
+    assert.equal(q.eligible, true);
+    assert.deepEqual(q.missing, []);
+    assert.ok(fixture.calls.some(([, r]) => r.path === "/api/marketplace/item_1" && r.method === "POST"));
+    assert.ok(!fixture.calls.some(([, r]) => r.method === "DELETE"));
+  });
+});
+
+test("JSON method qualification still refuses unsupported response statuses and representations", async () => {
+  for (const [status, type] of [[200, "application/json"], [403, "application/problem+json"], [501, "application/problem+json"], [405, "text/html"]]) {
+    const fixture = probeFixture([]);
+    const q = await qualify({ base: "http://localhost:8080", source: "fixture", probe(script, input) {
+      if (input.path === "/api/marketplace/item_1" && input.method === "POST")
+        return { status, ms: 1, bodyLength: 1, headers: { "content-type": type } };
+      return fixture.probe(script, input);
+    } });
+    assert.equal(q.eligible, false);
+    assert.deepEqual(q.missing, ["json405"]);
+  }
+});
+
 test("qualification probes native features, resets upstream failures, and admits no missing capability", async () => {
   await withControl(async (upstream, controls) => {
     const fixture = probeFixture(controls);
