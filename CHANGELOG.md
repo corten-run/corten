@@ -41,6 +41,13 @@ Corten is pre-1.0, so any minor version may change the API.
   answers a data client: add `type Data = corten::route::NoData;` to the impl
   ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
 
+- Bound Drogon marketplace page source reads with the existing native deadline and
+  caller-disconnect lifetime, preserving request-local trace context.
+
+- Save bounded, structural same-page browser diagnostics when native compiled
+  alert hydration checks fail. Retain only closed categories and numbers, not
+  browser text or URL paths; keep readiness gates and their errors unchanged.
+
 - Include the observer's durable writer in the fixed native replay source closure;
   keep deny-unlisted imports and replay captured commit bytes, not checkout edits.
 
@@ -1219,6 +1226,13 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
 ### Documentation
+
+- The forms guide no longer pairs a radio group with a plain enum field: a radio group drawn
+  with none checked sends nothing, so its field is `Option<Enum>` and the handler adds the
+  field's message when it is `None`, which redraws the form with the message without JavaScript;
+  a `<select>`, or radios drawn with one checked, stays the enum. A word the page never offers is
+  still a 422. A doctest and a router test hold the reading and the redraw
+  ([#1413 An enum form field that is missing or holds an unknown word fails the whole form with a 422, where a string field could draw a message on the field](https://github.com/corten-run/corten/issues/1413)).
 
 - Benchmark deployment refreshes target the newest stable framework, runtime and build
   tools rather than LTS alone. Record incompatible inputs without forcing dependencies,
