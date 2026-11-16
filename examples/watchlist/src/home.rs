@@ -435,10 +435,14 @@ mod tests {
             .await
     }
 
-    /// The script's rows are checked against these declarations by `npm run check`.
+    /// The scripts' rows and the smoke's screen data are checked against these declarations by
+    /// `npm run check`.
     #[test]
     fn script_types_match_the_server() {
-        corten::types::Types::new().add::<Stock>().sync(concat!(env!("CARGO_MANIFEST_DIR"), "/types/app.d.ts"));
+        corten::types::Types::new()
+            .add::<Stock>()
+            .add::<crate::smoke::Reading>()
+            .sync(concat!(env!("CARGO_MANIFEST_DIR"), "/types/app.d.ts"));
     }
 
     #[tokio::test]

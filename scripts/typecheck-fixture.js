@@ -6,6 +6,7 @@
 // declared from the Rust types in examples/*/types/app.d.ts.
 import { keep, subscribe } from "corten";
 import { shortcut } from "corten/keys";
+import { read, ReadError } from "corten/read";
 import { rows, view } from "corten/views";
 // @ts-expect-error noUncheckedSideEffectImports: an import run only for its effects names a module that exists.
 import "./no-such-module.js";
@@ -86,6 +87,36 @@ export function follow(stocks, levels, url) {
   subscribe(url, { snapshot() {}, patch() {} });
   // @ts-expect-error Nor does a written one.
   subscribe("/feed/stocks", { snapshot() {}, patch() {} });
+}
+
+// The handler's parameter names the screen's data (the route's data = Reading, checked with its
+// get handler when the crate compiles), and read() takes it from it.
+/** @typedef {import("../examples/watchlist/types/app").Reading} Reading Generated from the Rust struct. */
+/** @import { ScreenUrl } from "corten/read" */
+/** @param {ScreenUrl<Reading>} reading @param {FeedUrl<Stock>} stocks @param {string} url @param {AbortSignal} signal */
+export async function readScreen(reading, stocks, url, signal) {
+  const data = await read(reading, { signal });
+  data.rows.map((row) => row.trim());
+  // @ts-expect-error The data is the route's type: a field it lacks does not compile.
+  data.title;
+  // @ts-expect-error Nor does a field read as another type.
+  data.name.toFixed();
+  // @ts-expect-error A plain string names no data: the URL comes from a ScreenUrl<Data> parameter.
+  await read(url);
+  // @ts-expect-error Nor does a written one.
+  await read("/smoke/reading");
+  // @ts-expect-error A feed's URL is not a screen's: it names rows, not a screen's data.
+  await read(stocks);
+  // @ts-expect-error read() takes its signal in an options object, as subscribe() does.
+  await read(reading, signal);
+  try {
+    await read(reading);
+  } catch (error) {
+    // @ts-expect-error What a read rejects with is unknown until the script narrows it.
+    error.status;
+    if (error instanceof ReadError) return error.status === 404;
+  }
+  return false;
 }
 
 /** @import { Message } from "corten" */
