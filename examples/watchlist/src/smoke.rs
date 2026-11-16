@@ -3,9 +3,11 @@
 //! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, as an
 //! argument and as the value an element gives its ref, a patch drawn with this area's
 //! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
-//! `<details>` drawn closed that a form outside each asks for again, and a screen whose scope
-//! form's answer is the page at the address it asks for (`data-address`).
+//! `<details>` drawn closed that a form outside each asks for again, a screen whose data a
+//! script reads (`corten/read`), and a screen whose scope form's answer is the page at the
+//! address it asks for (`data-address`).
 use corten::{
+    Error,
     LiveResponse,
     http::{IntoResponse, Request, Response, StatusCode, header},
     prelude::*,
@@ -46,6 +48,14 @@ pub mod url {
     #[route("/smoke/sheet/more", get = open_more)]
     pub struct OpenMore;
 
+    /// A screen whose data (`Reading`) its page's script reads with `read()`; `missing` answers
+    /// 404 instead, and `moved` a redirect, as middleware might send.
+    #[route("/smoke/reading", get = reading, data = Reading)]
+    pub struct Reading {
+        pub missing: Option<bool>,
+        pub moved: Option<bool>,
+    }
+
     /// A screen whose scope form says its answer is the page at the address it asks for
     /// (`data-address`, #1406): with JavaScript the address answers the scope's panel as a patch,
     /// and without it, or on a reload, the whole screen.
@@ -73,7 +83,7 @@ pub mod url {
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote];
+pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, Reader];
 
 /// The text the handler is given, as itself and in a JSON array. `data-on` is single-quoted, so it
 /// is written with `&#39;`, `&amp;` and `&lt;` and its JSON's quotes as they are.
@@ -290,6 +300,46 @@ fn LargeList() -> impl Render {
             }
         </ul>
     }
+}
+
+/// What `/smoke/reading` shows and its script reads: a name and enough rows that the answer is
+/// larger than its headers, so the browser test can tell a 304 from a 200 by what it carried.
+#[derive(ToJson)]
+pub struct Reading {
+    pub name: String,
+    pub rows: Vec<String>,
+}
+
+#[derive(Id)]
+struct ReaderId;
+
+/// Reads `/smoke/reading`'s data when its button is pressed and writes what it got.
+#[component(js)]
+fn Reader() -> impl Render {
+    let out = refs();
+    html! {
+        <div>
+            <button type="button" on:click={js::show(out, url::Reading { missing: None, moved: None }, signal)}>"Read"</button>
+            <output id={ReaderId} ref={out}></output>
+        </div>
+    }
+}
+
+async fn reading(req: Req, Params(at): Params<url::Reading>) -> HtmlResult<corten::Screen<Reading>> {
+    if at.missing == Some(true) {
+        return Err(Error::not_found());
+    }
+    let data =
+        Reading { name: "Reading".into(), rows: (0..40).map(|i| format!("Row {i} of the screen a script reads")).collect() };
+    let mut res = req.screen(&data, html! { <Layout req={&req} title="Reading" viewer={None} head=""><Reader /></Layout> })?;
+    if at.moved == Some(true) {
+        // A response replaced through `DerefMut` is not checked against the route's data, so a
+        // script's read() must not follow it.
+        *res = corten::http::IntoResponse::into_response(
+            req.redirect::<corten::ForOne>(&url::Reading { missing: None, moved: None })?,
+        );
+    }
+    Ok(res)
 }
 
 /// One large event and then nothing: the browser must show it without more of the stream coming.

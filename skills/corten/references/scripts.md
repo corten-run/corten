@@ -289,6 +289,69 @@ last patch after a disconnect. Across several instances, use `corten-cluster`. A
 mirrors a log is `Feed::follow(generation, seq, rows)`, its generation ASCII letters, digits, `.`
 and `_` only (`deploy.3`, never `deploy:3` or base64): it panics on anything else.
 
+## A screen's data
+
+A script that needs data the page did not draw (another set's rows, picked by the user) reads it
+from the route that answers it as a screen. Data the page needs when it loads is a handler
+argument instead (no request).
+
+```rust
+// In the routes module: #[route("/sets/{set}", get = set, data = SetListing)] pub struct Set<'a> { pub set: &'a str }
+async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
+    let listing = SetListing::read(at.set).await?; // a ToJson, added with Types::add
+    req.screen(&listing, set_page(&req, &listing))
+}
+// another page's markup, links that are the set's page without JavaScript (with it, the address stays),
+// under data-no-prefetch: a hover would have the server draw the page the click does not use, and
+// replace the read's cached answer (no 304 for the next read):
+// <nav data-no-prefetch> for s in &sets { <a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>{&s.name}</a> } </nav>
+```
+
+```js
+import { read, ReadError } from "corten/read";
+/** @import { ScreenUrl } from "corten/read" */
+/** @typedef {import("../types/app").SetListing} SetListing */
+
+// ScreenUrl<SetListing> takes only a route with data = SetListing (checked when the crate compiles);
+// SetListing must come from ../types/app (the typedef above, or @import { SetListing } from it),
+// never a type of the script's own; leave types/app.d.ts to corten::types (a hand-written one is not caught).
+// read() asks it with Accept: application/json through the HTTP cache (a 304 when unchanged).
+/** @type {WeakMap<HTMLTableSectionElement, AbortController>} */
+const switching = new WeakMap(); // each table's switch in progress, aborted by the next
+
+/** @param {MouseEvent} event @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
+export async function switchTo(event, rows, set, signal) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; // a new tab: the link's
+  const mine = new AbortController();
+  const stop = AbortSignal.any([signal, mine.signal]); // the link left, or a later switch started
+  event.preventDefault(); // after the line above: where it throws, the link still opens the page
+  switching.get(rows)?.abort();
+  switching.set(rows, mine);
+  try {
+    const listing = await read(set, { signal: stop }); // a SetListing: draw it into rows
+  } catch (error) {
+    if (stop.aborted) return; // so an older, slower answer is never drawn
+    if (!(error instanceof ReadError)) throw error;
+    location.assign(set); // a failed read (offline, a 401, a redirect): the set's page instead
+  }
+}
+```
+
+It rejects with a `ReadError` (`status` the answer's, a signed-out `Caller` or `Refused::sign_in`
+included, which answers a data client 401; or 0, with `redirected` true for a redirect, which it
+follows none of and Corten never sends a data client, else with the error as `cause`) and with
+`signal`'s reason once it aborts, even after a failed answer. An app sends a signed-out visitor to
+sign in with `Refused::sign_in`, not a redirect of its own. A handler whose element can leave
+while it reads catches the rejection and returns when its signal is aborted. A read the user can
+start again gets its own `AbortController`, aborted by the next, as above.
+Never `fetch` a screen's JSON by hand or write its type: the route types it. `read()` returns what
+the handler gives `req.screen` to any script on this origin, with the user's cookie: only what the
+page may show. The browser keeps one answer per URL, so a read after the page itself was fetched
+again there (a navigation, or a hover prefetch of a link to it) gets the whole answer, not a 304:
+put `data-no-prefetch` around links whose click reads.
+A patch-making method (`req.patch`, `patch_or`, `invalid`) does not compile in a handler that
+returns `HtmlResult<Screen<T>>`.
+
 ## Many rows: views
 
 A row component a script changes often is a `#[component(view)]`: each parameter that is an
