@@ -15,6 +15,9 @@
 //!    parameter is refused with a message that says which (#1342).
 //! 7. A route that says `patches` mounted by hand with a `get` that may answer its page is
 //!    refused when the app builds, with a message that says what to give it (#1342).
+//! 8. `data` on a route with no `get`, on an `unstaged` route or on a route with a type
+//!    parameter, `data` named twice or naming no type, and `data` with `rows` are each refused with
+//!    a message that says which (#1399).
 //!
 //! Each app is built with `cargo`, offline, from the workspace's lock, in the target directory
 //! `link_clash` builds in, so they share the dependencies' builds.
@@ -35,11 +38,17 @@ fn build(args: &str) -> (bool, String) {
 /// building at once in one target directory do not write each other's binary), whose `main.rs` is
 /// `main`.
 fn build_main(dir: &str, main: &str) -> (bool, String) {
+    build_main_with(dir, main, &[])
+}
+
+/// `build_main` with Corten's `features` on.
+fn build_main_with(dir: &str, main: &str, features: &[&str]) -> (bool, String) {
     let corten = Path::new(env!("CARGO_MANIFEST_DIR")).to_string_lossy().replace('\\', "/");
     let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(dir);
+    let features = features.iter().map(|feature| format!("\"{feature}\"")).collect::<Vec<_>>().join(", ");
     write(
         &root.join("Cargo.toml"),
-        &format!("[package]\nname = \"{dir}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncorten = {{ package = \"corten-run\", path = \"{corten}\" }}\n\n[workspace]\n"),
+        &format!("[package]\nname = \"{dir}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncorten = {{ package = \"corten-run\", path = \"{corten}\", features = [{features}] }}\n\n[workspace]\n"),
     );
     std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"), root.join("Cargo.lock")).unwrap();
     write(&root.join("src/main.rs"), main);
@@ -193,8 +202,55 @@ fn a_patches_route_mounted_by_hand_with_a_page_handler_says_why() {
     assert!(ok, "the same mount with HtmlResult<Patches>: {stderr}");
 }
 
+/// A `data` route mounted by hand (`Area::route`, `Api::route`) with a `get` handler that
+/// answers a page, a screen of other data, or with no `get` at all, does not compile and says what
+/// it takes, at the mount; with a screen of its data it builds. Code generic over the route it
+/// mounts at is told the bound that lets it (#1399).
+#[test]
+fn a_data_route_mounted_by_hand_with_a_page_handler_says_why() {
+    let app = |answer: &str, body: &str, main: &str| {
+        format!(
+            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[derive(ToJson)]\npub struct Listing {{\n    name: String,\n}}\n\n#[derive(ToJson)]\npub struct Order {{\n    id: u32,\n}}\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/sets\", get = sets, data = Listing)]\n    pub struct Sets;\n}}\n\nfn doc() -> impl Document {{\n    html! {{ <html><head><title>\"Sets\"</title><Corten /></head><body><main>\"Sets\"</main></body></html> }}\n}}\n\nasync fn sets(req: Req) -> HtmlResult<corten::Screen<Listing>> {{\n    req.screen(&Listing {{ name: \"All\".into() }}, doc())\n}}\n\n#[allow(dead_code)]\nasync fn mounted(req: Req) -> {answer} {{\n    {body}\n}}\n\n{main}\n"
+        )
+    };
+    let area = |method: &str| {
+        format!("fn main() {{\n    let _ = sets;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>({method}(mounted))).router();\n}}")
+    };
+    let api = "fn main() {\n    let _ = sets;\n    let _ = App::new(Routes::new()).api::<Admin>(|api| api.route::<url::Sets>(get(mounted)));\n}".to_string();
+    let generic = |bound: &str| {
+        format!("fn mount<R: {bound}>(admin: Area<Admin>, methods: corten::Methods) -> Area<Admin> {{\n    admin.route::<R>(methods)\n}}\n\nfn main() {{\n    let _ = (sets, url::Sets, mount::<Admin>);\n}}")
+    };
+    let page = ("HtmlResult", "req.page(doc())");
+    let other = ("HtmlResult<corten::Screen<Order>>", "req.screen(&Order { id: 7 }, doc())");
+    let mine = ("HtmlResult<corten::Screen<Listing>>", "req.screen(&Listing { name: \"Mine\".into() }, doc())");
+    for ((answer, body), main, kind, at) in [
+        (page, area("get"), "AnyAnswer", "admin.route::<url::Sets>"),
+        (other, area("get"), "Screen<Order>", "admin.route::<url::Sets>"),
+        // No get at all: a post that answers the right data still cannot answer a read.
+        (mine, area("post"), "AnyAnswer", "admin.route::<url::Sets>"),
+        (page, api.clone(), "AnyAnswer", "api.route::<url::Sets>"),
+        (page, generic("corten::Route"), "AnyAnswer", "admin.route::<R>"),
+    ] {
+        let (ok, stderr) = build_main_with("data-mount-message", &app(answer, body, &main), &["json"]);
+        assert!(!ok, "a data route mounted at {at} with {answer} built");
+        assert!(stderr.contains("error[E0277]"), "an error when the crate compiles: {stderr}");
+        assert!(stderr.contains("the handlers mounted here may not serve the route, which names"), "Corten's message: {stderr}");
+        // The kind as rustc names it, with or without its path (`corten::answer::AnyAnswer`).
+        assert!(
+            stderr.contains(&format!("{kind}`: no get, or a get that may answer a page, a redirect or other data)")),
+            "the kind its handlers answer as: {stderr}"
+        );
+        assert!(stderr.contains("R: corten::Route<Data = corten::route::NoData>"), "the bound for generic code: {stderr}");
+        assert!(stderr.contains(at), "the error points at the mount: {stderr}");
+    }
+    for main in [area("get"), api, generic("corten::Route<Data = corten::route::NoData>")] {
+        let (ok, stderr) = build_main_with("data-mount-message", &app(mine.0, mine.1, &main), &["json"]);
+        assert!(ok, "the mount with a screen of its data, or bounded to a route without data: {main}: {stderr}");
+    }
+}
+
 /// `patches` where it cannot hold: a route with no `get`, an `unstaged` one, one with a type
-/// parameter. Each is refused by the routes module with its own reason, which the `compile_fail`
+/// parameter, one that says `data` too. Each is refused by the routes module with its own reason, which the `compile_fail`
 /// doctests on `corten::routes` cannot tell apart (#1342).
 #[test]
 fn patches_where_no_get_handler_can_answer_a_patch_says_why() {
@@ -220,8 +276,50 @@ fn patches_where_no_get_handler_can_answer_a_patch_says_why() {
             patch,
             "Alerts has a type parameter, so it cannot say patches",
         ),
+        (
+            "#[route(\"/alerts\", get = alerts, data = Alerted, patches)]\n    pub struct Alerts;",
+            patch,
+            "a route is one or the other, so say data or patches, not both",
+        ),
     ] {
         let (ok, stderr) = build_main("patches-where-message", &app(route, handler));
+        assert!(!ok, "{route} compiled");
+        assert!(stderr.contains(said), "the reason for {route}: {stderr}");
+    }
+}
+
+/// `data` where it cannot hold: a route with no `get`, an `unstaged` one, one with a type
+/// parameter, `data` named twice or naming no type, and `data` with `rows`. Each is refused by
+/// the routes module with its own reason, which the `compile_fail` doctests on `corten::routes`
+/// cannot tell apart (#1399).
+#[test]
+fn data_where_no_get_handler_can_answer_it_says_why() {
+    let app = |route: &str| {
+        format!(
+            "use corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    {route}\n}}\n\npub struct Listing;\npub struct Row;\n\nasync fn set() -> &'static str {{\n    \"set\"\n}}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
+        )
+    };
+    for (route, said) in [
+        (
+            "#[route(\"/sets\", post = set, data = Listing)]\n    pub struct Set;",
+            "data names what Set's get answers a data client with",
+        ),
+        (
+            "#[route(\"/sets\", get = set, unstaged, data = Listing)]\n    pub struct Set;",
+            "unstaged serves Set with a handler that takes no Req, so it cannot answer a screen's data",
+        ),
+        (
+            "#[route(\"/sets\", get = set, data = Listing)]\n    pub struct Set<T> {\n        pub after: Option<T>,\n    }",
+            "Set has a type parameter, so it cannot name its data",
+        ),
+        ("#[route(\"/sets\", get = set, data = Listing, data = Listing)]\n    pub struct Set;", "data is named twice"),
+        ("#[route(\"/sets\", get = set, data = 3)]\n    pub struct Set;", "data names the screen's data type"),
+        (
+            "#[route(\"/sets\", get = set, rows = Row, data = Listing)]\n    pub struct Set;",
+            "a route is one or the other, so say data or rows, not both",
+        ),
+    ] {
+        let (ok, stderr) = build_main("data-where-message", &app(route));
         assert!(!ok, "{route} compiled");
         assert!(stderr.contains(said), "the reason for {route}: {stderr}");
     }
