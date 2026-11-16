@@ -2799,15 +2799,15 @@ pub(crate) struct AsIs;
 /// has no route for it. A [`Mode::Data`] request, every request on an `api` route and every
 /// failure of a JSON route ([`crate::JsonResult`]) gets the failure as JSON instead
 /// ([`crate::api`]). A request a [`crate::Caller`] sent to sign in is redirected there.
-pub(crate) fn render_errors<'a, S: crate::app::Steps>(
-    shared: &'a Arc<Shared>,
+pub(crate) fn render_errors<'s, 'n, 'g, 'm, S: crate::app::Steps>(
+    shared: &'s Arc<Shared>,
     req: Request,
-    next: Next<'a, S>,
+    next: Next<'n, S>,
     deadline: Option<std::time::Duration>,
-    signal: &'a crate::Signal,
-    api: Option<&'a crate::api::Mount>,
+    signal: &'g crate::Signal,
+    api: Option<&'m crate::api::Mount>,
     (mode, fetched): (Mode, bool),
-) -> impl Future<Output = Response> + Send + 'a {
+) -> impl Future<Output = Response> + Send + use<'s, 'n, 'g, 'm, S> {
     // A write the runtime sent may answer its own page, which is whole for a runtime that draws one
     // (#1370). Looked up only in an app with layout reads, and once: its `Req` reads the mark.
     // Looked up before the future is made, so the request is moved into it once, as it was: a
