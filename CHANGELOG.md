@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Retain raw host process stat evidence and exempt only identity-bound Linux kernel
+  threads from grouped benchmark user-process cleanup. Prepare fresh disposable
+  hosts against firmware-service activation before baseline; keep new user-process
+  leaks and unproved historical inventories fail-closed.
+
 - Publish synthetic benchmark fixtures with explicit readable file permissions
   and search-only bind roots, including under the private campaign umask. Keep
   neighboring evidence private and contender users/read-only mounts unchanged.

@@ -615,6 +615,21 @@ running unit, retries a start or allocates a replacement.
 
 ## Evidence And Cleanup
 
+Fresh disposable-host bootstrap runtime-masks `fwupd.service`,
+`fwupd-refresh.service` and `fwupd-refresh.timer` after cloud-init and before
+provisioning. It requires all three to remain masked and inactive before native
+entry, preventing firmware timer/D-Bus activation inside the baseline boundary.
+This preparation is not applied to existing hosts or replayed during collection.
+
+Host inventories retain every PID/start/cgroup and the raw `/proc/PID/stat` read
+that supplied its identity. Only new identities with matching saved PID/start
+fields and Linux's `PF_KTHREAD` flag are exempt from the user-process cleanup
+comparison. Names, parent PIDs and claimed kernel booleans are not proof; absent,
+malformed or identity-mismatched stat data cannot excuse a new process. New user
+daemons, including fwupd, and application leaks still fail. Container, network,
+boot, participant and lifetime/resource gates are unchanged. Old inventories do
+not acquire proof from later observations: failed historical r21 stays invalid.
+
 Collection hashes the remote archive, reserves a download destination, preserves
 interrupted bytes and verifies SHA256 before extraction. A separate synced copy is
 kept as `results.tgz`. The original download remains retained too. A retry never

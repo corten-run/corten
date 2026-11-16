@@ -304,6 +304,8 @@ finish() { code=$?; trap - EXIT; printf '%s\\n' "$code" > /bench/exit-code; time
 trap finish EXIT
 ${supervisorBootstrap(s.unit)}
 timeout 900 cloud-init status --wait
+# Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
+systemctl mask --runtime --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
 systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
 timeout 900 systemd-run --quiet --property=After=apt-daily.service --property=After=apt-daily-upgrade.service --wait /bin/true
 export DEBIAN_FRONTEND=noninteractive
@@ -334,6 +336,10 @@ timeout 900 docker pull node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a980
 timeout 900 bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
 export PATH=/root/.cargo/bin:$PATH
 { docker --version; node --version; npm --version; rustc --version; cargo --version; } >> /bench/host.txt
+for unit in fwupd.service fwupd-refresh.service fwupd-refresh.timer; do
+  test "$(systemctl show "$unit" --property=LoadState --value)" = masked
+  test "$(systemctl show "$unit" --property=ActiveState --value)" = inactive
+done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
