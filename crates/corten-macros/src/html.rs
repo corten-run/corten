@@ -2738,8 +2738,8 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 #[cfg(test)]
 mod tests {
     use super::{
-        address_unsent, breaks_out, foreign_breakout, local_path, parsing_within, reads_as_text, refused_path, text_only_element, Attr,
-        Parsing, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TEXT_ONLY,
+        address_unsent, breaks_out, foreign_breakout, local_path, parsing_within, reads_as_text, refused_path, text_only_element,
+        Attr, Parsing, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TEXT_ONLY,
     };
     use proc_macro::TokenStream;
 
