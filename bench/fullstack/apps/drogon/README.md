@@ -14,6 +14,13 @@ and observes caller disconnects. An in-flight read owns its upstream connection;
 the per-thread idle-client pool is bounded. Aggregate concurrency/body limits and
 DNS/TLS-stage cancellation are not qualified by this work.
 
+Marketplace page GET and POST source reads use that same native lifetime mechanism,
+including the complete upstream body. A source deadline returns a native 504 page;
+caller disconnect closes that read and skips subsequent rendering/session mutation.
+The request-owned trace is attached before starting the read. Fixture lookups,
+native parsing/serialization, existing POST validation and render-before-append
+ordering are unchanged. Legacy item and catalog pages are outside this change.
+
 With the native dependencies from the Dockerfile installed, run from this directory:
 
 ```sh
@@ -29,12 +36,21 @@ fixture startup checks:
 docker build -t record-drogon bench/fullstack/apps/drogon
 node bench/fullstack/apps/drogon/tests/json-http.mjs record-drogon
 node bench/fullstack/apps/drogon/tests/fixture-startup.mjs record-drogon
+node bench/fullstack/apps/drogon/tests/page-lifetime-http.mjs record-drogon
 ```
 
 The HTTP driver checks both payloads and sources, complete-record correctness,
 malformed responses, redirects, deadlines, disconnect cleanup and recovery. Raw
 observations stay under ignored `tests/results/`. These are correctness checks,
 not production qualification, native audit receipts or benchmark throughput.
+
+The page lifetime driver uses the shared mixed plan's unmodified API slow GET paths
+for all three locales: healthy completion, real caller abort after upstream entry,
+and server deadline. It retains per-trace fetch/complete/cancel/pending observations
+before teardown, uses the existing 100 ms completion, 40 s hold, 50 ms abort and
+500 ms cleanup schedule, and checks healthy recovery and unchanged alert state.
+Partial-body deadline/abort cases additionally cover the same full-read primitive;
+these are focused regressions, not extra shared mixed workload requirements.
 
 ## Session alerts
 
@@ -65,8 +81,8 @@ readback and isolation, run the compiled-native driver documented in
 POST source parsing requires one complete JSON document and the requested record
 identity. A successful native CSP response must be prepared before appending.
 This is not a transaction tied to client receipt: later delivery failure does not
-roll back committed work, and the page source's existing native abort semantics
-are not expanded. Read-only paths remain unchanged. Tests cover exact minor units
+roll back committed work. Disconnect detected during the source read prevents
+later rendering/append; this is not a delivery acknowledgment. Tests cover exact minor units
 above 2^53 and the signed-64-bit acceptance boundary.
 
 ## Request-local trace context
