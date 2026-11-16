@@ -3088,8 +3088,9 @@ rules something out.
     patch's text) and imports the module, whose fetch the preload has already started, so the
     part's read waits for no round trip of its own after the first. Served beside the runtime, not
     with the app's scripts, so an app with no static files or components has it too. The runtime is
-    15,439 bytes gzipped (15,341 on main) and the module 910, where the reads in the runtime cost
-    1,344; a page without a slow part fetches nothing more. A stub that started the fetch before
+    15,467 bytes gzipped and 13,963 brotli (15,341 and 13,846 on main) and the module 955 and 825,
+    where the reads in the runtime cost 1,344 gzipped; a page without a slow part fetches nothing
+    more. A stub that started the fetch before
     the module arrived was not needed: the module is preloaded with the page that needs it.
 
     The read depends on its part alone: a patch of another element meanwhile (the next cell of a
@@ -3186,8 +3187,8 @@ rules something out.
     inside the page's own markup ([Choice 7](#choice-whole-pages)).
 
     Last checked: 2026-11-16, the picks read once on load and again after a navigation back, busy
-    while their read is on its way, an empty patch left unmarked, a failed read, an error page and
-    a redirect marked with the link shown and the page left where it was, the link's page with the
+    while their read is on its way, a patch that leaves them as they were, a failed read, an error
+    page and a redirect marked with the link shown and the page left where it was, the link's page with the
     picks read in, the part module fetched once by the page with the picks and never by one
     without, two parts one read draws and one of them removed while it is on its way (the other
     marked at once), a part replaced while its answer's stylesheet loads, a part a patch appends,

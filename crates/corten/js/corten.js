@@ -2402,8 +2402,11 @@ const READ_AGAIN = Symbol("corten.readAgain");
  * navigation to another history entry (or a page that no longer asks) stops it, and one on its
  * way puts it off: the page it brings starts its own. A page that also asks for parts of it to be read again
  * ({@link readPartsAgain}) is not read whole: its head's tag is for a browser without JavaScript.
+ * One whose part a read is bringing ({@link readNow}) waits one more interval for it, once
+ * (`held`), so a read that never ends does not stop the page's.
+ * @param {boolean} [held] this wait is that once
  */
-function readAgainLater() {
+function readAgainLater(held = false) {
   const page = ++readAgainPage;
   const tag = document.head.querySelector("noscript[data-corten-read-again]");
   const seconds = Number(tag?.getAttribute("data-corten-read-again"));
@@ -2415,6 +2418,7 @@ function readAgainLater() {
     seconds,
     () => page === readAgainPage && (navigation ? navigation.currentEntry?.key === entry : location.pathname === path),
     () => {
+      if (!held && document.querySelector(`[aria-busy] > ${PART_NOW}`)) return readAgainLater(true);
       if (!navigation) return reload();
       // A read cancelled on its way (a script's `replaceState`, as a sort in place does) is read
       // again later while this is still the entry: only a swapped page starts the next. A read

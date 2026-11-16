@@ -24,7 +24,8 @@ Corten is pre-1.0, so any minor version may change the API.
   not read, so reads do not chain, and a page whose head asks to be read again waits at most one
   more interval for a part's read. The reads are a script module of their own, `part.js`, served
   beside the runtime and preloaded only by a page that draws such a part: the runtime grows by
-  98 bytes gzipped (15,341 on main, 15,439 with this) and the module is 910. An app with such a
+  126 bytes gzipped and 117 brotli (15,341 and 13,846 on main, 15,467 and 13,963 with this) and the
+  module is 955 gzipped, 825 brotli. An app with such a
   stream moves to this shape: drop the stream's route and handler, put `ReadAgain::now` inside
   the part where the `<corten-live>` was, and key the link's CSS on `[data-corten-read-failed]`
   instead of `corten-live[status="closed"]`. Choices 7 and 44 are rewritten: declarative shadow
