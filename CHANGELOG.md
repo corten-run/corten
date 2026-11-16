@@ -16,7 +16,7 @@ Corten is pre-1.0, so any minor version may change the API.
   one of the name, or has one of another kind, throws, as does a group whose form has a control of
   the name that is not an input, saying what the call takes and what the form has instead, and
   `corten dev` reports the same when the page draws it (a group with none is `[]`). The lookup
-  is a module of its own (`corten-field`, 669 bytes with gzip) that only a page whose handlers take
+  is a module of its own (`corten-field`, 741 bytes with gzip) that only a page whose handlers take
   a field loads, and reads the form's index of names, a few microseconds a run in a form of 2,000
   controls; every page's runtime is 66 bytes larger with gzip
   ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).

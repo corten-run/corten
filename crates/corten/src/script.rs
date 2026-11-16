@@ -2197,7 +2197,7 @@ pub trait Arg<P> {
 #[diagnostic::on_unimplemented(
     message = "the script types this handler parameter so that no call can be checked against it",
     label = "the warning on this handler says why",
-    note = "a set of names, or any other JSON value, is a Rust type with a generated declaration, import(\"../types/app\").Name, and a list or an optional one a Rust type of its own; an element or an event takes an interface the scripts guide lists as checked (several events the one they share, UIEvent or Event); a parameter typed unknown takes any argument"
+    note = "a set of names, or any other JSON value, is a Rust type with a generated declaration, import(\"../types/app\").Name, and a list or an optional one a Rust type of its own; an element or an event takes an interface the scripts guide lists as checked (several events the one they share, UIEvent or Event); a parameter typed unknown takes any argument but a form field, which takes the control the form draws for it"
 )]
 pub trait Refused: refused::Sealed {}
 

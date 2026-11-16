@@ -738,6 +738,35 @@ async function run(browser) {
         marks === "ship-form,ship-form,ship-form,label-form",
         marks,
       );
+    }    // A form-associated custom element is a listed element too: its form= names its form, as a
+    // control's does, so a field is found in that form, not in the one around it, nor in none
+    // when no form is around it.
+    {
+      const faced = await shipped.evaluate(async () => {
+        customElements.define(
+          "smoke-control",
+          class extends HTMLElement {
+            static formAssociated = true;
+          },
+        );
+        // Built from elements, not markup: the page requires Trusted Types.
+        const other = Object.assign(document.createElement("form"), { id: "face-form" });
+        other.append(Object.assign(document.createElement("input"), { name: "weight" }));
+        document.body.append(other);
+        const on = document.querySelector("#ship-form ul")?.getAttribute("data-on") ?? "";
+        const controls = [document.createElement("smoke-control"), document.createElement("smoke-control")];
+        for (const control of controls) {
+          control.setAttribute("form", "face-form");
+          control.setAttribute("data-on", on);
+          control.textContent = "Mark";
+        }
+        document.getElementById("ship-form")?.append(controls[0]);
+        document.body.append(controls[1]);
+        for (const control of controls) control.click();
+        for (let waited = 0; controls.some((c) => !c.hasAttribute("data-form")) && waited < 5000; waited += 50) await new Promise((done) => setTimeout(done, 50));
+        return `${on.startsWith("click:") ? "" : `${on} `}${controls.map((c) => c.getAttribute("data-form") ?? "none").join(",")}`;
+      });
+      check("a field is found in the form a form-associated custom element's form= names, in a form or out of one", faced === "face-form,face-form", faced);
     }
     // A group no control of the form has is empty; one whose name is the form's select runs
     // nothing and says why.

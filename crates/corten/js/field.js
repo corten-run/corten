@@ -14,17 +14,22 @@ export const LISTED = "button,fieldset,input,object,output,select,textarea";
 
 /**
  * The form of `el`: the form itself; for a control (`LISTED`), the one the browser says it
- * belongs to (`form=` included), or none when its `form=` names no form, as a submit has it; else
- * the one around it. A `<label>` or `<legend>` is not a control: its `form` is the labelled
- * control's or the fieldset's, which `form=` may put in another form, so it takes the one around
- * it, as a `<ul>` does, and so does a form-associated custom element, which is not listed. Only a form's own members can be shadowed by a control's name (`form`,
- * `closest`), and a form is taken first.
+ * belongs to (`form=` included), or none when its `form=` names no form, as a submit has it; for
+ * a form-associated custom element, also a listed element, the same owner, which its `form=` gives
+ * as for any control (the first element of its tree with that id, if a form), though only its own
+ * script can read it; else the one around it. A `<label>` or `<legend>` is not a control: its
+ * `form` is the labelled control's or the fieldset's, which `form=` may put in another form, so it
+ * takes the one around it, as a `<ul>` does. Only a form's own members can be shadowed by a
+ * control's name (`form`, `closest`), and a form is taken first.
  * @param {Element} el @returns {HTMLFormElement | null}
  */
 export function formOf(el) {
   if (el instanceof HTMLFormElement) return el;
-  if (!el.matches(LISTED)) return el.closest("form");
-  return /** @type {HTMLInputElement} */ (el).form ?? (el.hasAttribute("form") ? null : el.closest("form"));
+  if (el.matches(LISTED)) return /** @type {HTMLInputElement} */ (el).form ?? (el.hasAttribute("form") ? null : el.closest("form"));
+  const id = el.getAttribute("form");
+  if (id === null || !Reflect.get(el.constructor, "formAssociated")) return el.closest("form");
+  const owner = /** @type {Document} */ (el.getRootNode()).getElementById?.(id);
+  return owner instanceof HTMLFormElement ? owner : null;
 }
 
 /**

@@ -607,6 +607,19 @@ deref!(Form);
 /// text(Ship::FIELDS.weight);
 /// ```
 ///
+/// A handler that takes anything (`unknown`) does not take one either: its parameter names no
+/// control for the runtime to find.
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, script::{Arg, ts}};
+///
+/// #[derive(Fields)]
+/// struct Ship { weight: String }
+///
+/// fn any<A: Arg<ts::Any>>(_: A) {}
+/// any(Ship::FIELDS.weight);
+/// ```
+///
 /// A handler that takes another element does not take one:
 ///
 /// ```compile_fail,E0277

@@ -197,7 +197,9 @@ rules something out.
    one object argument), and any value of a Rust type through its generated declaration; a type
    it cannot check a call against, a set of names written as string literals, any other JSON
    shape or an element or event in another shape, refuses the call rather than taking anything,
-   and only `unknown` takes any argument, since it claims nothing the call does not check);
+   and only `unknown` takes any argument but a form field (which needs the control's type to know
+   what to find, [Choice 57](#choice-field-arguments)), since it claims nothing the call does not
+   check);
    platform (apps require TypeScript 6.0 or later for the runtime's Navigation API DOM types;
    TypeScript 7.0.2 is pinned for framework CI to match npm's newest stable release installed by
    the getting-started guide. It checks JSDoc types as it checks annotations, except where
@@ -4562,7 +4564,7 @@ rules something out.
     needs no standard ([Rule 10](#rule-standard-formats)). When the handler runs, the field
     module (`corten-field`, `js/field.js`), which a page loads only when its handlers take a field,
     as a format argument loads `corten-format`, takes the form of the element with the `on:` (the form itself; for a control, the one it belongs
-    to, `form=` included; else the one around it, so a `<label>` takes the form it is in, not its
+    to, `form=` included, a form-associated custom element's too; else the one around it, so a `<label>` takes the form it is in, not its
     control's, which `form=` may put elsewhere), reads that form's own `elements` by the browser's
     index of its names (`namedItem`, so a control named `elements` or `namedItem` cannot stand in
     for either), keeps the controls whose `name` is the field's (the index also holds ids), and
@@ -4587,7 +4589,7 @@ rules something out.
     handler with the old one. The lookup in the runtime every page loads, as this change first had
     it: 204 bytes with gzip on every page (15,341 to 15,545), for a call few pages make, where a
     module of its own costs every page 51 (66 with the check that keeps a handler's run from
-    allocating, below) and only a page with a field 669 more and one
+    allocating, below) and only a page with a field 741 more and one
     request,
     which its first load makes with its handlers' modules, as a module script of the page. `RequiredWhen` keeps its name as text: its control may be a select,
     radios or a checkbox, and it reads only the value, which no one element type covers. A walk
@@ -4604,7 +4606,7 @@ rules something out.
     every user, chiefly for the parser's `~` branch (about 20 with gzip), loading the field module
     for a call that takes one (14), and a handler's run that looks up a binding's other modules and
     makes no closure or array when it has none, as before (about 15). The lookup and its message
-    are that module, 1,148 bytes raw, 669 with gzip and 573 with brotli as built, which only a page whose handlers take a field fetches, as one
+    are that module, 1,340 bytes raw, 741 with gzip and 640 with brotli as built, which only a page whose handlers take a field fetches, as one
     more module script of the page; a page the runtime swaps in imports it with the page's
     handler modules, and an event before it arrives gets the browser's default, as one before
     those does. A field argument writes its posted name where a
