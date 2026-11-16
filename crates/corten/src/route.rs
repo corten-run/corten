@@ -4780,9 +4780,10 @@ pub mod __private {
     /// ([`super::Route::Data`]): any kind a route with no data ([`super::NoData`]), and only
     /// `Screen<T>` one that says `data = T` ([`super::HasData<T>`]).
     #[diagnostic::on_unimplemented(
-        message = "the route says `data`, and the handlers it is mounted with have no get that answers a screen of its data (their get answers as `{Self}`)",
-        label = "these handlers' get does not answer a screen of the route's data",
-        note = "the route's screen answers `{Data}`: give it a get that returns HtmlResult<corten::Screen<..>> of the type the route names, from req.screen, as its routes module does"
+        message = "the handlers mounted here may not serve the route, which names `{Data}` (their kind is `{Self}`: no get, or a get that may answer a page, a redirect or other data)",
+        label = "these handlers cannot serve this route",
+        note = "a route that says `data = T` takes a get that returns HtmlResult<corten::Screen<T>>, from req.screen, as its routes module does",
+        note = "code generic over the route it mounts handlers at bounds it `R: corten::Route<Data = corten::route::NoData>`, a route that names no data"
     )]
     pub trait DataMatches<Data> {}
     impl<K> DataMatches<super::NoData> for K {}

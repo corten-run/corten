@@ -4326,7 +4326,8 @@ rules something out.
     (`NoData` for a route without data), and the handlers' kind must match it (`DataMatches`):
     every kind matches `NoData`, and only `Screen<T>` matches `HasData<T>`. A `Route` written
     by hand names its `Data` too, since a trait's associated type has no default on stable Rust,
-    a break for such an impl (none in the examples or the template; CHANGELOG, **Breaking:**); the route is then a handler
+    a break for such an impl (none in the examples or the template), and code generic over a route
+    that mounts handlers at it bounds it `R: Route<Data = NoData>` (CHANGELOG, **Breaking:**); the route is then a handler
     argument of type `ScreenUrl<T>`, where `T` must come from the declarations `corten::types`
     writes (a type the script declares would match the Rust type by name alone; what is checked is
     the path the name is imported from, `types/app`, so a file written by hand at that path is not

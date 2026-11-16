@@ -38,7 +38,10 @@ Corten is pre-1.0, so any minor version may change the API.
   `HtmlResult<Screen<T>>` cannot answer through them, and code of an app's own that is generic
   over an answer's kind and calls them bounds it `K: corten::answer::PatchingKind`. A `Route`
   written by hand (`impl corten::Route for ..`, not `#[derive(Route)]`) names what its screen
-  answers a data client: add `type Data = corten::route::NoData;` to the impl
+  answers a data client: add `type Data = corten::route::NoData;` to the impl. Code of an app's
+  own that is generic over a route and mounts handlers at it (`area.route::<R>(methods)`,
+  `api.route::<R>(methods)`) bounds it `R: corten::Route<Data = corten::route::NoData>`, a route
+  that names no data (E0277 otherwise)
   ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
 
 - Bound Drogon marketplace page source reads with the existing native deadline and

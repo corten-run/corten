@@ -198,6 +198,77 @@ impl<P: Prefix> Api<P> {
     /// let app = App::new(Routes::new()).api::<ApiRoot>(|api| api.route::<Item>(get(|| async { "item" })));
     /// # let _ = app.router();
     /// ```
+    ///
+    /// A route that says `data = T` takes only a `get` that answers a screen of `T`, as in
+    /// [`crate::Area::route`], so one that answers a page does not compile:
+    ///
+    #[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+    #[cfg_attr(not(feature = "json"), doc = "```ignore")]
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// #[derive(Route)]
+    /// #[route("/apis")]
+    /// struct ApiRoot;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/apis/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// fn doc(title: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{title}</title><Corten /></head><body><main>{title}</main></body></html> }
+    /// }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&SetListing { name: "All".into() }, doc("Sets"))
+    /// }
+    ///
+    /// async fn mounted(req: Req) -> HtmlResult {
+    ///     req.page(doc("Sets"))
+    /// }
+    ///
+    /// fn main() {
+    ///     let _ = (sets, url::router);
+    ///     let _ = App::new(Routes::new()).api::<ApiRoot>(|api| api.route::<url::Sets>(get(mounted)));
+    /// }
+    /// ```
+    ///
+    /// With a `get` that answers a screen of `SetListing` it compiles:
+    ///
+    #[cfg_attr(feature = "json", doc = "```no_run")]
+    #[cfg_attr(not(feature = "json"), doc = "```ignore")]
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// #[derive(Route)]
+    /// #[route("/apis")]
+    /// struct ApiRoot;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/apis/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// fn doc(title: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{title}</title><Corten /></head><body><main>{title}</main></body></html> }
+    /// }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&SetListing { name: "All".into() }, doc("Sets"))
+    /// }
+    ///
+    /// fn main() {
+    ///     let _ = (sets, url::router);
+    ///     let _ = App::new(Routes::new()).api::<ApiRoot>(|api| api.route::<url::Sets>(get(sets)));
+    /// }
+    /// ```
     pub fn route<R: TypedRoute>(
         mut self,
         methods: crate::Methods<(), impl crate::answer::AnswerKind + crate::route::__private::DataMatches<R::Data>>,

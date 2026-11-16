@@ -202,39 +202,51 @@ fn a_patches_route_mounted_by_hand_with_a_page_handler_says_why() {
     assert!(ok, "the same mount with HtmlResult<Patches>: {stderr}");
 }
 
-/// A `data` route mounted by hand (`Area::route`) with a `get` handler that answers a page, or
-/// a screen of other data, does not compile and says what it takes, at the mount; with a screen of
-/// its data it builds (#1399).
+/// A `data` route mounted by hand (`Area::route`, `Api::route`) with a `get` handler that
+/// answers a page, a screen of other data, or with no `get` at all, does not compile and says what
+/// it takes, at the mount; with a screen of its data it builds. Code generic over the route it
+/// mounts at is told the bound that lets it (#1399).
 #[test]
 fn a_data_route_mounted_by_hand_with_a_page_handler_says_why() {
-    let app = |answer: &str, body: &str| {
+    let app = |answer: &str, body: &str, main: &str| {
         format!(
-            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[derive(ToJson)]\npub struct Listing {{\n    name: String,\n}}\n\n#[derive(ToJson)]\npub struct Order {{\n    id: u32,\n}}\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/sets\", get = sets, data = Listing)]\n    pub struct Sets;\n}}\n\nfn doc() -> impl Document {{\n    html! {{ <html><head><title>\"Sets\"</title><Corten /></head><body><main>\"Sets\"</main></body></html> }}\n}}\n\nasync fn sets(req: Req) -> HtmlResult<corten::Screen<Listing>> {{\n    req.screen(&Listing {{ name: \"All\".into() }}, doc())\n}}\n\nasync fn mounted(req: Req) -> {answer} {{\n    {body}\n}}\n\nfn main() {{\n    let _ = sets;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>(get(mounted))).router();\n}}\n"
+            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[derive(ToJson)]\npub struct Listing {{\n    name: String,\n}}\n\n#[derive(ToJson)]\npub struct Order {{\n    id: u32,\n}}\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/sets\", get = sets, data = Listing)]\n    pub struct Sets;\n}}\n\nfn doc() -> impl Document {{\n    html! {{ <html><head><title>\"Sets\"</title><Corten /></head><body><main>\"Sets\"</main></body></html> }}\n}}\n\nasync fn sets(req: Req) -> HtmlResult<corten::Screen<Listing>> {{\n    req.screen(&Listing {{ name: \"All\".into() }}, doc())\n}}\n\n#[allow(dead_code)]\nasync fn mounted(req: Req) -> {answer} {{\n    {body}\n}}\n\n{main}\n"
         )
     };
-    for (answer, body, kind) in [
-        ("HtmlResult", "req.page(doc())", "AnyAnswer"),
-        ("HtmlResult<corten::Screen<Order>>", "req.screen(&Order { id: 7 }, doc())", "Screen<Order>"),
+    let area = |method: &str| {
+        format!("fn main() {{\n    let _ = sets;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Sets>({method}(mounted))).router();\n}}")
+    };
+    let api = "fn main() {\n    let _ = sets;\n    let _ = App::new(Routes::new()).api::<Admin>(|api| api.route::<url::Sets>(get(mounted)));\n}".to_string();
+    let generic = |bound: &str| {
+        format!("fn mount<R: {bound}>(admin: Area<Admin>, methods: corten::Methods) -> Area<Admin> {{\n    admin.route::<R>(methods)\n}}\n\nfn main() {{\n    let _ = (sets, url::Sets, mount::<Admin>);\n}}")
+    };
+    let page = ("HtmlResult", "req.page(doc())");
+    let other = ("HtmlResult<corten::Screen<Order>>", "req.screen(&Order { id: 7 }, doc())");
+    let mine = ("HtmlResult<corten::Screen<Listing>>", "req.screen(&Listing { name: \"Mine\".into() }, doc())");
+    for ((answer, body), main, kind, at) in [
+        (page, area("get"), "AnyAnswer", "admin.route::<url::Sets>"),
+        (other, area("get"), "Screen<Order>", "admin.route::<url::Sets>"),
+        // No get at all: a post that answers the right data still cannot answer a read.
+        (mine, area("post"), "AnyAnswer", "admin.route::<url::Sets>"),
+        (page, api.clone(), "AnyAnswer", "api.route::<url::Sets>"),
+        (page, generic("corten::Route"), "AnyAnswer", "admin.route::<R>"),
     ] {
-        let (ok, stderr) = build_main_with("data-mount-message", &app(answer, body), &["json"]);
-        assert!(!ok, "a data route mounted with get({answer}) built");
+        let (ok, stderr) = build_main_with("data-mount-message", &app(answer, body, &main), &["json"]);
+        assert!(!ok, "a data route mounted at {at} with {answer} built");
         assert!(stderr.contains("error[E0277]"), "an error when the crate compiles: {stderr}");
+        assert!(stderr.contains("the handlers mounted here may not serve the route, which names"), "Corten's message: {stderr}");
+        // The kind as rustc names it, with or without its path (`corten::answer::AnyAnswer`).
         assert!(
-            stderr.contains(
-                "the route says `data`, and the handlers it is mounted with have no get that answers a screen of its data"
-            ),
-            "Corten's message: {stderr}"
+            stderr.contains(&format!("{kind}`: no get, or a get that may answer a page, a redirect or other data)")),
+            "the kind its handlers answer as: {stderr}"
         );
-        assert!(stderr.contains(kind), "the kind its get answers as: {stderr}");
-        // `get(mounted)` in `admin.route::<url::Sets>(..)`, on the last line of `main`.
-        assert!(stderr.contains("admin.route::<url::Sets>"), "the error points at the mount: {stderr}");
+        assert!(stderr.contains("R: corten::Route<Data = corten::route::NoData>"), "the bound for generic code: {stderr}");
+        assert!(stderr.contains(at), "the error points at the mount: {stderr}");
     }
-    let (ok, stderr) = build_main_with(
-        "data-mount-message",
-        &app("HtmlResult<corten::Screen<Listing>>", "req.screen(&Listing { name: \"Mine\".into() }, doc())"),
-        &["json"],
-    );
-    assert!(ok, "the same mount with a screen of its data: {stderr}");
+    for main in [area("get"), api, generic("corten::Route<Data = corten::route::NoData>")] {
+        let (ok, stderr) = build_main_with("data-mount-message", &app(mine.0, mine.1, &main), &["json"]);
+        assert!(ok, "the mount with a screen of its data, or bounded to a route without data: {main}: {stderr}");
+    }
 }
 
 /// `patches` where it cannot hold: a route with no `get`, an `unstaged` one, one with a type
