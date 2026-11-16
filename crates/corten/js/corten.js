@@ -1012,13 +1012,16 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
-  // For an answer no tag asked for (a form's): the first element it draws in place of one that held
-  // a tag to read a part (that part's own), where its own tag then goes.
+  // For an answer no tag asked for (a form's) with a tag of its own to read again: the first
+  // element it draws in place of one that held a tag to read a part (that part's own), where its
+  // own tag then goes. Looked for only then, so an ordinary patch searches nothing it replaces.
+  const kids = Array.from(content.children);
+  const ownTag = !asked && kids.some((el) => hasAttr(el, "data-corten-read-again"));
   /** @type {Element | null} */
   let heldTag = null;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
-  for (const el of Array.from(content.children)) {
+  for (const el of kids) {
     // Read from the attribute, as `target.id` is a control named id when the target is a form.
     const id = idOf(el) ?? "";
     const target = id ? document.getElementById(id) : null;
@@ -1039,7 +1042,7 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
       elementOwn.append.call(target, el.content);
     } else {
       if (target.parentElement) changedIn(target.parentElement, ["r", id, [el]]);
-      if (!asked && !heldTag && queryOne(target, PART_AGAIN)) heldTag = el;
+      if (ownTag && !heldTag && queryOne(target, PART_AGAIN)) heldTag = el;
       replaceKeeping(target, el, sent, took, true, within);
       put.push(el);
     }
