@@ -4068,10 +4068,13 @@ rules something out.
     `max-age` lets a read within it make no request; `Vary: corten, accept` keeps the page's HTML
     from answering it. A redirect is not followed (`redirect: "error"`): what answers before the
     handler or replaces its answer (middleware sending a signed-out visitor to sign in) is not
-    checked against the route's data, and its target is another route's. A failure is a
-    `ReadError` whose `status` is the answer's, or 0 when there was none it could use (a redirect
-    included), as `corten:error` gives a submit the network fails; an abort rejects with
-    `signal`'s reason, as `fetch` does. No new endpoint, header or format: the URL, the
+    checked against the route's data, and its target is another route's; the browser does not
+    say where it would have gone, so a sign-in redirect looks like no answer
+    ([Limits](#limit-read-redirect)). A failure is a `ReadError` whose `status` is the answer's,
+    or 0 when there was none it could use (a redirect included, and a success that is not a
+    screen's JSON, whose `cause` is a `TypeError`), as `corten:error` gives a submit the network
+    fails; an abort rejects with `signal`'s reason, as `fetch` does, even when a failed answer
+    came first. No new endpoint, header or format: the URL, the
     negotiation and the envelope are the ones native screens already read.
 
     What it costs: nothing for an app whose scripts do not import it. `corten/read` is a module
@@ -4081,7 +4084,7 @@ rules something out.
     that imports it, each page's import map names it
     (`,"corten/read":"/assets/<version>/scripts/corten-read.js"`, 60 bytes, 4 to 9 once the page
     is compressed), and the pages whose scripts import it preload it (a 77-byte
-    `<link rel="modulepreload">`). The module is 608 bytes, 414 with gzip and 360 with brotli,
+    `<link rel="modulepreload">`). The module is 666 bytes, 438 with gzip and 367 with brotli,
     which the users of an app that reads download once a release. The server's work is
     unchanged: a `req.screen` page costs 37,950 instructions a request as HTML and 41,211 as a
     data client's JSON on `dea1788d2` and on `4eb3d62d1`, within 0.2 of each other in every run
@@ -4098,11 +4101,17 @@ rules something out.
     needs when it loads. Also not chosen: a script that fetches the JSON itself under a type it
     writes (a type at the seam written by hand, which README Value 4 rules out); an `App::api`
     route beside each screen (a second route and handler for data the screen already answers);
-    `read` in the runtime itself (every user would download it to help the pages that read).
+    `read` in the runtime itself (every user would download it to help the pages that read); a
+    second method that answers a screen, `req.screen_of(..)` beside `req.screen`, which would have
+    left `req.screen`'s type parameters as they were but given an app two ways to answer one
+    screen (README Value 5). `req.screen` took a type parameter for the answer's kind instead, a
+    break Corten takes before 1.0: a call that names its types with a turbofish names three, and
+    a `req.screen(..)` in a closure that names no answer names its kind (CHANGELOG, **Breaking:**).
 
     Stands on: measured (the minified runtime's and `corten/read`'s sizes by Node's `zlib`, gzip
     at level 6 and brotli at quality 11, on `dea1788d2` and `4eb3d62d1`, once each, and the
-    module's again once it cancels a refused answer's body, 608, 414 and 360; a
+    module's again on `c74c4fa83`, once it cancels a refused answer's body, gives a malformed
+    success a `cause` and lets an abort win over a failed answer, 666, 438 and 367; a
     `req.screen` page's instructions a request under callgrind, 1,200 requests through the
     router in process less 200, over 1,000, in both modes, three alternated runs of each build,
     release, in `rust:1-bookworm`: HTML 37,949.68 to 37,949.73 on `dea1788d2` and 37,949.64 to
@@ -4114,7 +4123,8 @@ rules something out.
     checks, where in Chromium the second read names the first answer's tag and in Firefox it is
     answered 304, and the server answers that tag with a 304 and no body; Playwright's WebKit asks
     again without the tag and is sent the whole answer, as it does the runtime's navigation fetch;
-    `redirect: "error"` rejects a redirect without following it, a `ReadError` 0 in all three);
+    `redirect: "error"` rejects a redirect without following it, a `ReadError` 0 in all three,
+    and a 404 that arrives as the signal aborts rejects with the abort);
     reasoned (an app whose scripts do not import `corten/read` gets the same runtime and import
     map, so its pages pay nothing; `data`'s type comes from the route's `data = T` and the
     declaration of `T`, so no script writes it, and a route whose handler can answer without a
@@ -4136,10 +4146,11 @@ rules something out.
     version that compares a `TypeId` in a `const`, when a hand mount's check can move from
     startup to the compiler.
 
-    Last checked: 2026-11-15, the sizes, the instruction counts and the import-map entry on
-    `dea1788d2` and `4eb3d62d1`, and the module's size and the hand mount's check on the change
-    that added it; 2026-11-15, the smoke's read checks on `4eb3d62d1` in Chromium
-    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
+    Last checked: 2026-11-15, the runtime's size, the instruction counts and the import-map entry
+    on `dea1788d2` and `4eb3d62d1`; 2026-11-15, the module's size, the hand mount's check (its
+    tests and the `Route::DATA` comparison in `mounted_with`) and the smoke's read checks on
+    `c74c4fa83`, the read checks in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
+    (Playwright 1.64.1).
 
 ## Rules
 
@@ -4601,3 +4612,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
     it posts nowhere wrong (give it an `action` too), and a `formmethod="post"` button in a `GET`
     form and a form a script adds are not seen. A patch is not read: the runtime applies it at the
     address the browser was already at.
+30. <a id="limit-read-redirect"></a>A script's `read()` cannot tell a redirect from no answer at all:
+    it follows none (`redirect: "error"`, since the target is another route's answer and not the
+    route's data), and the browser says neither why nor where it would have gone, so middleware
+    that sends a signed-out visitor to sign in is a `ReadError` 0, as being offline is. Telling
+    the two apart would take `redirect: "manual"`, whose opaque answer says only that some
+    redirect happened, not that it was to sign in, so a script still could not act on it beyond
+    what it does for any `ReadError` 0. A script that may meet one navigates to the URL instead,
+    and the browser follows the redirect ([Choice 54](#choice-screen-read)).
