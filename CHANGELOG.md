@@ -23,14 +23,17 @@ Corten is pre-1.0, so any minor version may change the API.
   prerendered page reads once it is shown. A part waiting in a part's answer is marked failed,
   not read, so reads do not chain, and a page whose head asks to be read again waits at most one
   more interval for a part's read. The reads are a script module of their own, `part.js`, served
-  beside the runtime and preloaded only by a page that draws such a part: the runtime grows by
-  126 bytes gzipped and 117 brotli (15,341 and 13,846 on main, 15,467 and 13,963 with this) and the
-  module is 955 gzipped, 825 brotli. An app with such a
+  beside the runtime and preloaded only by a page that draws such a part (and precached once by a
+  PWA's service worker): the runtime grows by 147 bytes gzipped and 138 brotli (15,341 and 13,846
+  on main at `2b33cd568`, 15,488 and 13,984 at `a1436d473`) and the module is 986 gzipped, 860
+  brotli (`npm run build:js`'s `js/dist`, gzip 6 and brotli 11 by Node's `zlib`). An app with such a
   stream moves to this shape: drop the stream's route and handler, put `ReadAgain::now` inside
   the part where the `<corten-live>` was, and key the link's CSS on `[data-corten-read-failed]`
   instead of `corten-live[status="closed"]`. Choices 7 and 44 are rewritten: declarative shadow
   DOM places a part streamed later without a script only at a slot of a shadow tree around the
-  page, as a child of a host still open, and `scripts/dsd-probe.mjs` checks it again
+  page, as a child of a host still open, and Chromium's `<template for>` (on by default since
+  Chrome 150) anywhere in the page, but Firefox and WebKit not at all, so Choice 7, reopened, keeps
+  pages whole; `scripts/dsd-probe.mjs` checks both again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
 - The scripts guide gives `corten-format`'s size once, as built (3,005 bytes, 1,492 gzipped),

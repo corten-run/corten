@@ -352,46 +352,72 @@ rules something out.
 7. <a id="choice-whole-pages"></a>**A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
    response sends the status and headers before that section exists, so a failure in it can no
    longer become an error page or a redirect; and with the data fetched together (`tokio::join!`)
-   and rendering in microseconds, the most it saves is the slowest source's wait. Declarative
-   shadow DOM places a part streamed later with HTML alone, with JavaScript off: a `<slot name>`
-   in a `<template shadowrootmode="open">` shows its fallback, and an element with that `slot`
-   sent later as a child of the same host replaces it. Two layouts were probed. With the whole
-   page in the shadow root, the page is out of the document's reach: `document.getElementById`
-   does not find its elements, a `#fragment` link does not scroll to one, and the document's
-   stylesheets do not apply (a label's `for` still works). With only a layout in the shadow root
-   (a default slot for the page and a named one for the part) the page, as the host's own
-   children, keeps its ids, fragment links and styles, but the part can go only where that layout
-   put a slot: its place and every element around it are in the shadow tree, which the document's
-   stylesheets and ids do not reach, and it must be a child of the host, which stays open until
-   the part arrives, so the page's markup after it waits inside that element. A part sent inside
-   the page's own markup (a cell of a grid in `<main>`) is not placed: it stays where it is
-   sent and the slot keeps its fallback. So no page of Corten's is in a shadow root. A part that
-   is slow and optional is drawn waiting and read once the page is on the screen
-   (`ReadAgain::now`, answered by the page's own handler with `req.patch_or_with`), anywhere in
-   the page; where no read brings it, its waiting line links to the page with it read in
-   ([Choice 44](#choice-slow-part-link)).
+   and rendering in microseconds, the most it saves is the slowest source's wait. Two ways place a
+   part streamed later with HTML alone, with JavaScript off. Chromium's out-of-order streaming
+   (Declarative Partial Updates, on by default since Chrome 150) places it anywhere in the page's
+   own markup: a `<?start name>` processing instruction marks its place, a fallback up to `<?end>`,
+   and a `<template for>` sent later replaces that. Firefox and WebKit parse the marker as a comment
+   and leave the template inert, so there the fallback stays and the part never shows; and no engine
+   lets a script parse a stream into the page as the parser does (the streaming setters,
+   `streamHTMLUnsafe`) without Chromium's experimental flag, so the runtime's navigations, which
+   swap `<main>` in from a fetched answer, could not place a part that comes later without a script
+   of their own doing what the parser does. Declarative shadow DOM, in all three, places it only at
+   a slot: a `<slot name>` in a `<template shadowrootmode="open">` shows its fallback, and an
+   element with that `slot` sent later as a child of the same host replaces it. With the whole page
+   in the shadow root, the page is out of the document's reach: `document.getElementById` does not
+   find its elements, a `#fragment` link does not scroll to one, and the document's stylesheets do
+   not apply (a label's `for` still works). With only a layout in the shadow root (a default slot
+   for the page and a named one for the part) the page, as the host's own children, keeps its ids,
+   fragment links and styles, but the part can go only where that layout put a slot: its place and
+   every element around it are in the shadow tree, which the document's stylesheets and ids do not
+   reach, and it must be a child of the host, which stays open until the part arrives, so the page's
+   markup after it waits inside that element. A part sent inside the page's own markup (a cell of a
+   grid in `<main>`) is not placed: it stays where it is sent and the slot keeps its fallback. So no
+   page of Corten's is in a shadow root or streamed in parts. A part that is slow and optional is
+   drawn waiting and read once the page is on the screen (`ReadAgain::now`, answered by the page's
+   own handler with `req.patch_or_with`), anywhere in the page, in every engine, after a full load
+   and a navigation alike; where no read brings it, its waiting line links to the page with it read
+   in ([Choice 44](#choice-slow-part-link)).
+
+   Reopened by
+   [#1483 One handler answers a page and its slow part: ReadAgain::now and Req::patch_or_with](https://github.com/corten-run/corten/pull/1483),
+   since Chromium now places a part streamed out of order inside the page's own markup, which was
+   this Choice's Revisit-when, and kept: in one engine of three it would be a second way to bring
+   a slow part (Values 5) that, without a script, Firefox and WebKit never show (Values 3, which
+   the waiting line's link meets in all three), and that the runtime would have to apply itself
+   in those engines and on its own navigations, a script in every page's runtime for what the
+   platform does not yet do (Values 1 and 2); and the part would still cost the page its status
+   and headers.
 
    Stands on: bet (a page's sources are fetched together and the slowest is rarely slow enough for a
    part sent later to be worth its costs); measured (an uncompressed, untagged whole item page request
-   takes 47 µs of CPU in the server benchmark, median of three load passes); platform (a slot in a
-   declarative shadow root shows its fallback until a child of its host for it arrives later in
-   the response, with JavaScript off; a shadow root keeps the document's ids, fragments and
+   takes 47 µs of CPU in the server benchmark, median of three load passes); platform (with
+   JavaScript off, Chromium 156 applies a `<template for>` sent later to a `<?start name>` range
+   inside the page's own markup, and Firefox 157 and WebKit 27.2 do not, keeping its fallback;
+   the streaming setters are in Chromium only behind `--enable-experimental-web-platform-features`;
+   a slot in a declarative shadow root shows its fallback until a child of its host for it
+   arrives later in the response; a shadow root keeps the document's ids, fragments and
    stylesheets out of what it holds; an element for the slot sent elsewhere is not placed);
    reasoned (the status and headers go before a streamed part exists, so its failure cannot
    become an error page or a redirect); value (a page works without a script, Values 3, where a
-   part a script places would land at the end of the page without one, and a page in a shadow
-   root would lose its ids, links and styles).
+   part a script places would land at the end of the page without one, a part streamed with
+   `<template for>` never shows in two engines, and a page in a shadow root would lose its ids,
+   links and styles).
 
-   Revisit when: browsers place a part streamed out of order with HTML alone at a place inside the
-   page's own markup, not only at a slot of a shadow tree whose host stays open until it arrives;
-   or an app measures a first paint that streaming would bring forward by more than a part read
-   once the page is on the screen does.
+   Revisit when: Firefox and WebKit apply `<template for>` by default and every engine has a
+   streaming setter on by default, so a full load and a navigation alike could place a part
+   streamed later without a script of Corten's own; then a part in the page's response is weighed
+   against its status and headers, and against a part read once the page is on the screen. Or an
+   app measures a first paint that streaming would bring forward by more than a part read once
+   the page is on the screen does.
 
-   Last checked: 2026-11-15 for declarative shadow DOM, both layouts and a part sent inside the
-   page's cell, in Chromium 156, Firefox 157 and WebKit 27.2 (Playwright 1.64.1, JavaScript off for
-   the slot, on for the rest), by `node scripts/dsd-probe.mjs`, first run for
-   [#1483 One handler answers a page and its slow part: ReadAgain::now and Req::patch_or_with](https://github.com/corten-run/corten/pull/1483);
-   2026-11-06 for the item page's time, round r16, three load passes, on `eea6adb`.
+   Last checked: 2026-11-16 for `<template for>` and declarative shadow DOM (the whole page in the
+   shadow root, a layout's slots, a part sent inside the page's cell), in Chromium 156 with and
+   without `--enable-experimental-web-platform-features`, Firefox 157 and WebKit 27.2 (Playwright
+   1.64.1, JavaScript off for placing the part, on for the rest), by `node scripts/dsd-probe.mjs`
+   at `a1436d473`, and [Chrome 150's release notes](https://developer.chrome.com/release-notes/150) for
+   `<template for>` on by default; 2026-11-06 for the item page's time, round
+   r16, three load passes, on `eea6adb`.
 
 8. <a id="choice-compiled-static-files"></a>**Static files are compiled into the program, a constant per file.** `embed!(pub struct
    Static = "static")` includes the directory when the crate compiles, so the binary is the
@@ -3088,9 +3114,10 @@ rules something out.
     patch's text) and imports the module, whose fetch the preload has already started, so the
     part's read waits for no round trip of its own after the first. Served beside the runtime, not
     with the app's scripts, so an app with no static files or components has it too. The runtime is
-    15,467 bytes gzipped and 13,963 brotli (15,341 and 13,846 on main) and the module 955 and 825,
-    where the reads in the runtime cost 1,344 gzipped; a page without a slow part fetches nothing
-    more. A stub that started the fetch before
+    15,488 bytes gzipped and 13,984 brotli at `a1436d473` (15,341 and 13,846 on main) and the
+    module 986 and 860, where with the reads in the runtime it was 16,685 and 15,059 at
+    `cd6861c76` (Stands on); a page without a slow part fetches nothing more, except once, when a
+    PWA's service worker installs and precaches the module with the runtime. A stub that started the fetch before
     the module arrived was not needed: the module is preloaded with the page that needs it.
 
     The read depends on its part alone: a patch of another element meanwhile (the next cell of a
@@ -3128,9 +3155,9 @@ rules something out.
     being read whole too; placing it inside the part, so the page knew, and hardening
     `ReadAgain::from`'s own reads (stopping a read whose parts left, a check after its
     stylesheets load) are changes to `ReadAgain::from` of their own, not this Choice's. Not
-    `aria-busy="false"` for a failure: busy says an element is being updated, and false is also
-    the state of every element that is not, so a part that read fine but was not replaced (an
-    empty patch) would look failed. A `data-` attribute, as Values 2 extends a standard: the
+    `aria-busy="false"` for a failure: busy says whether an element is being updated, and false
+    is also the state of every element that is not, so it would say no more than the mark's
+    removal does. A `data-` attribute, as Values 2 extends a standard: the
     waiting element is the app's, any element, where an attribute of Corten's own like
     `<corten-live>`'s `status` is valid only on Corten's element; `corten-` is the runtime's
     prefix, as on the tag.
@@ -3163,12 +3190,22 @@ rules something out.
     with a slow part (Values 1); following a part read's redirect (above); a header of Corten's own
     for the part's read, where `corten: action` already asks for a patch; the link in a
     `<noscript>`, which a browser with scripting on never draws, so it would never show for a read
-    that failed; and declarative shadow DOM, whose slots place a part streamed later without a
+    that failed; declarative shadow DOM, whose slots place a part streamed later without a
     script only at a slot of a shadow tree around the page, as a child of a host still open
-    ([Choice 7](#choice-whole-pages)).
+    ([Choice 7](#choice-whole-pages)); and Chromium's `<template for>`, which places a part
+    streamed later in the page's response anywhere in its markup but in Chromium alone: without a
+    script, Firefox and WebKit keep the part's fallback for good, so the page would still need the
+    link this Choice draws (Values 3), the part would cost the page its status and headers, and
+    the runtime would have to place it itself in those engines and on its navigations, which no
+    engine's default streaming setter does yet ([Choice 7](#choice-whole-pages)).
 
     Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
-    less than a marker Corten reads on every request); platform (with scripting off
+    less than a marker Corten reads on every request); measured (`npm run build:js`'s
+    `js/dist/corten.js` and `js/dist/part.js`, gzip level 6 and brotli level 11 by Node's
+    `zlib`: the runtime 15,488 and 13,984 bytes at `a1436d473` and the module 986 and 860, against
+    15,341 and 13,846 for the runtime on main at `2b33cd568` and 16,685 and 15,059 with the reads
+    in it at `cd6861c76`, so a page without a slow part loads 1,197 bytes gzipped fewer than it
+    would with them there); platform (with scripting off
     `@media (scripting: none)` matches and `(scripting: enabled)` does not, with it on the
     reverse; `aria-busy` means the element is being updated, WAI-ARIA 1.2); reasoned (a browser
     without Media Queries 5's `scripting` matches neither query, as Media Queries evaluates a
@@ -3183,8 +3220,8 @@ rules something out.
     Revisit when: the repository's examples and the Chase Sets pilot between them write such a
     field and handler branch on three or more routes (one, watchlist's home, in this repository);
     or a browser the repository's Playwright runs matches `@media (scripting: none)` with
-    JavaScript on, or not with it off; or browsers place a part streamed later with HTML alone
-    inside the page's own markup ([Choice 7](#choice-whole-pages)).
+    JavaScript on, or not with it off; or Firefox and WebKit, as Chromium does, place a part
+    streamed later with HTML alone inside the page's own markup ([Choice 7](#choice-whole-pages)).
 
     Last checked: 2026-11-16, the picks read once on load and again after a navigation back, busy
     while their read is on its way, a patch that leaves them as they were, a failed read, an error

@@ -314,8 +314,9 @@ part, and shows it in place of the line saying the part is on its way under
 (offline, the server unreachable, an error page, a page, a patch without it) is marked
 `data-corten-read-failed`. A read the server redirects (a sign-in) marks it too, and the page
 stays: its link, a navigation, follows the redirect, as without JavaScript, so a user typing
-elsewhere on the page is not taken away. A read that brings a patch is not a failure, even one
-that leaves the part as it was. One of a shared read's parts replaced or removed while the read
+elsewhere on the page is not taken away. Only a patch that replaces or removes the part
+answers it: a patch that leaves it where it was (an empty one, or one of other elements) marks it
+too. One of a shared read's parts replaced or removed while the read
 was on its way (a form's answer, a script) is not drawn over: the patch is not applied, and the
 parts still waiting are marked failed at once, so their links show. A browser without the
 `scripting` media feature matches neither query and shows both. The query follows whether
