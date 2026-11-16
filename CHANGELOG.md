@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Preserve type-token punctuation in `#[derive(Fields)]`, so group, row and key types
+  written as paths compile, including keys of `#[fields(map)]` fields.
+
 - Clear only an already stopped, masked firmware unit's failed state during
   fresh benchmark setup, then recheck the mask, inactive state and service PID.
   Record fixed setup stages, source lines and original failure codes without
