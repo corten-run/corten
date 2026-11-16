@@ -318,7 +318,8 @@
 //! A feed's URL carries the feed's rows to the script. The route names them (`rows = Level`),
 //! its handler answers with them (`FeedResponse<Level>`), and the handler parameter that takes the
 //! route is a `FeedUrl<Level>` (from `corten`; `Level` is the Rust type of that name in the
-//! component's module), from which `subscribe()` takes the row type:
+//! component's module, imported in the script from the generated `types/app` declarations),
+//! from which `subscribe()` takes the row type:
 //!
 //! ```
 //! # #[cfg(feature = "feed")]
@@ -449,6 +450,33 @@
 //!
 //! #[component(js)]
 //! fn LevelFeed() -> impl Render {
+//!     let body = refs();
+//!     html! { <table><tbody ref={body} on:connect={js::follow(body, url::Levels, signal)}></tbody></table> }
+//! }
+//! # fn main() { let _ = url::router; }
+//! ```
+//!
+//! A `Level` the script declares itself (`local_feed.js`:
+//! `/** @typedef {{ id: string, invented: boolean }} Level */`) does not compile, even when
+//! the route names the Rust `Level`: its shape is not the server's generated declaration.
+//!
+#![cfg_attr(feature = "feed", doc = "```compile_fail")]
+#![cfg_attr(not(feature = "feed"), doc = "```ignore")]
+//! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
+//!
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String, qty: u32 }
+//!
+//! #[corten::routes(state = Feed<Level>)]
+//! pub mod url {
+//!     #[route("/feed/levels", get = levels, rows = Level)]
+//!     pub struct Levels;
+//! }
+//!
+//! async fn levels(State(feed): State<Feed<Level>>) -> FeedResponse<Level> { feed.snapshot() }
+//!
+//! #[component(js)]
+//! pub fn LocalFeed() -> impl Render {
 //!     let body = refs();
 //!     html! { <table><tbody ref={body} on:connect={js::follow(body, url::Levels, signal)}></tbody></table> }
 //! }
