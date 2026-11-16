@@ -1333,12 +1333,15 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// ```
 ///
 /// The runtime parses a patch's top-level elements together, as a `<template>`'s content, where
-/// the first element decides how the rest is read. Two shapes are lost wherever they are written,
-/// so `html!` refuses them where it sees the top level
+/// the first element decides how the rest is read. Some shapes are lost wherever they are
+/// written, so `html!` refuses them where it sees the top level
 /// ([design Choice 54](https://github.com/corten-run/corten/blob/main/docs/design.md#choice-html-parse-refusals)):
 /// a table part (`<tr>`, `<td>`, `<tbody>`, `<caption>`, `<col>` ..) after a first `<table>`, which
-/// the parse drops (or, where the patch began with a table part, takes the table apart), and an
-/// element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first `<col>`:
+/// the parse drops (or, where the patch began with a table part, takes the table apart); an
+/// element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first `<col>`;
+/// and after a first other table part, a `<table>`, at the top level or in a later element, which
+/// the parse takes apart, and a `<form>` there whose content it moves out, where an element HTML's
+/// wherever it lands is in or around the form:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -1358,8 +1361,27 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// let _ = html! { <col id={WidthId}> <p id={NoteId}>"Wide"</p> };
 /// ```
 ///
-/// Every other shape the parse may lose depends on what the patch began with, which a component's
-/// markup does not show: after a first `<tr>` a `<p>` and a row after it are both kept, so a
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct TotalsId;
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={TotalsId}><table><tr><td>"7"</td></tr></table></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct FilterId;
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <form id={FilterId}><p>"Filters"</p></form> };
+/// ```
+///
+/// Every other shape the parse may lose depends on what the patch began with or where the view is
+/// written, which a component's markup does not show: after a first `<tr>` a `<p>` and a row
+/// after it are both kept, and an `<svg>` keeps a `<form>` of fields after a `<tr>`, so a
 /// component that writes them compiles, and a debug build answers a patch the browser would lose
 /// part of with a 500 when it is sent (a `<p>` and then a `<tr>` on their own, below):
 ///

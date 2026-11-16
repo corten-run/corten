@@ -5,15 +5,19 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in one of
-  two shapes the runtime's parse loses wherever they are written no longer compiles: a table part
-  (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`,
-  `<colgroup>`) after a first `<table>`, and an element HTML's wherever it lands (a `<p>`, a
-  `<div>`, a `<table>` ..) after a first `<col>`. Each was dropped, or the table taken apart, in
-  the browser with only a console error. Send the table part inside the `<table>`, the `<col>`s
-  in a `<colgroup>` with an id, or the rest in a patch of its own. Every other shape depends on
-  what the patch began with (a `<p>` and a `<tr>` after it are kept after a first `<tr>`), so it
-  still compiles and the debug check below finds it when it is sent
+- **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in a shape
+  the runtime's parse loses wherever it is written no longer compiles: a table part (`<tr>`,
+  `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`, `<colgroup>`) after a
+  first `<table>`; an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after
+  a first `<col>`; and after a first other table part, a `<table>` at the top level or in a later
+  element, and a `<form>` there that holds an element, with an element HTML's wherever it lands in
+  or around it (a `<form>` holding a `<div>`, or one in a `<div>`). Each was dropped, the table
+  taken apart or the form's content moved out of it, in the browser with only a console error.
+  Send the table part inside the `<table>`, the `<col>`s in a `<colgroup>` with an id, or the rest
+  in a patch of its own. Every other shape depends on what the patch began with or where the view
+  is written (a `<p>` and a `<tr>` after it are kept after a first `<tr>`, and an `<svg>` keeps a
+  `<form>` of fields after a `<tr>`), so it still compiles and the debug check below finds it
+  when it is sent
   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409),
   [design Choice 54](docs/design.md#choice-html-parse-refusals)).
 

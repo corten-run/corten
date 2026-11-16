@@ -1060,20 +1060,24 @@ element, table parts (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `
 or put in a `<tbody>`, `<tr>` or `<colgroup>` the browser adds, a `<table>` is dropped, a
 table part inside a later top-level element that is not a table part (a `<div>` after the rows)
 is moved out of it, a `<table>` there is taken apart, its parts moved out, and a `<form>` there or
-at the top level loses what it holds (its fields are moved out of it); a table or form inside a
-row's cell is kept. After a `<col>`, everything but a `<col>` or
+at the top level loses what it holds (its fields, or text, are moved out of it; a form of only
+whitespace or comments is not reported); a table or form inside a row's cell is kept. After a `<col>`, everything but a `<col>` or
 `<template>` is dropped. A `<template>`'s content (`Append`'s rows, or a `<template>` inside an
 element) is read the same way on its own, except that Firefox drops a `<form>` there whole after
 a table part. So a patch that sends a table's header row beside a summary loses the row.
 Send the `<table>` whole with an id, or put the table parts first, of one kind, with no
-`<table>` or `<form>` in what follows. Two shapes are lost wherever they are written, and `html!`
-refuses them when it compiles, where its markup writes the first element: a table part after a
-first `<table>` (dropped, or, where the patch began with a table part, the table taken apart),
-and an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first
-`<col>` ([design Choice 54](../design.md#choice-html-parse-refusals)). Every other shape
-depends on what the patch began with, which a component's markup does not show: a `<p>` and
-then a `<tr>` lose the row on their own, but after a first `<tr>` both are kept, so a component
-that writes them compiles. Debug builds check each patch as it is sent (`req.patch`,
+`<table>` or `<form>` in what follows. Some shapes are lost wherever they are written, and
+`html!` refuses them when it compiles, where its markup writes the first element: a table part
+after a first `<table>` (dropped, or, where the patch began with a table part, the table taken
+apart); an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first
+`<col>`; and after a first other table part, a `<table>` at the top level or in a later element
+(taken apart), and a `<form>` there that holds an element, where an element HTML's wherever it
+lands is in or around it (a form holding a `<div>`, or one in a `<div>`), whose content is moved
+out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Every other shape
+depends on what the patch began with or where the view is written, which a component's markup
+does not show: a `<p>` and then a `<tr>` lose the row on their own, but after a first `<tr>`
+both are kept, and an `<svg>` keeps a `<form>` of fields after a `<tr>` as written, so a
+component that writes them compiles. Debug builds check each patch as it is sent (`req.patch`,
 `req.patch_or`, `req.invalid`, `form.draw` and `corten::live`, with the area's stylesheet
 links Corten adds after its elements): the request fails with a 500, or the stream panics, naming
 the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`,

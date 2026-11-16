@@ -198,6 +198,28 @@ fn raw_text_end(html: &str, from: usize, name: &str) -> usize {
     html.len()
 }
 
+/// Whether the element whose start tag ends at `from` in `html` holds what a page shows: a start
+/// tag, or text other than whitespace, before the first end tag, comments skipped. A `<form>` a
+/// table's reading puts in empty moves what it holds out of it, which loses an element or text from
+/// it, and a form of only whitespace or a comment shows the same either way.
+#[cfg(any(debug_assertions, test))]
+fn holds_shown(html: &str, from: usize) -> bool {
+    let mut at = from;
+    while let Some(n) = html.get(at..).and_then(|rest| rest.find('<')) {
+        let start = at + n;
+        if !html[at..start].trim_ascii().is_empty() {
+            return true;
+        }
+        let rest = &html[start..];
+        if rest.starts_with("<!--") {
+            at = rest[4..].find("-->").map_or(html.len(), |n| start + 4 + n + 3);
+            continue;
+        }
+        return rest.as_bytes().get(1).is_some_and(u8::is_ascii_alphabetic);
+    }
+    !html[at..].trim_ascii().is_empty()
+}
+
 /// Whether `text` has `needle` (ASCII, in lowercase) in it in any letter case, allocating nothing.
 #[cfg(any(debug_assertions, test))]
 fn has_ignoring_case(text: &str, needle: &str) -> bool {
@@ -449,7 +471,7 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         let written = &html[tag.start..tag.end];
         let part = TABLE_PARTS.contains(&name);
         let head = HEAD_TAGS.contains(&name);
-        let holds = !html[i..].starts_with("</");
+        let holds = name == "form" && holds_shown(html, i);
         let opens = !VOID.contains(&name) && !tag.self_closing;
         if problem.is_some() {
             // Read on only for whether it is closed.
@@ -737,6 +759,22 @@ mod tests {
             None,
             "an empty <form> at the patch's top level is kept"
         );
+        for holds in [" \n\t ", "<!-- note -->", " <!-- a --> <!-- b --> "] {
+            assert_eq!(
+                patch_parse_problem(&format!(
+                    r#"<tr id="r"></tr><form id="f">{holds}</form><div id="d"><form>{holds}</form></div>"#
+                )),
+                None,
+                "a <form> of whitespace and comments shows the same put in empty: {holds:?}"
+            );
+        }
+        for holds in ["<!-- note --><input name=\"q\">", " <b>x</b>", "<!-- a -->saved"] {
+            assert_eq!(
+                patch_parse_problem(&format!(r#"<tr id="r"></tr><form id="f">{holds}</form>"#)).as_deref(),
+                Some(r#"<form id="f"> loses what it holds, since <tr id="r"> comes first"#),
+                "{holds:?}"
+            );
+        }
         assert_eq!(
             patch_parse_problem(r#"<script id="s"><!-- note --></script><p id="m"></p><tr id="r"></tr>"#).as_deref(),
             Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#),
@@ -845,11 +883,13 @@ mod tests {
         }
     }
 
-    /// The two shapes `html!` refuses at a patch's top level (`check_patch_top` in
-    /// `crates/corten-macros/src/html.rs`: a table part after a first `<table>`, an element HTML's
-    /// wherever it lands after a first `<col>`) are lost in every browser wherever a patch puts
-    /// them: first, and after each table part the patch may begin with, which a component's
-    /// markup does not show. Each is a case of `patch-parsing.json`, whose parses
+    /// The shapes `html!` refuses at a patch's top level (`check_patch_top` in
+    /// `crates/corten-macros/src/html.rs`: a table part after a first `<table>`; an element HTML's
+    /// wherever it lands after a first `<col>`; after a first other table part, a `<table>` at the
+    /// top level or in a later element, and a `<form>` that holds an element with one HTML's
+    /// wherever it lands in or around it) are lost in every browser wherever a patch puts them:
+    /// first, and after each table part the patch may begin with, which a component's markup does
+    /// not show. Each is a case of `patch-parsing.json`, whose parses
     /// `scripts/smoke.mjs` checks in Chromium, Firefox and WebKit, so the refusal is held to the
     /// same browsers as the debug check.
     #[cfg(feature = "json")]
@@ -870,6 +910,15 @@ mod tests {
         let table = r#"<table id="a"><tbody><tr><td>1</td></tr></tbody></table>"#;
         let mut shapes: Vec<String> = super::TABLE_PARTS.iter().map(|part| format!("{table}{}", element(part, "b", 2))).collect();
         shapes.extend(["div", "p", "table"].map(|name| format!(r#"<col id="a">{}"#, element(name, "b", 2))));
+        let after_part = [
+            r#"<table id="b"><tbody><tr><td>1</td></tr></tbody></table>"#,
+            r#"<div id="b"><table><tbody><tr><td>1</td></tr></tbody></table></div>"#,
+            r#"<form id="b"><div><input name="q"></div></form>"#,
+            r#"<div id="b"><form><input name="q"></form></div>"#,
+        ];
+        for part in super::TABLE_PARTS.iter().filter(|part| **part != "col") {
+            shapes.extend(after_part.map(|after| format!("{}{after}", element(part, "a", 2))));
+        }
         let mut before = vec![String::new()];
         before.extend(super::TABLE_PARTS.iter().map(|part| element(part, "h", 1)));
         for before in &before {

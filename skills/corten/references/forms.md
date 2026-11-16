@@ -55,9 +55,12 @@ whose top level has text, an element without an id or an id written as text does
 component a patch sends is rooted at the element with the id and declared `-> impl Patch`. The
 browser parses a patch's top level as a `<template>`'s content, so table parts (`<tr>`, `<td>`,
 `<tbody>` ..) beside other elements are lost unless they come first; send the `<table>` whole
-with an id instead (`html!` refuses a table part after a first `<table>` and an element after a
-first `<col>`, lost wherever they are written, and a debug build refuses the rest when the patch
-is sent, naming the element). Fields
+with an id instead (`html!` refuses the shapes lost wherever they are written: a table part after
+a first `<table>`; an element HTML's wherever it lands, such as a `<p>`, a `<div>` or a
+`<table>`, after a first `<col>`; and after a first other table part, a `<table>` at the top
+level or in a later element, and a `<form>` there holding an element with a `<div>`, `<p>` or
+the like in or around it. A debug build refuses the rest when the patch is sent, naming the
+element). Fields
 the user edited (after the form was sent), the files chosen in a file input (until a successful
 answer to the form that sent them) and the focus carry over to the new markup, so a patch can
 include the form the user is typing in, and a refusal can mark a file input invalid.
