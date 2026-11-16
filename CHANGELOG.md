@@ -44,6 +44,10 @@ Corten is pre-1.0, so any minor version may change the API.
   that names no data (E0277 otherwise)
   ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
 
+- Verify the cancelled mixed campaign's captured source blobs and every selected
+  build context against its original authenticated subject before retirement;
+  refuse equally incomplete wrapper and custody copies without deletion intent.
+
 - Add an explicitly approved, single-attempt cancellation path for the exact old
   r21 mixed source-review wait. Signal only its verified pidfd-owned campaign entry,
   preserve the wrapper's terminal archive and all nine contexts, and require
