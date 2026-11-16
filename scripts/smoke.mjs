@@ -5387,11 +5387,15 @@ async function run(browser) {
         await writeHeld;
         await route.continue().catch(() => {});
       });
-      await scope.evaluate(() =>
-        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<form method="post" action="/smoke/styled" data-patch><button>Save</button></form>')),
-      );
+      /** Puts a form that writes in `<main>`, in place of one put there before. */
+      const writeForm = () =>
+        scope.evaluate(() => {
+          document.getElementById("scope-write")?.remove();
+          document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<form id="scope-write" method="post" action="/smoke/styled" data-patch><button>Save</button></form>'));
+        });
+      await writeForm();
       const writeSent = scope.waitForRequest((r) => writeAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      await scope.getByRole("button", { name: "Save", exact: true }).click();
+      await scope.click("#scope-write button");
       const writing = await writeSent;
       asked.length = 0;
       const afterWrite = { writing, at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
@@ -5414,11 +5418,9 @@ async function run(browser) {
         await route.continue().catch(() => {});
       });
       await scope.route(writeAsked, (route) => route.fulfill({ status: 204, headers: { "corten-location": "/smoke/quoted" } }));
-      await scope.evaluate(() =>
-        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<form method="post" action="/smoke/styled" data-patch><button>Save</button></form>')),
-      );
+      await writeForm();
       const quotedSent = scope.waitForRequest((r) => quotedAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      await scope.getByRole("button", { name: "Save", exact: true }).click();
+      await scope.click("#scope-write button");
       const redirecting = await quotedSent;
       await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
       await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());

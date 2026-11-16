@@ -4428,12 +4428,13 @@ rules something out.
     could refuse marking a form whose route appends, which the guide only asks today; an app needs
     Back between such entries across a page swap or a reload; or the browsers the runtime falls
     back for gain the Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the
-    mark goes.
+    mark goes; or Corten serves its per-use modules to every app, when moving `address` into one
+    costs no route of its own.
 
-    Last checked: 2026-11-15, the runtime's size on `2615ea777` against `c9ed56785`; 2026-11-15,
-    the smoke's twenty-four checks of the mark passing with `2615ea777`'s runtime in Chromium
-    156.0.8078.4 and Firefox 157.0, and twenty-three in WebKit 27.2, whose Playwright cannot answer
-    a request with a 3xx (Playwright 1.64.1); 2026-11-15, the traversals'
+    Last checked: 2026-11-16, the runtime's size on `fd45ee99d` against `412a3b4c9`, and the
+    module split built from `fd45ee99d`'s runtime; 2026-11-16, the smoke on `fd45ee99d`, its
+    twenty-eight checks of the mark passing in each of Chromium 156.0.8078.4, Firefox 157.0 and
+    WebKit 27.2 (Playwright 1.64.1), 1,108 checks in all; 2026-11-15, the traversals'
     bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and the request
     path's count on `307d00bca` against `c9ed56785`; 2026-11-15, the request path's count on
     `2d619cbb5` against `a3ee0c05f`.
