@@ -1220,7 +1220,7 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
         // Taken where no route kept the head of a write whose own page is filled after it answers
         // (middleware before the route, a route given by hand): a page made with it is filled from
         // this head, as a page route's is from the one it kept (#1370).
-        if req.fills && req.signal.late_write() == Some(false) {
+        if req.fills && req.write && req.signal.late_write() == Some(false) {
             req.early = Some(Arc::new(parts.clone()));
         }
         Ok(req)
@@ -1259,8 +1259,9 @@ impl Req {
             write,
             own_whole,
             fetched,
+            // A whole document's `GET` looks at its extensions alone: only a write is ever marked.
             fills: !shared.layout_reads.is_empty()
-                && (signal.late_write().is_some() || extensions.get::<crate::layout::StartHere>().is_some()),
+                && (extensions.get::<crate::layout::StartHere>().is_some() || (write && signal.late_write().is_some())),
             early: None,
             shared,
             signal,
