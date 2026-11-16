@@ -5,6 +5,32 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- The watchlist smoke's check that a submit which waited for a write the network failed is not
+  sent holds that write until the newer press is made, and presses both buttons in the page, where
+  it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the
+  failure, went out as a submit of its own and watched a stock that a later case then could not
+  select, which ended the run in a 30 s `selectOption` timeout
+  ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
+  Runtime behavior is unchanged.
+
+- Distinguish a failed benchmark account observation from uncertain worker lifetime
+  only after native request/response/socket closure, a bound terminal reply and
+  timely exit0. Preserve the failed operation and fresh cleanup proofs without
+  retries, worker reuse or repeated mutations; uncertain paths keep their locks.
+
+- Preserve closed rejection-site details for benchmark provider account requests
+  through private-worker diagnostics and cached teardown, without exposing native
+  errors or changing retries, credential use, acceptance or lifecycle locks.
+
+- Launch only the first complete official benchmark group initially; require its
+  replayed native evidence and confirmed cleanup before a separately approved,
+  once-only admission of the remaining dedicated group hosts. Keep deferred groups
+  visible, the complete registry mandatory and legacy collection available.
+
+- Show the grouped controller's closed failure stage and allowed provider detail
+  in direct CLI errors, without reflecting raw exceptions or changing recovery,
+  cleanup or benchmark acceptance rules.
+
 - A handler is given a form's control by its `#[derive(Fields)]` field,
   `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
   `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
@@ -1092,6 +1118,16 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,
+  so a `const` assertion only a binary's `main` reaches fails it as it fails `cargo build`: a
+  route that a bin-only app's `main` alone mounts by hand, outside its area or saying `patches`
+  with a `get` that answers a page, passed clippy and `cargo test`, which generate none of
+  `main`'s callees, and only `cargo build` refused it (design Limit 11). With the default
+  profiles the tests reuse the test targets the build compiled, so the check adds about one
+  compile of each binary and of each bench target; a `[profile.test]` that differs from
+  `[profile.dev]` has the tests compile their targets again
+  ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)).
 
 - A navigation under a `Pwa::network_only` prefix reaches the server once with the PWA's service
   worker in control. The worker turns navigation preload on and then declined these

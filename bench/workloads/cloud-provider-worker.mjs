@@ -48,8 +48,8 @@ export function serveProviderWorker(dependencies = {}) {
   assert.deepEqual(process.execArgv, stdinEntry ? ["--input-type=module"] : []);
   if (stdinEntry) assert.equal(process.argv[2], join(directory, "cloud-provider-worker.mjs"));
   assert.ok(Object.keys(process.env).every((name) => !diagnosticEnv.test(name) || name === "NODE_CHANNEL_FD" || name === "NODE_CHANNEL_SERIALIZATION_MODE"));
-  let nonce, sequence = 0, active = false, closing = false, failed = false, run, host, providerFailure;
-  const stop = () => { closing = true; if (!active) process.exit(0); };
+  let nonce, sequence = 0, active = false, closing = false, failed = false, terminal = false, run, host, providerFailure, isSettledAccountFailure;
+  const stop = () => { closing = true; if (!active) process.exit(terminal ? 2 : 0); };
   process.on("disconnect", stop);
   process.on("SIGTERM", stop);
   process.on("SIGINT", stop);
@@ -57,9 +57,9 @@ export function serveProviderWorker(dependencies = {}) {
     if (message?.schema === "cloud-provider-close/v1") {
       try { exact(message, ["schema"]); stop(); } catch { process.exit(2); } return;
     }
-    if (active || failed || closing) { failed = true; stop(); return; }
+    if (active || failed || closing || terminal) { failed = true; process.exit(2); return; }
     active = true;
-    let ok = false, result = null;
+    let ok = false, result = null, account = false, deadline;
     try {
       if (nonce === undefined) {
         exact(message, ["schema", "nonce", "sources"]); assert.equal(message.schema, "cloud-provider-init/v1");
@@ -85,20 +85,29 @@ export function serveProviderWorker(dependencies = {}) {
         providerFailure = (await import(pathToFileURL(join(directory, "cloud-options.mjs")).href)).providerFailure;
         host = (await import(pathToFileURL(join(directory, "cloud-contract.mjs")).href)).host;
         const { createProviderEngine } = engine;
+        isSettledAccountFailure = engine.isSettledAccountFailure;
         run = createProviderEngine({ ...dependencies, repo: process.cwd(), interrupted: () => closing }); result = "ready";
       } else {
         action(message, host); assert.equal(message.schema, "cloud-provider-action/v1"); assert.equal(message.sequence, sequence + 1); sequence++;
+        account = message.args[0] === "account";
+        deadline = Date.now() + message.timeout;
         result = await run(message.args, message.timeout, message.allowFail, message.deleteProofExpiresAtMs);
         // Never serialize exceptions, provider error bodies or native stderr.
         const diagnostic = result.status === 1 ? providerFailure(result) : undefined;
         result = { status: result.status, stdout: result.stdout, stderr: "", ...(diagnostic ? { providerDiagnostic: diagnostic } : {}) };
       }
       ok = true;
-    } catch (error) { failed = true; result = providerFailure?.(error) ?? null; }
+    } catch (error) {
+      result = providerFailure?.(error) ?? null;
+      terminal = account && !closing && Date.now() < deadline && isSettledAccountFailure?.(error) === true;
+      failed = !terminal;
+    }
     finally {
       active = false;
-      if (process.connected) process.send({ schema: "cloud-provider-result/v1", nonce: nonce ?? "", sequence, ok, result }, (error) => {
-        if (error || closing || failed) process.exit(error || failed ? 2 : 0);
+      const reply = terminal ? { schema: "cloud-provider-account-failed/v2", nonce, sequence, disposition: "resources-closed", diagnostic: result }
+        : { schema: "cloud-provider-result/v1", nonce: nonce ?? "", sequence, ok, result };
+      if (process.connected) process.send(reply, (error) => {
+        if (error || closing || failed || terminal) process.exit(error || failed || closing && terminal ? 2 : 0);
       });
       else process.exit(2);
     }
