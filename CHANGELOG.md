@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Bound matched Spring marketplace upstream reads with the native ten-second
+  timeout and map typed header timeouts to MVC 504 responses; retain default
+  behavior and the documented caller-disconnect limitation.
+
 - Bound Drogon marketplace page source reads with the existing native deadline and
   caller-disconnect lifetime, preserving request-local trace context.
 
