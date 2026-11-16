@@ -6,11 +6,11 @@ import * as path from "node:path";
 import { Worker } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { accountId, commit, context, harness, userId } from "./cloud-fixtures.mjs";
-import { digest } from "./cloud-local.mjs";
+import { accountId, archive, commit, context, harness, syntheticInspection, userId } from "./cloud-fixtures.mjs";
+import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { fleetMain, fleetWorkerPaths } from "./fleet.mjs";
 import { bootstrapMarker } from "./cloud-remote.mjs";
-import { readFleet } from "./fleet-verify.mjs";
+import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
 
@@ -91,10 +91,11 @@ const synthetic = (${syntheticDependencies.toString()})({
 test("captured production composition ignores arbitrary hints, binds POST identity and propagates remote options", { timeout: 30000 }, async (t) => {
   const p = fixture(t);
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3, JSON.stringify(p.output.at(-1)));
-  assert.equal(p.workers.length, groupNames.length);
+  assert.equal(p.workers.length, 1, "bootstrap must not admit any later production child");
   const fleet = readFleet(p.h.base, "r21").manifest, events = p.events();
-  assert.ok(p.output.at(-1).groups.every((row) => row.outcome === "pending"));
-  for (const [i, group] of groupNames.entries()) {
+  assert.equal(p.output.at(-1).groups[0].outcome, "pending");
+  assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "deferred"));
+  for (const [i, group] of groupNames.slice(0, 1).entries()) {
     const saved = p.saved(group), job = fleet.jobs[i];
     assert.equal(saved.status, "running"); assert.equal(saved.token, job.token);
     assert.equal(saved.id, String(101 + i)); assert.equal(saved.ip, `192.0.2.${i + 1}`);
@@ -132,8 +133,62 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     if (row.boundary === "ssh") { assert.equal(row.argv.at(-1), "/bin/bash -s"); assert.ok(row.options.input.startsWith("set -euo pipefail\n")); }
     else assert.equal(row.argv[0], "-B");
   }
-  for (let i = 1; i < groupNames.length; i++) assert.ok(events.findIndex((row) => row.group === groupNames[i] && row.method === "POST")
-    > events.findIndex((row) => row.group === groupNames[i - 1] && row.boundary === "provider-child-exit"));
+  assert.equal(events.filter((row) => row.method === "POST").length, 1);
+  for (const group of groupNames.slice(1)) assert.equal(fs.existsSync(path.join(p.h.base, group)), false);
+  assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
+});
+
+test("second exact approval dispatches all remaining captured production workers once, with overlapping remote groups", { timeout: 60000 }, async (t) => {
+  const p = fixture(t);
+  assert.equal(await fleetMain(await p.prepare(), p.deps), 3);
+  const state = p.saved(), group = groupNames[0], campaign = `r21-${state.token}`;
+  const local = path.join(p.h.base, group, "groups-r21"), evidence = path.join(local, "evidence-Synthetic");
+  const folder = path.join(evidence, "campaign"), report = syntheticInspection("verified");
+  Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", campaign,
+    selection: state.selection, groups: report.groups.filter((row) => row.group === group) });
+  fs.mkdirSync(path.join(folder, campaign), { recursive: true });
+  fs.writeFileSync(path.join(folder, ".host-attempt.json"), JSON.stringify({ id: campaign, commit, campaignSha256: report.campaignSha256 }));
+  report.reservationSha256 = fileHash(path.join(folder, ".host-attempt.json"));
+  fs.writeFileSync(path.join(folder, campaign, "plan.json"), JSON.stringify({ round: "r21", commit,
+    campaignSha256: report.campaignSha256, sourceSha256: report.sourceSha256 }));
+  fs.writeFileSync(path.join(evidence, "exit-code"), "0\n"); fs.writeFileSync(path.join(evidence, "host.txt"), "SYNTHETIC not measured\n");
+  fs.writeFileSync(path.join(local, "results.tgz"), archive([{ name: "campaign/" }]));
+  const at = new Date().toISOString();
+  Object.assign(state, { status: "collected", collectedAt: at, deletionIntentAt: at, destroyedAt: at,
+    evidence: "evidence-Synthetic", extractionAttempts: ["evidence-Synthetic"], evidenceSha256: treeHash(evidence),
+    archiveSha256: fileHash(path.join(local, "results.tgz")), evidenceOutcome: "validated", exitCode: 0,
+    validation: { status: "verified", campaign, collectionIntegrity: "manifest-verified" } });
+  fs.writeFileSync(path.join(local, "state.json"), JSON.stringify(state));
+  // Only this code-only stand-in substitutes the native replay result. Child
+  // admission still uses actual captured production/controller/provider workers.
+  // The synthetic archive cannot establish native readiness or paid authority.
+  p.deps.verify = async (fleet, group, { interrupted }) => ({
+    ...await verifyCollectedGroup(fleet, group, { inspect: async () => report, interrupted }), evidenceMode: "native-replay" });
+  const args = ["r21", "--fleet-root", p.h.base, "--admit-remaining"];
+  assert.equal(await fleetMain([...args, "--print-approval"], p.deps), 3);
+  const preview = p.output.at(-1), approval = preview.approvalSha256;
+  assert.equal(preview.subject.jobs[0].outcome, "verified");
+  for (const job of preview.subject.jobs.slice(1)) assert.equal(job.subject.options.group, job.group);
+  const approved = [...args, "--approve-reviewed-merged-ready", approval];
+  assert.equal(await fleetMain(approved, p.deps), 3);
+  assert.equal(p.workers.length, groupNames.length);
+  assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "pending"));
+  const events = p.events(), posts = events.filter((row) => row.method === "POST");
+  assert.deepEqual(posts.map((row) => row.group), groupNames);
+  const ids = new Set(), ips = new Set();
+  for (const group of groupNames) {
+    const saved = p.saved(group); ids.add(saved.id); ips.add(saved.ip);
+    assert.equal(saved.group, group); assert.equal(saved.status, group === groupNames[0] ? "collected" : "running");
+    const start = events.findIndex((row) => row.group === group && row.boundary === "provider-child-start");
+    const exit = events.findIndex((row) => row.group === group && row.boundary === "provider-child-exit");
+    assert.ok(start >= 0 && exit > start);
+    const next = groupNames[groupNames.indexOf(group) + 1];
+    if (next) assert.ok(exit < events.findIndex((row) => row.group === next && row.boundary === "provider-child-start"));
+  }
+  assert.equal(ids.size, groupNames.length); assert.equal(ips.size, groupNames.length);
+  assert.ok(!events.some((row) => row.method === "DELETE"));
+  await assert.rejects(fleetMain(approved, p.deps), /remaining-already-attempted/);
+  assert.equal(p.events().filter((row) => row.method === "POST").length, groupNames.length);
   assert.equal(fs.existsSync(path.join(p.h.base, ".fleet-operation.lock")), false);
 });
 
