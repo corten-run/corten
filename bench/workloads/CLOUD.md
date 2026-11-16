@@ -23,6 +23,17 @@ views share evidence; they do not launch a second campaign.
 
 ## Public Source Permissions
 
+Fresh hosts and the CI tools image install stable upstream Git from the same
+Ubuntu Git maintainers' PPA. They fetch its public key over bounded HTTPS, require
+the exact primary fingerprint `F911AB184317630C59970973E363C90F8F1B6217`, and scope
+APT trust to that source with `signed-by`. This avoids the Launchpad metadata API
+whose truncated responses stopped image preparation before tests. A failed
+download, key parse or fingerprint check stops setup; distribution Git is not a
+fallback. The existing immutable-source Git capability check still runs.
+`git-ppa.test.mjs` executes both setup forms with local command fixtures, including
+wrong, extra and missing primary keys and failed downloads/parsing. This is not
+native framework or official-run qualification.
+
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
 runs only the fixed public Git clone, fetch and exact detached checkout in a
 `umask 022` subshell. Committed nonexecutable scripts are `0644` under `0755`
