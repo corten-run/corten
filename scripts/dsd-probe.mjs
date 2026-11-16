@@ -1,6 +1,6 @@
 // Declarative shadow DOM as a way to place a slow part streamed later without a script, the
-// evidence for design Choice 7 (docs/design.md#choice-whole-pages). Two layouts, in Chromium,
-// Firefox and WebKit:
+// evidence for the design's choice of whole pages (docs/design.md#choice-whole-pages). Two
+// layouts, in Chromium, Firefox and WebKit:
 //
 // - "page": the whole page in the shadow root, a named slot where the part goes. Whether the
 //   slot's fallback shows and the late element replaces it with JavaScript off, and whether the
