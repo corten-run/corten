@@ -3136,7 +3136,9 @@ rules something out.
     performance at the user's end, so that would not decide against it once Value 1 is met. The two
     changes do not exclude each other: a block would carry the large values and `data-on`
     everything else a page has (formats, messages, a component's small arguments), single-quoted
-    either way, so this Choice is taken on its own and the issue stays open for the block. Also not
+    either way, so this Choice is taken on its own and the issue stays open for the block. Data a script
+    needs after the page loads, which a choice picks, is not the block's: a script reads it from
+    its route ([Choice 55](#choice-screen-read)). Also not
     chosen: a block the app writes itself (a way around the typed call, and markup a view would
     have to keep in step with the script); leaving the attribute double-quoted (88% more bytes for a
     large argument, and a parse four to twelve times slower).
@@ -4307,7 +4309,137 @@ rules something out.
     `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
     it, load such a page in the three engines and count the matches.
 
-55. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
+55. <a id="choice-screen-read"></a>**A script reads a screen's data with `read()`, from a module of its own, typed by its route; not
+    from a data block in the page.** A rich screen in the browser needs data the page did not draw:
+    another set's products when the user picks it, the package for another shipping service
+    ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
+    A script's only typed input was a handler argument written into the page
+    ([Rule 3](#rule-handler-arguments)), so such a screen drew every choice's data into the page or
+    fetched JSON by hand under a type written beside the server's. The route already answers that
+    data: `req.screen` gives a data client `{"title","data"}`, tagged and revalidated as any page
+    is. So a route says `data = T`, and its `get` handler must return `HtmlResult<Screen<T>>`,
+    which only `req.screen` given a `T` makes, checked at the handler's name in `#[route(..)]`
+    (the methods that answer a patch, `patch_or`'s other side included, answer only as
+    `AnyAnswer` or `Patches`, so none of them reaches `Screen<T>`); the same route mounted
+    again by hand (`Area::route`, `Api::route`) takes only a `get` that answers a screen of
+    `T`, also checked when the crate compiles: the route's `Route::Data` is `HasData<T>`
+    (`NoData` for a route without data), and the handlers' kind must match it (`DataMatches`):
+    every kind matches `NoData`, and only `Screen<T>` matches `HasData<T>`. A `Route` written
+    by hand names its `Data` too, since a trait's associated type has no default on stable Rust,
+    a break for such an impl (none in the examples or the template), and code generic over a route
+    that mounts handlers at it bounds it `R: Route<Data = NoData>` (CHANGELOG, **Breaking:**); the route is then a handler
+    argument of type `ScreenUrl<T>`, where `T` must come from the declarations `corten::types`
+    writes (a type the script declares would match the Rust type by name alone; what is checked is
+    the path the name is imported from, `types/app`, so a file written by hand at that path is not
+    detected), and `read(url, { signal })`
+    from `corten/read` asks it with `Accept: application/json` and resolves to `data`, typed as
+    `T` by that declaration. The read is a `fetch` in the default cache mode, so the
+    browser's HTTP cache does for it what it does for any `GET`: an answer it kept is asked about
+    with its weak `ETag` and an unchanged one is a 304 with no body (while nothing else fetched
+    that URL in between: the browser keeps one answer per URL, so the page fetched there again,
+    by a navigation or by the runtime's hover prefetch of a link to it
+    ([Choice 12](#choice-own-prefetch)), replaces the data's and the next read gets the whole
+    answer; a link whose click reads sits under `data-no-prefetch`, which also spares the server
+    drawing a page the click does not use), and a `Public` route's
+    `max-age` lets a read within it make no request; `Vary: corten, accept` keeps the page's HTML
+    from answering it. A redirect is not followed (`redirect: "manual"`): what answers before the
+    handler or replaces its answer (an app's middleware sending a visitor to sign in) is not
+    checked against the route's data, and its target is another route's. Corten's own sign-in
+    refusal (a `Caller`, `Refused::sign_in`) answers a data client 401, not a redirect, so a
+    redirect is one the app writes. A failure is a `ReadError` whose `status` is the answer's
+    (that 401 included), or 0 when there was none it could use: with `redirected` true for a
+    redirect (`fetch`'s opaque redirect, which tells a redirect from no answer but not where it
+    goes, [Limits](#limit-read-redirect)), else with the error as `cause` (offline, or a success
+    that is not a screen's JSON), as `corten:error` gives a submit the network fails; an abort
+    rejects with `signal`'s reason, as `fetch` does, even when a failed answer came first. No new endpoint, header or format: the URL, the
+    negotiation and the envelope are the ones native screens already read.
+
+    What it costs: nothing for an app whose scripts do not import it. `corten/read` is a module
+    of its own, as `corten/keys` is, in the import map and preloaded only for apps whose listed
+    scripts import it, so the runtime is the same bytes (43,395, 15,341 with gzip, 13,846 with
+    brotli, on `dea1788d2` and on `4eb3d62d1`) and so is every other app's import map. In an app
+    that imports it, each page's import map names it
+    (`,"corten/read":"/assets/<version>/scripts/corten-read.js"`, 60 bytes, 4 to 9 once the page
+    is compressed), and the pages whose scripts import it preload it (a 77-byte
+    `<link rel="modulepreload">`). The module is 749 bytes, 486 with gzip and 409 with brotli,
+    which the users of an app that reads download once a release. The server's work is
+    unchanged: a `req.screen` page costs 37,950 instructions a request as HTML and 41,211 as a
+    data client's JSON on `dea1788d2` and on `4eb3d62d1`, within 0.2 of each other in every run
+    (the answer's kind is a type only). A read costs a request where a handler argument costs
+    none, so data a page needs when it loads stays a handler argument; a read is for data a
+    choice picks or the page may never need.
+
+    Not chosen: the `<script type="application/json">` block
+    [Choice 45](#choice-data-on-single-quoted) left open. It makes the pages that hand a script
+    large data at load a little faster, but it puts the data in the page whether the script needs
+    it or not, so it does nothing for a screen whose data a choice picks (each choice's data would
+    be drawn into the page), and its reader is in the runtime every user downloads, where a read
+    costs only the apps that call it. It stays open on [Choice 45](#choice-data-on-single-quoted)'s terms, for large data a page
+    needs when it loads. Also not chosen: a script that fetches the JSON itself under a type it
+    writes (a type at the seam written by hand, which README Value 4 rules out); an `App::api`
+    route beside each screen (a second route and handler for data the screen already answers);
+    `read` in the runtime itself (every user would download it to help the pages that read); a
+    second method that answers a screen, `req.screen_of(..)` beside `req.screen`, which would have
+    left `req.screen`'s type parameters as they were but given an app two ways to answer one
+    screen (README Value 5). `req.screen` took a type parameter for the answer's kind instead, a
+    break Corten takes before 1.0: a call that names its types with a turbofish names three, and
+    a `req.screen(..)` in a closure that names no answer names its kind (CHANGELOG, **Breaking:**).
+
+    Stands on: measured (the minified runtime's and `corten/read`'s sizes by Node's `zlib`, gzip
+    at level 6 and brotli at quality 11, on `dea1788d2` and `4eb3d62d1`, once each, and the
+    module's again on `c74c4fa83`, once it cancels a refused answer's body, gives a malformed
+    success a `cause` and lets an abort win over a failed answer, 666, 438 and 367, and on
+    `7664551c8`, once it tells a redirect apart (`redirected`), 749, 486 and 409; a
+    `req.screen` page's instructions a request under callgrind, 1,200 requests through the
+    router in process less 200, over 1,000, in both modes, three alternated runs of each build,
+    release, in `rust:1-bookworm`: HTML 37,949.68 to 37,949.73 on `dea1788d2` and 37,949.64 to
+    37,949.75 on `4eb3d62d1`, JSON 41,211.21 to 41,211.38 and 41,211.29 to 41,211.40;
+    the import-map entry on three of the watchlist's pages, `/`, `/smoke/reading` and `/news`,
+    the page's size by `zlib` with and without it: 60 bytes raw, 9, 7 and 8 with gzip, 4, 5 and
+    8 with brotli); platform (`fetch` in the default cache mode keeps a 200 the server tags and
+    revalidates it with `If-None-Match`, a 304 answering it from the kept copy: the smoke's read
+    checks, where in Chromium the second read names the first answer's tag and in Firefox it is
+    answered 304, and the server answers that tag with a 304 and no body; Playwright's WebKit asks
+    again without the tag and is sent the whole answer, as it does the runtime's navigation fetch;
+    `redirect: "manual"` answers a redirect as an opaque answer without following it, a
+    `ReadError` 0 with `redirected` in all three; Corten's sign-in refusal answers a data client
+    401, which `a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors` tests);
+    reasoned (a hover prefetch is a `fetch` of the link's URL, which takes the URL's one entry in
+    the browser's cache as a navigation does, so a read after it is answered whole: why a link
+    whose click reads sits under `data-no-prefetch`; `read.js`'s own logic, which the smoke checks in the three engines with a stand-in
+    `fetch`, so not a browser probe: a 404 that arrives as the signal aborts rejects with the
+    abort, a success that is not JSON with a `SyntaxError` cause and JSON that is not the
+    envelope with a `TypeError` one; an app whose scripts do not import `corten/read` gets the same runtime and import
+    map, so its pages pay nothing; `data`'s type comes from the route's `data = T` and the
+    declaration of `T`, so no script writes it, and a route whose handler can answer without a
+    `T` does not compile, through `req.page`, a redirect or a patch-making method, which the
+    `compile_fail` doctests on `Req::screen` and `PatchingKind` show, and mounted again by hand
+    with such a handler it does not compile either, which the `compile_fail` doctests on
+    `Area::route` and `a_data_route_mounted_by_hand_with_a_page_handler_says_why` show; what
+    middleware answers or a handler replaces through `DerefMut` is not checked, which is why a
+    read follows no redirect; a script that meets one navigates to the URL, which the browser
+    follows, where offline it would wait or say so, which is why a redirect is told apart); value (a rich screen in the browser is as possible as one the
+    server draws, and only the apps that read pay for it, README Value 1;
+    types at the seam come from Rust, Value 4; one way to a screen's data, the route that answers
+    it, with no second endpoint, Values 5 and 6).
+
+    Revisit when: `corten/read` grows past 1 KB with gzip; most apps' scripts import it, when a
+    reader in the runtime may cost less than the module's own request; a page needs a screen's
+    data when it loads in amounts where [Choice 45](#choice-data-on-single-quoted)'s block would
+    pay (its Revisit when); Chromium or Firefox stops revalidating a read it kept, which the 304
+    rests on; a `Req` method other than `req.screen` comes to answer as `Screen<T>`; or a
+    `req.screen` page's instructions a request move by more than 1%; or stable Rust gives a trait's
+    associated type a default, when a `Route` written by hand need not name its `Data`.
+
+    Last checked: 2026-11-15, the runtime's size, the instruction counts and the import-map entry
+    on `dea1788d2` and `4eb3d62d1`; 2026-11-15, the module's size and the smoke's read checks on
+    `c74c4fa83`; 2026-11-15, the module's size and the smoke's read checks again on
+    `7664551c8`, the read checks in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
+    (Playwright 1.64.1); 2026-11-16, the hand mount's check when the crate compiles
+    (`Route::Data` and `DataMatches`, its `compile_fail` doctests and message test) on
+    `f109794c6`.
+
+56. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
     what the post reads); a time the clocks skip or repeat is read as Temporal's default
     (`compatible`) reads it.** `<input type="datetime-local">` sends what the visitor's clock read
@@ -4443,8 +4575,9 @@ rules something out.
     `DisambiguatePossibleEpochNanoseconds`, and RFC 5545 section 3.3.5, read that day, against
     `1c72b0379`; 2026-11-16, the HTML standard's step scale factor and default step for
     `datetime-local` and Temporal's `ZonedDateTime` documentation for time zone identifiers, read
-    that day and checked against the `FormZone` reader at `67d280e88`, with jiff 0.2.38 and
-    jiff-tzdb 0.1.9 (`Cargo.lock`), and the all-zones test passing on `67d280e88`.
+    that day and checked against the `FormZone` reader at `5f2b8cb8a` (the split into `DrawZone`
+    and `FormZone`), with jiff 0.2.38 and jiff-tzdb 0.1.9 (`Cargo.lock`), and the all-zones test
+    passing on `5f2b8cb8a`.
 
 ## Rules
 
@@ -4928,3 +5061,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     the drawing's. Following the parsing context across components would lift this: each
     component's render would tell the next what it is written into, at a cost to every render,
     for markup few apps write.
+31. <a id="limit-read-redirect"></a>A script's `read()` follows no redirect and cannot see where one
+    goes. It asks with `redirect: "manual"`, since the target is another route's answer and not
+    the route's data, and the browser hands it an opaque answer with no `Location`, so it rejects
+    with a `ReadError` 0 whose `redirected` is true: a redirect, told apart from no answer, but
+    not where to. Corten's own sign-in refusal (a signed-out `Caller`, `Refused::sign_in`)
+    answers a data client 401, not a redirect, so this is only a redirect the app writes itself
+    (its own middleware, or an answer replaced through `DerefMut`); an app that sends a visitor
+    to sign in does it with `Refused::sign_in`, and a script reads that as a 401. A script that
+    meets either navigates to the URL, and the browser follows the redirect or the sign-in
+    ([Choice 55](#choice-screen-read)).
