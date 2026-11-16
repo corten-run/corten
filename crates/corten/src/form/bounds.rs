@@ -184,19 +184,16 @@ impl<T: Float> Bounds<T> {
 }
 
 impl<T: Numeric> Bounds<T> {
-    /// The step inside an exclusive end that the input says in its place, as text and as the
-    /// number it reads as. `None` for an end the input says as it is: inclusive, with no step, or
-    /// where the digits do not line up (the bounds then hold no value near the end either).
-    fn inside(&self, last: bool) -> Option<(String, T)> {
+    /// The step inside an exclusive end that the input says in its place, as digits and an
+    /// exponent and as the number it reads as. `None` for an end the input says as it is:
+    /// inclusive, with no step, or where the digits do not line up (the bounds then hold no value
+    /// near the end either).
+    fn inside(&self, last: bool) -> Option<((i128, i32), T)> {
         let step = self.step?;
         if (last && !self.below) || (!last && !self.above) {
             return None;
         }
-        let decimal = T::step_inside(self.min, self.max, step, last)?;
-        let mut text = String::new();
-        write_decimal(decimal, &mut text);
-        let value = T::read(&text)?;
-        Some((text, value))
+        T::step_inside(self.min, self.max, step, last)
     }
 
     /// The `min` and `max` the input says, as numbers: what corten-ui's `NumberField` disables
@@ -213,10 +210,10 @@ impl<T: Numeric> Attrs for Bounds<T> {
         for (name, end, last) in [(" min", &self.min, false), (" max", &self.max, true)] {
             match self.inside(last) {
                 // Digits and a point: nothing to escape.
-                Some((text, _)) => {
+                Some((decimal, _)) => {
                     out.push_str(name);
                     out.push_str("=\"");
-                    out.push_str(&text);
+                    write_decimal(decimal, out);
                     out.push('"');
                 }
                 None => quoted(name, end, out),
@@ -232,21 +229,28 @@ impl<T: Numeric> Attrs for Bounds<T> {
 /// `digits` times ten to `exponent` in HTML's syntax for a number, with no exponent and no
 /// trailing zeros: `(25, -2)` is `0.25`.
 fn write_decimal((digits, exponent): (i128, i32), out: &mut String) {
+    use std::fmt::Write;
     if digits < 0 {
         out.push('-');
     }
-    let text = digits.unsigned_abs().to_string();
-    let Ok(point) = usize::try_from(-i64::from(exponent)) else {
-        out.push_str(&text);
-        out.extend(std::iter::repeat_n('0', exponent.unsigned_abs() as usize));
+    // A u128 has at most 39 digits.
+    let mut text = Buf::<40> { bytes: [0; 40], len: 0 };
+    let _ = write!(text, "{}", digits.unsigned_abs());
+    let text = std::str::from_utf8(&text.bytes[..text.len]).unwrap_or("0");
+    if exponent >= 0 || digits == 0 {
+        out.push_str(text);
+        if digits != 0 {
+            out.extend(std::iter::repeat_n('0', exponent.unsigned_abs() as usize));
+        }
         return;
-    };
-    let padded = format!("{text:0>width$}", width = point + 1);
-    let (whole, fraction) = padded.split_at(padded.len() - point);
+    }
+    let point = exponent.unsigned_abs() as usize;
+    let (whole, fraction) = text.split_at(text.len().saturating_sub(point));
+    out.push_str(if whole.is_empty() { "0" } else { whole });
     let fraction = fraction.trim_end_matches('0');
-    out.push_str(whole);
     if !fraction.is_empty() {
         out.push('.');
+        out.extend(std::iter::repeat_n('0', point.saturating_sub(text.len())));
         out.push_str(fraction);
     }
 }
@@ -282,11 +286,11 @@ pub trait Numeric: Copy + PartialOrd + Render + std::fmt::Debug + sealed::Sealed
     #[doc(hidden)]
     fn is_finite(self) -> bool;
     /// The first step above `min` that reads as more than `min`, or (`last`) the last one below
-    /// `max` that reads as less, exactly, as digits and an exponent. Past an empty range: the first
-    /// is above the last. `None` where the digits do not line up, and for an integer, which has no
-    /// exclusive end.
+    /// `max` that reads as less, exactly, as digits and an exponent, and the number it reads as.
+    /// Past an empty range: the first is above the last. `None` where the digits do not line up,
+    /// and for an integer, which has no exclusive end.
     #[doc(hidden)]
-    fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<(i128, i32)>;
+    fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<((i128, i32), Self)>;
     /// `self` as an input's value, with the decimals of `step`: `12.5` in steps of `0.01` is
     /// `12.50`. A whole number as it is.
     #[doc(hidden)]
@@ -332,7 +336,7 @@ macro_rules! whole {
             fn is_finite(self) -> bool {
                 true
             }
-            fn step_inside(_: Self, _: Self, _: Self, _: bool) -> Option<(i128, i32)> {
+            fn step_inside(_: Self, _: Self, _: Self, _: bool) -> Option<((i128, i32), Self)> {
                 None
             }
             fn shown(self, _: Self) -> String {
@@ -393,7 +397,7 @@ macro_rules! float {
             fn is_finite(self) -> bool {
                 <$t>::is_finite(self)
             }
-            fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<(i128, i32)> {
+            fn step_inside(min: Self, max: Self, step: Self, last: bool) -> Option<((i128, i32), Self)> {
                 // The steps count from `min`; `max` matters only to the last one.
                 if !(step.is_finite() && min.is_finite() && (!last || max.is_finite())) || step <= 0.0 {
                     return None;
@@ -417,17 +421,29 @@ macro_rules! float {
                     return None;
                 }
                 let span = span as i128;
-                // Whether the `k`th step from `min` reads inside `end`: `None` past an i128.
-                let inside = |k: i128| {
-                    let (digits, exponent) = from.plus_steps(by, k)?;
-                    let value = format!("{digits}e{exponent}").parse::<$t>().ok()?;
-                    Some(if last { value < end } else { value > end })
+                // The `k`th step from `min`, exactly and as the number it reads as: `None` past an
+                // i128.
+                let read = |k: i128| {
+                    use std::fmt::Write;
+                    let decimal = from.plus_steps(by, k)?;
+                    let mut text = Buf::<64> { bytes: [0; 64], len: 0 };
+                    write!(text, "{}e{}", decimal.0, decimal.1).ok()?;
+                    let value = std::str::from_utf8(&text.bytes[..text.len]).ok()?.parse::<$t>().ok()?;
+                    Some((decimal, value))
                 };
+                let reads_inside = |value: $t| if last { value < end } else { value > end };
+                let inside = |k: i128| read(k).map(|(_, value)| reads_inside(value));
                 let (mut lo, mut hi) = match (last, nearest) {
                     (true, -1) => ((-1i128).checked_sub(span)?, -1),
                     (true, _) => (nearest.saturating_sub(span).max(0), nearest),
                     (false, _) => (1, span),
                 };
+                // Mostly the nearest step reads inside, and it is the one wanted: what a step reads
+                // as only grows with it.
+                let nearest = read(if last { hi } else { lo })?;
+                if reads_inside(nearest.1) {
+                    return Some(nearest);
+                }
                 // The first step inside above `min`, or the last one below `max`.
                 if !inside(if last { lo } else { hi })? {
                     return None;
@@ -451,7 +467,7 @@ macro_rules! float {
                         }
                     }
                 }
-                from.plus_steps(by, lo)
+                read(lo)
             }
             fn shown(self, step: Self) -> String {
                 let text = step.to_string();
@@ -765,6 +781,30 @@ mod tests {
         let wide = Bounds::new(1e30, 2e30).step(1e-9);
         assert_eq!(drawn(wide.exclusive_min()).1, (1e30, 2e30));
         assert!(!wide.holds(1e30) && !wide.holds(1e30f64.next_up()));
+    }
+
+    #[test]
+    fn a_decimal_is_written_without_an_exponent_or_trailing_zeros() {
+        let written = |decimal| {
+            let mut out = String::new();
+            write_decimal(decimal, &mut out);
+            out
+        };
+        assert_eq!(written((25, -2)), "0.25");
+        assert_eq!(written((50, -4)), "0.005");
+        assert_eq!(written((-15, -1)), "-1.5");
+        assert_eq!(written((1200, -2)), "12");
+        assert_eq!(written((99, 1)), "990");
+        assert_eq!(written((0, 3)), "0");
+        assert_eq!(written((0, -3)), "0");
+        assert_eq!(written((i128::MIN, -38)), "-1.70141183460469231731687303715884105728");
+    }
+
+    #[test]
+    fn an_exclusive_end_at_zero_with_a_step_of_a_thousand_is_drawn_as_a_number() {
+        let mut out = String::new();
+        Bounds::new(-1e3, 1e3).step(1e3).exclusive_min().exclusive_max().render_attrs(&mut out);
+        assert_eq!(out, r#" min="0" max="0" step="1000""#);
     }
 
     #[test]
