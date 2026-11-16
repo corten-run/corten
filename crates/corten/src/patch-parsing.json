@@ -1,5 +1,5 @@
 {
-  "//": "How a browser parses a patch's top level as a <template>'s content (the runtime's parse in corten.js). parsed is each top-level element as name#id, (its child elements) and a template's {content}, without text, as the HTML standard and Firefox parse it; parsedIn, where an engine differs (Chromium and WebKit let a leading <title>, <base>, <basefont>, <bgsound> or <noframes> decide how the rest is read). lost is what the server's debug check (patch_parse in html.rs) reports, null when it reports nothing: html.rs's tests hold it to report exactly the cases here a browser does not parse as written, and hold the shapes html! refuses at compile time (a table part after a first <table>; an element HTML's wherever it lands after a first <col>; after a first other table part, a <table> at the top level or in a later element, and a <form> that holds an element with one HTML's wherever it lands in or around it), written first and after each table part, to be lost in every engine. scripts/smoke.mjs checks parsed in Chromium, Firefox and WebKit.",
+  "//": "How a browser parses a patch's top level as a <template>'s content (the runtime's parse in corten.js). parsed is each top-level element as name#id, (its child elements) and a template's {content}, without text, as the HTML standard and Firefox parse it; parsedIn, where an engine differs (Chromium and WebKit let a leading <title>, <base>, <basefont>, <bgsound> or <noframes> decide how the rest is read). lost is what the server's debug check (patch_parse in html.rs) reports, null when it reports nothing: html.rs's tests hold it to report exactly the cases here a browser does not parse as written, and hold the shapes html! refuses at compile time (a table part after a first <table>; an element HTML's wherever it lands after a first <col>; after a first other table part, a <table> at the top level or in a later element, and a <form> that holds an element with one HTML's wherever it lands in or around it), written first and after each table part, to be lost in every engine. unread, where it is set, is where the check stops (a construct it does not follow, named in docs/design.md Limit 2), reporting no loss and logging a warning instead. scripts/smoke.mjs checks parsed in Chromium, Firefox and WebKit.",
   "cases": [
     {
       "html": "<tr id=\"a\"><td>1</td></tr><tr id=\"b\"><td>2</td></tr>",
@@ -6840,6 +6840,153 @@
         "math(mi,annotation-xml(svg(title)))"
       ],
       "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><xmp id=\"x\"><table></table></xmp>",
+      "parsed": [
+        "tr#r",
+        "xmp#x"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"></tr><iframe id=\"x\"><table><tr><td><form>x</form></td></tr></table></iframe>",
+      "parsed": [
+        "tr#r",
+        "iframe#x"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"></tr><noembed id=\"x\"><table></table></noembed>",
+      "parsed": [
+        "tr#r",
+        "noembed#x"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"></tr><noframes id=\"x\"><table></table></noframes>",
+      "parsed": [
+        "tr#r",
+        "noframes#x"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<td id=\"c\"></td><xmp id=\"x\"><tr></tr><table></table></xmp>",
+      "parsed": [
+        "td#c",
+        "xmp#x"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<p id=\"m\"></p><xmp id=\"x\"><tr></tr></xmp>",
+      "parsed": [
+        "p#m",
+        "xmp#x"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"></tr><textarea id=\"x\"><table></table></textarea>",
+      "parsed": [
+        "tr#r",
+        "textarea#x"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"></tr><style id=\"x\"><table></table></style>",
+      "parsed": [
+        "tr#r",
+        "style#x"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<script id=\"s\" type=\"text/plain\"><!--<script></script>--></script><tr id=\"r\"></tr>",
+      "parsed": [
+        "script#s",
+        "tr#r"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<script id=\"s\" type=\"text/plain\"><!--<script></script><p id=\"m\">saved</p><script id=\"t\" type=\"text/plain\">--></script><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "script#s",
+        "tr#r(td)"
+      ],
+      "lost": null,
+      "unread": "whose text a <!-- and a <script in it carry past its first </script>"
+    },
+    {
+      "html": "<p id=\"m\"></p><svg id=\"s\"></p><tr id=\"r\"></tr></svg>",
+      "parsed": [
+        "p#m",
+        "svg#s",
+        "p"
+      ],
+      "lost": null,
+      "unread": "</p> in <svg>, in an <svg> or <math>"
+    },
+    {
+      "html": "<p id=\"m\"></p><svg id=\"s\"><g></br><tr id=\"r\"></tr></g></svg>",
+      "parsed": [
+        "p#m",
+        "svg#s(g)",
+        "br"
+      ],
+      "lost": null,
+      "unread": "</br> in <g>, in an <svg> or <math>"
+    },
+    {
+      "html": "<p id=\"m\"></p><math id=\"x\"><mrow></P><tr id=\"r\"></tr></mrow></math>",
+      "parsed": [
+        "p#m",
+        "math#x(mrow)",
+        "p"
+      ],
+      "lost": null,
+      "unread": "</P> in <mrow>, in an <svg> or <math>"
+    },
+    {
+      "html": "<svg id=\"s\"><foreignObject></p></foreignObject><desc></br></desc></svg>",
+      "parsed": [
+        "svg#s(foreignObject)",
+        "p",
+        "desc(br)"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "svg#s(foreignObject(p),desc(br))"
+        ],
+        "webkit": [
+          "svg#s(foreignObject(p),desc(br))"
+        ]
+      },
+      "lost": null,
+      "unread": "</p> in <foreignobject>, in an <svg> or <math>"
+    },
+    {
+      "html": "<math id=\"x\"><mi></p></mi><annotation-xml encoding=\"text/html\"></p></annotation-xml></math>",
+      "parsed": [
+        "math#x(mi)",
+        "p",
+        "annotation-xml(p)"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "math#x(mi(p),annotation-xml(p))"
+        ],
+        "webkit": [
+          "math#x(mi(p),annotation-xml(p))"
+        ]
+      },
+      "lost": null,
+      "unread": "</p> in <mi>, in an <svg> or <math>"
     }
   ]
 }

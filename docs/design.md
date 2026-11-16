@@ -4900,9 +4900,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
    parse drops: the server does not know what the page linked, and on a page without it the patch
    would land unstyled, so it is refused on both, and a `<colgroup>` with an id keeps the link.
    The check reads markup as `html!` writes it (a script's text as the browser's tokenizer does,
-   a void element's end tag ignored); where it cannot follow a patch (an end tag left out in `raw`
-   markup), it reports a loss found before the element it cannot follow and otherwise logs a
-   warning naming where it stopped.
+   a `<textarea>`'s, `<title>`'s, `<style>`'s, `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and
+   `<noframes>`'s as text, a void element's end tag ignored); where it cannot follow a patch (an
+   end tag left out in `raw` markup, a `</p>` or `</br>` in an `<svg>` or `<math>`, which
+   closes it, and a `<!--` and a `<script` in a script's text that carry it past its first
+   `</script>` and over an element, which the markup does not say was written as its text), it
+   reports a loss found before the element it cannot follow and otherwise logs a warning naming
+   where it stopped.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating

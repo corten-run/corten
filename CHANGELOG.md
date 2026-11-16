@@ -30,7 +30,9 @@ Corten is pre-1.0, so any minor version may change the API.
   `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
   fragment panics, naming the element lost and the one that came first, so an app's own
   debug-build tests that draw such a patch now fail; a patch the check cannot read to its end (an
-  end tag left out in `raw` markup) is sent, with a warning naming where it stopped; a release
+  end tag left out in `raw` markup, a `</p>` or `</br>` in an `<svg>` or `<math>`, a script whose
+  text a `<!--` and a `<script` carry past its first `</script>` and over an element) is sent, with
+  a warning naming where it stopped; a release
   build is unchanged
   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 

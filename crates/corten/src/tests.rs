@@ -3827,6 +3827,41 @@ async fn a_patch_the_parse_check_cannot_read_is_logged_in_debug_builds() {
 }
 
 #[derive(crate::view::Id)]
+struct NoteEndId;
+
+/// Two data blocks whose text opens with `<!--<script>` and ends with `-->`, around the message:
+/// the browser reads the first block to the second's end tag, so the message is its text, which
+/// the markup does not say is not what was meant. The check stops there and a debug build logs it,
+/// rather than passing it as read (#1409).
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_patch_whose_script_text_carries_it_past_an_element_is_logged_in_debug_builds() {
+    use std::sync::Arc;
+    let routes = Table::new().route(
+        "/blocks",
+        crate::router::post(|req: Req| async move {
+            req.patch::<ForOne, AnyAnswer>(html! {
+                <script id={NoteScriptId} type="text/x-template">"<!--<script>"</script>
+                <SavedNote />
+                <script id={NoteEndId} type="text/x-template">"-->"</script>
+                <LostRow />
+            })
+        }),
+    );
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let (status, _, body) = call_with(app(routes, None), "POST", "/blocks", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains(r#"read it only up to <script id="note-script" type="text/x-template">, whose text a <!-- and a <script in it carry past its first </script>"#),
+        "{text}"
+    );
+}
+
+#[derive(crate::view::Id)]
 struct CostRowId(u32);
 
 /// A patch of 50 table rows, each with three cells, one of them holding a form.

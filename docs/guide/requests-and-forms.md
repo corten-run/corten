@@ -1092,11 +1092,14 @@ covers what a table's reading does to a patch as `html!` writes it, each element
 end tag, not every way a browser's parse can differ from the markup. It reads what an `<svg>` or
 `<math>` holds by their own rules (a `<title>` or `<style>` there holds elements, a CDATA section is
 text) only to find where it ends, so a row holding an icon with a `<title>` is checked like any
-other, but it reports no loss inside one. It reads a `<script>`'s text as the browser does, so a
-`<!--` and a `<script` in a data block's text neither stop the check nor hide what follows, and it
-ignores the end tag `html!` writes for a `<param>` or a `<basefont>`, as the browser does. Where it
-cannot follow a patch (an end tag left out in `raw` markup, an element HTML's wherever it lands
-written straight in an `<svg>` or `<math>`, which `html!` refuses), it still reports a loss found
+other, but it reports no loss inside one. It reads a `<script>`'s text as the browser does, and a
+`<textarea>`'s, `<title>`'s, `<style>`'s, `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and
+`<noframes>`'s as text, and it ignores the end tag `html!` writes for a `<param>` or a
+`<basefont>`, as the browser does. Where it cannot follow a patch (an end tag left out in `raw`
+markup; an element HTML's wherever it lands written straight in an `<svg>` or `<math>`, which
+`html!` refuses, or a `</p>` or `</br>` there, which closes it; a `<!--` and a `<script` in a
+data block's text that carry the script past its first `</script>` and over an element, which
+may be text written for it or the patch's elements lost in it), it still reports a loss found
 before the element it cannot follow, and otherwise logs a warning naming where it stopped, since
 what follows was not checked. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
 a page's table takes apart too). A patch that
