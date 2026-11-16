@@ -548,9 +548,11 @@ rules something out.
    safelist (`Accept`, `Accept-Language`, `Content-Language`, `Content-Type`, `Range`) checked,
    and the cost of reading it measured by callgrind on `914f4781e`, with and without the whole
    line compared first (as `70b69a3db` has it), against `5d0bf7599`, three alternating rounds;
-   2026-11-15, the upload module called with an older runtime's arguments and the runtime handed the
-   older module, by the watchlist smoke in Chromium, Firefox and WebKit, both failing with the
-   headers passed third (`3dc461f6e`).
+   2026-11-16, the upload module called with an older runtime's arguments and the runtime handed the
+   older module, both passing in the watchlist smoke in Chromium, Firefox and WebKit on `3587a1b18`,
+   and the same two cases by a one-off probe in Chromium against that build (not a repository
+   check), each failing with `3dc461f6e`'s module or runtime served in its place: called the older
+   way, that module throws, and that runtime handed the older module sends no upload.
 
 12. <a id="choice-own-prefetch"></a>**The runtime prefetches links itself, not with Speculation Rules or `rel="prefetch"`.** A
    navigation the runtime makes asks with `corten: nav` and gets the title, head tags and
@@ -4713,8 +4715,8 @@ rules something out.
     watch (an app without layout reads) takes 81,585 where it took 80,551, and `main` takes 81,697
     for the same request with the preference, which `corten::testing` now sends for `Mode::Action`
     and `main` ignores: the watch's rise is the test client's one header more, and what the server
-    adds to it is within its runs' range (up to 430 instructions here, against 2 on the crate's
-    patch) and is not resolved. The route's
+    adds to it is within its runs' range (up to 430 instructions here, against at most 3 on the
+    crate's patch) and is not resolved. The route's
     fill is boxed: with the box only around the reads, past the handler, an `HtmlResult` patch took
     262 less but every other write about 480 to 590 more, as each route's future grew. The runtime
     is 1,180 bytes larger raw and 431 with gzip (15,341 to 15,772 at zlib's default level, against
@@ -4753,7 +4755,7 @@ rules something out.
     `1c72b037` with the harness tests added and `bb7562d9d` as a third build, three alternating
     rounds each, the whole document's own instructions per function compared by `callgrind_annotate`,
     and the runtime's size against `30bed57ed` by Node's `zlib` (the head merges `main` at
-    `30bed57ed` after `70031a793`; that merge is not measured); 2026-11-15, callgrind on `70b69a3db`
+    `30bed57ed` and then at `2b33cd568` after `70031a793`; those merges are not measured); 2026-11-15, callgrind on `70b69a3db`
     against `main` at `83a9c9fbd` with the harness tests added, and `914f4781e` with and without the whole `Prefer`
     line compared first against `17f285075` (the round before, `5d0bf7599` merged), three
     alternating rounds each, the time and bytes in release on `70b69a3db` (three runs of 25), the
