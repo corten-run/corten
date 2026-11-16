@@ -204,6 +204,11 @@ async fn home(req: Req, State(m): State<Market>) -> HtmlResult {
 }
 ```
 
+A screen whose data a page's script reads names it on its route, `#[route("/sets/{set}", get = set, data = SetListing)]`,
+and its handler returns `HtmlResult<corten::Screen<SetListing>>` (only `req.screen` with a `SetListing`, or a `&`, `Box`, `Rc` or `Arc` of one, makes one; `Screen` is not in the prelude);
+such a route says neither `patches` nor `rows`, and mounted again by hand it takes only a `get` that answers that data (else it does not compile);
+the script reads it with `read()` ([scripts.md](scripts.md), A screen's data).
+
 ## A route with no screen
 
 Webhooks, OAuth callbacks, calls from other services and public APIs answer only JSON: their

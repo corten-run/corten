@@ -21,7 +21,35 @@ the CLI string array including the mandatory local development round `wN`.
 The returned and persisted summary schema is `native-hardening-run/v1`.
 `--out` optionally selects a fresh subdirectory under `bench/hardening/results`.
 `--node-modules` can name an existing dependency installation (the pinned
-Playwright version is checked); it is mounted read-only, not installed or changed.
+Playwright version is checked). Stable regular installed files, including esbuild's
+postinstall hardlinks, are copied into a fresh private evidence tree and mounted
+read-only. The installed tree is not changed; copied files are independent and
+single-link. Saved evidence still rejects hardlinks.
+
+The copy preflights the existing depth, entry and byte bounds, checks descriptor
+identity before reading, and requires unchanged source identity, metadata and
+recursive membership bookends. Symlinks, special files and changing inputs fail
+closed. Linux traversal uses pinned directory descriptors and no-follow opens;
+Windows uses path bookends plus descriptor identity checks before content reads.
+Linux output storage is restricted to native ext-family, tmpfs and overlayfs
+filesystems, checked through the opened parent descriptor before any output
+creation and through active output descriptors before subsequent creates. Other
+types, including WSL DrvFS/9p, are refused as `unsupported-output-filesystem`.
+DrvFS descriptor child paths can follow a replaced directory name and create an
+empty file before identity checks reject it; no output tree is created there.
+Output creates are anchored to pinned directory descriptors on supported Linux
+filesystems. This is not a blanket Linux filesystem qualification. Windows
+temporarily pins the existing output parent while creating the root, then holds
+exclusive handles on active owned output directories to prevent rename/junction
+substitution before writes. Handles are bounded by traversal depth and released
+on success or failure. Output ancestor, directory and file identities are checked
+before writes and bookended around the read-only seal; byte-identical replacement
+trees are not accepted. Unrelated ancestor membership changes remain allowed.
+This is not an atomic filesystem snapshot: the installation must remain stable.
+Only the unused top-level `.bin` launchers are excluded. Rejections identify a
+bounded relative path (up to 64 characters), entry type, link count and reason,
+with fixed public I/O codes rather than absolute paths or file contents.
+
 No options select a smaller benchmark group. `--verify-app`, `--verify-source`,
 `--verify-case` and `--verify-phase` select bounded apparatus verification only.
 Every other cell remains `not-run`, and verification mode cannot set `groupReady`.

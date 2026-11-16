@@ -5,6 +5,76 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A script reads a screen's data typed, from the route that answers it, with
+  `read(url, { signal })` from the new `corten/read` module. A route that says `data = T` in
+  `#[route(..)]`, whose `get` handler returns `HtmlResult<corten::Screen<T>>` (which only
+  `req.screen` makes, given a `T` or a reference, `Box`, `Rc` or `Arc` of one), is a handler
+  argument of type `ScreenUrl<T>`. The parameter must name the declaration `corten::types` writes:
+  `import("../types/app").T`, `@import { T } from "../types/app"` or a `@typedef` of either; a
+  type the script declares itself does not compile. `read()` asks the route with
+  `Accept: application/json` through the browser's HTTP cache (an unchanged answer is a 304) and
+  resolves to its `data`, typed as `T`. A route says `data` without `patches` or `rows`, and
+  the same route mounted again by hand (`Area::route`, `Api::route`) with a `get` that answers a
+  page or other data does not compile. `read()` follows no redirect. It rejects with a
+  `ReadError`: `status` is the answer's (a signed-out `Caller`'s or `Refused::sign_in`'s 401
+  included), or 0 when there was none it could use, with `redirected` true for a redirect the app
+  wrote itself, else with the error as `cause` (offline, a `SyntaxError` for a success that is
+  not JSON, a `TypeError` for JSON that is not a screen's). Once `signal` aborts it rejects with
+  its reason, even after a failed answer. The module (749 bytes, 486 with gzip, 409 with brotli)
+  is served and preloaded only for apps whose scripts import it; the runtime is unchanged. A
+  static script's import of `corten/keys` or `corten/read` is now looked for outside its
+  comments, so a `corten/keys` named only in a comment no longer stops the app
+  ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
+
+- **Breaking:** `req.screen` and `req.screen_with_status` take a type parameter for the answer's
+  kind, `<For, Kind, T>`, so a call that names their types with a turbofish names three. Where
+  `req.screen::<ForOne, _>(&data, doc)` was written, write
+  `req.screen::<ForOne, corten::AnyAnswer, _>(&data, doc)` (or leave the types to the handler's
+  return type). Calls without a turbofish are unchanged, except a `req.screen(..)` given straight
+  to `Public::new` or `NoStore::new` where no return type names the answer (a closure), which
+  fails with E0283 and names the kind the same way, `req.screen::<_, corten::AnyAnswer, _>(..)`.
+  `req.patch`, `patch_with_status`, `patch_or`, `invalid` and `invalid_with` answer only as
+  `AnyAnswer` or `Patches` (the sealed `corten::answer::PatchingKind`), so a handler that returns
+  `HtmlResult<Screen<T>>` cannot answer through them, and code of an app's own that is generic
+  over an answer's kind and calls them bounds it `K: corten::answer::PatchingKind`. A `Route`
+  written by hand (`impl corten::Route for ..`, not `#[derive(Route)]`) names what its screen
+  answers a data client: add `type Data = corten::route::NoData;` to the impl. Code of an app's
+  own that is generic over a route and mounts handlers at it (`area.route::<R>(methods)`,
+  `api.route::<R>(methods)`) bounds it `R: corten::Route<Data = corten::route::NoData>`, a route
+  that names no data (E0277 otherwise)
+  ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
+
+- Verify the cancelled mixed campaign's captured source blobs and every selected
+  build context against its original authenticated subject before retirement;
+  refuse equally incomplete wrapper and custody copies without deletion intent.
+
+- Add an explicitly approved, single-attempt cancellation path for the exact old
+  r21 mixed source-review wait. Signal only its verified pidfd-owned campaign entry,
+  preserve the wrapper's terminal archive and all nine contexts, and require
+  separate terminal custody and fresh retirement guards without audit approval or
+  source qualification. Retain uncertainty and prohibit repeated signal/DELETE.
+  Bind cancellation and mixed terminal custody to the original uploaded control
+  manifest, independently of later launch-template changes.
+
+- Bound matched Spring marketplace upstream reads with the native ten-second
+  timeout and map typed header timeouts to MVC 504 responses; retain default
+  behavior and the documented caller-disconnect limitation.
+
+- Bound Drogon marketplace page source reads with the existing native deadline and
+  caller-disconnect lifetime, preserving request-local trace context.
+
+- Save bounded, structural same-page browser diagnostics when native compiled
+  alert hydration checks fail. Retain only closed categories and numbers, not
+  browser text or URL paths; keep readiness gates and their errors unchanged.
+
+- Include the observer's durable writer in the fixed native replay source closure;
+  keep deny-unlisted imports and replay captured commit bytes, not checkout edits.
+
+- Verify the standard cloud-init instance selector by pinned descriptor and exact
+  owned host ID during failed-native custody. Keep all other paths link-free,
+  require matching instance identity and empty regular user data, and refuse
+  selector, ancestry or file replacement during each terminal proof.
+
 - Bound failed-native retirement proof age from the final SSH request's local
   start, including response delivery, and refuse expired DELETEs after asynchronous
   HTTPS socket/TLS setup without queuing a mutation before readiness.
@@ -15,6 +85,38 @@ Corten is pre-1.0, so any minor version may change the API.
   stream directory admission within global evidence budgets and carry the final
   proof's absolute expiry through private provider dispatch. Keep ordinary
   collection gates and uncertain-delete reconciliation unchanged.
+
+- Probe the marketplace JSON route's method rejection with POST, which the page
+  form implements, rather than requiring an app to implement DELETE somewhere.
+  Keep the JSON 405 requirement and all production qualification gates.
+
+- Copy stable installed dependency hardlinks into independent hardening evidence,
+  retaining source identity and mutation checks, bounded no-follow reads and
+  single-link saved evidence. Report bounded relative-path rejection diagnostics.
+  Pin snapshot output directories before creates/writes and retain output
+  identities through sealing, rejecting directory/junction and file replacement.
+  Refuse unqualified Linux output filesystems before creation, including WSL
+  DrvFS/9p where descriptor child paths can create through a replaced directory.
+
+- Keep asynchronous benchmark observer startup owned through cancellation and
+  early native exit; dispose abandoned setup without late capture or a terminal seal.
+
+- Keep benchmark host sampling off synchronous record flushes with one bounded
+  asynchronous filesystem FIFO. Preserve per-record file/directory durability
+  before referencing sample writes, strict continuity and cancellation gates;
+  do not seal unfinished or failed storage or reinterpret historical failures.
+
+- Resample complete benchmark host scopes within the existing one-second window
+  when process churn invalidates a census, and require matching recursive
+  membership bookends. Keep PID/start, executable, accounting, observer-error and
+  positive-empty cleanup gates; roll back executable captures from rejected
+  attempts and observations without closing earlier accepted inputs. Do not
+  reinterpret retained failed evidence.
+
+- Retain raw host process stat evidence and exempt only identity-bound Linux kernel
+  threads from grouped benchmark user-process cleanup. Prepare fresh disposable
+  hosts against firmware-service activation before baseline; keep new user-process
+  leaks and unproved historical inventories fail-closed.
 
 - Retain omitted optional Docker image/container command defaults as explicit null
   in JSON, catalog and marketplace benchmark evidence and the JSON audit handoff.
@@ -677,7 +779,7 @@ Corten is pre-1.0, so any minor version may change the API.
   without; before, only `<main>` was swapped and the count kept its value from before the write. A
   `GET` form's page is still `<main>` alone, and a patch still fills no layout read: a write whose
   answer must change one answers its page
-  ([design Choice 55](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
+  ([design Choice 56](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
   has answered with the page, so they see what the write did, and a write that answers anything
   else starts none. The runtime says it draws the page whole with an HTTP preference (RFC 7240),
   `Prefer: corten-draws=whole`; a runtime without it (a tab open across the deploy) gets `<main>`
@@ -1178,6 +1280,13 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
 ### Documentation
+
+- The forms guide no longer pairs a radio group with a plain enum field: a radio group drawn
+  with none checked sends nothing, so its field is `Option<Enum>` and the handler adds the
+  field's message when it is `None`, which redraws the form with the message without JavaScript;
+  a `<select>`, or radios drawn with one checked, stays the enum. A word the page never offers is
+  still a 422. A doctest and a router test hold the reading and the redraw
+  ([#1413 An enum form field that is missing or holds an unknown word fails the whole form with a 422, where a string field could draw a message on the field](https://github.com/corten-run/corten/issues/1413)).
 
 - Benchmark deployment refreshes target the newest stable framework, runtime and build
   tools rather than LTS alone. Record incompatible inputs without forcing dependencies,

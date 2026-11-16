@@ -566,7 +566,7 @@ What it sends is what the app's own pages send, typed the same way:
    runtime's `data-patch` submit does, `Mode::Navigation` as its link, `Mode::Data` as a client
    that wants JSON. `Mode::Action` sends `Prefer: corten-draws=whole` as the runtime does, so a
    write that answers its own page (`req.page(..)`) is answered with the whole document, layout
-   and layout reads included ([Choice 55](../design.md#choice-write-own-page-whole)). To ask as a
+   and layout reads included ([Choice 56](../design.md#choice-write-own-page-whole)). To ask as a
    runtime from before that, which is answered with `<main>`, add
    `.header(HeaderName::from_static("prefer"), "corten-draws=main")` (`corten::http::HeaderName`):
    a preference the test sets is sent first, and the first is the one read.

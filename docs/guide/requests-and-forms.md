@@ -68,7 +68,7 @@ service is a server of the test's own, not Corten ([Testing an app](app.md#testi
 | `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `req.patch(view)` | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
 | `POST` with `corten: action` and `Prefer: corten-draws=whole`, answered with a page | runtime, a write that draws its own page (a refused form, a partial result) | `req.page(doc)`: the whole document, its layout reads started, as without JavaScript (`<main>` alone for a runtime that does not prefer it) | swaps the page and draws its layout again |
 | `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
-| any, `Accept: application/json` | native screen, agent, test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
+| any, `Accept: application/json` | native screen, agent, a page's script ([`read()`](scripts.md#a-screens-data)), test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
 | SSE | `<corten-live src>` | `corten::live(stream_of_views)` | applies each like a patch |
 | `GET {feed}`, `{feed}/live` | a handler's `subscribe()`, or `Replica` | `feed.snapshot()`, `feed.live(since)` | snapshot, then ordered patches |
@@ -360,10 +360,10 @@ type of its own that implements `Deserialize`.
 
 | Field type | Reads | A browser sends |
 |---|---|---|
-| `String`, a number, a unit-variant enum | the key's one value; sent twice is a 422 that names the field | `<input>`, `<select>`, a radio group |
+| `String`, a number, a unit-variant enum | the key's one value; sent twice is a 422 that names the field | `<input>`, `<select>`, a radio group drawn with one option checked |
 | `Entry<T>` of a number type | the text as sent and the number it reads as, `None` when blank or not a number | an `<input type="number">` the user types in |
 | `bool`, with `#[serde(default)]` | `true` for `on` or `true`, `false` when missing | a checkbox: `on` when checked, nothing when not |
-| `Option<T>` | `None` when missing or blank | an empty `<input type="number">` sends `max=` |
+| `Option<T>` | `None` when missing or blank | an empty `<input type="number">` sends `max=`; a radio group with none checked sends nothing |
 | `Vec<T>`, with `#[serde(default)]` | every value, in order; empty when missing | checkboxes sharing a name, `<select multiple>` |
 
 A number the user types is an `Entry` of its type: the text as sent and the number it reads as.
@@ -399,6 +399,36 @@ query; a path parameter reads as written (`3.0` is no link of the app's). An opt
 blank or within its bounds, `input.weight.is_blank() || WEIGHT.read(&input.weight).is_some()`,
 and one not sent at all (a disabled input) is blank. corten-ui's `NumberField` takes an `Entry`
 field and its `Bounds` ([UI](ui.md)).
+
+A choice (a `<select>`, radios) is a `#[derive(UrlValue)]` enum, and its field's type says
+whether the form can leave it out. A `<select>` always sends one of its options, and so does a
+radio group drawn with one option checked, so their field is the enum. A radio group drawn with
+none checked sends nothing until the user picks one, so its field is `Option<Enum>`, and the
+handler adds the field's message when it is `None`, as it does for an `Entry` that does not
+read; a `<select>` whose first option is a blank placeholder (`value=""`) reads `None` the same
+way. Give each radio `required` too, so the browser asks before the form is sent; the handler's
+check is what a browser without scripts, or another client, gets. A word the page never offers (a
+post edited by hand) is a 422 and the error page, as a typed number from a select is: it came
+from no page of the app's.
+
+```rust,ignore
+#[derive(Clone, Copy, PartialEq, UrlValue)]
+#[serde(rename_all = "snake_case")]
+enum Basis { Observed, Manual }
+
+#[derive(Fields)]
+struct Pricing { basis: Option<Basis> }
+
+// <div role="radiogroup" aria-label=.. {..e.aria(f.basis)}>
+//     <label><input type="radio" name={f.basis} value={Basis::Observed} required>..</label>
+//     <label><input type="radio" name={f.basis} value={Basis::Manual} required>..</label>
+// </div>
+// {e.message(f.basis)}
+let Some(basis) = input.basis else {
+    errors.add(f.basis, t.choose_basis());
+    return req.invalid(&errors, ..).await;
+};
+```
 
 A value the app stores itself and draws back (a delay its rate limiter writes) must be one its
 bounds hold, or the browser will not send the form until the user changes it: under `corten dev`

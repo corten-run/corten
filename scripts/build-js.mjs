@@ -6,6 +6,8 @@
 //                   which only pages with a form that has an on:corten:progress handler load
 //   dist/keys.js    shortcut() for a page-wide shortcut (`corten/keys`): a module of its own, which
 //                   only apps whose scripts import it serve, preloaded with those scripts
+//   dist/read.js    read() of a screen's typed data (`corten/read`): a module of its own, served
+//                   and preloaded as keys.js is
 //   dist/view.js    rows() and the helpers of the generated view classes, which Corten puts at
 //                   the start of an app's corten/views module (one script: no extra request)
 // esbuild bundles, lowers to ES2022 and minifies each file; terser minifies its output again,
@@ -46,6 +48,11 @@ const outputs = [
     name: "keys.js",
     entryPoints: [join(js, "keys.js")],
     banner: { js: "// Corten keys (MIT). Built from crates/corten/js/keys.js by scripts/build-js.mjs; do not edit." },
+  },
+  {
+    name: "read.js",
+    entryPoints: [join(js, "read.js")],
+    banner: { js: "// Corten read (MIT). Built from crates/corten/js/read.js by scripts/build-js.mjs; do not edit." },
   },
   {
     name: "view.js",

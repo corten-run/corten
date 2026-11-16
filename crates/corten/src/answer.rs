@@ -102,14 +102,17 @@ pub trait Answer: IntoResponse + Sized {
     /// a page says `const PAGE: bool = true;` (or forwards its page's), or its route starts no read
     /// and its layout's places draw nothing.
     const PAGE: bool = false;
-    /// What a request from the runtime ([`crate::Mode::Action`]) can get: [`Patches`] for
-    /// `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), a patch whenever the
-    /// runtime asked, and [`AnyAnswer`] for any other answer. A [`crate::Methods`] carries its
-    /// `get` handler's, so a route that says `patches` mounted by hand ([`crate::Area::route`],
-    /// [`crate::Api::route`]) takes only a `get` that answers one. Only those answers of Corten's
-    /// can be `Patches` ([`KindOf`]): an answer type of the app's own says
-    /// `type Kind = AnyAnswer;`, even one that holds a patch, since nothing holds it to answering
-    /// one.
+    /// What a request from the runtime ([`crate::Mode::Action`]) or a script's read can get:
+    /// [`Patches`] for `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), a patch
+    /// whenever the runtime asked; [`Screen<T>`] for `HtmlResult<Screen<T>>` (and `Public<..>` or
+    /// `NoStore<..>` of it), the page or its data `T`, which only `Req::screen` makes; and
+    /// [`AnyAnswer`] for any other answer. A [`crate::Methods`] carries its `get` handler's, so
+    /// a route that says `patches` mounted by hand ([`crate::Area::route`],
+    /// [`crate::Api::route`]) takes only a `get` that answers one, and one that says `data = T`
+    /// only a `get` that answers a screen of `T`. Only those answers of Corten's can be
+    /// `Patches` or `Screen<T>` ([`KindOf`]): an answer type of the app's own says
+    /// `type Kind = AnyAnswer;`, even one that holds a patch or a screen, since nothing holds it to
+    /// answering one.
     ///
     /// ```compile_fail,E0277
     /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, HtmlResult, Patches};
@@ -127,6 +130,29 @@ pub trait Answer: IntoResponse + Sized {
     ///     type Inputs = AnyInputs;
     ///     type Rows = NotAFeed;
     ///     type Kind = Patches;
+    /// }
+    /// ```
+    ///
+    /// Nor `Screen<T>`, which only `req.screen`, given a `T`, makes:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, HtmlResult, Screen};
+    ///
+    /// struct SetListing;
+    ///
+    /// struct Mine(HtmlResult<Screen<SetListing>>);
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         self.0.into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = Screen<SetListing>;
     /// }
     /// ```
     ///
@@ -176,7 +202,7 @@ pub trait Answer: IntoResponse + Sized {
     type Kind: KindOf<Self>;
 }
 
-/// The two kinds of answer ([`Answer::Kind`]): [`AnyAnswer`] and [`Patches`].
+/// The kinds of answer ([`Answer::Kind`]): [`AnyAnswer`], [`Patches`] and [`Screen<T>`].
 pub trait AnswerKind: sealed::Kind {
     /// Whether the answer is a patch whenever the runtime asked.
     #[doc(hidden)]
@@ -191,10 +217,16 @@ impl AnswerKind for Patches {
     const PATCHES: bool = true;
 }
 
-/// The kinds an answer `A` can say it is ([`Answer::Kind`]): [`AnyAnswer`] for any answer, and
+impl<T: ?Sized + 'static> AnswerKind for Screen<T> {
+    const PATCHES: bool = false;
+}
+
+/// The kinds an answer `A` can say it is ([`Answer::Kind`]): [`AnyAnswer`] for any answer,
 /// [`Patches`] only for `HtmlResult<Patches>` and `Public<..>` or `NoStore<..>` of it, the
-/// answers only the `Req` methods that answer a patch make. Sealed, so a route that says
-/// `patches` can trust its `get` handler's kind.
+/// answers only the `Req` methods that answer a patch make, and [`Screen<T>`] only for
+/// `HtmlResult<Screen<T>>` and `Public<..>` or `NoStore<..>` of it, which only `Req::screen`
+/// makes, given a `T`. Sealed, so a route that says `patches` or `data = T` can trust its
+/// `get` handler's kind.
 pub trait KindOf<A>: AnswerKind + sealed::KindOf<A> {
     /// The kind of `corten::Result<A>`.
     #[doc(hidden)]
@@ -216,6 +248,15 @@ impl<A> KindOf<A> for AnyAnswer {
     where
         A: Shareable;
     type InNoStore = AnyAnswer;
+}
+
+impl<A: sealed::ScreenAnswer<T>, T: ?Sized + 'static> KindOf<A> for Screen<T> {
+    type InResult = Screen<T>;
+    type InPublic
+        = Screen<T>
+    where
+        A: Shareable;
+    type InNoStore = Screen<T>;
 }
 
 impl<A: sealed::PatchAnswer> KindOf<A> for Patches {
@@ -382,6 +423,225 @@ pub struct AnyAnswer;
 /// ```
 pub struct Patches;
 
+/// A screen whose data is `T`: what `Req::screen` (feature `json`) answers a data client
+/// (`Accept: application/json`) with, `{"title", "data"}`, and the page otherwise. A handler names
+/// it in its return type, `HtmlResult<Screen<SetListing>>`, for a route that says
+/// `data = SetListing` ([`crate::routes`]), whose URL a script reads with `read()` from
+/// `corten/read`, typed by the declaration `corten::types` writes for `SetListing`. Only
+/// `req.screen` and `req.screen_with_status`, given a `T`, make one, so a route's data is what its
+/// `get` handler answers (the examples are on `Req::screen`).
+pub struct Screen<T: ?Sized>(PhantomData<fn(&T)>);
+
+/// The kinds `Req::screen` answers as, given data of type `U`:
+/// [`AnyAnswer`], for a handler that returns `HtmlResult`, and [`Screen<T>`], for one whose route
+/// says `data = T`, given a `T` or a reference to one or a `Box`, `Rc` or `Arc` of one, whose
+/// JSON is the `T`'s. Sealed.
+pub trait ScreenKind<U: ?Sized>: sealed::Kind {}
+impl<U: ?Sized> ScreenKind<U> for AnyAnswer {}
+impl<T: ?Sized, U: ?Sized + sealed::DataOf<T>> ScreenKind<U> for Screen<T> {}
+
+/// The kinds the `Req` methods that answer a patch make ([`Req::patch`](crate::Req::patch),
+/// [`Req::patch_with_status`](crate::Req::patch_with_status), [`Req::patch_or`](crate::Req::patch_or),
+/// [`Req::invalid`](crate::Req::invalid), [`Req::invalid_with`](crate::Req::invalid_with)):
+/// [`AnyAnswer`] and [`Patches`]. Not [`Screen<T>`], which only `Req::screen`, given a `T`,
+/// makes: a patch, a redirect or another value's screen in `patch_or`'s other side would answer
+/// a script's `read()` with something other than the route's data. Sealed.
+///
+/// Each answers a handler that returns `HtmlResult`:
+///
+#[cfg_attr(feature = "json", doc = "```")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn patch(req: Req) -> HtmlResult {
+///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+/// }
+/// async fn patch_with_status(req: Req) -> HtmlResult {
+///     req.patch_with_status(corten::http::StatusCode::ACCEPTED, html! { <p id={PartId}>"Saved"</p> })
+/// }
+/// async fn patch_or(req: Req) -> HtmlResult {
+///     let order = Order { id: "7".into() };
+///     req.patch_or(html! { <p id={PartId}>"Saved"</p> }, || async {
+///         req.screen(&order, html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
+///     })
+///     .await
+/// }
+/// async fn patch_or_redirect(req: Req) -> HtmlResult {
+///     req.patch_or(html! { <p id={PartId}>"Saved"</p> }, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await
+/// }
+/// async fn invalid(req: Req, errors: Errors) -> HtmlResult {
+///     req.invalid(&errors, html! { <p id={PartId}>"Refused"</p> }, || async { req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> }) }).await
+/// }
+/// async fn invalid_with(req: Req, errors: Errors) -> HtmlResult {
+///     req.invalid_with(
+///         &errors,
+///         |form| async move { form.draw(html! { <p id={PartId}>"Refused"</p> }) },
+///         || async { req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> }) },
+///     )
+///     .await
+/// }
+/// ```
+///
+/// None of them compiles where the handler says its answer is a screen: not a patch,
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+/// }
+/// ```
+///
+/// nor one with a status,
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+///     req.patch_with_status(corten::http::StatusCode::ACCEPTED, html! { <p id={PartId}>"Saved"</p> })
+/// }
+/// ```
+///
+/// nor `patch_or` with another value's screen on its other side,
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+///     let order = Order { id: "7".into() };
+///     req.patch_or(html! { <p id={PartId}>"Saved"</p> }, || async {
+///         req.screen(&order, html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
+///     })
+///     .await
+/// }
+/// ```
+///
+/// or a redirect there,
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+///     req.patch_or(html! { <p id={PartId}>"Saved"</p> }, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await
+/// }
+/// ```
+///
+/// nor a refusal,
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req, errors: Errors) -> HtmlResult<corten::Screen<SetListing>> {
+///     req.invalid(&errors, html! { <p id={PartId}>"Refused"</p> }, || async { req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> }) }).await
+/// }
+/// ```
+///
+/// nor one whose form needs a read.
+///
+#[cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#[cfg_attr(not(feature = "json"), doc = "```ignore")]
+/// use corten::prelude::*;
+///
+/// #[derive(ToJson)]
+/// pub struct SetListing { name: String }
+/// #[derive(ToJson)]
+/// pub struct Order { id: String }
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// async fn set(req: Req, errors: Errors) -> HtmlResult<corten::Screen<SetListing>> {
+///     req.invalid_with(
+///         &errors,
+///         |form| async move { form.draw(html! { <p id={PartId}>"Refused"</p> }) },
+///         || async { req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> }) },
+///     )
+///     .await
+/// }
+/// ```
+///
+/// Code of the app's own that is generic over the kind and calls one of them names this bound
+/// (before `Screen<T>`, those methods took any kind):
+///
+/// ```
+/// use corten::{answer::PatchingKind, prelude::*, ForOne, HtmlResponse};
+///
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// fn saved<K: PatchingKind>(req: &Req) -> corten::Result<HtmlResponse<ForOne, K>> {
+///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+/// }
+///
+/// async fn save(req: Req) -> HtmlResult<Patches> {
+///     saved(&req)
+/// }
+/// ```
+///
+/// and with any other bound does not compile:
+///
+/// ```compile_fail,E0277
+/// use corten::{answer::AnswerKind, prelude::*, ForOne, HtmlResponse};
+///
+/// #[derive(Id)]
+/// struct PartId;
+///
+/// fn saved<K: AnswerKind>(req: &Req) -> corten::Result<HtmlResponse<ForOne, K>> {
+///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+/// }
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "a patch-making `Req` method cannot answer as `{Self}`: only req.screen, given the route's data, makes a `Screen<..>`",
+    label = "this answer is said to be `{Self}`",
+    note = "answer the data with req.screen(&data, page), or return `HtmlResult` (or `HtmlResult<Patches>`) from a handler whose route does not say `data`"
+)]
+pub trait PatchingKind: sealed::Kind {}
+impl PatchingKind for AnyAnswer {}
+impl PatchingKind for Patches {}
+
 /// Who an answer that sets a cookie can be for: [`ForOne`] alone.
 #[diagnostic::on_unimplemented(
     message = "a `Public` answer is the same for everyone, so it cannot set a cookie",
@@ -393,7 +653,7 @@ pub trait SetsCookies: sealed::Sealed {}
 impl SetsCookies for ForOne {}
 
 pub(crate) mod sealed {
-    use super::{AnyAnswer, Error, HtmlResponse, NoStore, Patches, Public, Shareable};
+    use super::{AnyAnswer, Error, HtmlResponse, NoStore, Patches, Public, Screen, Shareable};
 
     pub trait Sealed {}
     impl Sealed for super::ForOne {}
@@ -401,10 +661,37 @@ pub(crate) mod sealed {
     pub trait Kind {}
     impl Kind for AnyAnswer {}
     impl Kind for Patches {}
+    impl<T: ?Sized> Kind for Screen<T> {}
 
     pub trait KindOf<A> {}
     impl<A> KindOf<A> for AnyAnswer {}
     impl<A: PatchAnswer> KindOf<A> for Patches {}
+    impl<A: ScreenAnswer<T>, T: ?Sized> KindOf<A> for Screen<T> {}
+
+    /// An answer that is a screen of `T`: the answers whose [`super::Answer::Kind`] can be
+    /// [`Screen<T>`] ([`super::KindOf`]). Only Corten's: `Req::screen` makes the first.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` cannot say `Kind = Screen<{T}>`: only req.screen's answers can",
+        label = "this answer says `Kind = Screen<..>`",
+        note = "only `HtmlResult<Screen<T>>` (and `Public<..>` or `NoStore<..>` of it), which req.screen and req.screen_with_status make, is a screen of T; an answer type of the app's own says `type Kind = AnyAnswer;`"
+    )]
+    pub trait ScreenAnswer<T: ?Sized> {}
+    impl<For, T: ?Sized> ScreenAnswer<T> for HtmlResponse<For, Screen<T>> {}
+    impl<A: ScreenAnswer<T>, T: ?Sized> ScreenAnswer<T> for Result<A, Error> {}
+    impl<A: ScreenAnswer<T> + Shareable, T: ?Sized> ScreenAnswer<T> for Public<A> {}
+    impl<A: ScreenAnswer<T>, T: ?Sized> ScreenAnswer<T> for NoStore<A> {}
+
+    /// A value whose JSON is a `T`'s: the `T` itself, a reference to it, or a `Box`, `Rc` or
+    /// `Arc` of it (`ToJson` writes each as the `T` it holds), which `req.screen` takes for a
+    /// screen of `T` (`super::ScreenKind`). Only these: a type of the app's own could write other
+    /// JSON.
+    pub trait DataOf<T: ?Sized> {}
+    impl<T: ?Sized> DataOf<T> for T {}
+    impl<T: ?Sized> DataOf<T> for &T {}
+    impl<T: ?Sized> DataOf<T> for &mut T {}
+    impl<T: ?Sized> DataOf<T> for Box<T> {}
+    impl<T: ?Sized> DataOf<T> for std::rc::Rc<T> {}
+    impl<T: ?Sized> DataOf<T> for std::sync::Arc<T> {}
 
     /// An answer that is a patch whenever the runtime asked: the answers whose
     /// [`super::Answer::Kind`] can be [`Patches`] ([`super::KindOf`]). Only Corten's.
@@ -563,6 +850,15 @@ impl Answer for HtmlResponse<ForOne, Patches> {
     type Kind = Patches;
 }
 
+/// A screen: the page for a browser, its data for a data client ([`Screen`]).
+impl<T: ?Sized + 'static> Answer for HtmlResponse<ForOne, Screen<T>> {
+    const FORMAT: Format = Format::Html;
+    const PAGE: bool = true;
+    type Inputs = AnyInputs;
+    type Rows = NotAFeed;
+    type Kind = Screen<T>;
+}
+
 /// An answer that can be [`Public`], and what it is there: the same answer, made for everyone.
 /// An [`HtmlResult`] becomes a `Result<HtmlResponse<ForAll>>`, so the `Req` methods that make
 /// it make it for everyone and it cannot set a cookie; an answer that cannot set one (text, JSON,
@@ -663,6 +959,10 @@ impl Shareable for HtmlResponse<ForOne, AnyAnswer> {
 
 impl Shareable for HtmlResponse<ForOne, Patches> {
     type ForAll = HtmlResponse<ForAll, Patches>;
+}
+
+impl<T: ?Sized> Shareable for HtmlResponse<ForOne, Screen<T>> {
+    type ForAll = HtmlResponse<ForAll, Screen<T>>;
 }
 
 impl<A: Shareable> Shareable for Result<A, Error> {

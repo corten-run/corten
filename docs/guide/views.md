@@ -123,7 +123,7 @@ that returns `impl Document`; `req.page`, `req.screen` and the error page take o
 markup is checked when it compiles: one `<head>` with one `<title>` and one `<Corten />`, and
 one `<main>`, not inside a `for`, `if` or `match`. Each part renders for the requests that use it:
 
-| Part | Full load | Client navigation | Data client (`req.screen`) |
+| Part | Full load | Client navigation | Data client (`req.screen`, or a script's [`read()`](scripts.md#a-screens-data)) |
 |---|---|---|---|
 | `<title>`'s text | yes | yes | yes, as `"title"` |
 | an expression or component in `<head>` (`{head}`): the page's own tags | yes | yes, each marked `data-corten-head` so the next page's replace them | no |
@@ -437,7 +437,7 @@ async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> H
 ```
 
 Either way there is one answer that brings a layout read up to date after a write, a page: the page
-the write redirects to, or its own ([design Choice 55](../design.md#choice-write-own-page-whole)).
+the write redirects to, or its own ([design Choice 56](../design.md#choice-write-own-page-whole)).
 
 A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}>"News"</a>`:
 `href`, `data-nav` and `aria-current="page"` when it is the page (`req.nav_section` for a link

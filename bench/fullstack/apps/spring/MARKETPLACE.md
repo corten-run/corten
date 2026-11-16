@@ -12,12 +12,12 @@ The catalog and marketplace JSON endpoints use Spring `ProblemDetail` and Jackso
 for missing records (404), method errors (405, retaining `Allow`) and upstream
 HTTP/parse failures (500 without exception details). Native `HEAD` suppresses the
 body for both success and failure. This handling is limited to `/api/catalog/`
-and `/api/marketplace/`; page/form error handling and profiles are unchanged.
+and `/api/marketplace/`; other page/form errors retain native handling.
 Error classification uses Spring's parsed request path and native path patterns,
 so percent-encoded and matrix-parameter aliases retain the same JSON behavior as
 the canonical routes. The aliases remain enabled; non-JSON routes stay native.
-Neither source configures an explicit request/read deadline. This change does not
-add one or claim upstream cancellation or bounded completion for a stalled read.
+Catalog and default-profile marketplace reads have no explicit request/read
+deadline. Matched marketplace reads use the native deadline described below.
 
 `MARKETPLACE_SOURCE=fixture` loads `MARKETPLACE_FIXTURE_PATH` once at startup
 (default `/fixtures/marketplace.json`). Otherwise each request reads one record
@@ -99,6 +99,9 @@ matrix over real HTTP in both profile environments; setup is in that app's READM
 
 ## Unreleased
 
+- Configure the matched marketplace source's native ten-second upstream deadline;
+  map native header timeouts to 504 without claiming caller-disconnect propagation.
+
 - Forward marketplace `traceparent` per native MVC request through explicit
   source arguments and request-local RestClient headers, including POST reads.
 
@@ -123,7 +126,7 @@ optional string. `MarketplaceSource.get` and `getForWrite` accept it explicitly;
 their original one-argument overloads remain compatible. Only the individual
 RestClient request receives the header, never the shared client's defaults.
 There is no ambient current operation, exporter or extra fetch. Fixture reads
-still bypass HTTP, and JSON parsing, deadlines and worker settings are unchanged.
+still bypass HTTP, and JSON parsing and worker settings are unchanged.
 
 This is transparent forwarding, not a trace participant: missing headers stay
 absent, and malformed headers pass through unchanged with no child span or
@@ -157,11 +160,42 @@ would be a different native stack; adding WebClient inside MVC would not remove
 the Servlet notification limitation.
 
 The real-socket probe in `../fastapi/page-lifetime.test.mjs` checks all locales with
-both profile environment values (this app has no separate matched configuration).
+both profile environment values.
 It captures upstream counters before cleaning up failed probes. Pending work after
 client abort fails the gate. Its twelve-second client guard expiring without a
 native response also fails the gate and establishes only that observation window,
-not absence of every possible later timeout. The marketplace source configures no
-explicit request/read deadline;
-no arbitrary new shared timeout or native async-controller conversion is added here.
-The existing production representative remains unqualified for the mixed lifetime gate.
+not absence of every possible later timeout. Default marketplace reads still have
+no explicit request/read deadline. The representative remains unqualified for the
+caller-cancellation gate; eventual timeout cleanup is not disconnect propagation.
+
+## Matched Marketplace Upstream Deadline
+
+Only `PROFILE=matched` sets `JdkClientHttpRequestFactory.setReadTimeout` to ten
+seconds, adopting the existing reference production budget documented in the
+full-stack README. The same native RestClient source serves GET pages, record
+JSON and POST reads. Redirects remain disabled, fixture reads still bypass HTTP,
+and the controller, native parsing, write validation and trace arguments are unchanged.
+No dependency, worker, MVC stack or benchmark measurement setting changes.
+
+A native `ResourceAccessException` whose direct cause is `HttpTimeoutException`
+becomes Spring's `ResponseStatusException` with status 504 and no exception reason.
+Existing MVC error resolution handles pages/forms; the existing record JSON advice
+retains its ProblemDetail response. Other HTTP, connection and parse errors are
+not reclassified. This is conventional app-level mixed adaptation, not a new
+global error mapper or admission to the legacy full-stack matched tier.
+
+The factory's native timer cancels a held-header exchange and also closes an
+unfinished response body. With this Spring version a stalled body instead surfaces
+as JacksonIOException wrapping IOException, so it remains an error, not a claimed
+504 deadline category. A body deadline can bound work without proving every native
+error shape satisfies the mixed deadline status predicate.
+
+`MarketplaceDeadlineTest` uses real sockets and embedded Tomcat to check the
+unchanged defaults beyond ten seconds, matched healthy/fixture reads, exact native
+header timeout cause and 504 status, all locales' page/JSON/POST deadline responses,
+one fetch per request, upstream cancellation/pending zero, no timed-out alert write,
+trace forwarding, stalled-body cleanup and unchanged non-timeout failures. These
+are focused functional checks, not performance or whole-workload qualification.
+Caller abort while synchronous MVC is blocked still has no pre-response disconnect
+notification: the upstream may remain pending until the independent ten-second
+deadline. The required 500 ms caller-cancellation observation still fails.

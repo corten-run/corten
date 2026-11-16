@@ -957,7 +957,7 @@ impl Shared {
         let import_map = crate::import_map(
             assets.as_ref().and_then(|a| a.events()).as_deref(),
             assets.as_ref().and_then(|a| a.views()).as_deref(),
-            assets.as_ref().and_then(|a| a.keys()).as_deref(),
+            &assets.as_ref().map(|a| a.imported()).unwrap_or_default(),
         );
         let mut hasher = std::hash::DefaultHasher::new();
         crate::runtime_version().hash(&mut hasher);
@@ -1473,6 +1473,12 @@ impl Req {
 
     /// [`Req::page`] with another status.
     pub fn page_with_status<For>(&self, status: StatusCode, doc: impl Document) -> crate::Result<HtmlResponse<For>> {
+        self.page_as(status, doc)
+    }
+
+    /// The page, as an answer of any kind: `Req::screen`'s page is its `Kind`'s, made in place
+    /// rather than moved out of an `HtmlResponse<For>`.
+    fn page_as<For, Kind>(&self, status: StatusCode, doc: impl Document) -> crate::Result<HtmlResponse<For, Kind>> {
         // The last size of each part, so the buffer is allocated once.
         static FULL: AtomicUsize = AtomicUsize::new(16 * 1024);
         static SWAP: AtomicUsize = AtomicUsize::new(16 * 1024);
@@ -2127,20 +2133,199 @@ impl Req {
     /// [`Mode::Data`] request gets `{"title": ..., "data": data}`, the title being the text of the
     /// document's `<title>`. `data` is the screen's view model, so a native screen or an agent sees
     /// exactly what the view shows; for it, only the document's `<title>` renders.
+    ///
+    /// Its answer is any `HtmlResult`, or the `HtmlResult<Screen<T>>` of a route that says
+    /// `data = T` ([`crate::Screen`]), whose URL a page's script can read the data from, typed
+    /// (`read()` from `corten/read`, [Scripts](https://github.com/corten-run/corten/blob/main/docs/guide/scripts.md#a-screens-data)):
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/sets/{set}", get = set, data = SetListing)]
+    ///     pub struct Set<'a> {
+    ///         pub set: &'a str,
+    ///     }
+    /// }
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing {
+    ///     name: String,
+    ///     products: Vec<String>,
+    /// }
+    ///
+    /// async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     let listing = SetListing { name: at.set.to_string(), products: Vec::new() };
+    ///     let name = &listing.name;
+    ///     req.screen(&listing, html! { <html><head><title>{name}</title><Corten /></head><body><main>{name}</main></body></html> })
+    /// }
+    /// # let _ = App::new(url::router()).router();
+    /// ```
+    ///
+    /// A page, a redirect or a screen of other data is not the route's data, so none compiles
+    /// there:
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.page(html! { <html><head><title>"Set"</title><Corten /></head><body><main>"Set"</main></body></html> })
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    /// #[derive(ToJson)]
+    /// pub struct Order { id: String }
+    ///
+    /// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     let order = Order { id: "7".into() };
+    ///     req.screen(&order, html! { <html><head><title>"Order"</title><Corten /></head><body><main>"7"</main></body></html> })
+    /// }
+    /// ```
+    ///
+    /// The route checks its `get` handler at its name, so one that may answer without the data
+    /// does not compile where the route says `data`:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// pub mod url {
+    ///     #[route("/sets", get = sets, data = SetListing)]
+    ///     pub struct Sets;
+    /// }
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// async fn sets(req: Req) -> HtmlResult {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     req.screen(&listing, html! { <html><head><title>"Sets"</title><Corten /></head><body><main>"Sets"</main></body></html> })
+    /// }
+    /// # fn main() { let _ = url::router(); }
+    /// ```
+    ///
+    /// The data may be the value, a reference to it, or a `Box`, `Rc` or `Arc` of it, whose JSON
+    /// is the value's (`req.screen(&listing, ..)` with `listing: &SetListing` or
+    /// `Arc<SetListing>`). The answer's kind is read from where it goes, as a patch's is: a
+    /// handler's return type, or a `Public` it is given to there.
+    ///
+    /// ```
+    /// use std::{sync::Arc, time::Duration};
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// fn set_page(name: &str) -> impl Document + '_ {
+    ///     html! { <html><head><title>{name}</title><Corten /></head><body><main>{name}</main></body></html> }
+    /// }
+    ///
+    /// async fn shared(req: Req, listing: Arc<SetListing>) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&listing, set_page(&listing.name))
+    /// }
+    ///
+    /// async fn borrowed(req: &Req, listing: &SetListing) -> HtmlResult<corten::Screen<SetListing>> {
+    ///     req.screen(&listing, set_page(&listing.name))
+    /// }
+    ///
+    /// async fn public(req: Req) -> Public<HtmlResult> {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     Public::new(Duration::from_secs(60), req.screen(&listing, set_page(&listing.name)))
+    /// }
+    /// ```
+    ///
+    /// Where nothing says it (a closure that returns `Public::new(..)`), the call names it:
+    ///
+    /// ```compile_fail,E0283
+    /// use std::time::Duration;
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// let set = |req: Req| async move {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     Public::new(Duration::from_secs(60), req.screen(&listing, html! { <html><head><title>"All"</title><Corten /></head><body><main>"All"</main></body></html> }))
+    /// };
+    /// # let _ = get(set);
+    /// ```
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// let set = |req: Req| async move {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     Public::new(
+    ///         Duration::from_secs(60),
+    ///         req.screen::<_, corten::AnyAnswer, _>(&listing, html! { <html><head><title>"All"</title><Corten /></head><body><main>"All"</main></body></html> }),
+    ///     )
+    /// };
+    /// # let _: corten::Methods = get(set);
+    /// ```
+    ///
+    /// Nor does `NoStore::new(..)` in a closure:
+    ///
+    /// ```compile_fail,E0283
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// let set = |req: Req| async move {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     NoStore::new(req.screen(&listing, html! { <html><head><title>"All"</title><Corten /></head><body><main>"All"</main></body></html> }))
+    /// };
+    /// # let _ = get(set);
+    /// ```
+    ///
+    /// and names the kind the same way:
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// let set = |req: Req| async move {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     NoStore::new(
+    ///         req.screen::<_, corten::AnyAnswer, _>(&listing, html! { <html><head><title>"All"</title><Corten /></head><body><main>"All"</main></body></html> }),
+    ///     )
+    /// };
+    /// # let _: corten::Methods = get(set);
+    /// ```
     #[cfg(feature = "json")]
-    pub fn screen<For, T: crate::json::ToJson + ?Sized>(&self, data: &T, doc: impl Document) -> crate::Result<HtmlResponse<For>> {
+    pub fn screen<For, Kind: crate::answer::ScreenKind<T>, T: crate::json::ToJson + ?Sized>(
+        &self,
+        data: &T,
+        doc: impl Document,
+    ) -> crate::Result<HtmlResponse<For, Kind>> {
         self.screen_with_status(StatusCode::OK, data, doc)
     }
 
+    /// [`Req::screen`] with another status.
     #[cfg(feature = "json")]
-    pub fn screen_with_status<For, T: crate::json::ToJson + ?Sized>(
+    pub fn screen_with_status<For, Kind: crate::answer::ScreenKind<T>, T: crate::json::ToJson + ?Sized>(
         &self,
         status: StatusCode,
         data: &T,
         doc: impl Document,
-    ) -> crate::Result<HtmlResponse<For>> {
+    ) -> crate::Result<HtmlResponse<For, Kind>> {
         if self.mode != Mode::Data {
-            return self.page_with_status(status, doc);
+            return self.page_as(status, doc);
         }
         use crate::json::ToJson;
         let mut title = String::new();
@@ -2163,12 +2348,15 @@ impl Req {
     /// be dropped in the browser, so `view` is a [`Patch`](crate::view::Patch), which the compiler
     /// checks: usually a component declared `-> impl Patch` whose root has a `#[derive(Id)]` id.
     /// It is any [`HtmlResult`], `HtmlResult<Patches>` too ([`crate::Patches`]).
-    pub fn patch<For, Kind>(&self, view: impl crate::view::Patch) -> crate::Result<HtmlResponse<For, Kind>> {
+    pub fn patch<For, Kind: crate::answer::PatchingKind>(
+        &self,
+        view: impl crate::view::Patch,
+    ) -> crate::Result<HtmlResponse<For, Kind>> {
         self.patch_with_status(StatusCode::OK, view)
     }
 
     /// Same as [`Req::patch`] with another status.
-    pub fn patch_with_status<For, Kind>(
+    pub fn patch_with_status<For, Kind: crate::answer::PatchingKind>(
         &self,
         status: StatusCode,
         view: impl crate::view::Patch,
@@ -2238,7 +2426,7 @@ impl Req {
     /// }
     /// # let _ = App::new(url::router()).router();
     /// ```
-    pub fn patch_or<For, Kind, F, Fut>(
+    pub fn patch_or<For, Kind: crate::answer::PatchingKind, F, Fut>(
         &self,
         view: impl crate::view::Patch,
         page: F,
@@ -2277,7 +2465,7 @@ impl Req {
     /// `role="alert"` that is announced where it lands.
     ///
     /// As [`Req::patch_or`], its answer may be an `HtmlResult<Patches>` ([`crate::Patches`]).
-    pub async fn invalid<For, Kind, F, Fut>(
+    pub async fn invalid<For, Kind: crate::answer::PatchingKind, F, Fut>(
         &self,
         errors: &crate::Errors,
         form: impl crate::view::Patch,
@@ -2357,7 +2545,7 @@ impl Req {
     ///     req.invalid_with(&errors, |_form| async { req.redirect(&corten::Local::parse("/").unwrap()) }, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await
     /// }
     /// ```
-    pub async fn invalid_with<'r, For, Kind, F, FormFut, P, PageFut>(
+    pub async fn invalid_with<'r, For, Kind: crate::answer::PatchingKind, F, FormFut, P, PageFut>(
         &'r self,
         errors: &crate::Errors,
         form: F,
