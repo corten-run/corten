@@ -1,22 +1,82 @@
 // Retirement evidence is separate from benchmark qualification. No operations on import.
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { quote } from "./cloud-transport.mjs";
+import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
 // This migration is not a general old-source collection or validation override.
 export const failedNativeCommit = "9f3d35884c67d90524f978d173fabeb3a17bc970";
 export function failedNativeRoots(state) {
   assert.equal(state.commit, failedNativeCommit, "unsupported failed-native measured source");
   assert.equal(state.round, "r21", "unsupported failed-native round");
+  if (state.group === "mixed-production") {
+    ownedMixedWait(state); cancellationState(state.mixedCancellation);
+    return ["/bench/campaign", "/bench/repo/bench/mixed-production/results/w21", "/bench/mixed-cancel-intent.json"];
+  }
   const roots = { "catalog-page": ["bench/catalog/results/c21"], "json-api": ["bench/json-api/results/j42", "bench/json-api/results/j43"],
     "localized-marketplace": ["bench/marketplace/results/r21"], "fullstack-browser": ["bench/fullstack-browser/work/w21"],
     "client-heavy": ["bench/client-heavy/work/w21"], "live-delivery": ["bench/live/results/parity/r21"],
     "recoverable-live": ["bench/recoverable-live/results/r21"], hardening: ["bench/hardening/results/w21"] };
   assert.ok(Object.hasOwn(roots, state.group), "unsupported failed-native group");
   return ["/bench/campaign", ...roots[state.group].map((path) => `/bench/repo/${path}`)];
+}
+export function mixedIntentRoot(path, root) {
+  assert.equal(root.path, "/bench/mixed-cancel-intent.json"); assert.equal(root.present, true);
+  const bytes = regular(path, 4096);
+  assert.equal(root.nodes, 1); assert.equal(root.bytes, bytes.length);
+  assert.equal(root.treeSha256, digest(Buffer.concat([Buffer.from(`f\0\0${bytes.length}\0`), bytes])), "framed cancellation intent root changed");
+  return JSON.parse(bytes);
+}
+// The caller authenticates the original plan and subject first. Hash the saved
+// payloads, not a rebuilt Git context or an executable native validator.
+function mixedCancelledCustody(directory, subject, binding) {
+  const { sourcesManifest: manifest } = subject, { sha256, ...body } = manifest;
+  assert.equal(mixedDigest(body), sha256, "mixed source manifest changed");
+  const { entries } = manifest.snapshot;
+  assert.ok(Array.isArray(entries) && entries.length <= evidenceEnvelope.nodes, "mixed source snapshot bound");
+  assert.equal(mixedDigest(entries), manifest.snapshot.sha256, "mixed source snapshot changed");
+  physical(directory);
+  assert.ok(isDeepStrictEqual(readdirSync(directory).sort(), ["blobs", "contexts"]), "mixed source root differs");
+  const saved = new Map(); let total = 0;
+  for (const entry of entries) {
+    assert.ok(!saved.has(entry.path), "duplicate mixed source snapshot path"); saved.set(entry.path, entry);
+    if (entry.type === "directory") {
+      assert.ok(["", "blobs", "contexts"].includes(entry.path), "unknown mixed source directory");
+      physical(entry.path ? join(directory, entry.path) : directory);
+    } else {
+      assert.equal(entry.type, "file");
+      assert.match(entry.path, /^(?:blobs\/[a-f0-9]{64}|contexts\/[a-z][a-z0-9-]*\.tar)$/);
+      assert.ok(Number.isSafeInteger(entry.bytes) && entry.bytes >= 0 && entry.bytes <= evidenceEnvelope.memberBytes, "mixed source file bound");
+      total += entry.bytes; assert.ok(total <= evidenceEnvelope.content, "mixed source content bound");
+      const path = join(directory, entry.path);
+      assert.equal(lstatSync(path).size, entry.bytes, "mixed source file size changed");
+      assert.equal(fileHash(path, entry.bytes), entry.sha256, "mixed source payload changed");
+    }
+  }
+  for (const name of ["", "blobs", "contexts"]) assert.equal(saved.get(name)?.type, "directory", "missing mixed source directory");
+  for (const name of ["blobs", "contexts"]) {
+    const names = entries.filter((e) => e.type === "file" && e.path.startsWith(`${name}/`)).map((e) => e.path.slice(name.length + 1)).sort();
+    assert.ok(isDeepStrictEqual(readdirSync(join(directory, name)).sort(), names), "mixed source inventory differs");
+  }
+  const blobs = new Set();
+  for (const file of manifest.files) {
+    assert.equal(file.storedAs, `blobs/${file.sha256}`);
+    const entry = saved.get(file.storedAs); assert.equal(entry?.type, "file", "mixed source blob missing from snapshot");
+    assert.equal(entry.sha256, file.sha256); assert.equal(entry.bytes, file.bytes); blobs.add(file.storedAs);
+  }
+  assert.equal(blobs.size, entries.filter((e) => e.path.startsWith("blobs/")).length, "unreferenced mixed source blob");
+  assert.ok(isDeepStrictEqual(subject.requests.map((r) => r.identity.app), binding.selection.apps), "mixed context contenders differ");
+  assert.equal(subject.bindingSha256, mixedDigest(binding), "mixed subject binding differs");
+  for (const request of subject.requests) {
+    const entry = saved.get(`contexts/${request.identity.app}.tar`);
+    assert.equal(entry?.type, "file", "mixed build context missing from snapshot");
+    assert.equal(entry.sha256, request.identity.contextArchiveSha256, "mixed build context differs");
+  }
+  assert.equal(subject.requests.length, entries.filter((e) => e.path.startsWith("contexts/")).length, "unreferenced mixed build context");
 }
 export function failedNativeArchive(local, state) {
   const roots = failedNativeRoots(state);
@@ -43,6 +103,27 @@ export function failedNativeArchive(local, state) {
     assert.ok(["prepare", "timing"].includes(pending.phase));
     assert.ok(roots.includes(`/bench/repo/${pending.artifactRoot}`), "unaccounted pending native output");
   }
+  if (state.group === "mixed-production") {
+    verifyMixedCancellation(local, state);
+    assert.equal(campaign, mixedWait.campaign);
+    const { campaignSha256, ...body } = plan;
+    assert.equal(campaignSha256, mixedWait.campaignSha256); assert.equal(mixedDigest(body), campaignSha256);
+    const event = JSON.parse(regular(join(dir, mixedWait.event))), halted = JSON.parse(regular(join(dir, "00003-halted.json")));
+    assert.equal(event.at, mixedWait.waitAt); assert.equal(event.subjectSha256, mixedWait.subjectSha256);
+    assert.equal(event.status.state, "blocked-review-needed");
+    const subject = JSON.parse(regular(join(dir, "mixed-audit-subject.json"))), { subjectSha256, ...subjectBody } = subject;
+    assert.equal(subjectSha256, mixedWait.subjectSha256); assert.equal(mixedDigest(subjectBody), subjectSha256);
+    mixedCancelledCustody(join(dir, "mixed-audit-sources"), subject, plan.bindings[0]);
+    const reservation = JSON.parse(regular(join(folder, ".host-attempt.json")));
+    assert.equal(reservation.id, campaign); assert.equal(reservation.campaignSha256, campaignSha256); assert.equal(reservation.commit, state.commit);
+    assert.equal(halted.kind, "halted"); assert.equal(halted.sequence, 3); assert.equal(halted.campaign, campaign);
+    assert.equal(halted.campaignSha256, campaignSha256); assert.deepEqual(halted.status, result.status);
+    assert.deepEqual(readdirSync(dir).filter((n) => /^\d{5}-/.test(n)).sort(), ["00000-authorized.json", "00001-started.json", mixedWait.event, "00003-halted.json"]);
+    assert.equal(result.status.state, "preserved-uncertain"); assert.equal(result.wholeHostTerminal, "parent-must-observe"); assert.equal(result.deletionAuthorized, false);
+    assert.deepEqual(result.status.uncollectedNativeRoots, []);
+    assert.equal(result.status.outcomes.length, 1); assert.equal(result.status.outcomes[0].group, state.group); assert.equal(result.status.outcomes[0].outcome, "not-run");
+    assert.ok(!readdirSync(dir).some((n) => /^mixed-(native-audits|audit-delivery(?:-retained)?)\.json$/.test(n)), "cancelled wait advanced into audit");
+  }
   return { campaign, roots };
 }
 
@@ -55,7 +136,8 @@ export function failedNativeScript(state, captureSha256 = null, fence = null) {
     assert.equal(fence.snapshotSha256, captureSha256);
     assert.deepEqual(fence.roots.map((root) => root.path), [...roots, "/bench/run.log", "/bench/host.txt", "/bench/exit-code", "/bench/results.tgz"]);
   }
-  const files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
+  const files = state.group === "mixed-production" ? originalMixedControls(state)
+    : Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
   const config = { roots, files, archiveSha256: state.archiveSha256, captureSha256, marker: `${JSON.stringify(bootstrapMarker(state))}\n`,
     requireMarker: state.bootstrapReady !== undefined, commit: state.commit, bounds: evidenceEnvelope, fence };
   return `/usr/bin/timeout 600 /usr/bin/python3 - ${quote(state.id)} ${quote(state.unit)} ${quote(JSON.stringify(config))} <<'CORTEN_FAILED_NATIVE_HOST'
@@ -414,12 +496,29 @@ export function verifyFailedNativeCustody(local, state, capture) {
   assert.deepEqual(JSON.parse(snapshot), { roots: observation.roots, metadataSha256: observation.metadataSha256 });
   assert.equal(fileHash(join(extracted, "campaign", "custody-metadata.json")), observation.metadataSha256);
   for (const [index, root] of observation.roots.slice(0, failedNativeRoots(state).length).entries()) {
-    if (root.present) assert.equal(treeHash(join(extracted, "campaign", `root-${index}`)), root.treeSha256, "custody root differs");
+    if (state.group === "mixed-production" && index === 2) mixedIntentRoot(join(extracted, "campaign", "root-2"), root);
+    else if (root.present) assert.equal(treeHash(join(extracted, "campaign", `root-${index}`)), root.treeSha256, "custody root differs");
     else assert.ok(!readdirSync(join(extracted, "campaign")).includes(`root-${index}`), "absent native root was invented");
   }
   for (const name of ["run.log", "host.txt", "exit-code"])
     assert.equal(fileHash(join(extracted, name)), fileHash(join(local, state.evidence, name)), "failed metadata changed");
   assert.equal(treeHash(join(extracted, "campaign", "root-0")), treeHash(join(local, state.evidence, "campaign")), "original campaign changed before custody");
+  if (state.group === "mixed-production") {
+    verifyMixedCancellation(local, state);
+    assert.equal(capture.observation.roots[2].present, true, "remote cancellation intent missing");
+    const intentPath = join(extracted, "campaign", "root-2"), intent = mixedIntentRoot(intentPath, capture.observation.roots[2]);
+    const signal = verifyMixedSignal(local, state);
+    assert.equal(fileHash(intentPath), signal.remoteIntentSha256, "remote intent differs from acknowledged signal");
+    assert.equal(intent.schema, "benchmark-mixed-cancel-remote-intent/v1");
+    assert.equal(intent.hostId, state.id); assert.equal(intent.unit, state.unit); assert.equal(intent.campaign, mixedWait.campaign);
+    assert.equal(intent.subjectSha256, mixedWait.subjectSha256); assert.equal(intent.signal, "SIGTERM");
+    const reservation = JSON.parse(regular(join(extracted, "campaign", "root-0", ".host-attempt.json")));
+    assert.equal(intent.pid, reservation.pid); assert.ok(Number.isSafeInteger(intent.startTicks) && intent.startTicks > 0);
+    assert.equal(intent.pid, signal.pid); assert.equal(intent.startTicks, signal.startTicks);
+    const dir = join(extracted, "campaign", "root-0", mixedWait.campaign);
+    const waitFiles = [join(extracted, "campaign", "root-0", ".host-attempt.json"), join(dir, "plan.json"), join(dir, mixedWait.event), join(dir, "mixed-audit-subject.json")];
+    assert.equal(intent.waitSha256, digest(Buffer.concat(waitFiles.flatMap((path, i) => [ ...(i ? [Buffer.from([0])] : []), regular(path) ]))), "cancellation wait bytes changed");
+  }
   return capture;
 }
 

@@ -96,7 +96,7 @@ try {
   for (const profile of ['defaults', 'matched']) for (const source of ['fixture', 'api']) {
     current = { profile, source };
     const name = `drogon-trace-${process.pid}-${profile}-${source}`;
-    docker('run', '-d', '--name', name, '--cpus', '1', '--label', 'agent.owner=codex', '--label', 'agent.task=parity-drogon-trace',
+    docker('run', '-d', '--name', name, '--cpus', '1', '--memory', '1g', '--label', 'agent.owner=codex', '--label', 'agent.task=parity-drogon-trace',
       ...(process.platform === 'linux' ? ['--add-host', 'host.docker.internal:host-gateway'] : []),
       '-p', '127.0.0.1::8080', '-v', `${temp}:/fixtures:ro`, '-e', `PROFILE=${profile}`, '-e', 'MAX_CONNECTIONS=256',
       '-e', 'ITEM_SOURCE=fixture', '-e', 'FIXTURE_PATH=/fixtures/items.json', '-e', `MARKETPLACE_SOURCE=${source}`,

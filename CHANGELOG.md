@@ -33,6 +33,25 @@ Corten is pre-1.0, so any minor version may change the API.
   checks it again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+- Verify the cancelled mixed campaign's captured source blobs and every selected
+  build context against its original authenticated subject before retirement;
+  refuse equally incomplete wrapper and custody copies without deletion intent.
+
+- Add an explicitly approved, single-attempt cancellation path for the exact old
+  r21 mixed source-review wait. Signal only its verified pidfd-owned campaign entry,
+  preserve the wrapper's terminal archive and all nine contexts, and require
+  separate terminal custody and fresh retirement guards without audit approval or
+  source qualification. Retain uncertainty and prohibit repeated signal/DELETE.
+  Bind cancellation and mixed terminal custody to the original uploaded control
+  manifest, independently of later launch-template changes.
+
+- Bound matched Spring marketplace upstream reads with the native ten-second
+  timeout and map typed header timeouts to MVC 504 responses; retain default
+  behavior and the documented caller-disconnect limitation.
+
+- Bound Drogon marketplace page source reads with the existing native deadline and
+  caller-disconnect lifetime, preserving request-local trace context.
+
 - Save bounded, structural same-page browser diagnostics when native compiled
   alert hydration checks fail. Retain only closed categories and numbers, not
   browser text or URL paths; keep readiness gates and their errors unchanged.
