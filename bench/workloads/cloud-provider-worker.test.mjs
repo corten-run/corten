@@ -134,7 +134,7 @@ test("closed census predicate diagnostics survive real worker IPC and cached tea
     const check = (error) => {
       assert.equal(error.controlTreeUncertain, true); assert.equal(error.controlUncertain, true);
       assert.deepEqual(error.providerDiagnostic, diagnostic);
-      assert.ok(publicError(error).includes(`Provider failure: ${diagnostic.code}.`));
+      assert.equal(publicError(error), `${publicError()} Provider failure: ${diagnostic.code}${diagnostic.detail ? ` (${diagnostic.detail})` : ""}.`);
       assert.ok(!`${publicError(error)}${error.stack}${JSON.stringify(error)}`.includes("SYNTHETIC_ONLY_DIAGNOSTIC_CREDENTIAL"));
       return true;
     };

@@ -27,6 +27,10 @@ Corten is pre-1.0, so any minor version may change the API.
   takes either kind of bounds; with any step it shows the number as it is and draws both buttons
   disabled. ui-gallery's listing has a discount, above 0 and below 100 percent with any decimals.
 
+- Show the grouped controller's closed failure stage and allowed provider detail
+  in direct CLI errors, without reflecting raw exceptions or changing recovery,
+  cleanup or benchmark acceptance rules.
+
 - A handler is given a form's control by its `#[derive(Fields)]` field,
   `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
   `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
