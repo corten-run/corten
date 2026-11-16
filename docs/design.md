@@ -3424,7 +3424,8 @@ rules something out.
     waiting for a patch's load in Chromium and Firefox; 2026-11-13, both of those waits drawn
     unstyled, and those two checks alone failing, in Chromium and Firefox with round 1's
     `stylesOf` (`9c722e27`) put back in this head's runtime; 2026-11-15, why WebKit is not among
-    them, read from `scripts/smoke.mjs` (the navigation wait itself not checked in WebKit again).
+    them, read from `scripts/smoke.mjs` at `e0be99e67` (the navigation wait itself not checked in
+    WebKit again).
 
 48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
     `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what
