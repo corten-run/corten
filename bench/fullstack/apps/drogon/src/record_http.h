@@ -11,8 +11,8 @@ namespace record_http
 enum class Result { Ok, Failed, Timeout, Aborted };
 using Callback = std::function<void(Result, const drogon::HttpResponsePtr &)>;
 
-// Only the two record JSON routes use this bounded request lifetime. Pages and legacy items
-// retain their existing source/transport behavior.
+// Record JSON and marketplace pages share this bounded request lifetime.
+// Legacy item and catalog pages retain their existing source/transport behavior.
 void get(const drogon::HttpRequestPtr &caller, const std::string &prefix, const std::string &id, Callback done,
          const trace_context::Context &trace = {});
 drogon::HttpResponsePtr problem(drogon::HttpStatusCode status);

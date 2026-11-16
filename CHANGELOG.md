@@ -9,6 +9,9 @@ Corten is pre-1.0, so any minor version may change the API.
   timeout and map typed header timeouts to MVC 504 responses; retain default
   behavior and the documented caller-disconnect limitation.
 
+- Bound Drogon marketplace page source reads with the existing native deadline and
+  caller-disconnect lifetime, preserving request-local trace context.
+
 - Save bounded, structural same-page browser diagnostics when native compiled
   alert hydration checks fail. Retain only closed categories and numbers, not
   browser text or URL paths; keep readiness gates and their errors unchanged.

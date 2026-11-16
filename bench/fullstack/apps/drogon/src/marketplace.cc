@@ -5,7 +5,6 @@
 #include <drogon/HttpMiddleware.h>
 #include <drogon/utils/Utilities.h>
 #include <json/reader.h>
-#include <trantor/net/EventLoop.h>
 #include <cstdlib>
 #include <fstream>
 #include <stdexcept>
@@ -17,7 +16,6 @@ bool fromFixture = false;
 std::unordered_map<std::string, RecordPtr> fixture;
 Json::Value labels;
 Alerts alerts;
-thread_local std::vector<drogon::HttpClientPtr> idleClients;
 std::string env(const char *name, const char *fallback) {
  const char *value = std::getenv(name); return value && *value ? value : fallback;
 }
@@ -50,31 +48,27 @@ void load() {
   for (const auto &line : (*entry.second)[key])
    if (!fixture.count(line["item_id"].asString())) throw std::runtime_error("unknown marketplace item reference");
 }
-void get(const std::string &id, const trace_context::Context &trace, std::function<void(RecordPtr, bool)> done, bool completeDocument) {
+void get(const drogon::HttpRequestPtr &caller, const std::string &id, const trace_context::Context &trace,
+         std::function<void(RecordPtr, record_http::Result)> done, bool completeDocument) {
+ using record_http::Result;
  if (fromFixture) {
-  auto found = fixture.find(id); done(found == fixture.end() ? nullptr : found->second, false); return;
+  auto found = fixture.find(id); done(found == fixture.end() ? nullptr : found->second, Result::Ok); return;
  }
- drogon::HttpClientPtr client;
- if (idleClients.empty()) client = drogon::HttpClient::newHttpClient(env("API_BASE", "http://localhost:8080"), trantor::EventLoop::getEventLoopOfCurrentThread());
- else { client = std::move(idleClients.back()); idleClients.pop_back(); }
- auto request = drogon::HttpRequest::newHttpRequest();
- request->setPath("/marketplace/records/" + drogon::utils::urlEncodeComponent(id));
- trace.apply(request);
- client->sendRequest(request, [client, completeDocument, done = std::move(done)](drogon::ReqResult result, const drogon::HttpResponsePtr &response) {
-  idleClients.push_back(client);
-  if (result != drogon::ReqResult::Ok) { done(nullptr, true); return; }
-  if (response->statusCode() == drogon::k404NotFound) { done(nullptr, false); return; }
-  if (response->statusCode() != drogon::k200OK) { done(nullptr, true); return; }
+ record_http::get(caller, "/marketplace/records/", id,
+ [completeDocument, done = std::move(done)](Result result, const drogon::HttpResponsePtr &response) {
+  if (result != Result::Ok) { done(nullptr, result); return; }
+  if (response->statusCode() == drogon::k404NotFound) { done(nullptr, Result::Ok); return; }
+  if (response->statusCode() != drogon::k200OK) { done(nullptr, Result::Failed); return; }
   Json::Value value; Json::CharReaderBuilder builder;
   if (completeDocument) Json::CharReaderBuilder::strictMode(&builder.settings_);
   std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
   auto body = response->body(); std::string errors;
-  if (!reader->parse(body.data(), body.data()+body.size(), &value, &errors)) { done(nullptr, true); return; }
+  if (!reader->parse(body.data(), body.data()+body.size(), &value, &errors)) { done(nullptr, Result::Failed); return; }
   RecordPtr record;
   try { record = std::make_shared<const Json::Value>(parseRecord(value)); }
-  catch (const std::exception &) { done(nullptr, true); return; }
-  done(std::move(record), false);
- });
+  catch (const std::exception &) { done(nullptr, Result::Failed); return; }
+  done(std::move(record), Result::Ok);
+ }, trace);
 }
 void routes() {
  drogon::app().registerHandler("/api/alerts", [](const drogon::HttpRequestPtr &request, Callback &&callback) {
@@ -125,8 +119,10 @@ void routes() {
      return error(callback, drogon::k415UnsupportedMediaType);
    }
    const auto trace = trace_context::Context::capture(request);
-   get(id, trace, [request, locale, id, callback = std::move(callback)](RecordPtr record, bool failed) mutable {
-    if (failed) return error(callback, drogon::k502BadGateway);
+   get(request, id, trace, [request, locale, id, callback = std::move(callback)](RecordPtr record, record_http::Result result) mutable {
+    if (result == record_http::Result::Aborted || !request->connected()) return;
+    if (result == record_http::Result::Timeout) return error(callback, drogon::k504GatewayTimeout);
+    if (result != record_http::Result::Ok) return error(callback, drogon::k502BadGateway);
     if (!record) return error(callback, drogon::k404NotFound);
     if (request->method() == drogon::Post && (*record)["id"].asString() != id) return error(callback, drogon::k502BadGateway);
     auto view = std::make_shared<View>(record, locale, labels[locale], request->getParameter("seller"), request->getParameter("sort"), request->getParameter("offers") == "all");
