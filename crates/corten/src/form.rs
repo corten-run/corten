@@ -401,7 +401,7 @@ mod bounds;
 pub(crate) mod de;
 mod number;
 pub(crate) mod upload;
-pub use bounds::{Bounds, Float, Numeric};
+pub use bounds::{AnyStep, Bounds, Exclusive, Float, Numeric, Spacing, Stepped};
 pub use de::{from_bytes, FormError};
 pub use number::{read_number, Entry};
 pub use upload::{File, Files, Upload, UploadError};

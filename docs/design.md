@@ -4307,6 +4307,56 @@ rules something out.
     `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
     it, load such a page in the three engines and count the matches.
 
+56. <a id="choice-exclusive-ends"></a>**An exclusive end is any step's alone, and the input says
+    the type's next number inside it.** HTML's number input has a `min` and a `max`, both
+    included, and no exclusive form. Bounds with a step stay off an end as a count does, by
+    starting a step inside it (`Bounds::new(0.1, 16.0).step(0.1)` is above 0 in tenths,
+    `Bounds::new(1, 9)` above 0), so only `Bounds::any_step`, a `Bounds<T, AnyStep>`, takes
+    `exclusive_min` and `exclusive_max`, and an exclusive end on stepped bounds or a step on
+    any-step ones does not compile (`compile_fail` examples of `Bounds`). For a refused end the
+    input says the float's next number inside it, written in exponent form, the shortest
+    decimal that reads as it (`min="5e-324"` above 0 in an `f64`, `max="9.999999999999999e1"`
+    below 100). The browser's range check then refuses the end as the handler does, and its arrow
+    keys, which with `step="any"` add 1, never step past `min` or `max`: within 1 of a drawn end,
+    Chromium and WebKit leave the value as it is, and Firefox leaves it or moves it to the drawn end
+    (`5e-324` from 0.5), which the handler holds. The handler still refuses the end itself, for a client that does not
+    check.
+
+    Where the two can still differ: an `f64` field's drawn end is the double next to the end,
+    and a browser reads a number input's value as a double, so its check and `Bounds::holds`
+    agree on every value. An `f32` field's drawn end is the shortest decimal that reads as the
+    `f32` next to the end (`1e-45` above 0, `9.9999994e-1` below 1), which the browser reads as a
+    nearby double. Within one `f32` spacing of the end, the browser refuses a few values the
+    handler would take (`0.99999994039` below 1), never the other way round. A typed number that
+    reads as the end in an `f32` (`1e-50`) the browser refuses too, being below `1e-45`.
+
+    Not chosen: drawing the end itself, which this change first did: the browser let a typed end
+    through for the handler to refuse, and its arrow keys landed on it (ArrowDown from 0.5 went
+    to 0 in all three engines). Taking the arrow keys
+    in `number_field.js` for `step="any"`: the page without the script, and a typed end, would
+    still reach the handler as values the browser had allowed. An exclusive end on stepped
+    bounds, drawn as the first step inside it: it holds the same values as the inclusive min a
+    step in, so a field could be written two ways, and it cost about 250 lines and a search on
+    every render.
+
+    Stands on: platform (HTML's number input: `min` and `max` are inclusive, with no exclusive
+    form; with `step="any"` its arrow keys step by the default step, 1, and do not step past `min`
+    or `max`; a valid floating-point number takes an exponent, and a browser reads it as a double);
+    measured (`examples/ui-gallery/smoke.mjs` presses ArrowDown from 0.5 and ArrowUp from 99.5 on
+    the gallery's discount, above 0 and below 100, and finds a valid value inside them in each
+    engine, and finds a typed 0 and 100 refused by the browser and by the handler); reasoned (an `f64`'s next
+    number is a double, so the browser's range check and `holds` agree on every double, and an
+    `f32`'s is within one `f32` spacing of the end); value (correct output first: the browser and
+    the handler agree on a field's values, the README's conflict order 1; one way to write a
+    field and a mistake the compiler can see as a compile error, its 3).
+
+    Revisit when: HTML gains an exclusive `min` or `max` for a number input, when the input says
+    the end itself and the next number goes; or a browser's arrow keys with `step="any"` step
+    past `min` or `max`.
+
+    Last checked: 2026-11-16, the ui-gallery smoke's step-any checks on this change, which passed
+    in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

@@ -248,13 +248,13 @@ pub struct SellForm {
 /// The listing's currency.
 pub const USD: Currency = Currency::new("USD");
 
-/// How many copies a listing may offer, and its shipping weight in ounces, above 0 in tenths (the
-/// input says the first tenth): the inputs' `min`, `max` and `step`, and the handler's check.
+/// How many copies a listing may offer, and its shipping weight in ounces: the inputs' `min`, `max`
+/// and `step`, and the handler's check.
 pub const QTY: Bounds<u32> = Bounds::new(1, 10);
-pub const WEIGHT: Bounds<f64> = Bounds::new(0.0, 16.0).step(0.1).exclusive_min();
-/// The discount on two or more copies, in percent: above 0 and below 100, with any decimals. The
-/// input says 0 and 100, which the browser lets through; the handler refuses them.
-pub const DISCOUNT: Bounds<f64> = Bounds::new(0.0, 100.0).exclusive_min().exclusive_max().any_step();
+pub const WEIGHT: Bounds<f64> = Bounds::new(0.1, 16.0).step(0.1);
+/// The discount on two or more copies, in percent: above 0 and below 100, with any decimals. HTML
+/// has no exclusive end, so the input says the numbers next to 0 and 100 inside them.
+pub const DISCOUNT: Bounds<f64, AnyStep> = Bounds::any_step(0.0, 100.0).exclusive_min().exclusive_max();
 
 /// What a listing that ships nowhere is told, by the browser and by the handler.
 pub const NO_REGION: &str = "Choose where you ship.";
@@ -270,7 +270,7 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
         errors.add(f.qty, format!("List from {} to {} copies.", QTY.min(), QTY.max()));
     }
     if weight.is_none() {
-        errors.add(f.weight, format!("Enter a weight above {} and up to {} oz, in tenths.", WEIGHT.min(), WEIGHT.max()));
+        errors.add(f.weight, format!("Enter a weight from {} to {} oz, in tenths.", WEIGHT.min(), WEIGHT.max()));
     }
     let discount = DISCOUNT.read(&form.discount);
     if discount.is_none() && !form.discount.is_blank() {
@@ -560,8 +560,9 @@ mod tests {
         assert!(page.text().contains("<html") && page.text().contains("Listed 2 Lightly Played Ashen Drake"));
     }
 
-    /// A discount takes any decimals and stays off both its ends: the input says 0 and 100, which
-    /// the browser sends, and the handler refuses them with the message that says "above".
+    /// A discount takes any decimals and stays off both its ends: the input says the numbers next
+    /// to 0 and 100 inside them, and the handler refuses the ends, which a browser without that
+    /// check could send, with the message that says "above".
     #[tokio::test]
     async fn a_discount_is_above_0_and_below_100_with_any_decimals() {
         let app = client();
@@ -585,7 +586,11 @@ mod tests {
         }
         // Without JavaScript the form comes back with the discount as sent.
         let page = sent("100").await;
-        assert!(page.text().contains(r#"name="discount" value="100" min="0" max="100" step="any""#), "{}", page.text());
+        assert!(
+            page.text().contains(r#"name="discount" value="100" min="5e-324" max="9.999999999999999e1" step="any""#),
+            "{}",
+            page.text()
+        );
     }
 
     /// What the browser stops when its script runs (no region, offers with no lowest one), the

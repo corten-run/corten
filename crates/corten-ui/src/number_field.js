@@ -71,8 +71,9 @@ export function click(event, button, input, by) {
 
 /** @param {KeyboardEvent} event @param {HTMLInputElement} input */
 export function key(event, input) {
-  // With no step, Home and End move the caret, as in a text field: the bounds an input draws
-  // may be ends the value must stay off (`exclusive_min`).
+  // With no step there is none to add ten of (`stepUp` throws), and Home and End move the caret,
+  // as in a text field, rather than go to an end such as `5e-324`, the number an input draws
+  // above a refused 0. The arrow keys stay the browser's: they add 1 and never step past those ends.
   if (input.step === "any") return;
   if (event.key === "PageUp" || event.key === "PageDown") step(input, event.key === "PageUp" ? 10 : -10);
   else if (event.key === "Home" && input.min !== "") set(input, input.min);

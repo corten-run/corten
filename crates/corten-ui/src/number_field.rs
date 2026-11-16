@@ -1,5 +1,5 @@
 use corten::{
-    form::Numeric,
+    form::{Numeric, Spacing},
     prelude::*,
     view::{Attrs, Id},
 };
@@ -15,7 +15,7 @@ use corten::{
 /// let qty = Number { value: 1.into(), ..Number::new(QtyId, f.qty, QTY, t.fewer(), t.more()) };
 /// html! { <NumberField field={&qty} /> }
 /// ```
-pub struct Number<'a, I, T> {
+pub struct Number<'a, I, T, S = T> {
     /// The input's `#[derive(Id)]` id, for the app's `<label for>` (or a form's `e.id(f.qty)`).
     pub id: I,
     /// The form field's name: `Input::FIELDS.qty`.
@@ -24,9 +24,10 @@ pub struct Number<'a, I, T> {
     pub value: Entry<T>,
     /// Its `min`, `max` and `step`: the amount a button or arrow key adds, which also sets the
     /// decimals shown (`0.1` shows `0.5` as `0.5`, `0.25` shows it as `0.50`). Page Up and Page
-    /// Down add ten steps. With [`any_step`](Bounds::any_step) there is no step to add: a number
-    /// is shown as it is, and both buttons are drawn disabled, so the field keeps its layout.
-    pub bounds: Bounds<T>,
+    /// Down add ten steps. [`Bounds::any_step`] has no step for a button to add: a number is shown
+    /// as it is, both buttons are drawn disabled, so the field keeps its layout, and the arrow
+    /// keys are the browser's, which add 1 and never step past the ends the input says.
+    pub bounds: Bounds<T, S>,
     pub required: bool,
     pub disabled: bool,
     pub decrease: Step<'a>,
@@ -47,7 +48,7 @@ const MINUS: &str = "\u{2212}";
 const PLUS: &str = "+";
 static NO_ATTRS: [(&str, bool); 0] = [];
 
-impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
+impl<'a, I: Id, T: Numeric, S: Spacing<T>> Number<'a, I, T, S> {
     /// A field with no value and buttons showing − and +, for a number the user types
     /// (`qty: Entry<u32>`) within `bounds` of its type. Another field's name does not compile, a
     /// typed one (`qty: u32`) included, since a number that does not read would be the error page
@@ -105,7 +106,7 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
     ///
     /// let _ = Number::new("qty", Order::FIELDS.qty, Bounds::new(1, 9), "Fewer", "More");
     /// ```
-    pub fn new(id: I, name: FieldName<Entry<T>>, bounds: Bounds<T>, decrease: &'a str, increase: &'a str) -> Self {
+    pub fn new(id: I, name: FieldName<Entry<T>>, bounds: Bounds<T, S>, decrease: &'a str, increase: &'a str) -> Self {
         Number {
             id,
             name: name.untyped(),
@@ -158,17 +159,15 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
 /// assert!(html.contains(r#"<input data-ref="input" type="number" inputmode="decimal" id="ui-qty" name="qty" value="1" min="1" max="99" step="1""#));
 /// ```
 #[component(js)]
-pub fn NumberField<'a, I: Id, T: Numeric>(field: &'a Number<'a, I, T>) -> impl Render {
+pub fn NumberField<'a, I: Id, T: Numeric, S: Spacing<T>>(field: &'a Number<'a, I, T, S>) -> impl Render {
     let f = field;
     let (input, decrease, increase) = refs();
     let number = f.value.value();
-    let step = f.bounds.step_size();
+    let step = f.bounds.step_or_any();
     // `step="any"` has no step for a button to add (`stepUp` throws).
     let stepless = step.is_none();
-    // The ends the input says: the steps inside an exclusive end.
-    let (min, max) = f.bounds.drawn();
-    let at_min = stepless || number.is_some_and(|v| v <= min);
-    let at_max = stepless || number.is_some_and(|v| v >= max);
+    let at_min = stepless || number.is_some_and(|v| v <= f.bounds.min());
+    let at_max = stepless || number.is_some_and(|v| v >= f.bounds.max());
     // What was sent, as typed; a number made in code with its step's decimals, or as it is.
     let shown = match (f.value.text(), number, step) {
         (Some(text), _, _) => Some(std::borrow::Cow::Borrowed(text)),
@@ -252,31 +251,10 @@ mod tests {
         }
         #[derive(Id)]
         struct ShareId;
-        let share = Bounds::new(0.0, 100.0).exclusive_min().exclusive_max().any_step();
+        let share = Bounds::any_step(0.0, 100.0).exclusive_min().exclusive_max();
         let field = Number { value: 37.5.into(), ..Number::new(ShareId, Form::FIELDS.p, share, "Less", "More") };
         let html = NumberField { field: &field }.to_html();
-        assert!(html.contains(r#"value="37.5" min="0" max="100" step="any""#), "{html}");
+        assert!(html.contains(r#"value="37.5" min="5e-324" max="9.999999999999999e1" step="any""#), "{html}");
         assert_eq!(html.matches(r#"tabindex="-1" disabled"#).count(), 2, "{html}");
-    }
-
-    #[test]
-    fn a_stepped_exclusive_end_disables_its_button_at_the_step_inside_it() {
-        #[derive(Fields)]
-        #[allow(dead_code)]
-        struct Form {
-            p: Entry<f64>,
-        }
-        #[derive(Id)]
-        struct QuarterId;
-        let quarters = Bounds::new(0.0, 1.0).step(0.25).exclusive_min().exclusive_max();
-        let field = |v: f64| Number { value: v.into(), ..Number::new(QuarterId, Form::FIELDS.p, quarters, "Less", "More") };
-        let at_first = NumberField { field: &field(0.25) }.to_html();
-        assert!(at_first.contains(r#"value="0.25" min="0.25" max="0.75" step="0.25""#), "{at_first}");
-        assert!(
-            at_first.contains(r#"aria-label="Less" tabindex="-1" disabled"#)
-                && !at_first.contains(r#""More" tabindex="-1" disabled"#)
-        );
-        let between = NumberField { field: &field(0.5) }.to_html();
-        assert!(!between.contains(" disabled"), "{between}");
     }
 }

@@ -426,13 +426,6 @@ async function run(browser) {
   const fewer = page.locator("[data-scope=ui-number-field]").nth(1).locator("button").nth(0);
   for (const key of ["Enter", "Space", "Enter", "Space"]) await fewer.press(key);
   check("Enter and Space on decrease step down", (await page.locator("#weight").inputValue()) === "0.7", await page.locator("#weight").inputValue());
-  // The weight is above 0 in tenths (Bounds::exclusive_min with a step): the input says the first
-  // step inside, so Home goes there and decrease is disabled at it, never at the refused 0.
-  await page.locator("#weight").focus();
-  await page.keyboard.press("Home");
-  const firstStep = [await page.locator("#weight").inputValue(), await page.locator("#weight").getAttribute("min"), await fewer.isDisabled()].join(" ");
-  check("a stepped exclusive end: Home goes to the first step inside it, where decrease is disabled", firstStep === "0.1 0.1 true", firstStep);
-  await page.locator("#weight").fill("0.7");
   const layout = await page.evaluate(() => {
     // The number field's root is a div; the wrapper that lays out its parts and the adornment holds it.
     const field = /** @type {Element} */ (document.querySelector("#weight")?.closest("[data-scope=ui-number-field]")?.parentElement);
@@ -451,6 +444,21 @@ async function run(browser) {
   await discount.press("Home");
   const stepless = [await discount.inputValue(), await discount.getAttribute("step"), await discountButtons.nth(0).isDisabled(), await discountButtons.nth(1).isDisabled()].join(" ");
   check("a number field with step any keeps both buttons disabled and Home leaves its value", stepless === "37.5 any true true", stepless);
+  // Its arrow keys are the browser's: with step="any" they add 1 and never step past the ends the
+  // input says. Its ends are refused (Bounds::exclusive_min and exclusive_max), so the input says
+  // the numbers next to them inside, and a key within 1 of an end stays inside the range (Chromium
+  // and WebKit leave the value, Firefox leaves it or goes to the drawn end) rather than going to 0 or 100,
+  // which the handler would refuse, as each engine did when the input said 0 and 100.
+  /** @param {string} from @param {string} key */
+  const arrow = async (from, key) => {
+    await discount.fill(from);
+    await discount.press(key);
+    return discount.evaluate((input) => ({ value: /** @type {HTMLInputElement} */ (input).value, valid: /** @type {HTMLInputElement} */ (input).validity.valid }));
+  };
+  const down = await arrow("0.5", "ArrowDown");
+  check("step any: ArrowDown from 0.5 stays above the refused 0, at a value the browser and the handler hold", down.valid && Number(down.value) > 0 && Number(down.value) <= 0.5, JSON.stringify(down));
+  const up = await arrow("99.5", "ArrowUp");
+  check("step any: ArrowUp from 99.5 stays below the refused 100, at a value the browser and the handler hold", up.valid && Number(up.value) >= 99.5 && Number(up.value) < 100, JSON.stringify(up));
   await discount.fill("");
 
   // ComboBox
@@ -5008,20 +5016,28 @@ async function run(browser) {
   });
   await listForSale();
   const offStep = (await plain.textContent("#result")) ?? "";
-  check("no script: a weight between the input's steps is refused by the handler", offStep === "Enter a weight above 0 and up to 16 oz, in tenths.", offStep);
-  // An exclusive end (Bounds::exclusive_max): HTML has none, so the input says max="100", the
-  // browser sends 100, and the handler refuses it. Any decimals inside it are listed.
+  check("no script: a weight between the input's steps is refused by the handler", offStep === "Enter a weight from 0.1 to 16 oz, in tenths.", offStep);
+  // A refused end (Bounds::exclusive_min and exclusive_max): HTML has none, so the input says the
+  // numbers next to 0 and 100 inside them, which the browser checks; sent past that check, as a
+  // client that skips it would, the handler refuses the end. Any decimals inside are listed.
   /** @param {string} discount */
   const postDiscount = async (discount) => {
     await plain.goto(`${base}/`);
     await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
     await plain.fill("#discount", discount);
-    const valid = await plain.evaluate(() => /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]')).checkValidity());
+    const valid = await plain.evaluate(() => {
+      const form = /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]'));
+      const valid = form.checkValidity();
+      form.noValidate = true;
+      return valid;
+    });
     const answer = await listForSale();
     return `${valid} ${answer.status()} ${(await plain.textContent("#result")) ?? ""}`;
   };
-  const atEnd = await postDiscount("100");
-  check("no script: a discount at its exclusive end passes the browser and is refused by the handler", atEnd === "true 422 Enter a discount above 0 and below 100 percent, or none.", atEnd);
+  for (const end of ["0", "100"]) {
+    const atEnd = await postDiscount(end);
+    check(`no script: a discount of ${end}, a refused end, is refused by the browser and by the handler`, atEnd === "false 422 Enter a discount above 0 and below 100 percent, or none.", atEnd);
+  }
   const precise = await postDiscount("12.345");
   check("no script: a discount with any decimals is listed", precise === "true 200 Listed 1 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship, 12.345% off two or more.", precise);
   await plain.goto(`${base}/`);

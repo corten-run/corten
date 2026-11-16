@@ -9,19 +9,17 @@ Corten is pre-1.0, so any minor version may change the API.
   attributes and its handler's check are one constant again instead of `step="any"` written by
   hand beside a rule of the app's
   ([#1412 Bounds cannot say step any or an exclusive end (above 0, below 1), so most decimal fields keep hand-written rules beside their Entry](https://github.com/corten-run/corten/issues/1412)).
-  `.any_step()` writes `step="any"` and holds every finite number in range;
-  `.exclusive_min()` and `.exclusive_max()` refuse the end itself ("above 0", "below 1"). HTML
-  has no exclusive `min` or `max`: with a step the input says the first and last steps inside the
-  ends (`min="0.01"` above 0 in cents), which the browser checks; with no step it says the end,
-  the browser sends it, and the handler refuses it, and a number that reads as the end in the
-  field's type (`1e-50` in an `f32`). The three are a float's alone: on an integer's bounds they
-  do not compile, since a count stays off an end with its next whole number and `step="any"`
-  would send `2.5`. corten-ui's `NumberField` with no step shows the number as it is and draws
-  both buttons disabled, and leaves Page Up, Page Down, Home and End to the browser.
-  ui-gallery's listing has a discount, above 0 and below 100 percent with any decimals, and its
-  weight is above 0 in tenths.
-
-- **Breaking:** `Bounds::step_size` returns `Option<T>`, `None` for `any_step()`.
+  `Bounds::any_step(min, max)`, a `Bounds<f64, AnyStep>`, writes `step="any"` and holds every
+  finite number in range, and its `.exclusive_min()` and `.exclusive_max()` refuse the end itself
+  ("above 0", "below 1"). HTML has no exclusive `min` or `max`, so the input says the type's next
+  number inside a refused end (`5e-324` above 0), which the browser checks and its arrow keys never
+  step past; the handler refuses the end too, and a number that reads as it in the field's type (`1e-50`
+  in an `f32`) (docs/design.md, Choice 56). Any step is a float's alone, and an exclusive end is
+  any step's alone: stepped bounds stay off an end by starting a step inside it
+  (`Bounds::new(0.1, 16.0).step(0.1)` is above 0 in tenths), so an exclusive end on them, a step
+  on any-step bounds and `Bounds::any_step(0u32, 3)` do not compile. corten-ui's `NumberField`
+  takes either kind of bounds; with any step it shows the number as it is and draws both buttons
+  disabled. ui-gallery's listing has a discount, above 0 and below 100 percent with any decimals.
 
 - Verify the cancelled mixed campaign's captured source blobs and every selected
   build context against its original authenticated subject before retirement;
