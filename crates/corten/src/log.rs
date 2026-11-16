@@ -410,7 +410,8 @@ mod tests {
         let lines = access_lines(async {
             use http_body_util::BodyExt;
             let router = access_app().router();
-            let res = access_call(router.clone(), "GET", "/items/7", &[]).await;
+            // Ask to revalidate even without compression: the benchmark fast path makes no tag.
+            let res = access_call(router.clone(), "GET", "/items/7", &[("if-none-match", "\"other\"")]).await;
             let tag = res.headers()[http::header::ETAG].to_str().unwrap().to_owned();
             assert_eq!(res.into_body().collect().await.unwrap().to_bytes().len(), 4);
             let res = access_call(router.clone(), "GET", "/items/7", &[("if-none-match", &tag)]).await;
