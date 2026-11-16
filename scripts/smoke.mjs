@@ -1095,21 +1095,23 @@ async function run(browser) {
     }
     check("a link to a page whose handlers take a field loads the field module, and the first change runs its handler", filled.startsWith("select,"), filled);
   }
-  // The field module answered 503 once, as a link brings its page: the swap goes ahead, a change
-  // before it loads gets the browser's default, the next one after the wait asks for it again,
-  // and a change once it is in runs the handler.
+  // The field module answered 503 while a link brings its page in (the page's preload of it and
+  // the runtime's import): the swap goes ahead, a change then gets the browser's default, and once
+  // the module is let through, a change after the wait asks for it again and a later one runs the
+  // handler.
   {
     const refused = await browser.newPage();
-    /** @type {number[]} */
+    /** @type {[number, number, string][]} */
     const at = [];
+    let open = false;
     let first = "";
     let later = "";
     try {
       await refused.route(
         (url) => url.pathname.endsWith("/scripts/corten-field.js"),
         (route) => {
-          at.push(Date.now());
-          return at.length === 1 ? route.fulfill({ status: 503, body: "Service Unavailable" }) : route.continue();
+          at.push([Date.now(), open ? 200 : 503, route.request().resourceType()]);
+          return open ? route.continue() : route.fulfill({ status: 503, body: "Service Unavailable" });
         },
       );
       await refused.goto(`${base}/news`);
@@ -1120,22 +1122,21 @@ async function run(browser) {
       await refused.selectOption('#ship-form select[name="service"]', "air");
       await refused.waitForTimeout(200);
       first = await output();
-      // Past the wait after the failure, each change asks for the module until one runs.
-      const deadline = Date.now() + 5000;
-      for (let i = 0; !later && Date.now() < deadline; i += 1) {
-        await refused.waitForTimeout(Math.max(0, (at[0] ?? 0) + 600 - Date.now()));
+      open = true;
+      for (let i = 0, deadline = Date.now() + 8000; !later && Date.now() < deadline; i += 1) {
         await refused.selectOption('#ship-form select[name="service"]', i % 2 ? "air" : "ground");
-        await refused.waitForTimeout(150);
+        await refused.waitForTimeout(250);
         later = await output();
       }
     } finally {
       await refused.close();
     }
-    const gap = at.length > 1 ? at[1] - at[0] : -1;
+    const loaded = at.findIndex(([, status]) => status === 200);
+    const gap = loaded > 0 ? at[loaded][0] - at[loaded - 1][0] : -1;
     check(
-      "a field module answered 503 once gives a change the browser's default, is asked for again after its wait, and a later change runs the handler",
-      first === "" && later.startsWith("select,") && at.length > 1 && gap >= 400,
-      `first change: "${first}", later: "${later}", ${at.length} requests, ${gap} ms between them`,
+      "a field module answered 503 gives a change the browser's default, is asked for again after its wait, and a later change runs the handler",
+      first === "" && later.startsWith("select,") && gap >= 400,
+      `first change: "${first}", later: "${later}", requests: ${at.map(([when, status, type]) => `${type} ${status} at ${when - (at[0]?.[0] ?? 0)} ms`).join(", ")}`,
     );
   }
 
