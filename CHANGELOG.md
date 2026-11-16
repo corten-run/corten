@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Clear only an already stopped, masked firmware unit's failed state during
+  fresh benchmark setup, then recheck the mask, inactive state and service PID.
+  Record fixed setup stages, source lines and original failure codes without
+  dumping commands or environment; keep native cleanup and measurement gates.
+
 - Fullstack browser benchmark evidence uses bounded, authenticated, deduplicated JSON
   records and incremental raw-case hashing instead of one growing inline summary. The
   complete matrix, raw observations, native settings, safety ceilings and proof gates

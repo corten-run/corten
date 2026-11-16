@@ -302,49 +302,83 @@ exec >>/bench/run.log 2>&1
 { date -u --iso-8601=seconds; uname -a; lscpu; free -m; df -h /; } > /bench/host.txt
 finish() { code=$?; trap - EXIT; printf '%s\\n' "$code" > /bench/exit-code; timeout 600 /bin/bash /bench/pack.sh || true; exit "$code"; }
 trap finish EXIT
+bootstrap_stage=supervisor
+bootstrap_error() { local code=$?; trap - ERR; printf 'benchmark job failed: stage=%s line=%s exit=%s\\n' "$bootstrap_stage" "$1" "$code" >&2; return "$code"; }
+trap 'bootstrap_error "$LINENO"' ERR
 ${supervisorBootstrap(s.unit)}
+bootstrap_stage=cloud-init
 timeout 900 cloud-init status --wait
 # Fresh disposable hosts only: prevent timer and D-Bus firmware activation before baseline.
+bootstrap_stage=firmware-mask
 systemctl mask --runtime --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
+bootstrap_stage=package-services
 systemctl disable --now apt-daily.timer apt-daily-upgrade.timer || true
 timeout 900 systemd-run --quiet --property=After=apt-daily.service --property=After=apt-daily-upgrade.service --wait /bin/true
 export DEBIAN_FRONTEND=noninteractive
+bootstrap_stage=package-prerequisites
 timeout 900 apt-get update -qq
 timeout 900 apt-get install -y -qq software-properties-common curl ca-certificates build-essential
 # https://git-scm.com/install/linux: Ubuntu's upstream stable Git PPA.
 # Distribution Git may lack --no-lazy-fetch; never weaken immutable native queries.
+bootstrap_stage=git-install
 timeout 900 add-apt-repository --yes ppa:git-core/ppa
 timeout 900 apt-get update -qq
 timeout 900 apt-get install -y -qq git
 timeout 30 git --no-replace-objects --no-lazy-fetch --version >> /bench/host.txt
+bootstrap_stage=docker-install
 timeout 900 bash -o pipefail -c 'curl -fsSL https://get.docker.com | sh'
+bootstrap_stage=node-install
 timeout 900 bash -o pipefail -c 'curl -fsSL https://deb.nodesource.com/setup_26.x | bash -'
 timeout 900 apt-get install -y -qq nodejs
 node -e 'if (process.versions.node.split(".")[0] !== "26") process.exit(1)'
 systemctl enable --now docker
 export GIT_NO_REPLACE_OBJECTS=1 GIT_NO_LAZY_FETCH=1
+bootstrap_stage=source-checkout
 timeout 600 git clone --quiet https://github.com/corten-run/corten.git /bench/repo
 cd /bench/repo
 git checkout --detach ${s.commit}
 test "$(git rev-parse HEAD)" = ${s.commit}
 test -z "$(git status --porcelain --untracked-files=all)"
+bootstrap_stage=host-capacity
 test "$(nproc)" -ge 8
+bootstrap_stage=root-dependencies
 timeout 900 npm ci --no-audit --no-fund
+bootstrap_stage=browser-dependencies
 timeout 900 npm --prefix bench/browser ci --no-audit --no-fund
+bootstrap_stage=browser-install
 timeout 900 npx --no-install playwright install --with-deps chromium
+bootstrap_stage=upstream-image
 timeout 900 docker pull node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1
+bootstrap_stage=rust-install
 timeout 900 bash -o pipefail -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
 export PATH=/root/.cargo/bin:$PATH
+bootstrap_stage=tool-versions
 { docker --version; node --version; npm --version; rustc --version; cargo --version; } >> /bench/host.txt
+bootstrap_stage=firmware-verification
 for unit in fwupd.service fwupd-refresh.service fwupd-refresh.timer; do
   load_state=$(systemctl show "$unit" --property=LoadState --value)
+  active_state=$(systemctl show "$unit" --property=ActiveState --value)
+  main_pid=0
+  case "$unit" in *.service) main_pid=$(systemctl show "$unit" --property=MainPID --value) ;; esac
+  printf 'firmware unit=%s load=%s active=%s pid=%s\\n' "$unit" "$load_state" "$active_state" "$main_pid"
   test "$load_state" = masked
+  test "$main_pid" = 0
+  case "$active_state" in
+    inactive) ;;
+    failed) systemctl reset-failed "$unit" ;;
+    *) false ;;
+  esac
+  # Masking stops activation but does not clear a stopped unit's failed state.
+  # Reset only that state, then independently require the same strict boundary.
+  test "$(systemctl show "$unit" --property=LoadState --value)" = masked
   active_state=$(systemctl show "$unit" --property=ActiveState --value)
   test "$active_state" = inactive
+  case "$unit" in *.service) test "$(systemctl show "$unit" --property=MainPID --value)" = 0 ;; esac
 done
 # The entry derives all nine groups and their native settings from this measured source.
 # Popular/performance views reuse the same evidence; no second workload execution.
 unset BENCH_APPS BENCH_TIER BENCH_EDGE PROFILE
+bootstrap_stage=native-entry
 node bench/workloads/isolated/campaign-entry.mjs ${s.round} --commit ${s.commit} --state-dir /bench/campaign${s.group === undefined ? "" : ` --group ${s.group}`}
 `;
   return { "job.sh": job, "pack.sh": pack, [s.unit]: `[Unit]

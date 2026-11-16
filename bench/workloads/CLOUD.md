@@ -842,6 +842,29 @@ provisioning. It requires all three to remain masked and inactive before native
 entry, preventing firmware timer/D-Bus activation inside the baseline boundary.
 This preparation is not applied to existing hosts or replayed during collection.
 
+Masking does not clear a stopped unit's recorded failure. Before native entry,
+the bootstrap logs each fixed firmware unit's load state, active state and
+service PID. Only an already masked, stopped failed unit may have its failure
+state reset. Active or transitioning units, a live service PID and a missing
+mask still fail. After any reset, the mask, inactive state and zero service PID
+are checked again; reset failure is fatal. This does not exempt firmware or any
+other user process from native cleanup evidence.
+
+The generated job records a fixed preparation stage, source line and original
+exit code on command failure, never the failed command or an environment dump.
+The EXIT handler retains the original failure and packages the terminal logs.
+The production adapter also names campaign-directory, source-cleanliness and
+bootstrap-marker stages before native entry. These diagnostics do not convert
+failed setup into benchmark results. Run the Linux execution controls with:
+
+```sh
+node --max-old-space-size=256 --test --test-concurrency=1 bench/workloads/cloud-bootstrap-execution.test.mjs
+```
+
+Those controls execute the generated firmware checks with a local systemctl
+fixture, including refused live/unmasked states and failed post-reset checks.
+They do not provision a host or qualify a native campaign.
+
 Host inventories retain every PID/start/cgroup and the raw `/proc/PID/stat` read
 that supplied its identity. Only new identities with matching saved PID/start
 fields and Linux's `PF_KTHREAD` flag are exempt from the user-process cleanup
