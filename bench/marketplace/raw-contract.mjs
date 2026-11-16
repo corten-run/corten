@@ -14,14 +14,15 @@ const environment = ["MARKETPLACE_SOURCE", "MARKETPLACE_FIXTURE_PATH", "API_BASE
 export function containerReceipt(i) {
   return { id: i.Id, name: i.Name.replace(/^\//, ""), imageId: i.Image, image: i.Config.Image,
     env: Object.fromEntries(i.Config.Env.map((s) => [s.slice(0, s.indexOf("=")), s.slice(s.indexOf("=") + 1)]).filter(([k]) => environment.includes(k))),
-    cmd: i.Config.Cmd, entrypoint: i.Config.Entrypoint, owner: i.Config.Labels?.[ownerLabel], state: i.State,
+    cmd: i.Config.Cmd ?? null, entrypoint: i.Config.Entrypoint ?? null, owner: i.Config.Labels?.[ownerLabel], state: i.State,
     memoryBytes: i.HostConfig.Memory, nanoCpus: i.HostConfig.NanoCpus, cpuPeriod: i.HostConfig.CpuPeriod, cpuQuota: i.HostConfig.CpuQuota,
     cpuset: i.HostConfig.CpusetCpus, network: i.HostConfig.NetworkMode, ulimits: i.HostConfig.Ulimits,
     mounts: i.Mounts.map((m) => ({ type: m.Type, name: m.Name, source: m.Source, destination: m.Destination, readOnly: !m.RW })) };
 }
 export function imageReceipt(i) {
+  assert.ok(i?.Config && typeof i.Config === "object" && !Array.isArray(i.Config), "image configuration missing");
   return { id: i.Id, bytes: i.Size, labels: Object.fromEntries(Object.entries(i.Config.Labels ?? {}).filter(([k]) => k.startsWith("run.corten.marketplace."))),
-    cmd: i.Config.Cmd, entrypoint: i.Config.Entrypoint, repoDigests: i.RepoDigests ?? [] };
+    cmd: i.Config.Cmd ?? null, entrypoint: i.Config.Entrypoint ?? null, repoDigests: i.RepoDigests ?? [] };
 }
 // An absent local object is a failure, never an invitation to fetch. Ignore inherited Git
 // redirection/replacement/configuration variables, and bound both output and elapsed time.
