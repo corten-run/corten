@@ -1466,7 +1466,8 @@ function focusNear(el, root, fresh) {
  * @param {{ apply: () => void } | null} [layout] what changes around `<main>`, drawn in the same
  *   frame as the page ({@link swapDocument})
  * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
- * @param {string} [at] the address a `data-address` form asked for, which a full load instead loads
+ * @param {string} [at] the address a `data-address` form asked for: put in history as the page is
+ *   swapped in (in an entry of its own, none when it is the address already), or loaded instead
  * @returns {Promise<boolean>} false when it loaded the page in full instead
  */
 async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html), at = "") {
@@ -1519,11 +1520,16 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
   // Back or forward records it too when it is the entry's own (Back before a link's page came).
   const traverse = navigation?.transition?.navigationType === "traverse";
+  const left = drawnFor;
+  // A `data-address` form's page: its address first, so the entry left keeps its own scroll and
+  // what the user typed there (`remember`), as for a link followed.
+  if (at && at !== location.href) history.pushState(null, "", at);
   const key = navigation?.currentEntry?.key;
-  if (key && drawnFor && (drawnFor !== key || traverse)) remember(drawnFor, main);
+  if (key && left && (left !== key || traverse)) remember(left, main);
   if (key) drawnFor = key;
   // Another page: the entries `data-address` forms made showed the one this replaces.
   addressed.clear();
+  screenPath = location.pathname;
   typedFields.clear();
   // Back or forward to an entry: what the user typed there and had not sent, put in before the
   // page joins, so a component that reads its fields as it connects reads them.
@@ -2536,6 +2542,8 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   // The dwell of the link followed ends: the server may answer with another page (a redirect),
   // which a prefetch of the link would fetch again. A read again leaves a dwell over another link.
   if (!again) clearTimeout(hoverTimer);
+  // A write on its way, which the page's change cancels, may still land on the server.
+  const writing = Array.from(submits.values()).some((p) => p.write);
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
   const redirected = event.info?.[REDIRECTED];
@@ -2548,10 +2556,15 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     // Back and forward: the browser puts the user back where they were on that entry.
     if (event.navigationType === "traverse") {
       // Between two entries of this page that a `data-address` form's patch drew: its patch again,
-      // the rest of the page and the focus staying. Only at the same path: another route's
-      // patch is not this screen's.
+      // the rest of the page and the focus staying. Only at the path of the page on screen
+      // ({@link screenPath}), and not after a write (one no page has been read since, or one on its
+      // way, which may land): the patch would leave what it changed outside the part as it was.
       const patch =
-        addressed.has(event.destination.key) && addressed.has(navigation?.currentEntry?.key ?? "") && url.pathname === location.pathname;
+        !stale &&
+        !writing &&
+        addressed.has(event.destination.key) &&
+        addressed.has(navigation?.currentEntry?.key ?? "") &&
+        url.pathname === screenPath;
       event.intercept({
         focusReset: patch ? "manual" : "after-transition",
         handler: () => (patch ? readAddress(url, event.signal) : visit(url, event.signal, redirected, false, undefined, undefined, stale)),
@@ -2707,6 +2720,13 @@ const typedIn = new Map();
 let drawnFor = navigation?.currentEntry?.key ?? "";
 
 /**
+ * The path of the page on screen: the document's, then each page's swapped in. Only entries at it
+ * are `data-address` patch entries ({@link addressed}): a patch of another route drawn into this
+ * page is not what that route's page draws.
+ */
+let screenPath = location.pathname;
+
+/**
  * The history entries of the page on screen whose part a `data-address` form's patch drew for
  * their address (and the entry each such form was sent from), by key: Back and Forward between two
  * of them read the patch again ({@link readAddress}), not the page. A page swapped in empties it.
@@ -2716,19 +2736,20 @@ const addressed = new Set();
 
 /**
  * Puts `to`, the address a `data-address` form asked for by GET, in the address bar once its
- * answer is drawn, as the browser does for the form without JavaScript: in a new history entry,
- * none when it is the address already. `patched` when the answer was a patch, so the entry it was
- * sent from shows the same page.
- * @param {string} to @param {boolean} patched
+ * patch is drawn, as the browser does for the form without JavaScript: in a new history entry,
+ * none when it is the address already. (A page answer's address is put in as it is swapped in,
+ * {@link swapPage}.)
+ * @param {string} to
  */
-function address(to, patched) {
+function address(to) {
   const from = navigation?.currentEntry?.key;
   if (to === location.href) return;
-  // The entry it was sent from shows the same screen only at the same path: another route's
-  // patch drawn into this page is not what that route's page draws.
-  if (patched && from && new URL(to).pathname === location.pathname) addressed.add(from);
+  // Only entries at the screen's path ({@link screenPath}): the entry it was sent from shows the
+  // same screen as the new one.
+  const here = new URL(to).pathname === screenPath;
+  if (here && from && location.pathname === screenPath) addressed.add(from);
   history.pushState(null, "", to);
-  addressed.add(navigation?.currentEntry?.key ?? "");
+  if (here) addressed.add(navigation?.currentEntry?.key ?? "");
   // The entries the new one dropped (those it was ahead of) are forgotten.
   const live = new Set(navigation?.entries().map((e) => e.key));
   for (const key of addressed) if (!live.has(key)) addressed.delete(key);
@@ -3000,7 +3021,9 @@ addEventListener("pagehide", () => (left += 1));
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * A `data-address` form's submit also aborts every other one pending (`addressing`), as a
+ * navigation does: its answer is the page at its address, and only the latest asked is the screen.
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, addressing?: boolean, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 
@@ -3096,12 +3119,14 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
   // Its answer is the page at the address it asks for: the address follows once it is drawn.
   // Without the Navigation API, which Back and Forward to that address need, the browser sent it
-  // ({@link patchSubmit}).
-  const addressing = method === "GET" && hasAttr(form, "data-address");
+  // ({@link patchSubmit}), and one that waited for a write is a patch that leaves the address.
+  const addressing = !!navigation && method === "GET" && hasAttr(form, "data-address");
+  const pending = { key, controller, write: method !== "GET", addressing, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
+  // Another `data-address` form's submit still on its way would draw an older choice over this one.
+  if (addressing) for (const [other, p] of submits) if (other !== form && p.addressing) p.controller.abort();
   submits.set(form, pending);
   /** @type {RequestInit} */
   const init = { method, headers: { corten: "action" }, signal };
@@ -3191,8 +3216,9 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       }
       signal.throwIfAborted();
       if (addressing) {
-        if (drawn) address(at.href, patched);
-        else if (patched) {
+        if (drawn) {
+          if (patched) address(at.href);
+        } else if (patched) {
           // A patch not drawn whole leaves a screen that is not the address's: the page at it is
           // read, as the browser loads it for the form without JavaScript (an entry of its own, none
           // when it is the address already). It keeps the marks until it is drawn.

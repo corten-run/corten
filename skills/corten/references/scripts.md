@@ -150,7 +150,10 @@ division: end statements with `;` and keep a division on the line it continues.
    `data-address`, its route answering with `req.patch_or(part, page)`: once the patch is drawn,
    the address is the one it asked for (a new history entry), and Back and Forward between those
    entries at the screen's path read the patch again (a form whose `action` is another route's
-   gets page reads on Back). The patch draws everything the address changes, the form
+   gets page reads on Back, and so does any entry while a write is on its way or after one
+   redirected). Pick `data-keep-place` when the change redraws most of the page (a list's
+   results), `data-address` when it redraws one part of a screen whose rest is costly to read.
+   The patch draws everything the address changes, the form
    included; never mark a form whose patch appends (Load more), and never call
    `history.pushState` for it yourself (Back to such an entry reads the whole page). Without the
    Navigation API the browser sends the form itself, a full load at its address.

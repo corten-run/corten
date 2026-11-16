@@ -1794,8 +1794,17 @@ path, and the one the first was sent from, read the entry's address as the form 
 answer) and draw its patch, leaving the rest of the screen as it is. An answer that is not a 2xx
 patch (a page, a redirect, an error, none) or a patch the runtime cannot draw whole is read as a
 page, as any other entry is; so is an entry of a form whose `action` is another route's (its
-patch drawn into this screen is not that route's page), and every entry once another page has
-been swapped in or the page reloaded.
+patch drawn into this screen is not that route's page), every entry while a write the screen sent
+is on its way or after one redirected before its page came (the write may have changed more than
+the part), and every entry once another page has been swapped in or the page reloaded. Sending a
+marked form cancels any other marked form's request still on its way, so the screen and the
+address are always the last one sent, whichever answer comes first.
+
+Which mark a filter takes depends on what its change redraws. One that changes most of what the
+page shows (a list's results) is a navigation, `data-keep-place`: each change and each Back read
+the page, which is what changes. One that redraws one part of a screen whose rest costs more to
+read (a panel's period beside a long report) is `data-patch data-address`: a change and Back
+between its entries read only the part.
 
 ```rust,ignore
 #[component]

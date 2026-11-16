@@ -5,7 +5,11 @@
 //! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
 //! `<details>` drawn closed that a form outside each asks for again, and a screen whose scope
 //! form's answer is the page at the address it asks for (`data-address`).
-use corten::{LiveResponse, prelude::*};
+use corten::{
+    LiveResponse,
+    http::{IntoResponse, Request, Response, StatusCode, header},
+    prelude::*,
+};
 use futures_util::{StreamExt, stream};
 
 use crate::layout::Layout;
@@ -60,6 +64,12 @@ pub mod url {
         #[route(query)]
         pub q: super::ScopeQuery,
     }
+
+    /// A scope the server sends on to another with a 303 ([`super::MovedBy303`]), for whichever
+    /// request asks: a marked form sent here puts the address it went to in history, as the
+    /// browser does without JavaScript.
+    #[route("/smoke/scope-moved", get = scope_moved)]
+    pub struct ScopeMoved;
 }
 
 /// The components the smoke's pages draw.
@@ -190,6 +200,7 @@ fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
                 <button name={f.scope} value="week">"Week"</button>
                 <button name={f.scope} value="month" formaction={here.at(SmokeScopeId)}>"Month"</button>
                 <button name={f.scope} value="far" formaction={url::ScopeElsewhere::default()}>"Elsewhere"</button>
+                <button name={f.scope} value="moved" formaction={url::ScopeMoved.at(SmokeScopeId)}>"Moved"</button>
             </form>
             <form method="get" action={here.at(SmokeScopeId)} data-patch data-address>
                 <button name={f.scope} value="quarter">"Quarter"</button>
@@ -238,6 +249,31 @@ async fn scope_elsewhere(req: Req, Params(at): Params<url::ScopeElsewhere>) -> H
         })
     })
     .await
+}
+
+/// The day's scope, by Corten's redirect, which [`MovedBy303`] answers in its place.
+async fn scope_moved(req: Req) -> HtmlResult {
+    req.redirect(&day_scope())
+}
+
+/// The scope a moved one is sent to.
+fn day_scope() -> url::Scope {
+    url::Scope { q: ScopeQuery { scope: Some("day".into()) } }
+}
+
+/// Answers every request for [`url::ScopeMoved`] with a 303 to the day's scope, as a proxy or a
+/// layer outside Corten might, where Corten's own redirect answers the runtime with
+/// `corten-location`: the runtime's `fetch` follows it, and its `Location` names no `#id`, so a
+/// marked form's address keeps the one its `formaction` has, as the browser's own load does.
+pub struct MovedBy303;
+
+impl Middleware for MovedBy303 {
+    async fn call(&self, req: Request, next: impl Next) -> Response {
+        if req.uri().path() != url::ScopeMoved.to_string() {
+            return next.run(req).await;
+        }
+        (StatusCode::SEE_OTHER, [(header::LOCATION, day_scope().to_string())]).into_response()
+    }
 }
 
 #[derive(Id)]

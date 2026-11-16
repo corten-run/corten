@@ -4331,13 +4331,21 @@ rules something out.
     address, as the browser loads it; a page answer that has to load in full (its layout changed,
     or its stylesheet failed) loads at the address too. An error status's patch (a 422's, a 5xx's)
     is drawn and its address pushed, as the browser shows an error page at the form's address. A
-    nav link to the new address is marked current, as for a navigation. The runtime keeps, in
-    memory, the entries of the screen such forms made, and the one each was sent from when the
-    form's address has its path, and a traversal between two of them at the same path reads the
+    nav link to the new address is marked current, as for a navigation. A page answer's address is
+    pushed before the page is swapped in, so the entry left keeps its scroll and what was typed
+    there, as for a link followed. Sending a marked form cancels every other marked form's request
+    still on its way, as a navigation cancels a pending submit: the browser loads only the last
+    form sent, so the last one's answer is the screen and its address the one entry, whichever
+    answer comes first. The runtime keeps, in memory, the entries of the screen such forms made at
+    the path of the page on screen (the document's, then each page's swapped in), and the one each
+    was sent from when it is at that path too, and a traversal between two of them reads the
     destination as the form did (`corten: action`, which the HTTP cache can answer) and applies
-    its patch, the rest of the screen and the focus staying; a form sent to another route's address
-    makes no patch entry of the screen's, since that route's patch drawn into this screen is not
-    what that route's page draws. Any other answer (a page, Corten's redirect, an error status
+    its patch, the rest of the screen and the focus staying. A form sent to another route's
+    address makes no patch entry, nor do two entries at that address, since that route's patch
+    drawn into this screen is not what that route's page draws. Nor does a traversal while a write
+    the screen sent is on its way (it may land) or after one redirected before its page was read
+    (`stale`): the patch would leave what the write changed outside the part as it was, so the
+    page is read. Any other answer (a page, Corten's redirect, an error status
     even with a patch, no answer, a body cut off) or a patch not drawn whole (as above) is read as
     a page, as every other entry is, focus going to the
     document's start unless the page gives it to a control, and so is every entry once another
@@ -4345,11 +4353,26 @@ rules something out.
     answers its part with `req.patch_or`, drawing all the address changes; a route whose patch
     appends (Load more) is not one to mark. Entries live in memory: a page restored from the
     back/forward cache keeps them with the rest of its script state, and one loaded again has none,
-    so its entries are read as pages. Without the Navigation API
+    so its entries are read as pages (the smoke does not check a restore, since the browsers
+    Playwright drives do not keep its pages in that cache). Without the Navigation API
     ([Limit 1](#limit-navigation-api)) the runtime leaves a marked GET form to the browser, which
     loads the page at its address, as without JavaScript.
 
-    Not chosen: a header on the patch's answer that names its address (`corten-location` with
+    Not chosen: `data-keep-place` on the filter's form, Corten's way to apply a filter as it
+    changes: it sends the form as a navigation, so the address follows and the user's place stays,
+    but each change and each Back read the whole page, 11,077 bytes of body against the patch's
+    323 on the smoke's screen, the cost that made the issue's app push the address itself. The
+    two marks are not two ways to do one thing (README Value 5): `data-keep-place` is for a filter
+    that changes most of what the page shows (a list's results), which a page read is the right
+    size for, and `data-address` for one that redraws one part of a screen whose rest costs more
+    to read; the guide says which to pick. Loading `address` and the traversal's patch read as a
+    module of their own on the first marked submit, as file uploads load theirs: built and
+    measured, it took 722 bytes raw, 98 with gzip and 82 with brotli out of the runtime every page
+    loads, and the module was 1,217 raw, 613 gzip and 524 brotli, fetched on the first marked
+    submit (a request, though alongside the form's own) and served by a route of its own for apps
+    that serve no component scripts, where Corten serves its other modules only to apps that do;
+    the core keeps the entries, the traversal's check and the fallbacks either way, so the saving
+    is under 100 bytes compressed. A header on the patch's answer that names its address (`corten-location` with
     replace semantics, as the issue suggested), since the same `patch_or` answers Load more and a
     filter and only the form knows which it is, and a header of Corten's own where the form's
     markup can say it needs a reason of its own ([Rule 10](#rule-standard-formats)); changing the
@@ -4363,11 +4386,14 @@ rules something out.
     draft) was not chosen either: a reload would show another scope than the screen did, the error
     the mark is there to end, where a full load costs bytes (README conflict order 1 over 2).
 
-    What it costs: the runtime is 1,687 bytes larger raw, 506 with gzip (15,341 to 15,847) and
-    427 with brotli (13,846 to 14,273), paid once a release by every user; of that, refusing a
-    patch that appends is 123 raw, 23 gzip and 31 brotli. A GET `data-patch`
-    submit reads one attribute, a marked one's answer pushes an entry, forgets the entries it
-    dropped and marks the current nav link, and a traversal looks two keys up in a set. A
+    What it costs: the runtime is 1,927 bytes larger raw (43,395 to 45,322), 578 with gzip
+    (15,341 to 15,919) and 502 with brotli (13,846 to 14,348), paid once a release by every user;
+    of that, refusing a patch that appends is 123 raw, 23 gzip and 31 brotli, and cancelling
+    another marked submit, the screen's path and the write and `stale` guards 240 raw, 72 gzip
+    and 75 brotli. A GET `data-patch`
+    submit reads one attribute, a marked one cancels the other marked submits on their way, its
+    answer pushes an entry, forgets the entries it dropped and marks the current nav link, and a
+    traversal looks the pending submits over and two keys up in a set. A
     traversal whose patch read is answered by anything but a patch (a page, a redirect, an error)
     or cannot be drawn whole costs a second round trip, the page read after it, as does a first
     submit whose patch cannot be drawn whole; both are a route that does not draw its part as the

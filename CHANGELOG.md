@@ -9,9 +9,12 @@ Corten is pre-1.0, so any minor version may change the API.
   asked for: once the patch is drawn, the runtime puts that address in the address bar, in a new
   history entry (none when it is the address already), as the browser does for the form without
   JavaScript, so a filter or scope that redraws one part survives a reload, a bookmark and a
-  shared link. Back and Forward between the entries such forms made read the patch again
-  (`corten: action`, which the HTTP cache can answer) rather than the page, and an answer that
-  is not a patch, or a patch the runtime cannot draw whole, is read as a page. `html!` refuses
+  shared link. Back and Forward between the entries such forms made at the path of the page on
+  screen read the patch again (`corten: action`, which the HTTP cache can answer) rather than the
+  page; entries at another route's address, a traversal while a write is on its way or after one
+  redirected, an answer that is not a patch and a patch the runtime cannot draw whole are read as
+  a page. Sending a marked form cancels any other one still on its way, so the last one sent is
+  the screen. `html!` refuses
   the mark on anything but a `<form>`, on a form without `data-patch` and on one whose `method`
   is `post` or `dialog`. Without the Navigation API the browser sends the form itself, a full
   load of the page at its address
