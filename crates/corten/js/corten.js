@@ -1331,9 +1331,12 @@ async function readPartOnce(from, tags, waiting, visited, done) {
   // over, and the rest are marked failed, as when a patch is not drawn over them.
   // A page the browser shows again is the one the user is on, whatever navigations it began
   // before (`fresh`): its read counts from then.
+  // Tags whose addresses a script made differ (one part of a shared read sorted) are not split
+  // into reads that could each draw over the other's parts: they are marked failed too.
   const retry = (fresh = false) => {
     if (page !== swapped) return;
-    if (waiting.every(inPage)) readNow(tags.filter(inPage), null, fresh ? visits : visited);
+    const live = tags.filter(inPage);
+    if (waiting.every(inPage) && new Set(live.map((tag) => attrOf(tag, "data-from"))).size < 2) readNow(live, null, fresh ? visits : visited);
     else for (const el of waiting) if (inPage(el)) markFailed(el);
   };
   // Busy is this read's own: a form among the parts submitted meanwhile keeps the submit's.

@@ -5111,6 +5111,46 @@ async function run(browser) {
     await page.evaluate(() => document.getElementById("busy-1")?.remove());
     await page.unroute("**/smoke/busy-*");
   }
+  // Two parts one read draws, where a script moves only one tag's address while it is held: the
+  // answer is drawn for neither, and they are not split into two reads that could each draw over
+  // the other's part with another order; both show their link (#1400).
+  {
+    const split = await (await browser.newContext()).newPage();
+    let releaseSplit = () => {};
+    /** @type {string[]} */
+    const splitAsked = [];
+    await split.route((url) => url.pathname === "/smoke/split", async (route) => {
+      const url = new URL(route.request().url());
+      splitAsked.push(url.search);
+      if (!url.search) await new Promise((resolve) => (releaseSplit = () => resolve(undefined)));
+      await route
+        .fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: `<p id="split-a">Read ${url.search}</p><p id="split-b">Read ${url.search}</p>` })
+        .catch(() => {});
+    });
+    await split.goto(`${base}/`);
+    await split.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="split-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="split-0"><p id="split-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/split" data-part="split-a"></template><p id="split-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/split" data-part="split-b"></template></div>',
+        ),
+      );
+    });
+    for (let waited = 0; !splitAsked.length && waited < 5000; waited += 50) await split.waitForTimeout(50);
+    await split.evaluate(() => document.querySelector('template[data-part="split-a"]')?.setAttribute("data-from", "/smoke/split?o=new"));
+    releaseSplit();
+    await split.waitForSelector("#split-b[data-corten-read-failed]", { state: "attached", timeout: 3000 }).catch(() => {});
+    await split.waitForTimeout(500);
+    const splitParts = await split.evaluate(() => ["split-a", "split-b"].map((id) => [document.getElementById(id)?.textContent, document.getElementById(id)?.hasAttribute("data-corten-read-failed")]));
+    check(
+      "two parts one read draws, one of whose tags a script moved meanwhile, both show their link and are not read apart",
+      splitParts.every(([text, failed]) => text === "Waiting" && failed) && splitAsked.join() === "",
+      JSON.stringify({ splitParts, splitAsked }),
+    );
+    await split.unrouteAll({ behavior: "ignoreErrors" });
+    await split.context().close();
+  }
 
   // A part's read depends only on the element its tag names (`data-part`): a cell beside it in
   // the same grid is not busy, and a patch of that cell, or of a live row beside a slow row in a
