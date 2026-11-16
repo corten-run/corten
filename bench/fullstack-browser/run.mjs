@@ -2,17 +2,18 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, unlinkSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { hostname, platform, release } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { candidates, emptyCells, parseOptions, publishPort, retainedFamilies, schema, settings, sha256, validateTargets } from "./contract.mjs";
+import { candidates, emptyCells, parseOptions, publishPort, retainedFamilies, settings, sha256, validateTargets } from "./contract.mjs";
 import { records as fixtureRecords, writeFixture } from "../marketplace/fixtures.mjs";
 import { createBrowserPlan } from "../workloads/browser.mjs";
 import { runJourney } from "./journey.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 import { exportBrowserCaptures } from "./capture.mjs";
+import { recordSchema, retainCell, saveSummary } from "./cell-records.mjs";
 import { bindingArtifactFromImage } from "./binding-image.mjs";
 import { EvidenceStore } from "./native-evidence.mjs";
 import { captureSource, captureBuildContext, captureTools } from "./native-source.mjs";
@@ -196,7 +197,7 @@ async function ready(base, path, interrupted) {
 
 // Aggregate only after native/harness cleanup and unchanged-oracle export. A
 // selected subset completing is not a complete-group qualification.
-export function groupQualificationPassed(summary, reports) {
+export function groupQualificationPassed(summary, reports, readCell = (cell) => cell) {
   const empty = (value) => Array.isArray(value) && value.length === 0;
   const fullRegistry = (value) => value && Object.keys(value).length === candidates.length && candidates.every((app) => Object.hasOwn(value, app));
   const profiles = summary.effectivePlan?.cases;
@@ -214,7 +215,7 @@ export function groupQualificationPassed(summary, reports) {
     return profiles.every((profile) => {
       const matches = cells.filter((cell) => cell.case === profile.key), checked = validation.cases.filter((cell) => cell.case === profile.key);
       if (matches.length !== 1 || checked.length !== 1) return false;
-      const cell = matches[0], e = cell.evidence;
+      const cell = readCell(matches[0], app), e = cell.evidence;
       return cell.outcome === "captured" && cell.qualificationPassed === true
         && e?.functionalChecksPassed === true && e.domChecksPassed === true && empty(e.failures) && empty(e.gaps)
         && e.nativeCleanup?.outcome === "observed" && e.cleanup?.contextClosed === true && e.provenance?.stillSameProcess === true
@@ -238,7 +239,7 @@ export async function run(args) {
   const task = `browser-${randomUUID().slice(0, 12)}`;
   const commit = await command("git", ["rev-parse", "HEAD"]);
   const dirty = await command("git", ["status", "--porcelain", "--untracked-files=normal"]);
-  const summary = { schema, group: "fullstack-browser", startedAt: new Date().toISOString(), task, effectivePlan: plan, settings,
+  const summary = { schema: recordSchema, group: "fullstack-browser", startedAt: new Date().toISOString(), task, effectivePlan: plan, settings,
     code: { commit, dirty: Boolean(dirty), status: dirty,
       runnerFiles: Object.fromEntries(readdirSync(here).filter((p) => p.endsWith(".mjs")).sort().map((p) => [p, sha256(readFileSync(join(here, p)))])),
       runnerDiffSha256: sha256(await command("git", ["diff", "HEAD", "--", "bench/fullstack-browser"])) },
@@ -249,9 +250,10 @@ export async function run(args) {
     limits: ["No comparative result until all selected native capabilities and exact-image source provenance pass",
       "Browser-primitive resource observations do not invent framework ownership or probes into destroyed realms",
       "No load, production HTTP, repeated timing, build, CPU, memory or instruction qualification"], cleanupFailures: [], failures: [] };
-  const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2) + "\n"); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
+  const save = () => saveSummary(folder, summary);
   save();
   const store = new EvidenceStore(folder), ledger = new ExecutionLedger(store, { task, commit, startedAt: Date.now() });
+  const readCell = (cell) => cell.evidence === null ? cell : { ...cell, evidence: store.readJSON(cell.evidence) };
   const owned = new OwnedDocker(task, ledger);
   const native = summary.native = { schema: "native-browser-run/v2", source: null, sourceBinding: null, inputsBefore: null, inputsAfter: null,
     toolsBefore: null, toolsAfter: null, execution: null, targets: store.record("targets", targets), contexts: [], browserTerminal: null, manifest: null };
@@ -372,7 +374,7 @@ export async function run(args) {
             cell.qualificationPassed = false;
             if (cell.outcome === "captured") cell.outcome = "unsupported";
           }
-          summary.cells[app][index] = cell;
+          summary.cells[app][index] = retainCell(store, app, index, cell);
           console.log(`${app} ${profile.key}: ${cell.outcome}; ${cell.evidence.steps.length} real actions; qualification=${cell.qualificationPassed}`);
         } catch (e) { summary.cells[app][index] = { case: profile.key, outcome: "failed", reason: e.message, qualificationPassed: false, evidence: null }; }
         finally {
@@ -391,14 +393,14 @@ export async function run(args) {
     summary.cleanupFailures.push(...await owned.cleanup());
     let qualificationReports;
     try {
-      const exported = exportBrowserCaptures(summary, records), captureDir = join(folder, "captures"); mkdirSync(captureDir);
+      const exported = exportBrowserCaptures(summary, records, readCell), captureDir = join(folder, "captures"); mkdirSync(captureDir);
       for (const [app, capture] of Object.entries(exported.captures)) writeFileSync(join(captureDir, `${app}.json`), JSON.stringify(capture, null, 2) + "\n");
       writeFileSync(join(captureDir, "manifest.json"), JSON.stringify(exported.manifest, null, 2) + "\n");
       summary.strictCaptureExport = { manifest: "captures/manifest.json", functionalPassed: Object.values(exported.manifest.reports).every((report) => report.validation.functionalPassed), readyForLoad: false };
       qualificationReports = exported.manifest.reports;
     } catch (error) { summary.failures.push(`Strict capture export: ${error.message}`); }
     process.off("SIGINT", interrupt); process.off("SIGTERM", interrupt);
-    summary.qualificationPassed = groupQualificationPassed(summary, qualificationReports);
+    summary.qualificationPassed = groupQualificationPassed(summary, qualificationReports, readCell);
     try {
       if (source) native.inputsAfter = store.record("inputs-after", captureLiveInputs(store, source));
       if (summary.browser) native.toolsAfter = store.record("tools-after", captureTools(store, { browserExecutable: summary.browser.executable }));

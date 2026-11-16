@@ -19,10 +19,28 @@ Corten is pre-1.0, so any minor version may change the API.
   the form itself, a full load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
+- The scripts guide gives `corten-format`'s size once, as built (3,005 bytes, 1,492 gzipped),
+  where it said 1.4 kB in one place and about 1 KB in another, and `corten/keys`'s as built too.
+  `npm run build:js` now writes the size a guide gives right after one of Corten's script modules
+  (`corten-format`, `corten-upload`, `corten/keys`, `corten/read`), as it writes the runtime's in
+  the README, and `npm run check` fails when one is not the built module's or is written another
+  way.
+
+- Fullstack browser benchmark evidence uses bounded, authenticated, deduplicated JSON
+  records and incremental raw-case hashing instead of one growing inline summary. The
+  complete matrix, raw observations, native settings, safety ceilings and proof gates
+  are preserved; bounded historical summaries remain read-only diagnostics.
+
 - Scope the official cloud checkout's public umask to Git source creation so
   unprivileged load generators can read committed benchmark scripts. Keep job,
   control and campaign state private, with real Linux Git/nonroot regression
   controls and unchanged source, correctness and measurement gates.
+
+- Make the watchlist smoke's waiting-submit cases dispatch each press in the page before
+  changing fields or releasing held answers, so a loaded browser's early click acknowledgement
+  does not race their busy, send-count and renewed-key checks. Runtime behavior is unchanged.
+  Capture the first request before editing fields, and poll file output independently of
+  animation frames, with the same outcome deadline and forbidden-send checks.
 
 - A script reads a screen's data typed, from the route that answers it, with
   `read(url, { signal })` from the new `corten/read` module. A route that says `data = T` in
@@ -1060,6 +1078,21 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- A navigation under a `Pwa::network_only` prefix reaches the server once with the PWA's service
+  worker in control. The worker turns navigation preload on and then declined these
+  navigations, so the browser dropped the preload's answer and sent the request again: every
+  network-only page was rendered twice, and a one-time `GET` (an OAuth callback's code, a magic
+  link) was redeemed twice, the user seeing the second answer. In card-market's smoke a
+  navigation to `/mcp` reached the server twice in Chromium and WebKit and once in Firefox; now
+  once in all three. The worker answers such a navigation with the request preload sent (or one
+  fetch when none was), with no cache and no offline page, and a redirect is followed by the
+  browser as before; a posted form, a browser without navigation preload and every other request
+  under the prefix are still left to the browser. An `import_script` listener that already answers
+  such a navigation keeps its answer, and the worker's own listener now throws an
+  `InvalidStateError` into the worker's console there. The worker is 185 bytes larger (30 with
+  gzip at level 9) (design Choice 56,
+  [#1524 corten::pwa enables navigation preload but declines network-only navigations, so every navigation to a network_only path reaches the server twice](https://github.com/corten-run/corten/issues/1524)).
 
 - A `data-patch` answer that draws a dialog `open` opens it again after the user closed it, when
   the button that asked for it (or, with none, the focused control of the form, else the form) is
