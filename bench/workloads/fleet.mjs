@@ -11,7 +11,7 @@ import { controllerFailure, full, providerFailure, providerIdentity } from "./cl
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles } from "./cloud-provider.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
-import { fleetRoot, present, readFleet, readGroup } from "./fleet-verify.mjs";
+import { fleetRoot, present, readFleet, readGroup, recheckCollectedGroup, verifyCollectedGroup } from "./fleet-verify.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const ownPaths = ["fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((name) => `bench/workloads/${name}`);
@@ -32,7 +32,7 @@ export function parseFleetArgs(args) {
   const values = { "--fleet-root": "root", "--commit": "commit", "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--approve-reviewed-merged-ready": "approval" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "fleet-option"); seen.add(flag);
-    if (["--prepare", "--detach", "--collect", "--print-approval"].includes(flag)) o[flag.slice(2)] = true;
+    if (["--prepare", "--detach", "--admit-remaining", "--collect", "--print-approval"].includes(flag)) o[flag.slice(2)] = true;
     else {
       assert.ok(Object.hasOwn(values, flag), "fleet-option");
       const value = args[++i]; assert.ok(value && !value.startsWith("--"), "fleet-option"); o[values[flag]] = value;
@@ -40,7 +40,7 @@ export function parseFleetArgs(args) {
   }
   roundName(o.round); assert.ok(Number(o.round.slice(1)) >= 17);
   fleetRoot(o.root);
-  assert.equal([o.prepare, o.detach, o.collect].filter(Boolean).length, 1, "fleet-mode");
+  assert.equal([o.prepare, o.detach, o["admit-remaining"], o.collect].filter(Boolean).length, 1, "fleet-mode");
   if (o.prepare) {
     full(o.commit, /[a-f0-9]{40}/, "fleet-source"); full(o.sshKey, /[1-9]\d*/, "fleet-key");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -60,13 +60,13 @@ async function exactSource(repo, run) {
 }
 function rootRecords(fleet) {
   const records = {};
-  for (const name of ["launch-intent.json", "receipts"]) if (present(join(fleet.root, name))) {
+  for (const name of ["launch-intent.json", "remaining-intent.json", "receipts"]) if (present(join(fleet.root, name))) {
     const path = join(fleet.root, name);
     if (name === "receipts") {
       physical(path);
       const names = readdirSync(path).sort(); assert.ok(names.length <= 10000, "fleet-receipt-limit");
       for (const file of names) {
-        assert.ok(/^(?:detach|collect)-[a-f0-9]{16}-[a-z-]+\.json$/.test(file), "fleet-receipt-name");
+        assert.ok(/^(?:detach|admit-remaining|collect)-[a-f0-9]{16}-[a-z-]+\.json$/.test(file), "fleet-receipt-name");
         records[`receipts/${file}`] = digest(regular(join(path, file), 1024 * 1024));
       }
     } else records[name] = digest(regular(path, 1024 * 1024));
@@ -127,19 +127,71 @@ export function productionChild(args, { cancellation, WorkerClass = Worker, sour
   });
 }
 
-export async function fleetOperationPlan(options, { repo = checkout, run, plan = productionPlan } = {}) {
+function stagedIntent(fleet) {
+  const intent = JSON.parse(regular(join(fleet.root, "launch-intent.json"), 1024 * 1024));
+  assert.deepEqual(Object.keys(intent).sort(), ["approvalSha256", "schema", "subject"]);
+  assert.equal(intent.schema, "benchmark-group-fleet-staged-launch-intent/v1", "fleet-legacy-launch-cannot-admit");
+  const s = intent.subject, first = fleet.manifest.jobs[0].group;
+  assert.equal(intent.approvalSha256, digest(JSON.stringify(s)), "fleet-launch-intent-changed");
+  assert.equal(s.schema, "benchmark-group-fleet-staged-approval/v1");
+  assert.equal(s.action, "detach"); assert.equal(s.controllerCommit, fleet.manifest.commit);
+  assert.equal(s.stateRoot, fleet.root); assert.equal(s.requestedRoot, fleet.root); assert.equal(s.round, fleet.manifest.round);
+  assert.equal(s.manifestSha256, fleet.manifestSha256); assert.deepEqual(s.fleet, fleet.manifest);
+  assert.deepEqual(s.records, {});
+  assert.deepEqual(s.admission, { mode: "first-group-only", firstGroup: first, gate: "collected-verified-deleted", nativeReadiness: false });
+  assert.deepEqual(s.jobs.map(({ group }) => group), fleet.manifest.jobs.map(({ group }) => group));
+  for (const job of s.jobs) {
+    if (job.group !== first) assert.deepEqual(job, { group: job.group, outcome: "deferred" });
+    else {
+      assert.equal(job.outcome, "planned"); assert.deepEqual(job.options, childOptions(fleet, first, "detach"));
+      assert.deepEqual(job.subject.options, job.options); assert.equal(job.subject.controllerCommit, fleet.manifest.commit);
+      assert.equal(job.approvalSha256, digest(JSON.stringify(job.subject))); assert.deepEqual(job.missing, []);
+    }
+  }
+}
+
+// verify is a code-only synthetic TEST seam, never selected by argv/JSON.
+export async function fleetOperationPlan(options, { repo = checkout, run, plan = productionPlan, verify = verifyCollectedGroup,
+  inspect, interrupted = () => false } = {}) {
   repo = realpathSync(repo);
   const root = fleetRoot(options.root, repo), head = await exactSource(repo, run), fleet = readFleet(root, options.round);
   assert.equal(fleet.manifest.commit, head, "fleet-source-mismatch");
-  const mode = options.detach ? "detach" : "collect", records = rootRecords(fleet);
-  if (mode === "detach") assert.ok(!present(join(root, "launch-intent.json")), "fleet-already-attempted");
+  const mode = options.detach ? "detach" : options["admit-remaining"] ? "admit-remaining" : "collect", records = rootRecords(fleet);
+  const launching = mode !== "collect", first = fleet.manifest.jobs[0].group;
+  let deferred = false;
+  if (mode === "collect" && present(join(root, "launch-intent.json")) && !present(join(root, "remaining-intent.json"))) {
+    // Only a valid staged reservation explains absent future children. Legacy
+    // fleets retain their existing missing-state diagnostics and collection.
+    try { stagedIntent(fleet); deferred = true; } catch { /* Not staged authority. */ }
+  }
+  let firstGroup;
+  if (mode === "detach") {
+    assert.ok(!present(join(root, "launch-intent.json")), "fleet-already-attempted");
+    assert.ok(!present(join(root, "remaining-intent.json")) && !present(join(root, "receipts")), "fleet-reservation-consumed");
+  }
+  if (mode === "admit-remaining") {
+    stagedIntent(fleet);
+    assert.ok(!present(join(root, "remaining-intent.json")), "fleet-remaining-already-attempted");
+    firstGroup = await verify(fleet, first, { inspect, interrupted });
+    assert.equal(firstGroup.evidenceMode, "native-replay", "fleet-native-first-group-replay-required");
+    assert.equal(firstGroup.row.outcome, "verified", "fleet-first-group-not-verified-and-deleted");
+    recheckCollectedGroup(fleet, firstGroup.snapshot);
+  }
   const jobs = [], ids = new Set(), ips = new Set();
   for (const { group } of fleet.manifest.jobs) {
-    const child = childOptions(fleet, group, mode);
-    if (mode === "detach") {
+    const child = childOptions(fleet, group, launching ? "detach" : "collect");
+    if (mode === "admit-remaining" && group === first) {
+      const saved = readGroup(fleet, first);
+      ids.add(saved.state.id); ips.add(saved.state.ip);
+      jobs.push({ group, outcome: "verified", snapshot: firstGroup.snapshot }); continue;
+    }
+    if (launching) {
       assert.ok(!present(child.stateDir), "fleet-child-already-reserved");
-      jobs.push({ group, options: child, outcome: "planned" });
+      jobs.push(mode === "detach" && group !== first ? { group, outcome: "deferred" } : { group, options: child, outcome: "planned" });
     } else {
+      if (deferred && group !== first && !present(child.stateDir)) {
+        jobs.push({ group, outcome: "deferred" }); continue;
+      }
       let saved;
       try { saved = readGroup(fleet, group); }
       catch { jobs.push({ group, outcome: "error", error: "group-state-invalid" }); continue; }
@@ -163,16 +215,17 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   for (const [i, settled] of plans.entries()) {
     if (jobs[i].outcome !== "planned") continue;
     if (settled.status === "rejected") {
-      if (mode === "detach") throw settled.reason;
+      if (launching) throw settled.reason;
       jobs[i] = { group: jobs[i].group, outcome: "error", error: "group-plan-invalid", stateSha256: jobs[i].stateSha256 };
     } else Object.assign(jobs[i], { subject: settled.value.subject, approvalSha256: settled.value.approvalSha256, missing: settled.value.missing });
   }
   assert.equal(readFleet(root, options.round).manifestSha256, fleet.manifestSha256, "fleet-manifest-changed");
-  const subject = { schema: "benchmark-group-fleet-approval/v1", action: mode, controllerCommit: head,
+  if (firstGroup) recheckCollectedGroup(fleet, firstGroup.snapshot);
+  const subject = { schema: launching ? "benchmark-group-fleet-staged-approval/v1" : "benchmark-group-fleet-approval/v1", action: mode, controllerCommit: head,
     stateRoot: root, requestedRoot: resolve(options.root), round: options.round, manifestSha256: fleet.manifestSha256,
     fleet: fleet.manifest, records, jobs,
-    ...(mode === "detach" ? { admission: { mode: "serial", firstGroup: jobs[0].group, gate: "running-bound-host",
-      firstGroupGate: "common-bootstrap-marker", nativeReadiness: false } } : {}),
+    ...(launching ? { admission: { mode: mode === "detach" ? "first-group-only" : "remaining-once", firstGroup: first,
+      gate: "collected-verified-deleted", nativeReadiness: false }, ...(firstGroup ? { firstGroup } : {}) } : {}),
     declaration: "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), fleet };
 }
@@ -180,7 +233,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
 // plan/main injection is a synthetic TEST seam at the existing production
 // boundaries. Neither the CLI nor saved JSON can select implementations.
 export async function fleetMain(args, { repo = checkout, spawn, providerFactory, inspect, sleep,
-  interrupted = () => false, write = console.log, plan = productionPlan, main, WorkerClass } = {}) {
+  interrupted = () => false, write = console.log, plan = productionPlan, verify = verifyCollectedGroup, main, WorkerClass } = {}) {
   const options = parseFleetArgs(args); repo = realpathSync(repo);
   const transport = shellTransport({ repo, spawn });
   const run = async (...args) => {
@@ -210,7 +263,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       return 3;
     } finally { physical(root); unlinkSync(lock); syncDirectory(root); }
   }
-  const deps = { repo, run, plan }, preview = await fleetOperationPlan(options, deps);
+  const deps = { repo, run, plan, verify, inspect, interrupted }, preview = await fleetOperationPlan(options, deps);
   if (options["print-approval"]) {
     write(JSON.stringify({ subject: preview.subject, approvalSha256: preview.approvalSha256, fullGroupQualified: false }));
     return preview.subject.jobs.some((j) => j.missing?.length) ? 2 : 3;
@@ -225,8 +278,10 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
     const repeated = await fleetOperationPlan(options, deps);
     assert.equal(repeated.approvalSha256, options.approval, "fleet-action-changed");
     await controlCheckpoint(interrupted);
-    if (options.detach) durable(join(root, "launch-intent.json"), json({ schema: "benchmark-group-fleet-launch-intent/v1", approvalSha256: options.approval,
-      manifestSha256: preview.fleet.manifestSha256, children: preview.subject.jobs.map(({ group, approvalSha256 }) => ({ group, approvalSha256 })) }));
+    if (options.detach) durable(join(root, "launch-intent.json"), json({ schema: "benchmark-group-fleet-staged-launch-intent/v1",
+      approvalSha256: options.approval, subject: preview.subject }));
+    if (options["admit-remaining"]) durable(join(root, "remaining-intent.json"), json({ schema: "benchmark-group-fleet-remaining-intent/v1",
+      approvalSha256: options.approval, subject: preview.subject }));
     const receipts = join(root, "receipts");
     if (!present(receipts)) { mkdirSync(receipts, { mode: 0o700 }); syncDirectory(root); }
     physical(receipts);
@@ -243,9 +298,15 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       durable(join(receipts, `${preview.subject.action}-${operation}-${job.group}.json`), json(row));
       write(JSON.stringify(row)); return row;
     };
+    const launching = options.detach || options["admit-remaining"];
     const admittedIds = new Set(), admittedIps = new Set();
+    if (options["admit-remaining"]) {
+      const first = readGroup(preview.fleet, preview.fleet.manifest.jobs[0].group);
+      admittedIds.add(first.state.id); admittedIps.add(first.state.ip);
+    }
     const operate = async (job, skipped) => {
       if (skipped) return persist(job, { group: job.group, outcome: "not-admitted", reason: skipped });
+      if (["deferred", "verified"].includes(job.outcome)) return persist(job, { group: job.group, outcome: job.outcome });
       let code, failure;
       try {
         if (job.outcome === "planned") code = main
@@ -271,37 +332,40 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
           && typeof bootstrapReady.observedAt === "string" && Number.isFinite(Date.parse(bootstrapReady.observedAt));
         const retired = code === 1 && state?.status === "retired" && state.destroyedAt && ["unused", "setup-failed"].includes(state.retirement?.kind)
           && /^[a-f0-9]{64}$/.test(state.retirement.evidenceSha256);
-        const consistent = saved?.outcome === "available" && (options.detach
+        const consistent = saved?.outcome === "available" && (launching
           ? code === 3 && state.status === "running" && state.id && state.ip && !state.deletionIntentAt && !state.destroyedAt
             && bootstrap && !admittedIds.has(state.id) && !admittedIps.has(state.ip)
           : code === 3 ? state.status === "running"
           : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt && state.exitCode === code
             && (code === 0 ? state.validation?.status === "verified" : ["failed", "blocked"].includes(state.validation?.status)));
         if (!consistent) Object.assign(row, { outcome: "error", error: "group-state-invalid" });
-        else if (options.detach) { admittedIds.add(state.id); admittedIps.add(state.ip); }
+        else if (launching) { admittedIds.add(state.id); admittedIps.add(state.ip); }
         else if (retired) row.outcome = state.retirement.kind === "unused" ? "unused-retired" : "setup-failed-retired";
       }
       return persist(job, row);
     };
     let settled;
     try {
-      if (options.detach) {
+      if (launching) {
         settled = [];
         let stopped;
-        // The first required group must have the controller's exact common-bootstrap
-        // marker observation as well as bound running state and worker settlement.
-        // That marker precedes native entry; it does not prove any group's parity.
-        // Admit the rest serially; already-running remote measurements are untouched.
+        // Deferred groups cannot execute under the initial approval. A separate
+        // consumed intent admits the remaining hosts after first-group replay.
+        // Their remote campaigns overlap while local admission stays serialized.
         for (const job of preview.subject.jobs) {
           if (cancelled()) stopped = "cancelled";
           if (!stopped) {
             try { await controlCheckpoint(cancelled); }
             catch { stopped = "cancelled"; }
           }
+          if (!stopped && preview.subject.firstGroup) {
+            try { recheckCollectedGroup(preview.fleet, preview.subject.firstGroup.snapshot); }
+            catch { stopped = "first-group-evidence-changed"; }
+          }
           try {
             const value = await operate(job, stopped);
             settled.push({ status: "fulfilled", value });
-            if (!stopped && value.outcome !== "pending") stopped = "prior-admission-failed";
+            if (!stopped && !["pending", "deferred", "verified"].includes(value.outcome)) stopped = "prior-admission-failed";
           } catch (reason) {
             settled.push({ status: "rejected", reason }); stopped ??= "prior-admission-failed";
           }
@@ -314,7 +378,7 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
     await controlCheckpoint(cancelled);
     write(JSON.stringify({ schema: "benchmark-group-fleet-operation/v1", action: preview.subject.action, groups, fullGroupQualified: false }));
     if (groups.some((g) => ["error", "missing", "ambiguous", "busy", "not-admitted"].includes(g.outcome))) return 2;
-    return groups.some((g) => g.outcome === "pending") ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired"].includes(g.outcome)) ? 1 : 0;
+    return groups.some((g) => ["pending", "deferred"].includes(g.outcome)) ? 3 : groups.some((g) => ["terminal-incomplete", "unused-retired", "setup-failed-retired"].includes(g.outcome)) ? 1 : 0;
   } catch (error) {
     if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true;
     throw error;
