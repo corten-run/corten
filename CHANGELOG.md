@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Save bounded, sanitized same-page browser diagnostics when native compiled
+  alert hydration checks fail, without changing readiness gates or their errors.
+
 - Bound failed-native retirement proof age from the final SSH request's local
   start, including response delivery, and refuse expired DELETEs after asynchronous
   HTTPS socket/TLS setup without queuing a mutation before readiness.
