@@ -892,6 +892,75 @@
           "home": null
         }
       ]
+    },
+    {
+      "name": "form fields, one of each kind",
+      "attr": "click:shared.fill(~i\"weight\",~s\"format\",~t\"note\",~*\"size\")",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "shared",
+          "name": "fill",
+          "args": [
+            {
+              "kind": "~",
+              "control": "i",
+              "name": "weight"
+            },
+            {
+              "kind": "~",
+              "control": "s",
+              "name": "format"
+            },
+            {
+              "kind": "~",
+              "control": "t",
+              "name": "note"
+            },
+            {
+              "kind": "~",
+              "control": "*",
+              "name": "size"
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
+      "name": "a row's field and a name with an apostrophe, in a group",
+      "attr": "click:shared.pack({weight:~i\"parcels[a%20b].weight\",sizes:~*\"it's\"})",
+      "parsed": [
+        {
+          "type": "click",
+          "module": "shared",
+          "name": "pack",
+          "args": [
+            {
+              "kind": "{",
+              "fields": [
+                [
+                  "weight",
+                  {
+                    "kind": "~",
+                    "control": "i",
+                    "name": "parcels[a%20b].weight"
+                  }
+                ],
+                [
+                  "sizes",
+                  {
+                    "kind": "~",
+                    "control": "*",
+                    "name": "it's"
+                  }
+                ]
+              ]
+            }
+          ],
+          "home": null
+        }
+      ]
     }
   ]
 }

@@ -17,7 +17,7 @@ test("core default and unapproved CLI never execute cloud; grammar has no tuning
     assert.throws(() => parseDropletArgs([...args, ...tail]));
   for (const binary of ["doctl", "ssh", "scp"]) assert.throws(() => command(binary, []), /transport disabled/);
   const r = spawnSync(process.execPath, [resolve("bench/workloads/droplet.mjs"), ...args], { encoding: "utf8", windowsHide: true });
-  assert.equal(r.status, 2); assert.equal(r.stderr.trim(), publicError()); assert.deepEqual(h.calls, []); assert.ok(!existsSync(h.local));
+  assert.equal(r.status, 2); assert.equal(r.stderr.trim(), publicError({ controllerStage: "source-plan" })); assert.deepEqual(h.calls, []); assert.ok(!existsSync(h.local));
 });
 test("detach reserves before one completed create, uploads fixed job and starts once", async (t) => {
   const h = harness(t, { active: true });

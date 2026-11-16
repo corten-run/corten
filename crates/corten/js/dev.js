@@ -2,6 +2,9 @@
 // Loaded by the runtime under `corten dev` only, from /corten/dev.js, which only a dev server
 // serves, as written: what it reports costs a production page nothing.
 import { ready } from "corten";
+import { LISTED, field, formOf, why } from "./field.js";
+import { parseOn } from "./on.js";
+/** @import { Arg } from "./on.js" */
 
 const CONTROLS = "input,select,textarea";
 // A region a screen reader announces as it changes: the live roles and aria-live, unless
@@ -25,7 +28,7 @@ const liveName = (el) => {
  * @param {Element} root
  */
 function nested(root) {
-  for (const el of [...(root.matches(LIVE) ? [root] : []), ...root.querySelectorAll(LIVE)]) {
+  for (const el of within(root, LIVE)) {
     const outer = el.parentElement?.closest(LIVE);
     if (!outer || reported.has(el)) continue;
     reported.add(el);
@@ -54,7 +57,7 @@ function asDrawn(el) {
  * @param {Element} root
  */
 function check(root) {
-  const found = /** @type {HTMLInputElement[]} */ ([...(root.matches(CONTROLS) ? [root] : []), ...root.querySelectorAll(CONTROLS)]);
+  const found = /** @type {HTMLInputElement[]} */ (within(root, CONTROLS));
   for (const el of found) {
     if (reported.has(el) || !el.willValidate || !el.form || el.form.noValidate || el.getAttribute("aria-invalid") === "true" || !asDrawn(el)) continue;
     const { valid, valueMissing, customError } = el.validity;
@@ -78,7 +81,8 @@ const CLOSED_DIALOG = "dialog:not([open],[popover])";
  */
 function within(root, selector) {
   try {
-    return [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)];
+    // Through the prototypes: a form whose control is named `matches` is still a form.
+    return [...(Element.prototype.matches.call(root, selector) ? [root] : []), ...Element.prototype.querySelectorAll.call(root, selector)];
   } catch {
     return selector === CLOSED ? within(root, CLOSED_DIALOG) : [];
   }
@@ -180,11 +184,63 @@ function inPlace(root) {
   }
 }
 
+/** Handlers whose form fields were reported. @type {WeakSet<Element>} */
+const fieldsReported = new WeakSet();
+
+/** A call's arguments, a group's fields among them. @param {Arg[]} args @returns {Arg[]} */
+const flat = (args) => args.flatMap((arg) => (arg.kind === "{" ? flat(arg.fields.map(([, f]) => f)) : [arg]));
+
+/**
+ * Reports each handler in or at `root`, or in the form around it, given a form field
+ * (`js::fill(f.weight)`) that its form does not have as the handler takes it: none of that name, or
+ * a control of another kind (a select where it takes an input). The compiler cannot see the
+ * control, which another component may draw, so this is reported when the page draws it, not on
+ * the first event that calls the handler, which the runtime refuses with the same message.
+ * @param {Element} root
+ */
+function fields(root) {
+  // The calls drawn, and every call of each form a control drawn belongs to (the one around it, or
+  // another it joins with `form=`, and the calls joined to that form from outside it): the control
+  // can be the one such a call is given, or another of its name. Read through the prototypes, so a
+  // form's control named `closest` or `getAttribute` stands in for neither.
+  const calls = new Set(within(root, "[data-on]"));
+  const forms = new Set([Element.prototype.closest.call(root, "form"), ...within(root, LISTED).map(formOf)]);
+  for (const form of forms) {
+    if (!form) continue;
+    for (const el of within(form, "[data-on]")) calls.add(el);
+    for (const el of /** @type {HTMLFormControlsCollection} */ (Reflect.get(HTMLFormElement.prototype, "elements", form))) {
+      if (Element.prototype.hasAttribute.call(el, "data-on")) calls.add(el);
+    }
+  }
+  for (const el of calls) {
+    if (fieldsReported.has(el)) continue;
+    /** @type {string[]} */
+    const wrong = [];
+    /** @type {ReturnType<typeof parseOn>} */
+    let bound;
+    try {
+      bound = parseOn(Element.prototype.getAttribute.call(el, "data-on") ?? "");
+    } catch {
+      continue; // The runtime reports an attribute it cannot read.
+    }
+    for (const b of bound) {
+      for (const arg of flat(b.args)) {
+        if (arg.kind !== "~" || field(el, arg)) continue;
+        wrong.push(why(el, arg, b));
+      }
+    }
+    if (!wrong.length) continue;
+    fieldsReported.add(el);
+    console.error(`corten: ${wrong.join("; ")}`, el);
+  }
+}
+
 /** @param {Element} root */
 function checkAll(root) {
   check(root);
   nested(root);
   inPlace(root);
+  fields(root);
 }
 
 // The page once its handlers have connected (a task after `ready`, as a script's

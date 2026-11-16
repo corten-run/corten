@@ -19,6 +19,33 @@ Corten is pre-1.0, so any minor version may change the API.
   the form itself, a full load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
+- Show the grouped controller's closed failure stage and allowed provider detail
+  in direct CLI errors, without reflecting raw exceptions or changing recovery,
+  cleanup or benchmark acceptance rules.
+
+- A handler is given a form's control by its `#[derive(Fields)]` field,
+  `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
+  `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
+  radios or checkboxes that share the name. The runtime finds it by name in the handler's form
+  when the handler runs, so a component that draws the fields for forms with and without a
+  script needs no ref, and the script looks nothing up by a name as text. Text where a field
+  belongs, and a field where the handler takes text or another element, do not compile; a call
+  that takes a single control (an input, select or textarea) whose form lacks it, has more than
+  one of the name, or has one of another kind, throws, as does a group whose form has a control of
+  the name that is not an input, saying what the call takes and what the form has instead, and
+  `corten dev` reports the same when the page draws it (a group with none is `[]`). The lookup
+  is a module of its own (`corten-field`, 741 bytes with gzip) that only a page whose handlers take
+  a field loads, and reads the form's index of names, a few microseconds a run in a form of 2,000
+  controls; every page's runtime is 66 bytes larger with gzip
+  ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
+
+- Clear only an already stopped, masked firmware unit's failed state during
+  fresh benchmark setup, then recheck the mask, inactive state and service PID.
+  Record fixed setup stages, source lines and original failure codes without
+  dumping commands or environment; keep native cleanup and measurement gates.
+  Install stable upstream Git from its fingerprint-verified, signed Ubuntu PPA
+  directly in CI and fresh hosts, avoiding truncated Launchpad metadata API reads.
+
 - The scripts guide gives `corten-format`'s size once, as built (3,005 bytes, 1,492 gzipped),
   where it said 1.4 kB in one place and about 1 KB in another, and `corten/keys`'s as built too.
   `npm run build:js` now writes the size a guide gives right after one of Corten's script modules
@@ -1078,6 +1105,16 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,
+  so a `const` assertion only a binary's `main` reaches fails it as it fails `cargo build`: a
+  route that a bin-only app's `main` alone mounts by hand, outside its area or saying `patches`
+  with a `get` that answers a page, passed clippy and `cargo test`, which generate none of
+  `main`'s callees, and only `cargo build` refused it (design Limit 11). With the default
+  profiles the tests reuse the test targets the build compiled, so the check adds about one
+  compile of each binary and of each bench target; a `[profile.test]` that differs from
+  `[profile.dev]` has the tests compile their targets again
+  ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)).
 
 - A navigation under a `Pwa::network_only` prefix reaches the server once with the PWA's service
   worker in control. The worker turns navigation preload on and then declined these

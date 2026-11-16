@@ -23,6 +23,17 @@ views share evidence; they do not launch a second campaign.
 
 ## Public Source Permissions
 
+Fresh hosts and the CI tools image install stable upstream Git from the same
+Ubuntu Git maintainers' PPA. They fetch its public key over bounded HTTPS, require
+the exact primary fingerprint `F911AB184317630C59970973E363C90F8F1B6217`, and scope
+APT trust to that source with `signed-by`. This avoids the Launchpad metadata API
+whose truncated responses stopped image preparation before tests. A failed
+download, key parse or fingerprint check stops setup; distribution Git is not a
+fallback. The existing immutable-source Git capability check still runs.
+`git-ppa.test.mjs` executes both setup forms with local command fixtures, including
+wrong, extra and missing primary keys and failed downloads/parsing. This is not
+native framework or official-run qualification.
+
 The production adapter in `cloud-remote.mjs` keeps the job at `umask 077` but
 runs only the fixed public Git clone, fetch and exact detached checkout in a
 `umask 022` subshell. Committed nonexecutable scripts are `0644` under `0755`
@@ -153,6 +164,11 @@ The stage identifies the failing operation, not its cause or whether a host exis
 Only an own data property from that vocabulary crosses the worker boundary;
 unknown values and accessors are not forwarded. It adds no retry, cleanup or
 launch authority. Raw Git errors, URLs, arguments and stderr remain private.
+
+The direct CLI renders that same closed controller stage and the provider's
+allowlisted code-specific detail or HTTP status. It never prints a native error's
+message, stack, response or accessor. These labels identify the stopped operation,
+not its cause or successful cleanup; the retained state still governs recovery.
 
 Historical href diagnostics could classify a refused representation as
 `non-string`, `malformed-uri`, `credentials-or-fragment`, `foreign-origin`,
@@ -841,6 +857,29 @@ Fresh disposable-host bootstrap runtime-masks `fwupd.service`,
 provisioning. It requires all three to remain masked and inactive before native
 entry, preventing firmware timer/D-Bus activation inside the baseline boundary.
 This preparation is not applied to existing hosts or replayed during collection.
+
+Masking does not clear a stopped unit's recorded failure. Before native entry,
+the bootstrap logs each fixed firmware unit's load state, active state and
+service PID. Only an already masked, stopped failed unit may have its failure
+state reset. Active or transitioning units, a live service PID and a missing
+mask still fail. After any reset, the mask, inactive state and zero service PID
+are checked again; reset failure is fatal. This does not exempt firmware or any
+other user process from native cleanup evidence.
+
+The generated job records a fixed preparation stage, source line and original
+exit code on command failure, never the failed command or an environment dump.
+The EXIT handler retains the original failure and packages the terminal logs.
+The production adapter also names campaign-directory, source-cleanliness and
+bootstrap-marker stages before native entry. These diagnostics do not convert
+failed setup into benchmark results. Run the Linux execution controls with:
+
+```sh
+node --max-old-space-size=256 --test --test-concurrency=1 bench/workloads/cloud-bootstrap-execution.test.mjs
+```
+
+Those controls execute the generated firmware checks with a local systemctl
+fixture, including refused live/unmasked states and failed post-reset checks.
+They do not provision a host or qualify a native campaign.
 
 Host inventories retain every PID/start/cgroup and the raw `/proc/PID/stat` read
 that supplied its identity. Only new identities with matching saved PID/start

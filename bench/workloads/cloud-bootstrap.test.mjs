@@ -7,11 +7,14 @@ import { remoteFiles, reservation, supervisorBootstrap } from "./cloud-contract.
 const state = reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" });
 test("bootstrap prepares upstream stable Git and proves required immutable-query flags before clone", () => {
   const job = remoteFiles(state)["job.sh"], clone = job.indexOf("git clone");
-  const ppa = job.indexOf("add-apt-repository --yes ppa:git-core/ppa");
+  const ppa = job.indexOf("install -d -m 0755 /etc/apt/keyrings");
   const capability = job.indexOf("git --no-replace-objects --no-lazy-fetch --version");
   assert.ok(ppa >= 0 && capability > ppa && clone > capability);
   assert.match(job.slice(ppa, capability), /apt-get update -qq[\s\S]*apt-get install -y -qq git/);
-  assert.match(job.slice(0, ppa), /apt-get install -y -qq[^\n]*software-properties-common/);
+  assert.match(job.slice(0, ppa), /apt-get install -y -qq[^\n]*gnupg/);
+  assert.match(job.slice(ppa, capability), /signed-by=\/etc\/apt\/keyrings\/corten-git-ppa.asc/);
+  assert.match(job.slice(ppa, capability), /test .* = F911AB184317630C59970973E363C90F8F1B6217/);
+  assert.ok(!job.includes("timeout 900 add-apt-repository"));
   assert.match(job, /git --no-replace-objects --no-lazy-fetch --version >> \/bench\/host\.txt/);
   assert.match(execFileSync("git", ["--no-replace-objects", "--no-lazy-fetch", "--version"],
     { encoding: "utf8", windowsHide: true, timeout: 10000, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1" } }), /^git version /);
