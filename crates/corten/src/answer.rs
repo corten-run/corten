@@ -133,6 +133,29 @@ pub trait Answer: IntoResponse + Sized {
     /// }
     /// ```
     ///
+    /// Nor `Screen<T>`, which only `req.screen`, given a `T`, makes:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}, Answer, HtmlResult, Screen};
+    ///
+    /// struct SetListing;
+    ///
+    /// struct Mine(HtmlResult<Screen<SetListing>>);
+    ///
+    /// impl IntoResponse for Mine {
+    ///     fn into_response(self) -> Response {
+    ///         self.0.into_response()
+    ///     }
+    /// }
+    ///
+    /// impl Answer for Mine {
+    ///     const FORMAT: Format = Format::Html;
+    ///     type Inputs = AnyInputs;
+    ///     type Rows = NotAFeed;
+    ///     type Kind = Screen<SetListing>;
+    /// }
+    /// ```
+    ///
     /// Nor can one forward the kind of the answer it holds:
     ///
     /// ```compile_fail,E0277

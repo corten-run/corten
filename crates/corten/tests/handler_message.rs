@@ -15,6 +15,9 @@
 //!    parameter is refused with a message that says which (#1342).
 //! 7. A route that says `patches` mounted by hand with a `get` that may answer its page is
 //!    refused when the app builds, with a message that says what to give it (#1342).
+//! 8. `data` on a route with no `get`, on an `unstaged` route or on a route with a type
+//!    parameter, `data` named twice or naming no type, and `data` with `rows` are each refused with
+//!    a message that says which (#1399).
 //!
 //! Each app is built with `cargo`, offline, from the workspace's lock, in the target directory
 //! `link_clash` builds in, so they share the dependencies' builds.
@@ -227,6 +230,43 @@ fn patches_where_no_get_handler_can_answer_a_patch_says_why() {
         ),
     ] {
         let (ok, stderr) = build_main("patches-where-message", &app(route, handler));
+        assert!(!ok, "{route} compiled");
+        assert!(stderr.contains(said), "the reason for {route}: {stderr}");
+    }
+}
+
+/// `data` where it cannot hold: a route with no `get`, an `unstaged` one, one with a type
+/// parameter, `data` named twice or naming no type, and `data` with `rows`. Each is refused by
+/// the routes module with its own reason, which the `compile_fail` doctests on `corten::routes`
+/// cannot tell apart (#1399).
+#[test]
+fn data_where_no_get_handler_can_answer_it_says_why() {
+    let app = |route: &str| {
+        format!(
+            "use corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    {route}\n}}\n\npub struct Listing;\npub struct Row;\n\nasync fn set() -> &'static str {{\n    \"set\"\n}}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
+        )
+    };
+    for (route, said) in [
+        (
+            "#[route(\"/sets\", post = set, data = Listing)]\n    pub struct Set;",
+            "data names what Set's get answers a data client with",
+        ),
+        (
+            "#[route(\"/sets\", get = set, unstaged, data = Listing)]\n    pub struct Set;",
+            "unstaged serves Set with a handler that takes no Req, so it cannot answer a screen's data",
+        ),
+        (
+            "#[route(\"/sets\", get = set, data = Listing)]\n    pub struct Set<T> {\n        pub after: Option<T>,\n    }",
+            "Set has a type parameter, so it cannot name its data",
+        ),
+        ("#[route(\"/sets\", get = set, data = Listing, data = Listing)]\n    pub struct Set;", "data is named twice"),
+        ("#[route(\"/sets\", get = set, data = 3)]\n    pub struct Set;", "data names the screen's data type"),
+        (
+            "#[route(\"/sets\", get = set, rows = Row, data = Listing)]\n    pub struct Set;",
+            "a route is one or the other, so say data or rows, not both",
+        ),
+    ] {
+        let (ok, stderr) = build_main("data-where-message", &app(route));
         assert!(!ok, "{route} compiled");
         assert!(stderr.contains(said), "the reason for {route}: {stderr}");
     }

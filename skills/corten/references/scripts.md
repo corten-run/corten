@@ -286,7 +286,8 @@ async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::S
     let listing = SetListing::read(at.set).await?; // a ToJson, added with Types::add
     req.screen(&listing, set_page(&req, &listing))
 }
-// another page's markup: <button type="button" on:click={js::switchTo(rows, url::Set { set: &s.code }, signal)}>
+// another page's markup, a link that is the set's page without JavaScript:
+// <a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>
 ```
 
 ```js
@@ -298,20 +299,31 @@ import { read } from "corten/read";
 // SetListing must come from ../types/app (the typedef above, or @import { SetListing } from it),
 // never a type of the script's own; leave types/app.d.ts to corten::types (a hand-written one is not caught).
 // read() asks it with Accept: application/json through the HTTP cache (a 304 when unchanged).
-/** @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
-export async function switchTo(rows, set, signal) {
+/** @type {WeakMap<HTMLTableSectionElement, AbortController>} */
+const switching = new WeakMap(); // each table's switch in progress, aborted by the next
+
+/** @param {MouseEvent} event @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
+export async function switchTo(event, rows, set, signal) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; // a new tab: the link's
+  event.preventDefault();
+  switching.get(rows)?.abort();
+  const mine = new AbortController();
+  switching.set(rows, mine);
+  const stop = AbortSignal.any([signal, mine.signal]); // the link left, or a later switch started
   try {
-    const listing = await read(set, { signal }); // a SetListing
+    const listing = await read(set, { signal: stop }); // a SetListing: draw it into rows
   } catch (error) {
-    if (signal.aborted) return; // the element left the page
+    if (stop.aborted) return; // so an older, slower answer is never drawn
     throw error;
   }
 }
 ```
 
 It rejects with a `ReadError` (`status` the answer's, or 0 with a `cause` when there was none it
-could use, a redirect included: it follows none) and with `signal`'s reason once it aborts; a
-handler whose element can leave while it reads catches that and returns when `signal.aborted`.
+could use, a redirect included: it follows none, and cannot tell a sign-in redirect from another)
+and with `signal`'s reason once it aborts, even after a failed answer; a handler whose element can
+leave while it reads catches that and returns when its signal is aborted. A read the user can
+start again gets its own `AbortController`, aborted by the next, as above.
 Never `fetch` a screen's JSON by hand or write its type: the route types it. `read()` returns what
 the handler gives `req.screen` to any script on this origin, with the user's cookie: only what the
 page may show. The browser keeps one answer per URL, so a read after the page itself was fetched

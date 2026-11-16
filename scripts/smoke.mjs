@@ -601,11 +601,35 @@ async function run(browser) {
       stop.abort();
       const aborted = await settled(reading);
       const before = await settled(read(/** @type {any} */ ("/smoke/reading"), { signal: AbortSignal.abort(new Error("left")) }));
-      return { missing, moved, aborted, before };
+      // Two answers no server here gives, from a stand-in fetch: a 404 that arrives as the signal
+      // aborts, and a success that is not a screen's JSON.
+      const real = window.fetch;
+      let late, bare;
+      try {
+        const leaving = new AbortController();
+        window.fetch = async () => {
+          leaving.abort();
+          return new Response("", { status: 404 });
+        };
+        late = await settled(read(/** @type {any} */ ("/smoke/reading"), { signal: leaving.signal }));
+        window.fetch = async () => new Response('{"rows":[]}', { headers: { "content-type": "application/json" } });
+        bare = await read(/** @type {any} */ ("/smoke/reading")).then(
+          () => "resolved",
+          (e) => (e instanceof ReadError ? `ReadError ${e.status} ${e.cause instanceof TypeError ? "TypeError" : String(e.cause)}` : String(e)),
+        );
+      } finally {
+        window.fetch = real;
+      }
+      return { missing, moved, aborted, before, late, bare };
     });
     check(
-      "read() rejects with a ReadError of the status when the answer is not a success, with a ReadError 0 for a redirect it does not follow, and with the signal's reason once it aborts",
-      outcomes.missing === "ReadError 404" && outcomes.moved === "ReadError 0" && outcomes.aborted === "AbortError" && outcomes.before === "Error: left",
+      "read() rejects with a ReadError of the status when the answer is not a success, with a ReadError 0 for a redirect it does not follow, with a ReadError 0 whose cause is a TypeError for a success that is not a screen's JSON, and with the signal's reason once it aborts, even after a failed answer",
+      outcomes.missing === "ReadError 404" &&
+        outcomes.moved === "ReadError 0" &&
+        outcomes.aborted === "AbortError" &&
+        outcomes.before === "Error: left" &&
+        outcomes.late === "AbortError" &&
+        outcomes.bare === "ReadError 0 TypeError",
       JSON.stringify(outcomes),
     );
     await reader.close();

@@ -2150,6 +2150,21 @@ impl Req {
     /// # let _ = get(set);
     /// ```
     ///
+    /// Nor does `NoStore::new(..)` in a closure:
+    ///
+    /// ```compile_fail,E0283
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(ToJson)]
+    /// pub struct SetListing { name: String }
+    ///
+    /// let set = |req: Req| async move {
+    ///     let listing = SetListing { name: "All".into() };
+    ///     NoStore::new(req.screen(&listing, html! { <html><head><title>"All"</title><Corten /></head><body><main>"All"</main></body></html> }))
+    /// };
+    /// # let _ = get(set);
+    /// ```
+    ///
     /// ```
     /// use std::time::Duration;
     /// use corten::prelude::*;

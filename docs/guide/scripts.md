@@ -909,8 +909,9 @@ async fn set(req: Req, Params(at): Params<url::Set<'_>>) -> HtmlResult<corten::S
     req.screen(&listing, set_page(&req, &listing))
 }
 
-// In another page's markup: a button per set it can switch to.
-<button type="button" on:click={js::switchTo(rows, url::Set { set: &s.code }, signal)}>{&s.name}</button>
+// In another page's markup: a link per set it can switch to. Without JavaScript it opens the
+// set's page; with it, its click reads the set's data and draws it here.
+<a href={url::Set { set: &s.code }} on:click={js::switchTo(event, rows, url::Set { set: &s.code }, signal)}>{&s.name}</a>
 ```
 
 ```js
@@ -918,13 +919,28 @@ import { read } from "corten/read";
 /** @import { ScreenUrl } from "corten/read" */
 /** @typedef {import("../types/app").SetListing} SetListing */
 
-/** @param {HTMLTableSectionElement} rows @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal */
-export async function switchTo(rows, set, signal) {
+/** Each table's switch in progress, aborted by the next, so a slower older answer is not drawn. */
+/** @type {WeakMap<HTMLTableSectionElement, AbortController>} */
+const switching = new WeakMap();
+
+/**
+ * @param {MouseEvent} event @param {HTMLTableSectionElement} rows
+ * @param {ScreenUrl<SetListing>} set @param {AbortSignal} signal
+ */
+export async function switchTo(event, rows, set, signal) {
+  // A click that opens a new tab or window is the link's own.
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  event.preventDefault();
+  switching.get(rows)?.abort();
+  const mine = new AbortController();
+  switching.set(rows, mine);
+  // Aborted when the link leaves the page or the next switch starts.
+  const stop = AbortSignal.any([signal, mine.signal]);
   try {
-    const listing = await read(set, { signal });
-    // listing.products is SetListing's, as the server declared it.
+    const listing = await read(set, { signal: stop });
+    // listing.products is SetListing's, as the server declared it: draw it into rows.
   } catch (error) {
-    if (signal.aborted) return; // the element left the page: nothing went wrong
+    if (stop.aborted) return; // the link left the page, or a later switch took over
     throw error;
   }
 }
@@ -965,19 +981,25 @@ keeps a cached page from answering a read. The browser keeps one answer per URL,
 while nothing else fetched that URL in between: once the page itself is fetched there again (a
 navigation back to it), the next read gets the whole answer. A read rejects with a `ReadError` (from `corten/read`)
 when the answer is not a success (`status` is its status, a 404 or a 503) or when there is none it
-can use (`status` 0, with the error as `cause`: offline, a redirect, or an answer that is not a
-screen's JSON), and with `signal`'s reason once it aborts. A redirect is not followed: middleware
-that sends a signed-out visitor to sign in would otherwise hand the script another route's answer. In a handler pass `signal`, so a read the element no
+can use (`status` 0, with the error as `cause`: offline, a redirect, or a success that is not a
+screen's JSON, whose `cause` is a `TypeError`), and with `signal`'s reason once it aborts, even
+when a failed answer came first. A redirect is not followed: middleware that sends a signed-out
+visitor to sign in would otherwise hand the script another route's answer. The browser does not
+say where it would have gone, so a sign-in redirect is a `ReadError` 0, as being offline is; a
+script that may meet one can navigate to the URL instead, and the browser follows it
+([Limits](../design.md#limit-read-redirect)). In a handler pass `signal`, so a read the element no
 longer needs is dropped when it leaves the page; the runtime reports a handler's rejected promise,
 so a handler whose element can leave while it reads catches the rejection and returns when
-`signal.aborted`, as `switchTo` does. The envelope is checked; the data is trusted as the route's own type, as a
+its signal is aborted, as `switchTo` does. A read the user can start again before the last one
+answers gets a controller of its own that the next one aborts, joined to `signal` with
+`AbortSignal.any`, so an older answer that arrives last is never drawn. The envelope is checked; the data is trusted as the route's own type, as a
 feed's rows are ([design Choice 40](../design.md#choice-script-boundaries)). `read()` returns
 what the handler gives `req.screen`, and any script on this origin can read it with the user's
 cookie, so give it only what the page itself may show that user.
 
 Data the page needs when it loads is a handler argument, which costs no request; data it may never
 need, or that a choice the user makes picks, is a read; a change to what the server draws is a
-`data-patch` form. `corten/read` is a module of its own (608 bytes, 414 gzipped), served only to
+`data-patch` form. `corten/read` is a module of its own (666 bytes, 438 gzipped), served only to
 apps whose scripts import it and preloaded with those scripts, so a page that reads nothing does
 not download it and the runtime is unchanged; such an app's import map names it on every page (60
 bytes, under 10 compressed)

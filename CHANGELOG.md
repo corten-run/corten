@@ -16,13 +16,16 @@ Corten is pre-1.0, so any minor version may change the API.
   itself does not compile). A route says `data` without `patches` or `rows`, and the same route
   mounted again by hand (`Area::route`, `Api::route`) with a `get` that answers a page or other
   data stops the app when it is built. It follows no redirect, and rejects with a `ReadError`
-  (`status` the answer's, or 0 with a `cause`, a redirect included) and with `signal`'s reason
-  once it aborts. `req.patch`,
+  (`status` the answer's, or 0 with a `cause` when there was none it could use: offline, a
+  redirect, which it cannot tell from being offline, or a success that is not a screen's JSON,
+  whose `cause` is a `TypeError`) and with `signal`'s reason once it aborts, even after a failed
+  answer. `req.patch`,
   `patch_with_status`, `patch_or`, `invalid` and `invalid_with` answer only as `AnyAnswer` or
   `Patches` (the sealed `corten::answer::PatchingKind`), so a handler that returns
-  `HtmlResult<Screen<T>>` cannot answer through them. The module (608 bytes, 414 with gzip, 360
+  `HtmlResult<Screen<T>>` cannot answer through them. The module (666 bytes, 438 with gzip, 367
   with brotli) is served and preloaded only for apps whose scripts import it; the runtime is
-  unchanged
+  unchanged. A static script's import of `corten/keys` or `corten/read` is now looked for outside
+  its comments, so a `corten/keys` named only in a comment no longer stops the app
   ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).
 
 - **Breaking:** `req.screen` and `req.screen_with_status` take a type parameter for the answer's
@@ -30,8 +33,8 @@ Corten is pre-1.0, so any minor version may change the API.
   `req.screen::<ForOne, _>(&data, doc)` was written, write
   `req.screen::<ForOne, corten::AnyAnswer, _>(&data, doc)` (or leave the types to the handler's
   return type); calls without a turbofish are unchanged, except a `req.screen(..)` given straight
-  to `Public::new` where no return type names the answer (a closure), which names the kind the
-  same way, `req.screen::<_, corten::AnyAnswer, _>(..)`. Code of an app's own that is generic over
+  to `Public::new` or `NoStore::new` where no return type names the answer (a closure), which
+  fails with E0283 and names the kind the same way, `req.screen::<_, corten::AnyAnswer, _>(..)`. Code of an app's own that is generic over
   an answer's kind and calls `req.patch`, `patch_with_status`, `patch_or`, `invalid` or
   `invalid_with` bounds it `K: corten::answer::PatchingKind`, which they now require
   ([#1399 A script cannot read its page's typed data: req.screen answers data clients JSON, but a script's only typed input is a handler argument written into the page](https://github.com/corten-run/corten/issues/1399)).

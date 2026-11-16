@@ -16,7 +16,8 @@
 /**
  * Why `read()` got no data: `status` is the answer's when it was not a success (a 404, a 503), or
  * 0 when there was none it could use (offline, the server unreachable, a redirect, or an answer
- * that is not a screen's JSON), with the error that stopped it as `cause`.
+ * that is not a screen's JSON), with the error that stopped it as `cause` (a `TypeError` for a
+ * success that is not `{"title", "data"}`).
  */
 export class ReadError extends Error {
   /** @param {string} url @param {number} status @param {unknown} [cause] */
@@ -35,8 +36,9 @@ export class ReadError extends Error {
  * comes back as a 304 with no body; one still fresh (a `Public` route's `max-age`) is not asked
  * for at all. A redirect (middleware sending a signed-out visitor to sign in) is not followed, since
  * its target is not this route's data. It rejects with a `ReadError` when the answer is not a
- * success, is a redirect or is not a screen's JSON, and with `signal`'s reason once it aborts (in a handler, pass `signal`: the read is dropped
- * when the element leaves the page).
+ * success, is a redirect or is not a screen's JSON, and with `signal`'s reason once it aborts,
+ * whatever answer came first (in a handler, pass `signal`: the read is dropped when the element
+ * leaves the page).
  * @template Data
  * @param {ScreenUrl<Data>} url
  * @param {{ signal?: AbortSignal }} [options]
@@ -51,14 +53,16 @@ export async function read(url, { signal } = {}) {
       const body = await res.json();
       // The envelope is checked; the data is the route's own type, which the runtime trusts.
       if (body && typeof body === "object" && "data" in body) return /** @type {Data} */ (body.data);
+      throw new TypeError("not a screen's JSON");
     } else {
       status = res.status;
       // Its body is not read: cancelled, so the connection is not held for it.
       res.body?.cancel().catch(() => {});
     }
   } catch (error) {
-    if (signal?.aborted) throw signal.reason;
+    signal?.throwIfAborted();
     throw new ReadError(url, 0, error);
   }
+  signal?.throwIfAborted();
   throw new ReadError(url, status);
 }
