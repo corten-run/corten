@@ -4066,15 +4066,16 @@ rules something out.
     that URL in between: the browser keeps one answer per URL, so the page fetched there again
     replaces the data's and the next read gets the whole answer), and a `Public` route's
     `max-age` lets a read within it make no request; `Vary: corten, accept` keeps the page's HTML
-    from answering it. A redirect is not followed (`redirect: "error"`): what answers before the
-    handler or replaces its answer (middleware sending a signed-out visitor to sign in) is not
-    checked against the route's data, and its target is another route's; the browser does not
-    say where it would have gone, so a sign-in redirect looks like no answer
-    ([Limits](#limit-read-redirect)). A failure is a `ReadError` whose `status` is the answer's,
-    or 0 when there was none it could use (a redirect included, and a success that is not a
-    screen's JSON, whose `cause` is a `TypeError`), as `corten:error` gives a submit the network
-    fails; an abort rejects with `signal`'s reason, as `fetch` does, even when a failed answer
-    came first. No new endpoint, header or format: the URL, the
+    from answering it. A redirect is not followed (`redirect: "manual"`): what answers before the
+    handler or replaces its answer (an app's middleware sending a visitor to sign in) is not
+    checked against the route's data, and its target is another route's. Corten's own sign-in
+    refusal (a `Caller`, `Refused::sign_in`) answers a data client 401, not a redirect, so a
+    redirect is one the app writes. A failure is a `ReadError` whose `status` is the answer's
+    (that 401 included), or 0 when there was none it could use: with `redirected` true for a
+    redirect (`fetch`'s opaque redirect, which tells a redirect from no answer but not where it
+    goes, [Limits](#limit-read-redirect)), else with the error as `cause` (offline, or a success
+    that is not a screen's JSON), as `corten:error` gives a submit the network fails; an abort
+    rejects with `signal`'s reason, as `fetch` does, even when a failed answer came first. No new endpoint, header or format: the URL, the
     negotiation and the envelope are the ones native screens already read.
 
     What it costs: nothing for an app whose scripts do not import it. `corten/read` is a module
@@ -4084,7 +4085,7 @@ rules something out.
     that imports it, each page's import map names it
     (`,"corten/read":"/assets/<version>/scripts/corten-read.js"`, 60 bytes, 4 to 9 once the page
     is compressed), and the pages whose scripts import it preload it (a 77-byte
-    `<link rel="modulepreload">`). The module is 666 bytes, 438 with gzip and 367 with brotli,
+    `<link rel="modulepreload">`). The module is 749 bytes, 486 with gzip and 409 with brotli,
     which the users of an app that reads download once a release. The server's work is
     unchanged: a `req.screen` page costs 37,950 instructions a request as HTML and 41,211 as a
     data client's JSON on `dea1788d2` and on `4eb3d62d1`, within 0.2 of each other in every run
@@ -4111,7 +4112,8 @@ rules something out.
     Stands on: measured (the minified runtime's and `corten/read`'s sizes by Node's `zlib`, gzip
     at level 6 and brotli at quality 11, on `dea1788d2` and `4eb3d62d1`, once each, and the
     module's again on `c74c4fa83`, once it cancels a refused answer's body, gives a malformed
-    success a `cause` and lets an abort win over a failed answer, 666, 438 and 367; a
+    success a `cause` and lets an abort win over a failed answer, 666, 438 and 367, and on
+    `7664551c8`, once it tells a redirect apart (`redirected`), 749, 486 and 409; a
     `req.screen` page's instructions a request under callgrind, 1,200 requests through the
     router in process less 200, over 1,000, in both modes, three alternated runs of each build,
     release, in `rust:1-bookworm`: HTML 37,949.68 to 37,949.73 on `dea1788d2` and 37,949.64 to
@@ -4123,16 +4125,21 @@ rules something out.
     checks, where in Chromium the second read names the first answer's tag and in Firefox it is
     answered 304, and the server answers that tag with a 304 and no body; Playwright's WebKit asks
     again without the tag and is sent the whole answer, as it does the runtime's navigation fetch;
-    `redirect: "error"` rejects a redirect without following it, a `ReadError` 0 in all three,
-    and a 404 that arrives as the signal aborts rejects with the abort);
-    reasoned (an app whose scripts do not import `corten/read` gets the same runtime and import
+    `redirect: "manual"` answers a redirect as an opaque answer without following it, a
+    `ReadError` 0 with `redirected` in all three; Corten's sign-in refusal answers a data client
+    401, which `a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors` tests);
+    reasoned (`read.js`'s own logic, which the smoke checks in the three engines with a stand-in
+    `fetch`, so not a browser probe: a 404 that arrives as the signal aborts rejects with the
+    abort, a success that is not JSON with a `SyntaxError` cause and JSON that is not the
+    envelope with a `TypeError` one; an app whose scripts do not import `corten/read` gets the same runtime and import
     map, so its pages pay nothing; `data`'s type comes from the route's `data = T` and the
     declaration of `T`, so no script writes it, and a route whose handler can answer without a
     `T` does not compile, through `req.page`, a redirect or a patch-making method, which the
     `compile_fail` doctests on `Req::screen` and `PatchingKind` show, and mounted again by hand
     with such a handler the app is not built, which the tests on a hand mount show; what
     middleware answers or a handler replaces through `DerefMut` is not checked, which is why a
-    read follows no redirect); value (a rich screen in the browser is as possible as one the
+    read follows no redirect; a script that meets one navigates to the URL, which the browser
+    follows, where offline it would wait or say so, which is why a redirect is told apart); value (a rich screen in the browser is as possible as one the
     server draws, and only the apps that read pay for it, README Value 1;
     types at the seam come from Rust, Value 4; one way to a screen's data, the route that answers
     it, with no second endpoint, Values 5 and 6).
@@ -4149,7 +4156,8 @@ rules something out.
     Last checked: 2026-11-15, the runtime's size, the instruction counts and the import-map entry
     on `dea1788d2` and `4eb3d62d1`; 2026-11-15, the module's size, the hand mount's check (its
     tests and the `Route::DATA` comparison in `mounted_with`) and the smoke's read checks on
-    `c74c4fa83`, the read checks in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
+    `c74c4fa83`; 2026-11-15, the module's size and the smoke's read checks again on
+    `7664551c8`, the read checks in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2
     (Playwright 1.64.1).
 
 ## Rules
@@ -4612,11 +4620,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     it posts nowhere wrong (give it an `action` too), and a `formmethod="post"` button in a `GET`
     form and a form a script adds are not seen. A patch is not read: the runtime applies it at the
     address the browser was already at.
-30. <a id="limit-read-redirect"></a>A script's `read()` cannot tell a redirect from no answer at all:
-    it follows none (`redirect: "error"`, since the target is another route's answer and not the
-    route's data), and the browser says neither why nor where it would have gone, so middleware
-    that sends a signed-out visitor to sign in is a `ReadError` 0, as being offline is. Telling
-    the two apart would take `redirect: "manual"`, whose opaque answer says only that some
-    redirect happened, not that it was to sign in, so a script still could not act on it beyond
-    what it does for any `ReadError` 0. A script that may meet one navigates to the URL instead,
-    and the browser follows the redirect ([Choice 54](#choice-screen-read)).
+30. <a id="limit-read-redirect"></a>A script's `read()` follows no redirect and cannot see where one
+    goes. It asks with `redirect: "manual"`, since the target is another route's answer and not
+    the route's data, and the browser hands it an opaque answer with no `Location`, so it rejects
+    with a `ReadError` 0 whose `redirected` is true: a redirect, told apart from no answer, but
+    not where to. Corten's own sign-in refusal (a signed-out `Caller`, `Refused::sign_in`)
+    answers a data client 401, not a redirect, so this is only a redirect the app writes itself
+    (its own middleware, or an answer replaced through `DerefMut`); an app that sends a visitor
+    to sign in does it with `Refused::sign_in`, and a script reads that as a 401. A script that
+    meets either navigates to the URL, and the browser follows the redirect or the sign-in
+    ([Choice 54](#choice-screen-read)).
