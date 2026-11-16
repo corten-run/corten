@@ -4697,7 +4697,10 @@ rules something out.
     `datetime-local` and Temporal's `ZonedDateTime` documentation for time zone identifiers, read
     that day and checked against the `FormZone` reader at `5f2b8cb8a` (the split into `DrawZone`
     and `FormZone`), with jiff 0.2.38 and jiff-tzdb 0.1.9 (`Cargo.lock`), and the all-zones test
-    passing on `5f2b8cb8a`.
+    passing on `5f2b8cb8a`; 2026-11-16, the `FormZone` reader refusing `+00:00` and `-00:00`,
+    `Entry::at_keeping`, the drawn `min` and `value` in one minute, a day's start on the platform's
+    first and last days, and the all-zones test with its `FormZone` round trip, passing on
+    `12794f3ff`.
 
 ## Rules
 
