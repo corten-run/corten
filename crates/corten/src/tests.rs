@@ -3506,7 +3506,10 @@ fn LostRow() -> impl crate::Patch {
 /// `<template>`'s content) drops. Each is a component, so the `html!` that sends them together
 /// sees neither's tags: only the patch as sent shows the row after the message.
 fn lost_row() -> impl crate::Patch {
-    html! { <SavedNote /> <LostRow /> }
+    html! {
+        <SavedNote />
+        <LostRow />
+    }
 }
 
 /// `req.patch_or` and `req.invalid_with`'s `form.draw` answering with `lost_row`.

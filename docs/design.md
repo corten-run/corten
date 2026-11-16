@@ -4187,8 +4187,8 @@ rules something out.
     Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
 54. <a id="choice-html-parse-refusals"></a>**`html!` refuses three kinds of markup a browser parses differently from how it
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
-    taken out of foreign content), where the markup shows how a browser parses it, and acts
-    nowhere else.** An element written in a
+    taken out of foreign content), and a patch's top level the runtime's parse of it loses, where
+    the markup shows how a browser parses it, and acts nowhere else.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
     text, a `<plaintext>` made the rest of the page text, its end tag included, and an element the
@@ -4203,6 +4203,27 @@ rules something out.
     (`compile_fail` examples of `html!`). Text
     and expressions in the elements read as text compile as before, written escaped; an expression
     in a `<script>` or a `<style>` was refused already.
+
+    The runtime parses a patch as a `<template>`'s content, where the first top-level element
+    other than a head's (`<script>`, `<style>`, `<link>`, `<template>` ..) decides how the
+    rest is read, so a table row beside a status line was dropped with only a console error
+    ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
+    In a view that could be a patch (every top-level element has an `id={..}`), `html!` refuses
+    a table part (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`,
+    `<col>`, `<colgroup>`) after a first element that is HTML's wherever it lands (one of the
+    elements taken out of foreign content: a `<p>`, a `<div>`, a `<span>`, a `<table>` ..),
+    which the parse drops; after a first table part, a `<table>` at the top level, or a
+    `<table>`, `<form>` or table part inside a later element HTML's wherever it lands, which it
+    takes apart; and after a first `<col>`, an element HTML's wherever it lands, which it drops.
+    Each is lost wherever else the view is written too, under the rule below: a page's body
+    drops a table part, a table moves the other element out of it, and an `<svg>` is closed
+    before an element HTML's wherever it lands. So where the first element is not known (an
+    expression, a component or a block writes before it), is a `<title>` (a head's in the
+    standard and in Firefox, the first element in Chromium and WebKit), or is one an `<svg>`
+    keeps as written (a `<section>`, a `<form>`, an `<a>`), and for table parts of different
+    kinds or a `<form>` straight after the first table part, which an `<svg>` keeps too,
+    nothing is refused. The debug check that answers such a patch with a 500 when it is sent
+    ([Limit 2](#limit-whole-element-patches)) finds those; a release build sends them as drawn.
 
     `html!` sees only its own markup, so it acts only where that markup shows how a browser
     parses it, following the HTML standard's tree construction: HTML under an element that is
@@ -4266,7 +4287,9 @@ rules something out.
     rest are dropped;
     and the start tags its rules for parsing tokens in foreign content take out
     of an `<svg>` or a `<math>`, which `TEXT_ONLY`, `RAW_TEXT`, `SVG_HTML_POINTS`,
-    `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the browsers
+    `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the "in
+    template" insertion mode's head tags and table start tags, and what the table insertion
+    modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy; the browsers
     Playwright runs, which read an element in those holders as text and keep one in an `<svg>`'s
     own `<title>`, and keep the first of a duplicated `encoding`); reasoned (an `html!` sees its
     own markup and nothing around it, so what its top and a component's children land in is not
@@ -4278,7 +4301,9 @@ rules something out.
     written; a mistake the compiler can see is a compile error, its 3 and Values 4).
 
     Revisit when: the HTML standard changes the elements it reads as text, its integration points
-    or the start tags it takes out of foreign content, when the lists in `html.rs` follow it; or an
+    or the start tags it takes out of foreign content, when the lists in `html.rs` follow it; or the
+    runtime parses a patch some other way than as a `<template>`'s content, when the patch
+    refusals go or change with it; or an
     app is found to write one of the refused shapes across a component's edge (a component whose
     top-level element lands in an `<svg>` and writes an element there a browser moves out, or
     children a component writes into a `<textarea>`), when following the context across
@@ -4312,7 +4337,13 @@ rules something out.
     `querySelectorAll` for an element written in a `<textarea>`, an HTML `<title>` (in `<head>`,
     in the body and in an `<svg>`'s `<desc>`), an `<iframe>`, an `<xmp>`, a `<noembed>` and a
     `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
-    it, load such a page in the three engines and count the matches.
+    it, load such a page in the three engines and count the matches; 2026-11-15, for a patch's top
+    level, the "in template", "in table", "in table body", "in row" and "in column group"
+    insertion modes read that day against `TEMPLATE_HEAD`, `TABLE_PARTS` and `patch_top` in
+    `html.rs`, and `scripts/smoke.mjs` loading the shapes in
+    `crates/corten/src/patch-parsing.json` as a `<template>`'s content, which passed in Chromium
+    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), with Chromium and WebKit
+    letting a leading `<title>` decide.
 
 ## Rules
 
@@ -4426,10 +4457,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
    browser state inside a replaced element (scroll position) resets, so keep targets small. The
    runtime parses a patch as a `<template>`'s content, where the first top-level element (other
    than a head's, such as a `<script>` or `<template>`) decides how the rest is read, so a table
-   part beside other elements is dropped or moved there unless the table parts come first. A
-   debug build refuses such a patch, as `html!` writes it, when it sends it, naming the element,
-   but a release build sends it as drawn and the browser loses the part, so a mix that only some
-   data draws is found only by a debug render that draws it
+   part beside other elements is dropped or moved there unless the table parts come first.
+   `html!` refuses the shapes its markup shows ([Choice 54](#choice-html-parse-refusals)); where
+   it does not (a component or an expression writes the first element, or the first is one an
+   `<svg>` keeps, such as a `<section>` or a `<form>`), a debug build refuses such a patch, as
+   `html!` writes it, when it sends it, naming the element, but a release build sends it as drawn
+   and the browser loses the part, so a mix that only some data draws is found only by a debug
+   render that draws it
    ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
@@ -4788,7 +4822,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     text, a `<plaintext>`, an element taken out of foreign content;
     [Choice 54](#choice-html-parse-refusals)) and the debug check of a keyed ref's
     keys ([Choice 46](#choice-ref-values)) act only where that markup shows how a browser parses
-    it, and where it does not they let a mistake pass rather than stop correct markup. At the top
+    it (and the refusal of a patch's top level, only where the first element is written in it), and where it does not they let a mistake pass rather than stop correct markup. At the top
     of a component's markup, which its parent may write into an `<svg>` or a `<math>`, none of
     the refusals acts: an element a browser moves out of foreign content (`<b>`, `<div>`, `<p>`,
     `<span>`, `<table>` and the rest of the standard's list, a `<font>` with `color`, `face` or

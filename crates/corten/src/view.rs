@@ -267,7 +267,8 @@ use std::{
 ///
 /// Three kinds of markup a browser parses differently from how it is written do not compile, where
 /// the markup shows how the browser parses it: an element inside one whose content a browser reads
-/// as text, a `<plaintext>`, and an element a browser takes out of an `<svg>` or a `<math>`.
+/// as text, a `<plaintext>`, and an element a browser takes out of an `<svg>` or a `<math>`
+/// (and a patch's top level a browser loses, under [`Patch`]).
 /// HTML a browser rearranges inside HTML (a `<div>` in a `<p>`, an `<a>` in an `<a>`, a
 /// `<form>` in a `<form>`, an `<li>` in an `<li>`, a `<div>` straight in a `<table>`)
 /// still compiles. An element written inside one whose content a browser parsing HTML reads as
@@ -1329,6 +1330,57 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 ///         <Note text={&text} />
 ///     }
 /// }
+/// ```
+///
+/// The runtime parses a patch's top-level elements together, as a `<template>`'s content, where
+/// the first element decides how the rest is read. A table part (`<tr>`, `<td>`, `<tbody>`,
+/// `<caption>`, `<col>` ..) after an element that is HTML's wherever it lands (a `<p>`, a
+/// `<div>`, a `<span>`, a `<table>` ..) would be dropped, and after a table part a `<table>`, or a
+/// `<table>`, `<form>` or table part inside such an element, taken apart; none is kept as written
+/// on a page either, so `html!` refuses them where it sees the top level
+/// ([design Choice 54](https://github.com/corten-run/corten/blob/main/docs/design.md#choice-html-parse-refusals)):
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct StatusId;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// let _ = html! { <p id={StatusId}>"Saved"</p> <tr id={RowId(7)}><td>"7"</td></tr> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct TotalsId;
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <table id={TotalsId}></table> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct NoteId;
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={NoteId}><table></table></div> };
+/// ```
+///
+/// Table parts first, of one kind, compile, with other elements after them. Where the first
+/// element is not known (an expression, a component, a block) or is one an `<svg>` keeps as
+/// written (a `<section>`, a `<form>`), which a component's top level may land in, nothing is
+/// refused, and a debug build answers the patch with a 500 when it is sent:
+///
+/// ```
+/// use corten::{prelude::*, view::Patch};
+/// #[derive(Id)]
+/// struct StatusId;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// fn send(view: impl Patch) -> String { view.to_html() }
+/// let patch = html! { <tr id={RowId(7)}><td>"7"</td></tr> <p id={StatusId}>"Saved"</p> };
+/// assert_eq!(send(patch), r#"<tr id="row-7"><td>7</td></tr><p id="status">Saved</p>"#);
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a patch",

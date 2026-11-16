@@ -1036,7 +1036,14 @@ row's cell is kept. After a `<col>`, everything but a `<col>` or
 element) is read the same way on its own, except that Firefox drops a `<form>` there whole after
 a table part. So a patch that sends a table's header row beside a summary loses the row.
 Send the `<table>` whole with an id, or put the table parts first, of one kind, with no
-`<table>` or `<form>` in what follows. Debug builds check each patch as it is sent (`req.patch`,
+`<table>` or `<form>` in what follows. Where the markup shows it, `html!` refuses such a patch
+when it compiles: a table part after a first element that is HTML's wherever it lands (a `<p>`, a
+`<div>`, a `<span>`, a `<table>` ..), a `<table>` after a first table part or a `<table>`,
+`<form>` or table part inside a later such element, and such an element after a first `<col>`
+([design Choice 54](../design.md#choice-html-parse-refusals)). It refuses nothing where a
+component, an expression or a block writes the first element, or where the first is one an
+`<svg>` keeps as written (a `<section>`, a `<form>`, an `<a>`), which a component's top level
+may land in. Debug builds check each patch as it is sent (`req.patch`,
 `req.patch_or`, `req.invalid`, `form.draw` and `corten::live`, with the area's stylesheet
 links Corten adds after its elements): the request fails with a 500, or the stream panics, naming
 the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`
