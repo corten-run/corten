@@ -3776,7 +3776,12 @@ fn the_patch_checks_read_the_void_end_tags_html_writes() {
     let object = html! {
         <SavedNote />
         <tr id={LostRowId}>
-            <td><object type="image/svg+xml"><param name="a" value="1" />"fallback"</object></td>
+            <td>
+                <object type="image/svg+xml">
+                    <param name="a" value="1" />
+                    "fallback"
+                </object>
+            </td>
         </tr>
     }
     .to_html();
