@@ -4,7 +4,7 @@ A [Corten](https://github.com/corten-run/corten) app.
 
 ```sh
 corten dev      # http://localhost:3000, rebuilds on save and reloads the page
-corten check    # format, lint, tests, script types (needs TypeScript 6.0 or later: npm install --global typescript)
+corten check    # format, lint, build, tests, script types (needs TypeScript 6.0 or later: npm install --global typescript)
 corten build    # release binary in target/release
 docker build -t {{name}} . && docker run -p 8080:8080 {{name}}
 ```
