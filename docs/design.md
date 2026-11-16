@@ -3108,7 +3108,9 @@ rules something out.
     on its way: each whole read would replace the part and its read, so a part slower than the
     page's interval would never come, and not once a part's answer has asked for it to be read
     again (`ReadAgain::from`), which then reads in its place; that answer's tag goes beside the part
-    it was in, as drawn again, when the tag it answered was inside the part it replaced, never in place of another part's
+    it was in, as drawn again, when the tag it answered was inside the part it replaced, never in place of another part's (a
+    form's answer's tag takes the place only of the tag read again for the part it draws, not a
+    slow part's still waiting nor one read again for another part)
     (inside it when that part is `<main>` or one of the layout's elements that are the page's).
     A part read again stops its read, and its listener, when its part leaves the page (an answer
     that was its tag alone reads for the parts the tag it answered read for, all of a shared

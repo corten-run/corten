@@ -1081,8 +1081,13 @@ async function apply(html, signal, sent, took, own = true, asked, within, visite
  */
 function partTagBeside(put) {
   for (const el of put) {
-    if (!idOf(el) || !el.parentElement) continue;
-    const tag = Array.from(childrenOf(el.parentElement)).find((sibling) => matchesOf(sibling, PART_AGAIN));
+    const id = idOf(el);
+    if (!id || !el.parentElement) continue;
+    // Its own: not a slow part's tag (`data-part`, a read still on its way), nor one read again
+    // for other parts beside it (another part's answer put it there).
+    const tag = Array.from(childrenOf(el.parentElement)).find(
+      (sibling) => matchesOf(sibling, PART_AGAIN) && !hasAttr(sibling, "data-part") && (readFor.get(sibling)?.some((part) => idOf(part) === id) ?? true),
+    );
     if (tag) return tag;
   }
 }

@@ -5151,6 +5151,37 @@ async function run(browser) {
     await split.unrouteAll({ behavior: "ignoreErrors" });
     await split.context().close();
   }
+  // A form's answer for one of two independent parts beside each other, with its own tag to read
+  // it again, does not take the place of the other part's tag (#1400).
+  {
+    const ind = await (await browser.newContext()).newPage();
+    const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
+    await ind.route("**/smoke/ind-a-first", (route) => route.fulfill(patchOf('<p id="ind-a">A</p><template data-corten-read-again="30" data-from="/smoke/ind-a-poll"></template>')));
+    await ind.route("**/smoke/ind-b-first", () => {});
+    await ind.goto(`${base}/`);
+    await ind.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="ind-0"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="ind-0"><p id="ind-a">Waiting</p><template data-corten-read-again="0" data-from="/smoke/ind-a-first" data-part="ind-a"></template><p id="ind-b">Waiting</p><template data-corten-read-again="0" data-from="/smoke/ind-b-first" data-part="ind-b"></template></div>',
+        ),
+      );
+    });
+    await ind.waitForSelector('template[data-from="/smoke/ind-a-poll"]', { state: "attached", timeout: 5000 }).catch(() => {});
+    await ind.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<p id="ind-b">B by a form</p><template data-corten-read-again="30" data-from="/smoke/ind-b-poll"></template>'));
+    });
+    const indTags = await ind.evaluate(() => Array.from(document.querySelectorAll("#ind-0 > template")).map((tag) => tag.getAttribute("data-from")));
+    check(
+      "a form's answer for one of two parts beside each other, with a tag to read it again, leaves the other's tag in place",
+      indTags.includes("/smoke/ind-a-poll") && indTags.includes("/smoke/ind-b-first"),
+      JSON.stringify(indTags),
+    );
+    await ind.unrouteAll({ behavior: "ignoreErrors" });
+    await ind.context().close();
+  }
   // Nor when one of its tags left while its other moved: read again for one tag, it would no longer
   // guard the other's part, which a form's answer could then replace under it (#1400).
   {
