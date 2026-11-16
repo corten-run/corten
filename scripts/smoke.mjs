@@ -4777,14 +4777,22 @@ async function run(browser) {
         stays(early) && stays(reading) && (await at()) === "/smoke/scope?scope=week",
         JSON.stringify({ early, reading, at: await at() }),
       );
-      // The same address again: its answer is asked and drawn, and no new entry is made.
+      // The same address again: its answer is asked and drawn, and no new entry is made (the entry
+      // stays the current one, and Day, ahead of it since the checks above, stays ahead).
       const before = await entries();
+      const entry = () =>
+        scope.evaluate(() => {
+          const nav = /** @type {any} */ (window).navigation;
+          return { key: nav.currentEntry.key, index: nav.currentEntry.index, ahead: nav.entries()[nav.currentEntry.index + 1]?.url ?? "" };
+        });
+      const was = await entry();
       asked.length = 0;
       const again = await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-      const same = { drawn: again, asked: asked.splice(0), at: await at(), added: (await entries()) - before, shown: await shown() };
+      const same = { drawn: again, asked: asked.splice(0), at: await at(), added: (await entries()) - before, shown: await shown(), was, now: await entry() };
       check(
         "a data-address form's answer for the address it is at adds no history entry",
-        same.drawn && same.asked.join() === "action ?scope=week" && same.at === "/smoke/scope?scope=week" && same.added === 0 && same.shown === "week",
+        same.drawn && same.asked.join() === "action ?scope=week" && same.at === "/smoke/scope?scope=week" && same.added === 0 && same.shown === "week" &&
+          same.now.key === same.was.key && same.now.index === same.was.index && same.was.ahead.endsWith("/smoke/scope?scope=day") && same.now.ahead === same.was.ahead,
         JSON.stringify(same),
       );
       // A GET data-patch form without the mark draws its answer and leaves the address.
@@ -4808,18 +4816,20 @@ async function run(browser) {
        * takes focus for its unmarked form's button as its content is put in `<main>`, as a page's
        * own script may.
        * @param {string} button @param {string} search @param {import("@playwright/test").RouteFulfillOptions} answer
-       * @param {boolean} [claim] @param {boolean} [blurred] focus left the header's link before
-       *   the traversal, so Tab would go on from it
+       * @param {boolean} [claim] @param {"header" | "blurred" | "main"} [start] where focus is
+       *   before the traversal: the header's link, the body after the link (Tab would go on from
+       *   it), or a control in `<main>`, which the page read takes away
        */
-      const backFrom = async (button, search, answer, claim = false, blurred = false) => {
+      const backFrom = async (button, search, answer, claim = false, start = "header") => {
         await answered(() => scope.getByRole("button", { name: button, exact: true }).click());
         const from = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === search;
         await scope.route(from, (route) => (route.request().headers()["corten"] === "action" ? route.fulfill(answer) : route.continue()));
         asked.length = 0;
         // Focus outside the part, which a page read leaves at the document's start, as Back to any
         // other page does.
-        await scope.focus("header a");
-        if (blurred) await scope.evaluate(() => /** @type {HTMLElement} */ (document.activeElement).blur());
+        if (start === "main") await scope.getByRole("button", { name: "Year, in place", exact: true }).focus();
+        else await scope.focus("header a");
+        if (start === "blurred") await scope.evaluate(() => /** @type {HTMLElement} */ (document.activeElement).blur());
         if (claim)
           await scope.evaluate(() => {
             const panel = document.getElementById("smoke-scope");
@@ -4846,7 +4856,7 @@ async function run(browser) {
       // The page read above began the screen again: the form's next entry is the first of it.
       await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
       // Focus left the header's link before this one: Tab starts at the document's start after it.
-      const moved = await backFrom("Week", "?scope=day", { status: 204, headers: { "corten-location": "/smoke/quoted" } }, false, true);
+      const moved = await backFrom("Week", "?scope=day", { status: 204, headers: { "corten-location": "/smoke/quoted" } }, false, "blurred");
       check(
         "Back to a data-address form's entry whose patch read redirects reads the page instead",
         moved.at === "/smoke/scope?scope=day" && moved.shown === "day" && moved.asked.join() === "action ?scope=day,nav ?scope=day" && moved.focus === "body" && moved.tab === firstTab,
@@ -4872,12 +4882,19 @@ async function run(browser) {
         page.at === "/smoke/scope?scope=week" && page.added === 1 && page.shown === "week" && pageBack.at === "/smoke/scope?scope=day" && pageBack.shown === "day" && pageBack.asked.join() === "nav ?scope=day",
         JSON.stringify({ page, pageBack }),
       );
-      // An error status is no entry's patch, even one that carries a patch: the page is read.
-      const refused = await backFrom("Week", "?scope=day", {
-        status: 500,
-        headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
-        body: '<section id="smoke-scope"><p>Scope: <output>refused</output></p></section>',
-      });
+      // An error status is no entry's patch, even one that carries a patch: the page is read. Focus
+      // was on a control in `<main>`, which the read takes away: Tab starts at the document's start.
+      const refused = await backFrom(
+        "Week",
+        "?scope=day",
+        {
+          status: 500,
+          headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
+          body: '<section id="smoke-scope"><p>Scope: <output>refused</output></p></section>',
+        },
+        false,
+        "main",
+      );
       check(
         "Back to a data-address form's entry whose patch read is a 500 with a patch reads the page instead",
         refused.at === "/smoke/scope?scope=day" && refused.shown === "day" && refused.asked.join() === "action ?scope=day,nav ?scope=day" && refused.focus === "body" && refused.tab === firstTab,

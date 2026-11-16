@@ -3390,7 +3390,9 @@ rules something out.
     it fails, `style-src 'self'` allows it under the policy the document loaded with, and its
     subresources are under that policy too; the load, the failure and a second patch waiting for
     a load are checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`, and a navigation
-    waiting for a patch's load in Chromium and Firefox, WebKit having no Navigation API); reasoned (a
+    waiting for a patch's load in Chromium and Firefox, the smoke's WebKit run hiding the
+    Navigation API on that page, as Playwright's WebKit loses track of a page whose navigation the
+    runtime intercepts there, though WebKit 27.2 has the API); reasoned (a
     handler's path decides its area, as a page's does, so the links need nothing the request does
     not have; the runtime already skips a stylesheet the head has, by its URL; the wait a page
     outside the area pays is one request; the harness patch's buffer grows once more for the link,
@@ -3421,7 +3423,8 @@ rules something out.
     Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1) by `scripts/smoke.mjs`, and a navigation
     waiting for a patch's load in Chromium and Firefox; 2026-11-13, both of those waits drawn
     unstyled, and those two checks alone failing, in Chromium and Firefox with round 1's
-    `stylesOf` (`9c722e27`) put back in this head's runtime.
+    `stylesOf` (`9c722e27`) put back in this head's runtime; 2026-11-15, why WebKit is not among
+    them, read from `scripts/smoke.mjs` (the navigation wait itself not checked in WebKit again).
 
 48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
     `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what

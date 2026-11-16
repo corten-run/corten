@@ -2724,22 +2724,24 @@ function address(to, patched) {
  * Back or forward between entries of this page that `data-address` forms' patches drew
  * ({@link addressed}): the entry's address is read as the form read it (`corten: action`), so the
  * HTTP cache can answer it, and its patch is drawn. An answer that is not a whole 2xx patch from
- * here (a page, a redirect, an error, even one that carries a patch, none, a body cut off) is
- * read again as a page, as for any other entry. The traversal's signal ends it, as a newer
+ * here (a page, a redirect, an error, even one that carries a patch, none, a body cut off), or a
+ * patch that cannot be drawn, is read again as a page, as for any other entry. The traversal's
+ * signal ends it, as a newer
  * navigation does any visit; the screen stays, so the fields outside the patch keep what the user
  * typed, and the patch keeps a field they are editing as any patch does.
  * @param {URL} url @param {AbortSignal} signal
  */
 async function readAddress(url, signal) {
   // A page read: the traversal kept focus for the patch, so focus the swap left where it was (outside
-  // `<main>`, or the body, with Tab going on from where focus last was) goes where the browser puts
-  // it for a page, the document's start, which the next Tab starts from: the body takes it for the
-  // move. Focus the page gave a control as it was drawn stays.
+  // `<main>`) or let fall to the body (from what it took away, or before, with Tab going on from
+  // there) goes where the browser puts it for a page, the document's start, which the next Tab
+  // starts from: the body takes it for the move. Focus the page gave a control as it was drawn stays.
   const page = async () => {
     const was = document.activeElement;
     await visit(url, signal, undefined, false, undefined, undefined, stale);
     const body = document.body;
-    if (signal.aborted || document.activeElement !== was) return;
+    const now = document.activeElement;
+    if (signal.aborted || (now && now !== was && now !== body)) return;
     const made = !hasAttr(body, "tabindex");
     if (made) body.tabIndex = -1;
     body.focus({ preventScroll: true });
@@ -2755,7 +2757,15 @@ async function readAddress(url, signal) {
   const html = await res.text().catch(() => null);
   signal.throwIfAborted();
   if (html === null) return page();
-  await apply(html, signal, null);
+  // A patch that cannot be drawn leaves the screen another entry's: the page is read instead.
+  const drawn = await apply(html, signal, null).then(
+    () => true,
+    (e) => {
+      if (signal.aborted) throw e;
+      return false;
+    },
+  );
+  if (!drawn) return page();
   signal.throwIfAborted();
   drawnFor = navigation?.currentEntry?.key ?? drawnFor;
 }
