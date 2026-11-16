@@ -514,10 +514,16 @@ the two cannot drift.
 ## Form fields
 
 A handler takes a form's control as its field: the markup passes the `#[derive(Fields)]` name,
-as `name={..}` does, and the script's parameter is the control. A named control of the form's
-`Fields` is always reached this way, whether the component with the handler draws it or another
-does (a package's fields that the form shares with forms that have no script, which has no refs
-to give one); a ref is for every other element.
+as `name={..}` does, and the script's parameter is the control. A handler in a form (on it,
+inside it, or joined to it with `form=`) reaches the form's control of a name this way, whichever
+component draws it (a package's fields that the form shares with forms that have no script, which
+has no refs to give one). A ref names an element of the handler's own component: every element
+that is not a form's named control, and a named control the handler needs as that element rather
+than as its form's control of the name. That is one a handler outside the form reads (the deck
+builder's hidden `version`, which its `on:connect` on the element around the form reads), one of
+several that share a name, read through the control around the event (`copies.closest()`, the
+count input of the deck line that changed), and a widget's own control (corten-ui's
+`NumberField`), which it draws for whatever field the app names, in a form or not.
 
 ```rust,ignore
 let f = Shipment::FIELDS;
@@ -555,16 +561,19 @@ and a field where the handler takes text or another element, do not compile.
 
 What the compiler cannot see is the control. A field's name carries what it reads
 (`FieldName<Condition>`), not whether the form draws it as a select or as radios, and the markup
-that draws it may be another component's. So the runtime checks it: a call whose form has no
-control of that name, more than one where the handler takes one, or one of another kind, runs
-nothing and reports `corten: shipping.fill takes field weight, and its form has no such control`.
+that draws it may be another component's. So the runtime checks it: a call that takes one
+control (an input, select or textarea) whose form has none of that name, more than one, or one of
+another kind, and a call that takes a group whose form has a control of the name that is not an
+input, runs nothing and reports
+`corten: shipping.fill takes field weight, and its form has no such control`. A group with no
+control of the name is `[]`, as a group of radios the form left out is.
 Under `corten dev` the console says which as soon as the page draws such a call, before anything
 calls it: `corten: shipping.fill takes field weight as one <input>, and its form has select`
 ([design Limit 31](../design.md#limit-field-kind)). A group is an array, not the
 `RadioNodeList` a form's `elements.namedItem` gives: `namedItem` gives a list only for two or more
 controls of a name and the control itself for one, and a script cannot make one, so the handler
-could not count on its type. An element that is not a named control of the form's `Fields` is a
-ref: an `<output>`, a list, a button, a control outside any form; so is an `<input type="image">`,
+could not count on its type. Besides the cases above, a ref is an `<output>`, a list, a button, a
+control outside any form, and an `<input type="image">`,
 which the browser leaves out of a form's controls since it is a submit button that posts `name.x`
 and `name.y`, never its field. The page's handlers that take a field load a small module that finds
 it (`corten-field`, 0.5 kB gzipped), as a format argument loads `corten-format`; a page with none

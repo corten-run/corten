@@ -68,10 +68,13 @@ division: end statements with `;` and keep a division on the line it continues.
    and the parameter is the control: `HTMLInputElement` (an input or a checkbox),
    `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for radios or checkboxes
    sharing the name. The runtime finds it by name in the handler's form when the handler runs, so
-   the component that draws the field needs no ref. A named control of the form's `Fields` is
-   always passed this way, whoever draws it; a ref is for every other element. Never pass a
+   the component that draws the field needs no ref. A handler in a form passes the form's control
+   of a name this way, whoever draws it. A ref is for the handler's own elements: one a handler
+   outside the form reads, one of several sharing a name read through the control around the
+   event (`copies.closest()`, a deck line's count), and a widget's own control. Never pass a
    field's name as text and look it up with `form.elements.namedItem`. The compiler cannot see which control the form draws: a
-   call whose form lacks it, or has another kind, throws, and `corten dev` reports it on draw.
+   call that takes a single control (an input, select or textarea) whose form lacks it, or has
+   another kind, throws, and `corten dev` reports it on draw; a group with none is `[]`.
 3. A wrong ref type, wrong event type, wrong value type or a handler the script does not export
    is a compile error at the call. `tsc --checkJs` checks the function bodies, with `strict`,
    `noUncheckedIndexedAccess` (an element or record value read by index is `T | undefined`: read

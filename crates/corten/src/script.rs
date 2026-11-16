@@ -3358,7 +3358,7 @@ pub mod __private {
                 '<' => out.push_str("&lt;"),
                 '>' => out.push_str("&gt;"),
                 '\'' => out.push_str("&#39;"),
-                c if needs_escape(c) => {
+                c if needs_unicode_escape(c) => {
                     use std::fmt::Write;
                     let _ = write!(out, "\\u{:04x}", c as u32);
                 }
@@ -3367,9 +3367,15 @@ pub mod __private {
         }
     }
 
+    /// Whether [`json_chars`] writes `c` as `\uXXXX`: a control character or a line separator.
+    /// Its own test, run for each character of every string argument, so it stays this cheap.
+    fn needs_unicode_escape(c: char) -> bool {
+        (c as u32) < 0x20 || c == '\u{2028}' || c == '\u{2029}'
+    }
+
     /// Whether [`json_chars`] writes `c` other than as it is.
     fn needs_escape(c: char) -> bool {
-        matches!(c, '"' | '\\' | '&' | '<' | '>' | '\'' | '\u{2028}' | '\u{2029}') || (c as u32) < 0x20
+        matches!(c, '"' | '\\' | '&' | '<' | '>' | '\'') || needs_unicode_escape(c)
     }
 
     /// Whether [`json_chars`] writes `text` as it is.

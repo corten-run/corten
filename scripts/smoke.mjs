@@ -1047,6 +1047,97 @@ async function run(browser) {
     const imported = status === "live" && tries > 2;
     check("a script module whose first two requests fail is imported again, and its on:connect handler runs", imported, `${status}, ${tries} requests${imported ? "" : `: ${seen.join("; ")}`}`);
   }
+  // Corten's own modules retry the same way. The format module answered 503 twice (the page's
+  // module script, then the runtime's import): the on:connect handler that takes a format waits
+  // for it, through the wait after the second failure, and runs once a third request loads it.
+  {
+    const refused = await browser.newPage();
+    /** @type {number[]} */
+    const at = [];
+    let status = null;
+    try {
+      await refused.route(
+        (url) => url.pathname.endsWith("/scripts/corten-format.js"),
+        (route) => {
+          at.push(Date.now());
+          return at.length <= 2 ? route.fulfill({ status: 503, body: "Service Unavailable" }) : route.continue();
+        },
+      );
+      await refused.goto(base);
+      await refused.waitForSelector(`${live}[data-status="live"]`, { timeout: 15_000 }).catch(() => {});
+      status = await refused.getAttribute(live, "data-status");
+    } finally {
+      await refused.close();
+    }
+    const gap = at.length > 2 ? at[2] - at[1] : -1;
+    check(
+      "a format module answered 503 twice is asked for again after its wait, and the on:connect handler that takes a format runs",
+      status === "live" && at.length > 2 && gap >= 400,
+      `${status}, ${at.length} requests, ${gap} ms between the second and third`,
+    );
+  }
+  // A link from a page with no fields to one with them: the swapped-in page waits for the field
+  // module, which the runtime imports, so the first change runs its handler.
+  {
+    const linked = await browser.newPage();
+    let filled = "";
+    try {
+      await linked.goto(`${base}/news`);
+      await linked.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-fields" href="/smoke/fields">Fields</a>')));
+      await linked.click("#to-fields");
+      await linked.waitForSelector("#ship-form select", { timeout: 5000 });
+      await linked.selectOption('#ship-form select[name="service"]', "air");
+      filled = await linked
+        .waitForFunction(() => document.querySelector("#ship-form output")?.textContent || null, undefined, { timeout: 5000 })
+        .then((h) => h.jsonValue().then(String), () => "");
+    } finally {
+      await linked.close();
+    }
+    check("a link to a page whose handlers take a field loads the field module, and the first change runs its handler", filled.startsWith("select,"), filled);
+  }
+  // The field module answered 503 once, as a link brings its page: the swap goes ahead, a change
+  // before it loads gets the browser's default, the next one after the wait asks for it again,
+  // and a change once it is in runs the handler.
+  {
+    const refused = await browser.newPage();
+    /** @type {number[]} */
+    const at = [];
+    let first = "";
+    let later = "";
+    try {
+      await refused.route(
+        (url) => url.pathname.endsWith("/scripts/corten-field.js"),
+        (route) => {
+          at.push(Date.now());
+          return at.length === 1 ? route.fulfill({ status: 503, body: "Service Unavailable" }) : route.continue();
+        },
+      );
+      await refused.goto(`${base}/news`);
+      await refused.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-fields" href="/smoke/fields">Fields</a>')));
+      await refused.click("#to-fields");
+      await refused.waitForSelector("#ship-form select", { timeout: 5000 });
+      const output = () => refused.evaluate(() => document.querySelector("#ship-form output")?.textContent ?? "");
+      await refused.selectOption('#ship-form select[name="service"]', "air");
+      await refused.waitForTimeout(200);
+      first = await output();
+      // Past the wait after the failure, each change asks for the module until one runs.
+      const deadline = Date.now() + 5000;
+      for (let i = 0; !later && Date.now() < deadline; i += 1) {
+        await refused.waitForTimeout(Math.max(0, (at[0] ?? 0) + 600 - Date.now()));
+        await refused.selectOption('#ship-form select[name="service"]', i % 2 ? "air" : "ground");
+        await refused.waitForTimeout(150);
+        later = await output();
+      }
+    } finally {
+      await refused.close();
+    }
+    const gap = at.length > 1 ? at[1] - at[0] : -1;
+    check(
+      "a field module answered 503 once gives a change the browser's default, is asked for again after its wait, and a later change runs the handler",
+      first === "" && later.startsWith("select,") && at.length > 1 && gap >= 400,
+      `first change: "${first}", later: "${later}", ${at.length} requests, ${gap} ms between them`,
+    );
+  }
 
   const prices = () => page.$$eval('[data-ref="price"]', (cells) => cells.map((c) => c.textContent));
   const before = await prices();
