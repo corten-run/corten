@@ -1,6 +1,7 @@
-// Declarative shadow DOM as a way to place a slow part streamed later without a script, the
-// evidence for the design's choice of whole pages (docs/design.md#choice-whole-pages). Two
-// layouts, in Chromium, Firefox and WebKit:
+// Declarative shadow DOM, and Chromium's out-of-order streaming (Declarative Partial Updates), as
+// ways to place a slow part streamed later without a script, the evidence for the design's choice
+// of whole pages (docs/design.md#choice-whole-pages). Three layouts, in Chromium (with and without
+// its experimental web platform features), Firefox and WebKit:
 //
 // - "page": the whole page in the shadow root, a named slot where the part goes. Whether the
 //   slot's fallback shows and the late element replaces it with JavaScript off, and whether the
@@ -9,6 +10,12 @@
 //   host's own children. Whether the same holds for the page then, and where the late part may go:
 //   only as a child of the host, which stays open until it arrives, and a part nested in the page
 //   (a grid cell) is not placed.
+// - "templateFor": no shadow root; the part's place is a `<?start name>` processing instruction
+//   in a cell of the page, its fallback up to `<?end>`, and the late part a `<template for>` sent
+//   after `</main>`. `pi` says whether the parser left a processing instruction in the page and
+//   whether it applied the template (an engine without them parses the marker as a comment, the
+//   fallback stays and the template is inert), and whether a script can stream markup into an
+//   element as the parser does (`streamSetter`, the streaming setters an engine has).
 //
 // Run from a checkout after `npm ci` and `npx playwright install chromium firefox webkit`:
 // node scripts/dsd-probe.mjs. It prints one line of results a layout and engine.
@@ -20,7 +27,7 @@ const PAGE = '<p id=inner>inside</p><a id=jump href=#target>jump</a><div style=h
 const LATE = "<p slot=picks id=late>picks</p>";
 // `head` is sent first; the late part follows, then `close` and `end`, or between them as a child
 // of the host (`close` ends the page's cell).
-/** @type {Record<string, { head: string, close: string, end: string, nestedLate?: boolean }>} */
+/** @type {Record<string, { head: string, close: string, end: string, nestedLate?: boolean, late?: string }>} */
 const layouts = {
   page: {
     head: `<div id=host><template shadowrootmode=open>${PAGE}<slot name=picks><span id=fallback>fallback</span></slot></template>`,
@@ -33,6 +40,12 @@ const layouts = {
     end: "</div>",
     nestedLate: true,
   },
+  templateFor: {
+    head: `<main>${PAGE}<div id=cell><?start name="picks"><span id=fallback>fallback</span><?end></div>`,
+    close: "</main>",
+    end: "",
+    late: '<template for="picks"><p id=late>picks</p></template>',
+  },
 };
 
 const server = http.createServer((req, res) => {
@@ -41,7 +54,8 @@ const server = http.createServer((req, res) => {
   const nested = url.searchParams.has("nested");
   res.writeHead(200, { "content-type": "text/html" });
   // The late part, a child of the host or inside the page's cell (`nested`).
-  const tail = nested ? LATE + layout.close + layout.end : layout.close + LATE + layout.end;
+  const late = layout.late ?? LATE;
+  const tail = nested ? late + layout.close + layout.end : layout.close + late + layout.end;
   const head = `<!doctype html><title>probe</title>${CSS}${layout.head}`;
   if (url.pathname === "/stream") {
     res.write(head + "<!--" + "x".repeat(4096) + "-->");
@@ -52,8 +66,15 @@ await new Promise((ok) => server.listen(0, () => ok(undefined)));
 const address = server.address();
 const base = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
 
-for (const type of [chromium, firefox, webkit]) {
-  const browser = await type.launch();
+/** @type {[import("playwright").BrowserType, string[]][]} */
+const runs = [
+  [chromium, []],
+  [chromium, ["--enable-experimental-web-platform-features"]],
+  [firefox, []],
+  [webkit, []],
+];
+for (const [type, args] of runs) {
+  const browser = await type.launch({ args });
   for (const [name, layout] of Object.entries(layouts)) {
     for (const nested of layout.nestedLate ? [false, true] : [false]) {
       const query = `?layout=${name}${nested ? "&nested" : ""}`;
@@ -78,11 +99,24 @@ for (const type of [chromium, firefox, webkit]) {
         const box = /** @type {HTMLInputElement | null | undefined} */ (document.getElementById("box") ?? document.getElementById("host")?.shadowRoot?.getElementById("box"));
         return box?.checked ?? null;
       });
+      // As the document's parser built the page: a processing instruction left in it, or a
+      // `<template for>` it applied (gone from the page, its part in the cell).
+      // And whether a script can parse a stream into the page as the parser does, which a
+      // navigation that swaps <main> in would need to place a part sent later.
+      const pi =
+        name === "templateFor"
+          ? await on.evaluate(() => ({
+              node: document.createTreeWalker(document, NodeFilter.SHOW_PROCESSING_INSTRUCTION).nextNode() !== null,
+              applied: document.querySelector("template[for]") === null && document.querySelector("#cell #late") !== null,
+              streamSetter: ["streamHTML", "streamHTMLUnsafe", "streamAppendHTMLUnsafe"].filter((name) => name in Element.prototype),
+            }))
+          : undefined;
       console.log(
         type.name(),
         browser.version(),
+        args.join(" ") || "(no flags)",
         name + (nested ? " (late part inside the page's cell)" : ""),
-        JSON.stringify({ jsOff: { before, after }, idsFound, documentCss: color, fragmentScrollY, labelFor }),
+        JSON.stringify({ jsOff: { before, after }, idsFound, documentCss: color, fragmentScrollY, labelFor, pi }),
       );
       await off.context().close();
       await on.context().close();

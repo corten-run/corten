@@ -1478,8 +1478,8 @@ function focusNear(el, root, fresh) {
  * @param {boolean} [stay] keep the user's place: the scroll position (Chromium can reset it when
  *   <main> empties), what scrolls inside the page and the `<details>` open on screen
  * @param {Notice} [notice] the answer's, kept if the page has to load in full instead
- * @param {{ apply: () => void, fresh: Element[] } | null} [layout] what changes around `<main>`
- *   (`fresh`, the elements it draws), drawn in the same frame as the page ({@link swapDocument})
+ * @param {{ apply: () => Element[], fresh: Element[] } | null} [layout] what changes around `<main>`,
+ *   drawn in the same frame as the page ({@link swapDocument})
  * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
  * @returns {Promise<boolean>} false when it loaded the page in full instead
  */
@@ -1553,7 +1553,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   main.replaceChildren(content);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
   if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
-  layout?.apply();
+  const laid = layout?.apply() ?? [];
   scrolledIn.clear();
   sideways.clear();
   const kept = view?.() ?? [];
@@ -1564,7 +1564,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   markCurrent(kept);
   readAgainLater();
   readPartsAgain(main);
-  readNow([main, ...parts.map(([, part]) => part), ...(layout?.fresh ?? [])]);
+  readNow([main, ...parts.map(([, part]) => part), ...laid]);
   return true;
 }
 
@@ -1707,7 +1707,9 @@ let frame = { parts: new Set(frameOf(document)), sent: null };
  * around `<main>`, more or fewer elements beside one, or another frame ({@link frameOf}). One that
  * shows the notice the page drew is replaced even when its markup is the same, since the last one
  * a script hid (a toast) is drawn again by the same text.
- * @param {Document} doc @param {Notice} notice @returns {{ fresh: Element[], apply: () => void } | null}
+ * @param {Document} doc @param {Notice} notice @returns {{ fresh: Element[], apply: () => Element[] } | null}
+ *   `apply` returns the elements it drew, as they are in the page: `fresh`'s own where one took an
+ *   element's place, the element on screen where it was drawn in place (a live region's)
  */
 function layoutChanges(doc, notice) {
   const said = notice?.has("d") ? notice.get("m") || null : null;
@@ -1740,6 +1742,8 @@ function layoutChanges(doc, notice) {
   return {
     fresh: changed.map(([, el]) => el),
     apply() {
+      /** @type {Element[]} */
+      const laid = [];
       // An entry the load had and this page lacks stays: the runtime cannot tell the server's (a
       // theme it stopped writing) from a script's or an extension's (a theme set before first paint).
       frame = { parts: frame.parts, sent };
@@ -1761,7 +1765,9 @@ function layoutChanges(doc, notice) {
         // A page's part the write's page drew anew is what the next navigation compares with.
         if (now !== old) for (const [part, sent] of parts) partSent.set(part, sent);
         setVars(now);
+        laid.push(now);
       }
+      return laid;
     },
   };
 }
@@ -1880,8 +1886,9 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
       return false;
     }
     // Its section stylesheets are the page's, which are on the page already.
-    layout.apply();
+    const laid = layout.apply();
     readAgainLater();
+    readNow(laid);
     return true;
   }
   // The nodes parsed above, not the text parsed again.

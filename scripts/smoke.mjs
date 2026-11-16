@@ -4397,6 +4397,45 @@ async function run(browser) {
   );
   await page.evaluate(() => document.querySelector("#once-live")?.remove());
 
+  // A <corten-live> fragment that draws a part waiting (`ReadAgain::now`) has it read, as a form's
+  // answer does: one read a fragment, at the pace the server streams them, and a fragment that
+  // draws the part again ends the read the one before started, so only the last is drawn (#1400).
+  {
+    let fragmentReads = 0;
+    await page.route("**/live/fragment-part", (route) =>
+      route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body:
+          'event: patch\ndata: <p id="fragment-a">Waiting 1<template data-corten-read-now data-from="/smoke/fragment-part"></template></p>\n\n' +
+          'event: patch\ndata: <p id="fragment-a">Waiting 2<template data-corten-read-now data-from="/smoke/fragment-part"></template></p>\n\n' +
+          "event: end\ndata: end\n\n",
+      }),
+    );
+    await page.route("**/smoke/fragment-part", async (route) => {
+      const n = ++fragmentReads;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: `<p id="fragment-a">Fragment part ${n}</p>` }).catch(() => {});
+    });
+    await page.evaluate(() =>
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<corten-live id="fragment-live" src="/live/fragment-part"><p id="fragment-a">Idle</p></corten-live>')),
+    );
+    await page.waitForFunction(() => document.querySelector("#fragment-a")?.textContent?.startsWith("Fragment part"), null, { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(500);
+    const fragment = await page.evaluate(() => {
+      const el = document.getElementById("fragment-a");
+      return { text: el?.textContent, failed: el?.getAttribute("data-corten-read-failed") ?? null, busy: el?.getAttribute("aria-busy") ?? null };
+    });
+    check(
+      "a part a <corten-live> fragment draws waiting is read, one read a fragment, and only the last fragment's is drawn",
+      fragment.text === `Fragment part ${fragmentReads}` && fragmentReads >= 1 && fragmentReads <= 2 && fragment.failed === null && fragment.busy === null,
+      JSON.stringify({ ...fragment, reads: fragmentReads }),
+    );
+    await page.unroute("**/live/fragment-part");
+    await page.unroute("**/smoke/fragment-part");
+    await page.evaluate(() => document.querySelector("#fragment-live")?.remove());
+  }
+
   // ReadAgain::now in markup a patch puts on the page (a form's answer that draws a part waiting,
   // its tag inside it): the parts it waits for are read at once, and two waiting parts that name
   // one address share one read, whose patch draws both (#1400).
@@ -5763,6 +5802,70 @@ async function run(browser) {
       );
       await layoutPage.context().close();
     } else skip("a write's page draws its text into a live region around <main> that is a form with controls named after the members the runtime reads on it", noSwaps);
+    // A waiting part (`ReadAgain::now`) in a live region around <main>, which a write's page draws
+    // in place (its new children into the region on screen): read once the write's page is drawn,
+    // and once a read again that leaves <main> as it was draws it there (#1400).
+    const liveNames = [
+      "a waiting part a write's page draws into a live region around <main> is read",
+      "a waiting part a read again draws into a live region around <main>, the page as it was, is read",
+    ];
+    if (swaps) {
+      const livePage = await (await browser.newContext()).newPage();
+      let liveDrawn = 0;
+      let liveReads = 0;
+      // What each whole page draws in the region, by its turn: idle, the part waiting, then the
+      // page asking to be read again with the region calm, then the part waiting in that read.
+      const regionOf = (/** @type {number} */ n) =>
+        n === 1 || n >= 3 ? '<span id="live-part">Waiting<template data-corten-read-now data-from="/smoke/live-part"></template></span>' : n === 2 ? "<span>Calm</span>" : "<span>Idle</span>";
+      await livePage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET" || swapped(route.request())) return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const n = liveDrawn++;
+          let body = (await res.text()).replace(/(<header\b[^>]*>)/, `$1<p id="live-region" role="status">${regionOf(n)}</p>`);
+          if (n >= 2) body = body.replace("</title>", '</title><noscript data-corten-read-again="1" data-corten-head><meta http-equiv="refresh" content="1"></noscript>');
+          await route.fulfill({ status: res.status(), headers, body });
+        },
+      );
+      await livePage.route("**/smoke/live-part", (route) => {
+        liveReads++;
+        return route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: `<span id="live-part">Live part drawn ${liveReads}</span>` });
+      });
+      await livePage.goto(`${base}/news#briefing`);
+      const thankLive = () =>
+        livePage.evaluate(() => {
+          /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+          /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+        });
+      const liveText = () => livePage.evaluate(() => document.getElementById("live-region")?.textContent ?? "");
+      await thankLive();
+      const written = await livePage
+        .waitForFunction(() => document.getElementById("live-part")?.textContent?.startsWith("Live part drawn"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      check(liveNames[0], written && liveReads === 1, JSON.stringify({ drawn: liveDrawn, reads: liveReads, text: await liveText() }));
+      // A second write, whose page asks to be read again with the region calm; its read again keeps
+      // <main> and draws the part waiting in the region.
+      await thankLive();
+      await livePage.waitForFunction(() => document.getElementById("live-region")?.textContent === "Calm", null, { timeout: 5000 }).catch(() => {});
+      const marked = await livePage.evaluate(() => {
+        const first = document.querySelector("main")?.firstElementChild;
+        if (first) (/** @type {any} */ (first)).__same = 1;
+        return !!first;
+      });
+      const readIn = await livePage
+        // Each read again after it draws the part waiting again, as the server sends it: any of
+        // those reads drawn is the read in.
+        .waitForFunction(() => /^Live part drawn [2-9]/.test(document.getElementById("live-part")?.textContent ?? ""), null, { timeout: 6000 })
+        .then(() => true, () => false);
+      const kept = await livePage.evaluate(() => (/** @type {any} */ (document.querySelector("main")?.firstElementChild))?.__same === 1);
+      check(liveNames[1], marked && readIn && kept, JSON.stringify({ drawn: liveDrawn, reads: liveReads, kept, text: await liveText() }));
+      await livePage.unrouteAll({ behavior: "ignoreErrors" });
+      await livePage.context().close();
+    } else for (const name of liveNames) skip(name, noSwaps);
     // A swap that keeps the user's place (data-keep-place) puts back a row in <main> where the user
     // scrolled it, and its current link is left there, out of view. The row is put in <main> on its
     // way from the server, its current link first.

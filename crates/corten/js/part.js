@@ -9,6 +9,8 @@
 const PART_NOW = "template[data-corten-read-now][data-from]";
 /** The mark of a part no read will bring, where the app's CSS shows its link. */
 const FAILED = "data-corten-read-failed";
+/** The parts a read is on its way for: a layout element drawn again in place keeps them. */
+const reading = new WeakSet();
 // Read through Element's and Node's own, as a form's controls may shadow them.
 const own = Element.prototype;
 /** @param {Element} el */
@@ -51,7 +53,9 @@ export function read(roots, chained, apply, signalOf, busyBy) {
   for (const root of roots) {
     for (const tag of Array.from(own.querySelectorAll.call(root, PART_NOW))) {
       const part = tag.parentElement;
-      if (!part || !inPage(tag)) continue;
+      // One a read is on its way for, or that one ended without, already has its read: a layout
+      // element drawn again in place (a live region) keeps what it held.
+      if (!part || !inPage(tag) || reading.has(part) || own.hasAttribute.call(part, FAILED)) continue;
       if (chained || !own.hasAttribute.call(part, "id")) {
         if (!chained) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
         own.setAttribute.call(part, FAILED, "");
@@ -85,6 +89,7 @@ async function readPart(from, tags, parts, apply, signalOf, busyBy) {
   // Busy is this read's own: a submit that marks a part meanwhile keeps the mark it made.
   const mine = {};
   for (const part of parts) {
+    reading.add(part);
     signalOf(part).addEventListener("abort", () => stop.abort(), { signal });
     busyBy.set(part, mine);
     own.setAttribute.call(part, "aria-busy", "true");
@@ -108,7 +113,10 @@ async function readPart(from, tags, parts, apply, signalOf, busyBy) {
     again = !signal.aborted && hidden !== at;
   }
   stop.abort();
-  for (const part of parts) if (busyBy.get(part) === mine) own.removeAttribute.call(part, "aria-busy");
+  for (const part of parts) {
+    reading.delete(part);
+    if (busyBy.get(part) === mine) own.removeAttribute.call(part, "aria-busy");
+  }
   // Made again only for the same parts: one a form's answer replaced meanwhile is not read over,
   // and the rest are marked failed, as when a part leaves while the read is on its way.
   const end = () => {
