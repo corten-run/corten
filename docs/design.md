@@ -4660,7 +4660,11 @@ rules something out.
     2026-11-16, the item page's `render_cost` (native release builds) on `f7fc2e5ee` against
     `226b12b35`, the runtime's and the field module's sizes on it, and the smoke's checks of the form
     a field is found in, an empty group and a group named for a select, in the same three engines,
-    and `corten dev`'s reports, on it.
+    and `corten dev`'s reports, on it; 2026-11-16, the runtime's and the field module's sizes, the
+    lookup of three fields in forms of 50, 500 and 2,000 controls against a walk over them in
+    Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2, the smoke's field checks in the same three
+    engines (an element whose id is a field's name among them), and `corten dev`'s reports in their
+    new words, on `1b6fc2f11`.
 
 ## Rules
 
