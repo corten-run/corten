@@ -7,8 +7,7 @@
 //! script reads (`corten/read`), and a screen whose scope form's answer is the page at the
 //! address it asks for (`data-address`).
 use corten::{
-    Error,
-    LiveResponse,
+    Error, LiveResponse,
     http::{IntoResponse, Request, Response, StatusCode, header},
     prelude::*,
 };
