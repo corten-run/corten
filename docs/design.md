@@ -4187,8 +4187,9 @@ rules something out.
     Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
 54. <a id="choice-html-parse-refusals"></a>**`html!` refuses three kinds of markup a browser parses differently from how it
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
-    taken out of foreign content), and a patch's top level the runtime's parse of it loses, where
-    the markup shows how a browser parses it, and acts nowhere else.** An element written in a
+    taken out of foreign content), and two shapes of a patch's top level the runtime's parse of it
+    loses wherever they are written, where the markup shows how a browser parses it, and acts
+    nowhere else.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
     text, a `<plaintext>` made the rest of the page text, its end tag included, and an element the
@@ -4209,21 +4210,30 @@ rules something out.
     rest is read, so a table row beside a status line was dropped with only a console error
     ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
     In a view that could be a patch (every top-level element has an `id={..}`), `html!` refuses
-    a table part (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`,
-    `<col>`, `<colgroup>`) after a first element that is HTML's wherever it lands (one of the
-    elements taken out of foreign content: a `<p>`, a `<div>`, a `<span>`, a `<table>` ..),
-    which the parse drops; after a first table part, a `<table>` at the top level, or a
-    `<table>`, `<form>` or table part inside a later element HTML's wherever it lands, which it
-    takes apart; and after a first `<col>`, an element HTML's wherever it lands, which it drops.
-    Each is lost wherever else the view is written too, under the rule below: a page's body
-    drops a table part, a table moves the other element out of it, and an `<svg>` is closed
-    before an element HTML's wherever it lands. So where the first element is not known (an
-    expression, a component or a block writes before it), is a `<title>` (a head's in the
-    standard and in Firefox, the first element in Chromium and WebKit), or is one an `<svg>`
-    keeps as written (a `<section>`, a `<form>`, an `<a>`), and for table parts of different
-    kinds or a `<form>` straight after the first table part, which an `<svg>` keeps too,
-    nothing is refused. The debug check that answers such a patch with a 500 when it is sent
-    ([Limit 2](#limit-whole-element-patches)) finds those; a release build sends them as drawn.
+    two shapes: a table part (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`,
+    `<caption>`, `<col>`, `<colgroup>`) after a first `<table>`, and an element HTML's wherever
+    it lands (one the rules for foreign content take out of an `<svg>`: a `<p>`, a `<div>`, a
+    `<table>` ..) after a first `<col>`. Each is lost wherever the view is written, under the rule
+    below: in a patch the view begins, the parse drops the table part, or every element after the
+    `<col>` but a `<col>` or a `<template>`; in a patch that already began with a table part (one
+    an element or a component before the view wrote), it drops the `<table>` tag and reads the
+    table's parts as the patch's, or drops the `<col>` or puts it in a `<colgroup>` it adds; a
+    page's body drops the table part or the `<col>`; in a table, the `<table>` closes it and the
+    element after a `<col>` is moved out of it; and an `<svg>` is closed before the `<table>` or
+    the other element. A test in `corten`
+    (`a_shape_html_refuses_is_lost_after_each_table_part`) holds both shapes, written first and
+    after each of the nine table parts, to `crates/corten/src/patch-parsing.json`, whose parses
+    `scripts/smoke.mjs` checks in Chromium, Firefox and WebKit. No other shape is lost wherever it
+    is written: after a first `<tr>`, `<td>`, `<tbody>` or `<caption>`, a `<p>`, `<div>` or `<span>`
+    is kept (moved before the table that is not there) and a table part after it too, so a
+    component that writes `<p id={NoteId}>..</p><tr id={RowId(8)}>..</tr>` is correct where its
+    parent writes a row before it, and compiles. Those shapes, what a component, an expression or
+    a block writes, and a first element an `<svg>` keeps, are left to the debug check that answers
+    such a patch with a 500 when it is sent ([Limit 2](#limit-whole-element-patches)); a release
+    build sends them as drawn. Head tags before the first element do not change either refused
+    shape: the standard and Firefox read them as a head's, and Chromium and WebKit, which let a
+    leading `<title>`, `<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide, read the rest
+    as a body's, where both are lost too.
 
     `html!` sees only its own markup, so it acts only where that markup shows how a browser
     parses it, following the HTML standard's tree construction: HTML under an element that is
@@ -4289,7 +4299,8 @@ rules something out.
     of an `<svg>` or a `<math>`, which `TEXT_ONLY`, `RAW_TEXT`, `SVG_HTML_POINTS`,
     `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the "in
     template" insertion mode's head tags and table start tags, and what the table insertion
-    modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy; the browsers
+    modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy, held equal to
+    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there; the browsers
     Playwright runs, which read an element in those holders as text and keep one in an `<svg>`'s
     own `<title>`, and keep the first of a duplicated `encoding`); reasoned (an `html!` sees its
     own markup and nothing around it, so what its top and a component's children land in is not
@@ -4303,7 +4314,9 @@ rules something out.
     Revisit when: the HTML standard changes the elements it reads as text, its integration points
     or the start tags it takes out of foreign content, when the lists in `html.rs` follow it; or the
     runtime parses a patch some other way than as a `<template>`'s content, when the patch
-    refusals go or change with it; or an
+    refusals go or change with it; or a browser keeps one of the two refused patch shapes as
+    written after some first element, when `patch-parsing.json`'s cases fail in the smoke and that
+    refusal goes; or an
     app is found to write one of the refused shapes across a component's edge (a component whose
     top-level element lands in an `<svg>` and writes an element there a browser moves out, or
     children a component writes into a `<textarea>`), when following the context across
@@ -4456,11 +4469,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
    a `close` event ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)). Other
    browser state inside a replaced element (scroll position) resets, so keep targets small. The
    runtime parses a patch as a `<template>`'s content, where the first top-level element (other
-   than a head's, such as a `<script>` or `<template>`) decides how the rest is read, so a table
-   part beside other elements is dropped or moved there unless the table parts come first.
-   `html!` refuses the shapes its markup shows ([Choice 54](#choice-html-parse-refusals)); where
-   it does not (a component or an expression writes the first element, or the first is one an
-   `<svg>` keeps, such as a `<section>` or a `<form>`), a debug build refuses such a patch, as
+   than a head's, such as a `<script>` or `<template>`; Chromium and WebKit let a leading
+   `<title>`, `<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the
+   rest is read, so a table part beside other elements is dropped or moved there unless the table
+   parts come first. `html!` refuses the two shapes lost wherever they are written, a table part
+   after a first `<table>` and an element after a first `<col>`
+   ([Choice 54](#choice-html-parse-refusals)); the rest depend on what the patch began with (a
+   `<p>` and a `<tr>` after it are kept after a first `<tr>`), so for them, and where a
+   component or an expression writes the first element, a debug build refuses such a patch, as
    `html!` writes it, when it sends it, naming the element, but a release build sends it as drawn
    and the browser loses the part, so a mix that only some data draws is found only by a debug
    render that draws it
@@ -4822,7 +4838,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     text, a `<plaintext>`, an element taken out of foreign content;
     [Choice 54](#choice-html-parse-refusals)) and the debug check of a keyed ref's
     keys ([Choice 46](#choice-ref-values)) act only where that markup shows how a browser parses
-    it (and the refusal of a patch's top level, only where the first element is written in it), and where it does not they let a mistake pass rather than stop correct markup. At the top
+    it (and the refusal of a patch's top level, only where the first element is written in it,
+    and only for the two shapes lost whatever the patch began with, since a component's markup does
+    not show which table part, if any, an element before it wrote), and where it does not they let
+    a mistake pass rather than stop correct markup. At the top
     of a component's markup, which its parent may write into an `<svg>` or a `<math>`, none of
     the refusals acts: an element a browser moves out of foreign content (`<b>`, `<div>`, `<p>`,
     `<span>`, `<table>` and the rest of the standard's list, a `<font>` with `color`, `face` or

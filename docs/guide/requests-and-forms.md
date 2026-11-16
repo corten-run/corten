@@ -1066,18 +1066,20 @@ row's cell is kept. After a `<col>`, everything but a `<col>` or
 element) is read the same way on its own, except that Firefox drops a `<form>` there whole after
 a table part. So a patch that sends a table's header row beside a summary loses the row.
 Send the `<table>` whole with an id, or put the table parts first, of one kind, with no
-`<table>` or `<form>` in what follows. Where the markup shows it, `html!` refuses such a patch
-when it compiles: a table part after a first element that is HTML's wherever it lands (a `<p>`, a
-`<div>`, a `<span>`, a `<table>` ..), a `<table>` after a first table part or a `<table>`,
-`<form>` or table part inside a later such element, and such an element after a first `<col>`
-([design Choice 54](../design.md#choice-html-parse-refusals)). It refuses nothing where a
-component, an expression or a block writes the first element, or where the first is one an
-`<svg>` keeps as written (a `<section>`, a `<form>`, an `<a>`), which a component's top level
-may land in. Debug builds check each patch as it is sent (`req.patch`,
+`<table>` or `<form>` in what follows. Two shapes are lost wherever they are written, and `html!`
+refuses them when it compiles, where its markup writes the first element: a table part after a
+first `<table>` (dropped, or, where the patch began with a table part, the table taken apart),
+and an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first
+`<col>` ([design Choice 54](../design.md#choice-html-parse-refusals)). Every other shape
+depends on what the patch began with, which a component's markup does not show: a `<p>` and
+then a `<tr>` lose the row on their own, but after a first `<tr>` both are kept, so a component
+that writes them compiles. Debug builds check each patch as it is sent (`req.patch`,
 `req.patch_or`, `req.invalid`, `form.draw` and `corten::live`, with the area's stylesheet
 links Corten adds after its elements): the request fails with a 500, or the stream panics, naming
-the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`
-decide, so it is read both ways. A release build sends the patch as drawn, so a mix only some data
+the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`,
+`<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide, as a page's body would, so a patch
+with one is read both ways. A debug-build test of the app that draws such a patch fails with the
+500 too. A release build sends the patch as drawn, so a mix only some data
 draws (a row in one branch of an `if`) is found only by a debug render that draws it. The check
 covers what a table's reading does to a patch as `html!` writes it, each element closed by its own
 end tag, not every way a browser's parse can differ from the markup: it does not read inside an

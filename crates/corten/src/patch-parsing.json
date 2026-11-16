@@ -1,5 +1,5 @@
 {
-  "//": "How a browser parses a patch's top level as a <template>'s content (the runtime's parse in corten.js). parsed is each top-level element as name#id, (its child elements) and a template's {content}, without text, as the HTML standard and Firefox parse it; parsedIn, where an engine differs. lost is what the server's debug check (patch_parse_problem in html.rs) reports, null when it reports nothing: html.rs's tests hold it to report exactly the cases a browser does not parse as written, and scripts/smoke.mjs checks parsed in Chromium, Firefox and WebKit.",
+  "//": "How a browser parses a patch's top level as a <template>'s content (the runtime's parse in corten.js). parsed is each top-level element as name#id, (its child elements) and a template's {content}, without text, as the HTML standard and Firefox parse it; parsedIn, where an engine differs (Chromium and WebKit let a leading <title>, <base>, <basefont>, <bgsound> or <noframes> decide how the rest is read). lost is what the server's debug check (patch_parse_problem in html.rs) reports, null when it reports nothing: html.rs's tests hold it to report exactly the cases here a browser does not parse as written, and hold the two shapes html! refuses at compile time (a table part after a first <table>, an element after a first <col>), written first and after each table part, to be lost in every engine. scripts/smoke.mjs checks parsed in Chromium, Firefox and WebKit.",
   "cases": [
     {
       "html": "<tr id=\"a\"><td>1</td></tr><tr id=\"b\"><td>2</td></tr>",
@@ -402,6 +402,1100 @@
         "form#f"
       ],
       "lost": null
+    },
+    {
+      "html": "<base id=\"h\"><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "base#h",
+        "tr#r(td)"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "base#h"
+        ],
+        "webkit": [
+          "base#h"
+        ]
+      },
+      "lost": "<tr id=\"r\"> is dropped, since <base id=\"h\"> comes first in Chromium and WebKit"
+    },
+    {
+      "html": "<basefont id=\"h\"><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "basefont#h",
+        "tr#r(td)"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "basefont#h"
+        ],
+        "webkit": [
+          "basefont#h"
+        ]
+      },
+      "lost": "<tr id=\"r\"> is dropped, since <basefont id=\"h\"> comes first in Chromium and WebKit"
+    },
+    {
+      "html": "<bgsound id=\"h\"><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "bgsound#h",
+        "tr#r(td)"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "bgsound#h"
+        ],
+        "webkit": [
+          "bgsound#h"
+        ]
+      },
+      "lost": "<tr id=\"r\"> is dropped, since <bgsound id=\"h\"> comes first in Chromium and WebKit"
+    },
+    {
+      "html": "<noframes id=\"h\"></noframes><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "noframes#h",
+        "tr#r(td)"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "noframes#h"
+        ],
+        "webkit": [
+          "noframes#h"
+        ]
+      },
+      "lost": "<tr id=\"r\"> is dropped, since <noframes id=\"h\"> comes first in Chromium and WebKit"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><p id=\"a\">x</p><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tr#h(td)",
+        "p#a",
+        "tr#b(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<td id=\"h\">1</td><div id=\"a\"></div><td id=\"b\">2</td>",
+      "parsed": [
+        "td#h",
+        "div#a",
+        "td#b"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><span id=\"a\"></span><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "tbody#h",
+        "span#a",
+        "tbody#b"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><span id=\"a\"></span><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "caption#h",
+        "span#a",
+        "tbody#b"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "table#a(tbody(tr(td)))"
+      ],
+      "lost": "<tr id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "table#a(tbody(tr(td)))"
+      ],
+      "lost": "<td id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "table#a(tbody(tr(td)))"
+      ],
+      "lost": "<th id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "table#a(tbody(tr(td)))"
+      ],
+      "lost": "<tbody id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "table#a(tbody(tr(td)))"
+      ],
+      "lost": "<thead id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "table#a(tbody(tr(td)))"
+      ],
+      "lost": "<tfoot id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "table#a(tbody(tr(td)))"
+      ],
+      "lost": "<caption id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "table#a(tbody(tr(td)))"
+      ],
+      "lost": "<col id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "table#a(tbody(tr(td)))"
+      ],
+      "lost": "<colgroup id=\"b\"> is dropped, since <table id=\"a\"> comes first"
+    },
+    {
+      "html": "<col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "col#a"
+      ],
+      "lost": "<p id=\"b\"> is dropped, since <col id=\"a\"> comes first"
+    },
+    {
+      "html": "<col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "col#a"
+      ],
+      "lost": "<table id=\"b\"> is dropped, since <col id=\"a\"> comes first"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td)",
+        "tr#b(td)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td)",
+        "tr(td#b)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td)",
+        "tr(th#b)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "tr#h(td)",
+        "tr(td)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "tr#h(td)",
+        "div#b"
+      ],
+      "lost": "<col id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "tr#h(td)",
+        "p#b"
+      ],
+      "lost": "<col id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tr id=\"h\"><td>1</td></tr><col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "tr#h(td)"
+      ],
+      "lost": "<col id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "td#h",
+        "td",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "td#h",
+        "td",
+        "td#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "td#h",
+        "td",
+        "th#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "td#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "td#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "td#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "td#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "td#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "td#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "td#h",
+        "div#b"
+      ],
+      "lost": "<col id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "td#h",
+        "p#b"
+      ],
+      "lost": "<col id=\"a\"> is dropped"
+    },
+    {
+      "html": "<td id=\"h\">1</td><col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "td#h"
+      ],
+      "lost": "<col id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "th#h",
+        "td",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "th#h",
+        "td",
+        "td#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "th#h",
+        "td",
+        "th#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "th#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "th#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "th#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "th#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "th#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "th#h",
+        "td"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "th#h",
+        "div#b"
+      ],
+      "lost": "<col id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "th#h",
+        "p#b"
+      ],
+      "lost": "<col id=\"a\"> is dropped"
+    },
+    {
+      "html": "<th id=\"h\">1</th><col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "th#h"
+      ],
+      "lost": "<col id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td))",
+        "tbody(tr#b(td))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td))",
+        "tbody(tr(td#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td))",
+        "tbody(tr(th#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td))",
+        "tbody#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td))",
+        "thead#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td))",
+        "tfoot#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td))",
+        "caption#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td))",
+        "colgroup(col#b)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "tbody#h",
+        "tbody(tr(td))",
+        "colgroup#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "tbody#h",
+        "colgroup(col#a)",
+        "div#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "tbody#h",
+        "colgroup(col#a)",
+        "p#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<tbody id=\"h\"></tbody><col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "tbody#h",
+        "colgroup(col#a)"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td))",
+        "tbody(tr#b(td))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td))",
+        "tbody(tr(td#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td))",
+        "tbody(tr(th#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td))",
+        "tbody#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td))",
+        "thead#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td))",
+        "tfoot#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td))",
+        "caption#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td))",
+        "colgroup(col#b)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "thead#h",
+        "tbody(tr(td))",
+        "colgroup#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "thead#h",
+        "colgroup(col#a)",
+        "div#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "thead#h",
+        "colgroup(col#a)",
+        "p#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<thead id=\"h\"></thead><col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "thead#h",
+        "colgroup(col#a)"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td))",
+        "tbody(tr#b(td))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td))",
+        "tbody(tr(td#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td))",
+        "tbody(tr(th#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td))",
+        "tbody#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td))",
+        "thead#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td))",
+        "tfoot#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td))",
+        "caption#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td))",
+        "colgroup(col#b)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "tfoot#h",
+        "tbody(tr(td))",
+        "colgroup#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "tfoot#h",
+        "colgroup(col#a)",
+        "div#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "tfoot#h",
+        "colgroup(col#a)",
+        "p#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<tfoot id=\"h\"></tfoot><col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "tfoot#h",
+        "colgroup(col#a)"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td))",
+        "tbody(tr#b(td))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td))",
+        "tbody(tr(td#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td))",
+        "tbody(tr(th#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td))",
+        "tbody#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td))",
+        "thead#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td))",
+        "tfoot#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td))",
+        "caption#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td))",
+        "colgroup(col#b)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "caption#h",
+        "tbody(tr(td))",
+        "colgroup#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "caption#h",
+        "colgroup(col#a)",
+        "div#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "caption#h",
+        "colgroup(col#a)",
+        "p#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<caption id=\"h\">x</caption><col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "caption#h",
+        "colgroup(col#a)"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<col id=\"h\"><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "col#h",
+        "col#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "col#h"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<col id=\"h\"><col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "col#h",
+        "col#a"
+      ],
+      "lost": "<div id=\"b\"> is dropped, since <col id=\"h\"> comes first"
+    },
+    {
+      "html": "<col id=\"h\"><col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "col#h",
+        "col#a"
+      ],
+      "lost": "<p id=\"b\"> is dropped, since <col id=\"h\"> comes first"
+    },
+    {
+      "html": "<col id=\"h\"><col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "col#h",
+        "col#a"
+      ],
+      "lost": "<table id=\"b\"> is dropped, since <col id=\"h\"> comes first"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td))",
+        "tbody(tr#b(td))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><td id=\"b\">2</td>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td))",
+        "tbody(tr(td#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><th id=\"b\">2</th>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td))",
+        "tbody(tr(th#b))"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tbody id=\"b\"></tbody>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td))",
+        "tbody#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><thead id=\"b\"></thead>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td))",
+        "thead#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><tfoot id=\"b\"></tfoot>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td))",
+        "tfoot#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><caption id=\"b\">x</caption>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td))",
+        "caption#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><col id=\"b\">",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td))",
+        "colgroup(col#b)"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><table id=\"a\"><tbody><tr><td>1</td></tr></tbody></table><colgroup id=\"b\"></colgroup>",
+      "parsed": [
+        "colgroup#h",
+        "tbody(tr(td))",
+        "colgroup#b"
+      ],
+      "lost": "<table id=\"a\"> is dropped"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><col id=\"a\"><div id=\"b\">x</div>",
+      "parsed": [
+        "colgroup#h",
+        "colgroup(col#a)",
+        "div#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><col id=\"a\"><p id=\"b\">x</p>",
+      "parsed": [
+        "colgroup#h",
+        "colgroup(col#a)",
+        "p#b"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
+    },
+    {
+      "html": "<colgroup id=\"h\"></colgroup><col id=\"a\"><table id=\"b\"></table>",
+      "parsed": [
+        "colgroup#h",
+        "colgroup(col#a)"
+      ],
+      "lost": "<col id=\"a\"> is put in a <colgroup> the browser adds"
     }
   ]
 }

@@ -1829,45 +1829,49 @@ fn could_patch(nodes: &[Node]) -> bool {
 }
 
 /// Head tags a `<template>`'s content reads by the rules for a document's head (the HTML
-/// standard's "in template" insertion mode), so they do not decide how the elements after them
-/// are read. The standard lists `<title>` too, and Firefox follows it, but Chromium and WebKit let
-/// a `<title>` decide, so after one nothing is refused (`TopRead::Unknown`).
-const TEMPLATE_HEAD: &[&str] = &["base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template"];
+/// standard's "in template" insertion mode), before the first element `check_patch_top` reads.
+/// The two shapes it refuses are lost after them however a browser reads them: as the standard
+/// does (Firefox), or letting a leading `<title>`, `<base>`, `<basefont>`, `<bgsound>` or
+/// `<noframes>` decide how the rest is read, as a page's body does (Chromium and WebKit). The
+/// same list as `HEAD_TAGS` in `crates/corten/src/html.rs`, which a test there holds it to.
+const TEMPLATE_HEAD: &[&str] =
+    &["base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template", "title"];
 
-/// The start tags the "in template" insertion mode reads as a table's: the first of them at a
-/// patch's top level makes what follows table content.
+/// The start tags the "in template" insertion mode reads as a table's. The same list as
+/// `TABLE_PARTS` in `crates/corten/src/html.rs`, which a test there holds it to.
 const TABLE_PARTS: &[&str] = &["caption", "col", "colgroup", "tbody", "td", "tfoot", "th", "thead", "tr"];
 
-/// What to do instead, after `check_patch_top`'s account of what the browser loses.
-const PATCH_TOP_HELP: &str = "Send the <table> whole, with an id, or put the table parts first, of one kind (rows, cells, or a table's row groups, caption and column groups), with no <table> or <form> in the elements after them, or send them in a patch of their own";
-
-/// What the first element at a view's top level that decides how the rest is read (any but
-/// `TEMPLATE_HEAD`'s) makes of the elements after it, in a `<template>`'s content, which is how
-/// the runtime parses a patch.
+/// What the first element at a view's top level (after `TEMPLATE_HEAD`'s) makes of the elements
+/// after it, for the two shapes `check_patch_top` refuses.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum TopRead<'a> {
+enum TopRead {
     /// No element yet but head tags.
     Open,
-    /// The first is HTML's wherever it lands (`breaks_out`), so a table part after it is dropped.
-    Html(&'a str),
-    /// The first is a table part, so the rest is read as table content.
-    Table(&'a str),
-    /// The first is not known (an expression, a component or a block may write it), or is a
-    /// `<title>` or an element that is neither kind: nothing after it is refused.
+    /// The first is a `<table>`: a table part after it is lost.
+    Table,
+    /// The first is a `<col>`: an element HTML's wherever it lands after it is lost.
+    Col,
+    /// The first is another element, or is not known (an expression, a component or a block may
+    /// write it): nothing after it is refused.
     Unknown,
 }
 
-/// A view that could be a patch (`could_patch`) whose top level no browser keeps as written: the
-/// runtime parses a patch as a `<template>`'s content, where the first element decides how the
-/// rest is read, so a table part after an element HTML's wherever it lands is dropped, and after
-/// a table part a `<table>`, or a `<table>`, `<form>` or table part inside such an element, is
-/// taken apart (after a `<col>`, any such element is dropped). Each shape loses part of the
-/// markup wherever else it is written too (a page's body drops the table part; a table moves the
-/// other element out of it; an `<svg>` is closed before the element HTML's wherever it lands), so
-/// refusing it never stops markup a browser keeps as written
-/// (docs/design.md#choice-html-parse-refusals). Where the first
-/// element is not known, or is one an `<svg>` keeps (a `<form>`, a `<section>`), nothing is
-/// refused: the debug check in `req.patch` and `corten::live` finds the rest when it is sent.
+/// A view that could be a patch (`could_patch`) whose top level is lost wherever it is written: a
+/// first `<table>` with a table part after it, and a first `<col>` with an element HTML's wherever
+/// it lands (`breaks_out`) after it. The runtime parses a patch as a `<template>`'s content, where
+/// the first element decides how the rest is read. After a `<table>`, a table part is dropped;
+/// where the patch already began with a table part (one an element or a component before this
+/// markup wrote), the `<table>` tag is dropped instead and its parts are read as the patch's; on a
+/// page the table part is dropped, and in an `<svg>` the `<table>` closes it. After a `<col>`,
+/// anything but a `<col>` or a `<template>` is dropped; after another table part, the `<col>` is
+/// dropped or put in a `<colgroup>` the browser adds; on a page the `<col>` is dropped, and in an
+/// `<svg>` the other element closes it. So refusing either never stops markup a browser keeps as
+/// written (docs/design.md#choice-html-parse-refusals), and
+/// `a_shape_html_refuses_is_lost_after_each_table_part` in `crates/corten/src/html.rs` holds both
+/// to the browsers' parses in `patch-parsing.json`. Every other shape the parse loses depends on
+/// what the patch began with, which a component's markup does not show (after a first `<tr>`, a
+/// `<p>` and a `<tr>` after it are both kept), so it is left to the debug check in `req.patch` and
+/// `corten::live`, which finds it when it is sent.
 fn check_patch_top(nodes: &[Node]) -> Result<(), Error> {
     match patch_top(nodes, TopRead::Open) {
         Ok(_) => Ok(()),
@@ -1877,7 +1881,7 @@ fn check_patch_top(nodes: &[Node]) -> Result<(), Error> {
 
 /// Reads `nodes` from `read`, returning what follows them reads as, or the attributes of the
 /// top-level element whose markup is lost (for its `id`'s span) and why.
-fn patch_top<'a>(nodes: &'a [Node], mut read: TopRead<'a>) -> Result<TopRead<'a>, (&'a [Attr], String)> {
+fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], String)> {
     for node in nodes {
         match node {
             Node::Text(_) | Node::Markup(_) | Node::Let(_) => {}
@@ -1896,81 +1900,35 @@ fn patch_top<'a>(nodes: &'a [Node], mut read: TopRead<'a>) -> Result<TopRead<'a>
                     read = TopRead::Unknown;
                 }
             }
-            Node::Element { name, attrs, children } => {
+            Node::Element { name, attrs, .. } => {
                 let is = |list: &[&str]| list.iter().any(|t| name.eq_ignore_ascii_case(t));
-                let lost = |why: String| Err((attrs.as_slice(), format!("{why}. {PATCH_TOP_HELP}")));
                 match read {
                     TopRead::Open if is(TEMPLATE_HEAD) => {}
-                    TopRead::Open => {
-                        read = if is(TABLE_PARTS) {
-                            TopRead::Table(name)
-                        } else if breaks_out(name, attrs) && !is(&["head", "body"]) {
-                            TopRead::Html(name)
-                        } else {
-                            TopRead::Unknown
-                        };
-                    }
-                    TopRead::Html(first) if is(TABLE_PARTS) => {
-                        return lost(format!(
-                            "<{name}> after <{first}> is dropped: the runtime parses a patch as a <template>'s content, where the first element (<{first}>) decides how the rest is read, and after one that is not a table part a <{name}> is dropped, with only a console error (on a page the browser drops it too, or moves the <{first}> out of the table)"
+                    TopRead::Open if is(&["table"]) => read = TopRead::Table,
+                    TopRead::Open if is(&["col"]) => read = TopRead::Col,
+                    TopRead::Open | TopRead::Unknown => return Ok(TopRead::Unknown),
+                    TopRead::Table if is(TABLE_PARTS) => {
+                        return Err((
+                            attrs,
+                            format!(
+                                "<{name}> after <table> is lost: the runtime parses a patch as a <template>'s content, where the first element decides how the rest is read, and after a <table> a <{name}> is dropped, with only a console error (where the patch began with a table part, the <table> tag is dropped instead and its parts read as the patch's; on a page the browser drops the <{name}> too). Send the <{name}> inside the <table>, or in a patch of its own"
+                            ),
                         ));
                     }
-                    TopRead::Table(first) if first.eq_ignore_ascii_case("col") => {
-                        if !is(&["col", "template"]) && breaks_out(name, attrs) {
-                            return lost(format!(
-                                "<{name}> after <col> is dropped: the runtime parses a patch as a <template>'s content, where the first element (<col>) decides how the rest is read, and after a <col> anything but a <col> or a <template> is dropped (on a page the browser drops the <col>, or moves the <{name}> out of the table)"
-                            ));
-                        }
-                    }
-                    TopRead::Table(first) if is(&["table"]) => {
-                        return lost(format!(
-                            "<{name}> after <{first}> is taken apart: the runtime parses a patch as a <template>'s content, where the first element (<{first}>) makes the rest table content, in which a <table> tag is dropped and its parts are read as the patch's (on a page the browser drops the <{first}>, or this <{name}> closes the table around it)"
+                    TopRead::Col if !is(&["col", "template"]) && breaks_out(name, attrs) => {
+                        return Err((
+                            attrs,
+                            format!(
+                                "<{name}> after <col> is lost: the runtime parses a patch as a <template>'s content, where the first element decides how the rest is read, and after a <col> anything but a <col> or a <template> is dropped, with only a console error (where the patch began with another table part, the <col> is dropped or put in a <colgroup> the browser adds instead; on a page the browser drops the <col>, and in an <svg> the <{name}> closes it). Send the <col>s in a <colgroup> with an id, or the <{name}> in a patch of its own"
+                            ),
                         ));
                     }
-                    TopRead::Table(first) if breaks_out(name, attrs) => {
-                        if let Some(inner) = table_inside(children) {
-                            return lost(format!(
-                                "<{inner}> inside <{name}> is moved out of it or taken apart: the runtime parses a patch as a <template>'s content, where the first element (<{first}>) makes the rest table content, in which a <table>, a <form> or a table part inside a later element is not kept where it is written (on a page the browser drops the <{first}>, or moves the <{name}> out of the table)"
-                            ));
-                        }
-                    }
-                    TopRead::Html(_) | TopRead::Table(_) => {}
-                    TopRead::Unknown => return Ok(read),
+                    TopRead::Table | TopRead::Col => {}
                 }
             }
         }
     }
     Ok(read)
-}
-
-/// The first `<table>`, `<form>` or table part among `nodes` and the elements inside them, where
-/// the markup writes it for certain: not inside a `<template>` (whose content is parsed apart), an
-/// `<svg>` or a `<math>`, an element whose content is text, a component's children or what an
-/// expression writes.
-fn table_inside(nodes: &[Node]) -> Option<&str> {
-    for node in nodes {
-        match node {
-            Node::Element { name, children, .. } => {
-                let is = |list: &[&str]| list.iter().any(|t| name.eq_ignore_ascii_case(t));
-                if is(&["table", "form"]) || is(TABLE_PARTS) {
-                    return Some(name);
-                }
-                if is(&["template", "svg", "math", "noscript", "plaintext"]) || is(TEXT_ONLY) || is(RAW_TEXT) {
-                    continue;
-                }
-                if let Some(found) = table_inside(children) {
-                    return Some(found);
-                }
-            }
-            Node::Block { bodies, .. } => {
-                if let Some(found) = bodies.iter().find_map(|body| table_inside(body)) {
-                    return Some(found);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Where an element's `id={..}` is written, which a patch's top-level elements have.
@@ -2859,7 +2817,7 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 mod tests {
     use super::{
         breaks_out, foreign_breakout, local_path, parsing_within, patch_top, reads_as_text, refused_path, text_only_element,
-        Attr, Node, Parsing, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TABLE_PARTS, TEXT_ONLY,
+        Attr, Node, Parsing, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TABLE_PARTS, TEMPLATE_HEAD, TEXT_ONLY,
     };
     use proc_macro::TokenStream;
 
@@ -3044,55 +3002,42 @@ mod tests {
 
     #[test]
     fn a_patch_s_top_level_is_refused_only_where_no_browser_keeps_it_as_written() {
-        // After an element HTML's wherever it lands, every table part is dropped.
+        // After a first <table>, every table part is lost; head tags before it do not decide, and
+        // a table part in a block after it counts.
         for part in TABLE_PARTS {
-            for first in ["p", "div", "span", "table", "ul", "img"] {
-                let why = lost(&[el(first, vec![]), el(part, vec![])]).expect("refused");
-                assert!(why.starts_with(&format!("<{part}> after <{first}> is dropped")), "{why}");
-                assert!(why.contains("Send the <table> whole"), "{why}");
-            }
+            let why = lost(&[el("table", vec![]), el(part, vec![])]).expect("refused");
+            assert!(why.starts_with(&format!("<{part}> after <table> is lost")), "{why}");
+            assert!(why.contains("in a patch of its own"), "{why}");
         }
-        // Head tags before it do not decide; a table part in a block after it counts.
-        let block = Node::Block { head: Vec::new(), bodies: vec![vec![el("tr", vec![])]], arms: false };
-        let why = lost(&[el("script", vec![]), el("link", vec![]), el("template", vec![]), el("p", vec![]), block]);
-        assert!(why.expect("refused").starts_with("<tr> after <p>"));
-        // After a table part, a <table> is taken apart, and so is one inside a later element.
-        for first in ["tr", "td", "tbody", "caption", "colgroup"] {
-            let why = lost(&[el(first, vec![]), el("table", vec![])]).expect("refused");
-            assert!(why.starts_with(&format!("<table> after <{first}> is taken apart")), "{why}");
-            for inner in ["table", "form", "tr", "td"] {
-                let nested = el("section", vec![el(inner, vec![])]);
-                let why = lost(&[el(first, vec![]), el("div", vec![nested])]).expect("refused");
-                assert!(why.starts_with(&format!("<{inner}> inside <div> is moved")), "{why}");
-            }
+        for head in TEMPLATE_HEAD {
+            let block = Node::Block { head: Vec::new(), bodies: vec![vec![el("tr", vec![])]], arms: false };
+            let why = lost(&[el(head, vec![]), el("TABLE", vec![]), el("p", vec![]), block]).expect("refused");
+            assert!(why.starts_with("<tr> after <table>"), "{head}: {why}");
         }
-        // After a <col>, an element HTML's wherever it lands is dropped.
-        let why = lost(&[el("col", vec![]), el("col", vec![]), el("p", vec![])]).expect("refused");
-        assert!(why.starts_with("<p> after <col> is dropped"), "{why}");
+        // After a first <col>, an element HTML's wherever it lands is lost.
+        for name in ["p", "div", "span", "table"] {
+            let why = lost(&[el("col", vec![]), el("col", vec![]), el(name, vec![])]).expect("refused");
+            assert!(why.starts_with(&format!("<{name}> after <col> is lost")), "{why}");
+        }
 
         // Markup a browser may keep as written, or whose first element is not known, compiles:
         let expr = || Node::Expr(TokenStream::new());
         let kept: &[&[Node]] = &[
-            // table parts first, of one kind, and other elements after them
-            &[el("tr", vec![]), el("tr", vec![]), el("p", vec![el("span", vec![])])],
-            &[el("td", vec![]), el("div", vec![])],
-            // an element an <svg> keeps first (a component's top level may land in one)
+            // after any other first element, which a table part the patch began with may make
+            // table content, where a <p> is kept and a <tr> after it too
+            &[el("p", vec![]), el("tr", vec![])],
+            &[el("div", vec![]), el("td", vec![])],
+            &[el("span", vec![]), el("tbody", vec![])],
+            &[el("tr", vec![]), el("table", vec![])],
+            &[el("tr", vec![]), el("div", vec![el("table", vec![])])],
             &[el("section", vec![]), el("tr", vec![])],
-            &[el("form", vec![]), el("td", vec![])],
-            &[el("a", vec![]), el("tr", vec![])],
-            // a <title> first, which Firefox reads as the standard does
-            &[el("title", vec![]), el("tr", vec![])],
-            // what an expression, a component or a block writes first
-            &[expr(), el("p", vec![]), el("tr", vec![])],
-            &[Node::Block { head: Vec::new(), bodies: vec![vec![]], arms: false }, el("p", vec![]), el("tr", vec![])],
-            // a <form> straight after a table part (an <svg> keeps one), and what a <template>,
-            // an <svg> or an element whose content is text holds
-            &[el("tr", vec![]), el("form", vec![])],
-            &[el("tr", vec![]), el("div", vec![el("template", vec![el("table", vec![])])])],
-            &[el("tr", vec![]), el("div", vec![el("svg", vec![el("table", vec![])])])],
-            &[el("tr", vec![]), el("div", vec![el("textarea", vec![el("table", vec![])])])],
+            // a table part, an element an <svg> keeps or other markup after a <table>
+            &[el("table", vec![]), el("p", vec![el("span", vec![])]), el("table", vec![]), el("form", vec![])],
             // after a <col>, a <col>, a <template> or an element an <svg> keeps
-            &[el("col", vec![]), el("col", vec![]), el("template", vec![]), el("section", vec![])],
+            &[el("col", vec![]), el("col", vec![]), el("template", vec![]), el("section", vec![]), el("tr", vec![])],
+            // what an expression, a component or a block writes first
+            &[expr(), el("table", vec![]), el("tr", vec![])],
+            &[Node::Block { head: Vec::new(), bodies: vec![vec![]], arms: false }, el("col", vec![]), el("p", vec![])],
         ];
         for nodes in kept {
             assert_eq!(lost(nodes), None);

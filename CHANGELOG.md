@@ -5,26 +5,28 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) whose top
-  level the runtime's parse loses no longer compiles: a table part (`<tr>`, `<td>`, `<th>`,
-  `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`, `<colgroup>`) after a first element
-  that is HTML's wherever it lands (a `<p>`, a `<div>`, a `<span>`, a `<table>` ..), a
-  `<table>` after a first table part or a `<table>`, `<form>` or table part inside a later such
-  element, and such an element after a first `<col>`. Each was dropped or taken apart in the
-  browser with only a console error. Send the `<table>` whole with an id, or put the table parts
-  first. Where a component, an expression or a block writes the first element, or the first is
-  one an `<svg>` keeps (a `<section>`, a `<form>`), nothing is refused and the debug check
-  below finds it ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409),
+- **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in one of
+  two shapes the runtime's parse loses wherever they are written no longer compiles: a table part
+  (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`,
+  `<colgroup>`) after a first `<table>`, and an element HTML's wherever it lands (a `<p>`, a
+  `<div>`, a `<table>` ..) after a first `<col>`. Each was dropped, or the table taken apart, in
+  the browser with only a console error. Send the table part inside the `<table>`, the `<col>`s
+  in a `<colgroup>` with an id, or the rest in a patch of its own. Every other shape depends on
+  what the patch began with (a `<p>` and a `<tr>` after it are kept after a first `<tr>`), so it
+  still compiles and the debug check below finds it when it is sent
+  ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409),
   [design Choice 54](docs/design.md#choice-html-parse-refusals)).
 
 - A debug build refuses a patch the browser would lose part of: the runtime parses a patch as a
   `<template>`'s content, where the first top-level element (other than a head's, such as a
-  `<script>` or `<template>`) decides how the rest is read, so a table row, cell or other table
-  part beside another element was dropped (or a `<table>` or `<form>` after a row taken apart)
-  with only a console error about the next element. `req.patch`,
+  `<script>` or `<template>`; Chromium and WebKit let a leading `<title>`, `<base>`,
+  `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the rest is read, so a table
+  row, cell or other table part beside another element was dropped (or a `<table>` or `<form>`
+  after a row taken apart) with only a console error about the next element. `req.patch`,
   `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
-  fragment panics, naming the element lost and the one that came first; a release build is
-  unchanged ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
+  fragment panics, naming the element lost and the one that came first, so an app's own
+  debug-build tests that draw such a patch now fail; a release build is unchanged
+  ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 
 - Add an explicitly approved, single-attempt cancellation path for the exact old
   r21 mixed source-review wait. Signal only its verified pidfd-owned campaign entry,

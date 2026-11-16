@@ -177,22 +177,31 @@ const VOID: &[&str] = &[
     "param", "source", "track", "wbr",
 ];
 
-/// Where the end tag of the raw-text element `name` starts in `html`, searching from `from`, or
-/// `html`'s end: `</name` followed by whitespace, `/` or `>`, so a longer name (`</scriptx>`)
-/// is the element's text, as the HTML standard's tokenizer reads it.
+/// Where the end tag of the raw-text element `name` (in lowercase) starts in `html`, searching from
+/// `from`, or `html`'s end: `</name` in any letter case followed by whitespace, `/` or `>`, so a
+/// longer name (`</scriptx>`) is the element's text, as the HTML standard's tokenizer reads it.
+/// Allocates nothing, so a patch with many raw-text elements is read in one pass.
 #[cfg(any(debug_assertions, test))]
 fn raw_text_end(html: &str, from: usize, name: &str) -> usize {
-    let lower = html[from..].to_ascii_lowercase();
-    let close = format!("</{name}");
-    let mut at = 0;
-    while let Some(n) = lower[at..].find(&close) {
-        let after = at + n + close.len();
-        if matches!(lower.as_bytes().get(after), None | Some(b'>' | b'/' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' ')) {
-            return from + at + n;
+    let bytes = html.as_bytes();
+    let mut at = from;
+    while let Some(n) = html.get(at..).and_then(|rest| rest.find("</")) {
+        let start = at + n;
+        let name_end = start + 2 + name.len();
+        if bytes.get(start + 2..name_end).is_some_and(|written| written.eq_ignore_ascii_case(name.as_bytes()))
+            && matches!(bytes.get(name_end), None | Some(b'>' | b'/' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' '))
+        {
+            return start;
         }
-        at = after;
+        at = start + 2;
     }
     html.len()
+}
+
+/// Whether `text` has `needle` (ASCII, in lowercase) in it in any letter case, allocating nothing.
+#[cfg(any(debug_assertions, test))]
+fn has_ignoring_case(text: &str, needle: &str) -> bool {
+    text.as_bytes().windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// What the browser would drop from a patch (`req.patch`, a [`crate::live`] fragment): the first
@@ -249,17 +258,27 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
 
 /// Why the browser would lose part of a patch, after [`patch_parse_problem`]'s description of it.
 #[cfg(debug_assertions)]
-pub(crate) const PATCH_PARSE_HELP: &str = "The runtime parses a patch as a <template>'s content, where the first top-level element other than a <template>, <script>, <style>, <link>, <meta>, <title> or another head tag decides how the rest is read: after a table part (<tr>, <td>, <tbody>, <caption>, <col> ..), a <table>, a <form> or a table part inside a later top-level element that is not one is taken apart, after a <col> anything but a <col> or <template> is dropped, and after any other element table parts are dropped. Send the <table> whole, with an id, or put the table parts first, of one kind (rows, cells, or a table's row groups, caption and column groups), with no <table> or <form> in the elements after them, or keep them out of this patch";
+pub(crate) const PATCH_PARSE_HELP: &str = "The runtime parses a patch as a <template>'s content, where the first top-level element other than a head tag (a <template>, <script>, <style>, <link>, <meta>, or a <title>, <base>, <basefont>, <bgsound> or <noframes>, which Chromium and WebKit let decide when one comes first) decides how the rest is read: after a table part (<tr>, <td>, <tbody>, <caption>, <col> ..), a <table>, a <form> or a table part inside a later top-level element that is not one is taken apart, after a <col> anything but a <col> or <template> is dropped, and after any other element table parts are dropped. Send the <table> whole, with an id, or put the table parts first, of one kind (rows, cells, or a table's row groups, caption and column groups), with no <table> or <form> in the elements after them, or keep them out of this patch";
 
 /// Start tags a table's insertion modes read: a `<template>`'s first such element (in the HTML
-/// standard's "in template" insertion mode) reads the rest as a table's.
+/// standard's "in template" insertion mode) reads the rest as a table's. The same list as
+/// `TABLE_PARTS` in `crates/corten-macros/src/html.rs`, which
+/// `the_macro_s_patch_lists_are_the_check_s` holds it to.
 #[cfg(any(debug_assertions, test))]
 const TABLE_PARTS: &[&str] = &["caption", "col", "colgroup", "tbody", "td", "tfoot", "th", "thead", "tr"];
 
 /// Start tags the "in template" insertion mode reads as a head's: they do not decide how the rest
-/// is read, and every mode keeps them but a `<col>`'s, which keeps only `<template>`.
+/// is read (but [`DECIDING_HEAD`]'s, in Chromium and WebKit), and every mode keeps them but a
+/// `<col>`'s, which keeps only `<template>`. The same list as `TEMPLATE_HEAD` in
+/// `crates/corten-macros/src/html.rs`, which `the_macro_s_patch_lists_are_the_check_s` holds it to.
 #[cfg(any(debug_assertions, test))]
 const HEAD_TAGS: &[&str] = &["base", "basefont", "bgsound", "link", "meta", "noframes", "script", "style", "template", "title"];
+
+/// Head tags Chromium and WebKit let decide how a `<template>`'s content is read when one comes
+/// before any other element, as a page's body does (they read the rest as a body's, dropping table
+/// parts); the HTML standard reads them as a head's, and Firefox follows it.
+#[cfg(any(debug_assertions, test))]
+const DECIDING_HEAD: &[&str] = &["base", "basefont", "bgsound", "noframes", "title"];
 
 /// How a `<template>`'s top level reads its elements, set by the first one that is not a head's.
 #[cfg(any(debug_assertions, test))]
@@ -286,101 +305,54 @@ enum Reading {
 /// table part inside another top-level element is moved out of it, a `<table>` there is taken
 /// apart, its parts moved out, and a `<form>` there or at the top level loses what it holds; after a `<col>`, everything but a `<col>` or `<template>` is
 /// dropped. A `<template>`'s content, at the top level (`Append`'s rows) or inside an element,
-/// is read the same way on its own. Chromium and WebKit let a leading `<title>` decide too (the standard does not, and
-/// Firefox does not), so a patch is read both ways. Describes the first loss, for an error;
-/// [`PATCH_PARSE_HELP`] says why and what to do. Reads markup as `html!` writes it, each element
-/// closed by its own end tag ([`closes_each`]); what an `<svg>` or `<math>` holds, and what follows
-/// a script whose text could hide its end tag, are not read, so those are misses, never refusals. Checked in
+/// is read the same way on its own. Chromium and WebKit let a leading `<title>`, `<base>`,
+/// `<basefont>`, `<bgsound>` or `<noframes>` decide too ([`DECIDING_HEAD`]; the standard does not,
+/// and Firefox does not), so a patch with one is read both ways. Describes the first loss, for an
+/// error; [`PATCH_PARSE_HELP`] says why and what to do. Reads markup as `html!` writes it, each
+/// element closed by its own end tag, in one pass for each way it is read
+/// ([`template_problem`]); what an `<svg>` or `<math>` holds, and what follows a script whose
+/// text could hide its end tag, are not read, so those are misses, never refusals. Checked in
 /// debug builds only; `scripts/smoke.mjs` checks the browsers against `patch-parsing.json`, the
 /// cases `a_patch_s_parse_problems_are_what_browsers_parse` holds this to.
 #[cfg(any(debug_assertions, test))]
 pub(crate) fn patch_parse_problem(html: &str) -> Option<String> {
-    if !closes_each(html) {
+    let read = template_problem(html, false, false);
+    if !read.readable {
         return None;
     }
-    let (problem, titled) = template_problem(html, false, false);
-    if problem.is_some() || !titled {
-        return problem;
+    if read.problem.is_some() {
+        return read.problem;
     }
+    let head = read.headed?;
     template_problem(html, true, false)
-        .0
-        .map(|problem| format!("{problem} in Chromium and WebKit, which let a <title> before it decide how the rest is read"))
+        .problem
+        .map(|problem| format!("{problem} in Chromium and WebKit, which let a <{head}> before it decide how the rest is read"))
 }
 
-/// Whether each element in `html` but a void one is closed by its own end tag, in order, with no
-/// CDATA section, every comment ended by `-->`, and no comment, `<style>` or `<script>` in an
-/// `<svg>` or `<math>`. Where one is not (an `<li>` closed by its list's end tag, a `<p>` by the next
-/// `<p>`), the browser closes it where its rules say, which [`template_problem`] does not follow.
+/// What one reading of a patch (or of a `<template>`'s content in it) found.
 #[cfg(any(debug_assertions, test))]
-fn closes_each(html: &str) -> bool {
-    let bytes = html.as_bytes();
-    let mut open: Vec<String> = Vec::new();
-    // How many elements are open around an open `<svg>` or `<math>`, whose `<style>` and
-    // `<script>` hold markup, not text.
-    let mut foreign: Option<usize> = None;
-    let mut i = 0;
-    while let Some(at) = html.get(i..).and_then(|rest| rest.find('<')).map(|n| i + n) {
-        if html[at..].starts_with("<!--") {
-            // A comment ended by `-->` alone: one written `<!-->`, `<!--->` or with `--!>` in it ends
-            // elsewhere, and one in foreign content is not followed.
-            let body = at + 4;
-            let end = html[body..].find("-->").map_or(bytes.len(), |n| body + n);
-            if foreign.is_some()
-                || html[body..].starts_with('>')
-                || html[body..].starts_with("->")
-                || html[body..end].contains("--!>")
-            {
-                return false;
-            }
-            i = (end + 3).min(bytes.len());
-            continue;
-        }
-        // A CDATA section, which an `<svg>` or `<math>` reads as text up to `]]>` and HTML as a
-        // comment up to `>`: not followed.
-        if html[at..].starts_with("<![CDATA[") {
-            return false;
-        }
-        match bytes.get(at + 1) {
-            Some(b'/') => {
-                let end = html[at..].find('>').map_or(bytes.len(), |n| at + n);
-                if open.pop().as_deref() != Some(html[at + 2..end].trim_end().to_ascii_lowercase().as_str()) {
-                    return false;
-                }
-                if foreign.is_some_and(|around| open.len() <= around) {
-                    foreign = None;
-                }
-                i = end + 1;
-            }
-            Some(c) if c.is_ascii_alphabetic() => {
-                let tag = start_tag(html, at);
-                i = tag.end;
-                if RAW_TEXT.contains(&tag.name.as_str()) {
-                    if foreign.is_some() {
-                        return false;
-                    }
-                    i = raw_text_end(html, i, &tag.name);
-                }
-                if !VOID.contains(&tag.name.as_str()) && !tag.self_closing {
-                    if (tag.name == "svg" || tag.name == "math") && foreign.is_none() {
-                        foreign = Some(open.len());
-                    }
-                    open.push(tag.name);
-                }
-            }
-            Some(b'!' | b'?') => i = html[at..].find('>').map_or(bytes.len(), |n| at + n + 1),
-            _ => i = at + 1,
-        }
-    }
-    open.is_empty()
+struct Read {
+    /// The first loss.
+    problem: Option<String>,
+    /// The first of [`DECIDING_HEAD`] read before the first element that decides, here or in a
+    /// `<template>`'s content.
+    headed: Option<&'static str>,
+    /// Whether each element in it but a void one is closed by its own end tag, in order, with no
+    /// CDATA section, every comment ended by `-->`, and no comment, `<style>` or `<script>` in an
+    /// `<svg>` or `<math>`. Where one is not (an `<li>` closed by its list's end tag, a `<p>` by the
+    /// next `<p>`), the browser closes it where its rules say, which this does not follow, so
+    /// nothing is reported.
+    readable: bool,
 }
 
-/// [`patch_parse_problem`] for one reading of a leading `<title>`, and whether one was read
-/// before the first element that decides (in `html` or a `<template>`'s content). `nested`: `html`
-/// is the content of a `<template>` in the patch, which is on the parser's stack of open elements
-/// as the runtime's own `<template>` is not, so a table's reading drops a `<form>` there whole, as
-/// the HTML standard says and Firefox does (Chromium and WebKit keep it).
+/// [`patch_parse_problem`] for one way of reading a leading head tag ([`DECIDING_HEAD`]'s
+/// decide when `head_decides`), in one pass that also reads whether the patch is closed as
+/// [`Read`] says. `nested`: `html` is the content of a `<template>` in the patch, which is on the
+/// parser's stack of open elements as the runtime's own `<template>` is not, so a table's reading
+/// drops a `<form>` there whole, as the HTML standard says and Firefox does (Chromium and WebKit
+/// keep it).
 #[cfg(any(debug_assertions, test))]
-fn template_problem(html: &str, title_decides: bool, nested: bool) -> (Option<String>, bool) {
+fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
     let shown = |written: &str| -> String {
         let shown: String = written.chars().take(80).collect();
         if shown.len() < written.len() {
@@ -390,13 +362,15 @@ fn template_problem(html: &str, title_decides: bool, nested: bool) -> (Option<St
         }
     };
     let since = |first: &str| format!(", since {} comes first", shown(first));
+    let unread = |headed| Read { problem: None, headed, readable: false };
     let bytes = html.as_bytes();
     let mut reading = Reading::Undecided;
     // The element that decided, as written.
     let mut first = "";
-    let mut titled = false;
-    // The elements open, by name: an end tag closes the one it names and those inside it, as the
-    // browser does when an element's end tag is left out (an `<li>` closed by its list's).
+    let mut headed = None;
+    // The first loss: once one is found, the rest is read only for whether it is closed.
+    let mut problem: Option<String> = None;
+    // The elements open, by name, each closed by its own end tag.
     let mut open: Vec<String> = Vec::new();
     // A top-level element other than a table part or a head's, open in a table's reading: the
     // browser reads what it holds by the table's rules, so a table part in it leaves it.
@@ -414,31 +388,45 @@ fn template_problem(html: &str, title_decides: bool, nested: bool) -> (Option<St
             continue;
         }
         if html[i..].starts_with("<!--") {
-            i = html[i..].find("-->").map_or(bytes.len(), |n| i + n + 3);
+            // A comment ended by `-->` alone: one written `<!-->`, `<!--->` or with `--!>` in it ends
+            // elsewhere, and one in foreign content is not followed.
+            let body = i + 4;
+            let end = html[body..].find("-->").map_or(bytes.len(), |n| body + n);
+            if foreign.is_some()
+                || html[body..].starts_with('>')
+                || html[body..].starts_with("->")
+                || html[body..end].contains("--!>")
+            {
+                return unread(headed);
+            }
+            i = (end + 3).min(bytes.len());
             continue;
+        }
+        // A CDATA section, which an `<svg>` or `<math>` reads as text up to `]]>` and HTML as a
+        // comment up to `>`: not followed.
+        if html[i..].starts_with("<![CDATA[") {
+            return unread(headed);
         }
         match bytes.get(i + 1) {
             Some(b'/') => {
                 let at = i;
-                let name_end = html[i + 2..]
-                    .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
-                    .map_or(bytes.len(), |n| i + 2 + n);
-                let name = html[i + 2..name_end].to_ascii_lowercase();
-                i = html[i..].find('>').map_or(bytes.len(), |n| i + n + 1);
-                // One that names no open element is ignored, as the browser ignores it.
-                if let Some(n) = open.iter().rposition(|open| *open == name) {
-                    open.truncate(n);
+                let end = html[i..].find('>').map_or(bytes.len(), |n| i + n);
+                if !open.last().is_some_and(|last| last.eq_ignore_ascii_case(html[i + 2..end].trim_end())) {
+                    return unread(headed);
                 }
+                open.pop();
+                i = (end + 1).min(bytes.len());
                 if foreign.is_some_and(|around| open.len() <= around) {
                     foreign = None;
                 }
                 if let Some((_, start)) = template.filter(|(around, _)| open.len() <= *around) {
                     template = None;
-                    let (problem, inner_titled) = template_problem(&html[start..at], title_decides, true);
-                    titled |= inner_titled;
-                    if problem.is_some() {
-                        return (problem, titled);
+                    let inner = template_problem(&html[start..at], head_decides, true);
+                    headed = headed.or(inner.headed);
+                    if !inner.readable {
+                        return unread(headed);
                     }
+                    problem = problem.or(inner.problem);
                 }
                 if open.is_empty() {
                     watched = None;
@@ -463,11 +451,14 @@ fn template_problem(html: &str, title_decides: bool, nested: bool) -> (Option<St
         let head = HEAD_TAGS.contains(&name);
         let holds = !html[i..].starts_with("</");
         let opens = !VOID.contains(&name) && !tag.self_closing;
-        if open.is_empty() {
+        if problem.is_some() {
+            // Read on only for whether it is closed.
+        } else if open.is_empty() {
             watched = None;
             if reading == Reading::Undecided {
-                titled |= name == "title";
-                if !head || (name == "title" && title_decides) {
+                let deciding = DECIDING_HEAD.iter().find(|tag| **tag == name).copied();
+                headed = headed.or(deciding);
+                if !head || (deciding.is_some() && head_decides) {
                     first = written;
                     reading = match name {
                         "caption" | "colgroup" | "tbody" | "tfoot" | "thead" => Reading::Table,
@@ -500,53 +491,44 @@ fn template_problem(html: &str, title_decides: bool, nested: bool) -> (Option<St
                     } else {
                         shown(written)
                     };
-                    return (Some(format!("{what} is dropped{}", since(first))), titled);
-                }
-                if let Some(added) = added {
-                    return (Some(format!("{} is put in {added} the browser adds{}", shown(written), since(first))), titled);
-                }
-                if table && name == "form" && nested {
-                    return (Some(format!("{} is dropped in Firefox{}", shown(written), since(first))), titled);
-                }
-                if table && name == "form" && holds {
-                    return (Some(format!("{} loses what it holds{}", shown(written), since(first))), titled);
-                }
-                if table && !part && !head && opens {
+                    problem = Some(format!("{what} is dropped{}", since(first)));
+                } else if let Some(added) = added {
+                    problem = Some(format!("{} is put in {added} the browser adds{}", shown(written), since(first)));
+                } else if table && name == "form" && nested {
+                    problem = Some(format!("{} is dropped in Firefox{}", shown(written), since(first)));
+                } else if table && name == "form" && holds {
+                    problem = Some(format!("{} loses what it holds{}", shown(written), since(first)));
+                } else if table && !part && !head && opens {
                     watched = Some(written);
                 }
             }
         } else if let (Some(top), None, None) = (watched, template, foreign) {
             if name == "table" {
-                return (
-                    Some(format!(
-                        "{} in {} is taken apart, its parts moved out of it{}",
-                        shown(written),
-                        shown(top),
-                        since(first)
-                    )),
-                    titled,
-                );
-            }
-            if part {
-                return (Some(format!("{} in {} is moved out of it{}", shown(written), shown(top), since(first))), titled);
-            }
-            if name == "form" && nested {
-                return (Some(format!("{} in {} is dropped in Firefox{}", shown(written), shown(top), since(first))), titled);
-            }
-            if name == "form" && holds {
-                return (Some(format!("{} in {} loses what it holds{}", shown(written), shown(top), since(first))), titled);
+                problem = Some(format!(
+                    "{} in {} is taken apart, its parts moved out of it{}",
+                    shown(written),
+                    shown(top),
+                    since(first)
+                ));
+            } else if part {
+                problem = Some(format!("{} in {} is moved out of it{}", shown(written), shown(top), since(first)));
+            } else if name == "form" && nested {
+                problem = Some(format!("{} in {} is dropped in Firefox{}", shown(written), shown(top), since(first)));
+            } else if name == "form" && holds {
+                problem = Some(format!("{} in {} loses what it holds{}", shown(written), shown(top), since(first)));
             }
         }
         if RAW_TEXT.contains(&name) {
+            if foreign.is_some() {
+                return unread(headed);
+            }
             // Its text, up to its end tag: nothing in it is markup.
             let end = raw_text_end(html, i, name);
             // A `<script>` written after `<!--` in a script's text can make the tokenizer read the
             // next `</script>` as text (its double-escaped state), which is not followed here: what
             // comes after is not read.
-            if name == "script"
-                && html[i..end].find("<!--").is_some_and(|n| html[i + n..end].to_ascii_lowercase().contains("<script"))
-            {
-                return (None, titled);
+            if name == "script" && html[i..end].find("<!--").is_some_and(|n| has_ignoring_case(&html[i + n..end], "<script")) {
+                return Read { problem, headed, readable: true };
             }
             i = end;
         }
@@ -559,10 +541,10 @@ fn template_problem(html: &str, title_decides: bool, nested: bool) -> (Option<St
             if (name == "svg" || name == "math") && foreign.is_none() && template.is_none() {
                 foreign = Some(open.len());
             }
-            open.push(name.to_owned());
+            open.push(tag.name);
         }
     }
-    (None, titled)
+    Read { problem, headed, readable: open.is_empty() }
 }
 
 #[cfg(test)]
@@ -674,6 +656,19 @@ mod tests {
             Some(
                 r#"<td id="a"> is dropped, since <title> comes first in Chromium and WebKit, which let a <title> before it decide how the rest is read"#
             )
+        );
+        for head in ["base", "basefont", "bgsound"] {
+            assert_eq!(
+                patch_parse_problem(&format!(r#"<{head} id="h"><tr id="r"></tr>"#)),
+                Some(format!(
+                    r#"<tr id="r"> is dropped, since <{head} id="h"> comes first in Chromium and WebKit, which let a <{head}> before it decide how the rest is read"#
+                )),
+            );
+        }
+        assert_eq!(
+            patch_parse_problem(r#"<link id="l" rel="stylesheet" href="/s.css"><meta id="m" name="x"><tr id="r"></tr>"#),
+            None,
+            "a <link> or a <meta> decides in no engine"
         );
         assert_eq!(
             patch_parse_problem(r#"<tr id="a"></tr><div id="b"><template><tr><td>1</td></tr></template></div>"#),
@@ -818,8 +813,8 @@ mod tests {
     }
 
     /// `patch-parsing.json`'s cases, whose parses `scripts/smoke.mjs` checks in Chromium, Firefox
-    /// and WebKit: the check reports exactly the patches some browser does not parse as written,
-    /// naming what it loses. Elements are compared, not text: a form's text moved out of it is
+    /// and WebKit: of these cases, the check reports exactly those some browser does not parse as
+    /// written, naming what it loses. Elements are compared, not text: a form's text moved out of it is
     /// [`a_patch_names_what_the_browser_loses_and_what_came_first`]'s.
     #[cfg(feature = "json")]
     #[test]
@@ -848,5 +843,62 @@ mod tests {
                 assert!(problem.contains(lost), "{html}: {problem:?} does not say {lost:?}");
             }
         }
+    }
+
+    /// The two shapes `html!` refuses at a patch's top level (`check_patch_top` in
+    /// `crates/corten-macros/src/html.rs`: a table part after a first `<table>`, an element HTML's
+    /// wherever it lands after a first `<col>`) are lost in every browser wherever a patch puts
+    /// them: first, and after each table part the patch may begin with, which a component's
+    /// markup does not show. Each is a case of `patch-parsing.json`, whose parses
+    /// `scripts/smoke.mjs` checks in Chromium, Firefox and WebKit, so the refusal is held to the
+    /// same browsers as the debug check.
+    #[cfg(feature = "json")]
+    #[test]
+    fn a_shape_html_refuses_is_lost_after_each_table_part() {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("patch-parsing.json")).expect("patch-parsing.json is JSON");
+        let cases = vectors["cases"].as_array().expect("cases");
+        // An element as the cases write it: a row with a cell, a cell with its number, a caption,
+        // a <div> or a <p> with text.
+        let element = |name: &str, id: &str, n: u8| match name {
+            "col" => format!(r#"<col id="{id}">"#),
+            "tr" => format!(r#"<tr id="{id}"><td>{n}</td></tr>"#),
+            "td" | "th" => format!(r#"<{name} id="{id}">{n}</{name}>"#),
+            "caption" | "div" | "p" => format!(r#"<{name} id="{id}">x</{name}>"#),
+            _ => format!(r#"<{name} id="{id}"></{name}>"#),
+        };
+        let table = r#"<table id="a"><tbody><tr><td>1</td></tr></tbody></table>"#;
+        let mut shapes: Vec<String> = super::TABLE_PARTS.iter().map(|part| format!("{table}{}", element(part, "b", 2))).collect();
+        shapes.extend(["div", "p", "table"].map(|name| format!(r#"<col id="a">{}"#, element(name, "b", 2))));
+        let mut before = vec![String::new()];
+        before.extend(super::TABLE_PARTS.iter().map(|part| element(part, "h", 1)));
+        for before in &before {
+            for shape in &shapes {
+                let html = format!("{before}{shape}");
+                let case = cases.iter().find(|case| case["html"] == html.as_str()).unwrap_or_else(|| panic!("no case {html}"));
+                let as_written = serde_json::Value::from(written(&html));
+                let mut parses = vec![&case["parsed"]];
+                if let Some(engines) = case["parsedIn"].as_object() {
+                    parses.extend(engines.values());
+                }
+                assert!(parses.iter().all(|parsed| **parsed != as_written), "{html}: some browser keeps it as written");
+                assert!(patch_parse_problem(&html).is_some(), "{html}");
+            }
+        }
+    }
+
+    /// The lists `html!`'s refusal reads a patch's top level by are this check's: `corten-macros` has
+    /// no dependency to share them through. (Skipped outside the repository.)
+    #[test]
+    fn the_macro_s_patch_lists_are_the_check_s() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../corten-macros/src/html.rs");
+        let Ok(source) = std::fs::read_to_string(path) else { return };
+        let list = |name: &str| -> Vec<String> {
+            let start = source.find(&format!("const {name}: &[&str] =")).unwrap_or_else(|| panic!("{name} in corten-macros"));
+            let end = start + source[start..].find("];").expect("the list's end");
+            source[start..end].split('"').skip(1).step_by(2).map(str::to_owned).collect()
+        };
+        assert_eq!(list("TEMPLATE_HEAD"), super::HEAD_TAGS);
+        assert_eq!(list("TABLE_PARTS"), super::TABLE_PARTS);
     }
 }

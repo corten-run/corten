@@ -1333,44 +1333,35 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// ```
 ///
 /// The runtime parses a patch's top-level elements together, as a `<template>`'s content, where
-/// the first element decides how the rest is read. A table part (`<tr>`, `<td>`, `<tbody>`,
-/// `<caption>`, `<col>` ..) after an element that is HTML's wherever it lands (a `<p>`, a
-/// `<div>`, a `<span>`, a `<table>` ..) would be dropped, and after a table part a `<table>`, or a
-/// `<table>`, `<form>` or table part inside such an element, taken apart; none is kept as written
-/// on a page either, so `html!` refuses them where it sees the top level
+/// the first element decides how the rest is read. Two shapes are lost wherever they are written,
+/// so `html!` refuses them where it sees the top level
 /// ([design Choice 54](https://github.com/corten-run/corten/blob/main/docs/design.md#choice-html-parse-refusals)):
+/// a table part (`<tr>`, `<td>`, `<tbody>`, `<caption>`, `<col>` ..) after a first `<table>`, which
+/// the parse drops (or, where the patch began with a table part, takes the table apart), and an
+/// element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first `<col>`:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// #[derive(Id)]
-/// struct StatusId;
-/// #[derive(Id)]
-/// struct RowId(u32);
-/// let _ = html! { <p id={StatusId}>"Saved"</p> <tr id={RowId(7)}><td>"7"</td></tr> };
-/// ```
-///
-/// ```compile_fail
-/// use corten::prelude::*;
-/// #[derive(Id)]
-/// struct RowId(u32);
 /// #[derive(Id)]
 /// struct TotalsId;
-/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <table id={TotalsId}></table> };
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// let _ = html! { <table id={TotalsId}></table> <tr id={RowId(7)}><td>"7"</td></tr> };
 /// ```
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
 /// #[derive(Id)]
-/// struct RowId(u32);
+/// struct WidthId;
 /// #[derive(Id)]
 /// struct NoteId;
-/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={NoteId}><table></table></div> };
+/// let _ = html! { <col id={WidthId}> <p id={NoteId}>"Wide"</p> };
 /// ```
 ///
-/// Table parts first, of one kind, compile, with other elements after them. Where the first
-/// element is not known (an expression, a component, a block) or is one an `<svg>` keeps as
-/// written (a `<section>`, a `<form>`), which a component's top level may land in, nothing is
-/// refused, and a debug build answers the patch with a 500 when it is sent:
+/// Every other shape the parse may lose depends on what the patch began with, which a component's
+/// markup does not show: after a first `<tr>` a `<p>` and a row after it are both kept, so a
+/// component that writes them compiles, and a debug build answers a patch the browser would lose
+/// part of with a 500 when it is sent (a `<p>` and then a `<tr>` on their own, below):
 ///
 /// ```
 /// use corten::{prelude::*, view::Patch};
@@ -1378,9 +1369,13 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// struct StatusId;
 /// #[derive(Id)]
 /// struct RowId(u32);
+/// #[component]
+/// fn NoteAndRow() -> impl Patch {
+///     html! { <p id={StatusId}>"Saved"</p> <tr id={RowId(8)}><td>"8"</td></tr> }
+/// }
 /// fn send(view: impl Patch) -> String { view.to_html() }
-/// let patch = html! { <tr id={RowId(7)}><td>"7"</td></tr> <p id={StatusId}>"Saved"</p> };
-/// assert_eq!(send(patch), r#"<tr id="row-7"><td>7</td></tr><p id="status">Saved</p>"#);
+/// let patch = html! { <tr id={RowId(7)}><td>"7"</td></tr> <NoteAndRow /> };
+/// assert_eq!(send(patch), r#"<tr id="row-7"><td>7</td></tr><p id="status">Saved</p><tr id="row-8"><td>8</td></tr>"#);
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a patch",
