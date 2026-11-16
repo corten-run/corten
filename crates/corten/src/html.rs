@@ -198,6 +198,90 @@ fn raw_text_end(html: &str, from: usize, name: &str) -> usize {
     html.len()
 }
 
+/// Where the end tag of the HTML `<script>` whose start tag ends at `from` in `html` starts, as
+/// the HTML standard's tokenizer reads script data: a `</script` followed by whitespace, `/` or
+/// `>`, in any letter case, but one a `<!--` and a `<script` before it in its text hide (the
+/// script data escaped and double-escaped states, which a `</script` or a `-->` leaves). `html`'s
+/// end if its text hides every one after it. Allocates nothing.
+#[cfg(any(debug_assertions, test))]
+fn script_end(html: &str, from: usize) -> usize {
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        Data,
+        Escaped,
+        EscapedDash,
+        EscapedDashDash,
+        Double,
+        DoubleDash,
+        DoubleDashDash,
+    }
+    let bytes = html.as_bytes();
+    // A `script` tag name at `at`, in any letter case, ended by whitespace, `/` or `>`.
+    let script_at = |at: usize| {
+        bytes.get(at..at + 6).is_some_and(|name| name.eq_ignore_ascii_case(b"script"))
+            && matches!(bytes.get(at + 6), Some(b'>' | b'/' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' '))
+    };
+    let mut state = State::Data;
+    let mut i = from;
+    while i < bytes.len() {
+        let c = bytes[i];
+        let double = matches!(state, State::Double | State::DoubleDash | State::DoubleDashDash);
+        match c {
+            b'<' if state == State::Data => {
+                if bytes.get(i + 1) == Some(&b'/') && script_at(i + 2) {
+                    return i;
+                }
+                if bytes[i + 1..].starts_with(b"!--") {
+                    // `<!--`: the escaped state, as after its dash dash, so `<!-->` leaves it at once.
+                    state = State::EscapedDashDash;
+                    i += 4;
+                    continue;
+                }
+            }
+            b'<' if !double => {
+                if bytes.get(i + 1) == Some(&b'/') && script_at(i + 2) {
+                    return i;
+                }
+                if script_at(i + 1) {
+                    // `<script` and its delimiter: double-escaped.
+                    state = State::Double;
+                    i += 8;
+                    continue;
+                }
+                state = State::Escaped;
+            }
+            b'<' => {
+                if bytes.get(i + 1) == Some(&b'/') && script_at(i + 2) {
+                    // `</script` and its delimiter: escaped again.
+                    state = State::Escaped;
+                    i += 9;
+                    continue;
+                }
+                state = State::Double;
+            }
+            b'-' => {
+                state = match state {
+                    State::Data => State::Data,
+                    State::Escaped => State::EscapedDash,
+                    State::EscapedDash | State::EscapedDashDash => State::EscapedDashDash,
+                    State::Double => State::DoubleDash,
+                    State::DoubleDash | State::DoubleDashDash => State::DoubleDashDash,
+                };
+            }
+            b'>' if matches!(state, State::EscapedDashDash | State::DoubleDashDash) => state = State::Data,
+            _ => {
+                state = match state {
+                    State::Data => State::Data,
+                    State::Escaped | State::EscapedDash | State::EscapedDashDash => State::Escaped,
+                    State::Double | State::DoubleDash | State::DoubleDashDash => State::Double,
+                };
+            }
+        }
+        i += 1;
+    }
+    html.len()
+}
+
 /// Whether the element whose start tag ends at `from` in `html` holds what a page shows: a start
 /// tag, or text other than whitespace, before the first end tag, comments skipped. A `<form>` a
 /// table's reading puts in empty moves what it holds out of it, which loses an element or text from
@@ -218,12 +302,6 @@ fn holds_shown(html: &str, from: usize) -> bool {
         return rest.as_bytes().get(1).is_some_and(u8::is_ascii_alphabetic);
     }
     !html[at..].trim_ascii().is_empty()
-}
-
-/// Whether `text` has `needle` (ASCII, in lowercase) in it in any letter case, allocating nothing.
-#[cfg(any(debug_assertions, test))]
-fn has_ignoring_case(text: &str, needle: &str) -> bool {
-    text.as_bytes().windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 /// What the browser would drop from a patch (`req.patch`, a [`crate::live`] fragment): the first
@@ -252,8 +330,13 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
             continue;
         }
         if bytes.get(i + 1) == Some(&b'/') {
-            depth = depth.saturating_sub(1);
-            i = html[i..].find('>').map_or(bytes.len(), |n| i + n + 1);
+            let end = html[i..].find('>').map_or(bytes.len(), |n| i + n);
+            // A void element's end tag (`html!` writes one for a `<param>` or a `<basefont>`)
+            // closes nothing: the browser ignores it.
+            if !VOID.iter().any(|void| void.eq_ignore_ascii_case(html[i + 2..end].trim_end())) {
+                depth = depth.saturating_sub(1);
+            }
+            i = (end + 1).min(bytes.len());
             continue;
         }
         // A start tag: its name, then its attributes up to `>`.
@@ -269,7 +352,7 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
         }
         if RAW_TEXT.contains(&name.as_str()) {
             // Its text up to the end tag, and the end tag: nothing in it is markup.
-            i = raw_text_end(html, i, &name);
+            i = if name == "script" { script_end(html, i) } else { raw_text_end(html, i, &name) };
             i = html[i..].find('>').map_or(bytes.len(), |n| i + n + 1);
         } else if !VOID.contains(&name.as_str()) && !self_closing {
             depth += 1;
@@ -278,7 +361,7 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
     None
 }
 
-/// Why the browser would lose part of a patch, after [`patch_parse_problem`]'s description of it.
+/// Why the browser would lose part of a patch, after [`patch_parse`]'s description of it.
 #[cfg(debug_assertions)]
 pub(crate) const PATCH_PARSE_HELP: &str = "The runtime parses a patch as a <template>'s content, where the first top-level element other than a head tag (a <template>, <script>, <style>, <link>, <meta>, or a <title>, <base>, <basefont>, <bgsound> or <noframes>, which Chromium and WebKit let decide when one comes first) decides how the rest is read: after a table part (<tr>, <td>, <tbody>, <caption>, <col> ..), a <table>, a <form> or a table part inside a later top-level element that is not one is taken apart, after a <col> anything but a <col> or <template> is dropped, and after any other element table parts are dropped. Send the <table> whole, with an id, or put the table parts first, of one kind (rows, cells, or a table's row groups, caption and column groups), with no <table> or <form> in the elements after them, or keep them out of this patch";
 
@@ -455,24 +538,54 @@ enum Reading {
 /// element closed by its own end tag, in one pass for each way it is read
 /// ([`template_problem`]). What an `<svg>` or `<math>` holds is read by foreign content's rules
 /// ([`placed`]: a `<title>` or `<style>` there holds elements, a CDATA section is text) for where
-/// it ends, and no loss inside one is reported; an element HTML's wherever it lands written straight
-/// in one, which `html!` refuses, and what follows a script whose text could hide its end tag, are
-/// not read: those are misses, never refusals. Checked in
-/// debug builds only; `scripts/smoke.mjs` checks the browsers against `patch-parsing.json`, the
-/// cases `a_patch_s_parse_problems_are_what_browsers_parse` holds this to.
+/// it ends, and no loss inside one is reported; a `<script>`'s text is read by the tokenizer's
+/// script data states ([`script_end`]), and the end tag of a void element is ignored, as the
+/// browser does. A patch it cannot read to its end (an element closed by another's end tag, an
+/// element HTML's wherever it lands written straight in an `<svg>` or `<math>`, which `html!`
+/// refuses) is read up to there: a loss before it is reported, and [`patch_parse_checked`] logs
+/// that the rest was not read. Checked in debug builds only; `scripts/smoke.mjs` checks the
+/// browsers against `patch-parsing.json`, the cases `a_patch_s_parse_problems_are_what_browsers_parse`
+/// holds this to.
 #[cfg(any(debug_assertions, test))]
-pub(crate) fn patch_parse_problem(html: &str) -> Option<String> {
+pub(crate) fn patch_parse(html: &str) -> Parse {
     let read = template_problem(html, false, false);
-    if !read.readable {
-        return None;
+    let Some(head) = read.headed.filter(|_| read.problem.is_none()) else {
+        return Parse { problem: read.problem, unread: read.unread };
+    };
+    let other = template_problem(html, true, false);
+    Parse {
+        problem: other.problem.map(|problem| {
+            format!("{problem} in Chromium and WebKit, which let a <{head}> before it decide how the rest is read")
+        }),
+        unread: read.unread.or(other.unread),
     }
-    if read.problem.is_some() {
-        return read.problem;
+}
+
+/// What [`patch_parse`] found of a patch: the first loss, and where it stopped reading, if it did.
+#[cfg(any(debug_assertions, test))]
+pub(crate) struct Parse {
+    pub problem: Option<String>,
+    pub unread: Option<String>,
+}
+
+/// The loss [`patch_parse`] finds, which the tests read.
+#[cfg(test)]
+pub(crate) fn patch_parse_problem(html: &str) -> Option<String> {
+    patch_parse(html).problem
+}
+
+/// [`patch_parse`] for a patch about to be sent (`what`: where it comes from), logging a
+/// warning when it found no loss but could not read the patch to its end, so a patch the check
+/// does not follow is not passed in silence.
+#[cfg(debug_assertions)]
+pub(crate) fn patch_parse_checked(html: &str, what: &dyn std::fmt::Display) -> Option<String> {
+    let parse = patch_parse(html);
+    if let (None, Some(unread)) = (&parse.problem, &parse.unread) {
+        tracing::warn!(
+            "corten: the debug check of what the browser keeps of {what} read it only up to {unread}, which it does not follow, so what comes after was not checked: it reads markup as html! writes it, each element closed by its own end tag"
+        );
     }
-    let head = read.headed?;
-    template_problem(html, true, false)
-        .problem
-        .map(|problem| format!("{problem} in Chromium and WebKit, which let a <{head}> before it decide how the rest is read"))
+    parse.problem
 }
 
 /// What one reading of a patch (or of a `<template>`'s content in it) found.
@@ -483,16 +596,16 @@ struct Read {
     /// The first of [`DECIDING_HEAD`] read before the first element that decides, here or in a
     /// `<template>`'s content.
     headed: Option<&'static str>,
-    /// Whether each element in it but a void one is closed by its own end tag, in order, with a
-    /// CDATA section only in an SVG or MathML element, every comment ended by `-->`, and no element
-    /// HTML's wherever it lands written straight in an `<svg>` or `<math>`. Where one is not (an
-    /// `<li>` closed by its list's end tag, a `<p>` by the next `<p>`, a `<p>` the browser takes out
-    /// of an `<svg>`), the browser closes it where its rules say, which this does not follow, so
-    /// nothing is reported.
-    readable: bool,
+    /// Where it stopped reading, when it did: each element in it but a void one is read closed by
+    /// its own end tag, in order, with a CDATA section only in an SVG or MathML element, every
+    /// comment ended by `-->`, and no element HTML's wherever it lands written straight in an
+    /// `<svg>` or `<math>`. Where one is not (an `<li>` closed by its list's end tag, a `<p>` by the
+    /// next `<p>`, a `<p>` the browser takes out of an `<svg>`), the browser closes it where its
+    /// rules say, which this does not follow, so what follows is not read.
+    unread: Option<String>,
 }
 
-/// [`patch_parse_problem`] for one way of reading a leading head tag ([`DECIDING_HEAD`]'s
+/// [`patch_parse`] for one way of reading a leading head tag ([`DECIDING_HEAD`]'s
 /// decide when `head_decides`), in one pass that also reads whether the patch is closed as
 /// [`Read`] says. `nested`: `html` is the content of a `<template>` in the patch, which is on the
 /// parser's stack of open elements as the runtime's own `<template>` is not, so a table's reading
@@ -509,7 +622,6 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         }
     };
     let since = |first: &str| format!(", since {} comes first", shown(first));
-    let unread = |headed| Read { problem: None, headed, readable: false };
     let bytes = html.as_bytes();
     let mut reading = Reading::Undecided;
     // The element that decided, as written.
@@ -517,6 +629,13 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
     let mut headed = None;
     // The first loss: once one is found, the rest is read only for whether it is closed.
     let mut problem: Option<String> = None;
+    // Stops reading where the patch is not read as written ([`Read::unread`]), keeping the loss
+    // found before.
+    macro_rules! unread {
+        ($($why:tt)*) => {
+            return Read { problem, headed, unread: Some(format!($($why)*)) }
+        };
+    }
     // The elements open, each closed by its own end tag.
     let mut open: Vec<Open> = Vec::new();
     // A top-level element other than a table part or a head's, open in a table's reading: the
@@ -540,7 +659,10 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             let body = i + 4;
             let end = html[body..].find("-->").map_or(bytes.len(), |n| body + n);
             if html[body..].starts_with('>') || html[body..].starts_with("->") || html[body..end].contains("--!>") {
-                return unread(headed);
+                unread!(
+                    "the comment {}, which a browser ends elsewhere than at its -->",
+                    shown(&html[i..(end + 3).min(bytes.len())])
+                );
             }
             i = (end + 3).min(bytes.len());
             continue;
@@ -550,7 +672,10 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         if html[i..].starts_with("<![CDATA[") {
             match html[i..].find("]]>").filter(|_| open.last().is_some_and(|last| last.foreign)) {
                 Some(n) => i += n + 3,
-                None => return unread(headed),
+                None => unread!(
+                    "the CDATA section {}, outside an SVG or MathML element (HTML reads it as a comment up to its first >) or not ended by ]]>",
+                    shown(&html[i..])
+                ),
             }
             continue;
         }
@@ -558,8 +683,16 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             Some(b'/') => {
                 let at = i;
                 let end = html[i..].find('>').map_or(bytes.len(), |n| i + n);
-                if !open.last().is_some_and(|last| last.name.eq_ignore_ascii_case(html[i + 2..end].trim_end())) {
-                    return unread(headed);
+                let closing = html[i + 2..end].trim_end();
+                if !open.last().is_some_and(|last| last.name.eq_ignore_ascii_case(closing)) {
+                    // A void element's end tag (`html!` writes one for a `<param>` or a `<basefont>`)
+                    // closes nothing: the browser ignores it.
+                    if VOID.iter().any(|void| void.eq_ignore_ascii_case(closing)) {
+                        i = (end + 1).min(bytes.len());
+                        continue;
+                    }
+                    let open = open.last().map_or_else(|| String::from("nothing"), |last| format!("<{}>", last.name));
+                    unread!("{}, where {open} is open", shown(&html[i..(end + 1).min(bytes.len())]));
                 }
                 open.pop();
                 i = (end + 1).min(bytes.len());
@@ -570,10 +703,10 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                     template = None;
                     let inner = template_problem(&html[start..at], head_decides, true);
                     headed = headed.or(inner.headed);
-                    if !inner.readable {
-                        return unread(headed);
-                    }
                     problem = problem.or(inner.problem);
+                    if let Some(why) = inner.unread {
+                        unread!("{why}, in a <template>'s content");
+                    }
                 }
                 if open.is_empty() {
                     watched = None;
@@ -593,7 +726,8 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         let tag = start_tag(html, i);
         i = tag.end;
         let Some((foreign_element, within)) = placed(open.last().map_or(Within::Html, |last| last.within), &tag) else {
-            return unread(headed);
+            let holder = open.last().map_or("", |last| last.name.as_str());
+            unread!("{} written straight in <{holder}>, which a browser closes before it", shown(&html[tag.start..tag.end]));
         };
         let name = tag.name.as_str();
         let written = &html[tag.start..tag.end];
@@ -672,12 +806,20 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         // An HTML element's text, up to its end tag: nothing in it is markup. An SVG or MathML
         // `<title>`, `<style>` or `<script>` holds elements.
         if !foreign_element && RAW_TEXT.contains(&name) {
-            let end = raw_text_end(html, i, name);
-            // A `<script>` written after `<!--` in a script's text can make the tokenizer read the
-            // next `</script>` as text (its double-escaped state), which is not followed here: what
-            // comes after is not read.
-            if name == "script" && html[i..end].find("<!--").is_some_and(|n| has_ignoring_case(&html[i + n..end], "<script")) {
-                return Read { problem, headed, readable: true };
+            let end = if name == "script" { script_end(html, i) } else { raw_text_end(html, i, name) };
+            if end == bytes.len() {
+                // No end tag the tokenizer reads: a `<!--` and a `<script` in a script's text can
+                // hide the one written after it (`html!` writes its text as is), and the rest of the
+                // patch is its text.
+                let written_end = raw_text_end(html, i, name);
+                let after = html[written_end..].find('>').map_or(bytes.len(), |n| written_end + n + 1);
+                if problem.is_none() && !html[after..].trim_ascii().is_empty() {
+                    problem = Some(format!(
+                        "what follows {} is read as its text, since a <!-- and a <script in its text hide its end tag",
+                        shown(written)
+                    ));
+                }
+                unread!("{}, which is not closed", shown(written));
             }
             i = end;
         }
@@ -693,7 +835,7 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             open.push(Open { name: tag.name, foreign: foreign_element, within });
         }
     }
-    Read { problem, headed, readable: open.is_empty() }
+    Read { problem, headed, unread: open.last().map(|last| format!("<{}>, which is not closed", last.name)) }
 }
 
 #[cfg(test)]
@@ -776,6 +918,68 @@ mod tests {
         assert_eq!(patch_problem(nested), None);
         let long = format!(r#"<div class="{}">x</div>"#, "c".repeat(100));
         assert!(patch_problem(&long).unwrap().ends_with(".. has no id"));
+        // A void element's end tag, which `html!` writes for a `<param>`, closes nothing.
+        let object =
+            r#"<p id="m"><object><param name="a"></param>fallback</object></p><div id="d"><param></param><span>x</span></div>"#;
+        assert_eq!(patch_problem(object), None);
+        // A script's text is read as the tokenizer reads it, to the end tag its `<!--` hides.
+        assert_eq!(
+            patch_problem(r#"<script id="s" type="text/plain"><!--<script></script>--></script><p>x</p>"#).as_deref(),
+            Some("<p> has no id")
+        );
+    }
+
+    /// A script's end tag is where the HTML standard's tokenizer ends it: a `</script` and a
+    /// delimiter, but one a `<!--` and a `<script` before it hide.
+    #[test]
+    fn a_script_s_text_ends_where_the_tokenizer_ends_it() {
+        for (html, end) in [
+            ("a</script>", 1),
+            ("a</SCRIPT >", 1),
+            ("a</scriptx></script>", 11),
+            ("<!-- </script>", 5),
+            ("<!--<scriptx></script>", 13),
+            ("<!--<script></script>--></script>", 24),
+            ("<!--<script>--></script>", 15),
+            ("<!--<Script/></script -->--></script>", 28),
+            ("<!--><script></script>", 13),
+            ("<!--<script></script>", 21),
+            ("<!--<script>", 12),
+            ("a</script", 9),
+        ] {
+            assert_eq!(super::script_end(html, 0), end, "{html}");
+        }
+    }
+
+    /// Where the check cannot read a patch as written, it says where it stopped, and reports a loss
+    /// found before (`a_patch_names_what_the_browser_loses_and_what_came_first`); `html!`'s own
+    /// output, void elements' end tags and foreign content included, is read to its end.
+    #[test]
+    fn a_patch_the_check_cannot_read_says_where_it_stopped() {
+        for (html, says) in [
+            (r#"<tr id="a"></tr><ul id="b"><li>x</ul><tr id="c"></tr>"#, "</ul>, where <li> is open"),
+            (r#"<!-- --!><tr id="a"></tr>"#, "which a browser ends elsewhere than at its -->"),
+            (r#"<tr id="a"></tr><svg id="s"><p>x</p></svg>"#, "<p> written straight in <svg>, which a browser closes before it"),
+            (r#"<tr id="a"></tr><div id="b"><![CDATA[x]]></div>"#, "the CDATA section <![CDATA[x]]></div>, outside"),
+            (r#"<tr id="a"></tr><div id="b">"#, "<div>, which is not closed"),
+            (r#"<div id="b"><template><ul><li>x</ul></template></div>"#, "</ul>, where <li> is open"),
+            (r#"<script id="s"><!--<script></script>"#, r#"<script id="s">, which is not closed"#),
+            (r#"<tr id="a"></tr></div>"#, "</div>, where nothing is open"),
+        ] {
+            let why = super::patch_parse(html).unread.unwrap_or_else(|| panic!("{html}: read to its end"));
+            assert!(why.contains(says), "{html}: {why}");
+            assert_eq!(patch_parse_problem(html), None, "{html}");
+        }
+        for html in [
+            "",
+            r#"<tr id="a"><td><object><param></param></object></td></tr>"#,
+            r#"<basefont id="h"></basefont><p id="m"></p>"#,
+            r#"<svg id="s"><![CDATA[x]]><title><b>t</b></title><!-- c --></svg>"#,
+            r#"<math id="x"><mi>a</mi><annotation-xml encoding="text/html"><div>d</div></annotation-xml></math>"#,
+            r#"<script id="s" type="text/plain"><!-- <script></script> --></script>"#,
+        ] {
+            assert_eq!(super::patch_parse(html).unread, None, "{html}");
+        }
     }
 
     /// The parse check names what is lost and the element that decided, and passes a patch a
@@ -907,9 +1111,9 @@ mod tests {
             "an HTML <style> at an <svg>'s integration point is text up to its end tag"
         );
         assert_eq!(
-            patch_parse_problem(r#"<p id="m"></p><tr id="r"><td><svg><p>x</p></svg></td></tr>"#),
-            None,
-            "a <p> written straight in an <svg>, which the browser takes out of it (and html! refuses): not read"
+            patch_parse_problem(r#"<p id="m"></p><tr id="r"><td><svg><p>x</p></svg></td></tr>"#).as_deref(),
+            Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#),
+            "a loss before a <p> written straight in an <svg> (which html! refuses), where reading stops, is found"
         );
         assert_eq!(
             patch_parse_problem(r#"<tr id="r"></tr><form id="f">saved</form>"#).as_deref(),
@@ -947,7 +1151,36 @@ mod tests {
                 r#"<script id="s" type="text/plain"><!--<script></script><div id="d"></div>--></script><tr id="r"></tr>"#
             ),
             None,
-            "a script's text with <!-- in it is not read past"
+            "a script's double-escaped text is read to its end tag, and the row after it as the first element"
+        );
+        for text in ["<!-- <scriptx> -->", "<!-- <script></script> -->", "<!--<SCRIPT/>-->"] {
+            assert_eq!(
+                patch_parse_problem(&format!(
+                    r#"<script id="s" type="text/plain">{text}</script><p id="m">saved</p><tr id="r"><td>1</td></tr>"#
+                ))
+                .as_deref(),
+                Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#),
+                "what follows a script whose text has <!-- and <script in it is read: {text}"
+            );
+        }
+        assert_eq!(
+            patch_parse_problem(r#"<script id="s" type="text/plain"><!--<script></script><p id="m">saved</p>"#).as_deref(),
+            Some(
+                r#"what follows <script id="s" type="text/plain"> is read as its text, since a <!-- and a <script in its text hide its end tag"#
+            ),
+            "a script whose text hides the end tag written after it"
+        );
+        assert_eq!(
+            patch_parse_problem(r#"<p id="m">saved</p><tr id="r"><td><object><param name="a"></param>x</object></td></tr>"#)
+                .as_deref(),
+            Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#),
+            "a void element's end tag, which html! writes for a <param>, is ignored and the loss before it kept"
+        );
+        assert_eq!(
+            patch_parse_problem(r#"<basefont id="h"></basefont><bgsound id="b"></bgsound><p id="m">saved</p><tr id="r"></tr>"#)
+                .as_deref(),
+            Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#),
+            "a <basefont>'s and a <bgsound>'s end tags close nothing"
         );
         assert_eq!(
             patch_parse_problem(r#"<basefont id="h"><p id="m">saved</p><tr id="r"></tr>"#).as_deref(),
@@ -987,6 +1220,11 @@ mod tests {
             if let Some(comment) = html[at..].strip_prefix("<!--") {
                 // A comment is no element, and a parse lists none.
                 i = comment.find("-->").map_or(html.len(), |n| at + 4 + n + 3);
+                continue;
+            }
+            if let Some(cdata) = html[at..].strip_prefix("<![CDATA[") {
+                // A CDATA section, an `<svg>`'s or a `<math>`'s text, is no element either.
+                i = cdata.find("]]>").map_or(html.len(), |n| at + 9 + n + 3);
                 continue;
             }
             if html[at..].starts_with("</") {

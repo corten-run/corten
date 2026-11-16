@@ -3735,6 +3735,86 @@ async fn a_patch_the_browser_would_lose_part_of_is_sent_in_release_builds() {
 }
 
 #[derive(crate::view::Id)]
+struct NoteScriptId;
+
+/// A data block whose text has `<!--` and a tag that begins like `<script` (`<scriptx>`, which
+/// hides no end tag), then the message and the row.
+fn lost_after_script() -> impl crate::Patch {
+    html! {
+        <script id={NoteScriptId} type="text/x-template">"<!-- <scriptx> -->"</script>
+        <SavedNote />
+        <LostRow />
+    }
+}
+
+/// The check reads a script's text as the tokenizer does, so what follows a script with `<!--` in
+/// its text is checked: the row after the message is an error in a debug build.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_lost_after_a_script_with_a_comment_in_its_text_is_an_error_in_debug_builds() {
+    let routes = Table::new()
+        .route("/", crate::router::post(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(lost_after_script()) }));
+    let (status, _, body) = call_with(app(routes, None), "POST", "/", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let named = crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#);
+    assert!(body.contains(&named), "{body}");
+}
+
+#[derive(crate::view::Id)]
+struct HeadFontId;
+
+/// `html!` writes an end tag for a `<basefont>` and a `<param>`, which the browser ignores: the
+/// checks read past them, so the loss beside them is found in what `html!` writes.
+#[test]
+fn the_patch_checks_read_the_void_end_tags_html_writes() {
+    let headed = html! {
+        <basefont id={HeadFontId} />
+        <SavedNote />
+        <LostRow />
+    }
+    .to_html();
+    let object = html! {
+        <SavedNote />
+        <tr id={LostRowId}>
+            <td><object type="image/svg+xml"><param name="a" value="1" />"fallback"</object></td>
+        </tr>
+    }
+    .to_html();
+    for html in [headed, object] {
+        assert_eq!(crate::html::patch_problem(&html), None, "{html}");
+        let parse = crate::html::patch_parse(&html);
+        assert_eq!(parse.problem.as_deref(), Some(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#), "{html}");
+        assert_eq!(parse.unread, None, "{html}");
+    }
+}
+
+/// A patch the parse check cannot read to its end (an `<li>` closed by its list's end tag, which
+/// `raw` markup can write) is sent, and a debug build logs where the check stopped, so it is not
+/// passed in silence.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_patch_the_parse_check_cannot_read_is_logged_in_debug_builds() {
+    use std::sync::Arc;
+    let routes = Table::new().route(
+        "/list",
+        crate::router::post(|req: Req| async move {
+            req.patch::<ForOne, AnyAnswer>(html! { <ul id={MsgId}>{crate::raw("<li>one<li>two")}</ul> })
+        }),
+    );
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let (status, _, body) = call_with(app(routes, None), "POST", "/list", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains("corten: the debug check of what the browser keeps of the patch for /list read it only up to </ul>, where <li> is open"),
+        "{text}"
+    );
+}
+
+#[derive(crate::view::Id)]
 struct CostRowId(u32);
 
 /// A patch of 50 table rows, each with three cells, one of them holding a form.

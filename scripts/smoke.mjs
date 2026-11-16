@@ -616,7 +616,7 @@ async function run(browser) {
   }
   // The runtime parses a patch as a <template>'s content (`parse`), where the first top-level
   // element decides how the rest is read: what each engine keeps of the shapes the server's debug
-  // check (`patch_parse_problem`) is held to, the leading head tags Chromium and WebKit let decide
+  // check (`patch_parse`) is held to, the leading head tags Chromium and WebKit let decide
   // included, and of the shapes `html!` refuses, after each table part a patch may begin with.
   {
     /** @type {{ cases: { html: string, parsed: string[], parsedIn?: Record<string, string[]> }[] }} */

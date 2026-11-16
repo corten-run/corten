@@ -1399,6 +1399,18 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// let patch = html! { <tr id={RowId(7)}><td>"7"</td></tr> <NoteAndRow /> };
 /// assert_eq!(send(patch), r#"<tr id="row-7"><td>7</td></tr><p id="status">Saved</p><tr id="row-8"><td>8</td></tr>"#);
 /// ```
+///
+/// A `<form>` in an `<svg>` or a `<math>` is foreign content's, which the table's reading never
+/// reaches, so it is kept as written after a first table part, a `<div>` around the drawing or not:
+///
+/// ```
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct ChartId;
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={ChartId}><svg><form><g></g></form></svg></div> };
+/// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a patch",
     label = "a patch replaces elements by id",

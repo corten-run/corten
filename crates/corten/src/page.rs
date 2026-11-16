@@ -2237,12 +2237,12 @@ impl Req {
     }
 
     /// In a debug build: the patch `body`, as sent, is one the browser keeps whole when the runtime
-    /// parses it as a `<template>`'s content (`crate::html::patch_parse_problem`): a table part
+    /// parses it as a `<template>`'s content (`crate::html::patch_parse`): a table part
     /// beside other elements can be dropped or moved there, which the compiler does not see when a
     /// component or an expression writes it. A release build sends it as it is.
     #[cfg(debug_assertions)]
     fn parses_whole(&self, body: &str) -> Result<()> {
-        match crate::html::patch_parse_problem(body) {
+        match crate::html::patch_parse_checked(body, &format_args!("the patch for {}", self.path())) {
             Some(problem) => {
                 Err(self
                     .unserved(format!("the browser would lose part of this patch: {problem}. {}", crate::html::PATCH_PARSE_HELP)))

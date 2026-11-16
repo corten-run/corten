@@ -4220,7 +4220,8 @@ rules something out.
     top level or in a later top-level element that is not a table part, and a `<form>` there that
     holds an element, where an element HTML's wherever it lands is the form's, around it or in it (a
     `<form>` holding a `<div>` or a `<p>`, or one in a `<div>`), neither read into a
-    `<template>` or an SVG or MathML integration point. Each is lost wherever the view is written,
+    `<template>`, an `<svg>` or a `<math>` (whose `<form>` is SVG's or MathML's, kept as written
+    even in a `<div>`), or an SVG or MathML integration point. Each is lost wherever the view is written,
     under the rule below: in a patch the view begins, the parse drops the table part, or every
     element after the `<col>` but a `<col>` or a `<template>`, or drops the `<table>` tag and
     moves its parts out, or puts the `<form>` in empty and moves what it holds out of it; in a
@@ -4319,7 +4320,10 @@ rules something out.
     `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the "in
     template" insertion mode's head tags and table start tags, and what the table insertion
     modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy, held equal to
-    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there; the browsers
+    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there;
+    the tree construction dispatcher, which reads an `<svg>`'s or a `<math>`'s `<form>` as foreign
+    content's whatever HTML element is around the drawing, so the third shape is not read into one;
+    the browsers
     Playwright runs, which read an element in those holders as text and keep one in an `<svg>`'s
     own `<title>`, and keep the first of a duplicated `encoding`); reasoned (an `html!` sees its
     own markup and nothing around it, so what its top and a component's children land in is not
@@ -4379,7 +4383,9 @@ rules something out.
     with a `<title>`) as a `<template>`'s content on `b89eead89`, which passed
     in Chromium 156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), with Chromium
     and WebKit letting a leading `<title>`, `<base>`, `<basefont>`, `<bgsound>` or
-    `<noframes>` decide; 2026-11-16, a one-off probe, not a repository check, in Chromium
+    `<noframes>` decide; 2026-11-16, the same check of the 767 shapes there on `PENDING`, among
+    them an `<svg>`'s and a `<math>`'s `<form>` in a `<div>` after four first table parts, kept
+    as written in all three; 2026-11-16, a one-off probe, not a repository check, in Chromium
     156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): each kind of the third shape (a `<table>` at the top level, in a `<div>` and in a
     `<label>`'s `<span>`; a `<form>` holding a `<div>` or a `<p>`, one in a `<div>`, and one
     holding a `<label>`'s `<span>`), after each of the eight first table parts but `<col>`, parsed
@@ -4757,6 +4763,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
    already has the area's stylesheet, whose link Corten writes after the patch's elements and the
    parse drops: the server does not know what the page linked, and on a page without it the patch
    would land unstyled, so it is refused on both, and a `<colgroup>` with an id keeps the link.
+   The check reads markup as `html!` writes it (a script's text as the browser's tokenizer does,
+   a void element's end tag ignored); where it cannot follow a patch (an end tag left out in `raw`
+   markup), it reports a loss found before that point and otherwise logs a warning naming where it
+   stopped.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating

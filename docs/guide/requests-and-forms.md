@@ -1072,7 +1072,8 @@ after a first `<table>` (dropped, or, where the patch began with a table part, t
 apart); an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first
 `<col>`; and after a first other table part, a `<table>` at the top level or in a later element
 (taken apart), and a `<form>` there that holds an element, where an element HTML's wherever it
-lands is in or around it (a form holding a `<div>`, or one in a `<div>`), whose content is moved
+lands is in or around it (a form holding a `<div>`, or one in a `<div>`, but not one in an `<svg>`
+or `<math>`, which is theirs and kept as written), whose content is moved
 out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Every other shape
 depends on what the patch began with or where the view is written, which a component's markup
 does not show: a `<p>` and then a `<tr>` lose the row on their own, but after a first `<tr>`
@@ -1087,11 +1088,16 @@ with one is read both ways. A debug-build test of the app that draws such a patc
 draws (a row in one branch of an `if`) is found only by a debug render that draws it. The check
 covers what a table's reading does to a patch as `html!` writes it, each element closed by its own
 end tag, not every way a browser's parse can differ from the markup. It reads what an `<svg>` or
-`<math>` holds by their own rules (a `<title>` or `<style>` there holds elements) only to find where
-it ends, so a row holding an icon with a `<title>` is checked like any other, but it reports no loss
-inside one. It does not read a patch with an end tag left out, or with an element HTML's wherever it
-lands written straight in an `<svg>` or `<math>` (which `html!` refuses), nor what a table part
-holds (a `<form>` written straight in a `<tr>`, which a page's table takes apart too). A patch that
+`<math>` holds by their own rules (a `<title>` or `<style>` there holds elements, a CDATA section is
+text) only to find where it ends, so a row holding an icon with a `<title>` is checked like any
+other, but it reports no loss inside one. It reads a `<script>`'s text as the browser does, so a
+`<!--` and a `<script` in a data block's text neither stop the check nor hide what follows, and it
+ignores the end tag `html!` writes for a `<param>` or a `<basefont>`, as the browser does. Where it
+cannot follow a patch (an end tag left out in `raw` markup, an element HTML's wherever it lands
+written straight in an `<svg>` or `<math>`, which `html!` refuses), it still reports a loss before
+that point, and otherwise logs a warning naming where it stopped, since what follows was not
+checked. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
+a page's table takes apart too). A patch that
 begins with a `<col>` from an area's handler is refused even on a page that already has the area's
 stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know
 what the page linked, so send the `<col>`s in a `<colgroup>` with an id.

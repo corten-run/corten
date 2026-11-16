@@ -1996,8 +1996,11 @@ impl PartLoss {
 /// of it, in a patch that began with a table part and in a page's table, while an `<svg>` keeps it
 /// as written unless an element HTML's wherever it lands is in or around it, which closes the
 /// drawing; so only that `<form>` is lost. Not read into a `<template>`, whose content is read on
-/// its own, or an SVG or MathML integration point, where in an `<svg>` a page's body reads the HTML
-/// and keeps both, so the other cases are misses, never refusals. `scripts/smoke.mjs` holds each
+/// its own, an `<svg>` or a `<math>`, whose content is foreign content's wherever it lands (a
+/// `<form>` there is SVG's or MathML's and kept as written, even under a `<div>`, and an element
+/// HTML's wherever it lands written straight in one is refused on its own), or an SVG or MathML
+/// integration point, where in an `<svg>` a page's body reads the HTML and keeps both, so the other
+/// cases are misses, never refusals. `scripts/smoke.mjs` holds each
 /// to the browsers' parses through `a_shape_html_refuses_is_lost_after_each_table_part` in
 /// `crates/corten/src/html.rs`.
 fn lost_after_part(name: &str, attrs: &[Attr], children: &[Node], around: bool) -> Option<PartLoss> {
@@ -2014,11 +2017,11 @@ fn lost_after_part(name: &str, attrs: &[Attr], children: &[Node], around: bool) 
     elements(children).into_iter().find_map(|(name, attrs, children)| lost_after_part(name, attrs, children, around))
 }
 
-/// Whether `lost_after_part` reads into the element `name`: not a `<template>` or an SVG or
-/// MathML integration point.
+/// Whether `lost_after_part` reads into the element `name`: not a `<template>`, a new foreign
+/// content root (an `<svg>` or a `<math>`) or an SVG or MathML integration point.
 fn read_after_part(name: &str) -> bool {
     let is = |list: &[&str]| list.iter().any(|t| name.eq_ignore_ascii_case(t));
-    !is(&["template", "annotation-xml"]) && !is(SVG_HTML_POINTS) && !is(MATH_HTML_POINTS)
+    !is(&["template", "svg", "math", "annotation-xml"]) && !is(SVG_HTML_POINTS) && !is(MATH_HTML_POINTS)
 }
 
 /// Whether an element HTML's wherever it lands is among `nodes` or in them, read as
@@ -3187,6 +3190,9 @@ mod tests {
                 el("tbody", vec![]),
                 el("label", vec![el("foreignObject", vec![el("table", vec![]), el("form", vec![el("p", vec![])])])]),
             ],
+            // an <svg>'s or a <math>'s <form>, foreign content's even under an HTML <div>
+            &[el("tr", vec![]), el("div", vec![el("svg", vec![el("form", vec![el("g", vec![])])])])],
+            &[el("td", vec![]), el("div", vec![el("math", vec![el("form", vec![el("mi", vec![])])])])],
             // a table part, an element an <svg> keeps or other markup after a <table>
             &[el("table", vec![]), el("p", vec![el("span", vec![])]), el("table", vec![]), el("form", vec![])],
             // after a <col>, a <col>, a <template> or an element an <svg> keeps

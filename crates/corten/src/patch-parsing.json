@@ -1,5 +1,5 @@
 {
-  "//": "How a browser parses a patch's top level as a <template>'s content (the runtime's parse in corten.js). parsed is each top-level element as name#id, (its child elements) and a template's {content}, without text, as the HTML standard and Firefox parse it; parsedIn, where an engine differs (Chromium and WebKit let a leading <title>, <base>, <basefont>, <bgsound> or <noframes> decide how the rest is read). lost is what the server's debug check (patch_parse_problem in html.rs) reports, null when it reports nothing: html.rs's tests hold it to report exactly the cases here a browser does not parse as written, and hold the shapes html! refuses at compile time (a table part after a first <table>; an element HTML's wherever it lands after a first <col>; after a first other table part, a <table> at the top level or in a later element, and a <form> that holds an element with one HTML's wherever it lands in or around it), written first and after each table part, to be lost in every engine. scripts/smoke.mjs checks parsed in Chromium, Firefox and WebKit.",
+  "//": "How a browser parses a patch's top level as a <template>'s content (the runtime's parse in corten.js). parsed is each top-level element as name#id, (its child elements) and a template's {content}, without text, as the HTML standard and Firefox parse it; parsedIn, where an engine differs (Chromium and WebKit let a leading <title>, <base>, <basefont>, <bgsound> or <noframes> decide how the rest is read). lost is what the server's debug check (patch_parse in html.rs) reports, null when it reports nothing: html.rs's tests hold it to report exactly the cases here a browser does not parse as written, and hold the shapes html! refuses at compile time (a table part after a first <table>; an element HTML's wherever it lands after a first <col>; after a first other table part, a <table> at the top level or in a later element, and a <form> that holds an element with one HTML's wherever it lands in or around it), written first and after each table part, to be lost in every engine. scripts/smoke.mjs checks parsed in Chromium, Firefox and WebKit.",
   "cases": [
     {
       "html": "<tr id=\"a\"><td>1</td></tr><tr id=\"b\"><td>2</td></tr>",
@@ -6612,6 +6612,234 @@
         "link"
       ],
       "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"><td>1</td></tr><div id=\"d\"><svg><form><g></g></form></svg></div>",
+      "parsed": [
+        "tr#r(td)",
+        "div#d(svg(form(g)))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"><td>1</td></tr><div id=\"d\"><math><form><mi>x</mi></form></math></div>",
+      "parsed": [
+        "tr#r(td)",
+        "div#d(math(form(mi)))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<td id=\"r\">1</td><div id=\"d\"><svg><form><g></g></form></svg></div>",
+      "parsed": [
+        "td#r",
+        "div#d(svg(form(g)))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<td id=\"r\">1</td><div id=\"d\"><math><form><mi>x</mi></form></math></div>",
+      "parsed": [
+        "td#r",
+        "div#d(math(form(mi)))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tbody id=\"r\"></tbody><div id=\"d\"><svg><form><g></g></form></svg></div>",
+      "parsed": [
+        "tbody#r",
+        "div#d(svg(form(g)))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tbody id=\"r\"></tbody><div id=\"d\"><math><form><mi>x</mi></form></math></div>",
+      "parsed": [
+        "tbody#r",
+        "div#d(math(form(mi)))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<caption id=\"r\">x</caption><div id=\"d\"><svg><form><g></g></form></svg></div>",
+      "parsed": [
+        "caption#r",
+        "div#d(svg(form(g)))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<caption id=\"r\">x</caption><div id=\"d\"><math><form><mi>x</mi></form></math></div>",
+      "parsed": [
+        "caption#r",
+        "div#d(math(form(mi)))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<script id=\"s\" type=\"text/plain\"><!-- <scriptx> --></script><p id=\"m\">saved</p><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "script#s",
+        "p#m"
+      ],
+      "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<script id=\"s\" type=\"text/plain\"><!-- <script></script> --></script><p id=\"m\">saved</p><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "script#s",
+        "p#m"
+      ],
+      "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<script id=\"s\" type=\"text/plain\"><!--<SCRIPT/>--></script><p id=\"m\">saved</p><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "script#s",
+        "p#m"
+      ],
+      "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<script id=\"s\" type=\"text/plain\"><!--<script></script><p id=\"m\">saved</p>",
+      "parsed": [
+        "script#s"
+      ],
+      "lost": "what follows <script id=\"s\" type=\"text/plain\"> is read as its text"
+    },
+    {
+      "html": "<script id=\"s\" type=\"text/plain\"><!-- <script></script> --></script><tr id=\"r\"><td>1</td></tr><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "script#s",
+        "tr#r(td)",
+        "tr#b(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<script id=\"s\" type=\"text/plain\"><!--<script></script><div id=\"d\"></div>--></script><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "script#s",
+        "tr#r(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<basefont id=\"h\"></basefont><p id=\"m\">saved</p><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "basefont#h",
+        "p#m"
+      ],
+      "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<bgsound id=\"h\"></bgsound><p id=\"m\">saved</p><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "bgsound#h",
+        "p#m"
+      ],
+      "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<basefont id=\"h\"></basefont><tr id=\"r\"><td>1</td></tr>",
+      "parsed": [
+        "basefont#h",
+        "tr#r(td)"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "basefont#h"
+        ],
+        "webkit": [
+          "basefont#h"
+        ]
+      },
+      "lost": "<tr id=\"r\"> is dropped, since <basefont id=\"h\"> comes first in Chromium and WebKit"
+    },
+    {
+      "html": "<p id=\"m\">saved</p><tr id=\"r\"><td><object><param name=\"a\" value=\"1\"></param>x</object></td></tr>",
+      "parsed": [
+        "p#m",
+        "object(param)"
+      ],
+      "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<tr id=\"r\"><td><object><param name=\"a\" value=\"1\"></param>x</object></td></tr><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tr#r(td(object(param)))",
+        "tr#b(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"><td>1</td></tr><svg id=\"g\"><![CDATA[<tr>]]><g></g></svg><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tr#r(td)",
+        "svg#g(g)",
+        "tr#b(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<p id=\"m\">x</p><svg id=\"g\"><![CDATA[</svg>]]><g></g></svg><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "p#m",
+        "svg#g(g)"
+      ],
+      "lost": "<tr id=\"b\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<p id=\"m\">x</p><svg id=\"g\"><!-- </svg> --><g></g></svg><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "p#m",
+        "svg#g(g)"
+      ],
+      "lost": "<tr id=\"b\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<tr id=\"r\"><td>1</td></tr><math id=\"x\"><mi>a</mi><mtext><b>t</b></mtext></math><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tr#r(td)",
+        "math#x(mi,mtext(b))",
+        "tr#b(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<p id=\"m\">x</p><math id=\"x\"><mi>a</mi></math><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "p#m",
+        "math#x(mi)"
+      ],
+      "lost": "<tr id=\"b\"> is dropped, since <p id=\"m\"> comes first"
+    },
+    {
+      "html": "<tr id=\"r\"><td>1</td></tr><math id=\"x\"><annotation-xml encoding=\"text/html\"><div>d</div></annotation-xml></math><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tr#r(td)",
+        "math#x(annotation-xml(div))",
+        "tr#b(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"><td>1</td></tr><svg id=\"g\"><foreignObject><p>x</p></foreignObject></svg><tr id=\"b\"><td>2</td></tr>",
+      "parsed": [
+        "tr#r(td)",
+        "svg#g(foreignObject(p))",
+        "tr#b(td)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<p id=\"m\">x</p><tr id=\"r\"><td><math><mi>x</mi><annotation-xml><svg><title>t</title></svg></annotation-xml></math></td></tr>",
+      "parsed": [
+        "p#m",
+        "math(mi,annotation-xml(svg(title)))"
+      ],
+      "lost": "<tr id=\"r\"> is dropped, since <p id=\"m\"> comes first"
     }
   ]
 }
