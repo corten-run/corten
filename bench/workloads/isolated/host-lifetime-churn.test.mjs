@@ -45,6 +45,8 @@ function pendingFixture(t) {
   t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
     if (argv[1] === "--hash-open-executables") {
       f.hashInputs = JSON.parse(options.input);
+      if (f.hashFailure) throw f.hashFailure;
+      if (f.hashReply !== undefined) return f.hashReply;
       if (platform.value === "linux") return exec(file, argv, options);
       return JSON.stringify(f.hashInputs.map((entry, i) => ({ ...entry,
         sha256: createHash("sha256").update(original.readFileSync(options.stdio[i + 3])).digest("hex") })));
@@ -160,6 +162,14 @@ test("rollback cannot hide mutation of an earlier accepted executable", (t) => {
   assert.throws(() => f.pending.finish()); assert.equal(f.held.size, 0);
 });
 
+for (const failure of ["helper-error", "invalid-json"]) test(`failed executable finish closes every accepted descriptor: ${failure}`, (t) => {
+  const f = pendingFixture(t); f.observe(); assert.equal(f.held.size, 2);
+  if (failure === "helper-error") f.hashFailure = missing("EIO"); else f.hashReply = "not a proof";
+  assert.throws(() => f.pending.finish()); assert.equal(f.held.size, 0);
+  assert.throws(() => f.pending.finish(), { code: "ERR_ASSERTION" });
+  f.pending.close(); assert.equal(f.held.size, 0);
+});
+
 function fixture(t, nativePids = [], browser = false) {
   const original = Object.fromEntries(["readFileSync", "writeFileSync", "mkdirSync", "rmdirSync", "lstatSync", "statSync", "readlinkSync", "readdirSync", "fsyncSync", "openSync", "closeSync", "writeSync"]
     .map((key) => [key, fs[key]]));
@@ -198,6 +208,7 @@ function fixture(t, nativePids = [], browser = false) {
         assert.deepEqual(argv, ["--host", "unix:///var/run/docker.sock", "container", "ls", "-aq", "--no-trunc"]);
         return "";
       }
+      if (f.failHash) throw missing("EIO");
       if (platform.value === "linux") return exec(file, argv, options);
       return JSON.stringify(JSON.parse(options.input).map((entry, i) => ({ ...entry,
         sha256: createHash("sha256").update(original.readFileSync(options.stdio[i + 3])).digest("hex") })));
@@ -298,6 +309,17 @@ test("a failed sample write releases only that sample's captures and keeps prior
   const proof = f.proof(); assert.equal(proof.executables.length, 1);
   assert.equal(proof.executables[0].sha256, createHash("sha256").update("original executable").digest("hex"));
   assert.equal(f.held.size, 0);
+});
+
+test("failed lifetime finish retains executable-proof failure evidence and closes its pending descriptors", (t) => {
+  const f = fixture(t, [], true); assert.equal(f.held.size, 1); f.failHash = true;
+  assert.throws(f.finish); // No executable proof may be fabricated to make replay pass.
+  assert.equal(f.held.size, 0); assert.throws(f.proof, { code: "ENOENT" });
+  assert.equal(f.terminal.observerError, "host-executable-proof-incomplete");
+  assert.equal(f.terminal.observerFailures.count, 1);
+  assert.equal(f.terminal.observerFailures.first.phase, "executables");
+  assert.equal(f.terminal.observerFailures.first.operation, "executable-proof");
+  assert.equal(f.terminal.observerFailures.first.code, "EIO");
 });
 
 for (const operation of ["stat", "exe"]) test(`full snapshot recovers from six consecutive exited-PID ${operation} races`, (t) => {
