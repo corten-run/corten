@@ -1056,8 +1056,10 @@ Corten is pre-1.0, so any minor version may change the API.
   once in all three. The worker answers such a navigation with the request preload sent (or one
   fetch when none was), with no cache and no offline page, and a redirect is followed by the
   browser as before; a posted form, a browser without navigation preload and every other request
-  under the prefix are still left to the browser. The worker is 294 bytes larger (82 with gzip)
-  (design Choice 56,
+  under the prefix are still left to the browser. An `import_script` listener that already answers
+  such a navigation keeps its answer, and the worker's own listener now throws an
+  `InvalidStateError` into the worker's console there. The worker is 185 bytes larger (30 with
+  gzip at level 9, as card-market serves it) (design Choice 56,
   [#1524 corten::pwa enables navigation preload but declines network-only navigations, so every navigation to a network_only path reaches the server twice](https://github.com/corten-run/corten/issues/1524)).
 
 - A `data-patch` answer that draws a dialog `open` opens it again after the user closed it, when
