@@ -494,6 +494,96 @@ try {
       await other.close();
     }
   }
+  // Under the service worker, in each engine, a navigation reaches the server once, counted by the
+  // server (the image is built with CARD_MARKET_SMOKE=1, src/smoke.rs): one to a network_only path
+  // (the MCP endpoint's 405), a one-time link there whose redirect lands on a page, a form posted to
+  // it, and a page the worker answers as any page. A worker that turns on navigation preload and then
+  // declines a navigation sends it twice: the browser drops the preload's answer and asks again
+  // (#1524). Offline, a network-only navigation is the browser's network error, not the worker's
+  // offline page, which a page still gets.
+  /** The requests the server counted, by path and query. */
+  const counted = async () => {
+    const res = await fetch(`${base}/smoke/requests`);
+    if (!res.ok) throw new Error(`/smoke/requests is ${res.status}: build the image with --build-arg CARD_MARKET_SMOKE=1`);
+    /** @type {Record<string, number>} */
+    const seen = {};
+    for (const line of (await res.text()).split("\n").filter(Boolean)) {
+      const [count, url] = line.split(" ");
+      seen[url] = Number(count);
+    }
+    return seen;
+  };
+  /** The requests that reached the server while `act` ran, by path and query, after it settles. */
+  const sentBy = async (/** @type {() => Promise<unknown>} */ act) => {
+    const before = await counted();
+    await act();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const after = await counted();
+    return Object.fromEntries(
+      Object.entries(after)
+        .filter(([url, n]) => !url.startsWith("/smoke/requests") && n !== (before[url] ?? 0))
+        .map(([url, n]) => [url, n - (before[url] ?? 0)]),
+    );
+  };
+  const once = (/** @type {Record<string, number>} */ sent, /** @type {string[]} */ urls) =>
+    Object.keys(sent).sort().join() === [...urls].sort().join() && Object.values(sent).every((n) => n === 1);
+  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
+    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+    const swContext = await (own ?? browser).newContext();
+    try {
+      const sw = await swContext.newPage();
+      await sw.goto(`${base}/`);
+      await sw.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 10000 }).catch(() => {});
+      const worker = await sw.evaluate(async () => {
+        const reg = await navigator.serviceWorker.getRegistration();
+        const preload = reg?.navigationPreload ? (await reg.navigationPreload.getState()).enabled : "unsupported";
+        return { controlled: !!navigator.serviceWorker.controller, preload };
+      });
+      const under = `${name}: under the service worker (${JSON.stringify(worker)}),`;
+      // Every engine's worker controls the page; one that does not cannot have its requests counted.
+      check(`${under} a service worker controls the page`, worker.controlled, worker.controlled ? "controlled" : "no controller 10 s after loading /");
+      if (!worker.controlled) continue;
+      /** @type {number | undefined} */
+      let status;
+      const mcp = await sentBy(async () => (status = (await sw.goto(`${base}/mcp`))?.status()));
+      check(`${under} a navigation to a network-only path (/mcp) reaches the server once`, once(mcp, ["/mcp"]) && status === 405, `${status}: ${JSON.stringify(mcp)}`);
+      const link = await sentBy(() => sw.goto(`${base}/smoke/once?code=${name}`));
+      const landed = `${new URL(sw.url()).pathname} ${await sw.textContent("h1")}`;
+      check(
+        `${under} a one-time network-only link is sent once and its redirect lands on the page it names`,
+        once(link, [`/smoke/once?code=${name}`, "/smoke/landed"]) && landed === "/smoke/landed Landed",
+        `${landed}: ${JSON.stringify(link)}`,
+      );
+      const posted = await sentBy(async () => {
+        await sw.evaluate(() => {
+          const form = document.createElement("form");
+          form.method = "post";
+          form.action = "/smoke/once";
+          document.body.append(form);
+          form.submit();
+        });
+        await sw.waitForURL(`${base}/smoke/landed`);
+        await sw.waitForLoadState();
+      });
+      check(`${under} a form posted to a network-only path is sent once and redirected`, once(posted, ["/smoke/once", "/smoke/landed"]), JSON.stringify(posted));
+      const page = await sentBy(() => sw.goto(`${base}/smoke/landed?again=${name}`));
+      check(`${under} a navigation to any other page reaches the server once`, once(page, [`/smoke/landed?again=${name}`]), JSON.stringify(page));
+      const offline = `${under} offline, a network-only navigation fails as the network does and a page gets the offline page`;
+      await swContext.setOffline(true);
+      // Each in a page of its own: a failed navigation's error page would interrupt the next.
+      const [first, second] = [await swContext.newPage(), await swContext.newPage()];
+      const offlineMcp = await first.goto(`${base}/mcp`).then((r) => `${r?.status()}`, (e) => String(e).split("\n")[0]);
+      const offlinePage = await second.goto(`${base}/smoke/landed?offline=${name}`).then(() => second.textContent("h1"), (e) => String(e).split("\n")[0]);
+      await swContext.setOffline(false);
+      const detail = `network-only: ${offlineMcp}; page: ${offlinePage}`;
+      // Playwright's Firefox does not take the worker's requests offline: the page comes from the server.
+      if (offlinePage === "Landed") skip(offline, `offline emulation did not reach the worker's requests (${detail})`);
+      else check(offline, !/^\d+$/.test(offlineMcp) && offlinePage === "Not available", detail);
+    } finally {
+      await swContext.close();
+      await own?.close();
+    }
+  }
   // The grading page's condition clip plays from the embedded files in every engine: each byte range
   // the browser asks for is answered 206 (WebKit also reads the file once without one, a 200; a
   // request the browser drops shows as status 0), it seeks to the clip's last part, and the
