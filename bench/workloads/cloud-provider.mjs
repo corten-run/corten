@@ -33,7 +33,11 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
   assert.equal(resolve(repo), repo);
   const env = controlEnvironment("doctl");
   let child, pending, sequence = 0, closed = false, failed = false, exitPromise, closing;
-  let diagnostic;
+  let diagnostic, terminal;
+  const inBudget = (slot) => {
+    const current = Date.now(), valid = current >= slot.last && current < slot.deadline;
+    slot.last = current; return valid;
+  };
   const uncertain = () => Object.assign(new Error("provider worker uncertain; preserve locks/state/evidence/host"),
     { controlTreeUncertain: true, controlUncertain: true }, diagnostic ? { providerDiagnostic: { ...diagnostic } } : {});
   const fail = () => { failed = true; if (pending) { const { reject } = pending; pending = undefined; reject(uncertain()); } };
@@ -45,12 +49,27 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
     // entry path. The fixed path argument only anchors the verified import root.
     child = launch(realpathSync(process.execPath), ["--input-type=module", "-", worker], { cwd: repo, env: { ...env }, execArgv: [],
       serialization: "json", windowsHide: true, stdio: ["pipe", "ignore", "ignore", "ipc"] });
-    exitPromise = new Promise((resolve) => child.once("exit", () => { if (!closing) fail(); resolve(); }));
-    child.on("error", fail); child.stdin.on("error", fail); child.on("disconnect", () => { if (!closing) fail(); });
+    exitPromise = new Promise((resolve) => child.once("exit", (code, signal) => {
+      if (terminal ? code !== 0 || signal !== null || !inBudget(terminal) || interrupted() : !closing) fail();
+      resolve();
+    }));
+    child.on("error", fail); child.stdin.on("error", fail); child.on("disconnect", () => { if (!closing && !terminal) fail(); });
     child.on("message", (message) => {
       if (pending?.sequence === -1) {
         if (!keys(message, ["schema"]) || message.schema !== "cloud-provider-boot/v1") { fail(); return; }
         const slot = pending; pending = undefined; slot.resolve(); return;
+      }
+      if (message?.schema === "cloud-provider-account-failed/v2") {
+        if (!pending?.account || pending.sequence <= 0 || failed || terminal || interrupted()
+          || !keys(message, ["schema", "nonce", "sequence", "disposition", "diagnostic"])
+          || message.nonce !== nonce || message.sequence !== pending.sequence || message.disposition !== "resources-closed"
+          || !inBudget(pending)) { fail(); return; }
+        const value = providerDiagnostic(message.diagnostic);
+        if (!value || !["account-request", "account-http"].includes(value.code)) { fail(); return; }
+        const slot = pending; pending = undefined; diagnostic = value;
+        const error = Object.assign(new Error("provider account observation failed; operation not accepted"), { providerDiagnostic: { ...value } });
+        terminal = { error, last: slot.last, deadline: slot.deadline }; closed = true;
+        slot.reject(error); return;
       }
       if (!pending || !keys(message, ["schema", "sequence", "nonce", "ok", "result"]) || message.schema !== "cloud-provider-result/v1"
         || message.sequence !== pending.sequence || message.nonce !== nonce || typeof message.ok !== "boolean") { fail(); return; }
@@ -89,14 +108,22 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
     } finally { clearTimeout(timer); clearInterval(cancellation); }
   }
   async function close() {
-    if (closing) return closing;
+    if (closing) {
+      await closing;
+      if (terminal && interrupted()) failed = true;
+      if (failed) throw uncertain();
+      return;
+    }
     closed = true;
     closing = (async () => {
       if (!child) return;
       if (pending) fail();
-      try { if (child.connected) child.send({ schema: "cloud-provider-close/v1" }); } catch { failed = true; }
+      try { if (child.connected && !terminal) child.send({ schema: "cloud-provider-close/v1" }); } catch { failed = true; }
       const wait = async (ms) => { let timer; try { return await Promise.race([exitPromise.then(() => true), new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); })]); } finally { clearTimeout(timer); } };
-      if (!await wait(1000)) { failed = true; child.kill("SIGKILL"); if (!await wait(1000)) throw uncertain(); }
+      if (!await wait(terminal ? Math.max(0, Math.min(1000, terminal.deadline - Date.now())) : 1000)) {
+        failed = true; child.kill("SIGKILL"); if (!await wait(1000)) throw uncertain();
+      }
+      if (terminal && (interrupted() || !inBudget(terminal))) failed = true;
       if (failed) throw uncertain();
     })();
     return closing;
@@ -111,11 +138,18 @@ export function providerTransport({ repo, interrupted = () => false, launch = sp
       if (!child) await start();
       if (failed || closed || interrupted()) throw uncertain();
       const id = ++sequence;
-      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get" }; });
+      const account = JSON.stringify(args.slice(0, -2)) === JSON.stringify(["account", "get", "--output", "json"])
+        && args.at(-2) === "--context" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(args.at(-1));
+      const started = Date.now();
+      const result = new Promise((resolve, reject) => { pending = { sequence: id, resolve, reject, allowFail, get: args[2] === "get", account, last: started, deadline: started + timeout }; });
       child.send({ schema: "cloud-provider-action/v1", sequence: id, args, timeout, allowFail,
         ...(deleteProofExpiresAtMs === undefined ? {} : { deleteProofExpiresAtMs }) }, (error) => { if (error) fail(); });
       return await bounded(result, timeout + 1000);
-    } catch { await close(); throw uncertain(); }
+    } catch (error) {
+      await close();
+      if (terminal?.error === error && !failed && !interrupted()) throw error;
+      throw uncertain();
+    }
   };
   run.close = close;
   return run;
