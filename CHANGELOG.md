@@ -40,6 +40,14 @@ Corten is pre-1.0, so any minor version may change the API.
   pages whole; `scripts/dsd-probe.mjs` checks both again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+- The watchlist smoke's check that a submit which waited for a write the network failed is not
+  sent holds that write until the newer press is made, and presses both buttons in the page, where
+  it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the
+  failure, went out as a submit of its own and watched a stock that a later case then could not
+  select, which ended the run in a 30 s `selectOption` timeout
+  ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
+  Runtime behavior is unchanged.
+
 - Distinguish a failed benchmark account observation from uncertain worker lifetime
   only after native request/response/socket closure, a bound terminal reply and
   timely exit0. Preserve the failed operation and fresh cleanup proofs without
