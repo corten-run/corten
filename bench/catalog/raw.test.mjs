@@ -166,6 +166,12 @@ const overlays = [
   p[role].mounts.push({ Type: "bind", Source: "/unreviewed/source", Destination, RW: false });
 } }));
 const executionOverrides = [
+  ...["checker", "runtime", "upstream"].flatMap((role) => [
+    { name: `${role} missing required command`, mutate: (p) => { delete p[role].Config.Cmd; } },
+    { name: `${role} null required command`, mutate: (p) => { p[role].Config.Cmd = null; } },
+    { name: `${role} malformed command`, mutate: (p) => { p[role].Config.Cmd = "node"; } },
+    { name: `${role} null-byte command`, mutate: (p) => { p[role].Config.Cmd = ["node\0evil"]; } },
+  ]),
   { name: "upstream command prefix", mutate: (p) => { p.upstream.Config.Cmd = ["node", "--eval", "process.exit(1)", "/bench/catalog/upstream.mjs"]; } },
   { name: "upstream matching substituted command and argv", mutate: (p) => {
     p.upstream.Config.Cmd = ["node", "--eval", "process.exit(1)", "/bench/catalog/upstream.mjs"];
@@ -190,6 +196,31 @@ test("catalog boundary projection retains actual image and container execution w
   assert.deepEqual(imageCommandEvidence({ Config: { ...info.Config, Env: ["SYNTHETIC_PRIVATE_SENTINEL"] } }),
     { Entrypoint: info.Config.Entrypoint, Cmd: info.Config.Cmd });
   assert.ok(!JSON.stringify(projected).includes("SYNTHETIC_PRIVATE_SENTINEL"));
+});
+
+test("catalog optional Docker defaults are retained as null through projection and replay", () => {
+  for (const Config of [{ Entrypoint: ["k6"] }, { Entrypoint: ["k6"], Cmd: null }, { Cmd: ["node"] }, { Entrypoint: null, Cmd: ["node"] }]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(imageCommandEvidence({ Config }))),
+      { Entrypoint: Config.Entrypoint ?? null, Cmd: Config.Cmd ?? null });
+  }
+  assert.throws(() => imageCommandEvidence({}));
+  const f = failedFixture();
+  for (const [path, bytes] of f.files) if (path.endsWith("/checker.json")) {
+    const proof = JSON.parse(bytes), info = proof.checker;
+    delete info.Config.Entrypoint;
+    proof.checker = checkBoundaryEvidence({ ...info, Mounts: info.mounts,
+      NetworkSettings: { Networks: Object.fromEntries((info.networks ?? []).map((name) => [name, {}])) } });
+    assert.equal(proof.checker.Config.Entrypoint, null);
+    f.put(path, proof);
+  }
+  assert.equal(replayCatalog(f.summary, f.reader, f.commit).attemptComplete, true);
+  const proof = f.reader.readJson(boundaryFile);
+  delete proof.upstream.Config.Cmd;
+  proof.upstream = checkBoundaryEvidence({ ...proof.upstream, Mounts: proof.upstream.mounts,
+    NetworkSettings: { Networks: Object.fromEntries(proof.upstream.networks.map((name) => [name, {}])) } });
+  assert.equal(proof.upstream.Config.Cmd, null);
+  f.put(boundaryFile, proof);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
 });
 const participantStates = ["runtime", "upstream"].flatMap((role) => [
   ["restart count", (info) => { info.RestartCount = 1; }],

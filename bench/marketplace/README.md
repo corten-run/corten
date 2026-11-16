@@ -304,6 +304,9 @@ receipts fail closed; do not backfill them with inferred observations.
 The v3 receipts also retain the selected immutable k6 manifest, platform and actual
 executable version in both the summary and raw tool observation. Earlier versions
 without that identity remain historical, not newly qualified v3 measurements.
+Image and container projections retain omitted optional Docker `Entrypoint`/`Cmd`
+as explicit `null`. They do not invent command arguments: replay still requires
+every nonempty image default and fixed native invocation exactly.
 
 The replay checks both sources, every localized page and neutral JSON profile/pass/phase,
 exact per-pass metrics and aggregates, raw qualification and browser/content gate results,
