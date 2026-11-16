@@ -1215,23 +1215,17 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
                 here.extracted(parts);
             }
         }
-        // Taken where no route kept the head of a write whose own page is filled after it answers
-        // (middleware before the route, a route given by hand): a page made with it is filled from
-        // this head, as a page route's is from the one it kept (#1370). Kept before the `Req` is
-        // made, so it is made where it is returned, as it was: changed after, it was copied out.
-        let early = match parts.extensions.get::<crate::Signal>() {
-            Some(signal)
-                if !shared.layout_reads.is_empty()
-                    && !matches!(parts.method, http::Method::GET | http::Method::HEAD)
-                    && signal.late_write() == Some(false) =>
-            {
-                keep_early_head(signal, parts.clone())
-            }
-            _ => 0,
-        };
         // A HEAD request (a link checker, a preview) gets no body, so it leaves the notice for the
         // page's GET.
-        Ok(Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD, early))
+        let mut req =
+            Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD);
+        // Taken where no route kept the head of a write whose own page is filled after it answers
+        // (middleware before the route, a route given by hand): a page made with it is filled from
+        // this head, as a page route's is from the one it kept (#1370).
+        if req.fills && req.write && req.signal.late_write() == Some(false) {
+            req.early = keep_early_head(&req.signal, parts.clone());
+        }
+        Ok(req)
     }
 }
 
@@ -1270,7 +1264,6 @@ impl Req {
         shared: Arc<Shared>,
         method: &http::Method,
         notice: bool,
-        early: u8,
     ) -> Self {
         let signal: crate::Signal = extensions.get::<crate::Signal>().cloned().unwrap_or_default();
         let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
@@ -1295,7 +1288,7 @@ impl Req {
             // A whole document's `GET` looks at its extensions alone: only a write is ever marked.
             fills: !shared.layout_reads.is_empty()
                 && (extensions.get::<crate::layout::StartHere>().is_some() || (write && signal.late_write().is_some())),
-            early,
+            early: 0,
             shared,
             signal,
             #[cfg(debug_assertions)]
@@ -1567,10 +1560,8 @@ impl Req {
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
         if fills {
             res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
-            if self.early != 0 {
-                if let Some(head) = early_head(&self.signal, self.early) {
-                    res.extensions_mut().insert(crate::layout::EarlyHead(head));
-                }
+            if let Some(head) = early_head(&self.signal, self.early) {
+                res.extensions_mut().insert(crate::layout::EarlyHead(head));
             }
         }
         if !vars.is_empty() {
