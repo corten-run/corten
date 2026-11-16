@@ -2824,7 +2824,6 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // is moved as it is polled, and with the reads' state inline each request ran about 9.5k more
     // instructions, 8.4k of them copying (callgrind, the item page).
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
-    let mut req = req;
     // A write the runtime sent runs no read beside its handler, whose reads must see what it wrote:
     // a route whose answer can be a page keeps the request's head, and only a page it answers with
     // starts the reads that page draws and is filled (`layout::at_late_route`). A route that answers
@@ -2845,6 +2844,11 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
             Box::pin(page_or_error(shared, req, next, deadline, signal, (mode, fetched)));
         return late.await;
     }
+    // Rebound only here, past the write's await: a binding of the request alive across both awaits
+    // takes a slot of its own in every state of this future, the request's 240 bytes on every
+    // document's and navigation's future too (`-Zprint-type-sizes`; a whole `GET` ran about 800
+    // more instructions, its allocations larger, #1370).
+    let mut req = req;
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
     let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
