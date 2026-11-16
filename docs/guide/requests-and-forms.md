@@ -203,14 +203,18 @@ reload) shows the fragment as the whole page, with no layout, stylesheets or nav
 address it asked. So a handler answers a patch with `req.patch_or(view, || async { .. })`, whose
 other side draws the page or a redirect, or checks `req.mode == Mode::Action` before
 `req.patch`, as a patch with a status or data of its own does. A debug build answers a browser's
-plain request (no `data-patch`, asking for HTML, any method) that a handler answered with a patch
+plain request (no `data-patch`, asking for HTML, any method, and, where the browser sends fetch
+metadata, a top-level navigation: `Sec-Fetch-Mode: navigate` to a `Sec-Fetch-Dest: document`)
+that a handler answered with a patch
 with a 500 naming the method and the route (its pattern, or the path of a route given by hand) and
 what to answer instead, so an app's router test that sends the plain request fails there; the
 handler's cookies and `Clear-Site-Data` go out with the error, as above. The runtime's
 `data-patch` fetch and a client that does not ask for HTML still get the patch. The handler's type
 does not say which it answers, since one handler answers both from `req.mode`
-([design Choice 55](../design.md#choice-plain-request-patch)). It does not see an `unstaged`
-route, a fragment answered without the patch's `corten-patch` header (a response built by hand,
+([design Choice 55](../design.md#choice-plain-request-patch)). Both checks here leave out a request
+whose fetch metadata says it is not a top-level navigation (a page's own `fetch` that asks for
+HTML, an `<iframe>`'s load), whose answer the browser does not show as the tab's page. It does
+not see an `unstaged` route, a fragment answered without the patch's `corten-patch` header (a response built by hand,
 or one put in place of the handler's through `DerefMut`), or a release build, which compiles none
 of it.
 

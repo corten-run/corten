@@ -3744,8 +3744,10 @@ rules something out.
     failing. A handler's result now carries what the runtime's read can get, as a second parameter
     of `HtmlResponse` beside `For` ([Choice 27](#choice-caller-types)): `AnyAnswer` (a page, a
     patch or a redirect, what `HtmlResult` is) or `Patches`, which only `req.patch`,
-    `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make (each a
-    patch in `Mode::Action` and its caller's page or redirect otherwise), since `HtmlResponse`'s
+    `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make (the last
+    three a patch in `Mode::Action` and their caller's page or redirect otherwise; the first two a
+    patch whatever the mode, which a debug build refuses to a browser's plain request,
+    [Choice 55](#choice-plain-request-patch)), since `HtmlResponse`'s
     constructor is the crate's own. A route says `patches` in its routes module; the module checks
     its `get` handler's result is `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it),
     at the handler's name, and only such a route is a `PatchRoute`, the one kind of route
@@ -4307,14 +4309,16 @@ rules something out.
     `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
     it, load such a page in the three engines and count the matches.
 
-55. <a id="choice-plain-request-patch"></a>**A patch answering a browser's plain request is a debug build's 500, not a
-    compile error: the handler's type cannot say which mode it answers.** `req.patch` and
+55. <a id="choice-plain-request-patch"></a>**A patch answering a browser's plain request is a debug build's 500 for now; a compile error
+    needs a new way to make a patch, which is its own change.** `req.patch` and
     `req.patch_with_status` answer whatever request reached the handler. The runtime's
     `data-patch` fetch (`corten: action`) applies the fragment; a browser that asked by itself (a
     form without JavaScript, a link, a reload) shows it as the whole document, with no layout,
     stylesheets or navigation, and every test that sends the runtime's request passes. A debug
     build now answers that request, a browser's (`text/html`) `Mode::Document` request the runtime
-    did not fetch, the same test the check for a page at a path with no `GET` makes
+    did not fetch and whose fetch metadata, where the browser sends it, says it is a top-level
+    navigation (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`), the same test the check
+    for a page at a path with no `GET` makes, which now reads the fetch metadata too
     ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)), but for any method, with a 500 that names the method
     and the route (its pattern from `#[corten::routes]`, else the request's path) and says to
     answer with `req.patch_or` or check `req.mode == Mode::Action` first. It reads the
@@ -4324,26 +4328,39 @@ rules something out.
     request's method is cloned for the message only under `debug_assertions`, and the release path
     is the one it was (measured below).
 
-    A compile error was weighed first ([Rule 8](#rule-compile-errors)). What a handler answers is
-    decided by `req.mode`, a value of the request, and one handler answers both modes (Values 5),
-    so its type cannot be "patch" or "page". [Choice 50](#choice-patch-routes) gave the type what it
-    can carry, that a patch is among the answers (`HtmlResult<Patches>`), which a plain request may
-    still get from a handler that checks nothing; it does not say which request gets it
-    ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)). Not chosen: `req.patch` taking a proof
-    of the mode, a token only `if let Some(action) = req.action()` hands out (as
-    [`req.invalid_with`](#choice-patch-routes)'s form side gets a `FormPatch`). That would make an
-    unchecked patch a compile error, but it removes `req.mode == Mode::Action`, the documented way
-    a handler checks, from every handler that patches with a status or data of its own (the
-    watchlist's, the deck builder's, the guide's), changes the signature of the two methods every
-    such handler calls for a mistake the debug build now finds at the first plain request a test
-    sends, and is still stepped around by a handler that writes `req.mode` ([Choice 50](#choice-patch-routes) keeps that
-    the app's explicit override); that is a change to the handler API of its own, not this check.
-    Also not chosen: `dev.js` saying so on the page, which sees nothing when no JavaScript runs,
+    A handler's return type cannot carry it: what a handler answers is decided by `req.mode`, a
+    value of the request, and one handler answers both modes, so its type cannot be "patch" or
+    "page". [Choice 50](#choice-patch-routes) gave the type what it can carry, that a patch is
+    among the answers (`HtmlResult<Patches>`), which a plain request may still get from a handler
+    that checks nothing
+    ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)).
+    What can carry it is how a patch is made: `req.action() -> Option<Action<'_>>`, `Some` only in
+    `Mode::Action`, whose `Action::patch` and `Action::patch_with_status` would be the only way to
+    make a patch besides `patch_or`, `invalid` and `invalid_with`, as `req.invalid_with` already
+    hands its form side a `FormPatch` only in that mode; `req.patch` and `req.patch_with_status`
+    would go. Weighed in the order the README gives for a conflict: correctness (1) is the same either way once the
+    mistake is found, but a debug check finds it only where a test or a developer sends the plain
+    request, and a compile error finds it in every build; performance at the user's end (2) is the
+    same, since this check is not compiled in a release build and the token would be a borrow of
+    `Req` (reasoned, not measured); compile-time safety and one way to do things (3) favor the
+    token: an unchecked patch would not compile (Values 4), and it leaves one way to answer a
+    patch on a checked path where today there are two, `patch_or` or a hand check of
+    `req.mode == Mode::Action` before `req.patch` (Values 5). So the compile error is the better
+    answer, and this check gives up Values 4 until it lands. It is not this change because it
+    removes two public methods every handler that checks by hand calls (the deck builder's, the
+    watchlist's, the guides' and the agent skill's), and has questions of its own: how a
+    `patches` route's handler that checks by hand gives its page side the `Patches` kind, which
+    `patch_or` does itself, and whether `req.action()` reads a `req.mode` the handler wrote, which
+    [Choice 50](#choice-patch-routes) keeps as the app's override. That is a breaking change to the handler API, proposed
+    in [#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532); this check
+    is the stopgap until then. Also not chosen: `dev.js` saying so on the page, which sees nothing when no JavaScript runs,
     the one case this is about; and checking only a `POST`, as the #1340 check does: a `GET` route
     whose handler answers only a patch (a dialog's form, a part read again by the runtime) is drawn
     bare by a link or a reload the same way.
 
-    What it does not see: an `unstaged` route, which skips the stages it runs in; a fragment sent
+    What it does not see: a request whose fetch metadata says it is not a top-level navigation (a
+    page's own `fetch` that asks for HTML, an `<iframe>`'s load), whose answer is not shown as the
+    tab's page; an `unstaged` route, which skips the stages it runs in; a fragment sent
     without `corten-patch` (a response built by hand, or one put in place of the handler's through
     `DerefMut`), which is not a patch to it; and a release build. A request the runtime makes is
     never checked, its `corten: page` fetch of a whole page included.
@@ -4366,10 +4383,11 @@ rules something out.
     same code, since the check and the method it clones are not compiled there); value (Values 3, a
     form works without JavaScript; Values 9, the developer sees it in a test).
 
-    Revisit when: an app needs a fragment answered to a plain request on purpose (a server that
-    answers an `<iframe>` or another program's fetch with HTML that is not a page), which would need
-    a way to say so; or a change to the handler API takes a proof of the mode for other reasons,
-    when the token above would make this a compile error; or the runtime stops marking its own
+    Revisit when: [#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)
+    lands, when an unchecked patch does not compile and this check is kept only for answers built
+    outside those methods, or removed, or is declined, when this Choice says why the debug check
+    is enough; or an app needs a fragment answered to a top-level navigation on purpose, which
+    would need a way to say so; or the runtime stops marking its own
     requests with the `corten` header ([Choice 11](#choice-corten-request-header)), on which "the
     runtime did not fetch it" stands.
 

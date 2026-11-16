@@ -738,8 +738,18 @@ Corten is pre-1.0, so any minor version may change the API.
   first: the browser would show the fragment as the whole page, with no layout, stylesheets or
   navigation. The handler's cookies and `Clear-Site-Data` go out with the error. The runtime's
   `data-patch` fetch and a client that does not ask for HTML still get the patch, and a release
-  build compiles none of the check. The watchlist's smoke-only dialog, `<details>` and styled-note
-  routes answer their page's address with a redirect without JavaScript
+  build compiles none of the check. **Breaking (debug builds only):** the test `Client` asks for
+  HTML unless `.mode(..)` is set, so an app's router test that sends a plain request (no
+  `.mode(Mode::Action)`) to a handler answering only `req.patch` or `req.patch_with_status` now
+  gets a 500, as does `corten dev` when a browser loads that route itself. To move: answer with
+  `req.patch_or(view, || async { .. })`, which draws the page or a redirect for a plain request,
+  or return the patch only when `req.mode == Mode::Action`; a test that means the runtime's
+  request sends `.mode(Mode::Action)`. A request whose fetch metadata says it is not a top-level
+  navigation (`Sec-Fetch-Mode` other than `navigate`, as a page's own `fetch` sends, or
+  `Sec-Fetch-Dest` other than `document`, as an `<iframe>` sends) and an `unstaged` route are not
+  checked, by this check or by the one for a page at a path with no `GET`.
+  The watchlist's smoke-only styled-note route redirects without JavaScript, and its dialog and
+  `<details>` routes draw the sheet page with them open
   ([#1423 A patch answering a browser's plain post is shown as the whole page, and the #1340 debug check only catches a page](https://github.com/corten-run/corten/issues/1423)).
 
 - **Breaking:** a handler parameter typed `Map<string, El>` takes only a ref whose every element

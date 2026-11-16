@@ -2799,7 +2799,8 @@ read (a JSON error names the value it could not parse, so part of an upstream an
 message above it could already (an HTTP client's names the URL); none of it reaches the client.
 A debug build's error about the app's own code (a component it
 does not serve, a `Refresh` header, a write redirected outside `form-action`, a page answering
-a post to a path with no `GET` ([Where a form posts](requests-and-forms.md#where-a-form-posts)))
+a post to a path with no `GET`, a patch answering a browser's plain request
+([Where a form posts](requests-and-forms.md#where-a-form-posts)))
 is the exception:
 it is set in every debug build, so a router test's error page names it.
 The error page `corten new` writes names every case without `_`, so when Corten adds one the
