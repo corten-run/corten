@@ -50,9 +50,11 @@ percent-encoding = "2"
 # Percent-decoding form bodies and query strings (Corten's own `Form` and `Params`).
 form_urlencoded = "1"
 # Finding a multipart boundary fast whatever bytes the client sends, 2.3 to 35 times a
-# byte-by-byte search (`memmem` is from 2.4). Already in serde_json's tree.
+# byte-by-byte search (`memmem` is from 2.4). Corten's own in the default build, with no crates
+# of its own; serde_json shares it when feature `json` is on.
 memchr = "2.4"
-# Float digits for views. Already in serde_json's tree.
+# Float digits for views and JSON, several times faster than `core::fmt`. Corten's own in the
+# default build, with no crates of its own; serde_json shares it when feature `json` is on.
 zmij = "1"
 # `macros` for `tokio::select!` in the accept loop and shutdown.
 tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "signal", "sync", "time"] }
