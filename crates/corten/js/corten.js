@@ -1295,8 +1295,9 @@ function serve(root) {
  * What the user opened or closed in `root` (a `<dialog>`, modal or not, a `<details>`, a shown
  * popover), applied to its counterpart in `fresh` once that is in the page. One the user left as
  * the server sent it takes the fresh markup's state, so a server that sends a dialog closed after
- * sending it open closes it. `root` itself, closed by the user and drawn open in answer to a
- * press outside it (a form's trigger beside a dialog), opens: the press is newer than their
+ * sending it open closes it: such a dialog still open goes in `shut`, with its counterpart, to be
+ * closed as the browser closes one ({@link closeAll}). `root` itself, closed by the user and
+ * drawn open in answer to a press outside it (a form's trigger beside a dialog), opens: the press is newer than their
  * close, so a dialog they closed and ask for again opens. One they opened stays open whatever the
  * answer draws. Outside is where the control was when it was pressed (`within`), so one removed,
  * or a dialog redrawn, while the answer was on its way does not turn a press inside into one
@@ -1304,9 +1305,10 @@ function serve(root) {
  * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids
  * @param {Set<string>} [within] the ids of the dialogs and details the control that asked for the
  *   patch was in when it was pressed ({@link asking})
+ * @param {[HTMLDialogElement, Element][]} [shut] where the open dialogs `fresh` closes go
  * @returns {() => void}
  */
-function opened(root, fresh, ids, within) {
+function opened(root, fresh, ids, within, shut = []) {
   /** @type {(() => void)[]} */
   const later = [];
   for (const el of [root, ...Array.from(queryAll(root, "details, dialog, [popover]"))]) {
@@ -1316,8 +1318,13 @@ function opened(root, fresh, ids, within) {
     const shown = popover && matchesOf(el, ":popover-open");
     const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
     // Left as the server sent it, and not a shown popover: the fresh markup says, so its
-    // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing).
-    if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) continue;
+    // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing),
+    // unless it is a dialog open, which the fresh markup may close.
+    if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) {
+      const to = dialog && now && counterpart(root, fresh, el, true, ids);
+      if (to && to.localName === "dialog" && !hasAttr(to, "open")) shut.push([/** @type {HTMLDialogElement} */ (el), to]);
+      continue;
+    }
     // A dialog or popover only by id: by place, another row's could open over the page.
     const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || to.localName !== el.localName) continue;
@@ -1366,7 +1373,11 @@ function replaceKeeping(root, fresh, sent, took, focus = true, within) {
   serve(fresh);
   // Every lookup until `fresh` is in the page, where a script may change it.
   const ids = idsIn(fresh);
-  const reopen = opened(root, fresh, ids, within);
+  /** @type {[HTMLDialogElement, Element][]} */
+  const shut = [];
+  const reopen = opened(root, fresh, ids, within, shut);
+  // Before anything below reads `root`, which their handlers may change as they close.
+  closeAll(shut);
   const focused = document.activeElement;
   const inside = focus && focused && focused !== document.body && holds(root, focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
@@ -1409,6 +1420,37 @@ function replaceKeeping(root, fresh, sent, took, focus = true, within) {
   }
   // The focused element went with the patch, or its counterpart cannot take focus.
   if (inside && document.activeElement === document.body) focusNear(focused, root, fresh);
+}
+
+/**
+ * Closes each dialog of `shut` (an open one a patch draws closed, with the element replacing it)
+ * as the browser closes one, before the patch replaces it: `close()`, so focus goes back to what
+ * had it before the dialog opened. The one holding focus goes first, the innermost of them, so
+ * nested modals each give focus back in turn; then the rest, the last in the page first. Its
+ * `toggle` and `close` come after the patch has taken it off the page, where the document's
+ * listener cannot hear them, so each is dispatched again on the element that took its place, and
+ * that element's handlers (`on:close`) hear them as the browser's. A handler of its
+ * `beforetoggle`, which runs at once, may change the page: the dialogs were found before.
+ * @param {[HTMLDialogElement, Element][]} shut
+ */
+function closeAll(shut) {
+  while (shut.length) {
+    let at = shut.length - 1;
+    for (let i = at; i >= 0; i -= 1) {
+      if (holds(/** @type {[HTMLDialogElement, Element]} */ (shut[i])[0], document.activeElement)) {
+        at = i;
+        break;
+      }
+    }
+    const [[dialog, to]] = /** @type {[[HTMLDialogElement, Element]]} */ (shut.splice(at, 1));
+    if (!dialog.open) continue;
+    for (const type of ["toggle", "close"]) {
+      // The same kind of event, with the same states for a toggle.
+      const again = (/** @type {Event} */ event) => !inPage(dialog) && inPage(to) && to.dispatchEvent(new /** @type {typeof Event} */ (event.constructor)(type, event));
+      dialog.addEventListener(type, again, { once: true });
+    }
+    dialog.close();
+  }
 }
 
 /**

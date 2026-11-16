@@ -3,8 +3,8 @@
 //! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, as an
 //! argument and as the value an element gives its ref, a patch drawn with this area's
 //! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
-//! `<details>` drawn closed that a form outside each asks for again, and a screen whose data a
-//! script reads (`corten/read`).
+//! `<details>` drawn closed that a form outside each asks for again, dialogs drawn open and modal
+//! that an answer draws closed, and a screen whose data a script reads (`corten/read`).
 use corten::{Error, LiveResponse, prelude::*};
 use futures_util::{StreamExt, stream};
 
@@ -42,6 +42,22 @@ pub mod url {
     #[route("/smoke/sheet/more", get = open_more)]
     pub struct OpenMore;
 
+    /// A page with dialogs drawn closed and the forms outside them that ask for them open (#1455).
+    #[route("/smoke/closing", get = closing_page)]
+    pub struct ClosingPage;
+
+    /// The one dialog drawn open.
+    #[route("/smoke/closing/one", get = open_one)]
+    pub struct OpenOne;
+
+    /// The dialog with another inside it, both drawn open.
+    #[route("/smoke/closing/nested", get = open_nested)]
+    pub struct OpenNested;
+
+    /// Every dialog drawn closed, as the answer to a form inside one.
+    #[route("/smoke/closing/done", get = done_closing)]
+    pub struct DoneClosing;
+
     /// A screen whose data (`Reading`) its page's script reads with `read()`; `missing` answers
     /// 404 instead, and `moved` a redirect, as middleware might send.
     #[route("/smoke/reading", get = reading, data = Reading)]
@@ -52,7 +68,7 @@ pub mod url {
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, Reader];
+pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, Reader, Closing];
 
 /// The text the handler is given, as itself and in a JSON array. `data-on` is single-quoted, so it
 /// is written with `&#39;`, `&amp;` and `&lt;` and its JSON's quotes as they are.
@@ -151,6 +167,89 @@ async fn open_more(req: Req) -> HtmlResult {
             <p>"Unfolded"</p>
         </details>
     })
+}
+
+#[derive(Id)]
+struct SmokeClosingId;
+
+#[derive(Id)]
+struct SmokeOneId;
+
+#[derive(Id)]
+struct SmokeOuterId;
+
+#[derive(Id)]
+struct SmokeInnerId;
+
+/// The page: a form outside the dialogs for each, and the dialogs, drawn closed.
+async fn closing_page(req: Req) -> HtmlResult {
+    req.page(html! {
+        <Layout req={&req} title="Closing" viewer={None} head="">
+            <form method="get" action={url::OpenOne} data-patch><button>"One"</button></form>
+            <form method="get" action={url::OpenNested} data-patch><button>"Nested"</button></form>
+            <Closing one={false} nested={false} />
+        </Layout>
+    })
+}
+
+/// Dialogs drawn open (`one`, or `nested`: one inside another) or closed, made modal as they join
+/// the page. Their delegated `on:toggle` and `on:close` handlers write what they heard into the
+/// part's `<output>`, and the one dialog's `on:beforetoggle` takes its field and `<details>` out
+/// as it starts to close. A form inside each draws them all closed.
+#[component(js)]
+fn Closing(one: bool, nested: bool) -> impl Patch {
+    let log = refs();
+    html! {
+        <div id={SmokeClosingId}>
+            <output ref={log}></output>
+            <dialog
+                id={SmokeOneId}
+                open={one}
+                on:connect={js::modal(target)}
+                on:beforetoggle={js::touch(event, target)}
+                on:toggle={js::heard(event, target, log)}
+                on:close={js::heard(event, target, log)}
+            >
+                <p>if one { "Open" } else { "Closed" }</p>
+                <input name="note" aria-label="Note">
+                <details><summary>"More"</summary></details>
+                <form method="get" action={url::DoneClosing} data-patch><button>"Done"</button></form>
+            </dialog>
+            <dialog
+                id={SmokeOuterId}
+                open={nested}
+                on:connect={js::modal(target)}
+                on:toggle={js::heard(event, target, log)}
+                on:close={js::heard(event, target, log)}
+            >
+                <button type="button">"Outer"</button>
+                <dialog
+                    id={SmokeInnerId}
+                    open={nested}
+                    on:connect={js::modal(target)}
+                    on:toggle={js::heard(event, target, log)}
+                    on:close={js::heard(event, target, log)}
+                >
+                    <form method="get" action={url::DoneClosing} data-patch><button>"Done"</button></form>
+                </dialog>
+            </dialog>
+        </div>
+    }
+}
+
+/// Answers with the one dialog drawn open.
+async fn open_one(req: Req) -> HtmlResult {
+    req.patch(Closing { one: true, nested: false })
+}
+
+/// Answers with the nested dialogs drawn open.
+async fn open_nested(req: Req) -> HtmlResult {
+    req.patch(Closing { one: false, nested: true })
+}
+
+/// Answers with every dialog drawn closed.
+async fn done_closing(req: Req) -> HtmlResult {
+    req.patch(Closing { one: false, nested: false })
 }
 
 #[derive(Id)]

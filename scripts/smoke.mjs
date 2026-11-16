@@ -4844,6 +4844,59 @@ async function run(browser) {
     await sheet.evaluate(() => ["smoke-queue", "smoke-queue-spot", "smoke-queued"].forEach((id) => document.getElementById(id)?.remove()));
     await sheet.close();
   }
+  // An open dialog the server drew, which an answer draws closed, is closed as the browser closes
+  // one (#1455): its delegated on:toggle and on:close handlers (smoke.rs's Closing) hear one of
+  // each on the dialog in the page, and focus goes back to the button that opened it. Nested
+  // modals close innermost first, so each gives focus back in turn, and an on:beforetoggle
+  // handler that takes the dialog's field and <details> out as it starts to close does not stop
+  // the patch. Pressed with the keyboard, so the opener has focus in every engine.
+  {
+    const closing = await browser.newPage();
+    closing.on("pageerror", (e) => errors.push(`closing: ${e.message}`));
+    await closing.goto(`${base}/smoke/closing`);
+    /** Presses `name` with Enter, then waits for `ready` to hold in the page. @param {string} name @param {() => boolean} ready */
+    const press = async (name, ready) => {
+      await closing.getByRole("button", { name, exact: true }).press("Enter");
+      return closing.waitForFunction(ready, undefined, { timeout: 5000 }).then(() => true, () => false);
+    };
+    /** The dialogs' log once `lines` lines are in it (or 3 seconds), the focused element and the dialogs' state. @param {number} lines */
+    const after = (lines) =>
+      closing
+        .waitForFunction((lines) => (document.querySelector("#smoke-closing output")?.textContent ?? "").split("\n").filter(Boolean).length >= lines, lines, { timeout: 3000 })
+        .catch(() => {})
+        .then(() =>
+          closing.evaluate(() => {
+            const $ = (/** @type {string} */ id) => /** @type {HTMLDialogElement} */ (document.getElementById(id));
+            return {
+              log: (document.querySelector("#smoke-closing output")?.textContent ?? "").split("\n").filter(Boolean),
+              focused: document.activeElement?.textContent?.trim() || document.activeElement?.localName,
+              open: ["smoke-one", "smoke-outer", "smoke-inner"].filter((id) => $(id).open),
+              text: $("smoke-one").querySelector("p")?.textContent,
+              field: !!$("smoke-one").querySelector("input"),
+            };
+          }),
+        );
+    const opened = await press("One", () => !!document.querySelector("#smoke-one:modal"));
+    const shut = await press("Done", () => !document.querySelector("#smoke-one[open]") && document.querySelector("#smoke-one p")?.textContent === "Closed");
+    const one = await after(2);
+    check(
+      "a patch that draws closed an open modal dialog the server drew closes it: its delegated handlers hear one toggle and one close, and focus goes back to its opener",
+      opened && shut && one.focused === "One" && one.open.length === 0 && one.text === "Closed" && one.field &&
+        one.log.join("|") === "smoke-one toggle:closed on One|smoke-one close on One",
+      JSON.stringify({ opened, shut, ...one }),
+    );
+    const nestedOpen = await press("Nested", () => !!document.querySelector("#smoke-inner:modal") && !!document.querySelector("#smoke-outer:modal"));
+    const nestedShut = await press("Done", () => !document.querySelector("#smoke-outer[open], #smoke-inner[open]"));
+    const nested = await after(4);
+    const closes = nested.log.filter((line) => line.includes(" close "));
+    check(
+      "a patch that draws closed nested modal dialogs closes the inner one first, each heard by its delegated handlers, and focus goes back to the outer one's opener",
+      nestedOpen && nestedShut && nested.focused === "Nested" && nested.open.length === 0 && nested.log.length === 4 &&
+        nested.log.every((line) => line.endsWith(" on Nested")) && closes.length === 2 && closes[0]?.startsWith("smoke-inner ") && !!closes[1]?.startsWith("smoke-outer "),
+      JSON.stringify({ nestedOpen, nestedShut, ...nested }),
+    );
+    await closing.close();
+  }
   await page.focus("#kept button");
   const buttonFocus = await page.evaluate(async (html) => {
     const { patch } = await import("corten");
