@@ -70,6 +70,19 @@ test("v2 binds the full replayed matrix and forwards its host subject without as
   assert.deepEqual(calls, [{ folder: f.folder, round, commit }]);
 });
 
+test("record-backed summary keeps the full isolated matrix and still requires replayed native proof", async (t) => {
+  const f = v2Fixture(t); f.summary.schema = "native-fullstack-browser/v2"; f.save();
+  const result = await inspectSaved(f.binding, f.folder);
+  assert.equal(result.status, "verified"); assert.equal(result.resources, "blocked");
+  assert.equal(result.attemptComplete, true); assert.equal(result.qualificationPassed, true);
+  assert.deepEqual(result.comparisonEligibleApps, apps);
+  report.status = "invalid"; report.invalid = ["Cell evidence root binding differs"];
+  const tampered = await inspectSaved(f.binding, f.folder);
+  assert.equal(tampered.status, "invalid"); assert.equal(tampered.qualificationPassed, undefined);
+  assert.equal(tampered.comparisonEligibleApps, undefined); assert.equal(tampered.attemptComplete, false);
+  assert.ok(tampered.outcomes.every((cell) => cell.outcome === "not-run"));
+});
+
 test("v2 observed prerequisite and target failures retain every app, exact exit one and no comparisons", async (t) => {
   const f = v2Fixture(t);
   for (const c of report.cells.filter((c) => c.app === apps[0])) {

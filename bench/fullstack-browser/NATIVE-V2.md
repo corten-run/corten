@@ -39,25 +39,74 @@ Native source or host observations confer no review/admission/operator authority
 
 `new EvidenceStore(folder)` exclusively creates `native-evidence/`. The folder is
 an operator-supplied local directory, never a saved path. `.blob(bytes)` returns
-`{path:'native-evidence/blobs/<sha256>',bytes,sha256}`; `.record(name,value)` writes
-one JSON blob and records its root reference. Names match `[a-z][a-z0-9-]{0,79}`.
+`{path:'native-evidence/blobs/<sha256>',bytes,sha256}`; `.json(value)` writes bounded,
+deduplicated structured JSON pages; `.recordJSON(name,value)` also names their root reference.
+`.record(name,value)` retains canonical raw metadata JSON as before, preserving source,
+tool and execution-root byte identities (including the native host subject).
+Names match `[a-z][a-z0-9-]{0,79}`. `.readJSON(ref)` supplies the producer's bounded
+one-record replay before sealing (strict export never keeps the entire run hydrated).
 `.seal()` writes the exact manifest, including every deduplicated blob:
 
 ```js
-{schema:"native-browser-evidence/v2", records:{source:ref,tools:ref,execution:ref},
+{schema:"native-browser-evidence/v3", records:{source:ref,tools:ref,execution:ref},
+ structured:[/* sorted unique SHA-256 identities of structured pages */],
  files:[ref /* sorted by path */], sha256:sha256(encoded(files))}
 ```
 
 `encoded(value)` is UTF-8 `JSON.stringify(value) + '\n'`; replay rejects duplicate
 keys/noncanonical JSON. `openEvidence(folder)` validates the entire namespace;
 `.read(ref)` returns bytes; `.json(ref)` returns canonical JSON; `.finish()` proves
-the manifest/tree unchanged and every blob consumed. Outer native tree sealing
+the manifest/tree unchanged and every blob consumed. Historical v2 manifests and their
+canonical raw JSON records remain readable without rewriting or authenticating old runs.
+Outer native tree sealing
 must still include existing summary/captures/logs and this namespace. Limits:
 50,000 blobs, 256 MiB/file, 1 GiB total, 32 MiB/JSON; no links, hard links, special
 files, unknown members, saved alternate paths or network roots. Bounds are fixed,
 not runner knobs. Store only outputs of the scoped producers below; `.blob` is
 not a generic credential sanitizer. No raw HTML, cookie/header/session/CSRF values,
 post bodies, arbitrary diagnostics or process command/environment dumps belong here.
+
+### Structured Records
+
+The v3 namespace extends the existing SHA-256 references, not the binary byte contract.
+Each structured page is canonical JSON plus a newline, hashed and rechecked exactly like
+every other blob. A page is a two-element tuple: `["v",value]` for at most 16 KiB of
+canonical JSON data, `["o",[[key,ref],...]]` for ordered object members, `["l",[ref,...]]`
+for array elements, `["a",[ref,...]]` for concatenated array pages, or `["s",[ref,...]]`
+for concatenated strings. Arrays use stable 64-element prefix pages, split further as
+needed; repeated journals and cumulative upstream prefixes therefore reuse the same bytes.
+Pages are at most 64 KiB. Arbitrary reference-looking JSON inside a value is data, not
+an instruction to read a path. Only declared structured edges are followed, and response,
+source and executable references are separately replayed by their fixed validators.
+
+Decoding is bounded per root: 96 levels, 32 MiB of distinct page material, 1,048,576
+materialized slots, 256 MiB of logical canonical JSON, and 16 Mi UTF-16 code units in a
+composed string. A fresh cache shares identical subtrees within that read only; callers
+treat observations as read-only. Producer roots pass the same decoder bounds before
+acceptance. Cycles, altered aliases, duplicate object members, unknown/missing pages,
+expansion bombs and cumulative excess fail closed. The existing 50,000-file, 256-MiB/file
+and 1-GiB/tree ceilings remain unchanged. Inventory and final outer seals use bounded
+chunk hashing, not whole-file hash allocations.
+
+`native-fullstack-browser/v2` summaries bind each non-null cell root to
+`records["cell-<app>-<profile-index>"]`. The production save boundary refuses inline raw
+evidence. Replay checks the exact root inventory, resolves one cell per validation/export
+step and consumes every retained blob before accepting closure. Strict export hashes
+the hydrated original JSON in matrix order, without creating an app-wide string; hash
+meaning and all native/oracle validation rules remain unchanged. Small v1 inline summaries
+still take their original diagnostic path; no v3 page can upgrade historical proof.
+
+Storage rationale: ordinary monolithic JSON duplicates cumulative observations and cannot
+be produced/replayed within the existing bounds. Merely splitting cells leaves repeated
+native DOM and proof records counted again; merely increasing limits postpones the same
+failure. Standard JSON remains the encoding; the existing content-addressed namespace
+provides lossless sharing without a compressor, new dependency, import selector or weaker
+proof oracle. This is benchmark custody, not a new application wire surface (see
+[standard formats](../../docs/design.md#rule-standard-formats)). Revisit if the complete
+matrix approaches the unchanged physical ceilings or a common standard supplies the same
+bounded JSON/reference/custody contract. Evidence: `native-records.test.mjs`,
+`cell-records.test.mjs` and the opt-in `large-records.test.mjs`; these are synthetic storage
+controls, not measurements or qualifications of native contenders.
 
 ## Source, contexts and tools
 

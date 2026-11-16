@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Fullstack browser benchmark evidence uses bounded, authenticated, deduplicated JSON
+  records and incremental raw-case hashing instead of one growing inline summary. The
+  complete matrix, raw observations, native settings, safety ceilings and proof gates
+  are preserved; bounded historical summaries remain read-only diagnostics.
+
 - A script reads a screen's data typed, from the route that answers it, with
   `read(url, { signal })` from the new `corten/read` module. A route that says `data = T` in
   `#[route(..)]`, whose `get` handler returns `HtmlResult<corten::Screen<T>>` (which only
