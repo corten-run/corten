@@ -2813,7 +2813,15 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     }
     // A write the runtime sent may answer its own page, which is whole for a runtime that draws one
     // (#1370). Looked up only in an app with layout reads, and once: its `Req` reads the mark.
-    let action_write = !shared.layout_reads.is_empty() && own_page_whole(mode, req.method(), req.headers());
+    // Read through a binding of its own, which ends here: a request borrowed in this future keeps a
+    // slot of its own in each of its later states, 240 bytes more on every whole document's and
+    // navigation's future, which made a whole `GET` about 750 instructions dearer
+    // (`-Zprint-type-sizes`, DHAT and callgrind).
+    let (req, action_write) = {
+        let req = req;
+        let action_write = !shared.layout_reads.is_empty() && own_page_whole(mode, req.method(), req.headers());
+        (req, action_write)
+    };
     if shared.layout_reads.is_empty() || (mode.swaps() && !action_write) {
         return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
     }
@@ -2838,16 +2846,8 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     // each ran about 200 more instructions, most of them copying, where the box costs each such
     // write about 1,000 (callgrind, #1370).
     if action_write {
-        signal.mark_late(until);
-        let next = FillsLate { next, shared, until };
-        let late: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> =
-            Box::pin(page_or_error(shared, req, next, deadline, signal, (mode, fetched)));
-        return late.await;
+        return late_write(shared, req, next, deadline, signal, (mode, fetched), until).await;
     }
-    // Rebound only here, past the write's await: a binding of the request alive across both awaits
-    // takes a slot of its own in every state of this future, the request's 240 bytes on every
-    // document's and navigation's future too (`-Zprint-type-sizes`; a whole `GET` ran about 800
-    // more instructions, its allocations larger, #1370).
     let mut req = req;
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
@@ -2856,6 +2856,22 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
         here.fill(res).await
     });
     filled.await
+}
+
+/// A write the runtime sent in an app with layout reads ([`render_errors`]), marked and its answer
+/// boxed (#1370).
+fn late_write<'f, 's: 'f, 'n: 'f, 'g: 'f, S: crate::app::Steps + 'f>(
+    shared: &'s Arc<Shared>,
+    req: Request,
+    next: Next<'n, S>,
+    deadline: Option<std::time::Duration>,
+    signal: &'g crate::Signal,
+    asked: (Mode, bool),
+    until: Option<tokio::time::Instant>,
+) -> std::pin::Pin<Box<dyn Future<Output = Response> + Send + 'f>> {
+    signal.mark_late(until);
+    let next = FillsLate { next, shared, until };
+    Box::pin(page_or_error(shared, req, next, deadline, signal, asked))
 }
 
 /// What answers a request under its deadline and panic catch: the app's middleware and the route
