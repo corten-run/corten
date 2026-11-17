@@ -1095,28 +1095,49 @@ text) only to find where it ends, so a row holding an icon with a `<title>` is c
 other, but it reports no loss inside one. It reads a `<script>`'s text as the browser does, and a
 `<textarea>`'s, `<title>`'s, `<style>`'s, `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and
 `<noframes>`'s as text, and it ignores the end tag `html!` writes for a `<param>` or a
-`<basefont>`, as the browser does. It reports a loss only from the tokens it reads as the browser
-does, and stops at any other, which only markup placed with `raw` writes: an end tag left out,
-one written otherwise than `</name>` (`</div ignored>`) or one that closes no element open (a
-`</p>` or `</br>`, which in an `<svg>` or `<math>` closes it); an HTML element's start tag
-ending `/>`; a comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, `--!>` in
-it); a CDATA section outside an `<svg>` or `<math>`; an element HTML's wherever it lands written
-straight in an `<svg>` or `<math>`, which `html!` refuses; a `<!--` and a `<script` in a data
-block's text that carry the script past its first `</script>` and over an element, which may be
-text written for it or the patch's elements lost in it; and, in a `<form>` a table's reading
-would put in empty, any token before what it holds but a comment or a void element's end tag
-(`</input>`); a start tag the patch ends in before its `>` (`<col data-note='` at the end, which
-the browser drops); an HTML `<image>`, which the browser reads as an `<img>`; a `<plaintext>`
-or a `<noscript>` (whose content the engines read differently); and an element the browser
-does not put where it is written: a table part outside a table, anything in a `<table>`, row
-group or row but its own parts and a `<script>`, `<style>` or `<template>`, an element that
-closes one open around it (a `<div>` in a `<p>`, an `<li>` in an `<li>`), a `<form>` in a
-`<form>`, what a `<select>` holds but its options, and, after a first table part, a `<form>` or
-`<table>` in an SVG `<foreignObject>` or a MathML `<mi>`. A row or cell written straight in a
-`<table>` is read as kept, since the browser only adds the `<tbody>` or `<tr>` around it. There
-it still reports a loss found before, and otherwise logs a warning naming where it stopped, since
-what follows was not checked: markup written through `raw` is checked only as far as these rules
-reach. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
+`<basefont>`, as the browser does. Where text decides (in a `<form>` a table's reading would
+put in empty, in a table, row group, row or column group, after a first `<col>`, and at the top
+level) it reads the text with its character references decoded: a numeric one, `&Tab;` and
+`&NewLine;` (whitespace), and `html!`'s own escapes and `&nbsp;` (which show), so a form that
+holds only `&#32;` is kept and one that holds `&nbsp;` loses it; a NUL, which the parser ignores
+there, shows nothing. It reports a loss only from the tokens it reads as the browser does, and
+stops at any other, whether `html!` writes it (a `<div>` in a `<p>`, a `<form>` in a `<form>`, a
+`<noscript>`) or markup placed with `raw` does:
+
+1. an end tag left out, one written otherwise than `</name>` (`</div ignored>`), or one that
+   closes no element open (a `</p>` or `</br>`, which adds an element or, in an `<svg>` or
+   `<math>`, closes it);
+2. an HTML element's start tag ending `/>`, and a start tag the patch ends in before its `>`
+   (`<col data-note='` at the end, which the browser drops);
+3. a comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, `--!>` in it), a
+   CDATA section outside an `<svg>` or `<math>` or not ended by `]]>`, and a doctype other than
+   `<!DOCTYPE html>` (a quoted `>` in one ends it early);
+4. where text decides, a named character reference it does not decode (`&bogus;`), and in a
+   table, row group, row or column group, or after a first `<col>`, any text that shows (a `<`
+   that starts no tag among it), which the browser moves out or drops;
+5. a script whose text a `<!--` and a `<script` carry past its first `</script>` and over an
+   element, which may be text written for it or the patch's elements lost in it;
+6. in a `<form>` a table's reading would put in empty, any token before what it holds but a
+   comment, a bogus comment (`<!note>`, `</ x>`), a `<!DOCTYPE html>` and a void element's end
+   tag (`</input>`);
+7. an element HTML's wherever it lands written straight in an `<svg>` or `<math>`, which `html!`
+   refuses;
+8. an HTML `<image>`, which the browser reads as an `<img>`; a `<plaintext>`; a `<noscript>`,
+   whose content Firefox reads as text and Chromium and WebKit as elements; and an `<html>`,
+   `<body>`, `<head>`, `<frame>` or `<frameset>`;
+9. an element the browser does not put where it is written: a table part outside a table;
+   anything in a `<table>`, row group, row or column group (a `<colgroup>`) but its own parts and
+   a `<script>`, `<style>` or `<template>`; an element that closes one open around it (a `<div>`
+   in a `<p>`, an `<li>` in an `<li>`, an `<a>` in an `<a>`, a heading in a heading, an
+   `<option>` in an `<option>`); a `<form>` in a `<form>`; what a `<select>` holds but its
+   options; and, after a first table part, a `<form>`, `<table>` or table part in an SVG or
+   MathML integration point (`<foreignObject>`, `<desc>`, `<title>`, `<mi>` ..) that is not in a
+   top-level table part.
+
+A row or cell written straight in a `<table>` is read as kept, since the browser only adds the
+`<tbody>` or `<tr>` around it. At a stop the check still reports a loss found before, and
+otherwise logs a warning naming where it stopped, since what follows was not checked: markup
+written through `raw` is checked only as far as these rules reach. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
 a page's table takes apart too). A patch that
 begins with a `<col>` from an area's handler is refused even on a page that already has the area's
 stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know

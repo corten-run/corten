@@ -3904,6 +3904,23 @@ async fn a_patch_with_tokens_the_parse_check_does_not_read_is_sent_and_logged_in
                     <div id={MsgId}>{crate::raw(r#"</div><image id="i"><tr id="r"><td>1</td></tr></image>"#)}</div>
                 })
             }),
+        )
+        .route(
+            "/doctype",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <div id={MsgId}>{crate::raw(r#"</div><!DOCTYPE html PUBLIC "><tr id='r'></tr>">"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/reference",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <form id={NoteEndId}>{crate::raw("&bogus;")}</form>
+                })
+            }),
         );
     let lines = Lines(Arc::default());
     let writer = lines.clone();
@@ -3921,12 +3938,72 @@ async fn a_patch_with_tokens_the_parse_check_does_not_read_is_sent_and_logged_in
             "/image",
             r#"the patch for /image read it only up to <image id="i">, which a browser reads as an <img>, an element with no end tag"#,
         ),
+        (
+            "/doctype",
+            r#"the patch for /doctype read it only up to the doctype <!DOCTYPE html PUBLIC ">, which the check does not read"#,
+        ),
+        (
+            "/reference",
+            r#"the patch for /reference read it only up to &bogus; in <form id="note-end">, which the check of what a form holds does not read"#,
+        ),
     ] {
         let (status, _, body) = call_with(app.clone(), "POST", path, Some("action"), None).await;
         assert_eq!(status, StatusCode::OK, "{path}: {body}");
         let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
         assert!(text.contains(stopped), "{path}: {text}");
     }
+}
+
+/// Characters past ASCII in the names, values and text of markup placed with `raw` are read
+/// without a panic, and the check reads on past them to the row the browser drops; text a
+/// `<form>` holds is read with its character references decoded, so a `&#32;`, which the browser
+/// reads as a space, is not a loss, and a `&nbsp;`, which it moves out of the form, is (#1409).
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_s_characters_past_ascii_and_references_are_read_as_the_browser_reads_them() {
+    let routes = Table::new()
+        .route(
+            "/multibyte",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <SavedNote />
+                    <div id={NoteEndId}>
+                        {crate::raw("<span \u{e9}=\"x\" data-\u{e9}='\u{65e5}>'>\u{e9}t\u{e9}</span><x-\u{e9}>\u{65e5}</x-\u{e9}>")}
+                    </div>
+                    <LostRow />
+                })
+            }),
+        )
+        .route(
+            "/space",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <form id={NoteEndId}>{crate::raw("&#32;")}</form>
+                })
+            }),
+        )
+        .route(
+            "/nbsp",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <form id={NoteEndId}>{crate::raw("&nbsp;")}</form>
+                })
+            }),
+        );
+    let app = app(routes, None);
+    let (status, _, body) = call_with(app.clone(), "POST", "/multibyte", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains(&crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#)), "{body}");
+    let (status, _, body) = call_with(app.clone(), "POST", "/space", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = call_with(app, "POST", "/nbsp", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body.contains(&crate::escape(r#"<form id="note-end"> loses what it holds, since <tr id="lost-row"> comes first"#)),
+        "{body}"
+    );
 }
 
 #[derive(crate::view::Id)]

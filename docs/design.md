@@ -4912,18 +4912,24 @@ by design; where it is known, a limit says what would lift it or why it is so.
    would land unstyled, so it is refused on both, and a `<colgroup>` with an id keeps the link.
    The check reads markup as `html!` writes it (a script's text as the browser's tokenizer does,
    a `<textarea>`'s, `<title>`'s, `<style>`'s, `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and
-   `<noframes>`'s as text, a void element's end tag ignored), and reports a loss only from the
-   tokens it reads as the browser does. It stops at any other, which only markup placed with `raw`
-   writes: an end tag left out, one written otherwise than `</name>` (`</div ignored>`) or one
+   `<noframes>`'s as text, a void element's end tag ignored, and text where it decides with its
+   numeric character references, `&Tab;`, `&NewLine;`, `html!`'s escapes and `&nbsp;` decoded and a
+   NUL ignored), and reports a loss only from the tokens it reads as the browser does. It stops at
+   any other, whether `html!` writes it (a `<div>` in a `<p>`, a `<form>` in a `<form>`, a
+   `<noscript>`) or markup placed with `raw` does: an end tag left out, one written otherwise than `</name>` (`</div ignored>`) or one
    that closes no element open (a `</p>` or `</br>`, which adds an element or, in an `<svg>` or
    `<math>`, closes it); an HTML element's start tag ending `/>`, which the browser opens; a
    comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, one with `--!>` in it);
-   a CDATA section outside an `<svg>` or `<math>`, or one not ended by `]]>`; an element HTML's
+   a CDATA section outside an `<svg>` or `<math>`, or one not ended by `]]>`; a doctype other
+   than `<!DOCTYPE html>`, which a quoted `>` in it ends early; where text decides (in such a form,
+   in a table holder, after a first `<col>`, at the top level), a named character reference it does
+   not decode, and any text that shows in a table, row group, row or column group or after a first
+   `<col>`, a `<` that starts no tag among it too; an element HTML's
    wherever it lands written straight in an `<svg>` or `<math>`, which `html!` refuses; a `<!--`
    and a `<script` in a script's text that carry it past its first `</script>` and over an
    element, which the markup does not say was written as its text; in a `<form>` a table's
-   reading would put in empty, any token before what it holds but a comment, a bogus comment and
-   a void element's end tag; a start tag the patch ends in before its `>` (`<col data-note='`
+   reading would put in empty, any token before what it holds but a comment, a bogus comment, a
+   `<!DOCTYPE html>` and a void element's end tag; a start tag the patch ends in before its `>` (`<col data-note='`
    at the end, which the browser drops); an HTML `<image>`, which the browser reads as an `<img>`;
    a `<plaintext>`, and a `<noscript>`, whose content Firefox reads as text and Chromium and
    WebKit as elements; and an element the browser does not put where it is written: a table part
@@ -4936,9 +4942,12 @@ by design; where it is known, a limit says what would lift it or why it is so.
    reports a loss found before and otherwise logs a warning naming where it stopped, so markup
    written through `raw` is checked only as far as these rules reach, and what a patch loses after
    one of them is found by neither the check nor `html!`. `scripts/patch-generated.json` holds
-   the check to these rules in 3,000 patches generated from a fixed seed, which the smoke parses
-   in all three engines: it reports a loss only where an engine loses something, and where one
-   does, reports it or says where it stopped.
+   the check to these rules in 3,000 patches generated from a fixed seed (with characters past
+   ASCII in names, values and text, character references, doctypes and text at the top level),
+   which the smoke parses in all three engines, text included: it reports a loss only where an
+   engine loses something, and where one does, reports it or says where it stopped; and the id
+   check reports an element without an id or text outside one only where the engine's parse has
+   one at its top level or loses something.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating

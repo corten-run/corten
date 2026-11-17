@@ -30,16 +30,18 @@ Corten is pre-1.0, so any minor version may change the API.
   `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
   fragment panics, naming the element lost and the one that came first, so an app's own
   debug-build tests that draw such a patch now fail; a patch with a token the check does not read
-  as the browser does, which only markup placed with `raw` writes (an end tag left out, written
-  otherwise than `</name>` or that closes no element open; an HTML start tag ending `/>`; a comment
-  a browser ends elsewhere than at its `-->`; a CDATA section outside an `<svg>` or `<math>`; an
+  as the browser does, whether `html!` writes it or markup placed with `raw` does (an end tag left
+  out, written otherwise than `</name>` or that closes no element open; an HTML start tag ending
+  `/>`; a comment a browser ends elsewhere than at its `-->`; a CDATA section outside an `<svg>`
+  or `<math>` or not ended; a doctype other than `<!DOCTYPE html>`; where text decides, a named
+  character reference it does not decode, and text in a table holder or after a first `<col>`; an
   element HTML's wherever it lands written straight in an `<svg>` or `<math>`; a script whose text
   a `<!--` and a `<script` carry past its first `</script>` and over an element; in a form a
   table's reading empties, any token before what it holds but a comment; a start tag the patch
-  ends in; an HTML `<image>`, `<plaintext>` or `<noscript>`; an element the browser does not put
-  where it is written, such as a table part outside a table or a `<div>` in a `<p>`), is checked
-  up to there and sent, with a warning naming where it stopped; a release
-  build is unchanged
+  ends in; an HTML `<image>`, `<plaintext>`, `<noscript>`, `<html>`, `<body>`, `<head>`,
+  `<frame>` or `<frameset>`; an element the browser does not put where it is written, such as a
+  table part outside a table or a `<div>` in a `<p>`; the full list is Limit 2), is checked up to
+  there and sent, with a warning naming where it stopped; a release build is unchanged
   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 
 - The watchlist smoke's check that a submit which waited for a write the network failed is not

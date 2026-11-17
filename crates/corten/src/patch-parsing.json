@@ -7103,6 +7103,65 @@
       ],
       "lost": null,
       "unread": "which a browser moves out of the <tbody>"
+    },
+    {
+      "html": "<div id=\"d\"></div><!DOCTYPE html PUBLIC \"><tr id='r'></tr>\"></div>",
+      "parsed": [
+        "div#d"
+      ],
+      "unread": "the doctype <!DOCTYPE html PUBLIC \">, which the check does not read"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><form id=\"f\">&#32;</form>",
+      "parsed": [
+        "tr#r",
+        "form#f"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"r\"></tr><form id=\"f\">&bogus;</form>",
+      "parsed": [
+        "tr#r",
+        "form#f"
+      ],
+      "unread": "&bogus; in <form id=\"f\">"
+    },
+    {
+      "html": "<div id=\"d\"><span é=\"x\"></span><x-é id=\"e\">日</x-é></div>",
+      "parsed": [
+        "div#d(span,x-é#e)"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<p id=\"m\" é=\"é\"></p><tr id=\"r\" 日><td>1</td></tr>",
+      "parsed": [
+        "p#m"
+      ],
+      "lost": "<tr id=\"r\" 日> is dropped, since <p id=\"m\" é=\"é\"> comes first"
+    },
+    {
+      "html": "<col id=\"e1\"><",
+      "parsed": [
+        "col#e1"
+      ],
+      "unread": "the text <, which a browser drops"
+    },
+    {
+      "html": "<template id=\"t\"><td id=\"c\"></td><form><label></label></form></template>",
+      "parsed": [
+        "template#t{td#c,label}"
+      ],
+      "parsedIn": {
+        "chromium": [
+          "template#t{td#c,form,label}"
+        ],
+        "webkit": [
+          "template#t{td#c,form,label}"
+        ]
+      },
+      "lost": "<form> loses what it holds, since <td id=\"c\"> comes first"
     }
   ]
 }

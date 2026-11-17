@@ -119,10 +119,12 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
             self_closing = bytes.get(i + 1) == Some(&b'>');
             i += 1;
         } else {
-            // A name, its first character any but these (an `=` there is the name's).
-            let attr_end = html[i + 1..]
+            // A name, its first character any but these (an `=` there is the name's), which may be
+            // one past ASCII: the name goes on after its whole character.
+            let first = html[i..].chars().next().map_or(1, char::len_utf8);
+            let attr_end = html[i + first..]
                 .find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '>' || c == '/')
-                .map_or(bytes.len(), |n| i + 1 + n);
+                .map_or(bytes.len(), |n| i + first + n);
             let attr = &html[i..attr_end];
             i = attr_end;
             let skip = |mut at: usize| {
@@ -299,27 +301,36 @@ fn script_end(html: &str, from: usize) -> usize {
 }
 
 /// Whether the `<form>` whose start tag ends at `from` in `html` holds what a page shows: a
-/// start tag, or text other than whitespace (a `<` that starts no tag among it), before its end
-/// tag `</form>`, past comments ended by `-->`, bogus ones (`<!note>`, `<?x>`, `</ x>`), a
-/// doctype, a `</>` and a void element's end tag (`</input>`), which show nothing. A `<form>` a
+/// start tag, or text that shows ([`text_shows`]; a `<` that starts no tag among it), before its
+/// end tag `</form>`, past comments ended by `-->`, bogus ones (`<!note>`, `<?x>`, `</ x>`), a
+/// `<!DOCTYPE html>`, a `</>` and a void element's end tag (`</input>`), which show nothing. A `<form>` a
 /// table's reading puts in empty moves what it holds out of it, which loses an element or text
 /// from it, and a form of only whitespace or a comment shows the same either way. Any other token
 /// before a start tag or text (another end tag, `</form >`, a comment a browser ends elsewhere
-/// than at its `-->`) is not read: `Err` with where it starts and ends.
+/// than at its `-->`, another doctype, text with a named character reference it does not decode) is
+/// not read: `Err` with where it starts and ends.
 #[cfg(any(debug_assertions, test))]
 fn holds_shown(html: &str, from: usize) -> Result<bool, (usize, usize)> {
     let bytes = html.as_bytes();
     let mut at = from;
     while let Some(n) = html.get(at..).and_then(|rest| rest.find('<')) {
         let start = at + n;
-        if !html[at..start].trim_ascii().is_empty() {
-            return Ok(true);
+        match text_shows(&html[at..start]) {
+            Some(true) => return Ok(true),
+            Some(false) => {}
+            None => return Err((at, start)),
         }
         let rest = &html[start..];
         let to_gt = rest.find('>').map_or(html.len(), |n| start + n + 1);
         if rest.starts_with("<!--") {
             at = comment_end(html, start).ok_or((start, to_gt))?;
             continue;
+        }
+        if lone_lt(bytes, start) {
+            return Ok(true);
+        }
+        if doctype(bytes, start) == Some(false) {
+            return Err((start, to_gt));
         }
         match bytes.get(start + 1) {
             Some(c) if c.is_ascii_alphabetic() => return Ok(true),
@@ -333,7 +344,7 @@ fn holds_shown(html: &str, from: usize) -> Result<bool, (usize, usize)> {
             _ => return Ok(true),
         }
     }
-    Ok(!html[at..].trim_ascii().is_empty())
+    text_shows(&html[at..]).ok_or((at, html.len()))
 }
 
 /// The end tag at `html[at]` when it is written exactly `</name>`, as `html!` writes one: its
@@ -370,14 +381,121 @@ fn comment_end(html: &str, at: usize) -> Option<usize> {
     Some((end + 3).min(html.len()))
 }
 
+/// Whether `text`, written in an HTML element, shows: `Some(true)` when it has a character but ASCII
+/// whitespace and NUL (which the HTML parser ignores outside foreign content), its character
+/// references decoded; `Some(false)` when it has none. A numeric reference is decoded (it is
+/// whitespace only for a tab, line feed, form feed, carriage return or space), `&Tab;` and
+/// `&NewLine;` are whitespace, and `html!`'s own escapes (`&amp;`, `&lt;`, `&gt;`, `&quot;`,
+/// `&#39;`) and `&nbsp;` show; `None` when the text shows nothing else and has another named
+/// reference, which the check does not decode. Debug builds only.
+#[cfg(any(debug_assertions, test))]
+fn text_shows(text: &str) -> Option<bool> {
+    let bytes = text.as_bytes();
+    let mut undecided = false;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\t' | b'\n' | b'\x0c' | b'\r' | b' ' | 0 => i += 1,
+            b'&' => {
+                let (shows, end) = reference(bytes, i);
+                match shows {
+                    Some(true) => return Some(true),
+                    Some(false) => {}
+                    None => undecided = true,
+                }
+                i = end;
+            }
+            _ => return Some(true),
+        }
+    }
+    if undecided {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+/// The character reference whose `&` is at `bytes[at]`, as [`text_shows`] reads it: whether it
+/// shows (`None` for a named one it does not decode) and one past it. A `&` that starts no
+/// reference (`&`, `&#;`) is the text `&`, which shows.
+#[cfg(any(debug_assertions, test))]
+fn reference(bytes: &[u8], at: usize) -> (Option<bool>, usize) {
+    let mut i = at + 1;
+    if bytes.get(i) == Some(&b'#') {
+        i += 1;
+        let hex = matches!(bytes.get(i), Some(b'x' | b'X'));
+        if hex {
+            i += 1;
+        }
+        let digits = i;
+        let mut value: u32 = 0;
+        while let Some(digit) = bytes.get(i).and_then(|c| (*c as char).to_digit(if hex { 16 } else { 10 })) {
+            value = value.saturating_mul(if hex { 16 } else { 10 }).saturating_add(digit);
+            i += 1;
+        }
+        if i == digits {
+            return (Some(true), at + 1);
+        }
+        if bytes.get(i) == Some(&b';') {
+            i += 1;
+        }
+        // A tab, line feed, form feed, carriage return or space; any other number is a character
+        // (U+FFFD for 0, a surrogate or one past Unicode), which shows.
+        return (Some(!matches!(value, 9 | 10 | 12 | 13 | 32)), i);
+    }
+    while bytes.get(i).is_some_and(u8::is_ascii_alphanumeric) {
+        i += 1;
+    }
+    if i == at + 1 {
+        return (Some(true), at + 1);
+    }
+    let semicolon = bytes.get(i) == Some(&b';');
+    let name = &bytes[at + 1..i];
+    if semicolon {
+        i += 1;
+    }
+    let shows = if semicolon && (name == b"Tab" || name == b"NewLine") {
+        Some(false)
+    } else if [&b"amp"[..], b"lt", b"gt", b"quot", b"nbsp"].contains(&name) {
+        // Decoded with or without its `;`.
+        Some(true)
+    } else {
+        None
+    };
+    (shows, i)
+}
+
+/// Whether the `<` at `bytes[at]` starts no token, so it is text, as the tokenizer reads it: one
+/// before anything but a letter, `/`, `!` or `?`, or the patch's end, and a `</` the patch ends in.
+#[cfg(any(debug_assertions, test))]
+fn lone_lt(bytes: &[u8], at: usize) -> bool {
+    match bytes.get(at + 1) {
+        Some(c) if c.is_ascii_alphabetic() => false,
+        Some(b'/') => at + 2 == bytes.len(),
+        Some(b'!' | b'?') => false,
+        _ => true,
+    }
+}
+
+/// Whether `html[at..]` starts a doctype (`<!doctype` in any letter case), and whether it is the one
+/// `<!DOCTYPE html>` (in any letter case), which a browser ignores in a patch. The check reads no
+/// other: what it holds (a quoted `>` ends it early) is not followed.
+#[cfg(any(debug_assertions, test))]
+fn doctype(bytes: &[u8], at: usize) -> Option<bool> {
+    let is = |from: usize, what: &[u8]| bytes.get(from..from + what.len()).is_some_and(|b| b.eq_ignore_ascii_case(what));
+    is(at, b"<!doctype").then(|| is(at, b"<!doctype html>"))
+}
+
 /// What the browser would drop from a patch (`req.patch`, a [`crate::live`] fragment): the first
 /// top-level element without an `id`, or top-level text, described for an error. The runtime
 /// replaces each top-level element by its id and ignores the rest, so either is a view that never
 /// shows. Reads markup as `html!` writes it (attribute values quoted, `<` escaped in text), each
 /// element closed by its own end tag written `</name>`; at a token it does not read so (an end tag
 /// written otherwise or that closes no element open, an HTML element's start tag ending `/>`, a
-/// start tag the patch ends in, an element the browser does not put where it is written
-/// ([`misplaced`])), it stops and finds nothing after it, which [`patch_parse_checked`] logs.
+/// start tag the patch ends in, a doctype but `<!DOCTYPE html>`, text with a named character
+/// reference it does not decode at the top level or in a table holder ([`text_shows`]), an element
+/// the browser does not put where it is written ([`misplaced`])), it stops and finds nothing after
+/// it, which [`patch_parse_checked`] logs.
 /// Checked in debug builds only.
 #[cfg(any(debug_assertions, test))]
 pub(crate) fn patch_problem(html: &str) -> Option<String> {
@@ -388,18 +506,24 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
     let in_template = |open: &[Open]| open.iter().any(|el| !el.foreign && el.name == "template");
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] != b'<' {
-            let end = html[i..].find('<').map_or(bytes.len(), |n| i + n);
-            let text = html[i..end].trim();
-            if open.is_empty() && !text.is_empty() {
-                let shown: String = text.chars().take(40).collect();
-                return Some(format!("text {shown:?} outside an element"));
-            }
-            if !text.is_empty()
-                && !in_template(&open)
-                && open.last().is_some_and(|last| !last.foreign && TABLE_HOLDERS.contains(&last.name.as_str()))
-            {
-                return None;
+        if bytes[i] != b'<' || lone_lt(bytes, i) {
+            // Text, a `<` that starts no tag among it.
+            let from = if bytes[i] == b'<' { i + 1 } else { i };
+            let end = html[from..].find('<').map_or(bytes.len(), |n| from + n);
+            let text = &html[i..end];
+            // Whether it shows, where that decides: at the top level, and in a table holder, which
+            // the browser moves it out of; `None` (a named reference it does not decode) stops.
+            let holder = !in_template(&open)
+                && open.last().is_some_and(|last| !last.foreign && TABLE_HOLDERS.contains(&last.name.as_str()));
+            if open.is_empty() || holder {
+                match text_shows(text) {
+                    Some(true) if open.is_empty() => {
+                        let shown: String = text.trim_ascii().chars().take(40).collect();
+                        return Some(format!("text {shown:?} outside an element"));
+                    }
+                    Some(false) => {}
+                    _ => return None,
+                }
             }
             i = end;
             continue;
@@ -425,6 +549,10 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
             continue;
         }
         if matches!(bytes.get(i + 1), Some(b'!' | b'?')) {
+            if doctype(bytes, i) == Some(false) {
+                // A doctype but `<!DOCTYPE html>`: what it holds is not followed.
+                return None;
+            }
             if html[i..].starts_with("<![CDATA[") {
                 // Text up to `]]>` in an SVG or MathML element (an integration point too); elsewhere
                 // not read.
@@ -433,14 +561,6 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
                 continue;
             }
             i = html[i..].find('>').map_or(bytes.len(), |n| i + n + 1);
-            continue;
-        }
-        if !bytes.get(i + 1).is_some_and(u8::is_ascii_alphabetic) {
-            // A `<` that starts no tag: text.
-            if open.is_empty() {
-                return Some("text \"<\" outside an element".into());
-            }
-            i += 1;
             continue;
         }
         // A start tag: its name, then its attributes up to `>`, unless the patch ends in it.
@@ -901,7 +1021,8 @@ enum Reading {
 /// browser does. It reports a loss only from tokens it reads as the browser does ([`Read::unread`]
 /// lists them); at any other (an end tag not written `</name>` or that closes no element open, an
 /// HTML element's start tag ending `/>`, a comment a browser ends elsewhere than at its `-->`, a
-/// CDATA section outside foreign content, an element HTML's wherever it lands written straight in
+/// doctype but `<!DOCTYPE html>`, text with a named character reference it does not decode
+/// ([`text_shows`]) where text decides, a CDATA section outside foreign content, an element HTML's wherever it lands written straight in
 /// an `<svg>` or `<math>`, which `html!` refuses; a script whose text carries it past its first
 /// `</script>` over a start tag; in a form whose content decides a loss, any token but a start
 /// tag, text, a comment, a bogus comment and a void element's end tag before its `</form>`) it
@@ -963,7 +1084,8 @@ struct Read {
     /// Where it stopped reading, when it did. It reads only these tokens: text; a start tag, an HTML
     /// one ending `/>` only for a void element; an end tag written `</name>` that closes the
     /// element open last, or a void element's, which the browser ignores; a comment ended by `-->`
-    /// alone; a bogus comment or a doctype up to its `>`; a CDATA section in an SVG or MathML
+    /// alone; a bogus comment up to its `>`; the doctype `<!DOCTYPE html>`; text, read where it
+    /// decides with its character references decoded ([`text_shows`]); a CDATA section in an SVG or MathML
     /// element; and an HTML element's text up to its end tag (a script's as the tokenizer ends it,
     /// unless that carries it over a start tag). At any other (an `<li>` closed by its list's end
     /// tag, a `</div ignored>`, a `</p>` that closes nothing), the browser places what follows by
@@ -1024,14 +1146,24 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
     let mut foreign: Option<usize> = None;
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] != b'<' {
-            let end = html[i..].find('<').map_or(bytes.len(), |n| i + n);
-            if template.is_none() && !html[i..end].trim_ascii().is_empty() {
-                if let Some(holder) = open.last().filter(|last| !last.foreign && TABLE_HOLDERS.contains(&last.name.as_str())) {
-                    unread!(usize::MAX; "the text {} in <{}>, which a browser moves out of it", shown(&html[i..end]), holder.name);
+        if bytes[i] != b'<' || lone_lt(bytes, i) {
+            // Text, a `<` that starts no tag among it.
+            let from = if bytes[i] == b'<' { i + 1 } else { i };
+            let end = html[from..].find('<').map_or(bytes.len(), |n| from + n);
+            let text = &html[i..end];
+            let holder = open.last().filter(|last| !last.foreign && TABLE_HOLDERS.contains(&last.name.as_str()));
+            // Where it decides (a table holder, a column group's reading and the top level, where the
+            // id check reads it), text with a named reference the check does not decode stops it.
+            if template.is_none() && (holder.is_some() || open.is_empty()) {
+                let shows = text_shows(text);
+                if let Some(holder) = holder.filter(|_| shows != Some(false)) {
+                    unread!(usize::MAX; "the text {} in <{}>, which a browser moves out of it", shown(text), holder.name);
                 }
-                if open.is_empty() && reading == Reading::ColumnGroup {
-                    unread!(usize::MAX; "the text {}, which a browser drops{}", shown(&html[i..end]), since(first));
+                if open.is_empty() && reading == Reading::ColumnGroup && shows != Some(false) {
+                    unread!(usize::MAX; "the text {}, which a browser drops{}", shown(text), since(first));
+                }
+                if open.is_empty() && shows.is_none() {
+                    unread!(usize::MAX; "the text {}, whose character reference the check does not decode", shown(text));
                 }
             }
             i = end;
@@ -1116,7 +1248,11 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                 continue;
             }
             Some(b'!' | b'?') => {
-                i = html[i..].find('>').map_or(bytes.len(), |n| i + n + 1);
+                let end = html[i..].find('>').map_or(bytes.len(), |n| i + n + 1);
+                if doctype(bytes, i) == Some(false) {
+                    unread!(usize::MAX; "the doctype {}, which the check does not read (a quoted > in it ends it early)", shown(&html[i..end]));
+                }
+                i = end;
                 continue;
             }
             Some(c) if c.is_ascii_alphabetic() => {}
@@ -1204,10 +1340,12 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                     problem = Some(format!("{what} is dropped{}", since(first)));
                 } else if let Some(added) = added {
                     problem = Some(format!("{} is put in {added} the browser adds{}", shown(written), since(first)));
+                } else if table && name == "form" && holds {
+                    // In a `<template>`'s content too, where Chromium and WebKit move what it holds
+                    // out of it and Firefox drops it.
+                    problem = Some(format!("{} loses what it holds{}", shown(written), since(first)));
                 } else if table && name == "form" && nested {
                     problem = Some(format!("{} is dropped in Firefox{}", shown(written), since(first)));
-                } else if table && name == "form" && holds {
-                    problem = Some(format!("{} loses what it holds{}", shown(written), since(first)));
                 } else if table && !part && !head && opens {
                     watched = Some(written);
                 }
@@ -1222,10 +1360,10 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                 ));
             } else if part {
                 problem = Some(format!("{} in {} is moved out of it{}", shown(written), shown(top), since(first)));
-            } else if name == "form" && nested {
-                problem = Some(format!("{} in {} is dropped in Firefox{}", shown(written), shown(top), since(first)));
             } else if name == "form" && holds {
                 problem = Some(format!("{} in {} loses what it holds{}", shown(written), shown(top), since(first)));
+            } else if name == "form" && nested {
+                problem = Some(format!("{} in {} is dropped in Firefox{}", shown(written), shown(top), since(first)));
             }
         }
         if problem.is_some() && problem_at.is_none() {
@@ -1571,6 +1709,124 @@ mod tests {
         );
     }
 
+    /// Markup with characters past ASCII in its tag and attribute names, values and text is read
+    /// without a panic, cut at any character, and read on past them: an attribute name that starts
+    /// with one (`<span é="x">`) is that whole name.
+    #[test]
+    fn a_patch_with_characters_past_ascii_is_read_to_its_end() {
+        let tags: Vec<_> = super::start_tags("<span \u{e9}=\"x\" data-\u{e9}t\u{e9}='\u{65e5}>' \u{65e5} title=\u{e9}>")
+            .map(|tag| tag.attrs.iter().map(|(name, value)| format!("{name}={value}")).collect::<Vec<_>>())
+            .collect();
+        assert_eq!(tags, [["\u{e9}=x", "data-\u{e9}t\u{e9}=\u{65e5}>", "\u{65e5}=", "title=\u{e9}"]]);
+        let kept = [
+            "<div id=\"d\"><span \u{e9}=\"x\"></span></div>",
+            "<p id=\"a\" title=\"\u{e9}t\u{e9}>\">\u{65e5}\u{672c} <\u{e9}>x</p><x-\u{e9} id=\"b\">\u{e9}</x-\u{e9}>",
+            "<tr id=\"r\"><td \u{e9}><form \u{e9}=\u{e9}>\u{a0}</form></td></tr>",
+        ];
+        for html in kept {
+            let parse = super::patch_parse(html);
+            assert_eq!((parse.problem, parse.unread, patch_problem(html)), (None, None, None), "{html}");
+        }
+        let lost = "<p id=\"m\" \u{e9}=\"\u{e9}\">\u{e9}t\u{e9}</p><tr id=\"r\" \u{65e5}><td>\u{65e5}</td></tr>";
+        assert_eq!(
+            patch_parse_problem(lost).as_deref(),
+            Some("<tr id=\"r\" \u{65e5}> is dropped, since <p id=\"m\" \u{e9}=\"\u{e9}\"> comes first")
+        );
+        for html in kept.iter().chain([&lost]) {
+            for (at, _) in html.char_indices() {
+                let cut = &html[..at];
+                let _ = (super::patch_parse(cut).problem, patch_problem(cut), super::start_tags(cut).count());
+                let _ = super::holds_shown(cut, 0);
+            }
+        }
+    }
+
+    /// Text decides a verdict where a browser moves or drops it: in a `<form>` a table's reading
+    /// puts in empty, in a table holder, after a first `<col>` and at the top level. There the check
+    /// reads it with its character references decoded (`&#32;` is a space, `&nbsp;` shows), and
+    /// stops at a named one it does not decode; NUL, which the parser ignores, shows nothing.
+    #[test]
+    fn text_is_read_with_its_character_references_decoded() {
+        for (text, shows) in [
+            ("", Some(false)),
+            (" \t\n\r\x0c\0", Some(false)),
+            ("&#32;&#x20;&#X0a;&#9&#13;&#12;&Tab;&NewLine;", Some(false)),
+            ("&#0;", Some(true)),
+            ("&#xD800;", Some(true)),
+            ("&#99999999999;", Some(true)),
+            ("&#11;", Some(true)),
+            ("&nbsp;", Some(true)),
+            ("&nbsp", Some(true)),
+            ("&amp; &lt;", Some(true)),
+            ("&", Some(true)),
+            ("&#;", Some(true)),
+            ("&#x;", Some(true)),
+            ("&Tab", None),
+            ("&tab;", None),
+            ("&bogus; ", None),
+            ("&bogus; x", Some(true)),
+            ("\u{a0}", Some(true)),
+            ("\u{e9}", Some(true)),
+        ] {
+            assert_eq!(super::text_shows(text), shows, "{text:?}");
+        }
+        for html in [
+            r#"<tr id="r"></tr><form id="f">&#32;</form>"#,
+            "<tr id=\"r\"></tr><form id=\"f\"> &Tab;&#x0a;\0 </form>",
+            r#"<tr id="r"></tr><div id="d"><form>&NewLine;</form></div>"#,
+            r#"<col id="c">&#32;"#,
+            r#"<table id="t"><tbody><tr><td>1</td></tr>&#32;</tbody></table>"#,
+            r#"<!DOCTYPE html><!doctype HTML><tr id="r"></tr>"#,
+        ] {
+            let parse = super::patch_parse(html);
+            assert_eq!((parse.problem, parse.unread, patch_problem(html)), (None, None, None), "{html}");
+        }
+        assert_eq!(
+            patch_parse_problem(r#"<tr id="r"></tr><form id="f">&nbsp;</form>"#).as_deref(),
+            Some(r#"<form id="f"> loses what it holds, since <tr id="r"> comes first"#)
+        );
+        for (html, says) in [
+            (
+                r#"<tr id="r"></tr><form id="f">&bogus;</form>"#,
+                r#"&bogus; in <form id="f">, which the check of what a form holds"#,
+            ),
+            (r#"<tbody id="b"><tr><td>1</td></tr>&bogus;</tbody>"#, "the text &bogus; in <tbody>"),
+            (r#"<col id="c">&bogus;"#, "the text &bogus;, which a browser drops"),
+            (r#"<p id="p"></p>&tab;"#, "the text &tab;, whose character reference the check does not decode"),
+        ] {
+            let parse = super::patch_parse(html);
+            assert_eq!(parse.problem, None, "{html}");
+            assert!(parse.unread.as_deref().is_some_and(|why| why.contains(says)), "{html}: {:?}", parse.unread);
+        }
+        // The id check: text outside an element is what shows there.
+        assert_eq!(patch_problem("<p id=\"p\"></p>&#32;&Tab;\0"), None);
+        assert_eq!(patch_problem(r#"<p id="p"></p>&nbsp;"#).as_deref(), Some(r#"text "&nbsp;" outside an element"#));
+        assert_eq!(patch_problem(r#"<p id="p"></p>&tab;<div></div>"#), None, "it stops at a reference it does not decode");
+        assert_eq!(patch_problem(r#"<p id="p"></p><"#).as_deref(), Some(r#"text "<" outside an element"#));
+        assert_eq!(patch_problem(r#"<p id="p"></p></"#).as_deref(), Some(r#"text "</" outside an element"#));
+    }
+
+    /// A doctype but `<!DOCTYPE html>` is not read, as review asked: a quoted `>` in it ends it
+    /// early (the HTML standard's abrupt doctype identifier error), so what follows may be the
+    /// patch's or the doctype's, and the check stops there. A `<` that starts no tag is text, which a
+    /// first `<col>`'s reading drops: it stops there too.
+    #[test]
+    fn a_doctype_and_a_lone_lt_stop_the_check() {
+        for (html, says) in [
+            (r#"<div id="d"></div><!DOCTYPE html PUBLIC "><tr id='r'></tr>"></div>"#, "the doctype <!DOCTYPE html PUBLIC \">"),
+            (r#"<tr id="r"></tr><form id="f"><!DOCTYPE x></form>"#, r#"<!DOCTYPE x> in <form id="f">"#),
+            (r#"<col id="e1"><"#, "the text <, which a browser drops"),
+            (r#"<col id="e1"></"#, "the text </, which a browser drops"),
+            (r#"<tbody id="b"><tr><td>1</td></tr><</tbody>"#, "the text < in <tbody>"),
+        ] {
+            let parse = super::patch_parse(html);
+            assert_eq!(parse.problem, None, "{html}");
+            assert!(parse.unread.as_deref().is_some_and(|why| why.contains(says)), "{html}: {:?}", parse.unread);
+        }
+        assert_eq!(patch_problem(r#"<div id="d"></div><!DOCTYPE html PUBLIC "><p></p>">"#), None);
+        assert_eq!(patch_problem(r#"<!DOCTYPE html><p></p>"#).as_deref(), Some("<p> has no id"));
+    }
+
     /// The parse check names what is lost and the element that decided, and passes a patch a
     /// browser keeps whole: an id-less `ReadAgain` tag and an area's stylesheet after rows.
     #[test]
@@ -1651,6 +1907,11 @@ mod tests {
             patch_parse_problem(r#"<template id="t"><tr id="r"></tr><form id="f"></form></template>"#).as_deref(),
             Some(r#"<form id="f"> is dropped in Firefox, since <tr id="r"> comes first"#),
             "a table's reading drops a <form> in a <template> the patch has, empty too"
+        );
+        assert_eq!(
+            patch_parse_problem(r#"<template id="t"><td id="c"></td><form><label></label></form></template>"#).as_deref(),
+            Some("<form> loses what it holds, since <td id=\"c\"> comes first"),
+            "and Chromium and WebKit move out what it holds"
         );
         assert_eq!(
             patch_parse_problem(
@@ -1980,8 +2241,9 @@ mod tests {
 
     /// A seeded generator of patches: the shapes of \`patch-parsing.json\` (table parts, a
     /// \`<table>\`, a \`<form>\`, head tags, a \`<template>\`, an \`<svg>\` and a \`<math>\` with their
-    /// integration points) composed at random with the tokens the check has been found to misread
-    /// (a start tag the patch ends in, an end tag written otherwise than \`</name>\` or closing
+    /// integration points) composed at random with text (characters past ASCII, character
+    /// references, NUL) and the tokens the check has been found to misread (a doctype with a quoted
+    /// `>`, names past ASCII, a start tag the patch ends in, an end tag written otherwise than \`</name>\` or closing
     /// nothing, an element whose content is text and a script's comment-like text, a CDATA section,
     /// a comment a browser ends early and a bogus one, an \`<image>\`, an element written where a
     /// browser does not put it, attributes the tokenizer reads past a \`>\` or an \`=\`), each piece
@@ -2037,6 +2299,12 @@ mod tests {
             fn text(html: &str) -> Piece {
                 Piece { html: html.into(), text: true, ..Piece::default() }
             }
+
+            /// Text that shows only when `shows`: something but ASCII whitespace and NUL once its
+            /// character references are decoded.
+            fn chars(html: &str, shows: bool) -> Piece {
+                Piece { html: html.into(), text: shows, ..Piece::default() }
+            }
         }
 
         /// What a piece is read as: HTML, HTML straight in an SVG or MathML integration point (where
@@ -2053,7 +2321,41 @@ mod tests {
             "div", "span", "p", "li", "ul", "a", "button", "form", "label", "b", "h2", "h3", "section", "dl", "dt", "dd", "ruby",
             "rt", "select", "table", "template", "svg", "math", "i", "p", "div", "span", "form", "label", "section",
             // In a tricky patch only.
-            "option", "td", "th", "tr", "tbody", "caption", "noscript", "image",
+            "option", "td", "th", "tr", "tbody", "caption", "noscript", "image", "x-\u{e9}",
+        ];
+        /// Text, and whether it shows: anything but ASCII whitespace and NUL (which the HTML parser
+        /// ignores outside foreign content) once its character references are decoded. The first
+        /// are what `html!` writes for text (its escapes, and characters past ASCII as they are).
+        const TEXT: &[(&str, bool)] = &[
+            ("x", true),
+            (" ", false),
+            ("\u{e9}t\u{e9}", true),
+            ("\u{65e5}\u{672c}", true),
+            ("\u{a0}", true),
+            ("&amp;", true),
+            ("&lt;", true),
+            ("&#39;", true),
+            // In a tricky patch only.
+            ("&#32;", false),
+            ("&#x20;", false),
+            ("&#9", false),
+            ("&#X0a;", false),
+            ("&#13;", false),
+            ("&Tab;", false),
+            ("&NewLine;", false),
+            ("&nbsp;", true),
+            ("&nbsp", true),
+            ("&#0;", true),
+            ("&#xD800;", true),
+            ("&#1114112;", true),
+            ("&#128;", true),
+            ("&bogus;", true),
+            ("&tab;", true),
+            ("&", true),
+            ("&#;", true),
+            ("&#x;", true),
+            ("\0", false),
+            (" &#32;\0&Tab; ", false),
         ];
         const VOIDS: &[&str] = &["br", "img", "input", "hr", "col", "wbr", "meta", "link", "base", "basefont", "param"];
         const RAW: &[&str] = &["textarea", "title", "style", "script", "xmp", "iframe", "noembed", "noframes"];
@@ -2080,6 +2382,11 @@ mod tests {
             "</div ignored>",
             "</tr>",
             "</form>",
+            "<!DOCTYPE html>",
+            "<!doctype HTML>",
+            r#"<!DOCTYPE html PUBLIC "><p id='q'></p>">"#,
+            "<!DOCTYPE html SYSTEM '>'>",
+            "<!DOCTYPE x>",
         ];
         const ATTRS: &[&str] = &[
             r#" class="c""#,
@@ -2093,6 +2400,10 @@ mod tests {
             r#" TITLE="T""#,
             r#" id="dup""#,
             r#" title="<tr id='q'>""#,
+            " \u{e9}=\"x\"",
+            " data-\u{e9}t\u{e9}='\u{65e5}>'",
+            " title=\u{e9}",
+            " \u{65e5}",
         ];
         const UNFINISHED: &[&str] = &[
             "<col data-note='",
@@ -2106,7 +2417,10 @@ mod tests {
             "</",
             r#"<td id="q" "#,
             r#"<tr id="z" title="</tr>"#,
+            "<p \u{e9}",
         ];
+        /// The unfinished tokens a browser keeps as text: a `<` or `</` the patch ends in.
+        const UNFINISHED_TEXT: &[&str] = &["<", "</"];
         const PARTS: &[&str] = &["tr", "td", "th", "tbody", "thead", "tfoot", "caption", "col", "colgroup"];
         const HEADS: &[&str] =
             &["title", "base", "basefont", "bgsound", "noframes", "link", "meta", "style", "script", "template"];
@@ -2188,6 +2502,14 @@ mod tests {
                     shown: vec![Self::shown(name, &id, &Piece::default(), false)],
                     text: false,
                 }
+            }
+
+            /// Text from `TEXT`: what `html!` writes for text, and in a tricky patch character
+            /// references, whitespace and NUL.
+            fn some_text(&mut self) -> Piece {
+                let pool = if self.tricky { TEXT } else { &TEXT[..8] };
+                let (html, shows) = pool[self.rng.below(pool.len())];
+                Piece::chars(html, shows)
             }
 
             fn content(&mut self, within: In, depth: usize) -> Piece {
@@ -2311,7 +2633,7 @@ mod tests {
                 let roll = self.rng.below(100);
                 match within {
                     In::Html | In::Point => match roll {
-                        0..15 => Piece::text("x"),
+                        0..15 => self.some_text(),
                         15..21 if !self.tricky => Piece::text("x"),
                         15..21 => {
                             let token = self.rng.pick(TOKENS);
@@ -2489,6 +2811,7 @@ mod tests {
                             let name = self.rng.pick(PARTS);
                             self.part(name, id, 0)
                         }
+                        88..92 => self.some_text(),
                         _ => {
                             let name = self.rng.pick(&["svg", "math"]);
                             self.html_element(name, id, 0)
@@ -2497,7 +2820,13 @@ mod tests {
                     patch.add(piece);
                 }
                 if self.tricky && self.rng.one_in(6) {
-                    patch.add(Piece::token(self.rng.pick(UNFINISHED)));
+                    let unfinished = self.rng.pick(UNFINISHED);
+                    // A `<` or `</` the patch ends in is text; an unfinished tag or comment is dropped.
+                    patch.add(if UNFINISHED_TEXT.contains(&unfinished) {
+                        Piece::text(unfinished)
+                    } else {
+                        Piece::token(unfinished)
+                    });
                 }
                 patch
             }
@@ -2524,9 +2853,11 @@ mod tests {
 
     /// \`scripts/patch-generated.json\` is the generator's cases from its seed, each with what it
     /// shows as written and the check's verdict: \`scripts/smoke.mjs\` parses each in Chromium,
-    /// Firefox and WebKit and holds the check to report a loss only in an engine that loses
-    /// something, and, where an engine loses something, to report it or say where it stopped. The
-    /// test rewrites the file and fails when the generator or the check changed, so the smoke checks
+    /// Firefox and WebKit, text included (the patch's own top level's too), and holds the check to
+    /// report a loss only in an engine that loses something, and, where an engine loses something,
+    /// to report it or say where it stopped; and the id check ([`patch_problem`]) to report an
+    /// element without an id or text outside one only where the engine's parse has one at its top
+    /// level or loses something. The test rewrites the file and fails when the generator or the check changed, so the smoke checks
     /// the check as it is. (Skipped outside the repository.) To look further, `PATCH_GENERATED_SEED`,
     /// `PATCH_GENERATED_CASES` and `PATCH_GENERATED_TO` (a path) write other cases elsewhere, for a
     /// browser to parse the same way, without failing.
@@ -2552,12 +2883,17 @@ mod tests {
             if !seen.insert(patch.html.clone()) {
                 continue;
             }
-            // The id check reads it too, without a panic.
-            let _ = patch_problem(&patch.html);
             let (lost, stops) = verdict(&patch.html);
-            lines.push(serde_json::to_string(&serde_json::json!([patch.html, patch.shown, lost, stops])).expect("JSON"));
+            // What the id check finds: a top-level element without an id, or text outside one.
+            let idless = patch_problem(&patch.html).is_some();
+            // Text written at the top level, first.
+            let mut shown = patch.shown;
+            if patch.text {
+                shown.insert(0, "\"".into());
+            }
+            lines.push(serde_json::to_string(&serde_json::json!([patch.html, shown, lost, stops, idless])).expect("JSON"));
         }
-        let comment = "Patches generated by html.rs's generated_patches_carry_the_check_s_verdict from its seed, which rewrites this file: each is [html, what it shows as written (each top-level element as name#id, a \" when it holds text, its child elements in (..) and a template's content in {..}), the engines the server's debug check (patch_parse) reports a loss in (all, chromium webkit, firefox, or none), whether the check stopped before the end]. scripts/smoke.mjs parses each in Chromium, Firefox and WebKit: the check reports a loss only in an engine that parses the patch otherwise than as written, and where one does, the check reports a loss in it or stopped.";
+        let comment = "Patches generated by html.rs's generated_patches_carry_the_check_s_verdict from its seed, which rewrites this file: each is [html, what it shows as written (a \" first when the patch has text at its top level, each top-level element as name#id, a \" when it holds text that shows (anything but ASCII whitespace and NUL once its character references are decoded), its child elements in (..) and a template's content in {..}), the engines the server's debug check (patch_parse) reports a loss in (all, chromium webkit, firefox, or none), whether the check stopped before the end, whether the id check (patch_problem) reports a top-level element without an id or text outside an element]. scripts/smoke.mjs parses each in Chromium, Firefox and WebKit: the check reports a loss only in an engine that parses the patch otherwise than as written, and where one does, the check reports a loss in it or stopped; the id check reports one only where the engine's parse has text or an element without an id at its top level, or loses something.";
         let written = format!(
             "{{\n  \"//\": {},\n  \"seed\": {seed},\n  \"cases\": [\n    {}\n  ]\n}}\n",
             serde_json::to_string(comment).expect("JSON"),
