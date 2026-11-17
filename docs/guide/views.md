@@ -52,10 +52,14 @@ shows HTML under an element that is HTML's wherever it lands (a `<div>`, a `<p>`
 or `application/xhtml+xml`; inside an `<svg>` or a `<math>`, outside those, a `<textarea>`,
 `<title>` or `<style>` is an element of the drawing or the formula and holds elements. At the top
 of a component's markup (its parent may write it into an `<svg>`), among a component's
-children (they go where the component writes them) and in an `<annotation-xml>` whose `encoding`
-an expression or a spread may write first, it does not show, and nothing here is
+children (they go where the component writes them), after an expression or a component (what
+it writes may open or close an `<svg>` or a `<textarea>`) and in an `<annotation-xml>` whose
+`encoding` an expression or a spread may write first, it does not show, and nothing here is
 refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an
-`<svg>` compiles ([design Choice 54](../design.md#choice-html-parse-refusals),
+`<svg>` compiles. An `<svg>` or a `<math>` written there does not show its own namespace either
+(a `<math>` in an `<svg>` is SVG's, an `<svg>` straight in a `<math>` MathML's): an element a
+browser takes out of either is refused straight in it, but its `<foreignObject>`, `<title>` or
+`<mtext>` shows nothing; put it in a `<div>` or another HTML element to show it ([design Choice 54](../design.md#choice-html-parse-refusals),
 [Limit 30](../design.md#limit-markup-context)).
 
 The same rule applies to literal HTML nesting whose start tags close an open element: a block
@@ -68,15 +72,21 @@ element's end are refused too (`<option><option>`, `<rt><rt>`). An option inside
 `<optgroup>` and an `<rt>` inside an `<rtc>` still compile. Put the elements beside one
 another, use `<div>` rather than `<p>` around blocks, and wrap a nested list in `<ul>` or
 `<ol>`. This is checked even without refs: a ref in content the browser moves may leave its
-component's scope. Control-flow bodies and fragments retain the literal ancestor chain;
-components, their children, expressions and `raw` do not expose what they write or where they
-write it, so nesting across those boundaries is the app's to keep correct. The content of a
+component's scope. A refusal rests only on the literal markup of the same `html!` between the
+two elements, followed through control-flow bodies and fragments. A component, with or without
+children, and an expression, `raw` among them, may write any element, or close one, so after
+one nothing written before it is taken to be open and how what follows is parsed is not known
+until an element shows it: `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
+compiles, as browsers keep it, and so does `<p>{text}<div>..</div></p>`, which they do not.
+Nesting across those boundaries is the app's to keep correct. The content of a
 `<template>`, and of an `<svg>` or `<math>` (their HTML integration points included), is
 checked with nothing open around it, as browsers keep these: an `<a>` in a `<foreignObject>`
 or `<mtext>` inside another `<a>`, and a form in a form inside a `<template>`, compile. A
 nested form outside a document's markup compiles too: a fragment's caller, or a component given
 it as children, may write it into a `<template>`, where browsers keep it, so `html!` refuses a
-nested form only in a document, the page itself. A
+nested form only in a document, the page itself, and only before the document's first
+expression or component other than `<Corten />` (an expression in its `<title>` included),
+since one may open a `<template>`. A
 top-level `<a>` or `<form>` might be foreign content: wrap HTML fragments in an HTML element when their
 namespace needs to be established. This is not a complete HTML validator. It does not check
 insertion modes such as table foster parenting (a `<div>` straight in a `<table>`), or a

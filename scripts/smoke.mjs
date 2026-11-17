@@ -537,6 +537,45 @@ async function parsesAsHtmlMeans(browser) {
       `<template id="forms"><div><form id="outer"><form id="inner"><input></form></form></div></template>`,
       () => !!(/** @type {HTMLTemplateElement | null} */ (document.getElementById("forms")))?.content.querySelector("#outer > #inner"),
     ],
+    // html! refuses nothing across what its markup does not show: an expression or a component
+    // between the two elements may write a boundary, as `raw` does here, or an <svg> or <math>
+    // root may land in the other one. Browsers keep each inner element in its outer one
+    // (crates/corten/tests/markup_roots.rs).
+    ...[
+      `<p id="outer"><button><div id="inner">Detail</div></button></p>`,
+      `<ul><li id="outer"><ul><li id="inner">x</li></ul></li></ul>`,
+      `<dl><dt id="outer"><dl><dd id="inner">x</dd></dl></dt></dl>`,
+      `<div><a id="outer" href="#one"><object><a id="inner" href="#two">x</a></object></a></div>`,
+      `<div><button id="outer"><object><button id="inner">x</button></object></button></div>`,
+      `<div><nobr id="outer"><object><nobr id="inner">x</nobr></object></nobr></div>`,
+      `<h1 id="outer"><span><h2 id="inner">x</h2></span></h1>`,
+      `<div><select id="outer"><object><input id="inner"></object></select></div>`,
+      `<div><select id="outer"><object><select id="inner"></select></object></select></div>`,
+      `<div><select><option id="outer"><span><option id="inner">x</option></span></option></select></div>`,
+      `<div><select><optgroup id="outer" label="g"><span><optgroup id="inner" label="h"></optgroup></span></optgroup></select></div>`,
+      `<div><select><option id="outer">Choice<span><hr id="inner"></span></option></select></div>`,
+      `<div><ruby>Base<rt id="outer"><ruby><rt id="inner">x</rt></ruby></rt></ruby></div>`,
+      `<div><ruby><rtc id="outer"><ruby><rb id="inner">x</rb></ruby></rtc></ruby></div>`,
+      `<div><a id="outer" href="#one"><svg><foreignObject><a id="inner" href="#two">Link</a></foreignObject></svg></a></div>`,
+      `<svg><math><mtext><a id="outer" href="#one"><a id="inner" href="#two">Link</a></a></mtext></math></svg>`,
+      `<math><mrow><svg><title><a id="outer" href="#one"><a id="inner" href="#two">Link</a></a></title></svg></mrow></math>`,
+    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+      `an element stays in its outer one across a boundary html! does not see: ${markup}`,
+      markup,
+      () => !!document.getElementById("outer")?.contains(document.getElementById("inner")),
+    ])),
+    ...[
+      `<div><a href="#one"><template id="content"><a id="inner" href="#two">Link</a></template></a></div>`,
+      `<main><template id="content"><form id="outer"><form id="inner"><input></form></form></template></main>`,
+    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+      `an element stays in a template written where html! does not see it: ${markup}`,
+      markup,
+      () => {
+        const content = /** @type {HTMLTemplateElement | null} */ (document.getElementById("content"))?.content;
+        const inner = content?.querySelector("#inner");
+        return !!inner && (!content?.querySelector("#outer") || !!content.querySelector("#outer > #inner"));
+      },
+    ])),
   ];
   for (const [name, markup, keeps] of shapes) {
     await page.setContent(`<!DOCTYPE html><html><head><title>Shapes</title></head><body>${markup}</body></html>`);

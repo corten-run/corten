@@ -16,8 +16,16 @@ Corten is pre-1.0, so any minor version may change the API.
   option-group, option and ruby starts that close an open element. Diagnostics say what to change. The content of a
   `<template>` or of SVG and MathML is checked apart from the elements around it, where browsers
   keep what is written.
-  Spreads and nesting hidden by components, expressions or `raw` remain unchecked; this is not
+  A refusal rests only on literal markup between the two elements: nesting across a component
+  or an expression (`raw` may write any element) and spreads remain unchecked; this is not
   a complete HTML validator ([views](docs/guide/views.md)).
+
+- `html!` no longer refuses an element in a `<textarea>`, `<title>` or another element read as
+  text, or a `<plaintext>`, under the `<foreignObject>`, `<desc>`, `<title>` or `<mtext>` of an
+  `<svg>` or `<math>` at the top of a component's markup or among its children, where its
+  namespace depends on the caller (a `<math>` in an `<svg>` is SVG's), nor an element read as
+  text or taken out of foreign content after an expression or a component, which may close the
+  holder or write an integration point. Wrap such an `<svg>` in an HTML element to have it checked.
 
 - Apply supported lean settings to catalog-page competitors as well as Corten:
   reduce optional access logging, compression and timer work where supported,

@@ -292,10 +292,16 @@ use std::{
 ///
 /// Literal nesting that makes the browser close or discard an open HTML element is refused.
 /// Put the elements beside one another, or use a container that can hold them (`<div>` rather
-/// than `<p>` for a block). The check follows literal elements through control flow, not through
-/// components, expressions or `raw`, and does not guess a namespace the markup does not show.
-/// A `<template>`'s content and an `<svg>`'s or a `<math>`'s start with nothing open, so an
-/// `<a>` in a `<foreignObject>` inside another `<a>` compiles, as browsers keep it. These do not:
+/// than `<p>` for a block). A refusal rests only on literal markup of the same `html!` between
+/// the two elements, followed through control flow. What the markup does not show may write
+/// anything: after an expression (`raw` among them) or a component, with or without children,
+/// nothing written before it is taken to be open, and how the browser parses what follows is
+/// not known until an element shows it, so `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
+/// compiles, as browsers keep it. Nor does a literal `<svg>` or `<math>` show its namespace where
+/// the markup does not (a `<math>` an `<svg>` holds is SVG's), so its integration points do not
+/// show HTML there. A `<template>`'s content and an `<svg>`'s or a `<math>`'s start with
+/// nothing open, so an `<a>` in a `<foreignObject>` inside another `<a>` compiles, as browsers
+/// keep it. These do not:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -326,8 +332,10 @@ use std::{
 /// let _ = html! { <div><a href="#one"><span><a href="#two">"Two"</a></span></a></div> };
 /// ```
 ///
-/// A nested `<form>` is refused only in a document's markup, the page itself: any other view may
-/// be written into a `<template>` by its caller, where a browser keeps a form in a form.
+/// A nested `<form>` is refused only in a document's markup, the page itself, before anything the
+/// markup does not show (but `<Corten />`, whose head tags open nothing): any other view may be
+/// written into a `<template>` by its caller, and an expression or a component may open one,
+/// where a browser keeps a form in a form.
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -413,8 +421,9 @@ use std::{
 /// Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`, `<xmp>`, `<noembed>`
 /// and `<noframes>`, and `<plaintext>` itself does not compile (it makes the rest of the page
 /// text, its end tag included). That holds under an element that is HTML's wherever it lands (a
-/// `<div>`, a `<p>`, a document's `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and
-/// `<title>`, which hold HTML, a `<title>` nested in an `<svg>`'s `<title>` included, and in a
+/// `<div>`, a `<p>`, a document's `<head>`), in the `<foreignObject>`, `<desc>` and `<title>` of
+/// an `<svg>` such an element holds, which hold HTML, a `<title>` nested in an `<svg>`'s
+/// `<title>` included, and in a
 /// `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (but for a `<mglyph>` or a
 /// `<malignmark>` in them, which stay MathML's) and an `<annotation-xml>` whose first `encoding`
 /// is `text/html` or `application/xhtml+xml`, which hold HTML too:
@@ -436,17 +445,17 @@ use std::{
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <svg><desc><title><span>"Chart"</span></title></desc></svg> };
+/// let _ = html! { <div><svg><desc><title><span>"Chart"</span></title></desc></svg></div> };
 /// ```
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <svg><title><title><span>"Chart"</span></title></title></svg> };
+/// let _ = html! { <div><svg><title><title><span>"Chart"</span></title></title></svg></div> };
 /// ```
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <svg><foreignObject><textarea name="note"><b>"Draft"</b></textarea></foreignObject></svg> };
+/// let _ = html! { <div><svg><foreignObject><textarea name="note"><b>"Draft"</b></textarea></foreignObject></svg></div> };
 /// ```
 ///
 /// ```compile_fail
@@ -544,8 +553,12 @@ use std::{
 /// `<annotation-xml>`'s whose first `encoding` is not an HTML one (or that has none), which holds
 /// MathML and where an `<svg>` is SVG's. Where the markup does not show how it is parsed, at the
 /// top of a component's markup (whose parent may write it into an `<svg>`), among a component's
-/// children (which go where it writes them) and in an `<annotation-xml>` whose `encoding` an
-/// expression or a spread may write first, none of this is refused, so a component that draws
+/// children (which go where it writes them), after an expression or a component (which may open
+/// or close an `<svg>`, or the element read as text), in the integration points of an `<svg>` or
+/// a `<math>` written there (a `<math>` an `<svg>` holds is SVG's, and its `<mtext>` holds no
+/// HTML) and in an `<annotation-xml>` whose `encoding` an expression or a spread may write first,
+/// none of this is refused, but for an element taken out of foreign content written straight into
+/// a literal `<svg>` or `<math>`, which is foreign wherever it lands; so a component that draws
 /// an SVG fragment without its `<svg>` compiles:
 ///
 /// ```

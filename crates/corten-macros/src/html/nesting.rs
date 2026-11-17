@@ -1,10 +1,13 @@
 //! Literal HTML nesting whose start tags close or discard an open element. This is not an HTML
-//! validator: it follows the existing namespace evidence and never crosses a component's edge,
-//! a `<template>` or a foreign element (an `<svg>`, a `<math>`, their integration points, or
-//! one whose namespace the markup does not show). Their content starts with no element open, so
-//! the check never refuses markup there by an ancestor it cannot be sure the browser still holds.
+//! validator. A refusal rests only on literal markup of the same `html!` that lies between the two
+//! elements: what the markup does not show (its caller's context, a component's output or
+//! children, an expression's output, `raw` among them) may open or close anything, so after one
+//! nothing open before it is known to be open, how the markup is parsed is not known until an
+//! element shows it again, and nothing is known to be outside a `<template>`. The content of a
+//! `<template>` and of a foreign element (an `<svg>`, a `<math>`, their integration points, or
+//! one whose namespace the markup does not show) starts with no element open too.
 
-use super::{as_html, breaks_out, parsing_within, Attr, Error, Node, Parsing};
+use super::{as_html, breaks_out, is_corten, parsing_within, Attr, Error, Node, Parsing};
 use crate::tokens::err;
 use proc_macro::Span;
 
@@ -145,8 +148,9 @@ const SPECIAL: &[&str] = &[
 const IMPLIED_END: &[&str] = &["dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc"];
 
 /// Whether the markup being walked is in a template's content, as far as it shows. Only a
-/// document's markup (`is_document`) is known to be outside one: any other `html!`, and a
-/// component's children, may be written into a `<template>` by a caller.
+/// document's markup (`is_document`) is known to be outside one, and only before anything it does
+/// not show (`Walk::opaque`), which may open a `<template>`: any other `html!`, and a component's
+/// children, may be written into a `<template>` by a caller.
 #[derive(Clone, Copy, PartialEq)]
 enum Template {
     Inside,
@@ -157,6 +161,38 @@ enum Template {
 struct Open<'a> {
     name: &'a str,
     html: bool,
+}
+
+/// The walk's state, in document order.
+struct Walk<'a> {
+    open: Vec<Open<'a>>,
+    /// The elements of `open` below this index are not known to be open where the walk is: they
+    /// were opened before something the markup does not show, or outside the template or foreign
+    /// element whose content is being walked.
+    floor: usize,
+    /// How many nodes the markup does not show have been passed (expressions, components and
+    /// their children, but `<Corten />`, whose head tags open nothing).
+    opaque: usize,
+}
+
+impl Walk<'_> {
+    /// Past a node the markup does not show: what it writes may close the open elements, or open
+    /// others (a `<button>`, an `<svg>`, a `<template>`) that change what follows.
+    fn unseen(&mut self) {
+        self.opaque += 1;
+        self.floor = self.open.len();
+    }
+}
+
+/// Whether `nodes` hold something the markup does not show, at any depth.
+pub(super) fn holds_unseen(nodes: &[Node]) -> bool {
+    nodes.iter().any(|node| match node {
+        Node::Expr(_) => true,
+        Node::Component { path, .. } => !is_corten(path),
+        Node::Element { children, .. } => holds_unseen(children),
+        Node::Block { bodies, .. } => bodies.iter().any(|body| holds_unseen(body)),
+        Node::Text(_) | Node::Markup(_) | Node::Let(_) => false,
+    })
 }
 
 fn is(name: &str, names: &[&str]) -> bool {
@@ -180,10 +216,11 @@ fn in_scope<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
 }
 
 /// The open element this start tag closes or discards, if the literal ancestors establish it.
-/// Every rule but the form's searches `open` from the innermost element out and stops at a
-/// literal match or boundary, so what lies outside the markup cannot change its answer. The form
-/// pointer is not reset by scope, and a template's content does not use it, so a nested form is
-/// refused only where the markup shows it is outside every template.
+/// `open` holds only the elements known to be open: those written since the last thing the
+/// markup does not show, in the content being walked. Every rule but the form's searches it from
+/// the innermost element out and stops at a literal match or boundary, and finds nothing past its
+/// end. The form pointer is not reset by scope, and a template's content does not use it, so a
+/// nested form is refused only where the markup shows it is outside every template.
 fn displaced<'a>(open: &[Open<'a>], name: &str, template: Template) -> Option<&'a str> {
     if name.eq_ignore_ascii_case("form") && template == Template::Outside {
         if let Some(form) = open.iter().rev().find(|e| e.html && e.name.eq_ignore_ascii_case("form")) {
@@ -258,16 +295,18 @@ fn displaced<'a>(open: &[Open<'a>], name: &str, template: Template) -> Option<&'
 /// a browser drops its `<html>`, `<head>` and `<body>` tags there.
 pub(super) fn check(nodes: &[Node], document: bool) -> Result<(), Error> {
     let template = if document { Template::Outside } else { Template::Unknown };
-    walk(nodes, Parsing::Unknown, &mut Vec::new(), template)
+    walk(nodes, Parsing::Unknown, template, &mut Walk { open: Vec::new(), floor: 0, opaque: 0 })
 }
 
-fn walk<'a>(nodes: &'a [Node], parsing: Parsing, open: &mut Vec<Open<'a>>, template: Template) -> Result<(), Error> {
+fn walk<'a>(nodes: &'a [Node], mut parsing: Parsing, template: Template, w: &mut Walk<'a>) -> Result<(), Error> {
     for node in nodes {
+        let seen = w.opaque;
         match node {
             Node::Element { name, attrs, children } => {
                 let html = html_element(parsing, name, attrs);
                 if html {
-                    if let Some(parent) = displaced(open, name, template) {
+                    let template = if template == Template::Outside && w.opaque > 0 { Template::Unknown } else { template };
+                    if let Some(parent) = displaced(&w.open[w.floor..], name, template) {
                         let action = if name.eq_ignore_ascii_case("form") && parent.eq_ignore_ascii_case("form") {
                             "ignores the nested <form> start tag".into()
                         } else {
@@ -281,34 +320,64 @@ fn walk<'a>(nodes: &'a [Node], parsing: Parsing, open: &mut Vec<Open<'a>>, templ
                         );
                     }
                 }
-                open.push(Open { name, html });
+                w.open.push(Open { name, html });
                 // Text holders are already checked by the parser; noscript is text with
-                // scripting enabled and markup without it, so do not assume either here.
-                if !(html && (super::reads_as_text(parsing, name) || name.eq_ignore_ascii_case("noscript"))) {
+                // scripting enabled and markup without it, so do not assume either here. What
+                // they hold is not walked, but an expression there may still close them.
+                if html && (super::reads_as_text(parsing, name) || name.eq_ignore_ascii_case("noscript")) {
+                    if holds_unseen(children) {
+                        w.unseen();
+                    }
+                } else {
                     let within = parsing_within(parsing, name, attrs);
                     // A template's content, and a foreign element's, start with no element open.
-                    if name.eq_ignore_ascii_case("template") {
-                        walk(children, within, &mut Vec::new(), Template::Inside)?;
-                    } else if !html {
-                        walk(children, within, &mut Vec::new(), template)?;
-                    } else {
-                        walk(children, within, open, template)?;
+                    let template_content = name.eq_ignore_ascii_case("template");
+                    let fresh = template_content || !html;
+                    let (floor, before) = (w.floor, w.opaque);
+                    if fresh {
+                        w.floor = w.open.len();
+                    }
+                    walk(children, within, if template_content { Template::Inside } else { template }, w)?;
+                    if fresh && w.opaque == before {
+                        w.floor = floor;
                     }
                 }
-                open.pop();
+                w.open.pop();
+                w.floor = w.floor.min(w.open.len());
             }
+            // One body or another, or one again: each is walked from where the block starts, as
+            // the first time it is written; what follows the block follows any of them.
             Node::Block { bodies, .. } => {
+                let (floor, before) = (w.floor, w.opaque);
+                let mut unseen = false;
                 for body in bodies {
-                    walk(body, parsing, open, template)?;
+                    (w.floor, w.opaque) = (floor, before);
+                    walk(body, parsing, template, w)?;
+                    unseen |= w.opaque != before;
+                }
+                (w.floor, w.opaque) = (floor, before);
+                if unseen {
+                    w.unseen();
                 }
             }
-            // A component's children go where it writes them, perhaps into a template of its
-            // own; inside a template they stay in it.
-            Node::Component { children: Some(children), .. } => {
-                let template = if template == Template::Inside { Template::Inside } else { Template::Unknown };
-                walk(children, Parsing::Unknown, &mut Vec::new(), template)?
+            // `<Corten />` marks where Corten writes its own head tags, which open nothing.
+            Node::Component { path, .. } if is_corten(path) => {}
+            // A component writes what it likes around its children, perhaps a template of its
+            // own; inside a template they stay in it, and they are walked as markup of their own.
+            Node::Component { children, .. } => {
+                w.unseen();
+                if let Some(children) = children {
+                    walk(children, Parsing::Unknown, template, w)?;
+                    w.unseen();
+                }
             }
-            _ => {}
+            Node::Expr(_) => w.unseen(),
+            Node::Text(_) | Node::Markup(_) | Node::Let(_) => {}
+        }
+        // Past something the markup does not show, it shows nothing of how what follows is
+        // parsed, until an element shows it again.
+        if w.opaque != seen {
+            parsing = Parsing::Unknown;
         }
     }
     Ok(())
@@ -398,6 +467,98 @@ mod tests {
         ];
         for node in kept {
             assert!(check(std::slice::from_ref(&node), false).is_ok());
+        }
+    }
+
+    fn expr() -> Node {
+        Node::Expr(proc_macro::TokenStream::new())
+    }
+
+    fn component(children: Option<Vec<Node>>) -> Node {
+        Node::Component { path: proc_macro::TokenStream::new(), props: Vec::new(), children }
+    }
+
+    /// Each refusal needs every element between the two to be literal: an expression, or a
+    /// component, may write a boundary (`raw("<button>")`), close the outer element, open an
+    /// `<svg>` or a `<template>`, and browsers keep what follows. One of each kind, the
+    /// expression between the two elements, inside them both or before the outer, compiles.
+    #[test]
+    fn nothing_the_markup_does_not_show_is_assumed_between_two_elements() {
+        // [around, outer, inner]: the inner one is refused when written straight in the outer.
+        let kinds: &[(&[&str], &str, &str)] = &[
+            (&["div"], "p", "div"),
+            (&["ul"], "li", "li"),
+            (&["dl"], "dt", "dd"),
+            (&["div"], "a", "a"),
+            (&["div"], "button", "button"),
+            (&["div"], "nobr", "nobr"),
+            (&["div"], "h1", "h2"),
+            (&["div"], "select", "input"),
+            (&["div", "select"], "option", "option"),
+            (&["div", "ruby"], "rt", "rt"),
+        ];
+        let wrap = |around: &[&str], node: Node| around.iter().rev().fold(node, |node, name| el(name, vec![node]));
+        for &(around, outer, inner) in kinds {
+            let between = [
+                // Between them, inside the outer.
+                vec![el(outer, vec![expr(), el(inner, Vec::new())])],
+                // Inside an element of the outer that closes before the inner opens.
+                vec![el(outer, vec![el("span", vec![expr()]), el(inner, Vec::new())])],
+                // A component with or without children between them.
+                vec![el(outer, vec![component(None), el(inner, Vec::new())])],
+                vec![el(outer, vec![component(Some(vec![el("span", Vec::new())])), el(inner, Vec::new())])],
+                // In a block before the inner, which any later body follows.
+                vec![el(
+                    outer,
+                    vec![
+                        Node::Block { head: Vec::new(), bodies: vec![vec![expr()], Vec::new()], arms: false },
+                        el(inner, Vec::new()),
+                    ],
+                )],
+            ];
+            for nodes in between {
+                let node = wrap(around, nodes.into_iter().next().unwrap());
+                assert!(check(std::slice::from_ref(&node), false).is_ok(), "{outer} {inner}");
+            }
+            // Before the outer, inside the elements that showed HTML: what it writes may open an
+            // <svg>, whose <a> or <option> are SVG's.
+            // (An element taken out of foreign content shows HTML again itself, so a <p> after
+            // one is still refused.)
+            if !breaks_out(outer, &[]) {
+                let node = wrap(
+                    around,
+                    Node::Block {
+                        head: Vec::new(),
+                        bodies: vec![vec![expr(), el(outer, vec![el(inner, Vec::new())])]],
+                        arms: false,
+                    },
+                );
+                assert!(check(std::slice::from_ref(&node), false).is_ok(), "{outer} {inner} after an expression");
+            }
+        }
+        // A nested form in a whole document, after an expression (`raw("<template>")`) or a
+        // component anywhere before it.
+        let document = |before: Node| {
+            let forms = el("form", vec![el("form", vec![el("input", Vec::new())])]);
+            el("html", vec![el("head", vec![before]), el("body", vec![el("main", vec![forms])])])
+        };
+        for before in [expr(), component(None), el("header", vec![expr()]), el("title", vec![expr()])] {
+            assert!(check(&[document(before)], true).is_ok());
+        }
+    }
+
+    /// A literal `<svg>` or `<math>` where how the browser parses is not known does not show its
+    /// namespace: a `<math>` written in an `<svg>` is SVG's, and its `<mtext>` no integration
+    /// point; an `<svg>` straight in a `<math>` is MathML's, and its `<title>` none.
+    #[test]
+    fn a_foreign_root_whose_namespace_the_markup_does_not_show_shows_no_integration_point() {
+        let links = |root: &str, point: &str| el(root, vec![el(point, vec![el("a", vec![el("a", Vec::new())])])]);
+        for (root, point) in [("math", "mtext"), ("math", "mi"), ("svg", "title"), ("svg", "foreignObject"), ("svg", "desc")] {
+            assert!(check(&[links(root, point)], false).is_ok(), "{root} {point}");
+            // Supplied as a component's children, which it may write into the other one.
+            assert!(check(&[component(Some(vec![links(root, point)]))], false).is_ok(), "{root} {point} as children");
+            // After an expression in an element that showed HTML.
+            assert!(check(&[el("div", vec![expr(), links(root, point)])], false).is_ok(), "{root} {point} after an expression");
         }
     }
 

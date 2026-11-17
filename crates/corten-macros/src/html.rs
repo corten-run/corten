@@ -1036,8 +1036,15 @@ enum Parsing {
     /// As MathML, but an `<svg>` is SVG's: straight in an `<annotation-xml>` whose first
     /// `encoding` is not an HTML one, or that has none. Refuses as `Math` does.
     AnnotationXml,
+    /// As SVG or as MathML, which the markup does not show: in a literal `<svg>` or `<math>`
+    /// written where how the browser parses is not known (a `<math>` in an `<svg>` is SVG's, an
+    /// `<svg>` straight in a `<math>` MathML's). An element a browser takes out of foreign
+    /// content is refused here as in either, and what an element that is an integration point in
+    /// either holds is not known.
+    Foreign,
     /// Not known: at the top of an `html!` (a component's markup lands where its parent writes
     /// it, in an `<svg>` perhaps), among a component's children, which go where it writes them,
+    /// after an expression or a component (what it writes may open an `<svg>` or close one),
     /// and in an `<annotation-xml>` where an expression or a spread comes before the first written
     /// `encoding` (either may write the first); one after it changes nothing.
     Unknown,
@@ -1093,6 +1100,13 @@ fn parsing_within(outer: Parsing, name: &str, attrs: &[Attr]) -> Parsing {
         Parsing::AnnotationXml => parsing_within(Parsing::Math, name, attrs),
         Parsing::MathText if is("mglyph") || is("malignmark") => Parsing::Math,
         Parsing::MathText => parsing_within(Parsing::Html, name, attrs),
+        // An integration point of either namespace holds what the markup does not show; every
+        // other element, an `<svg>` or a `<math>` too, is foreign in both.
+        Parsing::Foreign if SVG_HTML_POINTS.iter().chain(MATH_HTML_POINTS).any(|point| is(point)) || is("annotation-xml") => {
+            Parsing::Unknown
+        }
+        Parsing::Foreign => Parsing::Foreign,
+        Parsing::Unknown if is("svg") || is("math") => Parsing::Foreign,
         _ if is("svg") => Parsing::Svg,
         _ if is("math") => Parsing::Math,
         Parsing::Html => Parsing::Html,
@@ -1152,6 +1166,9 @@ fn foreign_breakout(parsing: Parsing, name: &str, attrs: &[Attr]) -> Option<Stri
         Parsing::AnnotationXml => Some(format!(
             "<{name}> is HTML's, and an <annotation-xml> whose first encoding is not an HTML one (or that has none) holds MathML, so a browser that meets it there closes the MathML elements around it, the <math> too unless one of them is an <mi>, <mo>, <mn>, <ms> or <mtext>: give the <annotation-xml> encoding=\"text/html\" as its first encoding, or put the HTML in an <mtext>"
         )),
+        Parsing::Foreign => Some(format!(
+            "<{name}> is HTML's, and a browser that meets it in an <svg> or a <math> closes the foreign elements around it, so it and what follows land outside them: put HTML in an <svg> inside a <foreignObject>, and in a <math> inside an <mtext>"
+        )),
         _ => None,
     }
 }
@@ -1168,6 +1185,8 @@ struct Cursor {
     text_only: Option<String>,
     /// How a browser parses the content here, as far as this markup shows.
     parsing: Parsing,
+    /// How many nodes the markup does not show this cursor has passed (`nesting::holds_unseen`).
+    opaque: usize,
 }
 
 impl Cursor {
@@ -1179,6 +1198,7 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
+            opaque: 0,
         }
     }
 
@@ -1190,7 +1210,17 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
+            opaque: 0,
         }
+    }
+
+    /// Past an expression, a component or a block holding one: what it writes may close the
+    /// element whose content is read as text, or open an `<svg>` or an integration point, so the
+    /// markup shows neither until an element shows it again.
+    fn unseen(&mut self) {
+        self.opaque += 1;
+        self.parsing = Parsing::Unknown;
+        self.text_only = None;
     }
 
     /// The body of a `for`, `if` or `match` here, inside an `<svg>` or an element read as text
@@ -1240,7 +1270,12 @@ impl Cursor {
                 };
                 return err(span, format!("unexpected closing tag </{name}>{hint}"));
             }
-            nodes.push(self.node()?);
+            let node = self.node()?;
+            // An element's own content is followed as it is read (`tag`).
+            if !matches!(node, Node::Element { .. }) && nesting::holds_unseen(std::slice::from_ref(&node)) {
+                self.unseen();
+            }
+            nodes.push(node);
         }
         Ok(nodes)
     }
@@ -1593,10 +1628,14 @@ impl Cursor {
             let outer_text = std::mem::replace(&mut self.text_only, holder);
             let inner = if component { Parsing::Unknown } else { parsing_within(self.parsing, &name, &attrs) };
             let outer_parsing = std::mem::replace(&mut self.parsing, inner);
+            let seen = self.opaque;
             let children = self.nodes(Some(&name));
             self.aria_svg = outer;
             self.text_only = outer_text;
             self.parsing = outer_parsing;
+            if self.opaque != seen {
+                self.unseen();
+            }
             let children = children?;
             self.closing(&name, open)?;
             Some(children)
@@ -2719,7 +2758,7 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 mod tests {
     use super::{
         breaks_out, foreign_breakout, local_path, parsing_within, reads_as_text, refused_path, text_only_element, Attr, Parsing,
-        BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TEXT_ONLY,
+        BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, SVG_HTML_POINTS, TEXT_ONLY,
     };
     use proc_macro::TokenStream;
 
@@ -2728,7 +2767,7 @@ mod tests {
     /// not show which (the top of a component's markup, its children).
     #[test]
     fn an_element_is_read_as_text_only_where_the_markup_shows_html() {
-        let svg = parsing_within(Parsing::Unknown, "svg", &[]);
+        let svg = parsing_within(Parsing::Html, "svg", &[]);
         assert_eq!(svg, Parsing::Svg);
         for point in ["foreignObject", "desc", "title"] {
             assert_eq!(parsing_within(svg, point, &[]), Parsing::Html, "{point}");
@@ -2783,6 +2822,29 @@ mod tests {
         assert_eq!(parsing_within(Parsing::Html, "svg", &[]), Parsing::Svg);
         assert_eq!(parsing_within(Parsing::Svg, "svg", &[]), Parsing::Svg);
 
+        // Where the markup does not show how it is parsed, an <svg> or a <math> is foreign, but
+        // which namespace is not known: a <math> in an <svg> is SVG's, an <svg> straight in a
+        // <math> MathML's. So neither's integration points show HTML, and a <textarea> under
+        // them is not taken for text; an element taken out of either is still refused.
+        for root in ["svg", "math"] {
+            let foreign = parsing_within(Parsing::Unknown, root, &[]);
+            assert_eq!(foreign, Parsing::Foreign, "{root}");
+            for point in SVG_HTML_POINTS.iter().chain(MATH_HTML_POINTS).chain(&["annotation-xml"]) {
+                assert_eq!(parsing_within(foreign, point, &[]), Parsing::Unknown, "{root} {point}");
+                assert!(!reads_as_text(parsing_within(foreign, point, &[]), "textarea"), "{root} {point}");
+            }
+            for name in ["g", "mrow", "svg", "math", "textarea", "style", "template"] {
+                assert_eq!(parsing_within(foreign, name, &[]), Parsing::Foreign, "{root} {name}");
+                assert!(!reads_as_text(foreign, name), "{root} {name}");
+            }
+            for name in BREAKOUT {
+                let why = foreign_breakout(foreign, name, &[]).expect("refused");
+                assert!(why.contains("<foreignObject>") && why.contains("<mtext>"), "{why}");
+            }
+            assert!(foreign_breakout(foreign, "font", &[]).is_none());
+            assert!(text_only_element(None, foreign, "plaintext").is_none());
+        }
+
         let color = [Attr::Static("color".into(), "red".into())];
         assert!(breaks_out("font", &color));
         assert!(breaks_out("FONT", &[Attr::Bare("SIZE".into())]));
@@ -2797,7 +2859,7 @@ mod tests {
     /// `<math>` is MathML's.
     #[test]
     fn a_math_holds_html_at_its_text_integration_points() {
-        let math = parsing_within(Parsing::Unknown, "math", &[]);
+        let math = parsing_within(Parsing::Html, "math", &[]);
         assert_eq!(math, Parsing::Math);
         for point in MATH_HTML_POINTS {
             let text = parsing_within(math, point, &[]);
