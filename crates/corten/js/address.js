@@ -26,10 +26,13 @@ const fromHere = (url) => url !== "" && new URL(url).origin === location.origin;
  * The path of the page on screen: the document's, then each page a navigation drew. Only entries
  * at it are patch entries ({@link addressed}): a patch of another route, drawn into this page, is
  * not what that route's page draws. A page drawn at that path since is the same screen, the
- * route's page, its part drawn for its entry's address, so the entries stay.
+ * route's page, its part drawn for its entry's address, so the entries stay. A same-document push
+ * or replace (`pushState`, a `#fragment`) draws none, though it ends in `navigatesuccess` too.
  */
 let screenPath = location.pathname;
-navigation?.addEventListener("navigatesuccess", () => (screenPath = location.pathname));
+let drawsNone = false;
+navigation?.addEventListener("navigate", (event) => (drawsNone = event.destination.sameDocument && event.navigationType !== "traverse"));
+navigation?.addEventListener("navigatesuccess", () => drawsNone || (screenPath = location.pathname));
 
 /**
  * The history entries whose part a marked form's patch drew for their address, and the entry each

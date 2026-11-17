@@ -5811,7 +5811,8 @@ async function run(browser) {
       );
       // A write redirected whose page has not come yet (stale): the form's entries made since read
       // the whole page (`corten: page`), so the write's change is drawn. The write's page is held,
-      // and the form sent twice before it comes, which leaves it.
+      // and left by a script's `replaceState` (a marked form sent while it is on its way would be
+      // the browser's navigation, which reads the page whole); then the form is sent twice.
       const quotedAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/quoted";
       /** @type {() => void} */
       let letQuotedGo = () => {};
@@ -5825,16 +5826,22 @@ async function run(browser) {
       const quotedSent = scope.waitForRequest((r) => quotedAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
       await scope.click("#scope-write button");
       const redirecting = await quotedSent;
+      const left = await scope.evaluate(() => {
+        const nav = /** @type {any} */ (window).navigation;
+        const going = nav.transition?.finished.then(() => "finished", () => "aborted");
+        history.replaceState(history.state, "", location.href);
+        return going ?? "none";
+      });
       await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
       await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
       asked.length = 0;
-      const staleBack = { redirecting, at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
+      const staleBack = { redirecting, left, at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
       letQuotedGo();
       await scope.unroute(writeAsked);
       await scope.unroute(quotedAsked);
       check(
         "Back between a data-address form's entries after a write redirected, before its page came, reads the page, not the patch",
-        staleBack.redirecting && staleBack.at === "/smoke/scope?scope=week" && staleBack.shown === "week" && staleBack.asked.join() === "page ?scope=week",
+        staleBack.redirecting && staleBack.left === "aborted" && staleBack.at === "/smoke/scope?scope=week" && staleBack.shown === "week" && staleBack.asked.join() === "page ?scope=week",
         JSON.stringify(staleBack),
       );
       // Two entries a marked form made at another route's address: the screen is this route's
@@ -5890,7 +5897,8 @@ async function run(browser) {
         overtaken.linkWent && overtaken.formRead && overtaken.linkEndedInTime && overtaken.at === "/smoke/scope?scope=week" && overtaken.shown === "week" &&
           overtaken.asked.join() === "nav ?scope=week",
         JSON.stringify(overtaken),
-      );      // What the user typed outside the part and did not send stays with the entry the form was
+      );
+      // What the user typed outside the part and did not send stays with the entry the form was
       // sent from, as the browser keeps it for the form without JavaScript: typed, the form sent,
       // a link followed, then Back twice; and typed, the form sent, then Back while a write is on
       // its way, which reads the page.
@@ -5925,6 +5933,22 @@ async function run(browser) {
           written.writing && written.at === "/smoke/scope" && written.note === "draft" && written.asked.join() === "nav ",
         JSON.stringify({ linked, written }),
       );
+      // Back and Forward between the form's entries put the user where they were on each, as the
+      // browser does for the pages: the patch is drawn, then the entry's scroll restored.
+      await scope.goto(`${base}/smoke/scope`);
+      const y = () => scope.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(Math.round(scrollY)))));
+      await scope.evaluate(() => scrollTo(0, 1500));
+      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      const afterSend = await y();
+      await scope.evaluate(() => scrollTo(0, 700));
+      asked.length = 0;
+      const scrolled = { afterSend, back: { at: await traverse("back"), y: await y() }, forward: { at: await traverse("forward"), y: await y() }, asked: asked.splice(0) };
+      check(
+        "Back and Forward between a data-address form's entries restore each entry's scroll",
+        scrolled.afterSend === 1500 && scrolled.back.at === "/smoke/scope" && scrolled.back.y === 1500 && scrolled.forward.at === "/smoke/scope?scope=week" &&
+          scrolled.forward.y === 700 && scrolled.asked.join() === "action ,action ?scope=week",
+        JSON.stringify(scrolled),
+      );
     }
     await scope.close();
   }
@@ -5934,7 +5958,8 @@ async function run(browser) {
   {
     const swapped = await browser.newPage();
     swapped.on("pageerror", (e) => errors.push(`swapped scope: ${e.message}`));
-    await swapped.goto(`${base}/news`);
+    // A page of the same shell with no marked form (one with another shell is loaded in full).
+    await swapped.goto(`${base}/smoke/quoted`);
     if (!(await swapped.evaluate(() => "navigation" in window))) skip("a page swapped in with a data-address form loads the address module", "no Navigation API");
     else {
       /** @type {string[]} */

@@ -1805,7 +1805,7 @@ part and did not send stays with the entry the form was sent from, as for a link
 Sending a marked form cancels any other marked form's request still on its way, so the screen and
 the address are always the last one sent, whichever answer comes first.
 
-The runtime's part of the mark is a module of its own, `corten-address` (2,658 bytes, 1,311 gzipped),
+The runtime's part of the mark is a module of its own, `corten-address` (2,763 bytes, 1,348 gzipped),
 which only a page that draws a marked form loads: with its head, `html!` having noted the form as
 it rendered it, or with the page or patch the runtime inserts that has one. Until it has loaded,
 or if it fails to, a marked form is sent as any GET form is, and the page at its address is read.
