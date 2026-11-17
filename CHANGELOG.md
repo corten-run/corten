@@ -9,6 +9,8 @@ Corten is pre-1.0, so any minor version may change the API.
   successfully without running the command; `corten help <command>` prints the same and refuses an
   unknown command. `corten check` reports each step and its elapsed
   time on stderr, including in redirected logs, while preserving Cargo's output.
+- Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
+  so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
