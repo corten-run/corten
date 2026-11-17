@@ -21,7 +21,7 @@ function fixture(t, mode = "success") {
   t.after(() => {
     const rows = events(), starts = rows.filter((row) => row.boundary === "provider-child-start");
     const exits = rows.filter((row) => row.boundary === "provider-child-exit");
-    assert.deepEqual(exits.map((row) => row.pid), starts.map((row) => row.pid), "every owned child reaped");
+    assert.deepEqual(exits.map((row) => row.pid).sort(), starts.map((row) => row.pid).sort(), "every owned child reaped");
     assert.ok(exits.every((row) => row.terminal));
     assert.ok(!rows.some((row) => row.tokenIPC || row.boundary === "forbidden-native-https"));
   });
@@ -58,7 +58,8 @@ const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
 const synthetic = (${syntheticDependencies.toString()})({
   repo: ${JSON.stringify(repo)}, trace: ${JSON.stringify(trace)}, hosts: ${JSON.stringify(hosts)},
   stateDir: syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], group: syntheticGroup,
-  commit: ${JSON.stringify(commit)}, userId: ${JSON.stringify(userId)}, mode: ${JSON.stringify(mode)}
+  commit: ${JSON.stringify(commit)}, userId: ${JSON.stringify(userId)}, mode: ${JSON.stringify(mode)},
+  holdUntilGroup: ${mode === "overlap" ? `syntheticGroup === ${JSON.stringify(groupNames[1])} ? ${JSON.stringify(groupNames[2])} : null` : "null"}
 }, { fs: syntheticFs, path: syntheticPath, fork: syntheticFork, providerTransport,
   bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead, controlRegistration,
   EventEmitter, PassThrough, Writable, registration: ${JSON.stringify(registration)} });\n`;
@@ -147,7 +148,7 @@ test("captured production composition ignores arbitrary hints, binds POST identi
 });
 
 test("second exact approval dispatches all remaining captured production workers once, with overlapping remote groups", { timeout: 60000 }, async (t) => {
-  const p = fixture(t);
+  const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);
   const state = p.saved(), group = groupNames[0], campaign = `r21-${state.token}`;
   const local = path.join(p.h.base, group, "groups-r21"), evidence = path.join(local, "evidence-Synthetic");
@@ -181,7 +182,7 @@ test("second exact approval dispatches all remaining captured production workers
   assert.equal(preview.subject.jobs[0].outcome, "verified");
   for (const job of preview.subject.jobs.slice(1)) assert.equal(job.subject.options.group, job.group);
   const approved = [...args, "--approve-reviewed-merged-ready", approval];
-  assert.equal(await fleetMain(approved, p.deps), 3);
+  assert.equal(await fleetMain(approved, p.deps), 3, JSON.stringify(p.output.at(-1)));
   assert.equal(p.workers.length, groupNames.length);
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "pending"));
   const events = p.events(), posts = events.filter((row) => row.method === "POST");
@@ -193,8 +194,11 @@ test("second exact approval dispatches all remaining captured production workers
     const start = events.findIndex((row) => row.group === group && row.boundary === "provider-child-start");
     const exit = events.findIndex((row) => row.group === group && row.boundary === "provider-child-exit");
     assert.ok(start >= 0 && exit > start);
-    const next = groupNames[groupNames.indexOf(group) + 1];
-    if (next) assert.ok(exit < events.findIndex((row) => row.group === next && row.boundary === "provider-child-start"));
+    if (group === groupNames[1]) {
+      const peer = events.findIndex((row) => row.group === groupNames[2] && row.boundary === "monitor-registered");
+      const terminal = events.findIndex((row) => row.group === group && row.boundary === "monitor-terminal");
+      assert.ok(start < peer && peer < terminal && terminal < exit, "peer registered while this monitor and provider worker were live");
+    }
   }
   assert.equal(ids.size, groupNames.length); assert.equal(ips.size, groupNames.length);
   assert.ok(!events.some((row) => row.method === "DELETE"));
