@@ -486,7 +486,13 @@ fn job_dialog(job: &Job) -> impl Render + '_ {
 
 With the `let` outside the `html!`, the view would borrow a local of a function that has
 returned (E0515). `let`s and a layout component are a document, like the layout alone, and `let`s and a patch
-component are a patch.
+component are a patch. A patch's top-level elements are parsed together, as a `<template>`'s
+content, so table rows or cells beside other elements are dropped unless they come first: `html!`
+refuses the shapes lost wherever they are written, such as a row after a first `<table>`
+(`<table id={TotalsId}>..</table> <tr id={RowId(7)}>..</tr>`) or a `<table>` after a first row,
+where nothing an expression or a component writes comes between the two, and a debug build
+refuses the rest, the shapes that depend on what the patch began with among them, when it is sent
+([Requests and forms](requests-and-forms.md)).
 
 A view lent to a prop inside another view (`action={&html! { .. }}`), or to a call written in its
 markup (`{keep_query(&at, &html! { .. })}`), is built and rendered inside the view around it, so it borrows what it uses instead of owning it: a step bar's action and the
