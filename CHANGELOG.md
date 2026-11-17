@@ -7,7 +7,7 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - Accept component-local `@position-try` definitions and rewrite their fallback references,
   reading `position-try` values as CSS tokens so custom-function calls, `if()` conditions and
-  whitespace after an escape keep their meaning; match statement at-rule names
+  whitespace or a comment after an escape keep their meaning; match statement at-rule names
   case-insensitively and document the complete component CSS at-rule inventory, including raw
   bodies and global names.
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part

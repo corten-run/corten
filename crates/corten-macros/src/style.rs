@@ -1372,11 +1372,22 @@ fn pseudo_element(selector: &str) -> bool {
 /// (space, tab and line breaks), so a no-break space stays part of an identifier. An escape is
 /// kept whole, the one whitespace that ends a hex escape written as a space, so whitespace after
 /// it still separates tokens: `--abov\65  flip-block` is two (CSS Syntax Level 3, consume an
-/// escaped code point).
+/// escaped code point). A comment right after a hex escape ends the escape and separates tokens,
+/// so the space written for it is doubled: `--abov\65/**/flip-block` is `--abov\65  flip-block`,
+/// where one space would end the escape and join the two names.
 fn squash(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     let mut space = false;
+    // The last thing written is a hex escape that no whitespace has ended yet.
+    let mut open = false;
+    let gap = |out: &mut String, space: &mut bool, open: &mut bool| {
+        if *space && !out.is_empty() {
+            out.push_str(if *open { "  " } else { " " });
+        }
+        *space = false;
+        *open = false;
+    };
     while let Some(c) = chars.next() {
         match c {
             '/' if chars.peek() == Some(&'*') => {
@@ -1391,10 +1402,7 @@ fn squash(text: &str) -> String {
                 space = true;
             }
             '"' | '\'' => {
-                if space && !out.is_empty() {
-                    out.push(' ');
-                }
-                space = false;
+                gap(&mut out, &mut space, &mut open);
                 out.push(c);
                 while let Some(s) = chars.next() {
                     out.push(s);
@@ -1409,10 +1417,7 @@ fn squash(text: &str) -> String {
             }
             c if c.is_ascii_whitespace() => space = true,
             '\\' if chars.peek().is_some_and(|next| !matches!(next, '\n' | '\r' | '\u{c}')) => {
-                if space && !out.is_empty() {
-                    out.push(' ');
-                }
-                space = false;
+                gap(&mut out, &mut space, &mut open);
                 out.push(c);
                 let mut hex = 0;
                 while hex < 6 && chars.peek().is_some_and(char::is_ascii_hexdigit) {
@@ -1426,13 +1431,12 @@ fn squash(text: &str) -> String {
                         chars.next();
                     }
                     out.push(' ');
+                } else {
+                    open = true;
                 }
             }
             c => {
-                if space && !out.is_empty() {
-                    out.push(' ');
-                }
-                space = false;
+                gap(&mut out, &mut space, &mut open);
                 out.push(c);
             }
         }
@@ -1852,8 +1856,9 @@ mod tests {
 
     #[test]
     fn position_references_are_whole_css_tokens() {
-        // A hex escape takes one whitespace; the next one still separates the tactic.
-        for space in ["  ", "\r\n ", "\t\t", "\n\n", " /* a */ "] {
+        // A hex escape takes one whitespace; the next one, or a comment, still separates the
+        // tactic.
+        for space in ["  ", "\r\n ", "\t\t", "\n\n", " /* a */ ", "/**/", "/*comment*/ ", "/* a */\n", " /**/"] {
             let css = format!("@position-try --above {{ top: 0 }} .a {{ position-try-fallbacks: --abov\\65{space}flip-block; position-try: most-width --abov\\65{space}flip-inline }}");
             assert_eq!(
                 scope(&css, "x").unwrap().css,
@@ -1861,6 +1866,11 @@ mod tests {
                 "{space:?}"
             );
         }
+        // The review's spellings: a comment glued to the escape is not the escape's whitespace.
+        assert_eq!(
+            scope("@position-try --above { top: 0 } .a { position-try-fallbacks: --abov\\65/**/flip-block, --abov\\65/*comment*/ flip-inline; position-try: --abov\\65/**/flip-block }", "x").unwrap().css,
+            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above flip-block, --x__above flip-inline;position-try:--x__above flip-block}"
+        );
         assert_eq!(
             scope(".a { position-try-fallbacks: --abov\\65\r\n\tflip-block }", "x").unwrap().css,
             ".x__a{position-try-fallbacks:--abov\\65  flip-block}"
