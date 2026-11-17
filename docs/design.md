@@ -4829,12 +4829,14 @@ rules something out.
     Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the mark goes; or the
     runtime gains a general way to hand a module its events, when the hooks here become that.
 
-    Last checked: 2026-11-16, the runtime's and the module's sizes on `HEAD_SHA` against
-    `f5f2132aa`, and each hook's share taken out of that build; 2026-11-16, the smoke on
-    `SMOKE_SHA`, SMOKE_COUNTS; 2026-11-15, the traversals' bytes and times measured with
-    `307d00bca`'s runtime in Chromium 156.0.8078.4, and the request path's count on `307d00bca`
-    against `c9ed56785`; 2026-11-15, the request path's count on `2d619cbb5` against
-    `a3ee0c05f`.
+    Last checked: 2026-11-16, the runtime's and the module's sizes on `321a303c1` against
+    `f5f2132aa` (main's runtime unchanged since, at `36e551158`), and each hook's share taken out
+    of that build; 2026-11-16, the watchlist smoke on `321a303c1`, 1,179 checks (Chromium
+    156.0.8078.4 433, Firefox 157.0 431, WebKit 27.2 310, 5 over HTTP), 92 skipped in WebKit,
+    none failed, the `data-address` checks 35 in each browser and none skipped; 2026-11-15, the
+    traversals' bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and
+    the request path's count on `307d00bca` against `c9ed56785`; 2026-11-15, the request path's
+    count on `2d619cbb5` against `a3ee0c05f`.
 
 ## Rules
 
