@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Permit custody-only terminal retirement of the exact r21 lean catalog attempt
+  if ordinary native collection refuses its failed evidence. Keep original raw
+  failures, source/reservation/archive binding, live-job refusal, current ownership
+  and quiescence proofs, separate reviewed approval and single-delete confirmation.
+  This is cleanup eligibility, not benchmark validation or permission to stop a run.
+
 - **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in a shape
   the runtime's parse loses wherever it is written no longer compiles: a table part (`<tr>`,
   `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`, `<colgroup>`) after a
@@ -111,6 +117,11 @@ Corten is pre-1.0, so any minor version may change the API.
   in direct CLI errors, without reflecting raw exceptions or changing recovery,
   cleanup or benchmark acceptance rules.
 
+- `FeedUrl<Row>` now requires `Row` to resolve to the declarations `corten::types` generates
+  (`import("../types/app").Row`), as `ScreenUrl<Data>` does. A local typedef, an import from
+  another module, or an undeclared row name does not compile; generated imports and their
+  aliases keep the feed's row type tied to the server's.
+
 - A handler is given a form's control by its `#[derive(Fields)]` field,
   `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
   `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
@@ -140,6 +151,41 @@ Corten is pre-1.0, so any minor version may change the API.
   (`corten-format`, `corten-upload`, `corten/keys`, `corten/read`), as it writes the runtime's in
   the README, and `npm run check` fails when one is not the built module's or is written another
   way.
+
+- Read a date and time a visitor picks (`<input type="datetime-local">`) as the instant it
+  names in the zone its form was drawn in: `corten::i18n::LocalDateTime` reads and writes HTML's
+  local date and time syntax (`InvalidLocalDateTime` when it does not read), and
+  `Entry<LocalDateTime>` keeps the text as sent (as `Entry<u32>` does). A page draws in a
+  `corten::form::DrawZone` (`DrawZone::from(req.zone())`, `DrawZone::from(Utc)` on a `Public`
+  page, `DrawZone::from(&input.zone)` when a refused post is drawn again): `zone.field(f.zone)`
+  writes the zone as a hidden input, `zone.name()` shows it (`UTC` without JavaScript), and
+  `zone.local(at)` writes an instant as the input's `value` (rounded down to the input's minute
+  steps with `floor_minute`), and `zone.min(at)` and `zone.max(at)` as its bounds, to the minute
+  and, where the clocks go back, at the offset that keeps every value between them inside them.
+  A tz database zone draws and reads only where its rules reach (jiff's range, to late 9999-12-30
+  UTC); past it a time is refused, not taken as UTC, and `Zone::known_offset` says where a zone's
+  rules end. The post reads the hidden input as a
+  `corten::form::FormZone` field, and `entry.at(&input.zone)` is the instant;
+  `entry.at_keeping(&input.zone, stored)`, for an edit form, is `stored` when the field comes back
+  as it was drawn. The compiler checks that a posted time is read only in a `FormZone` (not in
+  `req.zone()` or a `DrawZone`), that a `FormZone` is made only by deserializing what a client
+  sent (a form, a query), never from a zone, and that the hidden input is a `FormZone` field; a
+  form that leaves out the hidden input still compiles, and its post is a 422.
+  A skipped time moves forward by the gap and a repeated one is the earlier (Temporal's default,
+  RFC 5545). `Entry` holds any sealed `corten::form::EntryValue` (a number, a `Day` for
+  `<input type="date">`, or a `LocalDateTime`), and `day.start(zone)` is where a day begins in a
+  zone: the first instant its clock reads the day, as Temporal's `startOfDay` gives, which where
+  the clocks skip midnight is the change, even one that starts the day before (Toronto's day of
+  1919-03-31 began at `00:30`) ([design Choice 59](docs/design.md#choice-local-date-time)).
+
+- `Visitor` (`req.zone()`) gives the offset before a change of the clocks up to the change itself
+  before 1970 too: jiff looks an instant up by its second toward zero, which before 1970 is the
+  next second, so the last moments before a change (`1919-03-31T04:29:59.999Z` in Toronto) were
+  read and written at the offset after it.
+
+- **Breaking (for `#![deny(warnings)]` builds):** `Day::midnight_utc` is deprecated for
+  `day.start(Utc)`, the same instant, so a crate that denies warnings and calls it no longer
+  builds until it changes the call.
 
 - Fullstack browser benchmark evidence uses bounded, authenticated, deduplicated JSON
   records and incremental raw-case hashing instead of one growing inline summary. The
@@ -1239,7 +1285,7 @@ Corten is pre-1.0, so any minor version may change the API.
   a navigation replaces and the layout a write's page draws (which closed nested dialogs
   outer-first, and lost the events of one it replaced), for a dialog with an id; one the user
   opened still stays open when an answer draws it closed. The runtime is 738 bytes larger
-  minified (270 with gzip, 226 with brotli) (design Choice 59,
+  minified (270 with gzip, 226 with brotli) (design Choice 60,
   [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
 
 - `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,
