@@ -299,6 +299,7 @@ for (engine of names) {
   trusting(browser);
   try {
     await namedFormNavigation(browser);
+    await generatedFormViews(browser);
     await run(browser);
   } catch (error) {
     console.log(`[${engine}] still loading when it failed:\n${pending().join("\n") || "  nothing"}`);
@@ -348,6 +349,76 @@ async function namedFormNavigation(browser) {
       clearTimeout(timer);
       await page.context().close();
     }
+  }
+}
+
+/**
+ * The view classes #[component(view)] generates (`/smoke/views`, served as `corten/views`) whose
+ * holes are two elements into a form, past a form, and a form's whole text, with controls outside
+ * each form, joined to it by `form=`, named after the members the classes' paths read
+ * (`firstElementChild`, `nextElementSibling`, `textContent`): each property reads, writes and
+ * fills its element, never one of those controls.
+ * @param {import("@playwright/test").Browser} browser
+ */
+async function generatedFormViews(browser) {
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/smoke/views`);
+    const seen = await page.evaluate(async () => {
+      const { FormNested, PastForm, FormText } = await import("corten/views");
+      const own = Element.prototype;
+      /** @param {string} id */
+      const form = (id) => /** @type {Element} */ (document.getElementById(id));
+      /** The text of the element `css` finds under `root`, read past any named control. @param {Element} root @param {string} css */
+      const shown = (root, css) => Reflect.get(Node.prototype, "textContent", css ? own.querySelector.call(root, css) : root);
+      /** @param {() => unknown} step */
+      const run = (step) => {
+        try {
+          return String(step());
+        } catch (error) {
+          return String(error);
+        }
+      };
+      const nestedForm = form("nested-form");
+      const nested = new FormNested(nestedForm);
+      const pastRoot = /** @type {Element} */ (form("past-form").parentElement);
+      const past = new PastForm(pastRoot);
+      const textForm = form("text-form");
+      const whole = new FormText(textForm);
+      const out = {
+        nested: run(() => {
+          const read = nested.label;
+          nested.label = "Set";
+          const set = shown(nestedForm, "span");
+          FormNested.fill(nestedForm, { label: "Filled" });
+          return `${read};${set};${shown(nestedForm, "span")}`;
+        }),
+        past: run(() => {
+          const read = past.note;
+          past.note = "Set";
+          const set = shown(pastRoot, "p");
+          PastForm.fill(pastRoot, { note: "Filled" });
+          return `${read};${set};${shown(pastRoot, "p")}`;
+        }),
+        whole: run(() => {
+          const read = whole.text;
+          whole.text = "Set";
+          const set = `${typeof whole.text}:${whole.text}:${shown(textForm, "")}`;
+          FormText.fill(textForm, { text: "Filled" });
+          return `${typeof read}:${read};${set};${shown(textForm, "")}`;
+        }),
+        // The controls each form's members would have been: none was written (a value, or text
+        // put inside one).
+        controls: Array.from(document.querySelectorAll("input[form]"), (input) => `${/** @type {HTMLInputElement} */ (input).value}/${input.childNodes.length}`).join(),
+      };
+      return out;
+    });
+    check("a generated view reads, writes and fills a hole two elements into a form with a control named firstElementChild", seen.nested === "Nested;Set;Filled", seen.nested);
+    check("a generated view reads, writes and fills a hole past a form with a control named nextElementSibling", seen.past === "Past;Set;Filled", seen.past);
+    check("a generated view reads, writes and fills a form's whole text with a control named textContent", seen.whole === "string:;string:Set:Set;Filled", seen.whole);
+    check("a generated view's named form controls are left as they were", seen.controls === Array(9).fill("kept/0").join(), seen.controls);
+  } finally {
+    await page.context().close();
   }
 }
 
