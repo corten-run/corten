@@ -123,7 +123,7 @@ def stream_material(root, state):
     entries = subject['sourcesManifest']['snapshot']['entries']
     assert isinstance(entries, list) and len(entries) <= ${streamLimits.auditFiles} + 3
     expected, directories, seen = {}, set(), set()
-    for row in entries:
+    for index, row in enumerate(entries, 1):
         name = row['path']
         assert name not in seen
         seen.add(name)
@@ -135,6 +135,8 @@ def stream_material(root, state):
             assert group == 'mixed-production' or name.startswith('blobs/')
             assert isinstance(row['bytes'], int) and 0 <= row['bytes'] <= ${streamLimits.auditFileBytes} and re.fullmatch(r'[a-f0-9]{64}', row['sha256'])
             expected[source + '/' + name] = row
+        if index % 64 == 0:
+            yield None
     assert '' in directories and 'blobs' in directories and len(expected) < ${streamLimits.auditFiles}
     paths, total = [subject_path], len(subject_bytes)
     visited = set()
@@ -143,22 +145,26 @@ def stream_material(root, state):
         visited.add(name)
         private(directory)
         with os.scandir(directory) as items:
-            for item in items:
+            for index, item in enumerate(items, 1):
                 path = directory / item.name
                 info = path.lstat()
                 assert not stat.S_ISLNK(info.st_mode)
                 if stat.S_ISDIR(info.st_mode):
-                    walk(path, str(path.relative_to(folder / source)))
+                    yield from walk(path, str(path.relative_to(folder / source)))
                 else:
                     assert stat.S_ISREG(info.st_mode) and len(paths) < ${streamLimits.auditFiles} and str(path.relative_to(folder)) in expected
                     paths.append(path)
-    walk(folder / source, '')
+                if index % 64 == 0:
+                    yield None
+    yield from walk(folder / source, '')
     assert visited == directories
     assert {str(path.relative_to(folder)) for path in paths[1:]} == set(expected), 'audit inventory differs from subject'
-    for path in paths[1:]:
+    for index, path in enumerate(paths[1:], 1):
         info = path.lstat()
         assert 0 <= info.st_size <= ${streamLimits.auditFileBytes}
         total += info.st_size
+        if index % 64 == 0:
+            yield None
     assert total <= ${streamLimits.auditBytes}
     def stable(info):
         return tuple(getattr(info, key) for key in ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
@@ -289,8 +295,10 @@ def stream_monitor(root, expected):
                         emit(state['kind'], state['payload'])
                         terminal = state['kind'] == 'terminal'
                 try:
-                    kind, payload = next(material)
-                    emit(kind, payload)
+                    # Internal checkpoints return to custody/lease sampling, never the wire.
+                    frame = next(material)
+                    if frame is not None:
+                        emit(*frame)
                 except StopIteration:
                     pass
             readable, writable, _ = select.select([0], [1] if outgoing else [], [], 0.05)

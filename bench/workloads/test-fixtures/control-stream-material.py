@@ -14,7 +14,7 @@ import sys
 import time
 import types
 
-request = json.load(sys.stdin)
+request = json.loads(sys.stdin.buffer.readline())
 scope = {'__name__': 'payload_fixture'}
 exec(compile(request['source'], '<shipped-guardian>', 'exec'), scope)
 folder = pathlib.Path(request['directory']).resolve()
@@ -71,10 +71,38 @@ subject_path = folder / ('json-audit-subject.json' if request['group'] == 'json-
 subject = json.loads(subject_path.read_bytes())
 intent = {'campaign': folder.name, 'group': request['group'], 'subjectSha256': subject['subjectSha256']}
 frames, total, count, maximum, wire, ended, active = 0, 0, 0, 0, 0, False, None
+checkpoints = 0
+wire_mode = request.get('wire', False)
+wire_sequence, renewals = 0, 0
+
+def emit(kind, payload):
+    global wire_sequence
+    wire_sequence += 1
+    value = {'schema': 'benchmark-control-frame/v1', 'id': request['registration']['id'],
+             'sequence': wire_sequence, 'kind': kind, 'payload': payload}
+    sys.stdout.buffer.write(scope['encoded'](value))
+    sys.stdout.buffer.flush()
+
+def renew():
+    global renewals
+    challenge = {'sequence': renewals + 1, 'nonce': format(renewals + 1, '032x')}
+    emit('challenge', challenge)
+    reply = json.loads(sys.stdin.buffer.readline())
+    assert reply == {'id': request['registration']['id'], 'kind': 'renew', 'payload': challenge}
+    renewals += 1
+
+if wire_mode:
+    emit('registered', request['registration'])
+    emit('progress', {'state': 'fixture-audit-paused'})
+    renew()
 started = time.monotonic()
 failed = False
 try:
-    for kind, payload in scope['stream_material'](None, intent):
+    for frame in scope['stream_material'](None, intent):
+        if frame is None:
+            checkpoints += 1
+            continue
+        kind, payload = frame
         frames += 1
         wire += len(json.dumps({'schema': 'benchmark-control-frame/v1', 'id': 'd' * 32,
             'sequence': frames, 'kind': kind, 'payload': payload}, separators=(',', ':')).encode()) + 1
@@ -91,8 +119,25 @@ try:
             active = None
             count += 1
         elif kind == 'audit-end': ended = True
+        if wire_mode:
+            emit(kind, payload)
+            if frames % 128 == 0:
+                renew()
 except AssertionError:
     failed = True
-print(json.dumps({'failed': failed, 'ended': ended, 'files': count, 'bytes': total, 'frames': frames,
-    'maximumChunk': maximum, 'wireBytes': wire, 'elapsedMs': round((time.monotonic() - started) * 1000),
-    'windowsMetadataFacade': os.name == 'nt'}))
+result = {'failed': failed, 'ended': ended, 'files': count, 'bytes': total, 'frames': frames,
+    'maximumChunk': maximum, 'wireBytes': wire, 'checkpoints': checkpoints, 'elapsedMs': round((time.monotonic() - started) * 1000),
+    'windowsMetadataFacade': os.name == 'nt'}
+if wire_mode:
+    if failed:
+        sys.exit(2)
+    assert ended
+    # This round trip cannot finish until the receiver has accepted audit-end.
+    renew()
+    emit('progress', {'state': 'fixture-audit-exported', **result, 'renewals': renewals})
+    # Typed fixture closure only, never a native seal or remote-drain proof.
+    emit('terminal', {'id': request['registration']['id'], 'campaign': intent['campaign'],
+        'nativeTerminal': True, 'sealSha256': 'f' * 64})
+    assert json.loads(sys.stdin.buffer.readline()) == {'id': request['registration']['id'], 'kind': 'close', 'payload': {}}
+else:
+    print(json.dumps(result))
