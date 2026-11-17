@@ -649,6 +649,40 @@ async function run(browser) {
     });
     check(`a patch's top level parses as patch-parsing.json says, in ${cases.length} shapes`, !differ.length, differ.join("; "));
   }
+  // Patches generated from a fixed seed (`patch-generated.json`, which html.rs's
+  // `generated_patches_carry_the_check_s_verdict` writes with the debug check's verdict on each):
+  // the shapes above composed with the tokens the check has been found to misread. The check
+  // reports a loss only in an engine that parses the patch otherwise than as written, and where
+  // one does, the check reports a loss in it or says where it stopped. Text counts here (a `"`).
+  {
+    /** @type {{ cases: [string, string[], string, boolean][] }} */
+    const { cases } = JSON.parse(readFileSync(new URL("./patch-generated.json", import.meta.url), "utf8"));
+    const parsed = await page.evaluate(
+      (cases) =>
+        cases.map((html) => {
+          const template = document.createElement("template");
+          template.innerHTML = /** @type {any} */ (window).__html(html);
+          /** @param {Node} node */
+          const text = (node) => (Array.from(node.childNodes).some((c) => c.nodeType === Node.TEXT_NODE && /** @type {Text} */ (c).data.trim()) ? '"' : "");
+          /** @param {Element} el @returns {string} */
+          const show = (el) => {
+            const name = el.localName + (el.id ? `#${el.id}` : "");
+            if (el instanceof HTMLTemplateElement) return `${name}${text(el.content)}{${Array.from(el.content.children, show).join(",")}}`;
+            return name + text(el) + (el.children.length ? `(${Array.from(el.children, show).join(",")})` : "");
+          };
+          return Array.from(template.content.children, show).join(" ");
+        }),
+      cases.map((c) => c[0]),
+    );
+    const wrong = cases.flatMap(([html, written, lost, stops], i) => {
+      const differs = parsed[i] !== written.join(" ");
+      const reported = lost === "all" || lost.split(" ").includes(engine);
+      if (reported && !differs) return [`${html}: the check reports a loss, and ${engine} keeps it as written`];
+      if (differs && !reported && !stops) return [`${html} => ${parsed[i]}: ${engine} loses part of it, and the check passes it`];
+      return [];
+    });
+    check(`the patch parse check's verdicts hold in ${cases.length} generated patches`, !wrong.length, wrong.slice(0, 5).join("; "));
+  }
   // A handler is given its text and JSON arguments as the server had them, with an apostrophe
   // (`&#39;` in the single-quoted attribute), quotes, `&` and `<` in them, and so are the text and
   // the booleans elements give their refs (`ref={said.with(..)}`, `data-ref-value`, JSON read with

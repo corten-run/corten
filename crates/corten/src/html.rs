@@ -85,6 +85,9 @@ pub(crate) struct Tag<'a> {
     pub attrs: Vec<(&'a str, &'a str)>,
     /// It ends `/>`.
     pub self_closing: bool,
+    /// It ends at its `>`: the patch does not end inside it (a browser drops a tag the input ends
+    /// in, `<col data-note='` without its quote's end or its `>`).
+    pub complete: bool,
 }
 
 impl Tag<'_> {
@@ -94,9 +97,11 @@ impl Tag<'_> {
     }
 }
 
-/// The start tag whose `<` is at `html[start]`. A value in `"` or `'` is read to its closing
-/// quote, so what a quoted value holds is never taken for the tag's own: `data-on` is single-quoted
-/// and its JSON has `"` in it (`docs/design.md#choice-data-on-single-quoted`).
+/// The start tag whose `<` is at `html[start]`, read as the HTML standard's tokenizer reads one.
+/// A value in `"` or `'` is read to its closing quote, so what a quoted value holds is never
+/// taken for the tag's own: `data-on` is single-quoted and its JSON has `"` in it
+/// (`docs/design.md#choice-data-on-single-quoted`). Whitespace may come around an attribute's
+/// `=`, and only a `/` right before the `>` makes it self-closing.
 pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
     let bytes = html.as_bytes();
     let mut i = start + 1;
@@ -110,18 +115,25 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
         if c.is_ascii_whitespace() {
             i += 1;
         } else if c == b'/' {
-            self_closing = true;
+            // The browser ignores a `/` anywhere else.
+            self_closing = bytes.get(i + 1) == Some(&b'>');
             i += 1;
         } else {
-            self_closing = false;
-            let attr_end = html[i..]
+            // A name, its first character any but these (an `=` there is the name's).
+            let attr_end = html[i + 1..]
                 .find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '>' || c == '/')
-                .map_or(bytes.len(), |n| i + n);
+                .map_or(bytes.len(), |n| i + 1 + n);
             let attr = &html[i..attr_end];
             i = attr_end;
+            let skip = |mut at: usize| {
+                while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
+                    at += 1;
+                }
+                at
+            };
             let mut value = "";
-            if bytes.get(i) == Some(&b'=') {
-                i += 1;
+            if bytes.get(skip(i)) == Some(&b'=') {
+                i = skip(skip(i) + 1);
                 match bytes.get(i) {
                     Some(&q @ (b'"' | b'\'')) => {
                         let close = html[i + 1..].find(q as char).map_or(bytes.len(), |n| i + 1 + n);
@@ -138,7 +150,7 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
             attrs.push((attr, value));
         }
     }
-    Tag { start, end: (i + 1).min(bytes.len()), name, attrs, self_closing }
+    Tag { start, end: (i + 1).min(bytes.len()), name, attrs, self_closing, complete: i < bytes.len() }
 }
 
 /// Each start tag of `html` in order, past comments, end tags, a doctype and the text of the
@@ -363,14 +375,17 @@ fn comment_end(html: &str, at: usize) -> Option<usize> {
 /// replaces each top-level element by its id and ignores the rest, so either is a view that never
 /// shows. Reads markup as `html!` writes it (attribute values quoted, `<` escaped in text), each
 /// element closed by its own end tag written `</name>`; at a token it does not read so (an end tag
-/// written otherwise or that closes no element open, an HTML element's start tag ending `/>`),
-/// it stops and finds nothing after it, which [`patch_parse_checked`] logs. Checked in debug
-/// builds only.
+/// written otherwise or that closes no element open, an HTML element's start tag ending `/>`, a
+/// start tag the patch ends in, an element the browser does not put where it is written
+/// ([`misplaced`])), it stops and finds nothing after it, which [`patch_parse_checked`] logs.
+/// Checked in debug builds only.
 #[cfg(any(debug_assertions, test))]
 pub(crate) fn patch_problem(html: &str) -> Option<String> {
     let bytes = html.as_bytes();
-    // The elements open, each with how what it holds is read.
-    let mut open: Vec<(&str, Within)> = Vec::new();
+    // The elements open, each with whether it is SVG's or MathML's and how what it holds is read.
+    let mut open: Vec<Open> = Vec::new();
+    // In a `<template>`'s content, read by its own rules.
+    let in_template = |open: &[Open]| open.iter().any(|el| !el.foreign && el.name == "template");
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] != b'<' {
@@ -379,6 +394,12 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
             if open.is_empty() && !text.is_empty() {
                 let shown: String = text.chars().take(40).collect();
                 return Some(format!("text {shown:?} outside an element"));
+            }
+            if !text.is_empty()
+                && !in_template(&open)
+                && open.last().is_some_and(|last| !last.foreign && TABLE_HOLDERS.contains(&last.name.as_str()))
+            {
+                return None;
             }
             i = end;
             continue;
@@ -394,7 +415,7 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
                 continue;
             }
             let (name, end) = exact_end_tag(html, i)?;
-            if open.last().is_some_and(|(open, _)| open.eq_ignore_ascii_case(name)) {
+            if open.last().is_some_and(|open| open.name.eq_ignore_ascii_case(name)) {
                 open.pop();
             } else if !ignored_end_tag(name) {
                 // It closes no element open, or one with others open in it.
@@ -405,8 +426,9 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
         }
         if matches!(bytes.get(i + 1), Some(b'!' | b'?')) {
             if html[i..].starts_with("<![CDATA[") {
-                // Text up to `]]>` in an SVG or MathML element; elsewhere not read.
-                let foreign = open.last().is_some_and(|(_, within)| !matches!(within, Within::Html | Within::MathText));
+                // Text up to `]]>` in an SVG or MathML element (an integration point too); elsewhere
+                // not read.
+                let foreign = open.last().is_some_and(|last| last.foreign);
                 i = i + html[i..].find("]]>").filter(|_| foreign)? + 3;
                 continue;
             }
@@ -421,8 +443,11 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
             i += 1;
             continue;
         }
-        // A start tag: its name, then its attributes up to `>`.
+        // A start tag: its name, then its attributes up to `>`, unless the patch ends in it.
         let tag = start_tag(html, i);
+        if !tag.complete {
+            return None;
+        }
         i = tag.end;
         let id = tag.attrs.iter().any(|(attr, value)| attr.eq_ignore_ascii_case("id") && !value.is_empty());
         let written = &html[tag.start..tag.end];
@@ -433,21 +458,25 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
         }
         // Where it lands, as [`template_problem`] reads it: one HTML's wherever it lands, written
         // straight in an `<svg>` or `<math>`, is not read.
-        let (foreign, within) = placed(open.last().map_or(Within::Html, |(_, within)| *within), &tag)?;
+        let (foreign, within) = placed(open.last().map_or(Within::Html, |last| last.within), &tag)?;
         let self_closing = tag.self_closing;
-        // Its name as written, which lives as long as `html`.
-        let name = &written[1..1 + tag.name.len()];
-        let void = VOID.iter().any(|void| void.eq_ignore_ascii_case(name));
+        let void = VOID.contains(&tag.name.as_str());
         if self_closing && !foreign && !void {
             // The browser ignores the `/` and opens it.
             return None;
         }
-        if !foreign && RAW_TEXT.iter().any(|raw| raw.eq_ignore_ascii_case(name)) {
+        let in_html = open.last().is_none_or(|last| !last.foreign);
+        if (!foreign || in_html) && !in_template(&open) && misplaced(&open, &tag).is_some() {
+            // Where the browser puts it is not followed.
+            return None;
+        }
+        let raw = !foreign && RAW_TEXT.contains(&tag.name.as_str());
+        if raw {
             // Its text up to the end tag: nothing in it is markup.
-            i = if name.eq_ignore_ascii_case("script") { script_end(html, i) } else { raw_text_end(html, i, name) };
-            open.push((name, within));
-        } else if !self_closing && (foreign || !void) {
-            open.push((name, within));
+            i = if tag.name == "script" { script_end(html, i) } else { raw_text_end(html, i, &tag.name) };
+        }
+        if raw || (!self_closing && (foreign || !void)) {
+            open.push(Open { name: tag.name, foreign, within, start: tag.start });
         }
     }
     None
@@ -585,6 +614,241 @@ fn placed(within: Within, tag: &Tag) -> Option<(bool, Within)> {
         }
         Within::Math | Within::AnnotationXml => Some((true, Within::Math)),
     }
+}
+
+/// The HTML standard's special elements, at which the walk up the open elements for an `<li>`,
+/// a `<dd>` or a `<dt>` stops, but an `<address>`, a `<div>` and a `<p>`.
+#[cfg(any(debug_assertions, test))]
+const SPECIAL: &[&str] = &[
+    "applet",
+    "area",
+    "article",
+    "aside",
+    "base",
+    "basefont",
+    "bgsound",
+    "blockquote",
+    "body",
+    "br",
+    "button",
+    "caption",
+    "center",
+    "col",
+    "colgroup",
+    "dd",
+    "details",
+    "dir",
+    "dl",
+    "dt",
+    "embed",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "frame",
+    "frameset",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "head",
+    "header",
+    "hgroup",
+    "hr",
+    "html",
+    "iframe",
+    "img",
+    "input",
+    "keygen",
+    "li",
+    "link",
+    "listing",
+    "main",
+    "marquee",
+    "menu",
+    "meta",
+    "nav",
+    "noembed",
+    "noframes",
+    "noscript",
+    "object",
+    "ol",
+    "param",
+    "plaintext",
+    "pre",
+    "script",
+    "search",
+    "section",
+    "select",
+    "source",
+    "style",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "template",
+    "textarea",
+    "tfoot",
+    "th",
+    "thead",
+    "title",
+    "tr",
+    "track",
+    "ul",
+    "wbr",
+    "xmp",
+];
+
+/// The HTML elements whose text the browser moves out of them (foster-parents) or that it closes
+/// for text.
+#[cfg(any(debug_assertions, test))]
+const TABLE_HOLDERS: &[&str] = &["colgroup", "table", "tbody", "tfoot", "thead", "tr"];
+
+/// Start tags the "in body" insertion mode closes a `<p>` open in button scope for.
+#[cfg(any(debug_assertions, test))]
+const CLOSES_P: &[&str] = &[
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "center",
+    "dd",
+    "details",
+    "dialog",
+    "dir",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hgroup",
+    "hr",
+    "li",
+    "listing",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "plaintext",
+    "pre",
+    "search",
+    "section",
+    "summary",
+    "table",
+    "ul",
+    "xmp",
+];
+
+/// Why the browser does not put the HTML element of `tag` where the patch writes it, in the
+/// elements `open` around it (innermost last, a `<template>`'s content read on its own), or
+/// `None` where it does, as the HTML standard's "in body", "in table" and related insertion modes
+/// place a start tag. In a `<table>` a row, a cell or a `<col>` may be written without the
+/// `<tbody>`, `<tr>` or `<colgroup>` the browser adds around it, which loses nothing. Each
+/// `Some` is where the check stops: what the browser does there (moves the element out of a table,
+/// ignores it, closes an element open around it, reads it as another element or as text, or reads
+/// it differently in different engines) is not followed. Debug builds only.
+#[cfg(any(debug_assertions, test))]
+fn misplaced(open: &[Open], tag: &Tag) -> Option<String> {
+    let name = tag.name.as_str();
+    // Whether one of `targets` is open, walking up from the innermost to a foreign element (an
+    // SVG or MathML integration point, every scope's boundary) or one of `boundary`.
+    let open_in = |targets: &[&str], boundary: &dyn Fn(&str) -> bool| {
+        for el in open.iter().rev() {
+            if el.foreign {
+                return false;
+            }
+            if targets.contains(&el.name.as_str()) {
+                return true;
+            }
+            if boundary(el.name.as_str()) {
+                return false;
+            }
+        }
+        false
+    };
+    let scope = |name: &str| ["applet", "caption", "html", "table", "td", "th", "marquee", "object", "template"].contains(&name);
+    let closes = |what: &str| Some(format!("which closes the <{what}> open around it"));
+    // The innermost open element, when it is HTML's.
+    let current = open.last().filter(|el| !el.foreign).map(|el| el.name.as_str());
+    match name {
+        "image" => return Some("which a browser reads as an <img>, an element with no end tag".into()),
+        "plaintext" => return Some("which makes the rest of the patch its text".into()),
+        "noscript" => return Some("whose content Firefox reads as text and Chromium and WebKit as elements".into()),
+        "html" | "body" | "head" | "frame" | "frameset" => return Some("which a browser does not open in a patch".into()),
+        _ => {}
+    }
+    // A table, a row group, a row and a column group keep their own parts and a `<script>`,
+    // `<style>` or `<template>`: the browser moves anything else out of the table, or closes them.
+    let kept: Option<&[&str]> = match current {
+        Some("table") => {
+            Some(&["caption", "col", "colgroup", "script", "style", "tbody", "td", "template", "tfoot", "th", "thead", "tr"])
+        }
+        Some("tbody" | "thead" | "tfoot") => Some(&["script", "style", "td", "template", "th", "tr"]),
+        Some("tr") => Some(&["script", "style", "td", "template", "th"]),
+        Some("colgroup") => Some(&["col", "template"]),
+        _ => None,
+    };
+    if let (Some(kept), Some(current)) = (kept, current) {
+        return (!kept.contains(&name)).then(|| format!("which a browser moves out of the <{current}> or closes it for"));
+    }
+    if TABLE_PARTS.contains(&name) && !open.is_empty() {
+        return Some("a table part outside a table, which a browser drops or closes the cell or caption it is in for".into());
+    }
+    if open.iter().any(|el| !el.foreign && el.name == "select") {
+        let kept = match current {
+            Some("select") => ["hr", "optgroup", "option", "script", "template"].contains(&name),
+            Some("optgroup") => ["option", "script", "template"].contains(&name),
+            _ => false,
+        };
+        return (!kept).then(|| "content of a <select>, which the engines read by rules of their own".into());
+    }
+    if CLOSES_P.contains(&name) && open_in(&["p"], &|el| scope(el) || el == "button") {
+        return closes("p");
+    }
+    let heading = |el: &str| matches!(el, "h1" | "h2" | "h3" | "h4" | "h5" | "h6");
+    if heading(name) && current.is_some_and(heading) {
+        return closes(current.unwrap_or_default());
+    }
+    // An `<li>` closes the `<li>` it is in, and a `<dd>` or `<dt>` either, up to a special element.
+    let items: &[&str] = match name {
+        "li" => &["li"],
+        "dd" | "dt" => &["dd", "dt"],
+        _ => &[],
+    };
+    if !items.is_empty() && open_in(items, &|el| SPECIAL.contains(&el) && !matches!(el, "address" | "div" | "p")) {
+        return closes(items[0]);
+    }
+    if name == "form" && open.iter().any(|el| !el.foreign && el.name == "form") {
+        return Some("a <form> in a <form>, which Chromium and Firefox ignore and WebKit keeps".into());
+    }
+    if matches!(name, "a" | "button" | "nobr") {
+        // An `<a>` closes the `<a>` open up to a cell, a caption or a `<template>`.
+        let boundary = |el: &str| scope(el) && (name != "a" || !matches!(el, "html" | "table"));
+        if open_in(&[name], &boundary) {
+            return closes(name);
+        }
+    }
+    let implied = ["dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc"];
+    if matches!(name, "option" | "optgroup") && current == Some("option")
+        || matches!(name, "rb" | "rp" | "rt" | "rtc") && current.is_some_and(|el| implied.contains(&el))
+    {
+        return closes(current.unwrap_or_default());
+    }
+    None
 }
 
 /// Start tags the "in template" insertion mode reads as a head's: they do not decide how the rest
@@ -761,7 +1025,16 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] != b'<' {
-            i = html[i..].find('<').map_or(bytes.len(), |n| i + n);
+            let end = html[i..].find('<').map_or(bytes.len(), |n| i + n);
+            if template.is_none() && !html[i..end].trim_ascii().is_empty() {
+                if let Some(holder) = open.last().filter(|last| !last.foreign && TABLE_HOLDERS.contains(&last.name.as_str())) {
+                    unread!(usize::MAX; "the text {} in <{}>, which a browser moves out of it", shown(&html[i..end]), holder.name);
+                }
+                if open.is_empty() && reading == Reading::ColumnGroup {
+                    unread!(usize::MAX; "the text {}, which a browser drops{}", shown(&html[i..end]), since(first));
+                }
+            }
+            i = end;
             continue;
         }
         if html[i..].starts_with("<!--") {
@@ -853,6 +1126,10 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             }
         }
         let tag = start_tag(html, i);
+        if !tag.complete {
+            // The patch ends in it, and the browser drops it.
+            unread!(usize::MAX; "{}, a start tag the patch ends in before its >", shown(&html[tag.start..]));
+        }
         i = tag.end;
         let Some((foreign_element, within)) = placed(open.last().map_or(Within::Html, |last| last.within), &tag) else {
             let holder = open.last().map_or("", |last| last.name.as_str());
@@ -954,6 +1231,28 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         if problem.is_some() && problem_at.is_none() {
             problem_at = Some(tag.start);
         }
+        // A table, a table part or a form in an SVG or MathML integration point, which a table's
+        // reading reads by its rules there too, unless the element is in a top-level table part.
+        if !foreign_element
+            && foreign.is_some()
+            && template.is_none()
+            && matches!(reading, Reading::Table | Reading::TableBody | Reading::Row)
+            && open.first().is_some_and(|outer| !TABLE_PARTS.contains(&outer.name.as_str()))
+            && (part || name == "table" || name == "form")
+        {
+            let holder = open.last().map_or("", |last| last.name.as_str());
+            unread!(usize::MAX; "{} in <{holder}>, an SVG or MathML integration point, where a table's reading moves it{}", shown(written), since(first));
+        }
+        // An HTML element, or an `<svg>` or `<math>` in one, the browser does not put where it is
+        // written: what it does there is not followed (in a `<template>`'s content it is read when
+        // the content is).
+        let in_html = open.last().is_none_or(|last| !last.foreign);
+        if (!foreign_element || in_html) && template.is_none() {
+            if let Some(why) = misplaced(&open, &tag) {
+                let around = open.last().map(|last| format!(" in <{}>", last.name)).unwrap_or_default();
+                unread!(usize::MAX; "{}{around}, {why}", shown(written));
+            }
+        }
         // An HTML element's text, up to its end tag: nothing in it is markup. An SVG or MathML
         // `<title>`, `<style>` or `<script>` holds elements.
         if !foreign_element && RAW_TEXT.contains(&name) {
@@ -964,7 +1263,8 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
                 // hide the one written after it (`html!` writes its text as is), and the rest of the
                 // patch is its text.
                 let after = html[written_end..].find('>').map_or(bytes.len(), |n| written_end + n + 1);
-                if problem.is_none() && !html[after..].trim_ascii().is_empty() {
+                // An element written after it is lost; text and end tags only may be its own.
+                if problem.is_none() && start_tags(&html[after..]).any(|tag| tag.complete) {
                     problem = Some(format!(
                         "what follows {} is read as its text, since a <!-- and a <script in its text hide its end tag",
                         shown(written)
@@ -1183,6 +1483,42 @@ mod tests {
             ),
             (r#"<tr id="r"></tr><form id="f"></form ><input name="q"></form>"#, "</form > in <form"),
             (r#"<tr id="r"></tr><div id="d"><form><!--->x--></form></div>"#, "<!---> in <form>"),
+            // A start tag the patch ends in, which the browser drops: the `<div>` is kept whole.
+            (r#"<div id="d"></div><col data-note='</div>"#, "<col data-note='</div>, a start tag the patch ends in before its >"),
+            (r#"<p id="m"></p><tr id="r" title="</tr>"#, "a start tag the patch ends in"),
+            // An `<image>`, which the browser reads as an `<img>`: the row it holds is the patch's.
+            (r#"<image id="i"><tr id="r"></tr></image>"#, r#"<image id="i">, which a browser reads as an <img>"#),
+            // An element the browser does not put where it is written.
+            (r#"<p id="a"><div id="b"></div></p>"#, r#"<div id="b"> in <p>, which closes the <p> open around it"#),
+            (r#"<div id="a"><tr id="r"></tr></div>"#, r#"<tr id="r"> in <div>, a table part outside a table"#),
+            (
+                r#"<tbody id="b"><div id="d"></div></tbody>"#,
+                r#"<div id="d"> in <tbody>, which a browser moves out of the <tbody>"#,
+            ),
+            (
+                r#"<table id="t"><tbody><tr><td>1</td></tr></tbody>x</table>"#,
+                "the text x in <table>, which a browser moves out of it",
+            ),
+            (r#"<colgroup id="g"><col>x</colgroup><p id="p"></p>"#, "the text x in <colgroup>"),
+            (r#"<plaintext id="p"><b>x</b>"#, "which makes the rest of the patch its text"),
+            (r#"<noscript id="n"><p id="x">a</p></noscript>"#, "whose content Firefox reads as text"),
+            (r#"<select id="s"><div id="d">x</div></select>"#, "content of a <select>"),
+            (r#"<div id="a"><form id="f"><form id="g"></form></form></div>"#, "a <form> in a <form>"),
+            (r#"<ul id="u"><li>a<li>b</li></li></ul>"#, "<li> in <li>, which closes the <li> open around it"),
+            (r#"<a id="a"><span><a id="b">x</a></span></a>"#, r#"<a id="b"> in <span>, which closes the <a> open"#),
+            (r#"<td id="c"><tr><td>1</td></tr></td>"#, "<tr> in <td>, a table part outside a table"),
+            // Under a table's reading, a form or a table in an SVG or MathML integration point is
+            // read by its rules: the form is put in empty, the table's parts moved out.
+            (
+                r#"<thead id="a"></thead><svg id="s"><foreignObject><form><p>x</p></form></foreignObject></svg>"#,
+                "<form> in <foreignobject>, an SVG or MathML integration point, where a table's reading moves it",
+            ),
+            (r#"<tr id="a"></tr><math id="m"><mi><table></table></mi></math>"#, "<table> in <mi>, an SVG or MathML"),
+            (
+                r#"<table id="t"><tbody><tr><td></td></tr></tbody><svg><path/></svg></table>"#,
+                "<svg> in <table>, which a browser moves out of the <table>",
+            ),
+            (r#"<div id="d"><body><p>x</p></body></div>"#, "<body> in <div>, which a browser does not open in a patch"),
         ] {
             let why = super::patch_parse(html).unread.unwrap_or_else(|| panic!("{html}: read to its end"));
             assert!(why.contains(says), "{html}: {why}");
@@ -1199,17 +1535,40 @@ mod tests {
             r#"<tr id="a"><td><input name="q"></input><svg><path d="M0 0"/></svg></td></tr>"#,
             // A script whose text carries it past its first `</script>` with no start tag between.
             r#"<script id="s" type="text/plain"><!--<script></script>--></script><tr id="r"></tr>"#,
+            // Rows and cells written straight in a `<table>` or a row group: the browser adds the
+            // `<tbody>` or `<tr>` around them, which loses nothing.
+            r#"<table id="t"><tr><td>1</td></tr><col></table><td id="c"><table><td>1</td></table></td>"#,
+            r#"<ul id="u"><li>a<ul><li>b</li></ul></li></ul><dl id="d"><dt>a</dt><dd>b<dl><dt>c</dt></dl></dd></dl>"#,
+            r#"<select id="s"><optgroup label="g"><option>a</option></optgroup><option>b</option></select>"#,
+            r#"<a id="a"><b>x</b></a><a id="b"><button>y</button></a><p id="p" title = "a>b"><button><p>z</p></button></p>"#,
+            r#"<svg id="s"><foreignObject><div><table><tr><td><p>x</p></td></tr></table></div></foreignObject></svg>"#,
+            r#"<template id="t"><tr><td>1</td></tr></template><caption id="c"><p>x</p></caption>"#,
+            // In a top-level cell, a table's reading is a cell's, which reads an integration point's
+            // content as written.
+            r#"<tr id="a"><td><svg><foreignObject><form><p>x</p></form></foreignObject></svg></td></tr>"#,
         ] {
             assert_eq!(super::patch_parse(html).unread, None, "{html}");
+        }
+        // A loss found before a start tag the patch ends in, or an element the browser puts
+        // elsewhere, is kept.
+        for html in
+            [r#"<p id="m"></p><tr id="r"></tr><col data-x='"#, r#"<p id="m"></p><tr id="r"></tr><div id="d"><td>x</td></div>"#]
+        {
+            let parse = super::patch_parse(html);
+            assert_eq!(parse.problem.as_deref(), Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#), "{html}");
+            assert!(parse.unread.is_some(), "{html}");
         }
         // A loss found before a `</p>` in an `<svg>` is kept.
         let parse = super::patch_parse(r#"<p id="m"></p><tr id="r"></tr><svg id="s"></p></svg>"#);
         assert_eq!(parse.problem.as_deref(), Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#));
         assert!(parse.unread.is_some_and(|why| why.contains("</p>, which closes no element open")));
-        // A loss found after an element whose end tag is left out is not kept: the browser closed
-        // that element somewhere this did not read, so what follows may be elsewhere.
+        // A loss after an element the browser closes where it is not written is not looked for: the
+        // browser closed that element somewhere this does not follow, so what follows may be elsewhere.
         let parse = super::patch_parse(r#"<tr id="a"></tr><p id="b">one<p id="c">two</p><tr id="d"></tr>"#);
-        assert_eq!((parse.problem, parse.unread.as_deref()), (None, Some("<p>, which is not closed")));
+        assert_eq!(
+            (parse.problem, parse.unread.as_deref()),
+            (None, Some(r#"<p id="c"> in <p>, which closes the <p> open around it"#))
+        );
     }
 
     /// The parse check names what is lost and the element that decided, and passes a patch a
@@ -1617,6 +1976,600 @@ mod tests {
         text.sort();
         raw_text.sort();
         assert_eq!(text, raw_text, "the elements whose text is not markup");
+    }
+
+    /// A seeded generator of patches: the shapes of \`patch-parsing.json\` (table parts, a
+    /// \`<table>\`, a \`<form>\`, head tags, a \`<template>\`, an \`<svg>\` and a \`<math>\` with their
+    /// integration points) composed at random with the tokens the check has been found to misread
+    /// (a start tag the patch ends in, an end tag written otherwise than \`</name>\` or closing
+    /// nothing, an element whose content is text and a script's comment-like text, a CDATA section,
+    /// a comment a browser ends early and a bogus one, an \`<image>\`, an element written where a
+    /// browser does not put it, attributes the tokenizer reads past a \`>\` or an \`=\`), each piece
+    /// with what it shows as written.
+    #[cfg(feature = "json")]
+    mod generate {
+        /// splitmix64, so a seed gives the same cases on every machine.
+        pub struct Rng(pub u64);
+
+        impl Rng {
+            pub fn next(&mut self) -> u64 {
+                self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+                let mut z = self.0;
+                z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+                z ^ (z >> 31)
+            }
+
+            pub fn below(&mut self, n: usize) -> usize {
+                (self.next() % n as u64) as usize
+            }
+
+            pub fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+                items[self.below(items.len())]
+            }
+
+            pub fn one_in(&mut self, n: usize) -> bool {
+                self.below(n) == 0
+            }
+        }
+
+        /// Markup, and what it shows as written: each element as \`name#id\`, a \`"\` when it holds
+        /// text, its child elements in \`(..)\` and a \`<template>\`'s content in \`{..}\`.
+        #[derive(Default)]
+        pub struct Piece {
+            pub html: String,
+            pub shown: Vec<String>,
+            pub text: bool,
+        }
+
+        impl Piece {
+            fn add(&mut self, other: Piece) {
+                self.html.push_str(&other.html);
+                self.shown.extend(other.shown);
+                self.text |= other.text;
+            }
+
+            /// Markup that shows nothing.
+            fn token(html: &str) -> Piece {
+                Piece { html: html.into(), ..Piece::default() }
+            }
+
+            fn text(html: &str) -> Piece {
+                Piece { html: html.into(), text: true, ..Piece::default() }
+            }
+        }
+
+        /// What a piece is read as: HTML, HTML straight in an SVG or MathML integration point (where
+        /// a CDATA section is text), SVG or MathML.
+        #[derive(Clone, Copy, PartialEq)]
+        enum In {
+            Html,
+            Point,
+            Svg,
+            Math,
+        }
+
+        const CONTAINERS: &[&str] = &[
+            "div", "span", "p", "li", "ul", "a", "button", "form", "label", "b", "h2", "h3", "section", "dl", "dt", "dd", "ruby",
+            "rt", "select", "table", "template", "svg", "math", "i", "p", "div", "span", "form", "label", "section",
+            // In a tricky patch only.
+            "option", "td", "th", "tr", "tbody", "caption", "noscript", "image",
+        ];
+        const VOIDS: &[&str] = &["br", "img", "input", "hr", "col", "wbr", "meta", "link", "base", "basefont", "param"];
+        const RAW: &[&str] = &["textarea", "title", "style", "script", "xmp", "iframe", "noembed", "noframes"];
+        const RAW_TEXT: &[&str] = &["x", r#"<p id="r">y</p>"#, "</div>", "<tr><td>1</td></tr>", "<!--", "a<b", "</form>"];
+        const SCRIPT_TEXT: &[&str] =
+            &["f()", "<!--", "<!--<script>", "<!--<script></script>", "a<b", "<!-- x -->", "</scriptx>", "<!--x--><script>"];
+        const TOKENS: &[&str] = &[
+            "<!--c-->",
+            "<!-->",
+            "<!--->",
+            "<!--a--!>b-->",
+            r#"<!--a--!><p id="h"></p>-->"#,
+            "<!b>",
+            "<?b>",
+            "</ b>",
+            "</>",
+            "<![CDATA[c]]>",
+            "</p>",
+            "</br>",
+            "</span>",
+            "</input>",
+            "</bogus>",
+            "</image>",
+            "</div ignored>",
+            "</tr>",
+            "</form>",
+        ];
+        const ATTRS: &[&str] = &[
+            r#" class="c""#,
+            r#" title = "a>b""#,
+            " title='</div>'",
+            r#" data-on='{"a":"b>c"}'"#,
+            r#" title="a"lang="b""#,
+            " =x",
+            " hidden /",
+            " title=a/",
+            r#" TITLE="T""#,
+            r#" id="dup""#,
+            r#" title="<tr id='q'>""#,
+        ];
+        const UNFINISHED: &[&str] = &[
+            "<col data-note='",
+            r#"<tr id="z""#,
+            "<p",
+            "</div",
+            "<!--x",
+            r#"<div id="u" title="a"#,
+            "<![CDATA[x",
+            "<",
+            "</",
+            r#"<td id="q" "#,
+            r#"<tr id="z" title="</tr>"#,
+        ];
+        const PARTS: &[&str] = &["tr", "td", "th", "tbody", "thead", "tfoot", "caption", "col", "colgroup"];
+        const HEADS: &[&str] =
+            &["title", "base", "basefont", "bgsound", "noframes", "link", "meta", "style", "script", "template"];
+
+        /// Elements that hold phrasing content only, and what a clean patch puts in one.
+        const PHRASING_HOLDERS: &[&str] = &["p", "span", "a", "b", "i", "label", "button", "h2", "h3", "dt", "rt", "option"];
+        const PHRASING: &[&str] = &["span", "a", "b", "i", "label", "button", "select", "svg", "math", "template"];
+
+        pub struct Gen {
+            rng: Rng,
+            ids: usize,
+            /// This patch has the tokens the check stops at (half of them do): the others are
+            /// markup `html!` could write, or a component composed beside one.
+            tricky: bool,
+            /// The element being filled holds phrasing content only.
+            phrasing: bool,
+        }
+
+        impl Gen {
+            pub fn new(seed: u64) -> Self {
+                Gen { rng: Rng(seed), ids: 0, tricky: false, phrasing: false }
+            }
+
+            fn id(&mut self, id: bool) -> Option<String> {
+                id.then(|| {
+                    self.ids += 1;
+                    format!("e{}", self.ids)
+                })
+            }
+
+            fn shown(name: &str, id: &Option<String>, content: &Piece, template: bool) -> String {
+                let id = id.as_ref().map(|id| format!("#{id}")).unwrap_or_default();
+                let text = if content.text { "\"" } else { "" };
+                let children = content.shown.join(",");
+                if template {
+                    format!("{name}{id}{text}{{{children}}}")
+                } else if children.is_empty() {
+                    format!("{name}{id}{text}")
+                } else {
+                    format!("{name}{id}{text}({children})")
+                }
+            }
+
+            /// \`<name id attrs>content</name>\`, its end tag sometimes written otherwise.
+            fn element(&mut self, name: &str, id: bool, content: Piece, template: bool) -> Piece {
+                let mut id = self.id(id);
+                let attrs = if self.tricky && self.rng.one_in(12) { self.rng.pick(ATTRS) } else { "" };
+                if id.is_none() && attrs == r#" id="dup""# {
+                    // The browser reads the attributes' `id` when there is no other.
+                    id = Some("dup".into());
+                    let piece = Piece {
+                        html: format!("<{name}{attrs}>{}</{name}>", content.html),
+                        shown: vec![Self::shown(name, &id, &content, template)],
+                        text: false,
+                    };
+                    return piece;
+                }
+                let end = match if self.tricky { self.rng.below(40) } else { 40 } {
+                    0 => format!("</{name} ignored>"),
+                    1 => format!("</{name} >"),
+                    2 => format!("</{}>", name.to_ascii_uppercase()),
+                    _ => format!("</{name}>"),
+                };
+                let id_attr = id.as_ref().map(|id| format!(r#" id="{id}""#)).unwrap_or_default();
+                Piece {
+                    html: format!("<{name}{id_attr}{attrs}>{}{end}", content.html),
+                    shown: vec![Self::shown(name, &id, &content, template)],
+                    text: false,
+                }
+            }
+
+            /// An element with no end tag, or a foreign one closed by its \`/>\`.
+            fn void(&mut self, name: &str, id: bool, slash: bool) -> Piece {
+                let id = self.id(id);
+                let id_attr = id.as_ref().map(|id| format!(r#" id="{id}""#)).unwrap_or_default();
+                let slash = if slash { "/" } else { "" };
+                Piece {
+                    html: format!("<{name}{id_attr}{slash}>"),
+                    shown: vec![Self::shown(name, &id, &Piece::default(), false)],
+                    text: false,
+                }
+            }
+
+            fn content(&mut self, within: In, depth: usize) -> Piece {
+                let mut content = Piece::default();
+                let n = if depth > 2 { self.rng.below(2) } else { self.rng.below(3) };
+                for _ in 0..n {
+                    let child = if depth > 2 { Piece::text("x") } else { self.child(within, depth) };
+                    content.add(child);
+                }
+                content
+            }
+
+            fn table(&mut self, id: bool, depth: usize) -> Piece {
+                let cell = self.content(In::Html, depth + 1);
+                let id_cell = self.rng.one_in(3);
+                let td = self.element("td", id_cell, cell, false);
+                let tr = self.element("tr", false, td, false);
+                let tbody = self.element("tbody", false, tr, false);
+                let mut inner = Piece::default();
+                if self.rng.one_in(4) {
+                    inner.add(self.element("caption", false, Piece::text("c"), false));
+                }
+                if self.rng.one_in(4) {
+                    let col = self.void("col", false, false);
+                    inner.add(self.element("colgroup", false, col, false));
+                }
+                inner.add(tbody);
+                if self.rng.one_in(6) {
+                    // Something written straight in the table, but a table part, which the browser
+                    // puts in the `<tbody>` or `<tr>` it adds, losing nothing.
+                    let name = self.rng.pick(&["div", "span", "p", "form", "b", "svg", "template", "select", "image"]);
+                    let stray = if self.rng.one_in(3) { Piece::text("x") } else { self.html_element(name, false, depth + 1) };
+                    inner.add(stray);
+                }
+                self.element("table", id, inner, false)
+            }
+
+            fn part(&mut self, name: &str, id: bool, depth: usize) -> Piece {
+                match name {
+                    "tr" => {
+                        let cell = self.content(In::Html, depth + 1);
+                        let td = self.element("td", false, cell, false);
+                        self.element("tr", id, td, false)
+                    }
+                    "tbody" | "thead" | "tfoot" => {
+                        let rows = if self.rng.one_in(2) {
+                            let td = self.element("td", false, Piece::text("1"), false);
+                            self.element("tr", false, td, false)
+                        } else {
+                            Piece::default()
+                        };
+                        self.element(name, id, rows, false)
+                    }
+                    "col" => self.void("col", id, false),
+                    "colgroup" => {
+                        let col = self.void("col", false, false);
+                        self.element("colgroup", id, col, false)
+                    }
+                    _ => {
+                        let content = self.content(In::Html, depth + 1);
+                        self.element(name, id, content, false)
+                    }
+                }
+            }
+
+            fn raw(&mut self, name: &str, id: bool) -> Piece {
+                let pool = if name == "script" { SCRIPT_TEXT } else { RAW_TEXT };
+                let text = if self.tricky { self.rng.pick(pool) } else { pool[0] };
+                self.element(name, id, Piece::text(text), false)
+            }
+
+            fn html_element(&mut self, name: &str, id: bool, depth: usize) -> Piece {
+                match name {
+                    "table" => self.table(id, depth),
+                    "svg" => {
+                        let content = self.content(In::Svg, depth + 1);
+                        self.element("svg", id, content, false)
+                    }
+                    "math" => {
+                        let content = self.content(In::Math, depth + 1);
+                        self.element("math", id, content, false)
+                    }
+                    "template" => {
+                        let content = self.content(In::Html, depth + 1);
+                        self.element("template", id, content, true)
+                    }
+                    "select" => {
+                        let mut options = Piece::default();
+                        for _ in 0..1 + self.rng.below(2) {
+                            let option = if self.rng.one_in(4) {
+                                self.child(In::Html, depth + 1)
+                            } else {
+                                self.element("option", false, Piece::text("o"), false)
+                            };
+                            options.add(option);
+                        }
+                        self.element("select", id, options, false)
+                    }
+                    _ if PARTS.contains(&name) => self.part(name, id, depth),
+                    _ if self.tricky && self.rng.one_in(30) => {
+                        // \`<div id="x"/>\`, which a browser leaves open.
+                        let id = self.id(id);
+                        let id_attr = id.as_ref().map(|id| format!(r#" id="{id}""#)).unwrap_or_default();
+                        Piece {
+                            html: format!("<{name}{id_attr}/>"),
+                            shown: vec![Self::shown(name, &id, &Piece::default(), false)],
+                            text: false,
+                        }
+                    }
+                    _ => {
+                        let holder = std::mem::replace(&mut self.phrasing, PHRASING_HOLDERS.contains(&name));
+                        let content = self.content(In::Html, depth + 1);
+                        self.phrasing = holder;
+                        self.element(name, id, content, false)
+                    }
+                }
+            }
+
+            fn child(&mut self, within: In, depth: usize) -> Piece {
+                let id = self.rng.one_in(2);
+                let roll = self.rng.below(100);
+                match within {
+                    In::Html | In::Point => match roll {
+                        0..15 => Piece::text("x"),
+                        15..21 if !self.tricky => Piece::text("x"),
+                        15..21 => {
+                            let token = self.rng.pick(TOKENS);
+                            if within == In::Point && token.starts_with("<![CDATA[") {
+                                Piece::text(token)
+                            } else {
+                                Piece::token(token)
+                            }
+                        }
+                        21..60 => {
+                            let pool = if self.tricky {
+                                CONTAINERS
+                            } else if self.phrasing {
+                                PHRASING
+                            } else {
+                                &CONTAINERS[..CONTAINERS.len() - 8]
+                            };
+                            let name = self.rng.pick(pool);
+                            self.html_element(name, id, depth)
+                        }
+                        60..72 => {
+                            let name = self.rng.pick(VOIDS);
+                            let slash = self.rng.one_in(4);
+                            self.void(name, id, slash)
+                        }
+                        72..88 => {
+                            let name = self.rng.pick(RAW);
+                            self.raw(name, id)
+                        }
+                        88..96 => {
+                            let name = self.rng.pick(PARTS);
+                            self.part(name, id, depth)
+                        }
+                        _ if !self.tricky => Piece::text("x"),
+                        _ => match self.rng.below(5) {
+                            0 => {
+                                let content = self.content(In::Html, depth + 1);
+                                let id = self.id(id);
+                                let id_attr = id.as_ref().map(|id| format!(r#" id="{id}""#)).unwrap_or_default();
+                                Piece {
+                                    html: format!("<plaintext{id_attr}>{}", content.html),
+                                    shown: vec![Self::shown("plaintext", &id, &content, false)],
+                                    text: false,
+                                }
+                            }
+                            1 => self.void("frame", id, false),
+                            n => {
+                                let name = ["html", "body", "head"][n - 2];
+                                let content = self.content(In::Html, depth + 1);
+                                self.element(name, id, content, false)
+                            }
+                        },
+                    },
+                    In::Svg => match roll {
+                        0..12 => Piece::text("x"),
+                        12..20 => Piece::text(r#"<![CDATA[<p id="c">]]>"#),
+                        20..24 => Piece::token("<![CDATA[]]>"),
+                        24..32 => Piece::token(self.rng.pick(&["<!--c-->", "<!--a--!>b-->", "<!b>", "</p>", "</br>"])),
+                        32..46 => self.void("path", id, true),
+                        46..58 => {
+                            let content = self.content(In::Svg, depth + 1);
+                            self.element("g", id, content, false)
+                        }
+                        58..72 => {
+                            let name = self.rng.pick(&["title", "desc", "foreignObject"]);
+                            let content = self.content(In::Point, depth + 1);
+                            self.element(name, id, content, false)
+                        }
+                        72..78 => {
+                            let name = self.rng.pick(&["style", "script", "textarea"]);
+                            let content = if self.rng.one_in(2) { Piece::text("a{}") } else { self.content(In::Svg, depth + 1) };
+                            self.element(name, id, content, false)
+                        }
+                        78..84 => self.void("image", id, true),
+                        84..90 => {
+                            let content = self.content(In::Html, depth + 1);
+                            self.element("p", id, content, false)
+                        }
+                        90..94 => {
+                            let id = self.id(id);
+                            let id_attr = id.as_ref().map(|id| format!(r#" id="{id}""#)).unwrap_or_default();
+                            Piece {
+                                html: format!(r#"<font{id_attr} color="red">x</font>"#),
+                                shown: vec![Self::shown("font", &id, &Piece::text("x"), false)],
+                                text: false,
+                            }
+                        }
+                        _ => {
+                            let content = self.content(In::Svg, depth + 1);
+                            self.element("path", id, content, false)
+                        }
+                    },
+                    In::Math => match roll {
+                        0..12 => Piece::text("x"),
+                        12..20 => Piece::text(r#"<![CDATA[<p id="c">]]>"#),
+                        20..26 => Piece::token(self.rng.pick(&["<!--c-->", "<!--->", "</p>", "</br>"])),
+                        26..50 => {
+                            let name = self.rng.pick(&["mi", "mo", "mn", "ms", "mtext"]);
+                            let mut content = self.content(In::Point, depth + 1);
+                            if self.rng.one_in(4) {
+                                content.add(self.void("mglyph", false, true));
+                            }
+                            self.element(name, id, content, false)
+                        }
+                        50..64 => {
+                            let content = self.content(In::Math, depth + 1);
+                            let name = self.rng.pick(&["mrow", "semantics"]);
+                            self.element(name, id, content, false)
+                        }
+                        64..78 => {
+                            let html = self.rng.one_in(2);
+                            let content = if html {
+                                self.content(In::Point, depth + 1)
+                            } else if self.rng.one_in(2) {
+                                let content = self.content(In::Svg, depth + 1);
+                                self.element("svg", false, content, false)
+                            } else {
+                                self.content(In::Math, depth + 1)
+                            };
+                            let mut piece = self.element("annotation-xml", id, content, false);
+                            if html {
+                                piece.html = piece.html.replacen("<annotation-xml", r#"<annotation-xml encoding="text/html""#, 1);
+                            }
+                            piece
+                        }
+                        78..86 => {
+                            let content = self.content(In::Html, depth + 1);
+                            self.element("p", id, content, false)
+                        }
+                        86..92 => {
+                            let content = self.content(In::Math, depth + 1);
+                            self.element("mi", id, content, false)
+                        }
+                        _ => self.void("mspace", id, true),
+                    },
+                }
+            }
+
+            /// A patch: one to four top-level pieces, sometimes ended inside a tag.
+            pub fn patch(&mut self) -> Piece {
+                self.ids = 0;
+                self.tricky = self.rng.one_in(2);
+                self.phrasing = false;
+                let mut patch = Piece::default();
+                for _ in 0..1 + self.rng.below(4) {
+                    let id = !self.rng.one_in(10);
+                    let roll = self.rng.below(100);
+                    let piece = match roll {
+                        0..35 => {
+                            let name = self.rng.pick(PARTS);
+                            self.part(name, id, 0)
+                        }
+                        35..60 => {
+                            let name = self.rng.pick(CONTAINERS);
+                            self.html_element(name, id, 0)
+                        }
+                        60..70 => {
+                            let name = self.rng.pick(HEADS);
+                            match name {
+                                "base" | "basefont" | "bgsound" | "link" | "meta" => self.void(name, id, false),
+                                "template" => self.html_element(name, id, 0),
+                                _ => self.raw(name, id),
+                            }
+                        }
+                        70..78 => {
+                            let name = self.rng.pick(RAW);
+                            self.raw(name, id)
+                        }
+                        78..84 if self.tricky => Piece::token(self.rng.pick(TOKENS)),
+                        78..84 => {
+                            let name = self.rng.pick(&["div", "p", "form", "table", "label", "section"]);
+                            self.html_element(name, id, 0)
+                        }
+                        84..88 => {
+                            let name = self.rng.pick(PARTS);
+                            self.part(name, id, 0)
+                        }
+                        _ => {
+                            let name = self.rng.pick(&["svg", "math"]);
+                            self.html_element(name, id, 0)
+                        }
+                    };
+                    patch.add(piece);
+                }
+                if self.tricky && self.rng.one_in(6) {
+                    patch.add(Piece::token(self.rng.pick(UNFINISHED)));
+                }
+                patch
+            }
+        }
+    }
+
+    /// What the check makes of a patch, for \`scripts/patch-generated.json\`: the engines it reports a
+    /// loss in (\`all\`, \`chromium webkit\` for a reading only theirs has, \`firefox\` for a
+    /// \`<form>\` only Firefox drops, or empty), and whether it stopped reading before the end.
+    #[cfg(feature = "json")]
+    fn verdict(html: &str) -> (&'static str, bool) {
+        let first = super::template_problem(html, false, false);
+        if let Some(problem) = first.problem {
+            let lost = if problem.contains("is dropped in Firefox") { "firefox" } else { "all" };
+            return (lost, first.unread.is_some());
+        }
+        if first.headed.is_some() {
+            let other = super::template_problem(html, true, false);
+            let stops = first.unread.is_some() || other.unread.is_some();
+            return (if other.problem.is_some() { "chromium webkit" } else { "" }, stops);
+        }
+        ("", first.unread.is_some())
+    }
+
+    /// \`scripts/patch-generated.json\` is the generator's cases from its seed, each with what it
+    /// shows as written and the check's verdict: \`scripts/smoke.mjs\` parses each in Chromium,
+    /// Firefox and WebKit and holds the check to report a loss only in an engine that loses
+    /// something, and, where an engine loses something, to report it or say where it stopped. The
+    /// test rewrites the file and fails when the generator or the check changed, so the smoke checks
+    /// the check as it is. (Skipped outside the repository.) To look further, `PATCH_GENERATED_SEED`,
+    /// `PATCH_GENERATED_CASES` and `PATCH_GENERATED_TO` (a path) write other cases elsewhere, for a
+    /// browser to parse the same way, without failing.
+    #[cfg(feature = "json")]
+    #[test]
+    fn generated_patches_carry_the_check_s_verdict() {
+        let var = |name: &str| std::env::var(name).ok();
+        let explore = var("PATCH_GENERATED_TO");
+        let seed: u64 = var("PATCH_GENERATED_SEED").and_then(|n| n.parse().ok()).unwrap_or(1409);
+        let cases: usize = var("PATCH_GENERATED_CASES").and_then(|n| n.parse().ok()).unwrap_or(3000);
+        let path = match &explore {
+            Some(to) => std::path::PathBuf::from(to),
+            None => std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/patch-generated.json"),
+        };
+        if !path.parent().is_some_and(std::path::Path::is_dir) {
+            return;
+        }
+        let mut generate = generate::Gen::new(seed);
+        let mut seen = std::collections::HashSet::new();
+        let mut lines = Vec::new();
+        while lines.len() < cases {
+            let patch = generate.patch();
+            if !seen.insert(patch.html.clone()) {
+                continue;
+            }
+            // The id check reads it too, without a panic.
+            let _ = patch_problem(&patch.html);
+            let (lost, stops) = verdict(&patch.html);
+            lines.push(serde_json::to_string(&serde_json::json!([patch.html, patch.shown, lost, stops])).expect("JSON"));
+        }
+        let comment = "Patches generated by html.rs's generated_patches_carry_the_check_s_verdict from its seed, which rewrites this file: each is [html, what it shows as written (each top-level element as name#id, a \" when it holds text, its child elements in (..) and a template's content in {..}), the engines the server's debug check (patch_parse) reports a loss in (all, chromium webkit, firefox, or none), whether the check stopped before the end]. scripts/smoke.mjs parses each in Chromium, Firefox and WebKit: the check reports a loss only in an engine that parses the patch otherwise than as written, and where one does, the check reports a loss in it or stopped.";
+        let written = format!(
+            "{{\n  \"//\": {},\n  \"seed\": {seed},\n  \"cases\": [\n    {}\n  ]\n}}\n",
+            serde_json::to_string(comment).expect("JSON"),
+            lines.join(",\n    ")
+        );
+        let current = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+        if explore.is_some() {
+            std::fs::write(&path, &written).expect("the cases are written");
+        } else if current != written {
+            std::fs::write(&path, &written).expect("scripts/patch-generated.json is written");
+            panic!("scripts/patch-generated.json was rewritten from the generator and the check: commit it");
+        }
     }
 
     /// An HTML element whose content is text (`<xmp>`, `<iframe>`, `<noembed>`, `<noframes>`

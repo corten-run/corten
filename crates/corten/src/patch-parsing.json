@@ -7059,6 +7059,50 @@
       ],
       "lost": null,
       "unread": "</p>, which closes no element open"
+    },
+    {
+      "html": "<div id=\"d\"></div><col data-note='</div>",
+      "parsed": [
+        "div#d"
+      ],
+      "lost": null,
+      "unread": "a start tag the patch ends in before its >"
+    },
+    {
+      "html": "<image id=\"i\"><tr id=\"r\"></tr></image>",
+      "parsed": [
+        "img#i"
+      ],
+      "lost": null,
+      "unread": "which a browser reads as an <img>"
+    },
+    {
+      "html": "<svg id=\"s\"><title><![CDATA[x]]></title></svg><p>lost</p>",
+      "parsed": [
+        "svg#s(title)",
+        "p"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"a\"></tr><p id=\"b\"><div id=\"c\"></div></p>",
+      "parsed": [
+        "tr#a",
+        "p#b",
+        "div#c",
+        "p"
+      ],
+      "lost": null,
+      "unread": "which closes the <p> open around it"
+    },
+    {
+      "html": "<tbody id=\"b\"><div id=\"d\"></div></tbody>",
+      "parsed": [
+        "tbody#b",
+        "div#d"
+      ],
+      "lost": null,
+      "unread": "which a browser moves out of the <tbody>"
     }
   ]
 }

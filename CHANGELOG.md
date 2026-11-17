@@ -35,8 +35,10 @@ Corten is pre-1.0, so any minor version may change the API.
   a browser ends elsewhere than at its `-->`; a CDATA section outside an `<svg>` or `<math>`; an
   element HTML's wherever it lands written straight in an `<svg>` or `<math>`; a script whose text
   a `<!--` and a `<script` carry past its first `</script>` and over an element; in a form a
-  table's reading empties, any token before what it holds but a comment), is checked up to there
-  and sent, with a warning naming where it stopped; a release
+  table's reading empties, any token before what it holds but a comment; a start tag the patch
+  ends in; an HTML `<image>`, `<plaintext>` or `<noscript>`; an element the browser does not put
+  where it is written, such as a table part outside a table or a `<div>` in a `<p>`), is checked
+  up to there and sent, with a warning naming where it stopped; a release
   build is unchanged
   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 

@@ -1105,9 +1105,18 @@ straight in an `<svg>` or `<math>`, which `html!` refuses; a `<!--` and a `<scri
 block's text that carry the script past its first `</script>` and over an element, which may be
 text written for it or the patch's elements lost in it; and, in a `<form>` a table's reading
 would put in empty, any token before what it holds but a comment or a void element's end tag
-(`</input>`). There it still reports a loss found before, and otherwise logs a warning naming
-where it stopped, since what follows was not checked: markup written through `raw` is checked
-only as far as these rules reach. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
+(`</input>`); a start tag the patch ends in before its `>` (`<col data-note='` at the end, which
+the browser drops); an HTML `<image>`, which the browser reads as an `<img>`; a `<plaintext>`
+or a `<noscript>` (whose content the engines read differently); and an element the browser
+does not put where it is written: a table part outside a table, anything in a `<table>`, row
+group or row but its own parts and a `<script>`, `<style>` or `<template>`, an element that
+closes one open around it (a `<div>` in a `<p>`, an `<li>` in an `<li>`), a `<form>` in a
+`<form>`, what a `<select>` holds but its options, and, after a first table part, a `<form>` or
+`<table>` in an SVG `<foreignObject>` or a MathML `<mi>`. A row or cell written straight in a
+`<table>` is read as kept, since the browser only adds the `<tbody>` or `<tr>` around it. There
+it still reports a loss found before, and otherwise logs a warning naming where it stopped, since
+what follows was not checked: markup written through `raw` is checked only as far as these rules
+reach. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
 a page's table takes apart too). A patch that
 begins with a `<col>` from an area's handler is refused even on a page that already has the area's
 stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know

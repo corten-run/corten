@@ -3800,7 +3800,7 @@ fn the_patch_checks_read_the_void_end_tags_html_writes() {
     }
 }
 
-/// A patch the parse check cannot read to its end (an `<li>` closed by its list's end tag, which
+/// A patch the parse check cannot read to its end (an `<li>` closed by the next `<li>`, which
 /// `raw` markup can write) is sent, and a debug build logs where the check stopped, so it is not
 /// passed in silence.
 #[cfg(all(debug_assertions, feature = "log"))]
@@ -3821,7 +3821,7 @@ async fn a_patch_the_parse_check_cannot_read_is_logged_in_debug_builds() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
     assert!(
-        text.contains("corten: the debug check of what the browser keeps of the patch for /list read it only up to </ul>, where <li> is open"),
+        text.contains("corten: the debug check of what the browser keeps of the patch for /list read it only up to <li> in <li>, which closes the <li> open around it"),
         "{text}"
     );
 }
@@ -3864,8 +3864,10 @@ async fn a_patch_whose_script_text_carries_it_past_an_element_is_logged_in_debug
 /// Markup placed with `raw` that the parse check does not read as the browser does is checked only
 /// up to there, and a debug build logs where it stopped rather than refusing the patch: an end tag
 /// written `</div ignored>`, which closes the `<div>` so the row after it is kept (a refusal would
-/// be a false 500), and a `</bogus>` before a form's control, which a table's reading moves out of
-/// it (#1409).
+/// be a false 500); a `</bogus>` before a form's control, which a table's reading moves out of it;
+/// a `<col>` the patch ends in before its quote and `>`, which the browser drops, keeping the
+/// `<div>` whole (a refusal would be a false 500); and an `<image>`, which the browser reads as
+/// an `<img>`, dropping the row it holds (#1409).
 #[cfg(all(debug_assertions, feature = "log"))]
 #[tokio::test]
 async fn a_patch_with_tokens_the_parse_check_does_not_read_is_sent_and_logged_in_debug_builds() {
@@ -3888,6 +3890,20 @@ async fn a_patch_with_tokens_the_parse_check_does_not_read_is_sent_and_logged_in
                     <div id={NoteEndId}>{crate::raw(r#"<form></bogus><input name="q"></form>"#)}</div>
                 })
             }),
+        )
+        .route(
+            "/col",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! { <div id={MsgId}>{crate::raw("</div><col data-note='")}</div> })
+            }),
+        )
+        .route(
+            "/image",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <div id={MsgId}>{crate::raw(r#"</div><image id="i"><tr id="r"><td>1</td></tr></image>"#)}</div>
+                })
+            }),
         );
     let lines = Lines(Arc::default());
     let writer = lines.clone();
@@ -3899,6 +3915,11 @@ async fn a_patch_with_tokens_the_parse_check_does_not_read_is_sent_and_logged_in
         (
             "/form",
             "the patch for /form read it only up to </bogus> in <form>, which the check of what a form holds does not read",
+        ),
+        ("/col", "the patch for /col read it only up to <col data-note='</div>, a start tag the patch ends in before its >"),
+        (
+            "/image",
+            r#"the patch for /image read it only up to <image id="i">, which a browser reads as an <img>, an element with no end tag"#,
         ),
     ] {
         let (status, _, body) = call_with(app.clone(), "POST", path, Some("action"), None).await;
@@ -3968,6 +3989,18 @@ fn what_the_patch_parse_check_costs() {
 )]
 async fn a_live_fragment_the_browser_would_lose_part_of_panics_in_debug_builds() {
     let fragment = || String::from(r#"<p id="a">1</p><tr id="b"><td>2</td></tr>"#);
+    let router = Table::new().route("/", get(move || async move { crate::live(futures_util::stream::iter([fragment()])) }));
+    let _ = call(router, "GET", None).await;
+}
+
+/// A CDATA section in an SVG `<title>`, an HTML integration point, is the title's text, as it is
+/// in any element of an `<svg>`: the id check reads past it to the id-less `<p>` after the
+/// drawing, which the browser drops (#1409).
+#[cfg(debug_assertions)]
+#[tokio::test]
+#[should_panic(expected = "a live fragment's top-level <p> has no id")]
+async fn a_live_fragment_s_element_after_cdata_in_an_svg_title_is_checked_for_its_id() {
+    let fragment = || String::from(r#"<svg id="s"><title><![CDATA[x]]></title></svg><p>lost</p>"#);
     let router = Table::new().route("/", get(move || async move { crate::live(futures_util::stream::iter([fragment()])) }));
     let _ = call(router, "GET", None).await;
 }

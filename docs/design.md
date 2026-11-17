@@ -4917,12 +4917,24 @@ by design; where it is known, a limit says what would lift it or why it is so.
    a CDATA section outside an `<svg>` or `<math>`, or one not ended by `]]>`; an element HTML's
    wherever it lands written straight in an `<svg>` or `<math>`, which `html!` refuses; a `<!--`
    and a `<script` in a script's text that carry it past its first `</script>` and over an
-   element, which the markup does not say was written as its text; and, in a `<form>` a table's
+   element, which the markup does not say was written as its text; in a `<form>` a table's
    reading would put in empty, any token before what it holds but a comment, a bogus comment and
-   a void element's end tag. There it
+   a void element's end tag; a start tag the patch ends in before its `>` (`<col data-note='`
+   at the end, which the browser drops); an HTML `<image>`, which the browser reads as an `<img>`;
+   a `<plaintext>`, and a `<noscript>`, whose content Firefox reads as text and Chromium and
+   WebKit as elements; and an element the browser does not put where it is written: a table part
+   outside a table, anything in a `<table>`, row group, row or column group but its own parts, a
+   `<script>`, `<style>` or `<template>` (and text there), an element that closes one open around it
+   (a `<div>` in a `<p>`, an `<li>` in an `<li>`, an `<a>` in an `<a>`, a heading in a heading),
+   a `<form>` in a `<form>`, what a `<select>` holds but its options, an `<html>`, `<body>`,
+   `<head>`, `<frame>` or `<frameset>`, and, after a first table part, a `<form>`, `<table>` or
+   table part in an SVG or MathML integration point. There it
    reports a loss found before and otherwise logs a warning naming where it stopped, so markup
    written through `raw` is checked only as far as these rules reach, and what a patch loses after
-   one of them is found by neither the check nor `html!`.
+   one of them is found by neither the check nor `html!`. `scripts/patch-generated.json` holds
+   the check to these rules in 3,000 patches generated from a fixed seed, which the smoke parses
+   in all three engines: it reports a loss only where an engine loses something, and where one
+   does, reports it or says where it stopped.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating
