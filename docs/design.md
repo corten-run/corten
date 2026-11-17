@@ -197,7 +197,9 @@ rules something out.
    one object argument), and any value of a Rust type through its generated declaration; a type
    it cannot check a call against, a set of names written as string literals, any other JSON
    shape or an element or event in another shape, refuses the call rather than taking anything,
-   and only `unknown` takes any argument, since it claims nothing the call does not check);
+   and only `unknown` takes any argument but a form field (which needs the control's type to know
+   what to find, [Choice 57](#choice-field-arguments)), since it claims nothing the call does not
+   check);
    platform (apps require TypeScript 6.0 or later for the runtime's Navigation API DOM types;
    TypeScript 7.0.2 is pinned for framework CI to match npm's newest stable release installed by
    the getting-started guide. It checks JSDoc types as it checks annotations, except where
@@ -3748,8 +3750,10 @@ rules something out.
     failing. A handler's result now carries what the runtime's read can get, as a second parameter
     of `HtmlResponse` beside `For` ([Choice 27](#choice-caller-types)): `AnyAnswer` (a page, a
     patch or a redirect, what `HtmlResult` is) or `Patches`, which only `req.patch`,
-    `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make (each a
-    patch in `Mode::Action` and its caller's page or redirect otherwise), since `HtmlResponse`'s
+    `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make (the last
+    three a patch in `Mode::Action` and their caller's page or redirect otherwise; the first two a
+    patch whatever the mode, which a debug build refuses to a browser's plain request,
+    [Choice 58](#choice-plain-request-patch)), since `HtmlResponse`'s
     constructor is the crate's own. A route says `patches` in its routes module; the module checks
     its `get` handler's result is `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it),
     at the handler's name, and only such a route is a `PatchRoute`, the one kind of route
@@ -3796,7 +3800,8 @@ rules something out.
     with its message; not `cargo check`, clippy or rust-analyzer, which generate no code, nor a
     `cargo test` that generates nothing reaching the mount: `cargo test --lib` when no unit
     test reaches it, and `cargo test` when only a binary's `main` mounts the route (its test
-    build never generates `main`'s callees). Its error points into
+    build never generates `main`'s callees), which `corten check` covers by building every
+    target before its tests. Its error points into
     Corten's `mounted_with`, naming the route there (`mounted_with::<url::Status, AnyAnswer>`),
     not at the app's call: the note for a generic call names the call that instantiated the
     function holding the `const`, and `Area::route` cannot hold it itself, since its `Methods` is
@@ -3920,7 +3925,12 @@ rules something out.
     (`an_opaque_patch_answer_is_the_get_of_a_patches_route_in_its_module_and_mounted_by_hand`),
     an app's own answer that holds a patch refused as such a route's `get` (the
     `compile_fail,E0277` doctest on `PatchRoute`), the routes module's message still at the
-    handler's name (`tests/handler_message.rs`), on `89e355062`.
+    handler's name (`tests/handler_message.rs`), on `89e355062`; 2026-11-16, with Corten itself,
+    a `patches` route only a binary's `main` mounts with a `get` that answers a page passing
+    clippy, `cargo test` and `cargo check --bins` and refused with E0080 by `cargo build --bins`
+    and `cargo build --all-targets`, the same mount only an example's `main` reaches refused by
+    `cargo test`, and one only a bench's own `main` (`harness = false`) reaches passing `cargo test`
+    and refused by `cargo build --all-targets`, on `30bed57ed`.
 
 51. <a id="choice-msrv"></a>**The Rust floor moves for a needed dependency fix, not for freshness alone.**
     The minimum supported Rust version (MSRV) is the oldest compiler Corten promises to
@@ -4547,6 +4557,268 @@ rules something out.
     one fetch of `/service-worker.js` from card-market's default image built with `0c916b5a0`'s
     worker, and the same text with `226b12b35`'s template in place of its own.
 
+57. <a id="choice-field-arguments"></a>**A handler is given a form's control by its `#[derive(Fields)]` field, which
+    the runtime finds by name in the handler's form when the handler runs.** A component that
+    draws a form's fields for forms with a script and without one (a package's fields in two
+    editors) has no refs to give the script, since refs do not reach outside a component, so a
+    script reached a control by `form.elements.namedItem("weight")`: a field name as text the
+    compiler did not check, of a type the script had to narrow
+    ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
+    Now the markup passes the field, `on:change={js::fill(f.service, f.weight, f.size)}`, and
+    the handler's parameter is the control: `HTMLInputElement`, `HTMLSelectElement`,
+    `HTMLTextAreaElement`, or `HTMLInputElement[]` for radios or checkboxes that share the name.
+    A field passes only where the handler takes one of those, and text or another element does not
+    pass where it takes one; each is a `compile_fail` doctest on `FieldName`. The
+    call writes `~` with the kind (`i`, `s`, `t`, `*`) and the posted name as a JSON string
+    (`~i"parcels[1].weight"`), in `data-on`, a format only Corten's server and runtime read, so it
+    needs no standard ([Rule 10](#rule-standard-formats)). When the handler runs, the field
+    module (`corten-field`, `js/field.js`), which a page loads only when its handlers take a field,
+    as a format argument loads `corten-format`, takes the form of the element with the `on:` (the form itself; for a control, the one it belongs
+    to, `form=` included, a form-associated custom element's too; else the one around it, so a `<label>` takes the form it is in, not its
+    control's, which `form=` may put elsewhere), reads that form's own `elements` by the browser's
+    index of its names (`namedItem`, so a control named `elements` or `namedItem` cannot stand in
+    for either), keeps the controls whose `name` is the field's (the index also holds ids), and
+    gives the one control of the name with the kind's tag, or every input of it for a group (`[]`
+    for none); a control a patch replaced is the new one, as a ref's is. Anything else runs nothing
+    and throws what the call takes and what the form has instead, in the words `corten dev` uses. Whether the form draws the field as the kind the
+    handler takes cannot be known when the crate compiles ([Limit 32](#limit-field-kind)), so
+    `corten dev` reports such a call, with what the form has, when a page or a later draw puts it
+    on the page. Behavior is still a function the markup calls, and the field is an argument as a
+    ref is: no second way to attach behavior, and nothing to learn but the parameter's type.
+
+    Not chosen: the field's name as text, `js::fill(f.weight.as_str())`, which is how a script
+    was given one before (corten-ui's `RequiredWhen` passes its control so): the name is right, but
+    the script still looks it up by a string and narrows what it finds, which is the issue. A
+    `RadioNodeList`, as `namedItem` gives: it gives a list only for two or more controls of a name
+    and the control itself for one, and a script cannot make one, so a handler could not count on
+    its type. Requiring refs: the component that draws the fields would take refs from every form
+    that uses it, with or without a script, and a ref does not cross a component's edge. Marking the
+    kind on the field (`#[fields(select)]`) so the compiler checks it: a concept on `Fields` that
+    still does not see the markup another component writes, so the runtime check would stay.
+    Finding the control once, when the handler connects: a patch that replaces it would leave the
+    handler with the old one. The lookup in the runtime every page loads, as this change first had
+    it: 204 bytes with gzip on every page (15,341 to 15,545), for a call few pages make, where a
+    module of its own costs every page 51 (66 with the check that keeps a handler's run from
+    allocating, below) and only a page with a field 741 more and one
+    request,
+    which its first load makes with its handlers' modules, as a module script of the page. `RequiredWhen` keeps its name as text: its control may be a select,
+    radios or a checkbox, and it reads only the value, which no one element type covers. A walk
+    over every control of the form, as this change first had it: three fields took a run 600 to
+    980 us in a form of 500 controls, and 3.4 to 5.5 ms in one of 2,000 (below), against the
+    index's few. A load error that does not ask Corten's own modules whether their component is
+    listed in `App::components`: 14 bytes with gzip on every page, for a console message after a
+    server fails to serve one of them, so the hint stays as it is for every module.
+
+    What it costs, in the conflict order. Correctness gives up nothing: the control is the one the
+    form has when the handler runs, and a call whose form has another runs nothing rather than
+    hand the handler the wrong element. Performance: every page's runtime is 225 bytes larger raw,
+    66 with gzip (15,341 to 15,407) and 79 with brotli (13,846 to 13,925), paid once a release by
+    every user, chiefly for the parser's `~` branch (about 20 with gzip), loading the field module
+    for a call that takes one (14), and a handler's run that looks up a binding's other modules and
+    makes no closure or array when it has none, as before (about 15). The lookup and its message
+    are that module, 1,340 bytes raw, 741 with gzip and 640 with brotli as built (as the watchlist
+    serves it, with the line Corten appends, 1,551 bytes, 838 with its gzip and 716 with its
+    brotli, and an 82-byte script tag in the page), which only a page whose handlers take a field fetches, as one
+    more module script of the page; a page the runtime swaps in imports it with the page's
+    handler modules, and an event before it arrives gets the browser's default, as one before
+    those does. A field argument writes its posted name where a
+    ref writes its own: a handler given four controls (an input, a select, a textarea and two
+    radios) writes `data-on` of 58 bytes with fields against 30 with refs, but the form with refs
+    also writes a `data-ref` on each control and a `data-scope` on its component, so the whole
+    form is 266 bytes with fields against 331 with refs. Rendering a field writes its posted name as a string argument does;
+    the item page's `render_cost`, which draws no field (so never notes the field module), is unchanged: its bytes are the same
+    (7,772 for `<main>`, 9,236 for the document), and five alternated runs of each build gave
+    build and render of `<main>` in 19.2 us (18.0 to 21.7) on main and 20.4 us (18.0 to 22.8) on
+    this change, each build's runs varying more than the two differ, as they did when this was
+    first measured (19.2 us, 15.6 to 20.8, against 18.4 us, 16.0 to 21.0). The lookup reads the
+    form's index of names: a handler given three fields (an input, a select and a textarea) spent
+    4 to 10 us a run finding them in a form of 50, 500 or 2,000 controls, in Chromium, Firefox and
+    WebKit alike, where a walk over every control spent 60 to 95 us at 50, 600 to 980 at 500 and
+    3.4 to 5.5 ms at 2,000. Compile-time safety is
+    what the change buys: the name was already right as text (`f.weight.as_str()`), and now the
+    handler's parameter is the control, checked at the call.
+
+    Stands on: measured (the runtime's and the field module's minified sizes by Node's `zlib` gzip
+    and brotli at their defaults, once each build, and the module as the watchlist serves it, once;
+    a field's `data-on` and markup against a ref's for the same four
+    controls, once; the item page's `render_cost`, five alternated runs of each release build; the lookup of three
+    fields in a form of 50, 500 and 2,000 controls against a walk over them, the median of 15
+    batches in each of the three engines, once); platform (a form's `elements`
+    lists its controls in tree order, `form=` ones included, and a control's `localName` is its
+    tag; the smoke's field checks in Chromium, Firefox and WebKit); reasoned (a posted name
+    denotes one field of the form, a single control or the radios or checkboxes of a group that
+    share it, so the form is where a name finds that field's controls; the kind a form draws
+    is another component's markup, which no one `html!` sees); value (in the README's conflict
+    order: correctness first (the control is found when the handler runs, and no other is given),
+    then performance (README Value 1: the lookup is a module only the pages that call it load, not
+    bytes every page pays for a call few make), then compile-time safety, which is what the
+    change buys (Value 4: the field is typed at the seam and its name is the one `Fields` writes),
+    with one way to do things (Value 5: behavior stays a function the markup calls, and a handler
+    in a form reaches the form's control of a name as its field, whichever component draws it,
+    while a ref names an element of the handler's own component, a control among them when the
+    handler is outside the form, reads one of several that share a name through the control around
+    the event, or is a widget's that draws its own)).
+
+    Revisit when: `Fields` or `html!` comes to know the kind a form draws a field as, when the
+    kind check moves to the compiler and the runtime's goes; an app needs a control outside any
+    form, which is a ref's; a handler is measured spending time in the lookup; or most pages come to
+    load the field module, when its bytes belong in the runtime.
+
+    Last checked: 2026-11-15, a field's bytes against a ref's and the item page's `render_cost`
+    (native release builds) on `a69607283` against `c9ed56785`; 2026-11-15, the runtime's and the field module's sizes on `0a5e18c29`
+    against `1c72b0379`, and the smoke's field checks on it, the field module's loading among
+    them, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), and
+    `corten dev`'s reports of a mismatched field in Chromium 156.0.8078.4; 2026-11-16, the runtime's size on `03283dcb3` against `1c72b0379`, and the
+    smoke's retries of the field and format modules answered 503 and a link to a page that takes a
+    field, on it, in the same three engines; 2026-11-16, the smoke's field and retry checks in the
+    same three engines and `corten dev`'s reports, on `e5e260bd6`, which merges main's `read()`;
+    2026-11-16, the item page's `render_cost` (native release builds) on `f7fc2e5ee` against
+    `226b12b35`, the runtime's and the field module's sizes on it, and the smoke's checks of the form
+    a field is found in, an empty group and a group named for a select, in the same three engines,
+    and `corten dev`'s reports, on it; 2026-11-16, the runtime's and the field module's sizes, the
+    lookup of three fields in forms of 50, 500 and 2,000 controls against a walk over them in
+    Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2, the smoke's field checks in the same three
+    engines (an element whose id is a field's name among them), and `corten dev`'s reports in their
+    new words, on `1b6fc2f11`; 2026-11-16, the field module's sizes as built and as the watchlist
+    serves it, the smoke's field checks in the same three engines (a form-associated custom
+    element's `form=` among them, which the field module of `037bb827b` fails in each), and
+    `corten dev`'s reports, on `98e7ca184`.
+
+58. <a id="choice-plain-request-patch"></a>**A patch answering a browser's plain request is a debug build's 500 for now; a compile error
+    needs a new way to make a patch, which is its own change.** `req.patch` and
+    `req.patch_with_status` answer whatever request reached the handler. The runtime's
+    `data-patch` fetch (`corten: action`) applies the fragment; a browser that asked by itself (a
+    form without JavaScript, a link, a reload) shows it as the whole document, with no layout,
+    stylesheets or navigation, and every test that sends the runtime's request passes. A debug
+    build now answers that request, a browser's (`text/html`) `Mode::Document` request the runtime
+    did not fetch and whose fetch metadata, where the browser sends it, says it is a top-level
+    navigation (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`), the same test the check
+    for a page at a path with no `GET` makes, which now reads the fetch metadata too
+    ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)), but for any method, with a 500 that names the method
+    and the route (its pattern from `#[corten::routes]`, else the request's path) and says to
+    answer with `req.patch_or` or check `req.mode == Mode::Action` first. It reads the
+    `corten-patch` header every patch-making method sets, after the handler and the app's own steps
+    and beside the other debug checks in `page_or_error`, and carries the handler's `Set-Cookie` and
+    `Clear-Site-Data` to the error as that check does. A release build compiles none of it: the
+    request's method is cloned for the message only under `debug_assertions`, and the release path
+    is the one it was (measured below).
+
+    A handler's return type cannot carry it: what a handler answers is decided by `req.mode`, a
+    value of the request, and one handler answers both modes, so its type cannot be "patch" or
+    "page". [Choice 50](#choice-patch-routes) gave the type what it can carry, that a patch is
+    among the answers (`HtmlResult<Patches>`), which a plain request may still get from a handler
+    that checks nothing
+    ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)).
+    What can carry it is how a patch is made: `req.action() -> Option<Action<'_>>`, `Some` only in
+    `Mode::Action`, whose `Action::patch` and `Action::patch_with_status` would be the only way to
+    make a patch besides `patch_or`, `invalid` and `invalid_with`, as `req.invalid_with` already
+    hands its form side a `FormPatch` only in that mode; `req.patch` and `req.patch_with_status`
+    would go. Weighed in the order the README gives for a conflict: correctness (1) is the same either way once the
+    mistake is found, but a debug check finds it only where a test or a developer sends the plain
+    request, and a compile error finds it in every build; performance at the user's end (2) is the
+    same, since this check is not compiled in a release build and the token would be a borrow of
+    `Req` (reasoned, not measured); compile-time safety and one way to do things (3) favor the
+    token: an unchecked patch would not compile (Values 4), and it leaves one way to answer a
+    patch on a checked path where today there are two, `patch_or` or a hand check of
+    `req.mode == Mode::Action` before `req.patch` (Values 5). So the compile error is the better
+    answer, and this check gives up Values 4 until it lands. It is not this change because it
+    removes two public methods every handler that checks by hand calls (the deck builder's, the
+    watchlist's, the guides' and the agent skill's), and has questions of its own: how a
+    `patches` route's handler that checks by hand gives its page side the `Patches` kind, which
+    `patch_or` does itself, and whether `req.action()` reads a `req.mode` the handler wrote, which
+    [Choice 50](#choice-patch-routes) keeps as the app's override. That is a breaking change to the handler API, proposed
+    in [#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532); this check
+    is the stopgap until then. Also not chosen: `dev.js` saying so on the page, which sees nothing when no JavaScript runs,
+    the one case this is about; and checking only a `POST`, as the #1340 check does: a `GET` route
+    whose handler answers only a patch (a dialog's form, a part read again by the runtime) is drawn
+    bare by a link or a reload the same way.
+
+    What it does not see: a request whose fetch metadata says it is not a top-level navigation (a
+    page's own `fetch` that asks for HTML, an `<iframe>`'s load), whose answer is not shown as the
+    tab's page; a navigation a service worker passes on with `fetch(event.request)`, which reaches
+    the server as `navigate` to `empty` whether it was the tab's or a frame's, so it cannot be
+    told from a frame's and is not checked, though the worker may show its answer as the tab's
+    page (a known gap: Corten's own worker passes one on only when the browser sent no navigation
+    preload for it, as when the worker was not yet active as the navigation began; an app's own
+    worker may pass on every one); an `unstaged` route, which skips the stages it runs in; a fragment sent
+    without `corten-patch` (a response built by hand, or one put in place of the handler's through
+    `DerefMut`), which is not a patch to it; a relayed upstream answer (a `Relay`'s), checked by
+    the upstream; and a release build. A request the runtime makes is
+    never checked, its `corten: page` fetch of a whole page included. Browsers send fetch metadata
+    only to a secure context (HTTPS or `localhost`), so a debug build opened over plain HTTP at
+    another address (a phone on the LAN) gets none, and both checks take a page's own `fetch` that
+    asks for `text/html` there for a navigation: a false 500, which opening the app over HTTPS or
+    at `localhost` avoids.
+
+    Stands on: platform (a browser shows an HTML response to a navigation or a form submit as the
+    document, whatever its markup); platform (the
+    [Fetch Metadata](https://www.w3.org/TR/fetch-metadata/) headers a browser sends, on which both
+    checks' "top-level navigation" stands: `Sec-Fetch-Mode: navigate` with
+    `Sec-Fetch-Dest: document` for a link, a reload or a form it submits, `navigate` with
+    `iframe` for a frame's load, `cors` (or `same-origin`) with `empty` for a page's `fetch`,
+    and none to a URL that is not potentially trustworthy, so none over plain HTTP except to
+    `localhost`; probed in Chromium 156: each of those values at `localhost`, and no
+    `Sec-Fetch-*` header at all over plain HTTP to the machine's LAN address. That a script cannot
+    set them is [Choice 11](#choice-corten-request-header)'s probe); platform (what a navigation
+    a service worker answers carries: the request navigation preload sends keeps the navigation's
+    destination, `document` or `iframe`, and adds `Service-Worker-Navigation-Preload: true`, so
+    it is judged as the browser's own; one the worker passes on with `fetch(event.request)` is a
+    new request, which the
+    [Fetch Request constructor](https://fetch.spec.whatwg.org/#dom-request) gives no destination,
+    and arrives as `navigate` to `empty`, with no `Sec-Fetch-User` and no preload header, for
+    the tab's navigation and a frame's alike; probed in Chromium 156 and WebKit 27.2 at
+    `localhost`, a link, a reload and a frame's load through a worker of each kind. Taking
+    `navigate` to `empty` for the tab's would answer a frame's patch, passed on, with a false
+    500; a header Corten's worker added to say which it was would be a format of Corten's own for
+    one worker's case, and an app's own worker would still pass on navigations unmarked); reasoned (every
+    patch-making method sets `corten-patch` through one constructor, `html_response`, and the app cannot make an `HtmlResponse` but
+    through `Req`);
+    measured (callgrind, release, instructions per request through a route's `patch_or` in
+    process, 1,200 requests less 200 over 1,000, with the `#[ignore]` test
+    `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, alternate runs, the median
+    and the range: `55757d723` (before, six runs) against `55757d723` with only this change's
+    `crates/corten/src/page.rs` (three runs), the patch (`Mode::Action`) 17,969.79 (17,969.76 to
+    17,969.80) and 17,969.83 (17,969.83 to 17,969.87), the page (`Mode::Document`) 18,382.70
+    (18,382.68 to 18,382.82) and 18,382.72 (18,382.71 to 18,382.76), the same within a tenth of an
+    instruction; the whole change (three runs), whose other files are tests, an example and
+    documents, 17,974.49 (17,974.48 to 17,975.89) and 18,388.71 (18,388.59 to 18,388.78), about
+    five and six more, which the build with `page.rs` alone does not show. Those come from the
+    tests: `55757d723` with only `crates/corten/src/tests.rs` as at `019058f59` (three runs,
+    alternating with three of `55757d723` rebuilt) counts 17,975.85 (17,975.82 to 17,975.88)
+    and 18,388.76 (18,388.73 to 18,388.76) against 17,969.86 (17,969.78 to 17,969.86) and
+    18,382.79 (18,382.69 to 18,382.84), six more in each mode with no line of the request path
+    changed. `tests.rs` is `#[cfg(test)]`, compiled into the same test binary as the code it
+    counts, and the release profile builds that binary as one codegen unit with thin LTO, so more
+    tests in it can move what the optimizer inlines and lays out (reasoned; which functions moved
+    was not traced); an app's binary has no `tests.rs`.
+    The counted page asks for no HTML, which in a release build reaches the
+    same code, since the check and the method it clones are not compiled there); value (Values 3, a
+    form works without JavaScript; Values 9, the developer sees it in a test).
+
+    Revisit when: [#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)
+    lands, when an unchecked patch does not compile and this check is kept only for answers built
+    outside those methods, or removed, or is declined, when this Choice says why the debug check
+    is enough; or an app needs a fragment answered to a top-level navigation on purpose, which
+    would need a way to say so; or the runtime stops marking its own
+    requests with the `corten` header ([Choice 11](#choice-corten-request-header)), on which "the
+    runtime did not fetch it" stands; or a browser changes the fetch metadata it sends (a
+    navigation without `navigate` and `document`, a frame or a script's fetch with them, or the
+    headers sent over plain HTTP too), on which "a top-level navigation" stands; or a navigation
+    a service worker passes on can be told from a frame's (a browser keeping its destination, or
+    an app needing the case checked), when the known gap above closes.
+
+    Last checked: 2026-11-16, the router test
+    `a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds` and its release
+    counterpart (the release build's run with `--release`), on `855797ab6`; 2026-11-16, the callgrind runs on
+    `4060b8b27` and, of the tests alone, on `019058f59`'s `tests.rs`; 2026-11-16, the reading of
+    `html_response`'s callers in `crates/corten/src/page.rs` that the reasoned premise rests on, on
+    `855797ab6`; 2026-11-16, the fetch metadata a page's navigation, form submit, `<iframe>` and
+    `fetch` (with `Accept: text/html`) send, probed in Chromium 156 at `localhost` and over plain
+    HTTP at a LAN address, against the Fetch Metadata Working Draft of 21 September 2026;
+    2026-11-16, the fetch metadata of navigations a service worker answers from navigation preload
+    and passes on with `fetch(event.request)`, probed in Chromium 156 and WebKit 27.2 (Firefox was
+    not run).
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -4560,8 +4832,9 @@ rules something out.
    two cannot drift. It is declared `-> impl Patch`, and its markup's top-level elements each have
    a `#[derive(Id)]` id, which the compiler checks (`view::Patch`), so no patch loses an element in
    the browser.
-3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, `event`, `target`, `signal`,
-   `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
+3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, form fields (a form's
+   control by its `#[derive(Fields)]` name, found in the handler's form,
+   [Choice 57](#choice-field-arguments)), `event`, `target`, `signal`, `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
    running handler's component's own. (Three exceptions: `CopyButton` copies an element outside
    its component, which it is given as a typed `Id` value and finds by that id, since refs do
    not reach outside a component; `RelativeTime` keeps the page's relative times in its
@@ -4720,16 +4993,19 @@ by design; where it is known, a limit says what would lift it or why it is so.
     that says `patches`, mounted by hand or by its routes module, against the kind of the `get`
     handler it is given ([Choice 50](#choice-patch-routes)), and so is the shape of a hand-written
     `Route`'s path. Those assertions fail any build that generates the code that mounts the route:
-    `cargo build`, and `cargo test` (so `corten check`) when something it builds reaches the
-    mount, a test, a doctest or a library's own public non-generic code, which it builds for the
+    `cargo build`, and `cargo test` when something it builds reaches the mount, a test, a
+    doctest, an example or a library's own public non-generic code, which it builds for the
     doctests and the binaries, as the template's `app()` in its library is. `cargo test --lib`
     builds only the library's test binary, which generates what its unit tests reach, so it fails
     when a unit test reaches the mount and not otherwise. They do not fail `cargo check`, clippy
     or rust-analyzer, which generate no code, nor `cargo test` in a crate whose only mount is in a
-    binary's `main`, since a binary's test build never generates `main`'s callees; `corten check` passes such a
-    crate, and `cargo build` then refuses it
-    ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)
-    proposes that `corten check` build the binaries too). `Refused::sign_in`'s 401 to a
+    binary's `main`, since a binary's test build never generates `main`'s callees. `corten check`
+    builds every target (`cargo build --all-targets`) after clippy and before the tests, so it
+    fails such a crate as `cargo build` does, and one whose mount only a bench's own `main`
+    reaches
+    ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429));
+    a mount only a feature the check does not turn on reaches is evaluated only by a build with
+    that feature. `Refused::sign_in`'s 401 to a
     data client carries no `WWW-Authenticate`, short of RFC 9110 (15.5.2), since a session cookie
     has no HTTP authentication scheme to name; a lookup that also takes a token should answer a
     wrong one with `unauthorized`, which carries one.
@@ -5029,6 +5305,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     the drawing's. Following the parsing context across components would lift this: each
     component's render would tell the next what it is written into, at a cost to every render,
     for markup few apps write.
+
 31. <a id="limit-read-redirect"></a>A script's `read()` follows no redirect and cannot see where one
     goes. It asks with `redirect: "manual"`, since the target is another route's answer and not
     the route's data, and the browser hands it an opaque answer with no `Location`, so it rejects
@@ -5039,3 +5316,29 @@ by design; where it is known, a limit says what would lift it or why it is so.
     to sign in does it with `Refused::sign_in`, and a script reads that as a 401. A script that
     meets either navigates to the URL, and the browser follows the redirect or the sign-in
     ([Choice 55](#choice-screen-read)).
+
+32. <a id="limit-field-kind"></a>A form field given to a handler (`js::fill(f.weight)`) is checked
+    against the handler's parameter when the crate compiles, but whether its form draws that
+    control is checked only when the handler runs ([Choice 57](#choice-field-arguments)). A
+    field's name carries what it reads (`FieldName<Condition>`), not whether a form draws it as a
+    select or as radios, a call may name a field no control on the page has, and the markup that
+    draws the control may be another component's, often in another crate, so no one expansion of
+    `html!` sees both the call and the control. A call that takes a single control (`i`, `s`,
+    `t`) whose form has no control of the name, more than one, or one of another kind, or that
+    takes a group (`*`) whose form has a control of the name that is not an input, runs nothing
+    and throws what it takes and what the form has instead
+    (`corten: shipping.fill takes field weight as one <input>, and its form has select`), and
+    `corten dev` reports the same when the page or a later draw puts the call on the page, so the
+    mistake shows on load rather than on the first event that calls it. A group with
+    no control of the name is `[]` and is neither an error nor reported, since a form may leave
+    out a group of radios. It checks again for markup added to the page and a control that joins a
+    form, not when a `name`, `form` or `data-on` attribute changes or a control is removed, so a
+    mistake those make shows only as the runtime's error when the handler runs. It reports a call
+    once, when it is drawn: a call drawn before a later patch or script adds its control keeps that
+    report in the console though the handler then finds the control, so a report on a page that
+    draws its controls after its calls is checked against the page as it is. A call and its control
+    drawn in one `html!` expansion (a `<select name={f.service}>` given to a handler that takes an
+    input, in the same form) could be checked when the crate compiles, since the macro sees both;
+    it is not yet ([#1536 A form field's control kind is not checked at compile time when the call and the control are in the same html! expansion](https://github.com/corten-run/corten/issues/1536)),
+    and that would not reach the case this Choice is for, fields another component draws. It lifts
+    when the kind a form draws for a field is known where the call is checked.

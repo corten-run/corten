@@ -49,9 +49,10 @@ export function showAll(rows, rest, button) {
 | `let (rows, rest) = refs();`, `ref={rows}` on a `<tbody>` | a parameter `@param {HTMLTableSectionElement} rows` (`HTMLTableSectionElement[]`: every element with the ref; `Map<string, ..>`: every one by its `key={..}`; `Map<.., number>`: every one with the value it gives, `ref={row.with(cents)}`, [below](#lists-and-larger-components)) |
 | `on:click={js::showAll(..)}` | runs `showAll` on a click on that element |
 | `row.closest()` | the element with ref `row` around the event's target (the handler runs only inside one) |
+| `f.weight`, a `#[derive(Fields)]` field ([Form fields](#form-fields)) | its control in the handler's form, found by name when the handler runs: `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for radios or checkboxes that share the name |
 | `js::Selection { rows: row, count }` | a `@typedef` of elements: one object argument |
 | `event`, `target`, `signal`, `scope` | the event (`PointerEvent` for a click), the element with the `on:`, an `AbortSignal` that aborts when it leaves the page, the component's root element |
-| a Rust value: `&str`, a number, `bool`, a typed route, a slice, array or `Vec` of strings for `string[]`, a `corten::script::ElementId` (or a slice, array or `Vec` of them) for `ElementId` (`ElementId[]`) from `corten`, made only from a `#[derive(Id)]` type (`ElementId::of(&SalesId)`, never a string; corten-ui's `sorted(&SupplyId)` is one for a sorted table, and its `CopyButton` passes one), any `ToJson` (feature `json`) for a parameter typed `unknown` (which also takes a ref, `event`, `target`, `signal` or `scope`) | the JSON value (an integer past 2^53 stops debug builds, since a JavaScript number cannot hold it exactly: pass a 64-bit id as a string; a float for a `number` is written as `Display` writes it, [Numbers in JSON](app.md#numbers-in-json)). `unknown` claims nothing the call does not check, so the script narrows it before using it. Any other JSON shape (`{ count: number }`, `number[]`, `string \| null`, `object`, `any`, a `@typedef` of plain values) has no Rust type the call is checked against, so a call to that handler does not compile, and a warning on the call says why: type the value with a generated declaration (next row). The same holds for an element or an event in a shape no call is checked against (`MouseEvent \| KeyboardEvent`, `HTMLElement \| null`, `EventTarget`, `Node`): take an interface the rows above check (several events take the one they share, `UIEvent` or `Event`, and the script narrows it) |
+| a Rust value: `&str`, a number, `bool`, a typed route, a slice, array or `Vec` of strings for `string[]`, a `corten::script::ElementId` (or a slice, array or `Vec` of them) for `ElementId` (`ElementId[]`) from `corten`, made only from a `#[derive(Id)]` type (`ElementId::of(&SalesId)`, never a string; corten-ui's `sorted(&SupplyId)` is one for a sorted table, and its `CopyButton` passes one), any `ToJson` (feature `json`) for a parameter typed `unknown` (which also takes a ref, `event`, `target`, `signal` or `scope`, but not a form field, which needs the control's type to know what to find) | the JSON value (an integer past 2^53 stops debug builds, since a JavaScript number cannot hold it exactly: pass a 64-bit id as a string; a float for a `number` is written as `Display` writes it, [Numbers in JSON](app.md#numbers-in-json)). `unknown` claims nothing the call does not check, so the script narrows it before using it. Any other JSON shape (`{ count: number }`, `number[]`, `string \| null`, `object`, `any`, a `@typedef` of plain values) has no Rust type the call is checked against, so a call to that handler does not compile, and a warning on the call says why: type the value with a generated declaration (next row). The same holds for an element or an event in a shape no call is checked against (`MouseEvent \| KeyboardEvent`, `HTMLElement \| null`, `EventTarget`, `Node`): take an interface the rows above check (several events take the one they share, `UIEvent` or `Event`, and the script narrows it) |
 | a value of a Rust type `corten::types` writes a declaration for (`SortBy::Price`, an enum that derives `ToJson`, added with `Types::add`) | a parameter typed by that declaration, `@param {import("../types/app").SortBy} by` (or a `@typedef` of it, or of that): the call takes that Rust type and nothing else, so one handler serves every name and a renamed variant fails to build. The Rust type is the one of that name in the component's module, so bring it in with `use` under its declared name (the declaration is named after the Rust type, whatever `#[serde(rename)]` the type has). A declaration types a value alone: a list, an optional value or a generic around one does not compile, so declare a Rust type for the whole value. A call to a handler with a string literal anywhere in a parameter's type (`"name" \| "price"`, in a list, with `null`, optional, in a tuple or an object, through typedefs, in a typedef of plain values, or as a group's field) does not compile, since a set of names written that way would take any value; a warning on the call says why. A key is not a name: an object's (`{ "aria-label": string }`), an indexed type's (`HTMLElementTagNameMap["dialog" \| "details"]`), and the keys and members `Pick`, `Omit` and `Exclude` take after the type (`Extract<string, "a" \| "b">` is the set itself); neither is a callback's parameter name (`(Mode) => void`), nor a template literal type (a set in its `${..}` counts); such a type is still one no call is checked against, so it refuses the call as the row above says. A call does not compile either when a parameter holds a generated declaration in a shape the call is not checked against, through typedefs and in a typedef of plain values in any shape (`P`, `P \| null`, `P[]`, or inside another typedef). The script itself compiles: an export only other scripts import types its parameters as it needs. Typedefs that refer to each other are seen through as one, and each is written out once, so a recursive one (a `Json` type) costs no more than another. A generic typedef of the script's own (`@template`) is a definition, not a name for another type |
 | `on:connect={..}` | runs when the element joins the page (first load, navigation, patch, a script's insert); on the first load it runs before the page's `load`, and a navigation it starts then (a link it clicks, a form it submits) is a full page load, not a swap |
 | `on:document:keydown={..}` | runs for that event anywhere on the page while the element is on it ([below](#events-anywhere-on-the-page)) |
@@ -504,11 +505,83 @@ fn AccountChooser<'a>(accounts: &'a [Account]) -> impl Render {
 }
 ```
 
-A patch removes rows as well as replacing them: `req.patch(html! { for id in &done { {Remove(RowId(id))} } })`
+A patch (in `Mode::Action`) removes rows as well as replacing them: `req.patch(html! { for id in &done { {Remove(RowId(id))} } })`
 (`corten::view::Remove`, a `<template id data-remove>` the runtime applies), and adds them with
 `view::Append(RowsId, rows)` (`<template id data-append>`). `RowId` is the
 `#[derive(Id)]` the row prints its id with ([typed ids](views.md#typed-links-and-messages)), so
 the two cannot drift.
+
+## Form fields
+
+A handler takes a form's control as its field: the markup passes the `#[derive(Fields)]` name,
+as `name={..}` does, and the script's parameter is the control. A handler in a form (on it,
+inside it, or joined to it with `form=`) reaches the form's control of a name this way, whichever
+component draws it (a package's fields that the form shares with forms that have no script, which
+has no refs to give one). A ref names an element of the handler's own component: every element
+that is not a form's named control, and a named control the handler needs as that element rather
+than as its form's control of the name. That is one a handler outside the form reads (the deck
+builder's hidden `version`, which its `on:connect` on the element around the form reads), one of
+several that share a name, read through the control around the event (`copies.closest()`, the
+count input of the deck line that changed), and a widget's own control (corten-ui's
+`NumberField`), which it draws for whatever field the app names, in a form or not. A `@typedef`
+group of refs that a handler outside the form also takes keeps its controls as refs for every
+handler that takes it, those inside the form too: the deck builder's `Parts` holds `version`, and
+its lines' `<ul>`, inside the form, takes `Parts` as `start` does.
+
+```rust,ignore
+let f = Shipment::FIELDS;
+html! {
+    <form>
+        <select name={f.service} on:change={js::fill(f.service, f.weight, f.size)}>..</select>
+        <PackageFields />  // draws the weight input and the size radios, with no refs
+    </form>
+}
+```
+
+```js
+/** @param {HTMLSelectElement} service @param {HTMLInputElement} weight @param {HTMLInputElement[]} sizes */
+export function fill(service, weight, sizes) {
+  weight.value = service.value === "air" ? "2" : "9";
+  for (const size of sizes) size.checked = size.value === "small";
+}
+```
+
+| The form draws | The parameter |
+|---|---|
+| an `<input>`, a checkbox (a `bool` field) | `HTMLInputElement` |
+| a `<select>` (`multiple` for a `Vec`) | `HTMLSelectElement` |
+| a `<textarea>` | `HTMLTextAreaElement` |
+| radios, or checkboxes that share a name (a `Vec`) | `HTMLInputElement[]`: every one, in the form's order; none is `[]` |
+
+The page gets `data-on='change:shipping.fill(~s"service",~i"weight",~*"size")'`. When the handler
+runs, the runtime finds the controls of that name in the form of the element with the `on:` (the
+form itself; for a control, a form-associated custom element among them, the one it belongs to,
+`form=` included; else the one around it. A button whose `form=` names no form is in none, as its
+submit is, and a `<label>` or `<legend>`, which is not a control, takes the form around it, not the
+labelled control's), so a control a patch replaced is the new one. The lookup uses the form's own index of
+its controls' names, so it costs a run a few microseconds however many controls the form has. A field of a group or a row is passed the same way
+(`f.parcels.at(&1).weight`, `parcels[1].weight`), and so is one in a `@typedef` group. The name is
+the one `Fields` writes, so a renamed field is renamed in both places; text where a field belongs,
+and a field where the handler takes text or another element, do not compile.
+
+What the compiler cannot see is the control. A field's name carries what it reads
+(`FieldName<Condition>`), not whether the form draws it as a select or as radios, and the markup
+that draws it may be another component's. So the runtime checks it: a call that takes one
+control (an input, select or textarea) whose form has none of that name, more than one, or one of
+another kind, and a call that takes a group whose form has a control of the name that is not an
+input, runs nothing and throws what it takes and what the form has instead (none, more than one,
+another kind, or no form at all): `corten: shipping.fill takes field weight as one <input>, and its form has select`.
+A group with no control of the name is `[]`, as a group of radios the form left out is.
+Under `corten dev` the console says the same as soon as the page draws such a call, before
+anything calls it ([design Limit 32](../design.md#limit-field-kind)). A group is an array, not the
+`RadioNodeList` a form's `elements.namedItem` gives: `namedItem` gives a list only for two or more
+controls of a name and the control itself for one, and a script cannot make one, so the handler
+could not count on its type. Besides the cases above, a ref is an `<output>`, a list, a button, a
+control outside any form, and an `<input type="image">`,
+which the browser leaves out of a form's controls since it is a submit button that posts `name.x`
+and `name.y`, never its field. A page whose handlers take a field loads the module that finds it,
+`corten-field` (1,340 bytes, 741 gzipped), as a format argument loads `corten-format`; a page with
+none does not.
 
 ## Shared scripts
 
@@ -737,13 +810,44 @@ throws; inside one that something else's handler interrupts (an event it dispatc
 version, the undo and redo stacks and the saves still on their way, shared by its handlers and its
 feed's callbacks.
 
+## Reading a part again
+
+`patch(html, signal?)` from `corten` applies trusted markup, not a fetched string. Its `html`
+parameter is `TrustedHTML`: pages require Trusted Types, so the browser refuses a string with a
+`TypeError`, and `corten check` refuses it too. Only a policy the page explicitly allows can
+make that value; `patch` does not use the runtime's policy for a script's input.
+
+When a script knows a part changed (a provider's confirmation, a timer or a message), give it
+a ref to a hidden GET form marked `data-patch` and call `requestSubmit()`:
+
+```rust,ignore
+let refresh = refs();
+html! {
+    <form hidden method="get" action={url::Status { id }} data-patch ref={refresh}></form>
+    <button type="button" on:click={js::refresh(refresh)}>{t.refresh()}</button>
+}
+```
+
+```js
+/** @param {HTMLFormElement} form */
+export function refresh(form) {
+  form.requestSubmit();
+}
+```
+
+The route answers the part as a patch (`req.patch_or` if it also serves a page). The runtime
+fetches and draws it through its own policy. Use `requestSubmit()`, not `submit()`, which skips
+the submit event the runtime handles. For reads after a server-chosen delay, render
+[`ReadAgain { after }.from(route)`](requests-and-forms.md#a-read-that-has-not-caught-up-yet)
+instead; each answer decides whether to read again.
+
 ## Rules
 
 1. Markup is written in `html!`, never built from strings in a script. A script makes new
    elements by cloning markup the server rendered (a `<template ref={rest}>`, or a view's rows,
    `rows(..).push(items)`), and moves, shows, hides or writes the ones on the page.
-2. A script reaches the page only through its arguments: refs, `event`, `target`, `signal`,
-   `scope`, values. A handler that looks elements up by selector is a smell.
+2. A script reaches the page only through its arguments: refs, form fields, `event`, `target`,
+   `signal`, `scope`, values. A handler that looks elements up by selector is a smell.
 3. User-facing text lives in views, the view model or the catalog, never in scripts. Text that
    depends on what a script computed is a message the markup passes (below).
 4. Cleanup is `signal` alone: pass it to `addEventListener`, `fetch`, `subscribe` and `mount`.

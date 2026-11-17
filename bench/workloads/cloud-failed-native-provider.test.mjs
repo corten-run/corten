@@ -102,14 +102,14 @@ test("absolute retirement expiry survives provider consumption and its asynchron
 
 test("private HTTP dispatch rechecks absolute expiry immediately before connect and end", async () => {
   for (const phase of ["dispatch", "end", "fresh"]) {
-    const realNow = Date.now, start = realNow(); let offset = 0, connects = 0, sends = 0, destroyed = 0, clockReads = 0;
-    Date.now = () => realNow() + offset;
+    const realNow = Date.now, start = realNow(); let offset = 0, connects = 0, sends = 0, destroyed = 0, privateClockReads = 0;
+    Date.now = () => { privateClockReads++; return realNow() + offset; };
     try {
       const run = createProviderEngine({ repo: resolve("."), spawn, now() {
-        const current = Date.now();
-        // Engine's last clock sample is fresh; private HTTP sees an expired proof.
-        if (phase === "dispatch" && ++clockReads === 3) offset = 61001;
-        return current;
+        // Keep the sampled engine clock fresh while the private HTTP clock sees
+        // expired proof, independently of credential/engine clock-read counts.
+        if (phase === "dispatch") offset = 61001;
+        return realNow();
       }, connect(url, options, callback) {
         connects++; assert.equal(url.href, "https://api.digitalocean.com/v2/droplets/123"); assert.equal(options.method, "DELETE");
         if (phase === "end") offset = 61001;
@@ -120,17 +120,20 @@ test("private HTTP dispatch rechecks absolute expiry immediately before connect 
           const res = new EventEmitter(); res.statusCode = 204;
           callback(res); queueMicrotask(() => res.emit("end"));
         };
-        queueMicrotask(() => req.emit("socket", { connecting: false }));
+        const socket = new EventEmitter(); socket.connecting = false;
+        queueMicrotask(() => req.emit("socket", socket));
         return req;
       } });
       if (phase === "fresh") {
         assert.equal((await run(args, 120000, false, start + 60000)).status, 0);
         assert.equal(sends, 1); assert.equal(connects, 1);
       } else {
-        await assert.rejects(run(args, 120000, false, start + 60000));
+        await assert.rejects(run(args, 120000, false, start + 60000), (error) => {
+          assert.equal(error.providerDiagnostic?.code, "delete-request"); assert.equal(error.controlUncertain, true); return true;
+        });
         assert.equal(sends, 0); assert.equal(connects, phase === "end" ? 1 : 0);
         assert.equal(destroyed, connects);
-        if (phase === "dispatch") assert.equal(clockReads, 3);
+        assert.ok(privateClockReads > 0, "the private HTTP clock, not an earlier engine gate, observed expiry");
       }
     } finally { Date.now = realNow; }
   }

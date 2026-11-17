@@ -37,7 +37,7 @@ not remove that requirement.
 | A route outside all of the above | none: every route gets every default here | `unstaged` on one route's `#[route(..)]`: no same-origin check, middleware, security headers, cache rule, deadline or error page, for an answer the same for everyone who can reach it; the host check stays ([below](#a-route-outside-the-stages)) |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language`, or the locale a page's URL names (a `Locale<Msg>` route field the handler gives `req.set_locale`, [Views](views.md#a-locale-in-the-url)); each page says its locale in `Content-Language` |
 | Visitors' time zones | not known: dates are UTC unless a zone is given | `.client_zone()`: the runtime keeps the browser's zone in a `corten-zone` cookie, `Option<ClientZone>` reads its name and, with the `zones` feature, `req.zone()` gives it with its rules; `.zoned_dates()` (`zones` feature) also writes dates in it ([Views](views.md)) |
-| Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent, and a live region drawn inside another (`errors.form_message()` inside the kit's destructive `Alert`), which a screen reader may announce twice, and it warns of a closed `<dialog>` or popover that a rule inside `@media` or `@container` gives a `display` (a filters rail drawn in place from a breakpoint, or an open look written without `[open]`), which the components' stylesheet keeps hidden, with the rule for each, from `/corten/dev.js`, a module only a dev server serves | `.dev(bool)` |
+| Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent, and a live region drawn inside another (`errors.form_message()` inside the kit's destructive `Alert`), which a screen reader may announce twice, and a handler given a form field its form does not have as the handler takes it (`js::fill(f.weight)` where the form draws `weight` as a select, or no `weight`), with what the form has, which the runtime would refuse when the handler runs ([Scripts](scripts.md#form-fields)), and it warns of a closed `<dialog>` or popover that a rule inside `@media` or `@container` gives a `display` (a filters rail drawn in place from a breakpoint, or an open look written without `[open]`), which the components' stylesheet keeps hidden, with the rule for each, from `/corten/dev.js` and the modules it imports, `/corten/on.js` (the `data-on` parser) and `/corten/field.js` (the field lookup), which only a dev server serves | `.dev(bool)` |
 
 `App::header_timeout` (30 seconds unless set) bounds what comes before a request: a client that
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
@@ -563,7 +563,9 @@ What it sends is what the app's own pages send, typed the same way:
    GET form's checkbox (`?mine=on`, where a link writes `true`) is a `Local`.
 3. A request asks for HTML as a browser's page load does. `.mode(Mode::Action)` asks as the
    runtime's `data-patch` submit does, `Mode::Navigation` as its link, `Mode::Data` as a client
-   that wants JSON.
+   that wants JSON. So the same form posted without `.mode(..)` is the browser without JavaScript:
+   in a test (a debug build) a handler that answers it with a patch, or with a page at a path with
+   no `GET`, gets a 500 that says why ([Where a form posts](requests-and-forms.md#where-a-form-posts)).
 4. `.cookie(name, value)` sends a cookie (`answer.cookie(name)` reads one an answer set),
    `.header(name, value)` any other header, `.peer(ip)` the connection's address
    ([`ClientIp`](#the-clients-address)), and `Client::call(method, &route).body(type, bytes)` a body that
@@ -2481,6 +2483,11 @@ page that may not be framed) opens in the parent's tab: `<base target="_top">` i
 head, with `data-no-prefetch` around its links, since a hover's prefetch would fetch a page the
 frame never shows.
 
+To read a part of the page again from a script, use a hidden GET `data-patch` form with
+`requestSubmit()`, or render `ReadAgain::from` for a server-chosen delay
+([example](scripts.md#reading-a-part-again)). `patch(html, signal?)` takes `TrustedHTML`, not
+the text read from a fetched response; it does not pass a script's input through the runtime's policy.
+
 Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
 (`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rule-html-macro):
 markup reaches the page from a string (`innerHTML`, `insertAdjacentHTML`, `DOMParser`, the
@@ -2797,7 +2804,8 @@ read (a JSON error names the value it could not parse, so part of an upstream an
 message above it could already (an HTTP client's names the URL); none of it reaches the client.
 A debug build's error about the app's own code (a component it
 does not serve, a `Refresh` header, a write redirected outside `form-action`, a page answering
-a post to a path with no `GET` ([Where a form posts](requests-and-forms.md#where-a-form-posts)))
+a post to a path with no `GET`, a patch answering a browser's plain request
+([Where a form posts](requests-and-forms.md#where-a-form-posts)))
 is the exception:
 it is set in every debug build, so a router test's error page names it.
 The error page `corten new` writes names every case without `_`, so when Corten adds one the

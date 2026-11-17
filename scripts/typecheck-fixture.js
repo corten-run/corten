@@ -4,9 +4,10 @@
 // Handler parameters need nothing here: the Rust markup's calls are checked against each
 // handler's JSDoc when the crate compiles. What crosses into scripts as JSON or as an event is
 // declared from the Rust types in examples/*/types/app.d.ts.
-import { keep, subscribe } from "corten";
+import { keep, patch, subscribe } from "corten";
 import { shortcut } from "corten/keys";
 import { read, ReadError } from "corten/read";
+import { field } from "../crates/corten/js/field.js";
 import { rows, view } from "corten/views";
 // @ts-expect-error noUncheckedSideEffectImports: an import run only for its effects names a module that exists.
 import "./no-such-module.js";
@@ -18,6 +19,15 @@ import { register } from "corten";
 /** @typedef {import("../examples/watchlist/types/app").Stock} Stock Generated from the Rust struct. */
 /** @typedef {import("../examples/seller-desk/types/app").Level} Level Generated from the Rust struct. */
 /** @import { FeedUrl } from "corten" */
+
+/** @param {import("corten").TrustedHTML} html @param {import("corten").TrustedPolicy} policy @param {AbortSignal} signal */
+export async function patchHTML(html, policy, signal) {
+  await patch(html);
+  await patch(html, signal);
+  await patch(policy.createHTML("<p id=\"status\">Updated</p>"));
+  // @ts-expect-error Pages require TrustedHTML: a script's string is refused by the browser.
+  await patch("<p id=\"status\">Updated</p>");
+}
 
 /** @param {AbortSignal} signal @param {FeedUrl<Stock>} stocks */
 export function connect(signal, stocks) {
@@ -40,6 +50,23 @@ export function keys(event, click, screen) {
   // @ts-expect-error A shortcut is a key: a click is not one.
   shortcut(click);
   return key === "Control+s" || shortcut(event) === "p";
+}
+
+// A form field reaches its handler as the control its form draws, of the kind the compiler matched
+// to the handler's parameter (`js::weigh(f.weight)`, for an `HTMLInputElement`, writes
+// `~i"weight"`; the `compile_fail` doctests on `FieldName` hold the call). The field module gives
+// each kind that parameter's type, and never the field's name.
+/** @param {Element} el */
+export function weigh(el) {
+  /** @type {HTMLInputElement | null} */ const weight = field(el, { control: "i", name: "weight" });
+  /** @type {HTMLInputElement[] | null} */ const sizes = field(el, { control: "*", name: "size" });
+  // @ts-expect-error A select's field is given as its HTMLSelectElement, not as an input.
+  /** @type {HTMLInputElement | null} */ const service = field(el, { control: "s", name: "service" });
+  // @ts-expect-error A field is given as its control, not as its name.
+  /** @type {string | null} */ const named = field(el, { control: "i", name: "weight" });
+  // @ts-expect-error A field's kind is one of i, s, t and *: a checkbox is an input.
+  field(el, { control: "c", name: "gift" });
+  return [weight, sizes, service, named];
 }
 
 // The values a ref's elements give (`ref={row.with(cents)}`): the call is checked against the

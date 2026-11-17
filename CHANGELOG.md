@@ -8,6 +8,80 @@ Corten is pre-1.0, so any minor version may change the API.
 - Preserve type-token punctuation in `#[derive(Fields)]`, so group, row and key types
   written as paths compile, including keys of `#[fields(map)]` fields.
 
+- `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
+  Trusted Types enforcement would reject. The scripts guide shows how to read a part again
+  with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
+
+- Apply supported lean settings to catalog-page competitors as well as Corten:
+  reduce optional access logging, compression and timer work where supported,
+  record the exact profile in container evidence and reports, and retain full
+  source/rendering correctness. Richer groups keep their existing configuration.
+  Keep ASP.NET's native Kestrel header/keepalive timers at their defaults: setting
+  them to infinite caused early connection closure in Linux correctness checks
+  ([#1564 Catalog lean ASP.NET fails native JSON correctness with connection errors](https://github.com/corten-run/corten/issues/1564)).
+
+- Configure the standalone catalog Corten benchmark for the lean rendering
+  workload: omit optional compression and remove handler/header/send timers using
+  supported settings, while keeping page stages, error logs, full correctness
+  checks and the HTTP-source timeout. Production defaults and richer benchmarks
+  are unchanged; historical results keep their measured configuration. Keep the
+  shared JSON API consumer's default compression build and timers by selecting
+  lean build/runtime settings only in the catalog runner.
+
+- Preserve completed catalog load/request failures as versioned, replayable failed
+  app outcomes, separate from successful baselines and apparatus failures. Retain
+  all passes, raw counters, participant lifetimes and side errors; require successful
+  checker boundaries before any cold timing and attempt-wide upstream lifetime/CPU
+  continuity. Reject unknown prior termination in v3 functional participants and
+  require full lifetime-state consistency across observations. Summary-only reports
+  reconcile failure ledgers and baseline disposition with retained phases before
+  labeling an attempt complete. Keep HTTP error responses failed regardless of
+  their media type, retaining their content-check failures; report successful
+  throughput, failed requests and drops separately without excluding healthy peers
+  ([#1556 Catalog benchmark discards failed-load metrics and cannot replay completed target outcomes](https://github.com/corten-run/corten/issues/1556)).
+
+- The watchlist smoke's check that a submit which waited for a write the network failed is not
+  sent holds that write until the newer press is made, and presses both buttons in the page, where
+  it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the
+  failure, went out as a submit of its own and watched a stock that a later case then could not
+  select, which ended the run in a 30 s `selectOption` timeout
+  ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
+  Runtime behavior is unchanged.
+
+- Distinguish a failed benchmark account observation from uncertain worker lifetime
+  only after native request/response/socket closure, a bound terminal reply and
+  timely exit0. Preserve the failed operation and fresh cleanup proofs without
+  retries, worker reuse or repeated mutations; uncertain paths keep their locks.
+
+- Preserve closed rejection-site details for benchmark provider account requests
+  through private-worker diagnostics and cached teardown, without exposing native
+  errors or changing retries, credential use, acceptance or lifecycle locks.
+
+- Launch only the first complete official benchmark group initially; require its
+  replayed native evidence and confirmed cleanup before a separately approved,
+  once-only admission of the remaining dedicated group hosts. Keep deferred groups
+  visible, the complete registry mandatory and legacy collection available.
+
+- Show the grouped controller's closed failure stage and allowed provider detail
+  in direct CLI errors, without reflecting raw exceptions or changing recovery,
+  cleanup or benchmark acceptance rules.
+
+- A handler is given a form's control by its `#[derive(Fields)]` field,
+  `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
+  `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
+  radios or checkboxes that share the name. The runtime finds it by name in the handler's form
+  when the handler runs, so a component that draws the fields for forms with and without a
+  script needs no ref, and the script looks nothing up by a name as text. Text where a field
+  belongs, and a field where the handler takes text or another element, do not compile; a call
+  that takes a single control (an input, select or textarea) whose form lacks it, has more than
+  one of the name, or has one of another kind, throws, as does a group whose form has a control of
+  the name that is not an input, saying what the call takes and what the form has instead, and
+  `corten dev` reports the same when the page draws it (a group with none is `[]`). The lookup
+  is a module of its own (`corten-field`, 741 bytes with gzip) that only a page whose handlers take
+  a field loads, and reads the form's index of names, a few microseconds a run in a form of 2,000
+  controls; every page's runtime is 66 bytes larger with gzip
+  ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
+
 - Clear only an already stopped, masked firmware unit's failed state during
   fresh benchmark setup, then recheck the mask, inactive state and service PID.
   Record fixed setup stages, source lines and original failure codes without
@@ -111,6 +185,11 @@ Corten is pre-1.0, so any minor version may change the API.
 - Bound failed-native retirement proof age from the final SSH request's local
   start, including response delivery, and refuse expired DELETEs after asynchronous
   HTTPS socket/TLS setup without queuing a mutation before readiness.
+
+- Extend failed-native custody eligibility only to the exact r21 catalog host
+  attempt measured at `dbe1a34c753ee8ef4ac9927484dc3930d36f6e37`. Retain original
+  failed evidence and all terminal/deletion fences without qualifying it or
+  changing ordinary collection or the original migration.
 
 - Add an explicitly approved r21 failed-native custody/retirement action, separate
   from benchmark qualification. Preserve original failure evidence and all reserved
@@ -804,6 +883,31 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A debug build answers a browser's plain request (no `data-patch`, asking for HTML) that a
+  handler answered with `req.patch` or `req.patch_with_status` with a 500 that names the method
+  and the route and says to answer with `req.patch_or` or check `req.mode == Mode::Action`
+  first: the browser would show the fragment as the whole page, with no layout, stylesheets or
+  navigation. The handler's cookies and `Clear-Site-Data` go out with the error. The runtime's
+  `data-patch` fetch and a client that does not ask for HTML still get the patch, and a release
+  build compiles none of the check. **Breaking (debug builds only):** the test `Client` asks for
+  HTML unless `.mode(..)` is set, so an app's router test that sends a plain request (no
+  `.mode(Mode::Action)`) to a handler answering only `req.patch` or `req.patch_with_status` now
+  gets a 500, as does `corten dev` when a browser loads that route itself. To move: answer with
+  `req.patch_or(view, || async { .. })`, which draws the page or a redirect for a plain request,
+  or return the patch only when `req.mode == Mode::Action`; a test that means the runtime's
+  request sends `.mode(Mode::Action)`. A request whose fetch metadata says it is not a top-level
+  navigation (`Sec-Fetch-Mode` other than `navigate`, as a page's own `fetch` sends, or
+  `Sec-Fetch-Dest` other than `document`, as an `<iframe>` sends), a relayed upstream answer
+  and an `unstaged` route are not checked, by this check or by the one for a page at a path with
+  no `GET`. Neither is a navigation a service worker passes on with `fetch(event.request)`,
+  which arrives as `navigate` to `empty`, the tab's and a frame's alike; one answered from
+  navigation preload, as Corten's worker does, is checked. Browsers send fetch metadata only
+  over HTTPS or to `localhost`, so a debug build opened over plain HTTP at a LAN address takes a
+  page's own `fetch` that asks for HTML for a navigation, a false 500.
+  The watchlist's smoke-only styled-note route redirects without JavaScript, and its dialog and
+  `<details>` routes draw the sheet page with them open
+  ([#1423 A patch answering a browser's plain post is shown as the whole page, and the #1340 debug check only catches a page](https://github.com/corten-run/corten/issues/1423)).
+
 - **Breaking:** a handler parameter typed `Map<string, El>` takes only a ref whose every element
   has a `key={..}`: a ref without keys no longer compiles there, and the error says to add `key={..}`,
   where it compiled and the handler got a one-entry `Map`. A ref with a key on some elements and
@@ -1074,6 +1178,16 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,
+  so a `const` assertion only a binary's `main` reaches fails it as it fails `cargo build`: a
+  route that a bin-only app's `main` alone mounts by hand, outside its area or saying `patches`
+  with a `get` that answers a page, passed clippy and `cargo test`, which generate none of
+  `main`'s callees, and only `cargo build` refused it (design Limit 11). With the default
+  profiles the tests reuse the test targets the build compiled, so the check adds about one
+  compile of each binary and of each bench target; a `[profile.test]` that differs from
+  `[profile.dev]` has the tests compile their targets again
+  ([#1429 corten check misses a mount's const assertion when only a binary's main mounts the route](https://github.com/corten-run/corten/issues/1429)).
 
 - A navigation under a `Pwa::network_only` prefix reaches the server once with the PWA's service
   worker in control. The worker turns navigation preload on and then declined these

@@ -11,6 +11,8 @@ const providerCodes = ["provider-command", "provider-credential", "provider-outp
   "create-action-response", "create-action-pending", "delete-request", "delete-http"];
 const providerStatuses = [200, 201, 202, 204, 301, 302, 303, 304, 307, 308, 400, 401, 403, 404, 405, 408, 409, 410, 413, 415, 422, 429, 500, 501, 502, 503, 504];
 const providerDetails = {
+  "account-request": ["internal-refusal", "connect", "send", "request-error", "response-error", "response-aborted",
+    "response-status", "body-limit", "invalid-json", "deadline", "cancelled"],
   "create-link-href": ["non-string", "malformed-uri", "credentials-or-fragment", "foreign-origin",
     "semantically-same-canonical-uri", "query-or-trailing-slash", "wrong-action-or-resource"],
   "list-response-count": ["terminal-count-mismatch", "total-changed"],
