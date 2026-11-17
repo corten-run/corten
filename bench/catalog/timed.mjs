@@ -170,18 +170,23 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
       cpu: { startedAt: proof.startedAt, finishedAt: proof.finishedAt, before: proof.before[name], after: proof.after[name] },
     } : {}) };
   });
+  participants.push({ id: load.id, lifetime: { restarts: load.restarts, state: load.state }, load: { startedAt: start, finishedAt: end } });
   return { metrics, counters: proof.after, finishedAt: receipt.observedAt, upstreamId: receipt.after.upstream.id, loadId: load.id, participants };
 }
 
 // Summary traversal groups passes by app, not by their native observation clock.
 export function verifyTimedContinuity(observations) {
-  const participants = new Map();
-  for (const { id, lifetime, cpu } of observations) {
+  const participants = new Map(), loads = [];
+  for (const { id, lifetime, cpu, load } of observations) {
     const participant = participants.get(id) ?? { lifetime, windows: [] };
     same(lifetime, participant.lifetime, "timed participant lifetime changed across attempt");
     if (cpu) participant.windows.push(cpu);
+    if (load) loads.push(load);
     participants.set(id, participant);
   }
+  loads.sort((a, b) => a.startedAt - b.startedAt);
+  for (let i = 1; i < loads.length; i++)
+    assert.ok(loads[i].startedAt >= loads[i - 1].finishedAt, "timed load lifetimes overlap across attempt");
   for (const { windows } of participants.values()) {
     windows.sort((a, b) => a.startedAt - b.startedAt);
     for (let i = 1; i < windows.length; i++) {

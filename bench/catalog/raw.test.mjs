@@ -318,6 +318,91 @@ test("timed v3 CPU chronology follows observation clocks across rotated passes, 
   assert.equal(report.comparisonEligibleApps.length, 7);
 });
 
+function shiftFixtureRun(f, app, pass, delta) {
+  const root = `fixture/${app}/p${pass}-page`, run = f.summary.apps[app].runs["fixture-page"].find((r) => r.pass === pass);
+  const shift = (value) => new Date(Date.parse(value) + delta).toISOString();
+  const change = (path, mutate) => { const value = f.reader.readJson(path); mutate(value); f.put(path, value); };
+  run.cold.containerStartedAt = shift(run.cold.containerStartedAt); run.cold.first200At = shift(run.cold.first200At);
+  f.put(`${root}/cold.json`, run.cold);
+  const { first200MsFromContainerStart, containerStartedAt, clock, measuredBeforeReadinessOrWarmup, ...probe } = run.cold;
+  f.put(`${root}/cold.log`, `catalog-probe-ready\n${JSON.stringify(probe)}\n`);
+  change(`${root}/container.json`, (v) => { v.startedAt = shift(v.startedAt); });
+  for (const phase of ["warmup", ...phases]) {
+    change(`${root}/${phase}-boundary.json`, (b) => {
+      b.observedAt += delta;
+      for (const edge of ["before", "after"]) b[edge].runtime.state.StartedAt = shift(b[edge].runtime.state.StartedAt);
+      for (const key of ["StartedAt", "FinishedAt"]) b.after.load.state[key] = shift(b.after.load.state[key]);
+    });
+    change(`${root}/${phase}-cpu-counters.json`, (p) => { p.startedAt += delta; p.finishedAt += delta; });
+    change(`${root}/${phase}-stats.log.json`, (stats) => { for (const rows of Object.values(stats.samples)) for (const row of rows) row.t += delta; });
+  }
+}
+
+function reverseTimedRuns(summary) {
+  summary.apps = Object.fromEntries(Object.entries(summary.apps).reverse());
+  for (const entry of Object.values(summary.apps)) for (const runs of Object.values(entry.runs)) runs.reverse();
+}
+
+for (const [label, failure] of [["successful", null], ["timed-failed", { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]]) {
+  test(`timed v3 ${label} serial loads follow native clocks, not summary order or CPU envelopes`, () => {
+    const f = timedFixture(fixture(3), failure), [first, second] = f.summary.group.apps;
+    const check = () => {
+      const report = replayCatalog(f.summary, f.reader, f.commit);
+      assert.equal(report.attemptComplete, true); assert.equal(report.baseline, failure === null);
+      assert.equal(report.comparisonEligibleApps.length, failure === null ? 7 : 6);
+    };
+    check(); reverseTimedRuns(f.summary); check();
+    const end = Date.parse(f.reader.readJson(`fixture/${first}/p1-page/sat256-boundary.json`).after.load.state.FinishedAt);
+    const start = Date.parse(f.reader.readJson(`fixture/${second}/p1-page/warmup-boundary.json`).after.load.state.StartedAt);
+    shiftFixtureRun(f, second, 1, end - start);
+    const before = f.reader.readJson(`fixture/${first}/p1-page/sat256-cpu-counters.json`);
+    const after = f.reader.readJson(`fixture/${second}/p1-page/warmup-cpu-counters.json`);
+    assert.ok(after.startedAt < before.finishedAt, "CPU observation envelopes must overlap while native load lifetimes only touch");
+    check(); reverseTimedRuns(f.summary); check();
+  });
+
+  test(`timed v3 ${label} rejects overlapping native load lifetimes across runs`, async (t) => {
+    for (const scope of ["app", "pass"]) for (const overlap of ["complete", "one millisecond"]) await t.test(`${scope}: ${overlap}`, () => {
+      const f = timedFixture(fixture(3), failure), [first, second] = f.summary.group.apps;
+      const app = scope === "app" ? second : first, pass = scope === "pass" ? 2 : 1;
+      const phase = overlap === "complete" ? "warmup" : "sat256";
+      const a = f.reader.readJson(`fixture/${first}/p1-page/${phase}-boundary.json`).after.load;
+      const b = f.reader.readJson(`fixture/${app}/p${pass}-page/warmup-boundary.json`).after.load;
+      const delta = Date.parse(a.state[overlap === "complete" ? "StartedAt" : "FinishedAt"]) - Date.parse(b.state.StartedAt)
+        - (overlap === "complete" ? 0 : 1);
+      shiftFixtureRun(f, app, pass, delta);
+      const shifted = f.reader.readJson(`fixture/${app}/p${pass}-page/warmup-boundary.json`).after.load;
+      assert.equal(a.name, shifted.name); assert.notEqual(a.id, shifted.id);
+      assert.ok(Date.parse(shifted.state.StartedAt) < Date.parse(a.state.FinishedAt)
+        && Date.parse(shifted.state.FinishedAt) > Date.parse(a.state.StartedAt));
+      assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /timed load lifetimes overlap across attempt/);
+      reverseTimedRuns(f.summary);
+      assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /timed load lifetimes overlap across attempt/);
+    });
+  });
+
+  test(`timed v3 ${label} saved verifier rejects overlapping loads without rewriting evidence`, () => {
+    const f = timedFixture(fixture(), failure), [first, second] = f.summary.group.apps;
+    const delta = Date.parse(f.summary.apps[first].runs["fixture-page"][0].cold.containerStartedAt)
+      - Date.parse(f.summary.apps[second].runs["fixture-page"][0].cold.containerStartedAt);
+    const folder = mkdtempSync(join(tmpdir(), "catalog-load-overlap-"));
+    try {
+      for (const [key, bytes] of f.files) { mkdirSync(dirname(join(folder, key)), { recursive: true }); writeFileSync(join(folder, key), bytes); }
+      const original = validateSaved({ folder, round: "c1", commit: f.commit });
+      assert.equal(original.status, "verified"); assert.equal(original.complete, true); assert.equal(original.report.baseline, failure === null);
+      shiftFixtureRun(f, second, 1, delta);
+      for (const reordered of [false, true]) {
+        if (reordered) reverseTimedRuns(f.summary);
+        f.put("summary.json", f.summary);
+        for (const [key, bytes] of f.files) writeFileSync(join(folder, key), bytes);
+        const saved = validateSaved({ folder, round: "c1", commit: f.commit });
+        assert.equal(saved.status, "invalid"); assert.equal(saved.complete, false);
+        for (const [key, bytes] of f.files) assert.equal(readFileSync(join(folder, key), "utf8"), bytes, key);
+      }
+    } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
+  });
+}
+
 test("timed v3 binds the shared functional upstream identity and lifetime to timing", () => {
   for (const change of ["identity", "lifetime"]) {
     const f = timedFixture(fixture(), null);
