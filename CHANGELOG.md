@@ -9,6 +9,8 @@ Corten is pre-1.0, so any minor version may change the API.
   and container queries: it no longer warns outside the root, and checks `:scope`, `&` and
   declarations directly in the scope. Plain selector-list members select descendants, every
   `:scope` binds the same root, and strings and escaped identifiers keep their literal text.
+- Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
+  so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
