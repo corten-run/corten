@@ -68,6 +68,12 @@ try {
       '<dialog id="scopedDeclarations" class="scopedDeclarations"></dialog>',
       '<div class="scoped"><dialog id="scopedContainer" class="scopedContainer"></dialog></div><dialog id="outsideContainer" class="scopedContainer"></dialog>',
       '<dialog id="scopedSelf" class="scopedSelf"></dialog>',
+      '<div class="ancestorScope"><dialog id="outsideAncestor"></dialog></div>',
+      '<div class="identity"><dialog id="sameRoot" class="identity"></dialog></div>',
+      '<div class="impossible"><dialog id="differentRoots" class="impossible"></dialog></div>',
+      '<dialog id="listSelf" class="listScope listPlain"></dialog><div class="listScope"><dialog id="listPlain" class="listPlain"></dialog><dialog id="listExplicit" class="listExplicit"></dialog></div>',
+      '<div class="literalScope"><dialog id="literalAttribute" data-note=":scope"></dialog><dialog id="literalEscape" class="test:scope"></dialog><dialog id="literalImpostor" data-note=":is(.literalScope)"></dialog></div>',
+      '<dialog id="literalSelf" class="literalSelf test:scope" data-note=":scope"></dialog>',
       '<div class="scoped"><div id="scopedPopover" class="scopedPopover" popover></div></div><div id="outsidePopover" class="scopedPopover" popover></div>',
       '<div class="scopeHost"><div class="scopeInner"><dialog id="nestedScope" class="nestedScope"></dialog></div></div><div class="scopeInner"><dialog id="outsideNestedScope" class="nestedScope"></dialog></div>',
       '<div class="outerScope"><div class="innerScope"><dialog id="doubleScope" class="doubleScope"></dialog></div></div><div class="innerScope"><dialog id="outsideDoubleScope" class="doubleScope"></dialog></div>',
@@ -91,6 +97,12 @@ try {
         "@media (min-width: 1px) { @scope (.scoped) { .scopedPlain { display: flex; } :scope > .scopedRoot { display: grid; } & > .scopedAmp { display: block; } :scope > .scopedPopover { display: block; } } @scope (.scopedDeclarations) { display: flex; } }",
         "@container (min-width: 1px) { @scope (.scoped) { :scope > .scopedContainer { display: flex; } } }",
         "@scope (.scopedSelf) { @media (min-width: 1px) { dialog { display: grid; } } }",
+        "@scope (.ancestorScope) { @media (min-width: 1px) { body dialog { display: flex; } } }",
+        "@scope (.identity) { @media (min-width: 1px) { :scope > dialog:not(:scope) { display: flex; outline-style: solid; } } }",
+        "@scope (.impossible) { @media (min-width: 1px) { :scope > :scope { display: flex; outline-style: solid; } } }",
+        "@scope (.listScope) { @media (min-width: 1px) { :scope > .listExplicit, .listPlain { display: flex; outline-style: solid; } } }",
+        '@scope (.literalScope) { @media (min-width: 1px) { :scope > dialog[data-note=":scope"], :scope > .test\\:scope { display: flex; outline-style: solid; } } }',
+        '@scope (.literalSelf) { @media (min-width: 1px) { dialog[data-note=":scope"], .test\\:scope { display: flex; outline-style: solid; } } }',
         ".scopeHost { @scope (.scopeInner) { @media (min-width: 1px) { :scope > .nestedScope { display: flex; } } } }",
         "@scope (.outerScope) { @scope (.innerScope) { @media (min-width: 1px) { :scope > .doubleScope { display: grid; } } } }",
       ].join("\n"),
@@ -106,7 +118,13 @@ try {
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
   const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
   const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
-  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,scopedSelf,scopedPopover,nestedScope,doubleScope,lastrail", railNames);
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,sameRoot,listPlain,listExplicit,literalAttribute,literalEscape,scopedPopover,nestedScope,doubleScope,lastrail", railNames);
+  const warned = new Set(railOnLoad.map((e) => e.split(" ")[1]));
+  check("plain scoped selectors stay descendants, independently in each selector-list member", !warned.has("scopedSelf") && !warned.has("outsideAncestor") && !warned.has("listSelf") && warned.has("listPlain") && warned.has("listExplicit"));
+  check("every :scope in a selector binds the same root", warned.has("sameRoot") && !warned.has("differentRoots"));
+  check("selector strings and escaped identifiers are not scope tokens", warned.has("literalAttribute") && warned.has("literalEscape") && !warned.has("literalImpostor") && !warned.has("literalSelf"));
+  const scopedLooks = await drawn.evaluate(() => ["sameRoot", "differentRoots", "listSelf", "listPlain", "listExplicit", "literalAttribute", "literalEscape", "literalImpostor", "literalSelf"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle).join(","));
+  check("the browser applies the scoped regression rules only to the positive controls", scopedLooks === "solid,none,none,solid,solid,solid,solid,none,none", scopedLooks);
   check(
     "its warning names the rule, the query, the rule that draws it in place and the open one's look",
     !!railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") &&

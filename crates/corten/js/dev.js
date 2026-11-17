@@ -100,19 +100,31 @@ function within(root, selector) {
  * without one is inside it.
  * @param {string} selector
  * @param {string | null} parent
+ * @param {boolean} scoped
  */
-const resolved = (selector, parent) => {
-  if (!parent) return selector;
-  if (selector.includes("&")) return selector.replaceAll("&", `:is(${parent})`);
-  return /^\s*[>+~]/.test(selector) ? `:is(${parent}) ${selector}` : `:is(${parent}) :is(${selector})`;
-};
-
-/** @param {string} selector @param {string | null} parent @param {string | null} scope */
-const inScope = (selector, parent, scope) => {
-  if (!scope) return resolved(selector, parent);
-  const scoped = selector.replaceAll(":scope", `:is(${scope})`);
-  // Unlike nesting in a style rule, a scope's plain selector can match the root itself.
-  return resolved(scoped, parent ?? (selector.includes("&") || /^\s*[>+~]/.test(selector) ? scope : null));
+const resolved = (selector, parent, scoped) => {
+  // CSSOM normalizes pseudo-class names. Keep strings and identifiers (including CSS escapes)
+  // whole, so their colons, ampersands and commas are never read as selector syntax.
+  const tokens = selector.match(/"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|\/\*[\s\S]*?\*\/|(?:\\(?:[\da-f]{1,6}[ \t\n\r\f]?|[^\n\r\f])|[-\w\u0080-\uffff])+|::|[\s\S]/gi) ?? [];
+  /** @type {string[][]} */
+  const members = [[]];
+  let depth = 0;
+  for (const token of tokens) {
+    if (token === "," && !depth) members.push([]);
+    else members[members.length - 1]?.push(token);
+    if (token === "(" || token === "[") depth++;
+    if (token === ")" || token === "]") depth--;
+  }
+  return members.map((member) => {
+    const scope = member.some((token, i) => token === ":" && member[i + 1]?.toLowerCase() === "scope");
+    const nesting = member.includes("&");
+    const text = member.map((token) => token === "&" ? parent ? `:is(${parent})` : scoped ? ":scope" : token : token).join("");
+    // Each plain member is a descendant of the scoping root, not the root itself. Leave real
+    // :scope tokens to querySelectorAll, which binds every occurrence to that one element.
+    const anchor = parent ?? (scoped && !scope && !nesting ? ":scope" : null);
+    if (!anchor || nesting) return text;
+    return `:is(${anchor}) ${text}`;
+  }).join(",");
 };
 
 /**
@@ -121,29 +133,29 @@ const inScope = (selector, parent, scope) => {
  * `@container` query it is inside (`@media (min-width: 64rem)`, or null) and whether it is
  * `!important`. Read again for each check, as a dev server's stylesheets change; a sheet the page
  * may not read is skipped.
- * @returns {{ selector: string, scope: string | null, written: string, display: string, condition: string | null, important: boolean }[]}
+ * @returns {{ selector: string, scope: Element | null, written: string, display: string, condition: string | null, important: boolean }[]}
  */
 function displays() {
-  /** @type {{ selector: string, scope: string | null, written: string, display: string, condition: string | null, important: boolean }[]} */
+  /** @type {{ selector: string, scope: Element | null, written: string, display: string, condition: string | null, important: boolean }[]} */
   const found = [];
   /**
    * @param {CSSRuleList} rules
    * @param {string | null} condition
    * @param {string | null} selector
    * @param {string | null} written
-   * @param {string | null} scope
+   * @param {Element | null} scope
    */
   const walk = (rules, condition, selector, written, scope) => {
     for (const rule of rules) {
       if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule && rule.start) {
-        const root = inScope(rule.start, selector, scope);
-        const contained = scope ? `:is(${root}):is(${scope}, :is(${scope}) *)` : root;
-        walk(rule.cssRules, condition, null, ":scope", contained);
+        const start = resolved(rule.start, selector, !!scope);
+        const roots = scope ? within(scope, start) : document.querySelectorAll(start);
+        for (const root of roots) walk(rule.cssRules, condition, null, ":scope", root);
         continue;
       }
       const style = /** @type {CSSStyleRule} */ (rule).style;
       // A nested rule's own selector, or a nested block of declarations, which has its parent's.
-      const own = rule instanceof CSSStyleRule ? inScope(rule.selectorText, selector, scope) : selector ?? scope;
+      const own = rule instanceof CSSStyleRule ? resolved(rule.selectorText, selector, !!scope) : selector ?? (scope ? ":scope" : null);
       const asWritten = rule instanceof CSSStyleRule ? rule.selectorText : written;
       if (style && own && asWritten && style.display) found.push({ selector: own, scope, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
@@ -187,7 +199,7 @@ function inPlace(root) {
   const rules = displays();
   for (const el of closed) {
     if (getComputedStyle(el).display !== "none") continue;
-    const applies = rules.filter((r) => matching(el, r.selector) && (!r.scope || matching(el, `${r.scope}, :is(${r.scope}) *`)));
+    const applies = rules.filter((r) => r.scope ? within(r.scope, r.selector).includes(el) : matching(el, r.selector));
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
     if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
