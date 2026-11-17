@@ -20,6 +20,65 @@ header-timeout guarantee. The idle h2 case and a connection-level body-stall det
 untried. [Choice 25](../design.md#choice-axum-router) and the
 [partial weighing](../../bench/http2/README.md) record the evidence and reopening tests.
 
+## Client certificates
+
+An app that ends TLS itself can pass a verified client certificate from the handshake to
+every request on that connection. Use `serve_wrapped_with` instead of `serve_wrapped`:
+the step returns `(io, value)`, with `value: Clone + Send + Sync + 'static`. This example
+uses `tokio-rustls` 0.26 and rustls 0.23. `client_roots` is the app's trust store of client
+certificate authorities, not a store populated from what a client sends; `server_chain`
+and `server_key` are the app's own certificate chain and private key.
+
+```rust,ignore
+use std::sync::Arc;
+use corten::ConnectionInfo;
+use tokio_rustls::{rustls, TlsAcceptor};
+
+#[derive(Clone)]
+struct ClientCertificate(Arc<[u8]>); // leaf certificate, DER; cheap to clone
+
+let verifier = rustls::server::WebPkiClientVerifier::builder(Arc::new(client_roots)).build()?;
+let mut config = rustls::ServerConfig::builder()
+    .with_client_cert_verifier(verifier) // requires and verifies a client certificate
+    .with_single_cert(server_chain, server_key)?;
+config.alpn_protocols = vec![b"http/1.1".to_vec()]; // Corten speaks HTTP/1.1
+let acceptor = TlsAcceptor::from(Arc::new(config));
+
+corten::serve_wrapped_with(corten::listeners(3000).await?, move |tcp| {
+    let acceptor = acceptor.clone();
+    async move {
+        let tls = acceptor.accept(tcp).await?;
+        let leaf = tls.get_ref().1.peer_certificates()
+            .and_then(|chain| chain.first())
+            .ok_or_else(|| std::io::Error::other("verified client certificate missing"))?;
+        let certificate = ClientCertificate(Arc::from(leaf.as_ref()));
+        Ok::<_, std::io::Error>((tls, certificate))
+    }
+}, app).await?;
+```
+
+A handler takes `ConnectionInfo<ClientCertificate>`. An `Identify` implementation borrows
+the same value with `ConnectionInfo::<ClientCertificate>::of(parts)` and maps the certificate
+to the app's account and permissions, refusing an unknown or unauthorized certificate with
+`Refused::forbidden()`. Return that identity through `Caller<Partner>` when a page or its
+layout depends on it ([Caller](app.md#who-is-asking)). Certificate verification proves the
+trust relationship configured above, not permission to use every route. Never treat an
+unverified certificate or a certificate copied from a request header as that proof.
+
+Reading `ConnectionInfo` through its extractor or `of` makes the answer private; it does
+not itself key a layout by the certificate. A required value missing from a request answers
+500; `Option<ConnectionInfo<T>>` yields `None` (for example on a plain-HTTP listener). Several
+facts, such as the certificate, SNI name and ALPN protocol, belong in one app-defined struct.
+SNI and ALPN describe the connection, not an authenticated caller. The typed wrapper avoids
+replacing a framework extension when the app's value happens to have the same type.
+
+`App::header_timeout` includes the handshake, `max_connections` counts it, and `send_timeout`
+and shutdown drain still apply to the resulting connection. The existing `serve_on` and
+`serve_wrapped` APIs insert no connection-info extension. A proxy that ends TLS cannot pass
+this value: its connection to the app is not the client's TLS connection. An app accepting
+proxy assertions needs a separate authenticated trust boundary, not this API. Direct TLS
+does not add HTTP/2; the live-stream limitation at the top of this guide still applies.
+
 ## What the proxy must do
 
 | | What | Why |

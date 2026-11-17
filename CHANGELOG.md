@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `serve_wrapped_with` carries a TLS handshake's value to each request as
+  `ConnectionInfo<T>`, readable by handlers and `Identify`. The existing serve paths
+  carry no value; connection limits, timeouts and shutdown still cover the handshake.
+
 - Permit custody-only terminal retirement of the exact r21 lean catalog attempt
   if ordinary native collection refuses its failed evidence. Keep original raw
   failures, source/reservation/archive binding, live-job refusal, current ownership

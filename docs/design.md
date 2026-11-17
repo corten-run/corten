@@ -5143,6 +5143,45 @@ rules something out.
     from its first, with `Visitor::known_offset` asking jiff at the second an instant is in,
     passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`.
 
+60. <a id="choice-connection-info"></a>**A connection's handshake value reaches requests through an opt-in typed extension.**
+    `serve_wrapped_with` takes a step returning `(Io, T)`, where
+    `T: Clone + Send + Sync + 'static`, and inserts `ConnectionInfo<T>` into each request's
+    standard `http::Extensions`. A handler takes that extractor; `Identify` borrows it with
+    `ConnectionInfo::of`. Reading it makes the answer private, like reading `ClientIp`, but
+    a page whose layout depends on the caller still uses `Caller`: an arbitrary handshake
+    value is not required to be hashable or to identify a layout. An app groups several facts
+    in one struct and uses `Arc` for a value expensive to clone. The wrapper prevents a value
+    of a framework extension's type from replacing that extension.
+
+    The old `serve_wrapped` keeps its return shape, and `serve_on` still needs no step. Their
+    connection service has a zero-sized no-data value with an empty insertion method, not an
+    optional box or a dynamic dispatch on every request. Only the new entry point clones and
+    inserts an extension. All three use the same listener loop, connection permit, watch and
+    drain; the step still runs after accept, inside the header timeout and connection limit.
+    No TLS library or new dependency belongs to Corten.
+
+    Changing `serve_wrapped`'s return shape would break existing apps for a feature they do not
+    need. A thread-local cannot carry a certificate through middleware that spawns a task;
+    an extension follows the request. Letting a custom listener finish TLS before returning
+    its IO puts that handshake outside Corten's timeout and connection limit. A request header
+    is not proof of a TLS client's identity. Standard request extensions already provide the
+    typed store, so this adds no wire format, metadata map or second connection loop.
+
+    Stands on: platform (`http` 1.5 extensions require a cloneable, sendable, shareable owned
+    value); reasoned (monomorphizing the unit-data service leaves no metadata insertion on
+    ordinary requests); reasoned (the tests exercise two connections keeping distinct stand-in certificates across
+    repeated requests and `Identify`, a forged header cannot replace one, reads make answers
+    private, a plain connection has none, and the metadata step obeys connection and header
+    limits and shutdown); value (correctness before speed, one way to do each thing and a
+    small default surface, README Values).
+
+    Revisit when: a default-path instruction count regresses, an app needs a connection value
+    that cannot be cheaply cloned or shared, or the framework changes its connection service
+    or request-extension ownership model.
+
+    Last checked: 2026-11-17, the listener and connection service on `6c5f17b11`, and the new
+    metadata path's tests and measurements recorded with its pull request.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
