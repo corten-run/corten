@@ -193,40 +193,56 @@ fn Within(open: &'static str, close: &'static str, children: impl Render) -> imp
 #[test]
 fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
     let p = "<p><button><div>Detail</div></button></p>";
-    assert_eq!(html! {
-        <p>
-            {raw("<button>")}
-            <div>"Detail"</div>
-            {raw("</button>")}
-        </p>
-    }.to_html(), p);
-    assert_eq!(html! {
-        <p>
-            <Writes markup="<button>" />
-            <div>"Detail"</div>
-            <Writes markup="</button>" />
-        </p>
-    }.to_html(), p);
+    assert_eq!(
+        html! {
+            <p>
+                {raw("<button>")}
+                <div>"Detail"</div>
+                {raw("</button>")}
+            </p>
+        }
+        .to_html(),
+        p
+    );
+    assert_eq!(
+        html! {
+            <p>
+                <Writes markup="<button>" />
+                <div>"Detail"</div>
+                <Writes markup="</button>" />
+            </p>
+        }
+        .to_html(),
+        p
+    );
     assert_eq!(html! { <p><Within open="<button>" close="</button>"><div>"Detail"</div></Within></p> }.to_html(), p);
     for (markup, expected) in [
-        (html! {
-            <ul>
-                <li>
-                    {raw("<ul>")}
-                    <li>"x"</li>
-                    {raw("</ul>")}
-                </li>
-            </ul>
-        }.to_html(), "<ul><li><ul><li>x</li></ul></li></ul>"),
-        (html! {
-            <dl>
-                <dt>
-                    {raw("<dl>")}
-                    <dd>"x"</dd>
-                    {raw("</dl>")}
-                </dt>
-            </dl>
-        }.to_html(), "<dl><dt><dl><dd>x</dd></dl></dt></dl>"),
+        (
+            html! {
+                <ul>
+                    <li>
+                        {raw("<ul>")}
+                        <li>"x"</li>
+                        {raw("</ul>")}
+                    </li>
+                </ul>
+            }
+            .to_html(),
+            "<ul><li><ul><li>x</li></ul></li></ul>",
+        ),
+        (
+            html! {
+                <dl>
+                    <dt>
+                        {raw("<dl>")}
+                        <dd>"x"</dd>
+                        {raw("</dl>")}
+                    </dt>
+                </dl>
+            }
+            .to_html(),
+            "<dl><dt><dl><dd>x</dd></dl></dt></dl>",
+        ),
         (
             html! { <div><a href="#one">{raw("<object>")}<a href="#two">"x"</a>{raw("</object>")}</a></div> }.to_html(),
             r##"<div><a href="#one"><object><a href="#two">x</a></object></a></div>"##,
@@ -244,16 +260,21 @@ fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
                         {raw("</object>")}
                     </nobr>
                 </div>
-            }.to_html(),
+            }
+            .to_html(),
             "<div><nobr><object><nobr>x</nobr></object></nobr></div>",
         ),
-        (html! {
-            <h1>
-                {raw("<span>")}
-                <h2>"x"</h2>
-                {raw("</span>")}
-            </h1>
-        }.to_html(), "<h1><span><h2>x</h2></span></h1>"),
+        (
+            html! {
+                <h1>
+                    {raw("<span>")}
+                    <h2>"x"</h2>
+                    {raw("</span>")}
+                </h1>
+            }
+            .to_html(),
+            "<h1><span><h2>x</h2></span></h1>",
+        ),
         (
             html! { <div><select aria-label="Choice">{raw("<object>")}<input>{raw("</object>")}</select></div> }.to_html(),
             r#"<div><select aria-label="Choice"><object><input></object></select></div>"#,
@@ -264,7 +285,7 @@ fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
                     <select aria-label="Choice">{raw("<object>")}<select aria-label="Nested"></select>{raw("</object>")}</select>
                 </div>
             }
-                .to_html(),
+            .to_html(),
             r#"<div><select aria-label="Choice"><object><select aria-label="Nested"></select></object></select></div>"#,
         ),
         (
@@ -279,7 +300,7 @@ fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
                     </select>
                 </div>
             }
-                .to_html(),
+            .to_html(),
             r#"<div><select aria-label="Choice"><option><span><option>x</option></span></option></select></div>"#,
         ),
         (
@@ -308,7 +329,8 @@ fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
                         </option>
                     </select>
                 </div>
-            }.to_html(),
+            }
+            .to_html(),
             r#"<div><select aria-label="Choice"><option>Choice<span><hr></span></option></select></div>"#,
         ),
         (
@@ -323,7 +345,8 @@ fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
                         </rt>
                     </ruby>
                 </div>
-            }.to_html(),
+            }
+            .to_html(),
             "<div><ruby>Base<rt><ruby><rt>x</rt></ruby></rt></ruby></div>",
         ),
         (
@@ -337,7 +360,8 @@ fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
                         </rtc>
                     </ruby>
                 </div>
-            }.to_html(),
+            }
+            .to_html(),
             "<div><ruby><rtc><ruby><rb>x</rb></ruby></rtc></ruby></div>",
         ),
         // Opened by what an expression writes, an integration point or a template's content
@@ -348,7 +372,7 @@ fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
                     <a href="#one">{raw("<svg><foreignObject>")}<a href="#two">"Link"</a>{raw("</foreignObject></svg>")}</a>
                 </div>
             }
-                .to_html(),
+            .to_html(),
             r##"<div><a href="#one"><svg><foreignObject><a href="#two">Link</a></foreignObject></svg></a></div>"##,
         ),
         (
