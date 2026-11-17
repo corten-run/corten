@@ -14,13 +14,14 @@
  * Element's own members, for a row, a root or a parent that may be a form: a form control's
  * `name` shadows the form's member of that name (`<button name="remove">` makes `form.remove` the
  * button, `<input name="id">` makes `form.id` the input). Held whole, as the runtime holds it,
- * rather than each member taken off by name: the file ships smaller. Still read directly, names
- * no form gives a field: `insertBefore` and `textContent` (on the rows' parent),
- * `firstElementChild`, `cloneNode`, `tagName`, `ownerDocument`, and the text holes of a generated
- * view class and the path to its holes. A generated class reads and writes an attribute hole on a
+ * rather than each method taken off by name: the file ships smaller. Navigation and identity
+ * use captured prototype getters, and insertion and cloning use Node's methods. Assignments
+ * still invoke the platform's setters. A generated class reads and writes an attribute hole on a
  * `<form>` (and a form row's `key`) through Element's own. A form's `style` is read through
  * HTMLElement's own, and a row's `parentNode` and `nextSibling` through Node's.
  */
+import { getter } from "./dom.js";
+
 const own = Element.prototype;
 /** `el.id`, for an element that may be a form. @param {Element} el @returns {string} */
 const idOf = (el) => Reflect.get(own, "id", el);
@@ -29,7 +30,11 @@ const idOf = (el) => Reflect.get(own, "id", el);
  * make a walk up from a row's contents cycle inside the form.
  * @param {Node} node @returns {Node | null}
  */
-const parentOf = (node) => Reflect.get(Node.prototype, "parentNode", node);
+const parentOf = getter(Node.prototype, "parentNode");
+const firstOf = getter(Element.prototype, "firstElementChild");
+const firstNodeOf = getter(Node.prototype, "firstChild");
+const documentOf = getter(Node.prototype, "ownerDocument");
+const tagOf = getter(Element.prototype, "tagName");
 /** `el.children`, for an element that may be a form. @param {Element} el @returns {Element[]} */
 const childrenOf = (el) => Array.from(Reflect.get(own, "children", el));
 
@@ -58,7 +63,7 @@ function vars(root) {
  * @param {Element} el @param {string} value
  */
 export function text(el, value) {
-  const t = /** @type {Text | null} */ (el.firstChild);
+  const t = /** @type {Text | null} */ (firstNodeOf(el));
   if (t === null) el.textContent = value;
   else if (t.data !== value) t.data = value;
 }
@@ -101,14 +106,14 @@ export function view(host, View, template) {
     throw new Error("corten: view() needs a template with one root with an id", { cause: template });
   }
   if (own.matches.call(proto, "script") || own.querySelector.call(proto, "script")) throw new Error("corten: view() does not clone scripts", { cause: template });
-  const current = host.firstElementChild;
-  if (childrenOf(host).length === 1 && current && idOf(current) === idOf(proto) && current.tagName === proto.tagName) return new View(current);
-  const next = /** @type {Element} */ (proto.cloneNode(true));
+  const current = firstOf(host);
+  if (childrenOf(host).length === 1 && current && idOf(current) === idOf(proto) && tagOf(current) === tagOf(proto)) return new View(current);
+  const next = /** @type {Element} */ (Node.prototype.cloneNode.call(proto, true));
   const ids = new Set();
   for (const el of [next, ...own.querySelectorAll.call(next, "[id]")]) {
     const id = idOf(el);
     if (!id) continue;
-    const outside = [...host.ownerDocument.querySelectorAll(`#${CSS.escape(id)}`)].some((old) => old === host || !Node.prototype.contains.call(host, old));
+    const outside = [.../** @type {Document} */ (documentOf(host)).querySelectorAll(`#${CSS.escape(id)}`)].some((old) => old === host || !Node.prototype.contains.call(host, old));
     if (ids.has(id) || outside) {
       throw new Error(`corten: view() would duplicate id ${id}`, { cause: el });
     }
@@ -241,7 +246,7 @@ export function rows(parent, View, template) {
   /** @param {D} data */
   const make = (data) => {
     if (!proto) throw new Error("corten: rows() makes new rows from a <template> with one row in it", { cause: parent });
-    const el = /** @type {Element} */ (proto.cloneNode(true));
+    const el = /** @type {Element} */ (Node.prototype.cloneNode.call(proto, true));
     if (protoVars) vars(el);
     View.fill(el, data);
     return el;
@@ -253,7 +258,7 @@ export function rows(parent, View, template) {
   const add = (items, out, from, before) => {
     const frag = document.createDocumentFragment();
     for (let i = 0; i < items.length; i += 1) frag.appendChild((out[from + i] = make(/** @type {D} */ (items[i]))));
-    parent.insertBefore(frag, before);
+    Node.prototype.insertBefore.call(parent, frag, before);
   };
   /** @type {Rows<D, V>} */
   const list = {
@@ -329,10 +334,10 @@ export function rows(parent, View, template) {
       if (!a || !b || a === b) return;
       // Either may come first, and they may be neighbors: a goes where b is, then b where a was.
       const afterA = /** @type {ChildNode | null} */ (Reflect.get(Node.prototype, "nextSibling", a));
-      if (afterA === b) parent.insertBefore(b, a);
+      if (afterA === b) Node.prototype.insertBefore.call(parent, b, a);
       else {
-        parent.insertBefore(a, b);
-        parent.insertBefore(b, afterA);
+        Node.prototype.insertBefore.call(parent, a, b);
+        Node.prototype.insertBefore.call(parent, b, afterA);
       }
       els[i] = b;
       els[j] = a;
@@ -385,12 +390,12 @@ export function rows(parent, View, template) {
           let el;
           if (j < 0) {
             el = make(/** @type {D} */ (items[i]));
-            parent.insertBefore(el, before);
+            Node.prototype.insertBefore.call(parent, el, before);
           } else {
             el = /** @type {Element} */ (els[j]);
             View.fill(el, /** @type {D} */ (items[i]));
             if (s >= 0 && stay[s] === i) s -= 1;
-            else parent.insertBefore(el, before);
+            else Node.prototype.insertBefore.call(parent, el, before);
           }
           next[i] = el;
           before = el;

@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `serve_wrapped_with` carries a TLS handshake's value to each request as
+  `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
+  nothing to the document) and `Identify`. The existing serve paths carry no value;
+  connection limits, timeouts and shutdown still cover the handshake.
+
 - The watchlist smoke's first field change after a link now tests a same-shell page swap, with
   the field module held back, rather than racing the scripts of a full document load.
 
@@ -65,6 +70,13 @@ Corten is pre-1.0, so any minor version may change the API.
 - `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
   Trusted Types enforcement would reject. The scripts guide shows how to read a part again
   with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
+
+- Form controls named `parentElement`, `parentNode` or other DOM members no longer hang
+  patching or stand in for the form's members that the runtime (patches, navigation),
+  `shortcut()`, `view()`, `rows()` and the generated view classes read. A generated class now
+  reads a hole whose path starts from a form, into it or past it, and a form's whole text through
+  the platform's getters; its steps from any other element are unchanged
+  ([#1531 Patching a form with a control named parentElement hangs the tab: the runtime walks parentElement, which the control shadows](https://github.com/corten-run/corten/issues/1531)).
 
 - Apply supported lean settings to catalog-page competitors as well as Corten:
   reduce optional access logging, compression and timer work where supported,
@@ -1299,7 +1311,7 @@ Corten is pre-1.0, so any minor version may change the API.
   a navigation replaces and the layout a write's page draws (which closed nested dialogs
   outer-first, and lost the events of one it replaced), for a dialog with an id; one the user
   opened still stays open when an answer draws it closed. The runtime is 738 bytes larger
-  minified (270 with gzip, 226 with brotli) (design Choice 60,
+  minified (254 with gzip, 224 with brotli) (design Choice 61,
   [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
 
 - `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,

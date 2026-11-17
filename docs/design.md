@@ -4052,7 +4052,7 @@ rules something out.
     page, not a patch, redraws `<main>` from the new markup, its dialogs and `<details>` as drawn,
     as on main, while the layout's elements outside `<main>` keep the user's. A dialog the user left open as the server
     drew it, which new markup draws closed, is closed as the browser closes one before it is
-    replaced ([Choice 60](#choice-patch-closes-dialog)). One the user opened stays open when an
+    replaced ([Choice 61](#choice-patch-closes-dialog)). One the user opened stays open when an
     answer draws it closed, also now that a patch's close is the browser's: the runtime cannot
     tell an answer that means to close it from a redraw of the part around it, which draws it as
     the server last drew it, and closing it there is the bug #84 fixed. A popover has no markup that shows it, so no answer can ask for one shown
@@ -4071,7 +4071,7 @@ rules something out.
     the answer draws it closed, in this change: it was tried and taken out, since `close()` queues its `close`
     event after the patch has detached the dialog (so a delegated `on:close` handler never hears
     it), closes nested modals outer-first (so focus lands on the page), and lets a `beforetoggle`
-    handler change the tree while the runtime walks it; [Choice 60](#choice-patch-closes-dialog)
+    handler change the tree while the runtime walks it; [Choice 61](#choice-patch-closes-dialog)
     does it, for a dialog the user left as the server drew it. The pilot's workaround, a script that
     replaces the closed dialog with an empty element before each submit, is the per-page script
     this removes.
@@ -4121,7 +4121,7 @@ rules something out.
     waited for a write, its button moved outside the dialog by the write's answer, failing on
     `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines; 2026-11-16, the
     condition on closing an open dialog as the browser does met by
-    [Choice 60](#choice-patch-closes-dialog), and the case of an answer that draws closed a
+    [Choice 61](#choice-patch-closes-dialog), and the case of an answer that draws closed a
     dialog the user opened decided as before: the smoke's open-state checks, the one that keeps
     such a dialog open among them, passing on `fc0d6f302` in Chromium 156.0.8078.4, Firefox 157.0
     and WebKit 27.2 (Playwright 1.64.1).
@@ -5150,7 +5150,78 @@ rules something out.
     from its first, with `Visitor::known_offset` asking jiff at the second an instant is in,
     passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`.
 
-60. <a id="choice-patch-closes-dialog"></a>**A patch closes an open dialog it draws closed as the browser does, before replacing
+60. <a id="choice-connection-info"></a>**A connection's handshake value reaches requests through an opt-in typed extension.**
+    `serve_wrapped_with` takes a step returning `(Io, T)`, where
+    `T: Clone + Send + Sync + 'static`, and inserts `ConnectionInfo<T>` into each request's
+    standard `http::Extensions`. A handler takes that extractor; `Identify` borrows it with
+    `ConnectionInfo::of`. Reading it makes the answer private, like reading `ClientIp`, but
+    a page whose layout depends on the caller still uses `Caller`: an arbitrary handshake
+    value is not required to be hashable or to identify a layout. An app groups several facts
+    in one struct and uses `Arc` for a value expensive to clone. The wrapper prevents a value
+    of a framework extension's type from replacing that extension.
+
+    The old `serve_wrapped` keeps its return shape, and `serve_on` still needs no step. Their
+    step returns a zero-sized no-data value selecting the unchanged, non-generic connection
+    service, not an optional box or a dynamic dispatch on every request. Only the new entry
+    point wraps that service to clone and insert an extension. All three use the same listener
+    loop, connection permit, watch and drain; the step still runs after accept, inside the
+    header timeout and connection limit.
+    No TLS library or new dependency belongs to Corten.
+
+    Changing `serve_wrapped`'s return shape would break existing apps for a feature they do not
+    need. A thread-local cannot carry a certificate through middleware that spawns a task;
+    an extension follows the request. Letting a custom listener finish TLS before returning
+    its IO puts that handshake outside Corten's timeout and connection limit. A request header
+    is not proof of a TLS client's identity. Standard request extensions already provide the
+    typed store, so this adds no wire format, metadata map or second connection loop.
+
+    What it costs, in the conflict order. Every plain HTTP request pays 2.1 instructions more
+    (24,287.261 against 24,285.154, 0.0087%, measured below; the ranges do not overlap, so it is
+    real), and this Choice accepts that. It is not work the feature does on that path: the
+    ordinary service runs the same instructions and inserts nothing, and the difference is in how
+    the compiled connection task, now generic over its step's value, is polled. What was tried
+    within one loop cost as much or more: the generic service with a no-op insert about 30
+    instructions, that service kept out of line about 10, and an async plain step or choosing the
+    service when the handshake ends no less than 2.1. The way left to keep the plain task
+    unchanged is a second connection loop for the new entry point, rejected above: its permit,
+    header clock, send timeout and drain would be kept in step with the first by hand, a
+    reliability cost, and reliability ranks before performance in the README's order. It was not
+    measured. Value 1 refuses a feature that costs every user to help a few; here every user's
+    cost is two instructions in 24,000, estimated at about a nanosecond, which no time or latency
+    measured at the user's end resolves. A TLS request without a value measured no change.
+
+    Stands on: measured (release, Callgrind 3.19.0 on x86-64 Linux, a typed route returning
+    `served` over one persistent socket, default features off, Tokio 1.54.1 and tokio-rustls
+    0.26.6 with rustls 0.23.46; three rounds alternating before and after, subtracting 200
+    requests from 1,200 and dividing by 1,000: plain HTTP 24,285.154 instructions per request
+    before, range 24,284.606-24,286.526, and 24,287.261 after, range
+    24,286.994-24,288.051, +2.107 or 0.0087%; TLS without metadata 31,337.779 before,
+    range 31,337.769-31,337.898, and 31,337.723 after, range 31,337.483-31,338.365.
+    The ordinary service and hyper poll have identical instruction totals; the small HTTP
+    difference is in task polling, so these counts do not establish literally zero added
+    instructions. A generic ordinary service added about 30 instructions per request and was
+    replaced with the non-generic service above); platform (`http` 1.5 extensions require a cloneable, sendable, shareable owned
+    value); reasoned (selecting the ordinary service for unit data leaves no metadata insertion
+    on ordinary requests; the tests exercise two connections keeping distinct stand-in
+    certificates across repeated requests and `Identify`, a forged header cannot replace one,
+    reads make answers private, a plain connection has none, the metadata step obeys
+    connection and header limits and shutdown, and a documented API's handler takes the value,
+    required or optional, with its operation in the document unchanged); value (correctness
+    before speed, one way to do each thing and a small default surface, README Values).
+
+    Revisit when: a change to the connection task raises a plain HTTP request above the
+    24,287.261 instructions accepted here on the same harness (that count is the baseline; the
+    2.1 above is not a regression still to fix); a compiler or code change lets the one loop poll
+    the plain task at the 24,285.154 it cost before, which removes the residual; an app needs a
+    connection value that cannot be cheaply cloned or shared; or the framework changes its
+    connection service or request-extension ownership model.
+
+    Last checked: 2026-11-17, before `6c5f17b11` (merged as `b08c48d23`), and the metadata
+    path's Rust sources matching `caebfa19d` in the counts above, the connection-info
+    integration tests and handshake bounds test, the `Public` compile-fail doctest, and the
+    OpenAPI test of a documented route taking it.
+
+61. <a id="choice-patch-closes-dialog"></a>**A patch closes an open dialog it draws closed as the browser does, before replacing
     anything, and dispatches the dialog's `toggle` and `close` again on the dialog that has its
     id when they come.**
     A dialog the user left open as the server drew it, which a patch's markup draws closed, takes
@@ -5210,9 +5281,9 @@ rules something out.
     (`showModal()`, then `close()`), which knows nothing of what had focus before the old one
     opened, so focus could not go back to the opener.
 
-    What it costs: the runtime is 738 bytes larger raw (43,620 to 44,358), 270 with gzip (15,407
-    to 15,677) and 226 with brotli (13,925 to 14,151), against main's `38587c414`, paid once a
-    release by every user. One close path for every patch and swap did not make it smaller than
+    What it costs: the runtime is 738 bytes larger raw (43,678 to 44,416), 254 with gzip (15,568
+    to 15,822) and 224 with brotli (14,060 to 14,284), against main's `7d9bbbf1e`, paid once a
+    release by every user (738, 270 and 226 against `38587c414`, before main's own runtime changed). One close path for every patch and swap did not make it smaller than
     the first version (395, 174 and 137), which closed only in a patch's replacement: the passes
     over a whole answer, the layout's, the `returnValue` and finding the dialog by id when the
     events come are the difference. A patch, a swap and a write's layout each run one query for
@@ -5264,7 +5335,9 @@ rules something out.
     first version) on its fixture and passing on `1a37ba222`, in Chromium 156.0.8078.4, Firefox
     157.0 and WebKit 27.2 (the smoke runs WebKit without the Navigation API, which Playwright's
     WebKit loses the page with, so it skips the layout check there; run alone with it, it failed
-    and passed the same way), and the runtime's size on `1a37ba222` against `38587c414`.
+    and passed the same way), and the runtime's size on `1a37ba222` against `38587c414`;
+    2026-11-17, the runtime's size with this change merged onto main's `7d9bbbf1e` against
+    `7d9bbbf1e`.
 
 ## Rules
 
@@ -5375,7 +5448,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
    new markup draws it open, and one they opened closes when it draws it closed), and a
    `<details>` that moved takes another's state. A dialog the server drew open, which the user
    closed and opened again, looks unchanged, so an answer that draws it closed closes it (as the
-   browser closes one, [Choice 60](#choice-patch-closes-dialog)); an anonymous one drawn closed
+   browser closes one, [Choice 61](#choice-patch-closes-dialog)); an anonymous one drawn closed
    is replaced closed, with no `close` event. Other
    browser state inside a replaced element (scroll position) resets, so keep targets small. The
    runtime parses a patch as a `<template>`'s content, where the first top-level element (other

@@ -1670,19 +1670,64 @@ where
     if listeners.is_empty() {
         return Err(std::io::Error::other("corten::serve_wrapped: no listeners to serve on"));
     }
-    run(listeners, wrap, app, crate::shutdown_signal()).await
+    run(
+        listeners,
+        move |io| {
+            let step = wrap(io);
+            async move { step.await.map(|io| (io, ())) }
+        },
+        app,
+        crate::shutdown_signal(),
+    )
+    .await
+}
+
+/// [`serve_wrapped`] with a value learned by the step, such as a verified client certificate,
+/// the SNI name or negotiated ALPN protocol. The step returns `(io, value)`: every request on
+/// that connection receives a clone as [`crate::ConnectionInfo<T>`] in its extensions. A
+/// handler or [`crate::Identify`] reads it with that extractor, which makes the answer private.
+/// Put several facts in one struct; use an `Arc` where cloning them would be expensive.
+///
+/// The handshake, HTTP and shutdown have the same connection limit, header and send timeouts,
+/// and drain as [`serve_wrapped`]. Apps that need no value keep using `serve_wrapped` or
+/// [`serve_on`], whose requests insert no connection-info extension.
+pub async fn serve_wrapped_with<L, W, F, Io, E, T, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
+where
+    L: Listener,
+    L::Addr: std::fmt::Debug + 'static,
+    W: Fn(L::Io) -> F + Send + Sync + 'static,
+    F: Future<Output = Result<(Io, T), E>> + Send + 'static,
+    Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    T: Clone + Send + Sync + 'static,
+    M: Middleware,
+{
+    #[cfg(feature = "log")]
+    crate::log::init();
+    if listeners.is_empty() {
+        return Err(std::io::Error::other("corten::serve_wrapped_with: no listeners to serve on"));
+    }
+    run(
+        listeners,
+        move |io| {
+            let step = wrap(io);
+            async move { step.await.map(|(io, info)| (io, crate::ConnectionInfo(info))) }
+        },
+        app,
+        crate::shutdown_signal(),
+    )
+    .await
 }
 
 /// The step on a connection that has none: the listener's IO itself.
-pub(crate) fn plain<I>(io: I) -> std::future::Ready<Result<I, std::convert::Infallible>> {
-    std::future::ready(Ok(io))
+pub(crate) fn plain<I>(io: I) -> std::future::Ready<Result<(I, ()), std::convert::Infallible>> {
+    std::future::ready(Ok((io, ())))
 }
 
 /// Serves `app` on `listeners` with its tasks running until `stop` resolves; then tells the tasks
 /// and work handlers finish to stop, lets each listener finish its requests and waits for the
 /// tasks, then the work, up to the app's grace from when `stop` resolved. `wrap` is each connection's step before HTTP
 /// ([`serve_wrapped`]), [`plain`] for none.
-pub(crate) async fn run<L, W, F, Io, E, M>(
+pub(crate) async fn run<L, W, F, Io, E, D, M>(
     listeners: Vec<L>,
     wrap: W,
     mut app: App<M>,
@@ -1692,8 +1737,9 @@ where
     L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
-    F: Future<Output = Result<Io, E>> + Send + 'static,
+    F: Future<Output = Result<(Io, D), E>> + Send + 'static,
     Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    D: ConnectionData,
     M: Middleware,
 {
     let (tasks, grace) = (std::mem::take(&mut app.tasks), app.grace);
@@ -1780,7 +1826,7 @@ fn listen(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener
 
 /// Serves `router` on every listener, each connection after its step `wrap`, until `stop`
 /// resolves, then lets each finish its requests for as long as `connections.drain` gives it.
-pub(crate) async fn serve_router<L, W, F, Io, E>(
+pub(crate) async fn serve_router<L, W, F, Io, E, D>(
     listeners: Vec<L>,
     wrap: W,
     router: Router,
@@ -1790,8 +1836,9 @@ pub(crate) async fn serve_router<L, W, F, Io, E>(
     L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
-    F: Future<Output = Result<Io, E>> + Send + 'static,
+    F: Future<Output = Result<(Io, D), E>> + Send + 'static,
     Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    D: ConnectionData,
 {
     use futures_util::future::{join, join_all};
     // When shutdown begins: when it began, and how long connections may go on from then.
@@ -1862,7 +1909,7 @@ impl Closing {
 /// HTTP, then `http` (its limits) serves it. With `held.clock`, a connection waits for a
 /// request's head (the step included) only as long as it allows, and with `held.open`, a
 /// connection is accepted only once one of its permits is free.
-async fn serve_listener<L, W, F, Io, E>(
+async fn serve_listener<L, W, F, Io, E, D>(
     mut listener: L,
     wrap: Arc<W>,
     http: hyper::server::conn::http1::Builder,
@@ -1874,8 +1921,9 @@ where
     L: Listener,
     L::Addr: 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
-    F: Future<Output = Result<Io, E>> + Send + 'static,
+    F: Future<Output = Result<(Io, D), E>> + Send + 'static,
     Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    D: ConnectionData,
 {
     // Each connection holds a sender; the listener is done when every one has dropped. One
     // closed because shutdown's drain ran out sends first, to be counted.
@@ -1902,12 +1950,11 @@ where
         let watch = held.clock.as_ref().map(crate::watch::Clock::watch);
         let bound = held.bounds.then(|| Arc::new(Bound::new()));
         let connection = Connection { router: router.clone(), peer, watch: watch.clone(), bound: bound.clone() };
-        let service = hyper_util::service::TowerToHyperService::new(connection);
         let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
         tokio::spawn(async move {
             // `permit` is held by the task until the step is done, then by the IO (`Watched`).
             // The step, until it is done, the clock expires the connection or shutdown begins.
-            let io = {
+            let (io, data) = {
                 let mut step = std::pin::pin!(wrap(io));
                 let mut stopping = std::pin::pin!(stop.wait_for(Option::is_some));
                 let stepped = std::future::poll_fn(|cx| {
@@ -1921,6 +1968,7 @@ where
                     _ => return,
                 }
             };
+            let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
             let closing = tokio::select! {
@@ -1963,13 +2011,66 @@ where
 /// box each value, and one more cost every request 497 instructions whether anything read it or
 /// not; this costs 44 (callgrind, keep-alive requests over TCP).
 #[derive(Clone)]
-struct Connection {
+pub(crate) struct Connection {
     router: Router,
     peer: Peer,
     /// For [`App::header_timeout`] and [`App::send_timeout`].
     watch: Option<Arc<crate::watch::Watch>>,
     /// The deadline of the request it is answering, for shutdown ([`Drain::each`]).
     bound: Option<Arc<Bound>>,
+}
+
+/// Selects the service once, after the step. The ordinary service stays non-generic: making
+/// it generic changed hyper's inlining and added instructions even for unit data (callgrind).
+pub(crate) trait ConnectionData: Clone + Send + Sync + 'static {
+    type Service: tower_service::Service<
+            hyper::Request<hyper::body::Incoming>,
+            Response = http::Response<crate::watch::Answered>,
+            Error = Infallible,
+            Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>,
+        > + Clone
+        + Send
+        + 'static;
+
+    fn service(self, connection: Connection) -> Self::Service;
+}
+
+impl ConnectionData for () {
+    type Service = Connection;
+
+    fn service(self, connection: Connection) -> Connection {
+        connection
+    }
+}
+
+impl<T: Clone + Send + Sync + 'static> ConnectionData for crate::ConnectionInfo<T> {
+    type Service = Informed<T>;
+
+    fn service(self, connection: Connection) -> Informed<T> {
+        Informed { connection, info: self }
+    }
+}
+
+/// Only the metadata entry point wraps the ordinary service and inserts an extension.
+#[derive(Clone)]
+pub(crate) struct Informed<T> {
+    connection: Connection,
+    info: crate::ConnectionInfo<T>,
+}
+
+impl<T: Clone + Send + Sync + 'static> tower_service::Service<hyper::Request<hyper::body::Incoming>> for Informed<T> {
+    type Response = http::Response<crate::watch::Answered>;
+    type Error = Infallible;
+    type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        self.connection.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
+        req.extensions_mut().insert(self.info.clone());
+        self.connection.call(req)
+    }
 }
 
 impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connection {
