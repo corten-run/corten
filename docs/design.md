@@ -5214,6 +5214,28 @@ rules something out.
     integration tests and handshake bounds test, the `Public` compile-fail doctest, and the
     OpenAPI test of a documented route taking it.
 
+61. <a id="choice-locked-check"></a>**Checking and shipping use the lock; local builds update it.**
+    `corten check` uses `--locked` on the full Cargo metadata it already reads, before formatting
+    or compiling, and on lint, build and tests. The starter Dockerfile also builds
+    with `--locked`. A missing or stale lock is an error, not a successful check that silently
+    repairs the dependency graph and leaves CI's committed graph unchecked. Cargo finds the
+    workspace-root lock even from a member, including a library. The CLI does not require a
+    member-local lock or inspect Git's index: the developer commits the resolved lock.
+    `corten dev`, `corten build` and ordinary Cargo builds keep Cargo's normal lock updates;
+    those are the edit loop, while a check verifies what is ready to commit and ship.
+    Not chosen: an opt-in `corten check --locked` or an opt-out that lets CI silently repair
+    the graph, or an additional metadata subprocess when the check already resolves metadata.
+
+    Stands on: reasoned (locking the existing resolution adds no Cargo invocation; using Cargo
+    rather than locating a lock ourselves preserves workspace semantics; a lock rewritten by
+    CI is not the lock an image receives); value (correctness before developer convenience,
+    one way to check and good defaults, README Values).
+
+    Revisit when: the check no longer reads full Cargo metadata before its other steps, or an
+    app needs to verify a graph without retaining a lock and cannot use ordinary Cargo checks.
+
+    Last checked: 2026-11-17, the check's metadata and Cargo-step order read at `7d9bbbf1e`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

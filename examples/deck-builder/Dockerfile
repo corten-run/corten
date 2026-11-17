@@ -13,7 +13,7 @@ COPY . .
 RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=corten-examples.target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
-    && cargo build --release -p deck-builder \
+    && cargo build --release --locked -p deck-builder \
     && mkdir -p /out && cp target/release/deck-builder /out/server
 
 FROM debian:bookworm-slim

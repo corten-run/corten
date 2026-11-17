@@ -9,6 +9,10 @@ corten build    # release binary in target/release
 docker build -t {{name}} . && docker run -p 8080:8080 {{name}}
 ```
 
+Run `corten dev` or `cargo build` after creating the app or changing dependencies, then commit
+`Cargo.lock`. `corten check` and the image build use `--locked`: they refuse a missing or stale
+lock rather than resolve a different dependency graph. In a workspace, commit its root lockfile.
+
 | Path | What |
 |---|---|
 | `src/lib.rs` | the app: routes, handlers, `app()` and its tests; declare modules here |

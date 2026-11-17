@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `corten check` refuses a missing or stale `Cargo.lock` before formatting or compiling and
+  keeps lint, build and tests locked. Run `cargo build` or `corten dev`, then commit the lock
+  (at the workspace root for workspace members). The starter and seven example images build with
+  `--locked` too, instead of resolving a different graph during deployment.
+
 - `serve_wrapped_with` carries a TLS handshake's value to each request as
   `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
   nothing to the document) and `Identify`. The existing serve paths carry no value;

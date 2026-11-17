@@ -171,6 +171,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!dockerfile.contains("{{"), "a placeholder is left in the Dockerfile:\n{dockerfile}");
         assert!(dockerfile.contains("id=shop-front-target,target=/src/target"), "{dockerfile}");
+        assert!(dockerfile.contains("cargo build --release --locked"), "{dockerfile}");
     }
 
     #[test]

@@ -40,6 +40,16 @@ test and a Dockerfile.
 The CLI is a convenience over cargo, not a build system: an app is an ordinary crate, and
 `cargo run` works too.
 
+`corten check` first reads Cargo metadata with `--locked`, then holds lint, build and tests to
+that lock too. A missing or stale `Cargo.lock` fails before formatting or compiling; the check
+never repairs it. Run `cargo build` or `corten dev` after creating the app or changing dependencies,
+then commit `Cargo.lock` alongside the manifest change. In a workspace, Cargo uses the lock at
+the workspace root, including when checking a library member from its own directory; a member
+needs no lock of its own. Local `corten dev`, `corten build` and ordinary Cargo builds still
+create or update the lock, so editing dependencies needs no extra flag. The image build also
+uses `--locked` ([Building the image](deploy.md#building-the-image)). This is always checked,
+not a CI-only opt-in ([Choice 61](../design.md#choice-locked-check)).
+
 `corten dev`, `fmt` and `check` format and check the way the corten they were built from does, so
 they compare it with the one the app's `Cargo.lock` pins (a release, or a git revision): when they
 differ, a note before the command's output names both and the `cargo install` line for the
