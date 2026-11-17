@@ -1126,10 +1126,15 @@ Corten is pre-1.0, so any minor version may change the API.
   on the element that replaced it, so a delegated `<dialog on:close={..}>` handler hears one of
   each (a copy, with `isTrusted` false; a listener a script put on the old element hears the
   browser's). A `beforetoggle` handler that changes the dialog as it closes no longer stops the
-  patch. This holds for a `data-patch` answer, a `<corten-live>` fragment, a `ReadAgain` read and
-  `patch()`, for a dialog with an id; one the user opened still stays open when an answer draws it
-  closed. The runtime is 395 bytes larger minified (174 with gzip, 137 with brotli) (design
-  Choice 58,
+  patch. Every dialog an answer draws closed closes before anything is replaced, so focus also
+  goes back when the same answer draws the opener again (to the button in its place); the
+  handlers read the dialog's `returnValue`; and the copies reach the dialog with its id on the
+  page when they come, also when another patch drew it again first. This holds for a
+  `data-patch` answer, a `<corten-live>` fragment, a `ReadAgain` read, `patch()`, a page's part
+  a navigation replaces and the layout a write's page draws (which closed nested dialogs
+  outer-first, and lost the events of one it replaced), for a dialog with an id; one the user
+  opened still stays open when an answer draws it closed. The runtime is 738 bytes larger
+  minified (270 with gzip, 226 with brotli) (design Choice 58,
   [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
 
 - `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,

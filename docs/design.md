@@ -4688,37 +4688,56 @@ rules something out.
     `corten dev`'s reports, on `98e7ca184`.
 
 58. <a id="choice-patch-closes-dialog"></a>**A patch closes an open dialog it draws closed as the browser does, before replacing
-    it, and dispatches the dialog's `toggle` and `close` again on the element that replaces it.**
+    anything, and dispatches the dialog's `toggle` and `close` again on the dialog that has its
+    id when they come.**
     A dialog the user left open as the server drew it, which a patch's markup draws closed, takes
     the markup's state ([Choice 52](#choice-asked-open-state)). The runtime replaced it closed:
     no `close` event, so a `<dialog on:close={..}>` handler never ran, and focus fell to the page
     instead of going back to the button that opened it
     ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
-    Such a dialog is now closed with `close()` before the patch replaces it, so the browser does
-    what its close does: focus goes back to what had it before the dialog opened, and the dialog
-    leaves the top layer. Its `beforetoggle` comes at once, on the dialog still in the page, so
-    the document's listener hears it. Its `toggle` and `close` come in a later task, once the
-    patch has taken it off the page, where only a listener on the element itself hears them; so
-    the runtime listens once for each on that dialog and dispatches a copy (the same kind of
-    event, so a toggle keeps its states) on the element that took its place, when that one is in
-    the page and the old one is not. The app's delegated handlers hear one `toggle` and one
-    `close` on the dialog the page has, with the browser's timing; the copy is not trusted
-    (`isTrusted` is false), and a listener a script put on the old element hears the browser's
-    own. The dialogs are found first, in the walk that reads what the user opened, and closed
-    after it, before anything else reads the old element, so a `beforetoggle` handler that
-    changes the dialog (removes a field) changes what the rest of the patch reads rather than a
-    list it is walking. The one holding focus closes first, the innermost of those, then the rest
-    from the last in the page: nested modals each give focus back in turn, and a modal opened
-    from inside a sibling gives it back before the sibling closes. It is every patch's: a
-    `data-patch` answer, a `<corten-live>` fragment, a `ReadAgain` read and a script's
-    `patch()`, and a layout element drawn anew (one drawn in place already closed with
-    `close()`). It is only a dialog matched by its id (an anonymous one is replaced closed, [Limit 2](#limit-whole-element-patches)), left as the server drew it (one the user opened stays
-    open, [Choice 52](#choice-asked-open-state)), that the markup draws closed: a dialog a patch removes (`data-remove`, a
-    page swapped in) is removed, as the browser removes one, with no `close` event.
+    Such a dialog is now closed with `close()` before the patch replaces anything, so the browser
+    does what its close does: focus goes back to what had it before the dialog opened, and the
+    dialog leaves the top layer. Its `beforetoggle` comes at once, on the dialog still in the
+    page, so the document's listener hears it. Its `toggle` and `close` come in a later task,
+    once the patch has taken it off the page, where only a listener on the element itself hears
+    them; so the runtime listens once for each on that dialog and, if it is off the page by then,
+    dispatches a copy (the same kind of event, so a toggle keeps its states) on the dialog with
+    its id on the page then: the one that took its place, or the one a later patch drew in that
+    one's place before the events came (two `await patch()` in one task, a live update). One
+    removed by then hears nothing. The copy's dialog first takes the old one's `returnValue`,
+    which `close()` without a result keeps, so a handler reads the result a script gave the
+    dialog (in `beforetoggle` too), not the new element's empty one. The app's delegated handlers
+    hear one `toggle` and one `close` on the dialog the page has, with the browser's timing; the
+    copy is not trusted (`isTrusted` is false), and a listener a script put on the old element
+    hears the browser's own. The dialogs are found first, in every element the patch replaces or
+    draws (each of a patch's elements, a page's parts a navigation replaces, the layout elements
+    a write's page draws), and all of them close before any element is replaced: focus goes back
+    to the opener while it is still on the page, and when the same answer replaces the opener
+    too, replacing it carries focus to the element drawn in its place, as it carries any focus,
+    whatever the order of the answer's elements. A `beforetoggle` handler that changes the dialog
+    (removes a field) changes what the replacement then reads rather than a list being walked.
+    The one holding focus closes first, the innermost of those, then the rest from the last
+    found: nested modals each give focus back in turn, and a modal opened from inside a sibling
+    gives it back before the sibling closes. It is every patch's: a `data-patch` answer, a
+    `<corten-live>` fragment, a `ReadAgain` read and a script's `patch()`, a page's part a
+    navigation replaces, and a layout element a write's page draws, anew or in place (where the
+    dialog stays on the page and the browser's own events reach the document). It is only a dialog
+    matched by its id, or the replaced element itself (an anonymous one inside is replaced
+    closed, [Limit 2](#limit-whole-element-patches); a layout drawn in place reaches one by its
+    place, and closes it there the same way), left as the server drew it (one the user opened
+    stays open, [Choice 52](#choice-asked-open-state)), that the markup draws closed: a dialog a
+    patch removes (`data-remove`, a page swapped in) is removed, as the browser removes one, with
+    no `close` event.
 
     Not chosen: closing each dialog while walking the old element (the first attempt, in
     [Choice 52](#choice-asked-open-state)'s review), which let a `beforetoggle` handler change the tree under the walk and
     abort the patch, and closed nested modals outer-first, so focus landed on `<main>`; closing
+    the dialogs of each element as it is replaced (this Choice's first version), which lost the
+    focus when an earlier element of the same answer had replaced the opener, and left a layout
+    drawn in place closing outer-first, its own way; finding the opener's replacement by id after
+    the close, which needs the element the dialog gives focus back to, which the platform keeps
+    to itself; dispatching the copies on the first replacement only (also the first version),
+    which lost them when another patch drew the dialog again before they came; closing
     in reverse page order alone, which fails a modal opened from inside an earlier sibling;
     keeping the old dialog in the page until its `close` event, then replacing it, which would
     end the patch a task or a frame after its answer (Chromium's `close` comes up to a frame
@@ -4728,12 +4747,16 @@ rules something out.
     (`showModal()`, then `close()`), which knows nothing of what had focus before the old one
     opened, so focus could not go back to the opener.
 
-    What it costs: the runtime is 395 bytes larger raw (43,620 to 44,015), 174 with gzip (15,407
-    to 15,581) and 137 with brotli (13,925 to 14,062), against main's `38587c414`, paid once a
-    release by every user (against `ba77a51b0` it was 395, 170 and 142). A patch looks a dialog up
-    in the new markup only when one in the old is open as the server drew it (usually none), and
-    pays two listeners and a `close()` for each it closes. No markup changes, so `render_cost`
-    cannot see it; the per-patch cost is reasoned, not measured.
+    What it costs: the runtime is 738 bytes larger raw (43,620 to 44,358), 270 with gzip (15,407
+    to 15,677) and 226 with brotli (13,925 to 14,151), against main's `38587c414`, paid once a
+    release by every user. One close path for every patch and swap did not make it smaller than
+    the first version (395, 174 and 137), which closed only in a patch's replacement: the passes
+    over a whole answer, the layout's, the `returnValue` and finding the dialog by id when the
+    events come are the difference. A patch, a swap and a write's layout each run one query for
+    open dialogs (`dialog[open]`) in each element they replace or draw, and look a dialog up in
+    the new markup only when one is open as the server drew it (usually none); each it closes
+    pays two listeners and a `close()`. No markup changes, so `render_cost` cannot see it; the
+    per-patch cost is reasoned, not measured.
 
     Stands on: platform (HTML's dialog close: `close()` fires `beforetoggle` at once, queues
     `toggle` and `close`, and, when focus is in the dialog, focuses the element that had it
@@ -4742,10 +4765,15 @@ rules something out.
     listener on it and not by the document's, focus is on the opener right after `close()`, nested
     modals closed outer-first leave focus in the inner one while inner-first gives it back to
     the opener, and a `ToggleEvent` made by its constructor from another keeps its
-    `oldState` and `newState`); measured (the runtime's minified size by Node's `zlib` gzip and
-    brotli at their defaults, once each build; the smoke's checks of one modal and of nested
-    modals an answer draws closed, heard by delegated `on:toggle` and `on:close` handlers in
-    `examples/watchlist/src/smoke.rs`, failing with main's runtime and passing with this one);
+    `oldState` and `newState`; `close()` without a result keeps `returnValue`); measured (the
+    runtime's minified size by Node's `zlib` gzip and brotli at their defaults, once each build;
+    the smoke's checks, heard by delegated `on:toggle` and `on:close` handlers in
+    `examples/watchlist/src/smoke.rs`, of one modal an answer draws closed with the
+    `returnValue` a script gave it, of nested modals, of an answer that draws the opener again
+    before the dialog, and of two patches in one task, the second drawing the dialog again
+    before its events come, each failing with the first version's runtime and passing with this
+    one, and, by a listener on the document, of nested dialogs and one replaced in a layout a
+    write's page draws in place, failing and passing the same way);
     reasoned (the element the page has is the dialog the app's handlers are for; one listener
     each on a dialog being closed is the only way to learn when the browser's events come);
     value (a close Corten does behaves as the browser's, one `close` and focus given back,
@@ -4755,8 +4783,9 @@ rules something out.
 
     Revisit when: an engine dispatches a detached dialog's `toggle` or `close` through the
     document or stops sending them to it; the platform gives a way to move a dialog's focus
-    return to another element, when the new element could be closed instead; or an app's handler
-    needs the event the browser made (`isTrusted`), or one on the old element to be the only one.
+    return to another element, when the new element could be closed instead; an app's handler
+    needs the event the browser made (`isTrusted`), or one on the old element to be the only one;
+    or the runtime gains a way to replace or draw an element that does not close first.
 
     Last checked: 2026-11-16, a one-off probe, not a repository check, in Chromium
     156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): a modal dialog with focus
@@ -4767,7 +4796,12 @@ rules something out.
     `replaceWith()`, and log the events and `document.activeElement`; 2026-11-16, the smoke's
     two checks failing with main's runtime (`ba77a51b0`) and passing on `fc0d6f302`, in the same
     three engines, and the runtime's size on `fc0d6f302` against `ba77a51b0`; 2026-11-16, the
-    runtime's size with this change merged onto main's `38587c414` against `38587c414`.
+    runtime's size with this change merged onto main's `38587c414` against `38587c414`;
+    2026-11-16, the smoke's six checks of this Choice failing with `630ab7129`'s runtime (the
+    first version) on its fixture and passing on `1a37ba222`, in Chromium 156.0.8078.4, Firefox
+    157.0 and WebKit 27.2 (the smoke runs WebKit without the Navigation API, which Playwright's
+    WebKit loses the page with, so it skips the layout check there; run alone with it, it failed
+    and passed the same way), and the runtime's size on `1a37ba222` against `38587c414`.
 
 ## Rules
 

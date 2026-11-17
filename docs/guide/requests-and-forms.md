@@ -994,10 +994,13 @@ while it was on its way stays, and the same file chosen again goes). What the us
 was modal), a `<details>` they unfolded and a shown popover, matched by id (a `<details>` also by
 its place). One the user left as the server sent it takes the new markup's state, so a dialog
 the server sent open and now sends closed closes, as the browser closes one: before the patch
-replaces it, so focus goes back to what had it before the dialog opened, and its `on:toggle` and
-`on:close` handlers hear one `toggle` and one `close` on the dialog the page then has (the
-replacement, which gets a copy of each), nested dialogs the innermost first. Give such a dialog
-an id; one without is replaced closed, with no `close` event. A dialog or `<details>` the user closed opens again
+replaces anything, so focus goes back to what had it before the dialog opened (to the button
+drawn in its place when the same answer draws the opener again), and its `on:toggle` and
+`on:close` handlers hear one `toggle` and one `close` on the dialog with its id the page has
+when they come (the replacement, which gets a copy of each and the old one's `returnValue`),
+nested dialogs the innermost first. The same holds for a page's part a navigation replaces and
+for the layout a write's page draws. Give such a dialog an id; one without is replaced closed,
+with no `close` event. A dialog or `<details>` the user closed opens again
 when a `data-patch` answer replaces it drawn `open` and the button that sent it (or, when none
 did, the focused control of the form, else the form) is outside it: pressing it is newer than
 the user's close, so a Preview button beside a dialog opens it on every press, not only the

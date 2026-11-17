@@ -396,8 +396,8 @@ list below a chart follow) is `ChoiceGroup` with a `ShownFor` around each part, 
 the choice's values or a script that finds the parts. For anything else, use the platform first: `<dialog>`, `popover`, `<details>`, and CSS
 anchor positioning. A `<dialog>` the server can draw `open` (a form it refuses) gets
 `on:connect={corten_ui::dialog::modal(target)}`, so it is modal, not just open, and a patch that
-then draws it closed closes it as the browser does (its `on:close` runs, focus goes back to its
-opener; give it a `#[derive(Id)]` id); one the address
+then draws it closed closes it as the browser does (its `on:close` runs with the dialog's
+`returnValue`, focus goes back to its opener; give it a `#[derive(Id)]` id); one the address
 opens and a link closes (`?selected=..`) gets `dialog::modalClosedBy(target, close, signal)` with
 the link as the `close` ref, so a close request (Escape) goes to its address. A table whose page
 has all its rows sorts in place, also when other routes read its order (no round trip; the UI guide
