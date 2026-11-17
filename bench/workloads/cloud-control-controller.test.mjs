@@ -7,6 +7,7 @@ import { harness } from "./cloud-fixtures.mjs";
 import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { reservation, validateState } from "./cloud-contract.mjs";
+import { digest } from "./cloud-local.mjs";
 
 async function liveMonitor(h) {
   const pending = h.launch().launch();
@@ -36,7 +37,7 @@ test("lost monitor retains launch and operation custody; failed-only recovery wa
   assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(!existsSync(join(h.local, "stream-recovery.lock")));
 });
 
-test("supervised audit publication refuses before delivery until the locked approval checkpoint is integrated", async (t) => {
+test("supervised audit publication refuses without the production locked approval checkpoint", async (t) => {
   const h = harness(t, { active: true, monitorHold: true }), { pending } = await liveMonitor(h);
   const calls = h.calls.length;
   try {
@@ -46,6 +47,27 @@ test("supervised audit publication refuses before delivery until the locked appr
     assert.equal(h.calls.length, calls); assert.equal(h.deletes, 0);
     assert.ok(existsSync(join(h.local, "operation.lock")));
   } finally { h.flags.completeMonitor(); await pending; }
+});
+
+test("supervised audit binds publication bytes after the awaited locked checkpoint and refuses ended monitoring", async (t) => {
+  for (const changed of ["delivery", "reservation", "invalid", "terminal"]) {
+    const h = harness(t, { active: true, monitorHold: true }), { pending } = await liveMonitor(h);
+    const path = join(h.temp, "delivery.json"); writeFileSync(path, "{}");
+    const approved = { reservationSha256: digest(readFileSync(h.statePath)), deliverySha256: digest(readFileSync(path)) }, calls = h.calls.length;
+    try {
+      const task = h.task({ async authorizeAudit() {
+        assert.ok(existsSync(join(h.local, "audit-delivery.lock")));
+        if (changed === "delivery") writeFileSync(path, "{ }");
+        else if (changed === "reservation") h.change((s) => { s.auditIntents = {}; });
+        else writeFileSync(join(h.local, "monitor-" + changed + ".json"), "{}");
+        return approved;
+      } }, { collect: undefined, deliverAudit: path, campaign: "r21-" + "a".repeat(16), approveSubject: "b".repeat(64) });
+      await assert.rejects(task.deliverAudit(), changed === "delivery" ? /locked audit delivery changed/ : changed === "reservation" ? /locked audit reservation changed/ : /progress/);
+      assert.ok(!existsSync(join(h.local, "monitor-delivery-json-api.json")));
+      assert.ok(!existsSync(join(h.local, "audit-delivery.lock"))); assert.ok(existsSync(join(h.local, "operation.lock")));
+      assert.equal(h.calls.length, calls); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+    } finally { h.flags.completeMonitor(); await pending; }
+  }
 });
 
 test("closed monitor cannot delete running work or duplicate a host; terminal evidence permits exactly one cleanup", async (t) => {

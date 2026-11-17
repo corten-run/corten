@@ -26,7 +26,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval } = {}) {
+  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleet = options.group === undefined ? undefined : validateFleet(JSON.parse(regular(options.fleet, 1024 * 1024)));
@@ -186,8 +186,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       await sleep(Math.min(30000, remaining()));
     }
   }
-  async function locked(fn, recovery = false) {
-    boundary(); const lock = join(local, recovery ? "stream-recovery.lock" : "operation.lock");
+  async function locked(fn, recovery = false, name = recovery ? "stream-recovery.lock" : "operation.lock") {
+    boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
     preserveOperationLock = false;
@@ -623,7 +623,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(options.deliverAudit, "audit delivery options required");
       const observed = read();
       if (observed.control?.monitor) {
-        assert.fail("supervised audit publication requires the locked approval checkpoint; preserve host and review wait");
+        assert.equal(typeof authorizeAudit, "function", "supervised audit publication requires the locked approval checkpoint");
+        return locked(async () => {
+          const { queueStreamAudit } = await import("./cloud-control-stream.mjs");
+          const approved = await authorizeAudit(); check();
+          const bytes = regular(statePath, 1024 * 1024);
+          assert.equal(digest(bytes), approved.reservationSha256, "locked audit reservation changed");
+          state = controllerState(JSON.parse(bytes), options.round);
+          assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");
+          queueStreamAudit(local, state, options, approved.deliverySha256);
+          return 3; // Pending publication only; remote sealed admission is observed on the existing stream.
+        }, false, "audit-delivery.lock");
       }
       return locked(async () => {
         assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");
