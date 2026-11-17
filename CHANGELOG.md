@@ -1270,6 +1270,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- Grouped benchmark collection and retirement confirm delayed provider deletion
+  with bounded, exact-ID, read-only observations instead of failing on the first
+  still-present response. Account checks share the deadline, and uncertainty
+  retains the deletion intent without issuing another DELETE or qualifying
+  failed results.
+
 - A patch that draws closed a dialog the server drew open, which the user left open, closes it as
   the browser closes one: before replacing it, so focus goes back to the button that opened it
   rather than to the page, nested modals the innermost first. Its `toggle` and `close`, which the
