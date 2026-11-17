@@ -741,6 +741,30 @@ async function parsesAsHtmlMeans(browser) {
       // Run in the page: the markup it was given comes in the argument.
       ({ markup }) => document.body.innerHTML === markup,
     ])),
+    // An element a browser parsing HTML reads as text, written where html! does not see that it
+    // is HTML's (the top of a component's markup), may hold text: html! reads nothing in it for a
+    // refusal, and a <noscript>'s nowhere (text with scripting on). Browsers keep each as written
+    // (crates/corten/tests/markup_roots.rs).
+    ...[
+      ...["iframe", "noscript", "xmp", "noembed", "noframes", "style", "script"].map((holder) => `<${holder}><p><div>Detail</div></p></${holder}>`),
+      `<div><noscript><p><div>Detail</div></p></noscript></div>`,
+    ]
+      .map((markup) => /** @type {[string, string, (page: { markup: string }) => boolean]} */ ([
+        `a browser reads what a text element holds as text: ${markup}`,
+        markup,
+        ({ markup }) => document.body.innerHTML === markup,
+      ])),
+    // A <textarea> and a <title> serialize their text escaped, so their text is compared, at the
+    // top and in an <svg>'s <foreignObject> whose <svg> html! does not place.
+    ...[
+      `<textarea id="held"><p><div>Detail</div></p></textarea>`,
+      `<title id="held"><p><div>Detail</div></p></title>`,
+      `<svg><foreignObject><textarea id="held"><p><div>Detail</div></p></textarea></foreignObject></svg>`,
+    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+      `a browser reads what a text element holds as text: ${markup}`,
+      markup,
+      () => document.getElementById("held")?.textContent === "<p><div>Detail</div></p>",
+    ])),
   ];
   for (const [name, markup, keeps] of shapes) {
     await page.setContent(`<!DOCTYPE html><html><head><title>Shapes</title></head><body>${markup}</body></html>`);

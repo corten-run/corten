@@ -298,13 +298,17 @@ use std::{
 /// (`<Corten />` too: the macro knows it only by its name, which a component of the app's may
 /// share), and a `<script>` or `<style>` whose literal text holds a `<`, which `html!` writes as
 /// is. What it writes may close the open elements, open others, or leave a browser reading a
-/// script's text past any later literal end tag (`<!--<script>` does), so nothing after it in the
-/// same `html!` is refused, whatever it shows: `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
+/// script's text past any later literal end tag (`<!--<script>` does), so no nesting refusal acts
+/// after it in the same `html!`, whatever it shows: `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
 /// compiles, as browsers keep it. Nor does a literal `<svg>` or `<math>` show its namespace where
 /// the markup does not (a `<math>` an `<svg>` holds is SVG's), so its integration points do not
-/// show HTML there. A `<template>`'s content and an `<svg>`'s or a `<math>`'s start with
-/// nothing open, so an `<a>` in a `<foreignObject>` inside another `<a>` compiles, as browsers
-/// keep it. These do not:
+/// show HTML there, nor is what an element HTML reads as text holds read there (`<iframe>`,
+/// `<textarea>`, `<style>` ..: as HTML's it is text), nor what a `<noscript>` holds anywhere. A
+/// `<template>`'s content and an `<svg>`'s or a `<math>`'s start with nothing open, so an `<a>`
+/// in a `<foreignObject>` inside another `<a>` compiles, as browsers keep it. Every refusal
+/// assumes `html!` output, a component's included, is drawn where a browser reads tags: writing a
+/// component into script or style text a caller left open (after `raw("<script>")`) is not
+/// supported, since a script's text comes from a string, not markup. These do not compile:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;

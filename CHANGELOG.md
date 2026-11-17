@@ -16,10 +16,13 @@ Corten is pre-1.0, so any minor version may change the API.
   option-group, option and ruby starts that close an open element. Diagnostics say what to change. The content of a
   `<template>` or of SVG and MathML is checked apart from the elements around it, where browsers
   keep what is written.
-  A refusal rests only on literal markup of the same `html!` before the inner element: nothing
-  after a component (`<Corten />` too, so nothing in a document's body), an expression (`raw`
-  may write any element, or leave a script open) or a spread is checked, nor is a nested form;
-  this is not a complete HTML validator ([views](docs/guide/views.md)).
+  A nesting refusal rests only on literal markup of the same `html!` before the inner element:
+  no nesting is checked after a component (`<Corten />` too, so none in a document's body) or an
+  expression (`raw` may write any element, or leave a script open), nor is a nested form; a
+  duplicate attribute and a hand-written `data-key` need no context and are refused anywhere.
+  Every refusal assumes the output is drawn where a browser reads tags: a component written into
+  script text a caller left open is not supported. This is not a complete HTML validator
+  ([views](docs/guide/views.md)).
 
 - `html!` no longer refuses an element in a `<textarea>`, `<title>` or another element read as
   text, or a `<plaintext>`, under the `<foreignObject>`, `<desc>`, `<title>` or `<mtext>` of an
@@ -35,12 +38,24 @@ Corten is pre-1.0, so any minor version may change the API.
   compiles, as browsers keep it, and a `<div>` after `<script>"if (a < b) go();"</script>` in a
   `<p>` is no longer refused either (a miss).
 
-- `html!` refuses nothing after unseen output in the same markup, even where a later literal
+- No nesting, text-holder, foreign-content or patch-shape refusal of `html!` acts after unseen
+  output in the same markup (a duplicate attribute and a hand-written `data-key` still do), even
+  where a later literal
   `<svg>`, `<p>` or `<textarea>` would have shown the context: what an expression, a component
   or a script whose text holds `<!--<script>` writes may leave a browser reading the script's
   text, so `<script>"<!--<script>"</script><p><div>..</div></p>{raw("</script>")}` compiles, as
   browsers keep it. `<Corten />` is unseen like any other component, so a component of the
   app's named `Corten` compiles, and nothing in a document's body is refused (a miss).
+
+- `html!` no longer reads what an element HTML reads as text holds (`<iframe>`, `<textarea>`,
+  `<title>`, `<script>`, `<style>`, `<xmp>`, `<noembed>`, `<noframes>`, `<plaintext>`) where the
+  markup does not show the element is HTML's, nor what a `<noscript>` holds anywhere: it may be
+  text, so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a component compiles, as
+  browsers keep it, and nothing after such a `<plaintext>` is refused.
+
+- `html!` compares attribute names as it writes them, so `key` (written `data-key`) beside `KEY`
+  compiles as two attributes; a hand-written `data-key` is still refused, and `Key` beside `KEY`
+  is a duplicate.
 
 - The patch shapes `html!` refuses (below) compile where output the markup does not show (an
   expression, a component, or a `<script>` or `<style>` whose text holds a `<`) comes before the

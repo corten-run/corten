@@ -765,3 +765,47 @@ fn corten_s_own_head_marker_compiles_by_any_path() {
     assert!(html.contains("<title>Marker</title>"), "{html}");
     assert!(html.contains("<main><p>Body</p></main>"), "{html}");
 }
+
+/// What an element a browser parsing HTML reads as text holds is not read for a refusal where the
+/// markup does not show the element is HTML's (the top of a component's markup, an `<svg>`'s
+/// integration point whose `<svg>` the markup does not place): there it may be text, and
+/// browsers keep each of these as written. A `<noscript>`'s content is text with scripting on.
+#[component]
+fn FramedDetail() -> impl Render {
+    html! { <iframe><p><div>"Detail"</div></p></iframe> }
+}
+
+#[test]
+fn an_element_that_may_read_as_text_holds_what_no_refusal_reads() {
+    for (markup, expected) in [
+        (FramedDetail {}.to_html(), "<iframe><p><div>Detail</div></p></iframe>"),
+        (html! { <iframe><p><div>"Detail"</div></p></iframe> }.to_html(), "<iframe><p><div>Detail</div></p></iframe>"),
+        (html! { <noscript><p><div>"Detail"</div></p></noscript> }.to_html(), "<noscript><p><div>Detail</div></p></noscript>"),
+        (html! { <xmp><p><div>"Detail"</div></p></xmp> }.to_html(), "<xmp><p><div>Detail</div></p></xmp>"),
+        (html! { <noembed><p><div>"Detail"</div></p></noembed> }.to_html(), "<noembed><p><div>Detail</div></p></noembed>"),
+        (html! { <noframes><p><div>"Detail"</div></p></noframes> }.to_html(), "<noframes><p><div>Detail</div></p></noframes>"),
+        (html! { <style><p><div>"Detail"</div></p></style> }.to_html(), "<style><p><div>Detail</div></p></style>"),
+        (html! { <script><p><div>"Detail"</div></p></script> }.to_html(), "<script><p><div>Detail</div></p></script>"),
+        (html! { <textarea><p><div>"Detail"</div></p></textarea> }.to_html(), "<textarea><p><div>Detail</div></p></textarea>"),
+        (html! { <title><p><div>"Detail"</div></p></title> }.to_html(), "<title><p><div>Detail</div></p></title>"),
+        (
+            html! { <div><noscript><p><div>"Detail"</div></p></noscript></div> }.to_html(),
+            "<div><noscript><p><div>Detail</div></p></noscript></div>",
+        ),
+        (
+            html! { <svg><foreignObject><textarea><p><div>"Detail"</div></p></textarea></foreignObject></svg> }.to_html(),
+            "<svg><foreignObject><textarea><p><div>Detail</div></p></textarea></foreignObject></svg>",
+        ),
+    ] {
+        assert_eq!(markup, expected);
+    }
+}
+
+/// `key` is written `data-key`, so a `KEY` beside it is another attribute.
+#[test]
+fn key_and_upper_case_key_are_two_attributes() {
+    assert_eq!(
+        html! { <my-widget key="row-1" KEY="widget-value"></my-widget> }.to_html(),
+        r#"<my-widget data-key="row-1" KEY="widget-value"></my-widget>"#
+    );
+}

@@ -10,8 +10,16 @@
 //! with no element open. A `<script>` or `<style>` whose literal text holds a `<` is unseen as
 //! well: `html!` writes that text as is, and `</script>` in it ends the element where the text
 //! says, not where the markup does (and `<!--<script>` keeps it open past the literal end tag).
+//! What a `<noscript>` holds is not walked (text with scripting on), nor what an element a browser
+//! parsing HTML reads as text holds where the markup does not show it is HTML's (`<iframe>`,
+//! `<textarea>`, `<style>` at the top of an `html!`): it may be text. A `<plaintext>` written
+//! there may make the rest of the page text, so nothing after it is refused either.
+//!
+//! Every refusal assumes the `html!`'s output is drawn where a browser reads tags: a component
+//! written into a script's text that its caller left open (after `raw("<script>")`) is not
+//! supported, since a script's text comes from a string, not markup.
 
-use super::{as_html, breaks_out, parsing_within, writes_tags, Attr, Error, Node, Parsing};
+use super::{as_html, breaks_out, may_read_as_text, parsing_within, reads_as_text, writes_tags, Attr, Error, Node, Parsing};
 use crate::tokens::err;
 use proc_macro::Span;
 
@@ -170,11 +178,14 @@ struct Walk<'a> {
 
 /// Whether `nodes` hold something the markup does not show, at any depth: an expression, a
 /// component (`<Corten />` too: the macro sees only its name, which an app's component may
-/// share), or a `<script>` or `<style>` whose text may write tags (`writes_tags`).
+/// share), a `<script>` or `<style>` whose text may write tags (`writes_tags`), or a `<plaintext>`
+/// (refused where the markup shows it is HTML's; elsewhere it may make the rest of the page text).
 pub(super) fn holds_unseen(nodes: &[Node]) -> bool {
     nodes.iter().any(|node| match node {
         Node::Expr(_) | Node::Component { .. } => true,
-        Node::Element { name, children, .. } => writes_tags(name, children) || holds_unseen(children),
+        Node::Element { name, children, .. } => {
+            writes_tags(name, children) || name.eq_ignore_ascii_case("plaintext") || holds_unseen(children)
+        }
         Node::Block { bodies, .. } => bodies.iter().any(|body| holds_unseen(body)),
         Node::Text(_) | Node::Markup(_) | Node::Let(_) => false,
     })
@@ -298,12 +309,12 @@ fn walk<'a>(nodes: &'a [Node], parsing: Parsing, w: &mut Walk<'a>) -> Result<(),
                 }
                 w.open.push(Open { name, html });
                 // Text a `<script>` or `<style>` writes as is may end it and open anything.
-                // Text holders are already checked by the parser; noscript is text with
-                // scripting enabled and markup without it, so do not assume either here. What
-                // they hold is not walked, but an expression there may still close them.
-                if writes_tags(name, children)
-                    || (html && (super::reads_as_text(parsing, name) || name.eq_ignore_ascii_case("noscript")))
-                {
+                // Text holders are already checked by the parser; a noscript is text with
+                // scripting enabled and markup without it, and an element read as text where the
+                // markup does not show it is HTML's holds text or elements, so do not assume
+                // either here. What they hold is not walked, but an expression there may still
+                // close them.
+                if writes_tags(name, children) || reads_as_text(parsing, name) || may_read_as_text(parsing, name) {
                     w.unseen |= holds_unseen(std::slice::from_ref(node));
                 } else {
                     // A template's content, and a foreign element's, start with no element open.
@@ -563,6 +574,35 @@ mod tests {
             // After an expression in an element that showed HTML.
             assert!(check(&[el("div", vec![expr(), links(root, point)])]).is_ok(), "{root} {point} after an expression");
         }
+    }
+
+    /// What an element a browser parsing HTML reads as text holds, where the markup does not show
+    /// the element is HTML's, may be text (browsers keep `<iframe><p><div>` as written there): it
+    /// is not walked, and a `<noscript>`'s nowhere. After a `<plaintext>` there nothing is refused.
+    #[test]
+    fn what_an_element_that_may_read_as_text_holds_is_not_walked() {
+        let detail = || el("p", vec![el("div", vec![Node::Text("Detail".into())])]);
+        let holders = ["iframe", "noscript", "xmp", "noembed", "noframes", "style", "textarea", "title", "script", "plaintext"];
+        for holder in holders {
+            assert!(check(&[el(holder, vec![detail()])]).is_ok(), "{holder}");
+            // At an integration point of an <svg> whose own namespace the markup does not show.
+            let point = el("svg", vec![el("foreignObject", vec![el(holder, vec![detail()])])]);
+            assert!(check(&[point]).is_ok(), "{holder} in a foreignObject");
+            // Among a block's bodies, and nested in an element the markup does not show is HTML's.
+            let block = Node::Block { head: Vec::new(), bodies: vec![vec![el(holder, vec![detail()])]], arms: false };
+            assert!(check(&[el("section", vec![block])]).is_ok(), "{holder} in a block");
+        }
+        // A <noscript> is text with scripting on, under an element that shows HTML too.
+        assert!(check(&[el("div", vec![el("noscript", vec![detail()])])]).is_ok());
+        // A <plaintext> where it may be HTML's may make the rest of the page text.
+        assert!(check(&[el("section", vec![el("plaintext", Vec::new())]), detail()]).is_ok());
+        assert!(holds_unseen(&[el("plaintext", Vec::new())]));
+        // In an <svg> they hold elements, walked as SVG's (a <p> there is refused by the parser).
+        assert!(!may_read_as_text(Parsing::Foreign, "style") && !may_read_as_text(Parsing::Svg, "iframe"));
+        assert!(may_read_as_text(Parsing::Svg, "noscript") && may_read_as_text(Parsing::Html, "noscript"));
+        assert!(!may_read_as_text(Parsing::Html, "iframe") && reads_as_text(Parsing::Html, "iframe"));
+        // Text alone in one does not hide what follows it.
+        assert!(!holds_unseen(&[el("iframe", vec![Node::Text("Preview".into())])]));
     }
 
     #[test]

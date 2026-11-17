@@ -62,7 +62,12 @@ refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></re
 `<svg>` compiles. An `<svg>` or a `<math>` written there does not show its own namespace either
 (a `<math>` in an `<svg>` is SVG's, an `<svg>` straight in a `<math>` MathML's): an element a
 browser takes out of either is refused straight in it, but its `<foreignObject>`, `<title>` or
-`<mtext>` shows nothing; put it in a `<div>` or another HTML element to show it ([design Choice 54](../design.md#choice-html-parse-refusals),
+`<mtext>` shows nothing; put it in a `<div>` or another HTML element to show it. Where the
+markup does not show HTML, what a `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`,
+`<xmp>`, `<noembed>`, `<noframes>` or `<plaintext>` holds is not read for a refusal either (as
+HTML's it is text, as SVG's elements), so `<iframe><p><div>"Detail"</div></p></iframe>` at the
+top of a component compiles, and nothing after such a `<plaintext>` is refused; nor is what a
+`<noscript>` holds, anywhere, since it is text with scripting on ([design Choice 54](../design.md#choice-html-parse-refusals),
 [Limit 30](../design.md#limit-markup-context)).
 
 The same rule applies to literal HTML nesting whose start tags close an open element: a block
@@ -79,8 +84,9 @@ component's scope. A refusal rests only on the literal markup of the same `html!
 two elements, followed through control-flow bodies and fragments. A component, with or without
 children (`<Corten />` too: `html!` knows a component only by its name), and an expression,
 `raw` among them, may write any element, or close one, or leave a script open, and so may a
-`<script>` or `<style>` whose literal text holds a `<`, so after one nothing in the same
-`html!` is refused, whatever later literal elements show:
+`<script>` or `<style>` whose literal text holds a `<`, so after one no nesting or parsing
+refusal in the same `html!` acts, whatever later literal elements show (a duplicate attribute
+and a hand-written `data-key`, which need no context, are still refused):
 `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
 compiles, as browsers keep it, and so does `<p>{text}<div>..</div></p>`, which they do not.
 Nesting across those boundaries is the app's to keep correct. The content of a
@@ -89,8 +95,11 @@ checked with nothing open around it, as browsers keep these: an `<a>` in a `<for
 or `<mtext>` inside another `<a>` compiles. A form in a form is not refused: a browser ignores
 the inner one only outside every `<template>`, which a fragment cannot show (its caller may
 write it into one), and a document's body follows `<Corten />`, so nothing in a document's
-body is refused either. The one context `html!` assumes is that its markup starts where a
-browser reads tags, not inside a script's text a caller left open. A
+body is refused either. Every refusal assumes `html!` output, a component's included, is
+drawn where a browser reads tags. Writing a component into script or style text a caller left
+open (after `raw("<script>")`, or a script whose text holds `<!--<script>`) is not supported,
+since a script's text comes from a string, not markup: there a refused shape would be the
+script's text, which a browser keeps. A
 top-level `<a>` or `<form>` might be foreign content: wrap HTML fragments in an HTML element when their
 namespace needs to be established. This is not a complete HTML validator. It does not check
 insertion modes such as table foster parenting (a `<div>` straight in a `<table>`), or a

@@ -1168,6 +1168,17 @@ fn reads_as_text(parsing: Parsing, name: &str) -> bool {
     as_html(parsing) && RAW_TEXT.iter().chain(TEXT_ONLY).any(|t| name.eq_ignore_ascii_case(t))
 }
 
+/// Whether what `name` holds, in content parsed as `parsing`, may be text a browser does not read
+/// as tags, though the markup does not show it is: a `<noscript>` anywhere (text with scripting
+/// on, markup without it), and, where the markup does not show the element is HTML's
+/// (`Parsing::Unknown`), the elements a browser parsing HTML reads as text (`RAW_TEXT`,
+/// `TEXT_ONLY`, `<plaintext>`), which in an `<svg>` or a `<math>` hold elements. Nothing a
+/// refusal rests on is read in one: what it holds is unseen.
+fn may_read_as_text(parsing: Parsing, name: &str) -> bool {
+    let is = |n: &str| name.eq_ignore_ascii_case(n);
+    is("noscript") || (parsing == Parsing::Unknown && (is("plaintext") || RAW_TEXT.iter().chain(TEXT_ONLY).any(|t| is(t))))
+}
+
 /// Why the element `name` does not compile here: inside `holder`, whose content a browser reads
 /// as text, or a `<plaintext>` parsed as HTML, which makes the rest of the page text.
 fn text_only_element(holder: Option<&str>, parsing: Parsing, name: &str) -> Option<String> {
@@ -1514,8 +1525,14 @@ impl Cursor {
                 Some(TokenTree::Ident(_)) => {
                     let mut name = self.attr_name()?;
                     let written = name.to_ascii_lowercase();
+                    if written == "data-key" {
+                        return err(span, "data-key is printed by Corten: write key={item.id} to give a keyed ref its key");
+                    }
+                    // Compared as written out: `key` is written `data-key` (below), so a `KEY`
+                    // beside it is another attribute, and a `Key` beside `KEY` the same one.
+                    let emitted = if name == "key" { "data-key".to_string() } else { written.clone() };
                     // Handler calls share one generated data-on attribute, including repeated events.
-                    if !name.starts_with("on:") && !names.insert(written.clone()) {
+                    if !name.starts_with("on:") && !names.insert(emitted) {
                         let instead = if written == "style" {
                             "give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}"
                         } else {
@@ -1527,9 +1544,6 @@ impl Cursor {
                                 "attribute {name} is written twice on this element: {instead}; a browser keeps only the first"
                             ),
                         );
-                    }
-                    if written == "data-key" {
-                        return err(span, "data-key is printed by Corten: write key={item.id} to give a keyed ref its key");
                     }
                     // `key={item.id}` names an element in a keyed ref (a handler's `Map`).
                     if name == "key" {
@@ -1686,6 +1700,12 @@ impl Cursor {
             if component {
                 self.unseen();
             }
+            // What a `<noscript>` holds, or an element read as text where the markup does not show
+            // it is HTML's, may be text: none of it shows how anything is parsed.
+            let hidden = !component && may_read_as_text(self.parsing, &name);
+            if hidden {
+                self.opaque += 1;
+            }
             let shown = self.opaque == 0;
             let holder = (shown && reads_as_text(self.parsing, &name)).then(|| name.clone());
             let outer_text = std::mem::replace(&mut self.text_only, holder);
@@ -1701,10 +1721,18 @@ impl Cursor {
             if self.opaque != seen {
                 self.unseen();
             }
+            if hidden {
+                self.opaque -= 1;
+            }
             let children = children?;
             self.closing(&name, open)?;
             Some(children)
         };
+        // A `<plaintext>` HTML's makes the rest of the page text, so after one (where it is not
+        // refused, the markup does not show it is HTML's) nothing shows how anything is parsed.
+        if !component && name.eq_ignore_ascii_case("plaintext") {
+            self.unseen();
+        }
         if component {
             return Ok(Node::Component { path, props, children });
         }
@@ -2150,10 +2178,15 @@ fn lost_after_part(name: &str, attrs: &[Attr], children: &[Node], around: bool) 
 }
 
 /// Whether `lost_after_part` reads into the element `name`: not a `<template>`, a new foreign
-/// content root (an `<svg>` or a `<math>`) or an SVG or MathML integration point.
+/// content root (an `<svg>` or a `<math>`), an SVG or MathML integration point, or an element
+/// whose content a browser parsing HTML may read as text (`may_read_as_text`: the check does not
+/// know the namespace, and as HTML's what it holds is text, which is kept).
 fn read_after_part(name: &str) -> bool {
     let is = |list: &[&str]| list.iter().any(|t| name.eq_ignore_ascii_case(t));
-    !is(&["template", "svg", "math", "annotation-xml"]) && !is(SVG_HTML_POINTS) && !is(MATH_HTML_POINTS)
+    !is(&["template", "svg", "math", "annotation-xml"])
+        && !is(SVG_HTML_POINTS)
+        && !is(MATH_HTML_POINTS)
+        && !may_read_as_text(Parsing::Unknown, name)
 }
 
 /// Whether an element HTML's wherever it lands is among `nodes` or in them, read as
