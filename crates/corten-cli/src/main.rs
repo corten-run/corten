@@ -67,6 +67,10 @@ Usage:
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(help) = command_help(&args) {
+        print!("Usage:\n{help}");
+        return ExitCode::SUCCESS;
+    }
     // `ui` says so itself (`ui::run`), and its `add` and `init` refuse.
     if matches!(args.first().map(String::as_str), Some("dev" | "fmt" | "check"))
         && let Ok(root) = std::env::current_dir()
@@ -106,6 +110,32 @@ fn main() -> ExitCode {
     }
 }
 
+/// Reuse the command's sections of the full help, before any app inspection or work.
+fn command_help(args: &[String]) -> Option<String> {
+    let command = args.first()?;
+    if !args[1..].iter().take_while(|arg| arg.as_str() != "--").any(|arg| arg == "--help" || arg == "-h") {
+        return None;
+    }
+    let name = match command.as_str() {
+        "new" | "dev" | "build" | "fmt" | "check" | "help" => command.clone(),
+        "version" | "--version" | "-V" => "--version".into(),
+        "ui" => match args.get(1).map(String::as_str) {
+            Some(sub @ ("init" | "add" | "list" | "diff")) => format!("ui {sub}"),
+            Some("--help" | "-h") => "ui".into(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let prefix = format!("{name} ");
+    Some(
+        HELP.split("\n  corten ")
+            .skip(1)
+            .filter(|section| section.starts_with(&prefix))
+            .map(|section| format!("  corten {section}\n"))
+            .collect(),
+    )
+}
+
 /// `corten check`'s flags: whether `--no-script-types` skips the scripts' type check.
 fn check_flags(args: &[String]) -> Result<bool, String> {
     match args {
@@ -131,10 +161,25 @@ fn check(skip: bool) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
     // Whether the scripts can be type-checked is settled first, so a machine without `tsc` hears
     // it before format, lint and tests have run.
-    let scripts = scripts::plan(&root, skip)?;
-    fmt::run(&["--check".to_string()])
-        .and_then(|()| listed::check(&root))
-        .and_then(|()| lint_build_test(cargo, || scripts::run(scripts)))
+    let scripts = check_step("script type setup", || scripts::plan(&root, skip))?;
+    check_step("corten fmt --check", || fmt::run(&["--check".to_string()]))
+        .and_then(|()| check_step("listed components", || listed::check(&root)))
+        .and_then(|()| {
+            lint_build_test(
+                |args| check_step(&format!("cargo {}", args.join(" ")), || cargo(args)),
+                || check_step("script types", || scripts::run(scripts)),
+            )
+        })
+}
+
+/// Cargo's output is inherited already. Name even a silent or cached step in redirected logs.
+fn check_step<T>(name: &str, run: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    eprintln!("corten check: {name}");
+    let start = std::time::Instant::now();
+    let result = run();
+    let outcome = if result.is_ok() { "finished in" } else { "failed after" };
+    eprintln!("corten check: {name} {outcome} {:.2}s", start.elapsed().as_secs_f64());
+    result
 }
 
 /// `corten check`'s steps after format and the listed components: each Cargo step run with

@@ -37,6 +37,14 @@ test and a Dockerfile.
 | `corten build` | The release binary. |
 | `corten ui init`, `corten ui add <name>..`, `corten ui list` | The [UI kit](kit.md): theme tokens, then styled components copied into `src/ui/` as source the app owns. |
 
+Every command accepts `--help` or `-h`, including kit subcommands such as `corten ui add --help`:
+it prints that command's usage and exits successfully without inspecting or changing the app.
+`corten --help` prints all commands.
+
+`corten check` names each step on stderr before running it, then reports its elapsed time and
+whether it finished or failed, even when output is redirected. Cargo's own output still goes
+through unchanged; the progress messages add nothing to stdout.
+
 The CLI is a convenience over cargo, not a build system: an app is an ordinary crate, and
 `cargo run` works too.
 

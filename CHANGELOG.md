@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Every `corten` command accepts `--help` and `-h`, printing its own usage and exiting
+  successfully without running the command. `corten check` reports each step and its elapsed
+  time on stderr, including in redirected logs, while preserving Cargo's output.
+
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
   page is on the screen (a GET with `corten: action` to the page's own route, which says
