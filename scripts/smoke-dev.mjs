@@ -1,12 +1,12 @@
 // Browser smoke test of `corten dev` live reload: an open page reloads when the server restarts.
-// Usage: node scripts/smoke-dev.mjs http://localhost:18483 corten-watchlist-dev
+// Usage: node scripts/smoke-dev.mjs http://localhost:18483 corten-watchlist-dev [chromium|firefox|webkit]
 // (the watchlist image, run with -e CORTEN_DEV=1 in a container of that name).
-import { chromium } from "@playwright/test";
+import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "./steady.mjs";
 import { execFileSync } from "node:child_process";
 import { stall } from "./stall.mjs";
 
-const [base = "http://localhost:18483", container = "corten-watchlist-dev"] = process.argv.slice(2);
+const [base = "http://localhost:18483", container = "corten-watchlist-dev", engine = "chromium"] = process.argv.slice(2);
 const failures = [];
 const seen = stall(5);
 const check = (name, ok, detail = "") => {
@@ -15,7 +15,7 @@ const check = (name, ok, detail = "") => {
   if (!ok) failures.push(name);
 };
 
-const browser = steady(await chromium.launch({ headless: true }));
+const browser = steady(await ({ chromium, firefox, webkit })[engine].launch({ headless: true }));
 try {
   const page = await browser.newPage();
   await page.goto(base);
@@ -40,7 +40,8 @@ try {
   await drawn.route(base + "/", async (route) => {
     // The page's own load only: the runtime's read of its picks (`corten: action`) goes as it is.
     if (route.request().headers().corten) return route.continue();
-    const res = await route.fetch();
+    // Playwright decodes gzip here, but not zstd that Firefox can negotiate.
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "gzip" } });
     const controls = [
       '<form><input type="number" name="delay" min="0" step="100" value="250"><input type="number" name="fresh" required>',
       '<input type="number" name="sent" max="5" value="9" aria-invalid="true"></form>',
@@ -74,6 +75,9 @@ try {
       '<dialog id="listSelf" class="listScope listPlain"></dialog><div class="listScope"><dialog id="listPlain" class="listPlain"></dialog><dialog id="listExplicit" class="listExplicit"></dialog></div>',
       '<div class="literalScope"><dialog id="literalAttribute" data-note=":scope"></dialog><dialog id="literalEscape" class="test:scope"></dialog><dialog id="literalImpostor" data-note=":is(.literalScope)"></dialog></div>',
       '<dialog id="literalSelf" class="literalSelf test:scope" data-note=":scope"></dialog>',
+      '<div class="relativeScope"><dialog id="relativeScope"></dialog></div><dialog id="outsideRelativeScope"></dialog>',
+      '<div class="relativeAmp"><dialog id="relativeAmp"></dialog></div>',
+      '<div class="relativeList"><dialog id="relativeList"></dialog><dialog id="relativeOther" class="other"></dialog></div>',
       '<div class="scoped"><div id="scopedPopover" class="scopedPopover" popover></div></div><div id="outsidePopover" class="scopedPopover" popover></div>',
       '<div class="scopeHost"><div class="scopeInner"><dialog id="nestedScope" class="nestedScope"></dialog></div></div><div class="scopeInner"><dialog id="outsideNestedScope" class="nestedScope"></dialog></div>',
       '<div class="outerScope"><div class="innerScope"><dialog id="doubleScope" class="doubleScope"></dialog></div></div><div class="innerScope"><dialog id="outsideDoubleScope" class="doubleScope"></dialog></div>',
@@ -103,6 +107,9 @@ try {
         "@scope (.listScope) { @media (min-width: 1px) { :scope > .listExplicit, .listPlain { display: flex; outline-style: solid; } } }",
         '@scope (.literalScope) { @media (min-width: 1px) { :scope > dialog[data-note=":scope"], :scope > .test\\:scope { display: flex; outline-style: solid; } } }',
         '@scope (.literalSelf) { @media (min-width: 1px) { dialog[data-note=":scope"], .test\\:scope { display: flex; outline-style: solid; } } }',
+        "@scope (.relativeScope) { @media (min-width: 1px) { > dialog:not(:scope) { display: flex; outline-style: solid; } } }",
+        "@scope (.relativeAmp) { @media (min-width: 1px) { > dialog:not(&) { display: flex; outline-style: solid; } } }",
+        "@scope (.relativeList) { @media (min-width: 1px) { > dialog:not(:scope, .other), .other { display: flex; outline-style: solid; } } }",
         ".scopeHost { @scope (.scopeInner) { @media (min-width: 1px) { :scope > .nestedScope { display: flex; } } } }",
         "@scope (.outerScope) { @scope (.innerScope) { @media (min-width: 1px) { :scope > .doubleScope { display: grid; } } } }",
       ].join("\n"),
@@ -118,11 +125,14 @@ try {
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
   const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
   const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
-  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,sameRoot,listPlain,listExplicit,literalAttribute,literalEscape,scopedPopover,nestedScope,doubleScope,lastrail", railNames);
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,sameRoot,listPlain,listExplicit,literalAttribute,literalEscape,relativeScope,relativeAmp,relativeList,relativeOther,scopedPopover,nestedScope,doubleScope,lastrail", railNames);
   const warned = new Set(railOnLoad.map((e) => e.split(" ")[1]));
   check("plain scoped selectors stay descendants, independently in each selector-list member", !warned.has("scopedSelf") && !warned.has("outsideAncestor") && !warned.has("listSelf") && warned.has("listPlain") && warned.has("listExplicit"));
   check("every :scope in a selector binds the same root", warned.has("sameRoot") && !warned.has("differentRoots"));
   check("selector strings and escaped identifiers are not scope tokens", warned.has("literalAttribute") && warned.has("literalEscape") && !warned.has("literalImpostor") && !warned.has("literalSelf"));
+  check("leading combinators keep their scope anchor and other selector-list members", ["relativeScope", "relativeAmp", "relativeList", "relativeOther"].every((id) => warned.has(id)) && !warned.has("outsideRelativeScope"));
+  const relativeLooks = await drawn.evaluate(() => ["relativeScope", "relativeAmp", "relativeList", "relativeOther", "outsideRelativeScope"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle).join(","));
+  check("the browser applies the relative scoped selectors to the same controls", relativeLooks === "solid,solid,solid,solid,none", relativeLooks);
   const scopedLooks = await drawn.evaluate(() => ["sameRoot", "differentRoots", "listSelf", "listPlain", "listExplicit", "literalAttribute", "literalEscape", "literalImpostor", "literalSelf"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle).join(","));
   check("the browser applies the scoped regression rules only to the positive controls", scopedLooks === "solid,none,none,solid,solid,solid,solid,none,none", scopedLooks);
   check(
@@ -199,6 +209,32 @@ try {
   });
   check("dev mode does not report a value the user typed", (await marker) && !(await Promise.race([moved, Promise.resolve(false)])));
   await drawn.close();
+  // Count queries, not elapsed time: each scoped rule/root is queried once, not once per dialog.
+  const many = await browser.newPage();
+  const count = 1600;
+  let manyWarnings = 0;
+  many.on("console", (m) => { if (m.type() === "warning" && m.text().startsWith("corten: many")) manyWarnings++; });
+  await many.addInitScript(() => {
+    const query = Element.prototype.querySelectorAll;
+    (/** @type {any} */ (window)).__scopeQueries = 0;
+    Element.prototype.querySelectorAll = function (selector) {
+      if (this.classList.contains("manyScope")) (/** @type {any} */ (window)).__scopeQueries++;
+      return query.call(this, selector);
+    };
+  });
+  await many.route(base + "/", async (route) => {
+    if (route.request().headers().corten) return route.continue();
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "gzip" } });
+    const roots = Array.from({ length: count }, (_, i) => `<div class="manyScope"><dialog id="many${i}"></dialog></div>`).join("");
+    await route.fulfill({ response: res, body: (await res.text()).replace("</head>", '<link rel="stylesheet" href="/many-scopes.css"></head>').replace("</body>", `${roots}</body>`) });
+  });
+  await many.route(base + "/many-scopes.css", (route) => route.fulfill({ contentType: "text/css", body: "@scope (.manyScope) { @media (min-width: 1px) { dialog { display: flex; } } }" }));
+  const manyDone = many.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: many${count - 1} `), timeout: 30000 });
+  await many.goto(base + "/");
+  await manyDone;
+  const queries = await many.evaluate(() => (/** @type {any} */ (window)).__scopeQueries);
+  check("each scoped display rule queries its root once, independently of dialog count", manyWarnings === count && queries === count, `${manyWarnings} warnings, ${queries} queries for ${count} roots`);
+  await many.close();
   // A handler given a form field its form does not have as the handler takes it (the compiler
   // cannot see the control, which another component may draw) is reported when the page draws
   // it, before any event calls it, and when a later draw adds one; one whose fields fit is not.
@@ -212,7 +248,7 @@ try {
     // The page's own read of its picks (`corten: action`, a patch) goes as it is: one still out
     // when the page closes would fail its fetch here.
     if (route.request().headers().corten) return route.continue();
-    const res = await route.fetch();
+    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "gzip" } });
     const forms = [
       '<form id="ship"><input name="weight"><textarea name="note"></textarea>',
       '<input type="radio" name="size" value="s"><input type="radio" name="size" value="l">',

@@ -8,7 +8,9 @@ Corten is pre-1.0, so any minor version may change the API.
 - `corten dev`'s closed-dialog and popover warning keeps explicit `@scope` roots inside media
   and container queries: it no longer warns outside the root, and checks `:scope`, `&` and
   declarations directly in the scope. Plain selector-list members select descendants, every
-  `:scope` binds the same root, and strings and escaped identifiers keep their literal text.
+  `:scope` binds the same root, leading combinators keep their anchor, and strings and escaped
+  identifiers keep their literal text. Each display rule queries its root once per check, not
+  once per dialog.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 

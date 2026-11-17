@@ -77,7 +77,8 @@ drawn), `corten dev` warns in the console of each closed dialog or popover that 
 rules: the page cannot tell a rail from an open look written without `[open]`. The check keeps
 an explicit `@scope` root, including for `:scope`, `&` and declarations directly in the scope,
 so it warns only inside that root. Each selector-list member without `:scope` or `&` selects
-descendants, not the root itself; every `:scope` in a selector refers to the same root. Quoted
+descendants, not the root itself; every `:scope` in a selector refers to the same root. A leading
+combinator stays relative to that root, even with `:scope` or `&` later in the member. Quoted
 text and escaped class names are left as written. It does not narrow the warning by a scope's
 `to (limit)`. When only areas have stylesheets,
 each area's file starts with these rules. An app with no component stylesheet has neither file,

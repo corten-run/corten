@@ -119,10 +119,12 @@ const resolved = (selector, parent, scoped) => {
     const scope = member.some((token, i) => token === ":" && member[i + 1]?.toLowerCase() === "scope");
     const nesting = member.includes("&");
     const text = member.map((token) => token === "&" ? parent ? `:is(${parent})` : scoped ? ":scope" : token : token).join("");
+    const relative = /^[>+~]/.test(text.trimStart());
     // Each plain member is a descendant of the scoping root, not the root itself. Leave real
     // :scope tokens to querySelectorAll, which binds every occurrence to that one element.
-    const anchor = parent ?? (scoped && !scope && !nesting ? ":scope" : null);
-    if (!anchor || nesting) return text;
+    // A leading combinator still needs an anchor when :scope or & occurs later in the member.
+    const anchor = parent ?? (scoped && (relative || !scope && !nesting) ? ":scope" : null);
+    if (!anchor || nesting && !relative) return text;
     return `:is(${anchor}) ${text}`;
   }).join(",");
 };
@@ -173,15 +175,6 @@ function displays() {
   return found;
 }
 
-/** @param {Element} el @param {string} selector */
-const matching = (el, selector) => {
-  try {
-    return own.matches.call(el, selector);
-  } catch {
-    return false;
-  }
-};
-
 /**
  * Warns of each closed dialog or popover in or at `root` that components.css keeps hidden while a
  * rule inside `@media` or `@container` gives it a `display` (at the viewport's width now or any
@@ -197,9 +190,15 @@ function inPlace(root) {
   const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !own.hasAttribute.call(el, "hidden"));
   if (!closed.length) return;
   const rules = displays();
+  /** @type {Map<Element, typeof rules>} */
+  const matched = new Map(closed.map((el) => [el, []]));
+  // Query each rule/root once, keeping rule order without scanning every root for every dialog.
+  for (const rule of rules) {
+    for (const el of within(rule.scope ?? document.documentElement, rule.selector)) matched.get(el)?.push(rule);
+  }
   for (const el of closed) {
     if (getComputedStyle(el).display !== "none") continue;
-    const applies = rules.filter((r) => r.scope ? within(r.scope, r.selector).includes(el) : matching(el, r.selector));
+    const applies = matched.get(el) ?? [];
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
     if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
