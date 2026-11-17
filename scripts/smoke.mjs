@@ -5938,16 +5938,22 @@ async function run(browser) {
       await scope.goto(`${base}/smoke/scope`);
       const y = () => scope.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(Math.round(scrollY)))));
       await scope.evaluate(() => scrollTo(0, 1500));
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      // Sent from a script: a click would scroll the button into view first.
+      await answered(() =>
+        scope.evaluate(() => {
+          const week = /** @type {HTMLButtonElement} */ (document.querySelector("#smoke-scope button[value=week]"));
+          week.form?.requestSubmit(week);
+        }),
+      );
       const afterSend = await y();
       await scope.evaluate(() => scrollTo(0, 700));
       asked.length = 0;
-      const scrolled = { afterSend, back: { at: await traverse("back"), y: await y() }, forward: { at: await traverse("forward"), y: await y() }, asked: asked.splice(0) };
+      const restored = { afterSend, back: { at: await traverse("back"), y: await y() }, forward: { at: await traverse("forward"), y: await y() }, asked: asked.splice(0) };
       check(
         "Back and Forward between a data-address form's entries restore each entry's scroll",
-        scrolled.afterSend === 1500 && scrolled.back.at === "/smoke/scope" && scrolled.back.y === 1500 && scrolled.forward.at === "/smoke/scope?scope=week" &&
-          scrolled.forward.y === 700 && scrolled.asked.join() === "action ,action ?scope=week",
-        JSON.stringify(scrolled),
+        restored.afterSend === 1500 && restored.back.at === "/smoke/scope" && restored.back.y === 1500 && restored.forward.at === "/smoke/scope?scope=week" &&
+          restored.forward.y === 700 && restored.asked.join() === "action ,action ?scope=week",
+        JSON.stringify(restored),
       );
     }
     await scope.close();

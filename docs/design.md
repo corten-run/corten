@@ -4781,9 +4781,12 @@ rules something out.
     14,037), paid once a release by every user. Of the gzip bytes, measured by taking each out of
     the minified build: the runtime's functions the module calls 27, the traversal hook 19,
     handing the submit over 16, loading the module with inserted markup 13, the two answer hooks
-    in `send` 20, the module's name 5 and `apply`'s check 6; none can leave, being where the
-    runtime hands the module what only it sees (the submit, the traversal, the answer) or where
-    the module calls in. The module is 2,658 bytes raw, 1,311 with gzip and 1,145 with brotli,
+    in `send` 20, the module's name 5 and `apply`'s check 6, 109 together; the other 24 are the
+    two parameters the hooks add to `apply` and `send` and the minifier's names, a character
+    longer where the runtime has more of them. None can leave, being where the runtime hands the
+    module what only it sees (the submit, the traversal, the answer, a page or patch it inserts)
+    or where the module calls in. The module is 2,763 bytes raw, 1,348 with gzip and 1,168 with
+    brotli,
     fetched once (its URL is versioned) by a page that draws a marked form, whose head carries its
     `<script type="module">` tag, and by no other page. A submit reads one attribute; a marked one
     cancels the other marked submits on their way, its answer pushes an entry, forgets the entries
