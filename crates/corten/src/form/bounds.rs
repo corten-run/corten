@@ -432,12 +432,19 @@ macro_rules! float {
             const ZERO: Self = 0.0;
             const ONE: Self = 1.0;
             fn write_value(self, out: &mut String) {
-                // Written out first, as most numbers are short. Measured on 6,222 numbers, each
-                // between the doubles next to it: Chromium and WebKit took every one written out
-                // in up to 19 digits and refused about half of those in 20 or more; in exponent
-                // form, none. Firefox took them all.
-                // The exponent form is written first, as it is short (`5e-324`, where written out
-                // is 326 characters); the digits written out follow from its digits and exponent.
+                // Written out unless that would take more than 18 digits. Measured on 6,222 numbers,
+                // each between the doubles next to it: Chromium and WebKit took every one written
+                // out in up to 19 digits and refused about half of those in 20 or more; in exponent
+                // form, none. Firefox took them all. From 0.1 to below 1e18 (the shortest decimal
+                // has at most 17 significant digits) a number is at most 18 digits written out, so
+                // most are written at once; past that range the exponent form is written first, as
+                // it is short (`5e-324`, where written out is 326 characters), and the length
+                // written out follows from its digits and exponent.
+                let size = self.abs();
+                if size == 0.0 || (0.1..1e18).contains(&size) || !<$t>::is_finite(self) {
+                    self.render(out);
+                    return;
+                }
                 use std::fmt::Write;
                 let start = out.len();
                 // Digits, a point, `e` and `-`: nothing to escape.
