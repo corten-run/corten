@@ -32,7 +32,7 @@ Corten is pre-1.0, so any minor version may change the API.
   of their own, `part.js`, served beside the runtime and loaded only by a page that draws such a
   part (and precached once by a PWA's service worker); the runtime only imports it, on a load
   whose head preloads it or for markup with a waiting part, and grows by 55 bytes gzipped and 54
-  brotli (15,407 and 13,925 on main at `dbe1a34c7`, 15,462 and 13,979 here), and the module is
+  brotli (15,407 and 13,925 on main at `dbe1a34c7`, 15,462 and 13,979 at `83acf8662`), and the module is
   1,512 gzipped, 1,347 brotli (`npm run build:js`'s `js/dist`, gzip 6 and brotli 11 by Node's
   `zlib`). An app with such a stream moves to this shape: drop the stream's route and handler,
   put `ReadAgain::now` inside the part where the `<corten-live>` was, and hide the link under the
