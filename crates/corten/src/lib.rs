@@ -890,6 +890,10 @@ where
         if let Some(problem) = crate::html::patch_problem(&html) {
             panic!("corten: a live fragment's top-level {problem}, so the browser would drop it: give each top-level element a #[derive(Id)] id the page has");
         }
+        #[cfg(debug_assertions)]
+        if let Some(problem) = crate::html::patch_parse_checked(&html, &"a live fragment") {
+            panic!("corten: the browser would lose part of a live fragment: {problem}. {}", crate::html::PATCH_PARSE_HELP);
+        }
         // Room for the event's fields, `data: ` and a line feed for about ten lines of the fragment
         // (most are one), so the event is written into one buffer without growing it.
         let room = 13 + cursor.as_ref().map_or(0, |cursor| cursor.len() + 5) + html.len() + 70 + 1;
