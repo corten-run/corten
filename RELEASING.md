@@ -79,19 +79,21 @@ branch for one patch, not a maintained release branch.
 3. Open the release-preparation pull request against that branch. It carries the fix,
    cherry-picked from `main` (`git cherry-pick -x <fix-commit>`), steps 2 and 3 above for the
    files the patch tree has (a lockfile or example added on `main` since the tag is not added),
-   and `main`'s current `.github/workflows/release.yml` and the scripts it runs. GitHub runs the
-   workflow as the tagged commit has it, so an older tag's workflow would publish without the
-   attestation and checksum gates the [verification](#verify-what-users-received) below expects.
+   `main`'s `SECURITY.md` (the tag's may name an older supported version), and `main`'s current
+   `.github/workflows/release.yml` and the scripts it runs. GitHub runs the workflow as the
+   tagged commit has it, so an older tag's workflow would publish without the attestation and
+   checksum gates the [verification](#verify-what-users-received) below expects.
    Keep the tag's own `ci.yml`, which `release.yml` calls: it checks the tree it was written
    for, and `main`'s expects files the tag lacks. If `release.yml` needs anything from `ci.yml` the
-   tag's copy lacks, stop and use the minor release path instead. It gets the same review and
+   tag's copy lacks, add only that to the patch branch's `ci.yml`, reviewed in the same pull
+   request, so the fix still ships as the patch `SECURITY.md` promises. It gets the same review and
    checks; CI runs on pull requests to any branch.
 4. Record the merged commit's SHA on the patch branch as the candidate. At that SHA, confirm
    `git diff origin/main CANDIDATE_SHA -- .github/workflows/release.yml` prints nothing and
-   `git diff vX.Y.W CANDIDATE_SHA -- .github/workflows/ci.yml` prints nothing. CI does not run on
-   pushes to that branch, so run the [checks](CONTRIBUTING.md#checks) the tag's tree has on that
-   commit before tagging it; the Release run also reuses CI on the tagged commit before anything
-   publishes. Then [publish](#publish) that SHA.
+   `git diff vX.Y.W CANDIDATE_SHA -- .github/workflows/ci.yml` prints nothing beyond what step 3
+   added. CI does not run on pushes to that branch, so run the [checks](CONTRIBUTING.md#checks)
+   the tag's tree has on that commit before tagging it; the Release run also reuses CI on the
+   tagged commit before anything publishes. Then [publish](#publish) that SHA.
 5. After the release, add its versioned `CHANGELOG.md` section to `main` in a pull request, so
    `main`'s changelog records every published version.
 
