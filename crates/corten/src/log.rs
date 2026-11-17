@@ -624,8 +624,7 @@ mod tests {
     fn access_log_writes_nothing_for_a_dropped_request() {
         let lines = access_lines(async {
             use tower::ServiceExt;
-            let routes =
-                crate::router::Table::new().route("/wait", crate::router::get(|| std::future::pending::<&'static str>()));
+            let routes = crate::router::Table::new().route("/wait", crate::router::get(std::future::pending::<&'static str>));
             let router = crate::App::new(crate::Routes::from(routes)).access_log(true).router();
             let req = crate::http::Request::get("/wait").header("host", "localhost").body(crate::http::Body::empty()).unwrap();
             let waited = tokio::time::timeout(std::time::Duration::from_millis(20), router.oneshot(req)).await;
