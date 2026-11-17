@@ -3126,13 +3126,16 @@ rules something out.
     From then on the module finds every tag itself, with a `MutationObserver` of the page: a
     navigation's page, a form's answer, a `<corten-live>` fragment, a layout element a write's page
     draws again in place. Served beside the runtime, not with the app's scripts, so an app with no
-    static files or components has it too. The runtime is 15,464 bytes gzipped and 13,988 brotli
-    at `2d697e24d` (15,407 and 13,925 on main at `b0c2abd4d`, so 57 and 63 more), and the module 1,534 and 1,359; those 57 bytes are the import, the hand-over, the search
+    static files or components has it too. The runtime is 15,612 bytes gzipped and 14,100 brotli
+    at `051f040ef` (15,568 and 14,060 on main at `7d9bbbf1e`, so 44 and 40 more), and the module 1,534 and 1,359; those 44 bytes are the import, the hand-over, the search
     of a markup's text (the server's or a script's patch), the query of the head on load and the
     call that shows a part's read what its `apply` parsed (`own`, below), which every page
     runs (a search of text already in hand, one query of the head, one test of an argument) and
-    which a page without a slow part ends there. Without that call it would be 55 and 49 more than
-    main; a method `o` of the call's signal (round 16) cost 59 and 51, but a script's `patch()`
+    which a page without a slow part ends there. The same code was 57 and 63 more at `2d697e24d`
+    than main at `b0c2abd4d`, before main's runtime read the DOM through its prototypes
+    ([#1567 Protect runtime DOM access from form controls named after members](https://github.com/corten-run/corten/pull/1567));
+    it compresses better beside that code, not smaller. Against that main, the figures that follow:
+    without that call it would be 55 and 49 more than main; a method `o` of the call's signal (round 16) cost 59 and 51, but a script's `patch()`
     passes its own signal, so a script's signal with an `o` refused the patch or was shown its
     markup (round 17); the parsed patch kept on `apply` for the module to read after the call
     (round 15) cost 59 bytes gzipped (56 brotli) but was shared by every call, a seventh parameter
@@ -3291,11 +3294,12 @@ rules something out.
     Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
     less than a marker Corten reads on every request); measured (`npm run build:js`'s
     `js/dist/corten.js` and `js/dist/part.js`, gzip level 6 and brotli level 11 by Node's
-    `zlib`: the runtime 15,464 and 13,988 bytes and the module 1,534 and 1,359 at `2d697e24d`,
-    against 15,407 and 13,925 for the runtime on main at `b0c2abd4d`, 15,631 and 14,094 with
-    the discovery in it at `73279ab7a`, and 16,685 and 15,059 with the reads in it at
-    `cd6861c76`, so a page without a slow part loads 57 bytes gzipped more than on main, where it
-    loaded 224 and 1,278 more); platform (`aria-busy` means the element is being updated, WAI-ARIA
+    `zlib`: the runtime 15,612 and 14,100 bytes and the module 1,534 and 1,359 at `051f040ef`,
+    against 15,568 and 14,060 for the runtime on main at `7d9bbbf1e`, so a page without a slow
+    part loads 44 bytes gzipped more than on main; and against 15,407 and 13,925 on main at
+    `b0c2abd4d`, 15,464 and 13,988 at `2d697e24d` (57 more), 15,631 and 14,094 with the discovery
+    in the runtime at `73279ab7a`, and 16,685 and 15,059 with the reads in it too at `cd6861c76`,
+    224 and 1,278 more); platform (`aria-busy` means the element is being updated, WAI-ARIA
     1.2; the elements a patch draws are the ones its parse made, moved into the page, not copies,
     so the objects the module takes before the patch is drawn are the ones the page gains, and a
     `<template>`'s content is a fragment of its own, which no query of the patch's elements
