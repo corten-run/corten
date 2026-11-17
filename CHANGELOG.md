@@ -29,17 +29,18 @@ Corten is pre-1.0, so any minor version may change the API.
   back-forward cache ended is made again when the page is shown, and a prerendered page reads
   once it is shown. A part waiting in a part's answer is marked failed, not read, so reads do not
   chain; which tags the answer drew is told by the elements of its markup, taken from the patch
-  the runtime parsed before any of it is drawn, so a part a form's answer or a part read again
+  the runtime parsed, handed to that read alone before anything else runs, so a part a form's answer or a part read again
   draws in the same task (both waiting for one stylesheet) is read, even in place of one the
   part's answer drew or at its address, and so is one a script draws from a callback the drawing
-  runs (a `focusin`, a custom element's `connectedCallback`); a page whose head asks to be read again is read on its interval, and draws its part
+  runs (a `focusin`, a custom element's `connectedCallback`, even its stylesheet link's), and
+  nothing keeps the markup once the patch is drawn or cancelled; a page whose head asks to be read again is read on its interval, and draws its part
   waiting again when its `<main>` changed. The reads, and finding the parts, are a script module
   of their own, `part.js`, served beside the runtime and loaded only by a page that draws such a
   part (and precached once by a PWA's service worker); the runtime only imports it, on a load
   whose head preloads it or for markup with a waiting part (the server's, or a script's
   `patch`, its attribute's name found in any case and after any separator), and grows by 59 bytes
-  gzipped and 56 brotli (15,407 and 13,925 on main at `b0c2abd4d`, 15,466 and 13,981 at
-  `a510fda2f`), and the module is 1,560 gzipped, 1,389 brotli at `a510fda2f` (`npm run build:js`'s `js/dist`, gzip 6 and brotli 11 by Node's
+  gzipped and 51 brotli (15,407 and 13,925 on main at `b0c2abd4d`, 15,466 and 13,976 at
+  `e12287ab3`), and the module is 1,537 gzipped, 1,365 brotli at `e12287ab3` (`npm run build:js`'s `js/dist`, gzip 6 and brotli 11 by Node's
   `zlib`). An app with such a stream moves to this shape: drop the stream's route and handler,
   put `ReadAgain::now` inside the part where the `<corten-live>` was, and hide the link under the
   part's `[aria-busy]` instead of showing it on `corten-live[status="closed"]`. Choices 7 and 44 are rewritten: declarative shadow

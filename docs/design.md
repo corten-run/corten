@@ -3126,16 +3126,17 @@ rules something out.
     From then on the module finds every tag itself, with a `MutationObserver` of the page: a
     navigation's page, a form's answer, a `<corten-live>` fragment, a layout element a write's page
     draws again in place. Served beside the runtime, not with the app's scripts, so an app with no
-    static files or components has it too. The runtime is 15,466 bytes gzipped and 13,981 brotli
-    at `a510fda2f` (15,407 and 13,925 on main at `b0c2abd4d`, unchanged at `8a0d5c721`, so 59 and 56
-    more), and the module 1,560 and 1,389; those 59 bytes are the import, the hand-over, the search
+    static files or components has it too. The runtime is 15,466 bytes gzipped and 13,976 brotli
+    at `e12287ab3` (15,407 and 13,925 on main at `b0c2abd4d`, so 59 and 51 more), and the module 1,537 and 1,365; those 59 bytes are the import, the hand-over, the search
     of a markup's text (the server's or a script's patch), the query of the head on load and the
-    patch `apply` parsed kept as its `p` (below), which every page runs (a search of text already
-    in hand, one query of the head, one property set) and which a page without a slow part ends
-    there. Without `p` it would be 55 and 49 more than main; handing the parsed patch over through
-    a function of its own instead cost 69 and 69, a call into the module with it 73 and 73, and a
-    second read of a part read's `signal.aborted` once its answer was drawn (round 14) 63 and 68
-    with the search; a search for the name only after a space or a `/` cost 5 bytes more than one
+    call that shows a part's read what its `apply` parsed (`signal.o`, below), which every page
+    runs (a search of text already in hand, one query of the head, one property read) and which a
+    page without a slow part ends there. Without that call it would be 55 and 49 more than main;
+    the parsed patch kept on `apply` for the module to read after the call (round 15) cost the same
+    59 bytes gzipped (56 brotli) but was shared by every call, a parameter of `apply` 61 and 59, a
+    method named `parsed` 60 and 58, a variable of the runtime read through a function handed to
+    the module 69 and 69, a call into the module with it 73 and 73, and a second read of a part
+    read's `signal.aborted` once its answer was drawn (round 14) 63 and 68 with the search; a search for the name only after a space or a `/` cost 5 bytes more than one
     for the name alone, and missed one written straight after a quoted value, which HTML also
     reads as an attribute; measured the same way. A name in the text that is no tag (a page that
     shows the markup) only fetches the module, which finds nothing to read. With
@@ -3184,18 +3185,22 @@ rules something out.
     Reads do not chain: a part waiting in the answer to a part's read is marked failed rather than
     read, so two parts whose answers draw each other waiting cannot read each other without end
     with no delay; a part's own slow part is read in by the link's page. The module knows which
-    tags an answer drew from the elements of its markup, before any of it is drawn: the runtime's
-    `apply` parses a patch as soon as it is called, before its first `await`, and keeps what it
-    parsed as its `p`, which the module reads right after it calls it with the answer and takes the
-    waiting tags in (those in its elements and in the content of a template that appends, not those
-    in any other template's content, which never joins the page). Those elements, and no others,
-    are marked failed when the page gains them; a part anything else draws waiting is read,
-    whatever its address and whenever it joins the page: one a form's answer or a part read again
+    tags an answer drew from the elements of its markup, before anything else can run: the
+    runtime's `apply` parses a patch as soon as it is called and, before it links a stylesheet or
+    loads a module the patch needs, calls `o` on the call's signal, if it has one, with what it
+    parsed. A part's read gives its signal an `o` that takes the waiting tags in that markup (those
+    in its elements and in the content of a template that appends, not those in any other
+    template's content, which never joins the page). The markup goes from the call to its own read
+    and nowhere else, so nothing keeps it once the call is over (drawn, cancelled, aborted, or
+    with no target on the page). Those elements, and no others, are marked failed when the page
+    gains them; a part anything else draws waiting is read, whatever its address and whenever it
+    joins the page: one a form's answer or a part read again
     draws in the same task right after it (both waiting for one stylesheet), in place of a tag the
     part's answer drew or beside it once it removed it, one at an address only a template's
     content in the part's answer names, and one a script draws while the answer is drawn, from a
     callback its drawing runs (`focusin` as the focus moves to the answer's field, a custom
-    element's `connectedCallback`). Not chosen: every change in the observer's next batch counted
+    element's `connectedCallback`, even a stylesheet link's in the answer, which runs as the
+    runtime links it, before the answer waits for it). Not chosen: every change in the observer's next batch counted
     as the answer's, which marked such a form's part failed without reading it (the review of
     [#1483 One handler answers a page and its slow part: ReadAgain::now and Req::patch_or_with](https://github.com/corten-run/corten/pull/1483),
     round 13); the addresses of the tags the answer's text writes, the first tag the page gained
@@ -3204,7 +3209,10 @@ rules something out.
     failed unread (round 14); and the changes the page made between a read of the answer's
     `signal.aborted` right before it is drawn and a second right after, counted as the answer's
     because no other answer runs in that task, which also counted what scripts the drawing calls
-    back draw in it, synchronously, as the answer's (round 15). A part a periodic read's answer (`ReadAgain::from`), a `<corten-live>` fragment or a
+    back draw in it, synchronously, as the answer's (round 15); and the patch `apply` parsed last,
+    kept on `apply` and read by the module right after its call, which a script's patch made from
+    a stylesheet link's `connectedCallback` as `apply` linked it had already replaced, and which
+    kept a cancelled answer's markup until the next patch (round 16). A part a periodic read's answer (`ReadAgain::from`), a `<corten-live>` fragment or a
     script's `patch` draws waiting is read, as one a form's answer draws is: what draws it is not
     a part's read, so it sets the pace (its interval, a stream's fragments, a user's submits), and
     one that draws the part again ends the read the one before started, so one read at most is on
@@ -3276,7 +3284,7 @@ rules something out.
     Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
     less than a marker Corten reads on every request); measured (`npm run build:js`'s
     `js/dist/corten.js` and `js/dist/part.js`, gzip level 6 and brotli level 11 by Node's
-    `zlib`: the runtime 15,466 and 13,981 bytes and the module 1,560 and 1,389 at `a510fda2f`,
+    `zlib`: the runtime 15,466 and 13,976 bytes and the module 1,537 and 1,365 at `e12287ab3`,
     against 15,407 and 13,925 for the runtime on main at `b0c2abd4d`, 15,631 and 14,094 with
     the discovery in it at `73279ab7a`, and 16,685 and 15,059 with the reads in it at
     `cd6861c76`, so a page without a slow part loads 59 bytes gzipped more than on main, where it
@@ -3285,8 +3293,10 @@ rules something out.
     so the objects the module takes before the patch is drawn are the ones the page gains, and a
     `<template>`'s content is a fragment of its own, which no query of the patch's elements
     enters, DOM standard; a page drawn in one task is not drawn by its answer alone, since the
-    drawing calls back into the page's scripts (focus events, custom element reactions), which
-    may draw too, HTML standard; continuations waiting for one
+    drawing calls back into the page's scripts (focus events, custom element reactions, among
+    them a customized built-in stylesheet link's as `apply` links it, before its first `await`),
+    which may draw too, so only what is handed from one call to its own read is that read's,
+    HTML standard; continuations waiting for one
     promise run in one microtask checkpoint, so another answer waiting for the same stylesheet
     draws right after it, before the observer is told, ECMAScript jobs); reasoned (the runtime's read sends `corten: action`, which is `Mode::Action`, so a handler that picks its
     side by mode answers the read with the part and every other request with the page; the page's
@@ -3330,7 +3340,11 @@ rules something out.
     a failed read at the old address not stopping it), a part a script draws as a part's answer
     is drawn, at once from the `focusin` of the focus it moves to the answer's field or from a
     custom element in the answer's `connectedCallback`, a microtask later, or with a patch of its
-    own, read (2026-11-17), a script's `patch` whose tag's attribute follows a newline, or a tab
+    own, read (2026-11-17), one a script's patch draws from the `connectedCallback` of the
+    answer's stylesheet link (a customized built-in, in Chromium and Firefox; WebKit has none)
+    read and the answer's own still marked failed, and no parsed patch kept by anything once its
+    part left while it waited for its stylesheet, its signal had aborted, or its element had no
+    target (Chromium's heap after a collection) (2026-11-17), a script's `patch` whose tag's attribute follows a newline, or a tab
     in capitals, loading the module (2026-11-17), a part a form's answer draws in place of
     one a part's answer drew waiting at the same address, or at that address once it removed it,
     one a part read again draws in its place, and one at an address only a template's content in
