@@ -16,6 +16,18 @@ Corten is pre-1.0, so any minor version may change the API.
   checks and the HTTP-source timeout. Production defaults and richer benchmarks
   are unchanged; historical results keep their measured configuration.
 
+- Preserve completed catalog load/request failures as versioned, replayable failed
+  app outcomes, separate from successful baselines and apparatus failures. Retain
+  all passes, raw counters, participant lifetimes and side errors; require successful
+  checker boundaries before any cold timing and attempt-wide upstream lifetime/CPU
+  continuity. Reject unknown prior termination in v3 functional participants and
+  require full lifetime-state consistency across observations. Summary-only reports
+  reconcile failure ledgers and baseline disposition with retained phases before
+  labeling an attempt complete. Keep HTTP error responses failed regardless of
+  their media type, retaining their content-check failures; report successful
+  throughput, failed requests and drops separately without excluding healthy peers
+  ([#1556 Catalog benchmark discards failed-load metrics and cannot replay completed target outcomes](https://github.com/corten-run/corten/issues/1556)).
+
 - The watchlist smoke's check that a submit which waited for a write the network failed is not
   sent holds that write until the newer press is made, and presses both buttons in the page, where
   it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the

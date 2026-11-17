@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -12,20 +13,25 @@ import { allApps } from "../fullstack/apps.mjs";
 import { aggregate, cpuSettings, expectedPageChecks, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
-import { inspectCatalog } from "./report.mjs";
+import { inspectCatalog, renderCatalog } from "./report.mjs";
 import { rawSchema, replayCatalog, containerEvidence, upstreamImage, checkerImage, imageCommandEvidence, checkBoundaryEvidence, verifyCheckBoundary } from "./raw.mjs";
 import { recordAttemptSchema } from "./record-attempt.mjs";
 import { inspectNative } from "../workloads/isolated/native-replay.mjs";
 import { sampleStats, summarizeSamples } from "./stats.mjs";
 import { validateSaved } from "./verify.mjs";
 import { k6Image, k6Provenance } from "../load-tool.mjs";
+import { collectTimedPhase, readTimedLoad, verifyTimedPhase } from "./timed.mjs";
+import { composePhase } from "../workloads/isolated/composition.mjs";
+import { latestStableSchema } from "../workloads/latest-stable.mjs";
+import { loadSummary, timedFixture } from "./timed-fixture.mjs";
+import { requestOutcome } from "./load-outcome.js";
 
 // Synthetic verifier fixtures, never measured performance or qualification receipts.
-function fixture() {
+function fixture(passes = 1) {
   const files = new Map();
   const put = (key, value) => files.set(key, typeof value === "string" ? value : JSON.stringify(value));
   const group = groupDescriptor("catalog-page");
-  const options = parseArgs(["c1", "--group", "catalog-page", "--passes", "1", "--build"], allApps);
+  const options = parseArgs(["c1", "--group", "catalog-page", "--passes", String(passes), "--build"], allApps);
   const commit = "a".repeat(40), imageId = `sha256:${"b".repeat(64)}`;
   const catalog = records(), fixtureText = `${JSON.stringify(catalog)}\n`;
   const fixtureSha256 = createHash("sha256").update(fixtureText).digest("hex");
@@ -145,6 +151,567 @@ function failedFixture() {
   }
   f.put("summary.json", s); return f;
 }
+
+test("timed threshold outcomes retain every pass, failed requests and healthy peers without baseline promotion", () => {
+  const f = timedFixture(fixture(3)), report = replayCatalog(f.summary, f.reader, f.commit);
+  assert.equal(report.attemptComplete, true); assert.equal(report.baseline, false);
+  assert.equal(report.outcomes.find((r) => r.app === "fastapi").outcome, "failed");
+  assert.equal(report.comparisonEligibleApps.length, 6); assert.ok(!report.comparisonEligibleApps.includes("fastapi"));
+  const cell = report.timedCells.find((c) => c.app === "fastapi" && c.profile === "api-page" && c.phase === "sat256");
+  assert.equal(cell.passes, 3); assert.equal(cell.asked, 3); assert.equal(cell.outcomes.failed, 1);
+  assert.equal(cell.failed.max, 6); assert.equal(cell.successfulRps.min, 9.4); assert.equal(cell.rps.min, 10);
+  assert.match(renderCatalog(report), /observed load\/request failure/); assert.match(renderCatalog(report), /2 \/ 1 \/ 3/);
+  for (const entry of Object.values(f.summary.apps)) for (const runs of Object.values(entry.runs)) assert.equal(runs.length, 3);
+});
+
+test("lean v3 replay binds every functional and timed contender to the same exact profile", () => {
+  for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 1 }]) {
+    const f = timedFixture(fixture(), failure);
+    f.summary.measurement.leanProfile = { name: leanProfile, apps: [...leanApps] };
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /runtime lean profile differs/);
+    for (const path of f.files.keys()) {
+      if (path.endsWith("/checker.json")) {
+        const receipt = f.reader.readJson(path);
+        receipt.runtime.Config.Env.push(`PROFILE=${leanProfile}`);
+        f.put(path, receipt);
+      } else if (path.endsWith("-boundary.json")) {
+        const receipt = f.reader.readJson(path);
+        for (const edge of ["before", "after"]) receipt[edge].runtime.env.push(`PROFILE=${leanProfile}`);
+        for (const edge of ["before", "after"]) receipt[edge].runtime.env.sort();
+        f.put(path, receipt);
+      }
+    }
+    assert.equal(replayCatalog(f.summary, f.reader, f.commit).attemptComplete, true);
+    for (const phase of ["warmup", ...phases]) for (const edge of ["before", "after"]) {
+      const path = `fixture/corten/p1-page/${phase}-boundary.json`, original = f.files.get(path);
+      for (const badProfile of [null, "PROFILE=matched", `PROFILE=${leanProfile}`, "PROFILE=defaults"]) {
+        const receipt = JSON.parse(original);
+        if (badProfile === `PROFILE=${leanProfile}`) receipt[edge].runtime.env.push(badProfile);
+        else receipt[edge].runtime.env = receipt[edge].runtime.env.filter((value) => !value.startsWith("PROFILE="))
+          .concat(badProfile === null ? [] : [badProfile]).sort();
+        f.put(path, receipt);
+        assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /timed source environment differs/);
+      }
+      f.files.set(path, original);
+    }
+  }
+});
+
+test("timed successful v3 replay still establishes only a fully successful baseline", () => {
+  const f = timedFixture(fixture(), null), report = replayCatalog(f.summary, f.reader, f.commit);
+  assert.equal(report.baseline, true); assert.equal(report.attemptComplete, true); assert.equal(report.comparisonEligibleApps.length, 7);
+});
+
+test("timed v3 positive checker participants require known no-termination state", async (t) => {
+  for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]) {
+    const f = timedFixture(fixture(), failure), path = "fixture/corten/checker.json", original = f.files.get(path);
+    for (const role of ["runtime", "upstream"]) for (const finishedAt of ["2026-11-07T21:59:00.000Z", undefined, null, "invalid", ""]) {
+      await t.test(`${failure ? "failed" : "successful"} attempt ${role} FinishedAt ${String(finishedAt)}`, () => {
+        const boundary = JSON.parse(original);
+        boundary[role].State.FinishedAt = finishedAt; f.put(path, boundary);
+        assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /termination|lifetime|state|participant/);
+      });
+    }
+  }
+});
+
+test("timed v3 full participant lifetime must agree across functional and timed observations", async (t) => {
+  for (const scope of ["functional peer", "functional to timed", "timed phases"]) await t.test(scope, () => {
+    const f = timedFixture(fixture(), null);
+    const paths = scope === "functional peer" ? ["fixture/corten/checker.json"]
+      : scope === "functional to timed" ? [...f.files.keys()].filter((path) => path.endsWith("/checker.json"))
+      : ["fixture/corten/p1-page/sat256-boundary.json"];
+    for (const path of paths) {
+      const boundary = f.reader.readJson(path);
+      // Both dates pass a per-observation <= 0 check, but the retained state changed.
+      if (path.endsWith("/checker.json")) boundary.upstream.State.FinishedAt = "1970-01-01T00:00:00Z";
+      else for (const edge of ["before", "after"]) boundary[edge].upstream.state.FinishedAt = "1970-01-01T00:00:00Z";
+      f.put(path, boundary);
+    }
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /lifetime changed across attempt/);
+  });
+});
+
+test("timed v3 saved verifier rejects positive checker prior termination without rewriting evidence", () => {
+  const f = timedFixture(fixture(), null), path = "fixture/corten/checker.json";
+  const folder = mkdtempSync(join(tmpdir(), "catalog-positive-lifetime-"));
+  try {
+    for (const [key, bytes] of f.files) { mkdirSync(dirname(join(folder, key)), { recursive: true }); writeFileSync(join(folder, key), bytes); }
+    assert.equal(validateSaved({ folder, round: "c1", commit: f.commit }).status, "verified");
+    for (const role of ["runtime", "upstream"]) {
+      const boundary = f.reader.readJson(path); boundary[role].State.FinishedAt = f.summary.finishedAt;
+      const bytes = JSON.stringify(boundary); writeFileSync(join(folder, path), bytes);
+      const saved = validateSaved({ folder, round: "c1", commit: f.commit });
+      assert.equal(saved.status, "invalid", role); assert.equal(saved.complete, false);
+      assert.equal(readFileSync(join(folder, path), "utf8"), bytes);
+    }
+  } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
+});
+
+test("timed v3 summary reports require an exact retained-phase failure disposition", async (t) => {
+  const invented = { app: "fastapi", source: "api", target: "page", pass: 1, phase: "sat256", failed: 1, timeouts: 1, httpErrors: 0, dropped: 0 };
+  const cases = [
+    ["missing ledger", (s) => { delete s.targetFailures; }],
+    ["null ledger", (s) => { s.targetFailures = null; }],
+    ["invented ledger", (s) => { s.targetFailures = [invented]; }],
+    ["invented completion failure", (s) => { s.complete = false; }],
+    ["missing completion", (s) => { delete s.complete; }],
+  ];
+  for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]) {
+    const f = timedFixture(fixture(), failure), original = structuredClone(f.summary);
+    const changes = failure ? [...cases,
+      ["omitted failure", (s) => { s.targetFailures = []; }],
+      ["duplicate failure", (s) => { s.targetFailures.push({ ...s.targetFailures[0] }); }],
+      ["wrong failed phase", (s) => { s.targetFailures[0].phase = "sat64"; }],
+      ["wrong failed app", (s) => { s.targetFailures[0].app = "corten"; }],
+      ["wrong failure count", (s) => { s.targetFailures[0].failed++; }],
+      ["extra failure field", (s) => { s.targetFailures[0].invented = true; }],
+      ["contradictory baseline", (s) => { s.complete = true; }],
+    ].filter(([name]) => name !== "invented completion failure") : cases;
+    for (const [name, mutate] of changes) await t.test(`${failure ? "failed" : "successful"} attempt ${name}`, () => {
+      const summary = structuredClone(original); mutate(summary);
+      const before = structuredClone(summary), report = inspectCatalog(summary, f.commit);
+      assert.equal(report.attemptComplete, false); assert.equal(report.baseline, false);
+      assert.equal(report.status, "FAILED OR INCOMPLETE: not a baseline");
+      assert.doesNotMatch(renderCatalog(report), /COMPLETE ATTEMPT: observed load\/request failure/);
+      assert.deepEqual(summary, before, "reporting must not repair or rewrite the summary");
+      assert.throws(() => replayCatalog(summary, f.reader, f.commit));
+    });
+  }
+});
+
+test("timed v3 summary-only CLI cannot call missing or invented ledgers completed failures", () => {
+  const f = timedFixture(fixture(), null), folder = mkdtempSync(join(tmpdir(), "catalog-report-disposition-"));
+  try {
+    for (const missing of [true, false]) {
+      const summary = structuredClone(f.summary); summary.complete = false;
+      if (missing) delete summary.targetFailures;
+      else summary.targetFailures = [{ app: "fastapi", source: "api", target: "page", pass: 1, phase: "sat256", failed: 1, timeouts: 1, httpErrors: 0, dropped: 0 }];
+      const path = join(folder, "summary.json"); writeFileSync(path, JSON.stringify(summary));
+      const cli = childProcess.spawnSync(process.execPath, ["--max-old-space-size=384", fileURLToPath(new URL("./report.mjs", import.meta.url)), path,
+        "--commit", f.commit, "--require-complete"], { encoding: "utf8", timeout: 10000, windowsHide: true });
+      assert.equal(cli.error, undefined); assert.equal(cli.signal, null); assert.equal(cli.status, 1);
+      assert.match(cli.stdout, /FAILED OR INCOMPLETE: not a baseline/);
+      assert.doesNotMatch(cli.stdout, /COMPLETE ATTEMPT: observed load\/request failure/);
+    }
+  } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
+});
+
+test("timed v3 requires every positive checker boundary for both successful and failed attempts", () => {
+  for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]) {
+    const f = timedFixture(fixture(), failure), saved = new Map();
+    for (const app of f.summary.group.apps) for (const source of f.summary.group.sources) {
+      const path = `${source}/${app}/checker.json`, bytes = f.files.get(path);
+      saved.set(path, bytes); f.files.delete(path);
+      assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), undefined, `missing ${path}`);
+      f.files.set(path, bytes);
+    }
+    for (const path of saved.keys()) f.files.delete(path);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
+    for (const [path, bytes] of saved) {
+      const boundary = JSON.parse(bytes);
+      boundary.exit.code = 137; boundary.exit.expired = true; boundary.runtime.State.OOMKilled = true;
+      f.put(path, boundary);
+    }
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /checker client lifetime/);
+  }
+});
+
+test("timed v3 rejects contradictory functional checker execution and lifecycle evidence", () => {
+  const f = timedFixture(fixture(), null), path = "api/fastapi/checker.json", original = f.files.get(path);
+  for (const mutate of [
+    (b) => { b.exit.expired = true; },
+    (b) => { b.exit.code = 137; },
+    (b) => { b.exit.interrupted = true; },
+    (b) => { b.exit.signal = "SIGTERM"; },
+    (b) => { b.runtime.State.OOMKilled = true; },
+    (b) => { b.upstream.State.OOMKilled = true; },
+    (b) => { b.checker.State.ExitCode = 137; },
+    (b) => { b.runtime.Path = "/unreviewed/app"; },
+    (b) => { b.checker.Args.push("--skip-content"); },
+    (b) => { b.upstream.mounts = []; },
+    (b) => { b.runtime.Config.Env = b.runtime.Config.Env.filter((v) => !v.startsWith("CATALOG_SOURCE=")); },
+    (b) => { b.upstream.Id = "f".repeat(64); },
+    (b) => { b.upstream.State.StartedAt = new Date(Date.parse(f.summary.startedAt) + 1).toISOString(); },
+  ]) {
+    const boundary = JSON.parse(original); mutate(boundary); f.put(path, boundary);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
+  }
+});
+
+test("timed v3 CPU chronology follows observation clocks across rotated passes, not summary traversal", () => {
+  const f = timedFixture(fixture(3), null), s = f.summary;
+  const [first, second] = s.group.apps;
+  const time = (app, pass) => f.reader.readJson(`api/${app}/p${pass}-page/warmup-cpu-counters.json`).startedAt;
+  assert.ok(time(first, 3) > time(second, 1), "fixture must differ from app-grouped summary traversal");
+  for (const entry of Object.values(s.apps)) for (const runs of Object.values(entry.runs)) runs.reverse();
+  s.apps = Object.fromEntries(Object.entries(s.apps).reverse());
+  const report = replayCatalog(s, f.reader, f.commit);
+  assert.equal(report.attemptComplete, true); assert.equal(report.baseline, true);
+  assert.equal(report.comparisonEligibleApps.length, 7);
+});
+
+function shiftFixtureRun(f, app, pass, delta) {
+  const root = `fixture/${app}/p${pass}-page`, run = f.summary.apps[app].runs["fixture-page"].find((r) => r.pass === pass);
+  const shift = (value) => new Date(Date.parse(value) + delta).toISOString();
+  const change = (path, mutate) => { const value = f.reader.readJson(path); mutate(value); f.put(path, value); };
+  run.cold.containerStartedAt = shift(run.cold.containerStartedAt); run.cold.first200At = shift(run.cold.first200At);
+  f.put(`${root}/cold.json`, run.cold);
+  const { first200MsFromContainerStart, containerStartedAt, clock, measuredBeforeReadinessOrWarmup, ...probe } = run.cold;
+  f.put(`${root}/cold.log`, `catalog-probe-ready\n${JSON.stringify(probe)}\n`);
+  change(`${root}/container.json`, (v) => { v.startedAt = shift(v.startedAt); });
+  for (const phase of ["warmup", ...phases]) {
+    change(`${root}/${phase}-boundary.json`, (b) => {
+      b.observedAt += delta;
+      for (const edge of ["before", "after"]) b[edge].runtime.state.StartedAt = shift(b[edge].runtime.state.StartedAt);
+      for (const key of ["StartedAt", "FinishedAt"]) b.after.load.state[key] = shift(b.after.load.state[key]);
+    });
+    change(`${root}/${phase}-cpu-counters.json`, (p) => { p.startedAt += delta; p.finishedAt += delta; });
+    change(`${root}/${phase}-stats.log.json`, (stats) => { for (const rows of Object.values(stats.samples)) for (const row of rows) row.t += delta; });
+  }
+}
+
+function reverseTimedRuns(summary) {
+  summary.apps = Object.fromEntries(Object.entries(summary.apps).reverse());
+  for (const entry of Object.values(summary.apps)) for (const runs of Object.values(entry.runs)) runs.reverse();
+}
+
+for (const [label, failure] of [["successful", null], ["timed-failed", { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]]) {
+  test(`timed v3 ${label} serial loads follow native clocks, not summary order or CPU envelopes`, () => {
+    const f = timedFixture(fixture(3), failure), [first, second] = f.summary.group.apps;
+    const check = () => {
+      const report = replayCatalog(f.summary, f.reader, f.commit);
+      assert.equal(report.attemptComplete, true); assert.equal(report.baseline, failure === null);
+      assert.equal(report.comparisonEligibleApps.length, failure === null ? 7 : 6);
+    };
+    check(); reverseTimedRuns(f.summary); check();
+    const end = Date.parse(f.reader.readJson(`fixture/${first}/p1-page/sat256-boundary.json`).after.load.state.FinishedAt);
+    const start = Date.parse(f.reader.readJson(`fixture/${second}/p1-page/warmup-boundary.json`).after.load.state.StartedAt);
+    shiftFixtureRun(f, second, 1, end - start);
+    const before = f.reader.readJson(`fixture/${first}/p1-page/sat256-cpu-counters.json`);
+    const after = f.reader.readJson(`fixture/${second}/p1-page/warmup-cpu-counters.json`);
+    assert.ok(after.startedAt < before.finishedAt, "CPU observation envelopes must overlap while native load lifetimes only touch");
+    check(); reverseTimedRuns(f.summary); check();
+  });
+
+  test(`timed v3 ${label} rejects overlapping native load lifetimes across runs`, async (t) => {
+    for (const scope of ["app", "pass"]) for (const overlap of ["complete", "one millisecond"]) await t.test(`${scope}: ${overlap}`, () => {
+      const f = timedFixture(fixture(3), failure), [first, second] = f.summary.group.apps;
+      const app = scope === "app" ? second : first, pass = scope === "pass" ? 2 : 1;
+      const phase = overlap === "complete" ? "warmup" : "sat256";
+      const a = f.reader.readJson(`fixture/${first}/p1-page/${phase}-boundary.json`).after.load;
+      const b = f.reader.readJson(`fixture/${app}/p${pass}-page/warmup-boundary.json`).after.load;
+      const delta = Date.parse(a.state[overlap === "complete" ? "StartedAt" : "FinishedAt"]) - Date.parse(b.state.StartedAt)
+        - (overlap === "complete" ? 0 : 1);
+      shiftFixtureRun(f, app, pass, delta);
+      const shifted = f.reader.readJson(`fixture/${app}/p${pass}-page/warmup-boundary.json`).after.load;
+      assert.equal(a.name, shifted.name); assert.notEqual(a.id, shifted.id);
+      assert.ok(Date.parse(shifted.state.StartedAt) < Date.parse(a.state.FinishedAt)
+        && Date.parse(shifted.state.FinishedAt) > Date.parse(a.state.StartedAt));
+      assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /timed load lifetimes overlap across attempt/);
+      reverseTimedRuns(f.summary);
+      assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /timed load lifetimes overlap across attempt/);
+    });
+  });
+
+  test(`timed v3 ${label} saved verifier rejects overlapping loads without rewriting evidence`, () => {
+    const f = timedFixture(fixture(), failure), [first, second] = f.summary.group.apps;
+    const delta = Date.parse(f.summary.apps[first].runs["fixture-page"][0].cold.containerStartedAt)
+      - Date.parse(f.summary.apps[second].runs["fixture-page"][0].cold.containerStartedAt);
+    const folder = mkdtempSync(join(tmpdir(), "catalog-load-overlap-"));
+    try {
+      for (const [key, bytes] of f.files) { mkdirSync(dirname(join(folder, key)), { recursive: true }); writeFileSync(join(folder, key), bytes); }
+      const original = validateSaved({ folder, round: "c1", commit: f.commit });
+      assert.equal(original.status, "verified"); assert.equal(original.complete, true); assert.equal(original.report.baseline, failure === null);
+      shiftFixtureRun(f, second, 1, delta);
+      for (const reordered of [false, true]) {
+        if (reordered) reverseTimedRuns(f.summary);
+        f.put("summary.json", f.summary);
+        for (const [key, bytes] of f.files) writeFileSync(join(folder, key), bytes);
+        const saved = validateSaved({ folder, round: "c1", commit: f.commit });
+        assert.equal(saved.status, "invalid"); assert.equal(saved.complete, false);
+        for (const [key, bytes] of f.files) assert.equal(readFileSync(join(folder, key), "utf8"), bytes, key);
+      }
+    } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
+  });
+}
+
+test("timed v3 binds the shared functional upstream identity and lifetime to timing", () => {
+  for (const change of ["identity", "lifetime"]) {
+    const f = timedFixture(fixture(), null);
+    for (const app of f.summary.group.apps) for (const source of f.summary.group.sources) {
+      const path = `${source}/${app}/checker.json`, boundary = f.reader.readJson(path);
+      if (change === "identity") boundary.upstream.Id = "f".repeat(64);
+      else boundary.upstream.State.StartedAt = new Date(Date.parse(f.summary.startedAt) + 1).toISOString();
+      f.put(path, boundary);
+    }
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), change === "identity" ? /timed upstream identity changed/ : /lifetime changed across attempt/);
+  }
+});
+
+test("timed v3 does not retrofit legacy v2 checks or partial metrics into new proof", () => {
+  const f = fixture();
+  assert.ok(![...f.files.keys()].some((path) => path.endsWith("/checker.json")));
+  assert.equal(replayCatalog(f.summary, f.reader, f.commit).baseline, true, "v2 positive-check semantics stay unchanged");
+  f.summary.savedEvidence.schema = "catalog-saved-evidence/v3";
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /timed native attempt is not complete/);
+  f.summary.attemptComplete = true; f.summary.targetFailures = [];
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /timed native attempt is not complete/);
+});
+
+for (const scope of ["app", "source", "pass"]) for (const change of ["lifetime", "counter", "both"]) {
+  if (scope === "source" && change !== "lifetime") continue; // Fixture-source upstream has no CPU samples.
+  test(`timed v3 rejects upstream ${change} discontinuity across ${scope} runs`, () => {
+    const f = timedFixture(fixture(scope === "pass" ? 3 : 1), null), s = f.summary;
+    const app = s.group.apps[scope === "app" ? 1 : 0], source = scope === "source" ? "fixture" : "api", pass = scope === "pass" ? 2 : 1;
+    const raw = `${source}/${app}/p${pass}-page`, name = `${s.runId}-upstream`;
+    for (const phase of ["warmup", ...phases]) {
+      if (change !== "lifetime" && source === "api") {
+        const path = `${raw}/${phase}-cpu-counters.json`, p = f.reader.readJson(path);
+        p.before[name] -= 1e6; p.after[name] -= 1e6; f.put(path, p);
+      }
+      if (change !== "counter") {
+        const path = `${raw}/${phase}-boundary.json`, b = f.reader.readJson(path);
+        for (const edge of ["before", "after"]) b[edge].upstream.state.StartedAt = s.apps[app].runs[`${source}-page`].find((r) => r.pass === pass).cold.containerStartedAt;
+        f.put(path, b);
+      }
+    }
+    assert.throws(() => replayCatalog(s, f.reader, f.commit), change === "counter" ? /CPU counter moved backwards across attempt/ : /lifetime changed across attempt/);
+  });
+}
+
+test("timed summary reporting cannot hide request failures behind passing flags or incomplete attempts", () => {
+  const f = timedFixture(fixture()), s = f.summary, run = s.apps.fastapi.runs["api-page"][0];
+  run.phases.sat256.failed = 0; run.phases.sat256.outcome = "passed"; run.outcome = "passed";
+  s.complete = true; s.targetFailures = [];
+  s.apps.fastapi.phases["api-page"].sat256 = { ...aggregate([run.phases.sat256]), asked: 1 };
+  assert.equal(inspectCatalog(s).baseline, false); assert.equal(inspectCatalog(s).attemptComplete, false);
+  const good = timedFixture(fixture(), null).summary; good.attemptComplete = false;
+  assert.equal(inspectCatalog(good).baseline, false);
+});
+
+test("timed parser rejects unclassified/content failures and contradictory counts or thresholds", () => {
+  assert.equal(readTimedLoad(loadSummary({ timeouts: 6 })).failed, 6);
+  assert.equal(readTimedLoad(loadSummary({ httpErrors: 2 })).httpErrors, 2);
+  assert.equal(readTimedLoad(loadSummary({ dropped: 3 })).dropped, 3);
+  for (const mutate of [
+    (s) => { s.metrics.catalog_invalid_responses.count = 1; },
+    (s) => { delete s.metrics.catalog_timeouts; },
+    (s) => { s.metrics.http_req_failed.passes++; },
+    (s) => { s.metrics.http_req_failed.value = 0; },
+    (s) => { s.metrics.checks.fails++; },
+    (s) => { s.metrics.checks.value = 1; },
+    (s) => { s.root_group.checks["catalog content type"].fails++; },
+    (s) => { s.metrics.iterations.count--; },
+    (s) => { s.metrics.http_req_failed.thresholds["rate==0"] = false; },
+    (s) => { delete s.metrics.dropped_iterations; },
+    (s) => { s.metrics.dropped_iterations.count = -1; },
+    (s) => { s.metrics.http_req_duration["p(95)"] = null; },
+    (s) => { s.metrics.http_req_duration["p(95)"] = 10001; },
+  ]) { const summary = loadSummary({ timeouts: 6 }); mutate(summary); assert.throws(() => readTimedLoad(summary)); }
+  assert.throws(() => readTimedLoad(loadSummary({ invalid: 1 })), /corrupt response/);
+});
+
+test("timed request classification does not turn bad content types or arbitrary transport errors into target outcomes", () => {
+  const response = (status, type = "text/html", error_code = 0) => ({ status, headers: { "Content-Type": type }, error_code });
+  assert.equal(requestOutcome(response(200), "page"), "successes");
+  assert.equal(requestOutcome(response(0, "", 1050), "page"), "timeouts");
+  for (const status of [429, 500, 502, 503, 504]) for (const type of ["text/html", "application/json", "application/problem+json", "text/plain", ""])
+    for (const target of ["page", "json"]) assert.equal(requestOutcome(response(status, type), target), "http_errors");
+  for (const r of [response(200, "application/json"), response(404), response(302), response(0, "", 1000)])
+    assert.equal(requestOutcome(r, "page"), "invalid_responses");
+});
+
+test("timed HTTP error accounting retains errors whose media type differs from a successful page", () => {
+  const native = loadSummary({ httpErrors: 2 });
+  native.root_group.checks["catalog content type"].passes -= 2;
+  native.root_group.checks["catalog content type"].fails += 2;
+  native.metrics.checks.passes -= 2;
+  native.metrics.checks.fails += 2;
+  native.metrics.checks.value = native.metrics.checks.passes / 200;
+  assert.equal(readTimedLoad(native).httpErrors, 2);
+  assert.equal(readTimedLoad(native).outcome, "failed");
+  for (const passes of [97, 101]) {
+    const changed = structuredClone(native);
+    changed.root_group.checks["catalog content type"].passes = passes;
+    assert.throws(() => readTimedLoad(changed), /content checks/);
+  }
+  const f = timedFixture(fixture(3), { app: "drogon", source: "api", pass: 2, phase: "sat64", httpErrors: 1, httpErrorType: false });
+  const report = replayCatalog(f.summary, f.reader, f.commit);
+  assert.equal(report.baseline, false); assert.equal(report.attemptComplete, true);
+  assert.equal(report.outcomes.find((row) => row.app === "drogon").outcome, "failed");
+  assert.ok(!report.comparisonEligibleApps.includes("drogon"));
+});
+
+test("timed positive checks must finish globally before the first cold timing", () => {
+  for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]) {
+    const f = timedFixture(fixture(), failure);
+    const firstCold = Math.min(...Object.values(f.summary.apps).flatMap((app) => Object.values(app.runs).flatMap((runs) => runs.map((run) => Date.parse(run.cold.containerStartedAt)))));
+    const lastPhase = Math.max(...[...f.files.keys()].filter((key) => key.endsWith("-boundary.json")).map((key) => f.reader.readJson(key).observedAt));
+    const path = "api/fastapi/checker.json", original = f.files.get(path);
+    for (const end of [firstCold + 1, lastPhase + 2000]) {
+      const boundary = JSON.parse(original);
+      boundary.checker.State.StartedAt = new Date(end - 1).toISOString();
+      boundary.checker.State.FinishedAt = new Date(end).toISOString();
+      f.put(path, boundary);
+      assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /before.*timing/);
+    }
+  }
+});
+
+test("timed HTTP errors and pressure-bound fixed drops are failed observed outcomes, not successful throughput", () => {
+  for (const failure of [{ phase: "sat64", httpErrors: 2 }, { phase: "fixed", dropped: 3 }, { phase: "sat256", timeouts: 100 }]) {
+    const f = timedFixture(fixture(), { app: "fastapi", source: "api", pass: 1, ...failure });
+    const report = replayCatalog(f.summary, f.reader, f.commit);
+    assert.equal(report.baseline, false); assert.equal(report.attemptComplete, true);
+    assert.ok(!report.comparisonEligibleApps.includes("fastapi"));
+    assert.equal(report.outcomes.find((r) => r.app === "fastapi").outcome, "failed");
+    if (failure.timeouts === 100) assert.equal(report.timedCells.find((c) => c.app === "fastapi" && c.profile === "api-page" && c.phase === "sat256").successfulRps.max, 0);
+  }
+});
+
+test("timed resource proof rejects internally consistent busy, exhausted or incomplete participant observations", () => {
+  const f = timedFixture(fixture()), root = "api/fastapi/p1-page", file = `${root}/sat256-stats.log.json`;
+  const original = f.files.get(file), app = `${f.summary.runId}-fastapi`, load = `${f.summary.runId}-k6`, upstream = `${f.summary.runId}-upstream`;
+  const subject = { app: "fastapi", source: "api", target: "page", phase: "sat256", seconds: 60, instance: f.reader.readJson(`${root}/container.json`) };
+  const reader = { readJson: (key) => f.reader.readJson(`${root}/${key}`), readText: (key) => f.reader.readText(`${root}/${key}`) };
+  for (const [mutate, message] of [
+    [(s) => { for (const v of s[load]) v.cpu = 320; }, /generator.*headroom/],
+    [(s) => { for (const v of s[upstream]) v.cpu = 80; }, /busy upstream/],
+    [(s) => { for (const v of s[app]) v.mem = 1024; }, /invalid timed sample/],
+    [(s) => { s[load].splice(10, 4); }, /invalid timed sample/],
+    [(s) => { s[load].splice(0, 4); }, /window incomplete/],
+    [(s) => { s[load].splice(-4); }, /window incomplete/],
+    [(s) => { for (const v of s[load]) v.cpu = 0; }, /observations incomplete/],
+  ]) {
+    const stats = JSON.parse(original); mutate(stats.samples);
+    stats.summary = Object.fromEntries(Object.entries(stats.samples).map(([name, rows]) => [name, summarizeSamples(rows)]));
+    f.put(file, stats);
+    f.put(`${root}/sat256-stats.log`, Object.entries(stats.samples).flatMap(([Name, rows]) => rows.map((v) => JSON.stringify({ Name, CPUPerc: `${v.cpu}%`, MemUsage: `${v.mem}MiB / 2GiB` }))).join("\n") + "\n");
+    assert.throws(() => verifyTimedPhase(f.summary, subject, reader), message);
+  }
+  const dropped = timedFixture(fixture(), { app: "fastapi", source: "api", pass: 1, phase: "fixed", dropped: 3 });
+  const stats = dropped.reader.readJson(`${root}/fixed-stats.log.json`);
+  for (const v of stats.samples[app]) v.cpu = 94;
+  stats.summary[app] = summarizeSamples(stats.samples[app]); dropped.put(`${root}/fixed-stats.log.json`, stats);
+  dropped.put(`${root}/fixed-stats.log`, Object.entries(stats.samples).flatMap(([Name, rows]) => rows.map((v) => JSON.stringify({ Name, CPUPerc: `${v.cpu}%`, MemUsage: `${v.mem}MiB / 2GiB` }))).join("\n") + "\n");
+  assert.throws(() => verifyTimedPhase(dropped.summary, { ...subject, phase: "fixed" }, {
+    readJson: (key) => dropped.reader.readJson(`${root}/${key}`), readText: (key) => dropped.reader.readText(`${root}/${key}`),
+  }), /lacks observed target pressure/);
+  assert.throws(() => timedFixture(fixture(), { app: "fastapi", source: "api", pass: 1, phase: "warmup", timeouts: 1 }), /failed warmup/);
+});
+
+test("timed producer preserves normal threshold exit99 and all secondary sampler/counter/copy/cleanup errors", async () => {
+  const f = timedFixture(fixture()), prefix = "api/fastapi/p1-page", phase = "sat256";
+  const proof = f.reader.readJson(`${prefix}/${phase}-cpu-counters.json`), receipt = f.reader.readJson(`${prefix}/${phase}-boundary.json`);
+  const restore = Date.now;
+  const dockerInfo = (p) => ({ Id: p.id, Name: p.name, Image: p.image, RestartCount: p.restarts, Path: p.path, Args: p.args, State: p.state, HostConfig: p.budget,
+    Config: { Entrypoint: p.entrypoint, Cmd: p.command, Env: p.env, Labels: { "run.corten.catalog": p.owner } },
+    NetworkSettings: { Networks: Object.fromEntries(p.networks.map((name) => [name, {}])) }, Mounts: p.mounts });
+  for (const sideErrors of [false, true]) {
+    const raw = mkdtempSync(join(tmpdir(), "catalog-timed-producer-"));
+    let clock = proof.startedAt, started = false, cpuReads = 0, removed = false;
+    Date.now = () => clock;
+    const context = { summary: f.summary, raw, cpus: f.summary.measurement.cpus, k6Image, mount: [],
+      owned: async () => {},
+      inspect: async (name) => dockerInfo(receipt[started ? "after" : "before"][name.endsWith("-k6") ? "load" : name.endsWith("-upstream") ? "upstream" : "runtime"]),
+      cpu: async () => {
+        if (++cpuReads > 1 && sideErrors) throw new Error("counter unavailable");
+        return { ids: proof.ids, values: cpuReads === 1 ? proof.before : proof.after };
+      },
+      sampleStats: () => ({ stop: async () => {
+        for (const key of [`${phase}-stats.log`, `${phase}-stats.log.json`]) writeFileSync(join(raw, key), f.files.get(`${prefix}/${key}`));
+        if (sideErrors) throw new Error("sampler incomplete");
+      } }),
+      docker: async (args) => {
+        if (args[0] === "start") {
+          started = true; clock = proof.finishedAt;
+          writeFileSync(join(raw, `${phase}.log`), "synthetic native threshold exit99\n");
+          throw Object.assign(new Error("exit 99"), { exit: receipt.exit });
+        }
+        assert.equal(args[0], "cp");
+        if (sideErrors) throw new Error("copy failed");
+        writeFileSync(join(raw, `${phase}.json`), f.files.get(`${prefix}/${phase}.json`));
+      },
+      remove: async () => { removed = true; if (sideErrors) throw new Error("cleanup failed"); },
+    };
+    const subject = { app: "fastapi", source: "api", target: "page", phase, seconds: 60, instance: f.reader.readJson(`${prefix}/container.json`) };
+    try {
+      if (sideErrors) {
+        await assert.rejects(collectTimedPhase(context, subject), /apparatus failed/);
+        const saved = JSON.parse(readFileSync(join(raw, `${phase}-boundary.json`)));
+        assert.equal(saved.exit.code, 99);
+        assert.ok(["sampler stop", "after CPU", "summary copy", "CPU artifacts", "load cleanup"].every((stage) => saved.errors.some((e) => e.stage === stage)));
+      } else {
+        const metrics = await collectTimedPhase(context, subject);
+        assert.equal(metrics.outcome, "failed"); assert.equal(metrics.failed, 6); assert.equal(metrics.successfulRps, 9.4);
+        for (const key of [`${phase}.json`, `${phase}.log`, `${phase}-cpu.json`, `${phase}-cpu-counters.json`, `${phase}-boundary.json`, `${phase}-stats.log`, `${phase}-stats.log.json`])
+          f.put(`${prefix}/${key}`, readFileSync(join(raw, key), "utf8"));
+        assert.equal(replayCatalog(f.summary, f.reader, f.commit).attemptComplete, true);
+      }
+      assert.equal(removed, true);
+    } finally { Date.now = restore; assert.equal(dirname(raw), tmpdir()); rmSync(raw, { recursive: true, force: true }); }
+  }
+});
+
+test("timed saved native replay composes failed apps with exit1, never exit99 or missing cleanup", async () => {
+  const f = timedFixture(fixture()), folder = mkdtempSync(join(tmpdir(), "catalog-timed-native-"));
+  try {
+    for (const [path, bytes] of f.files) { mkdirSync(dirname(join(folder, path)), { recursive: true }); writeFileSync(join(folder, path), bytes); }
+    const binding = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit }, selection: { apps: f.summary.group.apps },
+      execution: { effectiveOptions: f.summary.options }, resources: { expectedCpus: f.summary.measurement.cpus }, preparation: { fixtures: [] },
+      latestStable: { schema: latestStableSchema, group: "catalog-page", valid: true, status: "not-applicable", groupComparisonEligible: null } };
+    const saved = validateSaved({ folder, round: f.summary.round, commit: f.commit });
+    assert.equal(saved.status, "verified"); assert.equal(saved.report.baseline, false);
+    const native = await inspectNative(binding, folder);
+    assert.equal(native.status, "failed"); assert.equal(native.attemptComplete, true);
+    const host = { resources: "verified", cleanupComplete: true }, command = { terminal: true, code: 1, signal: null, error: null, cancelled: false, forced: false, success: false };
+    const composed = composePhase(binding, native, host, [command]);
+    assert.equal(composed.outcome, "native-validated");
+    assert.ok(composed.appOutcomes.every((r) => r.app === "fastapi" ? r.outcome === "failed" && !r.comparisonEligible : r.outcome === "passed" && r.comparisonEligible));
+    for (const code of [0, 2, 99]) assert.notEqual(composePhase(binding, native, host, [{ ...command, code }]).outcome, "native-validated");
+    assert.notEqual(composePhase(binding, native, { ...host, cleanupComplete: false }, [command]).outcome, "native-validated");
+    rmSync(join(folder, "api/fastapi/p1-page/sat256-boundary.json"));
+    assert.notEqual((await inspectNative(binding, folder)).status, "failed");
+  } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
+});
+
+test("timed raw replay refuses exit99 without attributable complete native evidence", () => {
+  const root = "api/fastapi/p1-page", boundary = `${root}/sat256-boundary.json`;
+  const changes = [
+    (f) => { const r = f.reader.readJson(boundary); r.exit.code = 1; f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.exit.expired = true; f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.exit.interrupted = true; f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.exit.signal = "SIGTERM"; f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.errors.push({ stage: "sampler stop", message: "incomplete" }); f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.errors.push({ stage: "summary copy", message: "failed" }); f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.after.load.state.OOMKilled = true; f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.after.runtime.restarts = 1; f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); delete r.after.runtime.state.Paused; f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.after.upstream.state.Running = false; f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.after.load.state.FinishedAt = r.after.load.state.StartedAt; f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(boundary); r.after.load.command.push("--no-thresholds"); f.put(boundary, r); },
+    (f) => { const r = f.reader.readJson(`${root}/sat256-cpu-counters.json`); r.after[`${f.summary.runId}-fastapi`] = 0; f.put(`${root}/sat256-cpu-counters.json`, r); },
+    (f) => { const r = f.reader.readJson(`${root}/sat256-stats.log.json`); r.samples[`${f.summary.runId}-k6`][0].cpu = 400; f.put(`${root}/sat256-stats.log.json`, r); },
+    (f) => { f.put(`${root}/sat256-stats.log`, '{"Name":'); },
+    (f) => { f.put(`${root}/sat256-stats.log`, f.reader.readText(`${root}/sat256-stats.log`).replace('"50%"', '"50garbage%"')); },
+    (f) => { f.files.delete(boundary); },
+    (f) => { f.files.delete(`${root}/sat256.json`); },
+    (f) => { f.summary.apps.fastapi.phases["api-page"].sat256.failed.max++; },
+    (f) => { f.summary.apps.fastapi.runs["api-page"].pop(); },
+    (f) => { f.summary.targetFailures = []; },
+    (f) => { f.summary.complete = true; },
+    (f) => { f.summary.apps.fastapi.checks.api.jsonRecords = 499; },
+    (f) => { f.summary.cleanupFailures.push({ resource: "app", error: "retained" }); },
+    (f) => { f.summary.apps.fastapi.failures = [{ stage: "app logs", error: "incomplete" }]; },
+    (f) => { f.put("cleanup.json", { runId: f.summary.runId, containers: ["still-owned"], networks: [] }); },
+    (f) => { f.summary.savedEvidence.schema = "catalog-saved-evidence/v2"; },
+  ];
+  for (const [index, mutate] of changes.entries()) {
+    const f = timedFixture(fixture()); mutate(f);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), undefined, `negative ${index}`);
+  }
+});
 
 test("catalog negative raw replay retains every selected app without timing or baseline promotion", () => {
   const f = failedFixture(), report = replayCatalog(f.summary, f.reader, f.commit);

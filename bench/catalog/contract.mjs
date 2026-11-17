@@ -153,5 +153,9 @@ export function readLoad(summary) {
 export function aggregate(runs) {
   const result = { passes: runs.length };
   for (const key of ["rps", "p50", "p95", "p99", "cpuUsec", "perCpuSecond", "memAvgMiB", "memMaxMiB"]) result[key] = spread(runs.map((r) => r[key]));
+  if (runs.some((r) => r.outcome !== undefined)) {
+    for (const key of ["requests", "successfulRequests", "successfulRps", "failed", "timeouts", "httpErrors", "dropped"]) result[key] = spread(runs.map((r) => r[key]));
+    result.outcomes = { passed: runs.filter((r) => r.outcome === "passed").length, failed: runs.filter((r) => r.outcome === "failed").length };
+  }
   return result;
 }

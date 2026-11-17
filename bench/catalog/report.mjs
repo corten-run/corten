@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { allApps } from "../fullstack/apps.mjs";
 import { aggregate, cpuSettings, expectedPageChecks, phases, leanApps, leanProfile } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
@@ -51,6 +52,8 @@ export function inspectCatalog(summary, expectedCommit) {
     assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: leanApps }, "catalog lean configuration differs");
   }
   const group = inspectGroupEvidence(summary, phases, aggregate);
+  const timed = summary.savedEvidence?.schema === "catalog-saved-evidence/v3";
+  assert.ok(!timed || group?.descriptor.group === "catalog-page", "timed catalog reporting requires --group catalog-page");
   const expectedApps = group?.descriptor.apps ?? inventory;
   const reportKeys = group?.keys ?? keys;
   const warnings = [...(group?.warnings ?? [])];
@@ -94,7 +97,7 @@ export function inspectCatalog(summary, expectedCommit) {
         if (!phase) continue;
         const valid = [phase.rps, phase.perCpuSecond, phase.memMaxMiB].every((n) => finite(n) && n > 0)
           && finite(phase.cpuAvgPct) && phase.cpuAvgPct >= 0 && finite(phase.p95) && phase.p95 >= 0
-          && phase.failed === 0 && phase.dropped === 0;
+          && (timed ? ["passed", "failed"].includes(phase.outcome) && finite(phase.successfulRps) : phase.failed === 0 && phase.dropped === 0);
         if (!valid) {
           warnings.push(`${app} ${key} pass ${run.pass}: invalid or unsuccessful sat64 measurement omitted.`);
           continue;
@@ -112,7 +115,7 @@ export function inspectCatalog(summary, expectedCommit) {
       const complete = values.length === passes && runs.length === passes && runs.every((r) => r.complete === true && !r.failed);
       everyPass &&= complete;
       return [key, { passes: values.length, asked: passes, complete,
-        rps: range(values.map((v) => v.rps)), perCpuSecond: range(values.map((v) => v.perCpuSecond)),
+        rps: range(values.map((v) => timed ? v.successfulRps : v.rps)), perCpuSecond: range(values.map((v) => v.perCpuSecond)),
         memMaxMiB: range(values.map((v) => v.memMaxMiB)), cpuAvgPct: range(values.map((v) => v.cpuAvgPct)),
         p95: range(values.map((v) => v.p95)) }];
     }));
@@ -123,13 +126,32 @@ export function inspectCatalog(summary, expectedCommit) {
   const started = Date.parse(summary.startedAt);
   const validClock = terminal && Number.isFinite(started) && Date.parse(summary.finishedAt) >= started;
   if (!validClock) warnings.push("Start/end timestamps do not establish a completed, non-negative elapsed duration.");
+  const targetFailures = timed ? expectedApps.flatMap((app) => (group?.descriptor.cases ?? []).flatMap(({ source, target }) =>
+    (summary.apps[app]?.runs?.[`${source}-${target}`] ?? []).flatMap((run) => phases.flatMap((phase) => {
+      const metrics = run.phases?.[phase];
+      return metrics?.outcome === "failed" ? [{ app, source, target, pass: run.pass, phase, failed: metrics.failed,
+        timeouts: metrics.timeouts, httpErrors: metrics.httpErrors, dropped: metrics.dropped }] : [];
+    })))) : [];
+  const ordered = (rows) => [...rows].sort((a, b) => `${a?.app}/${a?.source}/${a?.target}/${a?.pass}/${a?.phase}`.localeCompare(`${b?.app}/${b?.source}/${b?.target}/${b?.pass}/${b?.phase}`));
+  const dispositionComplete = !timed || Array.isArray(summary.targetFailures)
+    && isDeepStrictEqual(ordered(summary.targetFailures), ordered(targetFailures)) && summary.complete === (targetFailures.length === 0);
+  if (!dispositionComplete) warnings.push("Timed target failure ledger or baseline disposition is missing or differs from retained phases.");
   const baseline = validClock && summary.complete === true && summary.checksPassed === true && summary.dirty === false
     && allAppsPresent && everyCheck && everyPass && fixtureMatches && configurationComplete && failures.length === 0 && summary.options.checkOnly !== true
+    && (!timed || summary.attemptComplete === true && dispositionComplete)
     && (group === null || group.complete);
+  const attemptComplete = timed && validClock && summary.attemptComplete === true && summary.checksPassed === true && summary.dirty === false
+    && allAppsPresent && everyCheck && everyPass && fixtureMatches && configurationComplete && failures.length === 0
+    && summary.options.checkOnly !== true && group?.attemptComplete === true && dispositionComplete;
+  const timedCells = timed ? Object.entries(summary.apps).flatMap(([app, entry]) => Object.entries(entry.runs ?? {}).flatMap(([profile, runs]) => phases.map((phase) => {
+    const values = runs.map((r) => r.phases?.[phase]).filter(Boolean);
+    return { app, profile, phase, ...aggregate(values), asked: passes };
+  }))) : undefined;
   if (!everyPass) warnings.push(`Some sat64 passes are missing or belong to unsuccessful runs; available values are partial, not a complete ${passes}-pass comparison.`);
   return { round: summary.round, commit: summary.commit, config, baseline, terminal, passes, apps, failures, warnings,
+    ...(timed ? { attemptComplete, timedCells } : {}),
     attemptGates: { validClock, allAppsPresent, fixtureMatches, configurationComplete }, ...(group ? { group: group.descriptor } : {}),
-    status: baseline ? "COMPLETE" : terminal ? "FAILED OR INCOMPLETE: not a baseline" : "PRELIMINARY: not a baseline" };
+    status: baseline ? "COMPLETE" : attemptComplete ? "COMPLETE ATTEMPT: observed load/request failure; not a baseline" : terminal ? "FAILED OR INCOMPLETE: not a baseline" : "PRELIMINARY: not a baseline" };
 }
 
 const number = (value, digits = 0) => value === null || value === undefined ? "pending" : value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -137,7 +159,7 @@ const cell = (phase) => phase.rps ? `${number(phase.rps.median)} [${number(phase
 export function renderCatalog(report) {
   const c = report.config;
   const reportKeys = report.group?.cases.map((profile) => `${profile.source}-${profile.target}`) ?? keys;
-  const headings = reportKeys.map((key) => `${key.startsWith("fixture-") ? "Memory" : "HTTP"} ${key.endsWith("-json") ? "JSON" : "page"} req/s`);
+  const headings = reportKeys.map((key) => `${key.startsWith("fixture-") ? "Memory" : "HTTP"} ${key.endsWith("-json") ? "JSON" : "page"} ${report.timedCells ? "successful " : ""}req/s`);
   const lines = [`# Catalog ${report.round}`, "", `**${report.status}**`, "", `Measured commit: \`${report.commit}\`.`, "",
     `Per phase: duration ${number(c.duration)} s; warmup ${number(c.warmup)} s; fixed rate ${number(c.rate)} req/s; encoding ${c.encoding ?? "unknown"}.`,
     `Started: ${c.startedAt ?? "unknown"}; finished: ${c.finishedAt ?? "not recorded"}.`,
@@ -153,8 +175,14 @@ export function renderCatalog(report) {
     `| Framework | ${headings.join(" | ")} |`,
     `|---|${reportKeys.map(() => "---:").join("|")}|`);
   for (const [app, phases] of Object.entries(report.apps)) lines.push(`| ${app} | ${reportKeys.map((key) => cell(phases[key])).join(" | ")} |`);
+  if (report.timedCells) {
+    lines.push("", "## Timed outcomes", "", "Observed load/request outcomes, not root-cause diagnoses. Successful req/s excludes failed requests; attempted req/s includes them. Ranges retain every observed pass. Failed apps are not comparison-eligible, including when a different phase passed.", "",
+      "| App | Profile | Phase | Passed / failed / requested passes | Successful req/s median [min, max] | Attempted req/s median [min, max] | Failed requests median [min, max] | Drops median [min, max] |", "|---|---|---|---|---|---|---|---|");
+    const value = (v) => v ? `${number(v.median, 2)} [${number(v.min, 2)}, ${number(v.max, 2)}]` : "pending";
+    for (const c of report.timedCells) lines.push(`| ${c.app} | ${c.profile} | ${c.phase} | ${c.outcomes?.passed ?? 0} / ${c.outcomes?.failed ?? 0} / ${c.asked} | ${value(c.successfulRps)} | ${value(c.rps)} | ${value(c.failed)} | ${value(c.dropped)} |`);
+  }
   lines.push("", "## Corten efficiency", "", "Median and [minimum, maximum] across available passes. Memory is each pass's peak under load; p95 is the median of per-pass p95s, not a pooled percentile.", "",
-    "| Source / response | Requests/CPU-second | Peak MiB | Sampled CPU % | p95 ms | req/s range |",
+    `| Source / response | ${report.timedCells ? "Attempted requests" : "Requests"}/CPU-second | Peak MiB | Sampled CPU % | p95 ms | ${report.timedCells ? "Successful " : ""}req/s range |`,
     "|---|---:|---:|---:|---:|---:|");
   const spread = (v, digits) => v ? `${number(v.median, digits)} [${number(v.min, digits)}, ${number(v.max, digits)}]` : "pending";
   for (const key of reportKeys) {
