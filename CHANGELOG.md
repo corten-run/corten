@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
+  `OPTIONS` answer reads them in place: about 1.2% fewer instructions per `tools/call`, with the
+  route's body limit and body errors unchanged.
+
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
