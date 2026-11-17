@@ -47,6 +47,9 @@ Corten is pre-1.0, so any minor version may change the API.
   pages whole; `scripts/dsd-probe.mjs` checks both again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+- Preserve type-token punctuation in `#[derive(Fields)]`, so group, row and key types
+  written as paths compile, including keys of `#[fields(map)]` fields.
+
 - `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
   Trusted Types enforcement would reject. The scripts guide shows how to read a part again
   with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
