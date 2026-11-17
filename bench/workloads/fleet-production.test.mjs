@@ -13,6 +13,7 @@ import { bootstrapMarker } from "./cloud-remote.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
+import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 
@@ -41,13 +42,16 @@ function fixture(t, mode = "success") {
     if (file === "bench/workloads/cloud-production.mjs") {
       // Change defaults only. The actual productionMain body, approval gates,
       // transport, controller and worker protocol remain the production code.
-      const before = "spawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted";
-      const after = "spawn = synthetic.spawn, providerFactory = synthetic.providerFactory, repo = synthetic.repo, inspect, sleep = synthetic.sleep, interrupted";
+      const before = "spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted";
+      const after = "spawn = synthetic.spawn, streamSpawn = synthetic.streamSpawn, providerFactory = synthetic.providerFactory, repo = synthetic.repo, inspect, sleep = synthetic.sleep, interrupted";
       assert.equal(source.split(before).length, 2, "review fixture injection when production signature changes");
       source = source.replace(before, after) + `\nimport * as syntheticFs from 'node:fs';
 import * as syntheticPath from 'node:path';
 import { workerData as syntheticData } from 'node:worker_threads';
 import { fork as syntheticFork } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
+import { controlRegistration } from './cloud-control-runtime.mjs';
 import { bootstrapMarker as syntheticMarker, bootstrapReadScript as syntheticRead } from './cloud-remote.mjs';
 const syntheticArgs = syntheticData.args;
 const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
@@ -56,7 +60,8 @@ const synthetic = (${syntheticDependencies.toString()})({
   stateDir: syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], group: syntheticGroup,
   commit: ${JSON.stringify(commit)}, userId: ${JSON.stringify(userId)}, mode: ${JSON.stringify(mode)}
 }, { fs: syntheticFs, path: syntheticPath, fork: syntheticFork, providerTransport,
-  bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead });\n`;
+  bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead, controlRegistration,
+  EventEmitter, PassThrough, Writable, registration: ${JSON.stringify(registration)} });\n`;
     }
     fs.writeFileSync(target, source);
     return { path: file, url: pathToFileURL(target).href, source, sha256: digest(source) };
@@ -111,6 +116,9 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     assert.ok(!JSON.stringify(p.output).includes("SYNTHETIC_FLEET_CREDENTIAL"));
     const uploads = events.filter((row) => row.group === group && row.boundary === "upload");
     assert.equal(uploads.length, 3);
+    assert.deepEqual(saved.control.sealed, ["bootstrap"]);
+    assert.equal(saved.control.monitor.phase, "closed");
+    assert.equal(events.filter((row) => row.group === group && row.boundary === "monitor").length, 1);
     const script = uploads.find((row) => row.to.endsWith("/job.sh")).content;
     assert.ok(script.includes(`--group '${group}'`)); assert.ok(script.includes(`--commit '${commit}'`));
     assert.ok(script.includes("--state-dir '/bench/campaign'"));
@@ -124,14 +132,14 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   }
   const first = p.saved(), marker = `${JSON.stringify(bootstrapMarker(first))}\n`;
   assert.equal(first.bootstrapReady.sha256, digest(marker)); assert.ok(Number.isFinite(Date.parse(first.bootstrapReady.observedAt)));
-  for (const row of events.filter((row) => ["ssh", "scp"].includes(row.boundary))) {
+  for (const row of events.filter((row) => ["ssh", "sftp", "monitor"].includes(row.boundary))) {
     assert.equal(row.options.shell, false); assert.equal(row.options.windowsHide, true);
-    assert.ok(row.options.timeout > 0 && row.options.timeout <= 900000);
-    assert.deepEqual(row.argv.slice(row.boundary === "scp" ? 1 : 0, row.boundary === "scp" ? 5 : 4), ["-F", "none", "-o", "ForwardAgent=no"]);
+    if (row.boundary !== "monitor") assert.ok(row.options.timeout > 0 && row.options.timeout <= 900000);
+    assert.deepEqual(row.argv.slice(0, 4), ["-F", "none", "-o", "ForwardAgent=no"]);
     assert.ok(row.argv.includes("ClearAllForwardings=yes")); assert.ok(row.argv.includes("ControlPath=none"));
     assert.ok(row.argv.some((arg) => arg.startsWith('UserKnownHostsFile="') && arg.endsWith('/known_hosts"')));
-    if (row.boundary === "ssh") { assert.equal(row.argv.at(-1), "/bin/bash -s"); assert.ok(row.options.input.startsWith("set -euo pipefail\n")); }
-    else assert.equal(row.argv[0], "-B");
+    if (row.boundary === "ssh") assert.ok(row.options.input.startsWith("set -euo pipefail\n"));
+    if (row.boundary === "sftp") assert.ok(row.argv.includes("-b") && row.argv.includes("-s"));
   }
   assert.equal(events.filter((row) => row.method === "POST").length, 1);
   for (const group of groupNames.slice(1)) assert.equal(fs.existsSync(path.join(p.h.base, group)), false);
@@ -199,7 +207,7 @@ test("completed POST host A cannot provision otherwise owned host B or admit the
   const events = p.events(), saved = p.saved();
   assert.equal(saved.id, "201", "fresh owned identity retained for recovery");
   assert.equal(saved.status, "preparing");
-  assert.ok(!events.some((row) => ["ssh", "scp", "upload"].includes(row.boundary)));
+  assert.ok(!events.some((row) => ["ssh", "sftp", "monitor", "upload"].includes(row.boundary)));
   assert.equal(events.filter((row) => row.method === "POST").length, 1);
   assert.deepEqual(events.filter((row) => row.path?.startsWith("/v2/actions/")).map((row) => [row.method, row.path]), [["GET", "/v2/actions/1101"]]);
   assert.ok(!events.some((row) => row.method === "DELETE"));
@@ -212,7 +220,7 @@ test("late completed create preserves uncertainty and locks without provisioning
   assert.equal(p.workers.length, 1);
   const events = p.events(), saved = p.saved();
   assert.equal(saved.status, "creating"); assert.equal(saved.id, undefined);
-  assert.ok(!events.some((row) => ["ssh", "scp", "upload"].includes(row.boundary)));
+  assert.ok(!events.some((row) => ["ssh", "sftp", "monitor", "upload"].includes(row.boundary)));
   assert.equal(events.filter((row) => row.method === "POST").length, 1);
   assert.equal(events.filter((row) => row.path?.startsWith("/v2/actions/")).length, 1);
   assert.ok(!events.some((row) => row.method === "DELETE"));

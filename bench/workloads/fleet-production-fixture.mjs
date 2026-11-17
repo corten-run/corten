@@ -1,13 +1,25 @@
 // Serialized into a captured production module by fleet-production.test.mjs.
 // Only external boundaries are synthetic. Never import this from a CLI module.
-export function syntheticDependencies(config, { fs, path, fork, providerTransport, bootstrapMarker, bootstrapReadScript }) {
+export function syntheticDependencies(config, { fs, path, fork, providerTransport, bootstrapMarker, bootstrapReadScript,
+  controlRegistration, EventEmitter, PassThrough, Writable, registration }) {
   const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
   const local = path.join(config.stateDir, "groups-r21");
   const state = () => JSON.parse(fs.readFileSync(path.join(local, "state.json")));
   const record = (event) => fs.appendFileSync(config.trace, `${JSON.stringify({ group: config.group, ...event })}\n`);
   const spawn = (binary, argv, options) => {
+    let input = options.input, reply = good;
+    if (["ssh", "sftp"].includes(binary)) {
+      const request = state().control.ledger.at(-1).request, control = controlRegistration(request);
+      if ((binary === "ssh" ? argv.at(-1) : argv.at(-2)) !== control.command) throw new Error("unregistered synthetic command");
+      if (binary === "ssh") {
+        if (!input.startsWith(control.inputPrefix)) throw new Error("guardian input differs");
+        input = input.slice(control.inputPrefix.length);
+      }
+      const id = request.invocation.id;
+      reply = (stdout = "") => ({ ...good(stdout), stderr: `CORTEN_CONTROL ${id} ${"d".repeat(64)}\nCORTEN_RESULT ${id} 0\n` });
+    }
     record({ boundary: binary, argv, options: { cwd: options.cwd, shell: options.shell, windowsHide: options.windowsHide,
-      timeout: options.timeout, maxBuffer: options.maxBuffer, input: options.input, stdio: options.stdio } });
+      timeout: options.timeout, maxBuffer: options.maxBuffer, input, stdio: options.stdio } });
     if (binary === "git") {
       if (argv[0] === "rev-parse") return good(argv[1] === "HEAD" ? config.commit : config.repo);
       if (argv[0] === "status" || argv[0] === "cat-file" || argv[0] === "fetch" || argv[0] === "merge-base") return good();
@@ -15,26 +27,47 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
       if (argv[0] === "ls-remote") return good(`${config.commit}\trefs/heads/${config.mode === "advertisement" ? "foreign" : "main"}\n`);
     }
     if (binary === "ssh") {
-      const script = options.input.slice("set -euo pipefail\n".length, -1), saved = state();
+      const script = input.slice("set -euo pipefail\n".length, -1), saved = state();
       if (script === bootstrapReadScript) {
         const marker = bootstrapMarker(saved);
         if (config.mode === "marker") marker.commit = "b".repeat(40);
         record({ boundary: "bootstrap-marker", marker });
-        return good(`${JSON.stringify(marker)}\n`);
+        return reply(`${JSON.stringify(marker)}\n`);
       }
-      if (script.startsWith("systemctl show")) return good(`Id=${saved.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${saved.unit}\nActiveState=active\nRestart=no\nMainPID=123\nExecMainCode=0\nExecMainStartTimestamp=Sun 2026-11-15 00:00:00 UTC\n`);
+      if (script.startsWith("systemctl show")) return reply(`Id=${saved.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${saved.unit}\nActiveState=active\nRestart=no\nMainPID=123\nExecMainCode=0\nExecMainStartTimestamp=Sun 2026-11-15 00:00:00 UTC\n`);
       if (script === "true" || script === "mkdir -m 700 /bench && touch /bench/run.log"
         || script.includes("sha256sum --check --status") || script.startsWith("bash -n /bench/job.sh")
-        || script === `systemctl start ${saved.unit}`) return good();
+        || script === ":" || script === `systemctl start ${saved.unit}`) return reply();
     }
-    if (binary === "scp") {
-      const from = argv.at(-2);
-      record({ boundary: "upload", from, to: argv.at(-1), content: fs.readFileSync(from, "utf8") });
-      return good();
+    if (binary === "sftp") {
+      const [, from, to] = /^put "([^"]+)" "(\/bench\/[a-z0-9.-]+)"\n$/.exec(input);
+      record({ boundary: "upload", from, to, content: fs.readFileSync(from, "utf8") });
+      return reply();
     }
     throw new Error(`unexpected synthetic boundary ${binary}`);
   };
-  return { repo: config.repo, spawn,
+  const streamSpawn = (binary, argv, options) => {
+    if (binary !== "ssh" || options.shell !== false) throw new Error("unexpected monitor boundary");
+    const expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex"));
+    record({ boundary: "monitor", argv, options: { shell: options.shell, windowsHide: options.windowsHide } });
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    let sequence = 0, closed = false;
+    const frame = (kind, payload) => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1",
+      sequence: ++sequence, id: expected.id, kind, payload }) + "\n");
+    const close = (code) => { if (!closed) { closed = true; clearInterval(timer); child.emit("close", code, null); } };
+    child.stdin = new Writable({ write(data, _, next) {
+      if (JSON.parse(data).kind === "close") setImmediate(() => close(0)); next();
+    } });
+    child.stdin.on("close", () => setImmediate(() => close(255)));
+    setImmediate(() => { frame("registered", { ...registration, ...expected }); frame("progress", { state: "active" }); });
+    const deadline = Date.now() + 5000, timer = setInterval(() => {
+      if (state().control.sealed.includes("bootstrap")) {
+        clearInterval(timer); frame("terminal", { id: expected.id, nativeTerminal: true, sealSha256: "f".repeat(64) });
+      } else if (Date.now() > deadline) close(255);
+    }, 10);
+    return child;
+  };
+  return { repo: config.repo, spawn, streamSpawn,
     sleep: async () => { throw new Error("unexpected synthetic sleep"); },
     providerFactory: ({ interrupted }) => {
       record({ boundary: "provider-factory" });
