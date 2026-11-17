@@ -1719,8 +1719,8 @@ where
 }
 
 /// The step on a connection that has none: the listener's IO itself.
-pub(crate) fn plain<I>(io: I) -> std::future::Ready<Result<(I, ()), std::convert::Infallible>> {
-    std::future::ready(Ok((io, ())))
+pub(crate) async fn plain<I>(io: I) -> Result<(I, ()), std::convert::Infallible> {
+    Ok((io, ()))
 }
 
 /// Serves `app` on `listeners` with its tasks running until `stop` resolves; then tells the tasks
@@ -1949,7 +1949,7 @@ where
         };
         let watch = held.clock.as_ref().map(crate::watch::Clock::watch);
         let bound = held.bounds.then(|| Arc::new(Bound::new()));
-        let router = router.clone();
+        let connection = Connection { router: router.clone(), peer, watch: watch.clone(), bound: bound.clone() };
         let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
         tokio::spawn(async move {
             // `permit` is held by the task until the step is done, then by the IO (`Watched`).
@@ -1968,8 +1968,7 @@ where
                     _ => return,
                 }
             };
-            let connection = Connection { router, peer, watch: watch.clone(), bound: bound.clone(), data };
-            let service = hyper_util::service::TowerToHyperService::new(connection);
+            let service = hyper_util::service::TowerToHyperService::new(data.service(connection));
             let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
             let closing = tokio::select! {
@@ -2010,35 +2009,71 @@ where
 /// One connection's service: the router, each of whose requests runs with the connection's
 /// peer at hand for [`ClientIp`](crate::ClientIp). Not a request extension: `http`'s extensions
 /// box each value, and one more cost every request 497 instructions whether anything read it or
-/// not; this costs 44 (callgrind, keep-alive requests over TCP). `data` is zero-sized for the
-/// usual path; only `serve_wrapped_with` inserts its opt-in connection-info extension.
+/// not; this costs 44 (callgrind, keep-alive requests over TCP).
 #[derive(Clone)]
-struct Connection<D> {
+pub(crate) struct Connection {
     router: Router,
     peer: Peer,
-    data: D,
     /// For [`App::header_timeout`] and [`App::send_timeout`].
     watch: Option<Arc<crate::watch::Watch>>,
     /// The deadline of the request it is answering, for shutdown ([`Drain::each`]).
     bound: Option<Arc<Bound>>,
 }
 
-/// No data for the usual serve path; only the opt-in path inserts an extension.
+/// Selects the service once, after the step. The ordinary service stays non-generic: making
+/// it generic changed hyper's inlining and added instructions even for unit data (callgrind).
 pub(crate) trait ConnectionData: Clone + Send + Sync + 'static {
-    fn insert(&self, extensions: &mut http::Extensions);
+    type Service: tower_service::Service<
+            hyper::Request<hyper::body::Incoming>,
+            Response = http::Response<crate::watch::Answered>,
+            Error = Infallible,
+            Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>,
+        > + Clone
+        + Send
+        + 'static;
+
+    fn service(self, connection: Connection) -> Self::Service;
 }
 
 impl ConnectionData for () {
-    fn insert(&self, _: &mut http::Extensions) {}
-}
+    type Service = Connection;
 
-impl<T: Clone + Send + Sync + 'static> ConnectionData for crate::ConnectionInfo<T> {
-    fn insert(&self, extensions: &mut http::Extensions) {
-        extensions.insert(self.clone());
+    fn service(self, connection: Connection) -> Connection {
+        connection
     }
 }
 
-impl<D: ConnectionData> tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connection<D> {
+impl<T: Clone + Send + Sync + 'static> ConnectionData for crate::ConnectionInfo<T> {
+    type Service = Informed<T>;
+
+    fn service(self, connection: Connection) -> Informed<T> {
+        Informed { connection, info: self }
+    }
+}
+
+/// Only the metadata entry point wraps the ordinary service and inserts an extension.
+#[derive(Clone)]
+pub(crate) struct Informed<T> {
+    connection: Connection,
+    info: crate::ConnectionInfo<T>,
+}
+
+impl<T: Clone + Send + Sync + 'static> tower_service::Service<hyper::Request<hyper::body::Incoming>> for Informed<T> {
+    type Response = http::Response<crate::watch::Answered>;
+    type Error = Infallible;
+    type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        self.connection.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
+        req.extensions_mut().insert(self.info.clone());
+        self.connection.call(req)
+    }
+}
+
+impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connection {
     type Response = http::Response<crate::watch::Answered>;
     type Error = std::convert::Infallible;
     type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
@@ -2047,13 +2082,9 @@ impl<D: ConnectionData> tower_service::Service<hyper::Request<hyper::body::Incom
         tower_service::Service::<Request>::poll_ready(&mut self.router, cx)
     }
 
-    // Keep the unit-data path's call boundary: inlining the generic service into hyper's
-    // dispatcher added work even when there was no extension to insert (callgrind).
-    #[inline(never)]
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         // Marks a read of the body that waits for the client, for the deadline (#1061).
-        let mut req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
-        self.data.insert(req.extensions_mut());
+        let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         let connect = req.method() == http::Method::CONNECT;
         if let Some(bound) = &self.bound {

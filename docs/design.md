@@ -5154,10 +5154,11 @@ rules something out.
     of a framework extension's type from replacing that extension.
 
     The old `serve_wrapped` keeps its return shape, and `serve_on` still needs no step. Their
-    connection service has a zero-sized no-data value with an empty insertion method, not an
-    optional box or a dynamic dispatch on every request. Only the new entry point clones and
-    inserts an extension. All three use the same listener loop, connection permit, watch and
-    drain; the step still runs after accept, inside the header timeout and connection limit.
+    step returns a zero-sized no-data value selecting the unchanged, non-generic connection
+    service, not an optional box or a dynamic dispatch on every request. Only the new entry
+    point wraps that service to clone and insert an extension. All three use the same listener
+    loop, connection permit, watch and drain; the step still runs after accept, inside the
+    header timeout and connection limit.
     No TLS library or new dependency belongs to Corten.
 
     Changing `serve_wrapped`'s return shape would break existing apps for a feature they do not
@@ -5168,12 +5169,12 @@ rules something out.
     typed store, so this adds no wire format, metadata map or second connection loop.
 
     Stands on: platform (`http` 1.5 extensions require a cloneable, sendable, shareable owned
-    value); reasoned (monomorphizing the unit-data service leaves no metadata insertion on
-    ordinary requests); reasoned (the tests exercise two connections keeping distinct stand-in certificates across
-    repeated requests and `Identify`, a forged header cannot replace one, reads make answers
-    private, a plain connection has none, and the metadata step obeys connection and header
-    limits and shutdown); value (correctness before speed, one way to do each thing and a
-    small default surface, README Values).
+    value); reasoned (selecting the ordinary service for unit data leaves no metadata insertion
+    on ordinary requests; the tests exercise two connections keeping distinct stand-in
+    certificates across repeated requests and `Identify`, a forged header cannot replace one,
+    reads make answers private, a plain connection has none, and the metadata step obeys
+    connection and header limits and shutdown); value (correctness before speed, one way to
+    do each thing and a small default surface, README Values).
 
     Revisit when: a default-path instruction count regresses, an app needs a connection value
     that cannot be cheaply cloned or shared, or the framework changes its connection service
