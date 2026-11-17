@@ -479,7 +479,8 @@ with several tokens (`seller.42`) work; `""`, `.seller`, `seller.`, `seller..42`
 do not. `create_feed` refuses an invalid key before inserting anything, with the typed
 `corten_cluster::InvalidFeedKey` error inside `corten_cluster::Error` (inspect it with
 `error.is::<corten_cluster::InvalidFeedKey>()`). The caller's transaction remains usable.
-`begin` and `Cluster::feed` refuse the same keys, including feeds an older version created.
+`begin` refuses the same keys, including feeds an older version created, and `Cluster::feed`
+answers `None` for them (so a feed route answers 404), since no patch can reach such a feed.
 `Options::subject_prefix` must follow those same literal-subject rules; `Cluster::start`
 refuses an invalid prefix before changing the database or starting background tasks.
 

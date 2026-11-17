@@ -5,11 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- `corten-cluster` refuses invalid NATS feed keys at `create_feed`, `begin` and `Cluster::feed`
-  with `InvalidFeedKey`, and refuses invalid subject prefixes at startup. The relay retains
-  legacy invalid outbox rows with `rejected_at` (not `published_at`), logs them and continues
-  other feeds instead of retrying one impossible subject forever. Rejected rows are not pruned;
-  repair their feed keys consistently before clearing the rejection to retry delivery.
+- `corten-cluster` refuses a feed key that is not a literal NATS subject (`my feed`, `a..b`,
+  `*`) at `create_feed` and `begin` with `InvalidFeedKey`, `Cluster::feed` answers `None` for
+  it, and `Cluster::start` refuses such a subject prefix. The relay sets an existing invalid
+  outbox row's `rejected_at` (not `published_at`), logs it and goes on, instead of retrying one
+  impossible subject and stopping every feed's patches. Rejected rows are not pruned; repair
+  their feed keys before clearing the rejection to retry delivery.
 
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.

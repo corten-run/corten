@@ -4,6 +4,10 @@
 //! the next one, which publishes it again, and JetStream drops the copy by its message id. Two
 //! relays briefly overlapping is therefore harmless: each publishes the pending rows in order, and
 //! the copies are dropped.
+//!
+//! A row whose feed key is not a literal NATS subject (written before keys were checked, or by
+//! other SQL) can never be published. The relay marks it rejected, logs it once and goes on, so
+//! one such row cannot hold back every other feed.
 
 use std::{
     sync::{
@@ -13,16 +17,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use async_nats::{jetstream, HeaderMap};
+use async_nats::{jetstream, HeaderMap, Subject};
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
-use crate::{store, Error, Options};
+use crate::{literal, store, Error, Options};
 
 /// Outbox rows published per round trip.
 const BATCH: i64 = 256;
 
-pub(crate) fn subject(options: &Options, feed: &str) -> String {
-    format!("{}.{feed}", options.subject_prefix)
+/// Feed `feed`'s subject. The prefix was checked at startup, so it is a literal subject exactly
+/// when the key is one.
+pub(crate) fn subject(options: &Options, feed: &str) -> Subject {
+    Subject::from(format!("{}.{feed}", options.subject_prefix))
 }
 
 /// Runs forever: wait for the lease, publish while holding it, then start over.
@@ -111,17 +117,28 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
         }
         held.check()?;
         let mut acks = Vec::with_capacity(rows.len());
+        let mut sent = Vec::with_capacity(rows.len());
         for row in &rows {
+            let subject = subject(options, &row.feed);
+            if !literal(&subject) {
+                if store::reject(pool, row.id).await? {
+                    tracing::warn!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
+                        "outbox row rejected: its feed key is not a literal NATS subject; it stays unpublished until repaired");
+                }
+                continue;
+            }
             let mut headers = HeaderMap::new();
             headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
             headers.insert("Feed-Generation", row.generation.as_str());
-            acks.push(js.publish_with_headers(subject(options, &row.feed), headers, row.body.clone().into()).await?);
+            acks.push(js.publish_with_headers(subject, headers, row.body.clone().into()).await?);
+            sent.push(row.id);
         }
         for ack in acks {
             ack.await?;
         }
-        let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
-        store::mark_published(pool, &ids).await?;
+        if !sent.is_empty() {
+            store::mark_published(pool, &sent).await?;
+        }
         if (rows.len() as i64) < BATCH {
             return Ok(());
         }

@@ -46,6 +46,49 @@ pub use store::{begin, create_feed, migrate, prune, seq, Begin, Write, Written};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
+/// A feed key that is not a literal NATS subject, refused by [`create_feed`] and [`begin`]
+/// before they touch the database. A key is published as
+/// `{subject_prefix}.{key}`, so it must be nonempty dot-separated tokens without spaces, tabs,
+/// line breaks, `*` or `>`. It arrives inside [`Error`]: test for it with
+/// `error.is::<InvalidFeedKey>()`.
+///
+/// ```
+/// # async fn run(pool: sqlx::PgPool) -> Result<(), corten_cluster::Error> {
+/// let mut tx = pool.begin().await?;
+/// let error = corten_cluster::create_feed(&mut tx, "my feed").await.unwrap_err();
+/// assert!(error.is::<corten_cluster::InvalidFeedKey>());
+/// assert!(corten_cluster::create_feed(&mut tx, "sellers.42").await?);
+/// # Ok(()) }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidFeedKey;
+
+impl std::fmt::Display for InvalidFeedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "corten-cluster: a feed key must be a literal NATS subject: nonempty dot-separated tokens \
+             without spaces, tabs, line breaks, `*` or `>`",
+        )
+    }
+}
+
+impl std::error::Error for InvalidFeedKey {}
+
+/// True when `subject` names one subject a message can be published to: async-nats's structural
+/// check (nonempty tokens, no whitespace) without the `*` and `>` wildcards NATS reserves for
+/// subscriptions.
+pub(crate) fn literal(subject: &async_nats::Subject) -> bool {
+    subject.is_valid() && !subject.as_str().contains(['*', '>'])
+}
+
+pub(crate) fn check_key(key: &str) -> Result<(), Error> {
+    if literal(&async_nats::Subject::from(key)) {
+        Ok(())
+    } else {
+        Err(InvalidFeedKey.into())
+    }
+}
+
 /// Where a feed's rows live. Called inside the cluster's consistent read, so the rows match the
 /// sequence number and replay log loaded with them.
 pub trait Source: Send + Sync + 'static {
@@ -62,7 +105,8 @@ pub struct Options {
     pub instance: String,
     /// JetStream stream that carries the patches.
     pub stream: String,
-    /// Feed `k` is published on `{subject_prefix}.k`.
+    /// Feed `k` is published on `{subject_prefix}.k`. A literal NATS subject, as a feed key is
+    /// ([`InvalidFeedKey`]); [`Cluster::start`] refuses any other.
     pub subject_prefix: String,
     /// The relay lease. The active relay renews it every quarter and steps down if it cannot
     /// renew within three quarters, so after an instance dies another takes over within about
@@ -107,6 +151,14 @@ impl<S: Source> Cluster<S> {
     /// Creates the tables if needed, starts this instance's JetStream consumer (before any feed
     /// loads, so no patch falls between a load and the stream) and its relay candidate.
     pub async fn start(pool: PgPool, nats: async_nats::Client, source: S, options: Options) -> Result<Self, Error> {
+        if !literal(&async_nats::Subject::from(options.subject_prefix.as_str())) {
+            return Err(format!(
+                "corten-cluster: subject_prefix {:?} is not a literal NATS subject: nonempty dot-separated \
+                 tokens without spaces, tabs, line breaks, `*` or `>`",
+                options.subject_prefix
+            )
+            .into());
+        }
         store::migrate(&pool).await?;
         let js = async_nats::jetstream::new(nats);
         let options = Arc::new(options);
@@ -122,8 +174,12 @@ impl<S: Source> Cluster<S> {
 
     /// The feed for `key`, loaded on first use. `None` when no such feed exists. Ask again per
     /// request rather than keeping the handle: an idle feed is unloaded (`Options::idle_unload`),
-    /// and a kept handle would stop receiving patches.
+    /// and a kept handle would stop receiving patches. A key that is not a literal NATS subject
+    /// ([`InvalidFeedKey`]) is `None` without a query: no feed can be written under it.
     pub async fn feed(&self, key: &str) -> Result<Option<Feed<S::Row>>, Error> {
+        if check_key(key).is_err() {
+            return Ok(None);
+        }
         self.hub.feed(key).await
     }
 

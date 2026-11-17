@@ -5592,7 +5592,8 @@ rules something out.
 63. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys are literal NATS subjects, not encoded names; an invalid
     legacy outbox row is retained but excluded from the relay.** `create_feed` takes a string,
     not a typed key the compiler can check. It returns `InvalidFeedKey` through the crate's
-    existing boxed error before issuing SQL, as do `begin` and `Cluster::feed`. The existing
+    existing boxed error before issuing SQL, as does `begin`; `Cluster::feed` answers `None`,
+    since no patch can reach such a feed and its routes already answer `None` as 404. The existing
     async-nats `Subject::is_valid` checks framing and nonempty dot-separated tokens; Corten
     additionally refuses `*` and `>`, which NATS reserves for subscriptions. The subject prefix
     follows the same rules and is checked at cluster startup, before migration or background
@@ -5602,9 +5603,11 @@ rules something out.
     outbox row's `rejected_at`, logs its id and key, and continues, including past a full batch
     of rejected rows. It does not claim a JetStream acknowledgement by setting `published_at`,
     delete the row, or roll back the app's committed data. Rejected rows remain available for
-    operator inspection and repair; `prune` does not remove them. A new pending index excludes
-    them, so they are not scanned again on every drain. Network, permission, capacity and other
-    publish failures remain retryable: only locally proven invalid subjects are rejected.
+    operator inspection and repair; `prune` does not remove them. The column is a nullable
+    `ADD COLUMN IF NOT EXISTS`, and the relay's query filters on it under the existing index of
+    unpublished rows, so a drain steps over rejected rows; their number grows only by rows the
+    API can no longer write. Network, permission, capacity and other publish failures remain
+    retryable: only locally proven invalid subjects are rejected.
 
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of existing subjects),
     restricting every key to an ASCII slug (NATS accepts UTF-8 and multiple tokens), retrying
