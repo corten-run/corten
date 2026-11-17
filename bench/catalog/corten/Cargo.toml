@@ -6,8 +6,12 @@ publish = false
 
 [workspace]
 
+[features]
+default = ["compression"]
+compression = ["corten/compress"]
+
 [dependencies]
-corten = { package = "corten-run", path = "../../../crates/corten", features = ["json", "compress"] }
+corten = { package = "corten-run", path = "../../../crates/corten", features = ["json"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive", "rc"] }

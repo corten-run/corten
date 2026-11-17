@@ -17,6 +17,7 @@
 #include <exception>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <thread>
 
 using namespace drogon;
@@ -65,6 +66,11 @@ int main()
     }
     marketplace::routes();
     const char *port = std::getenv("PORT");
+    const char *profile = std::getenv("PROFILE");
+    if (profile && std::string_view(profile) == "catalog-lean")
+    {
+        app().enableGzip(false).enableBrotli(false).setLogLevel(trantor::Logger::kWarn);
+    }
 
     // Corten's 404 page, for a missing item and for any address no handler serves.
     HttpViewData missing;

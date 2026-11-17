@@ -3989,11 +3989,16 @@ pub trait FromUrl {
 /// struct StatusId;
 ///
 /// async fn status(req: Req) -> HtmlResult<Patches> {
-///     req.patch(html! { <p id={StatusId}>"Saved"</p> })
+///     req.patch_or(html! { <p id={StatusId}>"Saved"</p> }, || async { status_page(&req) }).await
 /// }
 ///
 /// async fn saved(req: Req) -> HtmlResult<Patches> {
-///     req.patch(html! { <p id={StatusId}>"Saved again"</p> })
+///     req.patch_or(html! { <p id={StatusId}>"Saved again"</p> }, || async { status_page(&req) }).await
+/// }
+///
+/// // Without JavaScript, the page the part is in.
+/// fn status_page(req: &Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Status"</title><Corten /></head><body><main>"Saved"</main></body></html> })
 /// }
 ///
 /// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Status>(get(saved)));
@@ -4020,7 +4025,8 @@ pub trait FromUrl {
 /// struct StatusId;
 ///
 /// async fn status(req: Req) -> HtmlResult<Patches> {
-///     req.patch(html! { <p id={StatusId}>"Saved"</p> })
+///     let page = || async { req.page(html! { <html><head><title>"Status"</title><Corten /></head><body><main>"Saved"</main></body></html> }) };
+///     req.patch_or(html! { <p id={StatusId}>"Saved"</p> }, page).await
 /// }
 ///
 /// async fn page(req: Req) -> HtmlResult {
