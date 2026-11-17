@@ -8,9 +8,10 @@ Corten is pre-1.0, so any minor version may change the API.
 - Accept component-local `@position-try` definitions and rewrite their fallback references,
   reading `position-try` values as CSS tokens so custom-function calls, `if()` conditions and
   whitespace after an escape keep their meaning; write a comment with no whitespace beside it as
-  `/**/` so removing comments never joins tokens or adds a combinator (a selector's `.a/**/.b`
-  stays compound), keep escaped declaration values and `/*` in an unquoted `url()` intact,
-  and recognize selectors, `!important` and custom-property reads across comment trivia;
+  `/**/` to keep adjacent tokens apart without adding a combinator (a selector's `.a/**/.b`
+  stays compound), keep trailing escapes in declaration values, and recognize selectors,
+  `!important` and custom-property reads across comment trivia. Scope dashed class names,
+  refuse non-ASCII class names, and check required `var()` references after an escaped slash;
   match statement at-rule names case-insensitively and document the complete component CSS
   at-rule inventory, including raw bodies and global names.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs

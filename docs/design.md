@@ -5809,7 +5809,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `@custom-media` is refused because tokens define breakpoints. Every other block or statement
    at-rule, including `@namespace` and `@document`, is refused outside raw bodies because the
    macro has no scoping rule for it; put those rules in the app's global stylesheet. Unknown
-   statements are refused inside raw bodies too. Escaped at-rule and class names are not supported.
+   statements are refused inside raw bodies too. Escaped at-rule names and escaped or non-ASCII
+   class names are not supported.
 
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
@@ -5823,17 +5824,18 @@ by design; where it is known, a limit says what would lift it or why it is so.
    functions' arguments and unrelated declarations are not position references. A hex escape's
    terminating whitespace is kept apart from the whitespace after it, which still separates
    tokens, and only CSS whitespace counts. A name carried in a custom property's value is not
-   rewritten. Throughout the stylesheet, comments are removed without changing the tokens the
-   browser reads: a comment with whitespace beside it becomes that one space, and one with none
+   rewritten. The minifier shortens comments to preserve token boundaries: a comment with
+   whitespace beside it becomes that one space, and one with none
    is written `/**/`, since dropping it could join tokens (`<!/**/--`, `U+/**/A`,
    `--abov\65/**/flip-block`) and a space would add a descendant combinator (`#\62/**/.c`). The
    space that ends a hex escape is the escape's, not whitespace beside a comment. `/*` inside an
-   unquoted `url(..)` is part of the URL, and only an identifier `url(` starts one, not a hash or
+   unquoted `url(..)` is part of the URL, but an earlier pass can mistake it for an unclosed
+   comment; quote such URLs. Only an identifier `url(` starts one in the minifier, not a hash or
    at-keyword (`#\75rl(`). Preludes and declaration names read past comments, as do a class
    selector's dot, a scope selector's pseudo-element colon, and a declaration's `!important`.
    The startup check reads past comments between `@property` and its name and around a
-   `var()` name. Trivia is not read inside a token, and trimming a declaration value never
-   removes an escaped byte.
+   `var()` name, and does not treat an escaped slash as a comment opener. Trimming a declaration
+   value does not remove its trailing escaped whitespace.
    [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
    gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
    components share the document tree, so prefixing prevents collisions. This does not make

@@ -1280,7 +1280,13 @@ impl Scoper<'_> {
                         continue;
                     }
                     let mut end = start;
-                    while end < chars.len() && (chars[end].is_ascii_alphanumeric() || matches!(chars[end], '-' | '_')) {
+                    while end < chars.len() && css_name(chars[end]) {
+                        if !chars[end].is_ascii() {
+                            return Err(self.error(
+                                at,
+                                "non-ASCII characters in a class name are not supported in a component's stylesheet",
+                            ));
+                        }
                         end += 1;
                     }
                     if chars.get(end) == Some(&'\\') {
@@ -1332,9 +1338,10 @@ impl Scoper<'_> {
 }
 
 fn ident_start(rest: &[char]) -> bool {
+    let name_start = |c: char| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii();
     match rest {
-        [c, ..] if c.is_ascii_alphabetic() || *c == '_' => true,
-        ['-', c, ..] => c.is_ascii_alphabetic() || matches!(c, '_' | '\\'),
+        [c, ..] if name_start(*c) => true,
+        ['-', c, ..] => name_start(*c) || matches!(c, '-' | '\\'),
         ['\\', ..] => true,
         _ => false,
     }
@@ -2107,13 +2114,24 @@ mod tests {
         for (input, expected) in [
             ("./**/a{}", "./**/x__a{}"),
             (":is(./**/foreign,.a){}", ":is(./**/x__foreign,.x__a){}"),
-            (":not(./**/foreign,.a){}", ":not(./**/x__foreign,.x__a){}"),
+            (".a :not(./**/foreign,.a){}", ".x__a :not(./**/x__foreign,.x__a){}"),
             ("@scope (.a) to (./**/foreign) { p {} }", "@scope (.x__a) to (./**/x__foreign){p{}}"),
         ] {
             assert_eq!(scope(input, "x").unwrap().css, expected, "{input}");
         }
         assert!(scope(". /**/a{}", "x").unwrap_err().contains("does not own"));
         assert!(scope(r":is(./**/\66 oreign,.a){}", "x").unwrap_err().contains("escaped characters"));
+    }
+
+    #[test]
+    fn commented_class_selectors_scope_the_whole_ident_or_refuse_it() {
+        let sheet = scope(":is(./* gap */--foreign,.a){color:green}", "x").unwrap();
+        assert_eq!(sheet.css, ":is(./**/x__--foreign,.x__a){color:green}");
+        assert_eq!(sheet.classes, ["--foreign", "a"]);
+        for name in ["\u{e9}", "a\u{e9}", "-\u{e9}"] {
+            let css = format!(":is(./* gap */{name},.a){{color:green}}");
+            assert!(scope(&css, "x").unwrap_err().contains("non-ASCII characters"), "{css}");
+        }
     }
 
     #[test]

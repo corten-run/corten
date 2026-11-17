@@ -56,6 +56,15 @@
 //!   build (a router test, `cargo run`, `corten dev`), a page that renders a component the app did
 //!   not list is an error that names it.
 //!
+//! Non-ASCII class names are refused rather than left unscoped, even in a forgiving selector
+//! list such as `:is(./**/é,.example)` (`non_ascii_class.css`).
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NonAsciiClass() -> impl Render { html! { <div class={Example}></div> } }
+//! ```
+//!
 //! [`tokens!`] reads a design-token file (JSON) into CSS custom properties, theme overrides,
 //! typed scales and responsive utility classes, so a design system has one source for its tokens.
 //!
@@ -1038,6 +1047,12 @@ pub(crate) fn custom_properties(css: &str) -> (Vec<&str>, Vec<&str>) {
             last = c;
             continue;
         }
+        // A slash escaped in a value is not the start of a comment.
+        if c == b'\\' && i + 1 < b.len() {
+            i += 2;
+            last = c;
+            continue;
+        }
         if c == b'-' && b.get(i + 1) == Some(&b'-') && matches!(last, b'{' | b';') {
             let end = name_end(i + 2);
             if end > i + 2 && b.get(trivia(end)) == Some(&b':') {
@@ -1182,6 +1197,14 @@ mod tests {
         let css = CommentedProperties.style.unwrap().css;
         assert!(css.contains("var(--opt/**/,var(--needed))"), "{css}");
         assert!(!custom_properties(css).1.contains(&"--needed"));
+    }
+
+    #[test]
+    fn an_escaped_slash_does_not_hide_a_commented_var_at_startup() {
+        let css = CommentedProperties.style.unwrap().css;
+        assert!(css.contains(r"--v:x\/*;color:var(/**/--after-escaped-slash)"), "{css}");
+        assert!(custom_properties(css).1.contains(&"--after-escaped-slash"));
+        assert_eq!(custom_properties(r".a{--v:x\\/* var(--in-comment) */;color:var(--real)}").1, ["--real"]);
     }
 
     #[test]

@@ -9,3 +9,8 @@
   height: var(/**/--missing);
   padding: var(--opt/**/,var(--needed));
 }
+
+.example {
+  --v: x\/*;
+  color: var(/* gap */--after-escaped-slash);
+}
