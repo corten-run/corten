@@ -6,7 +6,7 @@
 use std::convert::Infallible;
 
 use corten::{
-    HtmlResponse,
+    ForOne, HtmlResponse,
     extract::FromRequestParts,
     http::request::Parts,
     security::{
@@ -39,7 +39,7 @@ impl Visitor {
 
     /// `res` with the cookie that names the browser, for an answer to one that had none: it is set
     /// before the first change is kept, so two first changes sent at once go to one id.
-    pub fn with_cookie(&mut self, res: HtmlResponse) -> HtmlResponse {
+    pub fn with_cookie<Kind>(&mut self, res: HtmlResponse<ForOne, Kind>) -> HtmlResponse<ForOne, Kind> {
         match self.new_cookie() {
             Some(cookie) => res.with_cookie(cookie),
             None => res,
