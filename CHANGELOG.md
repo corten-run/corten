@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Parse `Accept-Language` and `Accept-Encoding` weights with the same RFC 9110 qvalue
+  grammar (0 to 1, at most three decimals). Ignore ranges with invalid weights instead of
+  accepting float syntax or treating a malformed compression weight as `1`.
+
 - `serve_wrapped_with` carries a TLS handshake's value to each request as
   `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
   nothing to the document) and `Identify`. The existing serve paths carry no value;

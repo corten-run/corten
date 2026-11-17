@@ -30,6 +30,68 @@ pub use crate::body::{Body, BodyDataStream};
 pub use crate::handler::Request;
 pub use crate::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
 
+/// RFC 9110 section 12.4.2's qvalue, in thousandths, without rounding or float syntax.
+pub(crate) fn qvalue(value: &[u8]) -> Option<u16> {
+    let (&whole, rest) = value.split_first()?;
+    let mut quality = match whole {
+        b'0' => 0,
+        b'1' => 1000,
+        _ => return None,
+    };
+    if rest.is_empty() {
+        return Some(quality);
+    }
+    let digits = rest.strip_prefix(b".")?;
+    if digits.len() > 3 {
+        return None;
+    }
+    let mut place = 100;
+    for &digit in digits {
+        if !digit.is_ascii_digit() || (whole == b'1' && digit != b'0') {
+            return None;
+        }
+        quality += u16::from(digit - b'0') * place;
+        place /= 10;
+    }
+    Some(quality)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::qvalue;
+
+    #[test]
+    fn qvalues_follow_the_rfc_grammar() {
+        for (text, expected) in [
+            ("0", 0),
+            ("0.", 0),
+            ("0.0", 0),
+            ("0.00", 0),
+            ("0.000", 0),
+            ("1", 1000),
+            ("1.", 1000),
+            ("1.0", 1000),
+            ("1.00", 1000),
+            ("1.000", 1000),
+            ("0.1", 100),
+            ("0.12", 120),
+            ("0.123", 123),
+        ] {
+            assert_eq!(qvalue(text.as_bytes()), Some(expected), "{text}");
+        }
+        for quality in 0..1000 {
+            assert_eq!(qvalue(format!("0.{quality:03}").as_bytes()), Some(quality));
+        }
+        for text in [
+            "nan", "NaN", "inf", "infinity", "1.5", "-0", "1.0001", "0.1234", "", ".5", "+0.5", "1e0", "00", "1.001", "0. 1",
+            " 0.5", "0.5 ",
+        ] {
+            assert_eq!(qvalue(text.as_bytes()), None, "{text:?}");
+        }
+        assert_eq!(qvalue(b"0.\xff"), None);
+    }
+}
+
 /// This module is the one place these types are named: the paths each had before it are gone,
 /// one test each.
 ///

@@ -141,13 +141,13 @@ fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
     }
 }
 
-/// The q-value among an item's parameters (`q=0.5`), in thousandths; 1000 when it has none.
+/// The q-value among an item's parameters (`q=0.5`), in thousandths; 1000 when absent,
+/// 0 when invalid, so a malformed weight cannot make its coding preferable.
 fn quality(params: &[u8]) -> u16 {
     params
         .split(|&b| b == b';')
-        .filter_map(|p| p.trim_ascii().strip_prefix(b"q=").or_else(|| p.trim_ascii().strip_prefix(b"Q=")))
-        .find_map(|q| std::str::from_utf8(q.trim_ascii()).ok()?.parse::<f32>().ok())
-        .map_or(1000, |q| (q.clamp(0.0, 1.0) * 1000.0) as u16)
+        .find_map(|p| p.trim_ascii().strip_prefix(b"q=").or_else(|| p.trim_ascii().strip_prefix(b"Q=")))
+        .map_or(1000, |q| crate::http::qvalue(q).unwrap_or(0))
 }
 
 fn compressible(content_type: &str) -> bool {
@@ -731,6 +731,16 @@ mod tests {
         assert_eq!(accepted(&accept("zstd, gzip"), &[Coding::Brotli, Coding::Gzip]), Some(Coding::Gzip));
     }
 
+    #[test]
+    fn negotiation_ignores_invalid_weights() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for weight in ["nan", "NaN", "inf", "infinity", "1.5", "-0", "1.0001", "0.1234", "", ".5", "+0.5", "1e0", "00", "1.001"] {
+            let header = format!("zstd;q={weight}, gzip;q=0.001");
+            assert_eq!(accepted(&accept(&header), &all), Some(Coding::Gzip), "{header}");
+            assert_eq!(negotiate(&accept(&header)).streamed(), Some(Coding::Gzip), "{header}");
+        }
+    }
+
     fn app() -> Compressed {
         let page = "<p>corten</p>".repeat(200);
         apply(
@@ -874,7 +884,7 @@ mod tests {
         assert_eq!(at("identity"), (None, None));
         assert_eq!(at("br;q=0, gzip;level=1;q=0.9 , zstd ; q=0.1"), (Some(Coding::Gzip), Some(Coding::Gzip)));
         assert_eq!(at("ZSTD;Q=0.2, Br;q=0.2"), (Some(Coding::Zstd), Some(Coding::Brotli)));
-        assert_eq!(at("x-gzip;q=bad, br;q=0"), (Some(Coding::Gzip), Some(Coding::Gzip)));
+        assert_eq!(at("x-gzip;q=bad, br;q=0"), (None, None), "an invalid weight skips that coding");
         assert_eq!(negotiate(&HeaderMap::new()), Accepts::default());
     }
 

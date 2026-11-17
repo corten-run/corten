@@ -879,7 +879,10 @@ Every request goes through the same stages in the same order, outside in, each n
 before it (a route that says `unstaged` goes through none;
 [below](#a-route-outside-the-stages)):
 
-1. Compression is negotiated (`Accept-Encoding`); it is applied last.
+1. Compression is negotiated (`Accept-Encoding`); it is applied last. Weights use RFC 9110's
+   qvalue grammar (0 to 1, at most three decimals), as `Accept-Language` does. A coding with
+   an invalid weight is ignored rather than given the default weight of 1; a coding with no
+   weight still has weight 1.
 2. A write another site sent is refused (`Failure::CrossSite`). A browser's gets the error page,
    with the request's `Signal` made for it as in stage 3; its layout reads are not started.
 3. The request gets its `Signal`, its nonce and the app.

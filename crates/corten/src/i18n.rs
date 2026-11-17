@@ -476,21 +476,22 @@ impl<'de, M: Messages> serde::Deserialize<'de> for Locale<M> {
 /// (`zh-Hant-TW` matches `zh-Hant`, `fr-CA-u-ca-gregory` matches `fr-CA`, `fr-BE` matches `fr`).
 /// The same-language step, which Lookup does not have, takes the first listed locale of the
 /// range's primary language (`fr` matches `fr-CA`), which can be more specific than the range or
-/// another script (docs/design.md#choice-locale-same-language). Allocates nothing.
+/// another script (docs/design.md#choice-locale-same-language). A weight must be an RFC 9110
+/// qvalue (0 to 1, at most three decimals); an invalid one skips that range. Allocates nothing.
 pub fn negotiate(locales: &[&str], accept_language: Option<&str>) -> usize {
     let listed = |tag: &str| locales.iter().position(|l| l.eq_ignore_ascii_case(tag));
-    let mut best: Option<(f32, usize)> = None;
+    let mut best: Option<(u16, usize)> = None;
     for part in accept_language.unwrap_or("").split(',') {
         let mut pieces = part.trim().split(';');
         let tag = pieces.next().unwrap_or("").trim();
-        let q = match pieces.find_map(|p| p.trim().strip_prefix("q=")) {
-            Some(q) => match q.parse::<f32>() {
-                Ok(q) => q,
-                Err(_) => continue,
+        let q = match pieces.find_map(|p| p.trim().strip_prefix("q=").or_else(|| p.trim().strip_prefix("Q="))) {
+            Some(q) => match crate::http::qvalue(q.as_bytes()) {
+                Some(q) => q,
+                None => continue,
             },
-            None => 1.0,
+            None => 1000,
         };
-        if tag.is_empty() || tag == "*" || q <= 0.0 || best.is_some_and(|(b, _)| q <= b) {
+        if tag.is_empty() || tag == "*" || q == 0 || best.is_some_and(|(b, _)| q <= b) {
             continue;
         }
         let mut candidate = tag;
@@ -1977,6 +1978,69 @@ mod tests {
         assert_eq!(pick(Some("fr;q=0")), "en", "q=0 means not acceptable");
         assert_eq!(pick(Some("fr;q=x, pt")), "pt-BR", "a bad q skips that tag only");
         assert_eq!(pick(None), "en");
+    }
+
+    #[test]
+    fn negotiation_ignores_invalid_weights() {
+        let locales = ["en", "fr", "pt-BR"];
+        for weight in ["nan", "NaN", "inf", "infinity", "1.5", "-0", "1.0001", "0.1234", "", ".5", "+0.5", "1e0", "00", "1.001"] {
+            for (header, expected) in [
+                (format!("fr;q={weight}"), "en"),
+                (format!("fr;q={weight}, pt-BR;q=0.001"), "pt-BR"),
+                (format!("en;q=1, fr;q={weight}, pt-BR;q=0.001"), "en"),
+            ] {
+                assert_eq!(locales[negotiate(&locales, Some(&header))], expected, "{header}");
+            }
+        }
+    }
+
+    /// Callgrind in release at NEGOTIATION_REQUESTS=200 and 1200, difference / 1000:
+    /// a request through the stages reading both Accept-Language and Accept-Encoding.
+    #[cfg(feature = "compress")]
+    #[test]
+    #[ignore]
+    fn what_negotiation_costs() {
+        use crate::http::{Body, Request, StatusCode};
+        use crate::{
+            router::{get, Table},
+            App, Req, Routes,
+        };
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        let requests = std::env::var("NEGOTIATION_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let routes = Table::new().route("/", get(|req: Req| async move { req.lang().to_owned() }));
+        let router = App::new(Routes::from(routes)).messages::<Msg>().router();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            for _ in 0..requests {
+                let request = Request::get("/")
+                    .header("accept-language", "fr-CA,fr;q=0.9,en;q=0.8")
+                    .header("accept-encoding", "gzip;q=0.5,br;q=0.8,zstd;q=1")
+                    .body(Body::empty())
+                    .unwrap();
+                let response = router.clone().oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = response.into_body().collect().await.unwrap().to_bytes();
+                assert_eq!(body.as_ref(), b"fr");
+                std::hint::black_box(body);
+            }
+        });
+    }
+
+    #[test]
+    fn negotiation_accepts_rfc_weights_and_keeps_equal_ranges_in_order() {
+        let locales = ["en", "fr"];
+        let pick = |header: &str| locales[negotiate(&locales, Some(header))];
+        for weight in ["1", "1.", "1.0", "1.00", "1.000", "0.1", "0.12", "0.123", "0.001"] {
+            assert_eq!(pick(&format!("fr;q={weight}, en;q=0.001")), "fr", "{weight}");
+        }
+        for weight in ["0", "0.", "0.0", "0.00", "0.000"] {
+            assert_eq!(pick(&format!("fr;q={weight}")), "en", "{weight}");
+        }
+        assert_eq!(pick("en;q=0.5, fr;q=0.500"), "en");
+        assert_eq!(pick("fr;q=0.5, en;q=0.500"), "fr");
+        assert_eq!(pick("en;Q=0, fr;q=0.5"), "fr", "parameter names are case-insensitive");
     }
 
     /// RFC 4647 Lookup: a range loses its last subtag (a single-character one with the subtag

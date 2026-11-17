@@ -731,6 +731,13 @@ listed, not `zh-Hant`, and with `zh-Hans` and `zh-Hant` listed and no `zh`, the 
 step gives it `zh-Hans`, the first, even when `zh-Hant` is the header's next choice; an app with
 Traditional Chinese readers lists `zh-TW` and `zh-HK` too, which Corten has data for.
 
+Weights follow RFC 9110's `qvalue` grammar: `0` to `1`, with at most three decimal places
+(`0.123`, `1.000`; a decimal point with no digits is allowed too). A missing weight means `1`,
+and equal weights keep header order. A range with an invalid weight (`nan`, `inf`, `1.5`,
+`-0`, an empty value or too many decimals) is ignored, as a range whose weight does not parse
+already was, rather than guessing its preference. If no range matches, the first locale is
+still the fallback.
+
 A page that a shared cache keeps (`Public`), or one whose address should name its
 language (a link to the French page), takes its locale from its URL instead: a
 `corten::i18n::Locale<Msg>` route field, read only as one of the tags `messages!` lists, as
