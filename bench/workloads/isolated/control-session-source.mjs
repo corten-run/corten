@@ -473,6 +473,124 @@ def inspect_epoch(root, epoch):
             "host": host(), "closedMonoNs": str(time.monotonic_ns()), "qualification": "pending-first-host-native-proof"}
 
 
+def setup_query(root, expected):
+    private(root)
+    assert load(root, "binding.json") == expected["binding"]
+    assert sha(read(root / "helper.py")) == expected["binding"]["helperSha256"]
+    assert not list(root.glob("seal-*.json")) and not list(root.glob("admission-*.json")), "sealed/native entry is not failed setup"
+    assert not (root / "campaign-active.json").exists() and not (root / "window.json").exists()
+    assert not list(root.glob("intrusion-*.json"))
+    requests = expected["requests"]
+    assert 0 < len(requests) < 4096 and expected["sequence"] == len(requests)
+    actual = [load(root, p.name) for p in root.glob("request-*.json")]
+    assert len(actual) == len(requests) + 1
+    current = [p for p in actual if p["sequence"] == expected["sequence"]]
+    assert len(current) == 1
+    current = current[0]
+    identifier = request_valid(current)["id"]
+    assert current["epoch"] == "collection" and current["invocation"]["channel"] == "ssh" and "seal" not in current
+    assert current["helperSha256"] == expected["binding"]["helperSha256"]
+    assert sorted(actual, key=lambda p: p["sequence"]) == requests + [current]
+    receipts, watchers = [], []
+    allowed_names = {"helper.py", "binding.json", "mutex"}
+    for sequence, request in enumerate(requests + [current]):
+        assert request["sequence"] == sequence and request["epoch"] in ("bootstrap", "collection") and "seal" not in request
+        invocation = request_valid(request)
+        assert all(invocation[k] == expected["binding"][k] for k in ("round", "commit", "token"))
+        assert request["helperSha256"] == expected["binding"]["helperSha256"]
+        names = ("request", "start", "launcher", "registration") + (() if sequence == len(requests) else ("result", "receipt"))
+        allowed_names.update(name + "-" + invocation["id"] + ".json" for name in names)
+        if sequence < len(requests):
+            receipt = load(root, "receipt-" + invocation["id"] + ".json")
+            assert receipt["invocation"] == invocation and receipt["host"] == host()
+            terminal = watcher_terminal(root, invocation["id"], receipt)
+            assert terminal is not None, "earlier query watcher unresolved"
+            receipts.append(receipt)
+            watchers.append(terminal)
+    assert {p.name for p in root.iterdir()} == allowed_names, "unknown control custody member"
+    registration = load(root, "registration-" + identifier + ".json")
+    start = load(root, "start-" + identifier + ".json")
+    launcher = load(root, "launcher-" + identifier + ".json")
+    assert launcher == {"unit": start["unit"], "code": 0}
+    assert registration["invocation"] == current["invocation"] and registration["host"] == host()
+    unit = "corten-bench-control-" + expected["binding"]["token"] + "-" + identifier + ".service"
+    assert start["unit"] == unit
+    properties = ["Id", "LoadState", "ActiveState", "MainPID", "Restart", "FragmentPath", "ControlGroup"]
+    result = subprocess.run(["/usr/bin/systemctl", "show", unit] + ["--property=" + p for p in properties],
+                            check=True, capture_output=True, timeout=5)
+    assert len(result.stdout) < 4096
+    values = dict(line.split("=", 1) for line in result.stdout.decode().splitlines())
+    observer = registration["observer"]
+    assert values == {"Id": unit, "LoadState": "loaded", "ActiveState": "active", "MainPID": str(observer["pid"]),
+                      "Restart": "no", "FragmentPath": "/run/systemd/transient/" + unit, "ControlGroup": "/system.slice/" + unit}
+    assert identity(proc(observer["pid"])) == observer
+    command = lambda args: b"\0".join(os.fsencode(arg) for arg in args) + b"\0"
+    watcher_argv = ["/usr/bin/python3", "-I", str(root / "helper.py"), "watch", expected["binding"]["token"], identifier]
+    assert (pathlib.Path("/proc") / str(observer["pid"]) / "cmdline").read_bytes() == command(watcher_argv)
+    query, timeout = proc(os.getpid()), proc(os.getppid())
+    assert parent(query) == timeout["pid"]
+    query_argv = ["/usr/bin/python3"] + sys.argv
+    assert query_argv == expected["queryArgv"]
+    timeout_argv = ["/usr/bin/timeout", "25"] + query_argv
+    for row, argv in ((query, query_argv), (timeout, timeout_argv)):
+        assert (pathlib.Path("/proc") / str(row["pid"]) / "cmdline").read_bytes() == command(argv)
+    executables = {}
+    for name, path in (("python", "/usr/bin/python3"), ("timeout", "/usr/bin/timeout")):
+        info = pathlib.Path(path).stat()
+        executables[name] = {"device": str(info.st_dev), "inode": str(info.st_ino)}
+    assert query["executable"] == observer["executable"] == executables["python"]
+    assert timeout["executable"] == executables["timeout"]
+    rows = inventory()
+    assert identity(rows[query["pid"]]) == identity(query) and identity(rows[timeout["pid"]]) == identity(timeout)
+    chain = registration["session"]["chain"]
+    assert {p["pid"] for p in registration["first"]["processes"]} == {p["pid"] for p in chain} | {observer["pid"], registration["listener"]["pid"]}
+    assert chain[-1]["pid"] == start["child"] and chain[-2]["pid"] == start["guardian"]
+    assert start["connection"] == registration["socket"]["connection"]
+    allowed = {p["pid"] for p in chain} | {registration["listener"]["pid"], observer["pid"], query["pid"], timeout["pid"]}
+    assert len(allowed) >= len(chain) + 3
+    for owned in chain + [observer, registration["listener"]]:
+        actual_row = rows[owned["pid"]]
+        assert key(actual_row) == key(owned) and actual_row["cgroup"] == owned["cgroup"]
+        if owned["pid"] not in (registration["listener"]["pid"], timeout["pid"]):
+            assert identity(actual_row) == owned
+        if owned["pid"] == registration["listener"]["pid"]:
+            assert actual_row["executable"] == owned["executable"]
+    assert parent(timeout) in (start["child"], start["guardian"]) and timeout["pid"] != start["guardian"]
+    scope = registration["session"]["scope"]
+    assert member(query, scope) and member(timeout, scope)
+    for row in rows.values():
+        if row["pid"] in allowed:
+            continue
+        assert parent(row) not in allowed, "unregistered query descendant"
+        assert not row["cgroup"].startswith("0::/user.slice/") and not re.search(r"/session-[^/\n]+\.scope(?:/|\n)", row["cgroup"])
+        assert not row["cgroup"].startswith("0::/system.slice/corten-bench"), "unknown owned-unit participant"
+        assert row["cgroup"] != registration["listener"]["cgroup"] and not row["cgroup"].startswith(registration["listener"]["cgroup"].rstrip("\n") + "/")
+    entries, total = [], 0
+    for path in sorted(root.iterdir()):
+        contents = read(path)
+        total += len(contents)
+        assert total <= 64 * 1024 * 1024
+        entries.append({"name": path.name, "bytes": len(contents), "sha256": sha(contents)})
+    custody = pathlib.Path("/bench/control")
+    private(custody)
+    copied = []
+    for path in sorted(custody.iterdir()):
+        assert path.name in allowed_names
+        contents = read(path)
+        assert contents == read(root / path.name), "original custody changed"
+        copied.append({"name": path.name, "bytes": len(contents), "sha256": sha(contents)})
+    assert {p["name"] for p in copied} >= {"helper.py", "binding.json"}
+    observed = time.monotonic_ns()
+    assert observed < int(start["deadlineMonoNs"])
+    proof = {"schema": "benchmark-control-setup-query/v1", "binding": expected["binding"], "requests": requests + [current],
+             "receipts": receipts, "watchers": watchers, "registration": registration, "start": start, "launcher": launcher,
+             "watcher": values, "query": identity(query), "timeout": identity(timeout), "executables": executables,
+             "observation": {**host(), "monoNs": str(observed), "processes": sorted(rows.values(), key=lambda p: p["pid"])},
+             "entries": entries, "custody": copied}
+    assert len(encoded(proof)) <= LIMIT
+    return proof
+
+
 def custody(root):
     destination = pathlib.Path("/bench/control")
     if destination.exists():

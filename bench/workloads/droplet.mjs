@@ -230,13 +230,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const verifyRetirementRecord = (bytes, kind) => {
     const setup = kind === "setup-failed";
     const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
-    const expected = setup ? setupEvidence(raw, state, terminalSetupScript(state, setupExit()), setupExit(), record.startedAtMs, record.finishedAtMs)
+    const expected = setup ? setupEvidence(raw, state, terminalSetupScript(state, setupExit(), state.control ? record.observation.control.requests.length - 1 : undefined), setupExit(), record.startedAtMs, record.finishedAtMs, local)
       : unusedEvidence(raw, state, unusedHostScript(state), record.startedAtMs, record.finishedAtMs);
     assert.deepEqual(record, expected, "retirement evidence differs");
   };
   const verifyRetirement = () => {
     if (state.retirement.kind === "native-failed") return verifyFailedNativeRetirement(local, state);
-    const bytes = regular(join(local, retirementFile(state.retirement.kind)), 4096);
+    const bytes = regular(join(local, retirementFile(state.retirement.kind)), state.control && state.retirement.kind === "setup-failed" ? 8 * 1024 * 1024 : 4096);
     assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
     verifyRetirementRecord(bytes, state.retirement.kind);
   };
@@ -244,16 +244,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     await own(); check();
     assert.ok(Date.now() >= finishedAtMs && Date.now() - finishedAtMs <= 60000, "retirement proof expired before deletion");
     const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
+    assert.ok(Buffer.byteLength(bytes) <= (state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096), "bounded retirement record required");
     const path = join(local, retirementFile(kind));
     if (existsSync(path)) {
       // A crash between receipt and state writes is recoverable. Preserve the
       // exact old record, but only this operation's fresh probe authorizes intent.
       assert.ok(!state.deletionIntentAt && !state.retirement, "existing retirement intent cannot be repeated");
-      const prior = regular(path, 4096), hash = digest(prior); verifyRetirementRecord(prior, kind);
+      const limit = state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096;
+      const prior = regular(path, limit), hash = digest(prior); verifyRetirementRecord(prior, kind);
       const retained = join(local, `${retirementFile(kind).slice(0, -5)}.interrupted-${hash}.json`);
       if (existsSync(retained)) assert.equal(digest(regular(retained, 4096)), hash, "interrupted retirement history differs");
       else durable(retained, prior);
-      assert.equal(digest(regular(path, 4096)), hash, "interrupted retirement receipt changed");
+      assert.equal(digest(regular(path, limit)), hash, "interrupted retirement receipt changed");
       unlinkSync(path); syncDirectory(local);
     }
     durable(path, bytes);
@@ -274,7 +276,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.ok(["starting", "running"].includes(state.status) && !preserveOperationLock, "uncertain work cannot use setup retirement");
     const exit = setupExit(), script = terminalSetupScript(state, exit), startedAtMs = Date.now();
     const raw = (await ssh(script, 30000)).stdout, finishedAtMs = Date.now();
-    const evidence = setupEvidence(raw, state, script, exit, startedAtMs, finishedAtMs);
+    const evidence = setupEvidence(raw, state, script, exit, startedAtMs, finishedAtMs, local);
     return retire("setup-failed", evidence, finishedAtMs);
   };
   return {
@@ -403,6 +405,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
+        assert.ok(!state.control?.sealed.includes("bootstrap"),
+          "terminal status unavailable without SSH intrusion; preserve host; registered native collection needs an approved observation protocol");
         assert.ok(state.createIntentAt, "no create intent; reservation requires operator inspection");
         bind(await own());
         if (state.status === "preparing") return retireUnused();

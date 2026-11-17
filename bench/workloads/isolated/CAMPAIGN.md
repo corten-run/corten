@@ -12,6 +12,11 @@ The [owned SSH/SFTP drain contract](owned-ssh-drain.md) adds production registra
 input hold, sealed bootstrap/audit admission and watcher-terminal proof. Actual first-host
 native qualification remains pending. Local transport exit still does not clear a remote
 session, relax a host bookend, or release an uncertain lock.
+Routine SSH `--collect` monitoring after bootstrap seal is not yet compatible with
+this strict boundary. The controller now refuses before opening SSH instead of
+invalidating an active window. An approved terminal/review observation protocol is a
+remaining architecture prerequisite, not an instruction to wait without a bound or
+guess that the remote unit has ended. Do not treat this checkpoint as source-ready.
 
 ## Parent interface
 

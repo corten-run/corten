@@ -72,6 +72,139 @@ function kernelAddress(value, byteOrder) {
     return [...bytes.subarray(-4)].join(".");
   return ip([...Array(8)].map((_, i) => bytes.readUInt16BE(i * 2).toString(16)).join(":"));
 }
+function socketProof(socket, chain) {
+  const fields = socket.connection.split(" ");
+  assert.ok(["little", "big"].includes(socket.byteOrder), "socket byte order missing");
+  assert.equal(fields.length, 4, "raw SSH connection tuple required");
+  for (const port of [fields[1], fields[3]]) assert.ok(/^[1-9]\d{0,4}$/.test(port) && Number(port) < 65536);
+  const listening = socket.listener.trim().split(/\s+/), connected = socket.session.trim().split(/\s+/);
+  assert.equal(listening[3], "0A"); assert.equal(connected[3], "01");
+  assert.ok(chain.some((p) => p.pid === socket.sessionPid), "connection socket outside registered ancestry");
+  assert.ok(socket.listenerFds.includes(listening[9]) && socket.sessionFds.includes(connected[9]), "socket ownership differs");
+  assert.equal(parseInt(listening[1].split(":")[1], 16), Number(fields[3]));
+  assert.equal(parseInt(connected[1].split(":")[1], 16), Number(fields[3]));
+  assert.equal(parseInt(connected[2].split(":")[1], 16), Number(fields[1]));
+  assert.equal(kernelAddress(connected[1].split(":")[0], socket.byteOrder), ip(fields[2]), "server socket address differs");
+  assert.equal(kernelAddress(connected[2].split(":")[0], socket.byteOrder), ip(fields[0]), "client socket address differs");
+}
+
+export function verifyControlRegistration(expected, registration) {
+  validateControlInvocation(expected);
+  exact(registration, ["invocation", "host", "listener", "observer", "session", "socket", "first"]);
+  same(registration.invocation, expected, "query invocation differs");
+  exact(registration.host, ["hostname", "bootId"]);
+  text(registration.host.hostname, /^[A-Za-z0-9.-]{1,253}$/, "invalid query hostname");
+  text(registration.host.bootId, /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/, "invalid query boot");
+  identity(registration.listener); identity(registration.observer);
+  exact(registration.session, ["chain", "scope"]);
+  const { chain, scope } = registration.session;
+  assert.ok(Array.isArray(chain) && chain.length >= 2 && chain.length <= 32);
+  text(scope, /^\/(?:[A-Za-z0-9_.:@-]+\/)*[A-Za-z0-9_:@-][A-Za-z0-9_.:@-]*\.scope$/, "query session scope required");
+  assert.ok(!scope.split("/").some((p) => p === "." || p === ".."));
+  assert.equal(registration.observer.cgroup, `0::/system.slice/corten-bench-control-${expected.token}-${expected.id}.service\n`);
+  const first = registration.first, map = inventory(first, registration.host);
+  exact(first, ["hostname", "bootId", "monoNs", "processes", "scope"]);
+  exact(first.scope, ["path", "exists", "events", "members"]);
+  decimal(first.monoNs);
+  let parent = registration.listener;
+  const ids = new Set([parent.pid, registration.observer.pid]); assert.equal(ids.size, 2);
+  for (const p of chain) {
+    identity(p); assert.ok(!ids.has(p.pid)); ids.add(p.pid);
+    assert.ok(present(map, p) && sameCommand(map.get(p.pid), p) && map.get(p.pid).cgroup === p.cgroup
+      && map.get(p.pid).parentPid === parent.pid, "query registration ancestry differs");
+    parent = p;
+  }
+  for (const p of [registration.listener, registration.observer])
+    assert.ok(present(map, p) && sameCommand(map.get(p.pid), p) && map.get(p.pid).cgroup === p.cgroup && !inScope(p, scope));
+  assert.equal(map.size, ids.size, "unregistered process in original query registration");
+  assert.ok(inScope(chain.at(-1), scope));
+  assert.equal(first.scope.path, scope); assert.equal(first.scope.exists, true); assert.ok(scopeEvents(first.scope.events, 1));
+  same(first.scope.members, [...map.values()].filter((p) => inScope(p, scope)).map((p) => p.pid).sort((a, b) => a - b), "query registration scope differs");
+  assert.ok(first.scope.members.every((pid) => chain.some((p) => p.pid === pid)));
+  socketProof(registration.socket, chain);
+  return registration;
+}
+
+export function verifyControlSetupQuery(expected, proof) {
+  assert.ok(Number.isSafeInteger(expected.sequence) && expected.sequence > 0 && expected.sequence < 4096);
+  assert.equal(proof.schema, "benchmark-control-setup-query/v1");
+  same(proof.binding, expected.binding, "setup control source/owner differs");
+  assert.equal(proof.requests.length, expected.sequence + 1);
+  same(proof.requests.slice(0, -1), expected.requests, "setup control sequence differs");
+  assert.equal(proof.receipts.length, expected.sequence); assert.equal(proof.watchers.length, expected.sequence);
+  const request = proof.requests.at(-1), invocation = request.invocation;
+  assert.equal(request.sequence, expected.sequence); assert.equal(request.epoch, "collection");
+  assert.equal(invocation.channel, "ssh"); assert.equal(invocation.purpose, "collection");
+  assert.equal(request.seal, undefined);
+  const ids = new Set();
+  for (const [i, row] of proof.requests.entries()) {
+    assert.equal(row.sequence, i); assert.ok(!ids.has(row.invocation.id)); ids.add(row.invocation.id);
+    assert.ok(["bootstrap", "collection"].includes(row.epoch)); assert.equal(row.seal, undefined);
+    assert.equal(row.helperSha256, expected.binding.helperSha256);
+    for (const field of ["round", "commit", "token"]) assert.equal(row.invocation[field], expected.binding[field]);
+    if (i < expected.sequence) {
+      verifyControlSession(row.invocation, proof.receipts[i]); same(proof.receipts[i].host, proof.registration.host, "setup receipt boot differs");
+    }
+  }
+  const registration = verifyControlRegistration(invocation, proof.registration), host = registration.host;
+  const { chain, scope } = registration.session, unit = `corten-bench-control-${invocation.token}-${invocation.id}.service`;
+  assert.equal(proof.start.unit, unit); assert.equal(proof.start.child, chain.at(-1).pid);
+  assert.equal(proof.start.guardian, chain.at(-2).pid);
+  assert.equal(proof.start.connection, registration.socket.connection);
+  same(proof.launcher, { unit, code: 0 }, "query launcher differs");
+  const observer = registration.observer;
+  same(proof.watcher, { Id: unit, LoadState: "loaded", ActiveState: "active", MainPID: String(observer.pid),
+    Restart: "no", FragmentPath: `/run/systemd/transient/${unit}`, ControlGroup: `/system.slice/${unit}` }, "query watcher source/unit differs");
+  const map = inventory(proof.observation, host), now = decimal(proof.observation.monoNs), deadline = decimal(proof.start.deadlineMonoNs);
+  assert.ok(now >= decimal(registration.first.monoNs) && now < deadline && decimal(registration.first.monoNs) >= deadline - BigInt(invocation.deadlineMs) * 1000000n
+    && now >= deadline - BigInt(invocation.deadlineMs) * 1000000n, "query observation outside original deadline");
+  const command = (args) => createHash("sha256").update(args.join("\0") + "\0").digest("hex");
+  const query = proof.query, timeout = proof.timeout;
+  for (const p of [query, timeout, observer]) {
+    identity(p); assert.ok(present(map, p)); same(identityFields(map.get(p.pid)), p, "live query identity differs");
+  }
+  same(query.executable, proof.executables.python, "query executable differs"); same(observer.executable, proof.executables.python, "watcher executable differs");
+  same(timeout.executable, proof.executables.timeout, "timeout executable differs");
+  assert.equal(query.commandSha256, command(expected.queryArgv));
+  assert.equal(timeout.commandSha256, command(["/usr/bin/timeout", "25", ...expected.queryArgv]));
+  assert.equal(observer.commandSha256, command(["/usr/bin/python3", "-I", `/run/corten-bench-control-${invocation.token}/helper.py`, "watch", invocation.token, invocation.id]));
+  assert.equal(map.get(query.pid).parentPid, timeout.pid);
+  assert.ok([proof.start.child, proof.start.guardian].includes(map.get(timeout.pid).parentPid) && timeout.pid !== proof.start.guardian);
+  assert.ok(inScope(query, scope) && inScope(timeout, scope));
+  const allowed = new Set([...chain.map((p) => p.pid), registration.listener.pid, observer.pid, query.pid, timeout.pid]);
+  assert.ok(allowed.size >= chain.length + 3);
+  for (const p of [...chain, registration.listener]) {
+    assert.ok(present(map, p) && map.get(p.pid).cgroup === p.cgroup, "query ancestor identity/cgroup differs");
+    if (p.pid !== timeout.pid && p.pid !== registration.listener.pid) same(identityFields(map.get(p.pid)), p);
+    else if (p.pid === registration.listener.pid) same(map.get(p.pid).executable, p.executable);
+  }
+  for (const p of map.values()) if (!allowed.has(p.pid)) {
+    assert.ok(!allowed.has(p.parentPid), "unknown query descendant");
+    assert.ok(!p.cgroup.startsWith("0::/user.slice/") && !/\/session-[^/\n]+\.scope(?:\/|\n)/.test(p.cgroup), "unknown login survivor");
+    assert.ok(!p.cgroup.startsWith("0::/system.slice/corten-bench"), "unknown owned-unit participant");
+    assert.ok(p.cgroup !== registration.listener.cgroup && !p.cgroup.startsWith(registration.listener.cgroup.trimEnd() + "/"), "unknown listener participant");
+  }
+  assert.ok(Array.isArray(proof.entries) && proof.entries.length <= 32768 && Array.isArray(proof.custody));
+  const names = new Set(["helper.py", "binding.json", "mutex"]), entries = new Map();
+  for (const [i, row] of proof.requests.entries()) for (const name of ["request", "start", "launcher", "registration", ...(i < expected.sequence ? ["result", "receipt"] : [])])
+    names.add(`${name}-${row.invocation.id}.json`);
+  let total = 0;
+  for (const entry of proof.entries) {
+    exact(entry, ["name", "bytes", "sha256"]); assert.ok(names.has(entry.name) && !entries.has(entry.name));
+    assert.ok(Number.isSafeInteger(entry.bytes) && entry.bytes >= 0 && entry.bytes <= 8 * 1024 * 1024);
+    text(entry.sha256, /^[a-f0-9]{64}$/, "invalid custody digest"); total += entry.bytes; assert.ok(total <= 64 * 1024 * 1024);
+    entries.set(entry.name, entry);
+  }
+  assert.equal(entries.size, names.size); assert.equal(entries.get("helper.py").sha256, expected.binding.helperSha256);
+  const rawDigest = (value) => createHash("sha256").update(JSON.stringify(value) + "\n").digest("hex");
+  assert.equal(entries.get("binding.json").sha256, rawDigest(expected.binding));
+  for (const row of proof.requests) assert.equal(entries.get(`request-${row.invocation.id}.json`).sha256, rawDigest(row));
+  const copied = new Set();
+  for (const entry of proof.custody) { same(entry, entries.get(entry.name), "control custody differs"); assert.ok(!copied.has(entry.name)); copied.add(entry.name); }
+  assert.ok(copied.has("helper.py") && copied.has("binding.json"));
+  return { allowedPids: [...allowed], host, sequence: expected.sequence, remoteDrained: false };
+}
+const identityFields = (p) => Object.fromEntries(["pid", "startTicks", "cgroup", "executable", "commandSha256"].map((field) => [field, p[field]]));
 
 /** Validates saved evidence, never authorizes execution, deletion, or a transport retry. */
 export function verifyControlSession(expected, receipt) {
@@ -102,19 +235,7 @@ export function verifyControlSession(expected, receipt) {
   assert.ok(inScope(chain.at(-1), scope), "control endpoint outside session scope");
   assert.ok(Array.isArray(receipt.samples) && receipt.samples.length >= 2 && receipt.samples.length <= (native ? 4096 : 128), "bounded host-side observations required");
   if (native) {
-    const socket = receipt.socket, fields = socket.connection.split(" ");
-    assert.ok(["little", "big"].includes(socket.byteOrder), "socket byte order missing");
-    assert.equal(fields.length, 4, "raw SSH connection tuple required");
-    for (const port of [fields[1], fields[3]]) assert.ok(/^[1-9]\d{0,4}$/.test(port) && Number(port) < 65536);
-    const listening = socket.listener.trim().split(/\s+/), connected = socket.session.trim().split(/\s+/);
-    assert.equal(listening[3], "0A"); assert.equal(connected[3], "01");
-    assert.ok(chain.some((p) => p.pid === socket.sessionPid), "connection socket outside registered ancestry");
-    assert.ok(socket.listenerFds.includes(listening[9]) && socket.sessionFds.includes(connected[9]), "socket ownership differs");
-    assert.equal(parseInt(listening[1].split(":")[1], 16), Number(fields[3]));
-    assert.equal(parseInt(connected[1].split(":")[1], 16), Number(fields[3]));
-    assert.equal(parseInt(connected[2].split(":")[1], 16), Number(fields[1]));
-    assert.equal(kernelAddress(connected[1].split(":")[0], socket.byteOrder), ip(fields[2]), "server socket address differs");
-    assert.equal(kernelAddress(connected[2].split(":")[0], socket.byteOrder), ip(fields[0]), "client socket address differs");
+    socketProof(receipt.socket, chain);
   }
   const result = receipt.result;
   exact(result, ["transport", "code", "releasedMonoNs", "completedMonoNs"]);

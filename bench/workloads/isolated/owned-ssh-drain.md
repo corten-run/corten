@@ -1,6 +1,7 @@
 # Owned SSH/SFTP Control Drainage
 
-Status: production source and portable controls; **first-host native proof pending**.
+Status: production source and portable controls; **not source-ready: routine monitoring
+needs a parent architecture decision, and first-host native proof remains pending**.
 Neither portable tests nor local SSH/SFTP exit certify Ubuntu/PAM cleanup. The deleted
 historical host's thirteen unexplained userspace identities remain unexplained.
 
@@ -62,9 +63,12 @@ control registration against native windows; window opening rechecks the sealed 
 Control attempted during a window creates retained intrusion evidence and prevents
 advancement even if it later disappears. Collection traffic while the campaign owner
 is alive also blocks. This is not a new worker engine.
-Collection is not a harmless native-window status poll: an early registered collection
-attempt is rejected and retained as an intrusion. Do not poll through SSH during native
-execution. Audit admission uses its separate registered epoch while waiting for review.
+Collection is not a harmless native-window status poll. The controller refuses a new
+reservation's `--collect` before any SSH/SFTP once bootstrap is sealed, with an explicit
+terminal-status-unavailable error. It does not return a made-up running status, sleep
+indefinitely or let a routine operator poll invalidate a campaign. Legacy collection
+keeps its existing single observation. Direct control that bypasses this refusal still
+creates retained intrusion evidence in the remote guardian.
 
 The original raw native end observation is preserved. Production still uses the unchanged
 strict `verifyHostBoundary`; no later clean sample rewrites that observation or excuses
@@ -79,13 +83,58 @@ The terminal packer copies bounded private control records to the explicit archi
 archives are not overwritten. Files have exact allowed names, private ownership, physical
 paths and stable inode/content checks. Early failure does not qualify native execution.
 
-The saved-state allowlist must admit `control` before this source can launch. Existing
-failed-setup retirement remains fail-closed on the new control directory/watcher units;
-it is not silently exempted or granted new deletion authority by these receipts.
+The saved-state allowlist admits only the new `control` field; its strict ledger
+validation remains in the existing contract. This does not resolve monitoring.
 Collection-time local success still returns `remoteDrained: false`; it neither proves
 remote emptiness nor retrospectively qualifies a native boundary. Timeout, disconnect,
 cancellation or missing result framing retains the existing locks/state/evidence/host.
 Normal remote nonzero results remain distinct from transport uncertainty.
+
+## Monitoring Blocker
+
+The current operator learns unit state and audit readiness by opening SSH. Authentication
+and PAM/session creation occur before the fixed remote guardian can inspect a native
+window. Therefore an SSH status request that arrives during a window is already control
+traffic, even if the guardian waits, refuses payload or the session later disappears.
+Treating that traffic as harmless would weaken the original raw bookend/timing contract.
+
+These three requirements cannot all be met by the existing protocol: no live/control
+SSH across native windows; fresh bounded knowledge of terminal/audit state; and SSH as
+the only remote evidence channel. Local clocks, the service's maximum runtime, stale
+receipts or a delayed clean inventory are not actual terminal/disappearance observations.
+The new pre-network refusal is a safe failure, not an operational monitoring solution.
+After seal, even a possibly finished campaign stays preserved until this is resolved.
+
+Parent must choose an approved non-SSH terminal/review observation channel or explicitly
+review a different experiment boundary permitting an owned persistent control channel.
+Neither is implemented or implicitly authorized here. No new status server, credentials,
+auth/PAM scope, polling exception or assumed terminal deadline is introduced. In
+particular, this source must not be called ready for a routine official-host launch.
+
+## Pre-Entry Retirement
+
+New control reservations may use failed-setup retirement only while bootstrap remains
+unsealed, no native campaign/window/admission exists, the unit has the existing nonzero
+terminal setup exit, and the campaign directory is absent or empty. The original
+metadata, exact job/unit/script hashes, cloud-init, container-idle and process/path
+checks still execute. Legacy script bytes and v1 receipt interpretation are unchanged.
+
+The v2 failed-setup receipt adds the complete expected request sequence, prior session
+receipts and actual prior watcher termination, fixed helper/boot binding, raw current
+query registration, executable/argv/PID-start/cgroup identity of the current read-only
+Python/timeout query and its source-bound watcher, and bounded original custody hashes.
+Only those exact identities may remain live as the retirement query itself; no name
+grants ownership and no unknown participant is adopted. The fixed transient watcher
+must have the exact active PID, source command, unit path, cgroup and `Restart=no`.
+Changed source, sequence, boot, custody, unknown descendants/login/unit participants,
+earlier live watchers or any native entry refuse retirement. A transport failure still
+retains locks/state/host.
+
+This proof deliberately returns `remoteDrained: false`: the current query/watcher have
+not yet disappeared. It extends neither native qualification nor the existing pre-entry
+deletion policy to a native attempt. It is not a solution to post-seal collection.
+New v2 proof/retirement records are capped at 8 MiB; the 25-second remote query,
+30-second local observation and existing retirement freshness bounds are unchanged.
 
 ## Bounds And Qualification
 
@@ -122,4 +171,6 @@ Controller/native producers additionally use `droplet.mjs`, `cloud-remote.mjs`,
 `cloud-audit.mjs`, `isolated/campaign-entry.mjs` and `isolated/campaign.mjs`.
 `isolated/control-session-qualification.mjs` is legacy test support, not a live producer
 or an import of saved validation. `test-fixtures/control-session-kernel.py` is test-only.
+`cloud-retirement.mjs` additionally imports the runtime, session replay and admission
+helpers for pre-entry v2 proof only; it is not reached by saved campaign validation.
 No dependency, source-inventory allowlist or validation resource cap is changed here.

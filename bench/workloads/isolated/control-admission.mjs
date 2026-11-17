@@ -14,6 +14,15 @@ export function controlRoot(binding) {
   assert.match(binding.token, /^[a-f0-9]{16}$/);
   return `/run/corten-bench-control-${binding.token}`;
 }
+export function verifyControlWatcher(invocation, receipt, terminal) {
+  const unit = `corten-bench-control-${invocation.token}-${invocation.id}.service`, properties = terminal.properties;
+  assert.equal(terminal.unit, unit); assert.equal(properties.Id, unit); assert.equal(properties.MainPID, "0");
+  assert.ok(["inactive", "failed"].includes(properties.ActiveState));
+  assert.ok(["loaded", "not-found"].includes(properties.LoadState));
+  if (properties.LoadState === "loaded") { assert.equal(properties.ExecMainCode, "1"); assert.equal(properties.ExecMainStatus, "0"); }
+  equal(terminal.observer, receipt.observer); assert.equal(terminal.identityAbsent, true);
+  assert.ok(terminal.cgroupEvents === null || /^populated 0\n(?:frozen [01]\n)?$/.test(terminal.cgroupEvents));
+}
 export function verifyControlAdmission(binding, epoch, admission) {
   assert.equal(admission.schema, "benchmark-control-admission/v1");
   const seal = admission.seal;
@@ -33,13 +42,7 @@ export function verifyControlAdmission(binding, epoch, admission) {
     assert.equal(receipt.schema, "benchmark-control-session/v2", "legacy replay receipts cannot qualify a live session");
     verifyControlSession(invocation, receipt);
     equal(receipt.host, admission.host);
-    const unit = `corten-bench-control-${binding.token}-${invocation.id}.service`, properties = terminal.properties;
-    assert.equal(terminal.unit, unit); assert.equal(properties.Id, unit); assert.equal(properties.MainPID, "0");
-    assert.ok(["inactive", "failed"].includes(properties.ActiveState));
-    assert.ok(["loaded", "not-found"].includes(properties.LoadState));
-    if (properties.LoadState === "loaded") { assert.equal(properties.ExecMainCode, "1"); assert.equal(properties.ExecMainStatus, "0"); }
-    equal(terminal.observer, receipt.observer); assert.equal(terminal.identityAbsent, true);
-    assert.ok(terminal.cgroupEvents === null || /^populated 0\n(?:frozen [01]\n)?$/.test(terminal.cgroupEvents));
+    verifyControlWatcher(invocation, receipt, terminal);
     assert.ok(BigInt(admission.closedMonoNs) >= BigInt(receipt.samples.at(-1).monoNs));
     for (const p of receipt.session.chain) {
       const key = `${p.pid}:${p.startTicks}`;

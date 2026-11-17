@@ -116,6 +116,15 @@ class Path:
         populated = any(p["cgroup"] == "0::" + cg + "\n" for p in rows.values())
         return "populated " + str(int(populated)) + "\nfrozen 0\n"
 
+    def read_bytes(self):
+        if self.value.startswith("/proc/") and self.name == "cmdline":
+            return commands[int(self.value.split("/")[2])]
+        return data[self.value]
+
+    def stat(self):
+        assert self.value in ("/usr/bin/python3", "/usr/bin/timeout")
+        return types.SimpleNamespace(st_dev=1, st_ino=401 if self.value.endswith("python3") else 402)
+
     def glob(self, pattern):
         return [p for p in self.iterdir() if fnmatch.fnmatchcase(p.name, pattern)]
 
@@ -178,6 +187,43 @@ class Child:
     def wait(self, timeout):
         assert timeout > 0 and self.stdin.transferred == current["payload"]
         assert str(root / ("registration-" + current["id"] + ".json")) in data, "payload before registration"
+        if mode.startswith("setup-") and current["id"] == format(3, "032x"):
+            # Execute the actual source's pre-entry query producer while its own
+            # guardian and outside-session watcher are still alive.
+            query_pid, timeout_pid = 405, 404
+            cg = rows[self.pid]["cgroup"][3:-1]
+            rows[timeout_pid] = row(timeout_pid, self.pid, cg)
+            rows[query_pid] = row(query_pid, timeout_pid, cg)
+            query_argv = argument["expected"]["queryArgv"]
+            commands[query_pid] = command(query_argv)
+            commands[timeout_pid] = command(["/usr/bin/timeout", "25"] + query_argv)
+            for pid, inode in ((query_pid, 401), (timeout_pid, 402)):
+                rows[pid]["executable"] = {"device": "1", "inode": str(inode)}
+                rows[pid]["commandSha256"] = hashlib.sha256(commands[pid]).hexdigest()
+            scope["custody"](root)
+            if mode == "setup-unknown": rows[999] = row(999, current["guardian"], "/foreign.scope")
+            if mode == "setup-user-manager": rows[999] = row(999, 1, "/user.slice/user-0.slice/user@0.service")
+            if mode == "setup-unknown-unit": rows[999] = row(999, 1, "/system.slice/corten-bench-control-foreign.service")
+            if mode == "setup-watcher": rows[units[next(iter(units))]] = row(units[next(iter(units))], 1, "/foreign.scope")
+            if mode == "setup-watcher-command":
+                observer = units[list(units)[-1]]
+                commands[observer] = b"foreign\0"
+                rows[observer]["commandSha256"] = hashlib.sha256(commands[observer]).hexdigest()
+            if mode == "setup-watcher-cgroup": rows[units[list(units)[-1]]]["cgroup"] = "0::/foreign.scope\n"
+            if mode == "setup-sealed": write(root / "seal-bootstrap.json", b"{}")
+            if mode == "setup-extra-record": write(root / "unknown.json", b"{}")
+            if mode == "setup-custody": data["/bench/control/helper.py"] += b"changed"
+            if mode == "setup-source": data[str(root / "helper.py")] += b"changed"
+            local.pid = query_pid
+            try:
+                with patch.object(scope["os"], "getppid", lambda: timeout_pid), patch.object(sys, "argv", query_argv[1:]):
+                    current["proof"] = scope["setup_query"](root, argument["expected"])
+            except (AssertionError, KeyError) as error:
+                assert mode != "setup-normal", traceback.format_exc()
+                current["rejected"] = True
+            finally:
+                local.pid = current["guardian"]
+                for pid in (query_pid, timeout_pid, 999): rows.pop(pid, None)
         rows.pop(self.pid)
         if mode == "disconnect":
             raise scope["subprocess"].TimeoutExpired("synthetic-disconnect", timeout)
@@ -192,6 +238,9 @@ def run(args, **kwargs):
         unit = next(p.split("=", 1)[1] for p in args if p.startswith("--unit="))
         observer = 200 + len(units)
         rows[observer] = row(observer, 1, "/system.slice/" + unit)
+        commands[observer] = command(["/usr/bin/python3", "-I", str(root / "helper.py"), "watch", token, identifier])
+        rows[observer]["commandSha256"] = hashlib.sha256(commands[observer]).hexdigest()
+        rows[observer]["executable"] = {"device": "1", "inode": "401"}
         units[unit] = observer
         if mode == "launcher-overlap":
             rows[500] = row(500, current["guardian"], rows[current["child"]]["cgroup"][3:-1])
@@ -217,6 +266,9 @@ def run(args, **kwargs):
     active = units[unit] in rows or mode == "watcher-alive"
     values = {"Id": unit, "LoadState": "loaded", "ActiveState": "active" if active else "inactive",
               "MainPID": str(units[unit]) if active else "0", "ExecMainCode": "1", "ExecMainStatus": "0"}
+    if "--property=ControlGroup" in args:
+        values = {"Id": unit, "LoadState": "loaded", "ActiveState": "active" if active else "inactive", "MainPID": str(units[unit]) if active else "0",
+                  "Restart": "no", "FragmentPath": "/run/systemd/transient/" + unit, "ControlGroup": "/system.slice/" + unit}
     return types.SimpleNamespace(returncode=0, stdout="".join(k + "=" + v + "\n" for k, v in values.items()).encode())
 
 
@@ -228,13 +280,20 @@ tcp = [(["0:", "00000000:0016", "00000000:0000", "0A", "0", "0", "0", "0", "0", 
         "0: 00000000:0016 00000000:0000 0A 0 0 0 0 0 500"),
        (["1:", "0A0200C0:0016", "140200C0:9C40", "01", "0", "0", "0", "0", "0", "501"],
         "1: 0A0200C0:0016 140200C0:9C40 01 0 0 0 0 0 501")]
+@contextlib.contextmanager
+def mutex(root):
+    data.setdefault(str(root / "mutex"), b"")
+    yield
+
 scope.update({"root_for": lambda t: root if t == token else None, "private": lambda p: None, "write": write, "read": read,
               "proc": proc, "inventory": lambda: copy.deepcopy(rows), "host": lambda: dict(boot),
-              "socket_rows": lambda: tcp, "sockets": sockets, "mutex": lambda r: contextlib.nullcontext()})
+              "socket_rows": lambda: tcp, "sockets": sockets, "mutex": mutex})
 # Windows Python monotonic may be tick-resolution. The fake clock uses its high-
 # resolution monotonic counter; shorten synthetic sleeps, not source deadlines.
 scope["time"] = types.SimpleNamespace(monotonic_ns=time.perf_counter_ns, sleep=lambda seconds: time.sleep(min(seconds, 0.005)))
 invocations = []
+commands = {}
+command = lambda args: b"\0".join(arg.encode() for arg in args) + b"\0"
 frames = io.StringIO()
 binding = {"round": "r21", "commit": commit, "token": token, "helperSha256": hashlib.sha256(source.encode()).hexdigest()}
 
@@ -244,11 +303,20 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
     for sequence, channel in enumerate(["ssh", "sftp", "ssh"]):
         identifier = format(sequence + 1, "032x")
         payload = b"set -euo pipefail\n:\n" if channel == "ssh" else b"synthetic-sftp-protocol"
+        if mode.startswith("setup-") and sequence == 2:
+            payload = argument["queryPayload"].encode()
         invocation = {"schema": "benchmark-control-invocation/v1", "round": "r21", "commit": commit, "token": token,
                       "id": identifier, "channel": channel, "purpose": "bootstrap", "requestSha256": hashlib.sha256(payload).hexdigest(), "deadlineMs": 1000}
         request = {"invocation": invocation, "helperSha256": binding["helperSha256"], "epoch": "bootstrap", "sequence": sequence}
+        if mode.startswith("setup-") and sequence < 2:
+            request = argument["expected"]["requests"][sequence]
+            invocation = request["invocation"]
+        if mode.startswith("setup-") and sequence == 2:
+            request["epoch"] = "collection"
+            invocation["purpose"] = "collection"
+            invocation["requestSha256"] = argument["querySha256"]
         invocations.append(invocation)
-        if sequence == 2:
+        if sequence == 2 and not mode.startswith("setup-"):
             request["seal"] = [{"id": p["id"], "sha256": hashlib.sha256(scope["encoded"](p)[:-1]).hexdigest()} for p in invocations]
         current.update({"id": identifier, "guardian": 101 + sequence * 10, "child": 102 + sequence * 10, "payload": payload})
         local.pid = current["guardian"]
@@ -281,7 +349,10 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
         if mode in ("disconnect", "ancestor-survives", "ancestor-zombie"):
             assert str(root / ("receipt-" + identifier + ".json")) not in data
             break
-    if mode in ("disconnect", "ancestor-survives", "ancestor-zombie"):
+    if mode.startswith("setup-"):
+        output = {"proof": current.get("proof"), "rejected": current.get("rejected", False),
+                  "custody": {p.rsplit("/", 1)[-1]: value.hex() for p, value in data.items() if p.startswith("/bench/control/")}}
+    elif mode in ("disconnect", "ancestor-survives", "ancestor-zombie"):
         output = {"intentionalNegative": mode, "receiptAbsent": True, "observerErrors": errors}
     else:
         if mode == "unknown-survivor":
