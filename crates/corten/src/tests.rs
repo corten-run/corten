@@ -769,6 +769,45 @@ async fn patch_or_keeps_a_handler_send_with_a_view_of_cells() {
     assert_eq!(body, r#"<p id="msg">1</p>"#);
 }
 
+/// `patch_or_with` runs one side: the part for the runtime's read (`Mode::Action`), the page for
+/// every other mode (a first load, a navigation, a data client), so neither reads what only the
+/// other draws; and the part varies on `corten`, so a cache keeps it apart from the page at the
+/// same URL.
+#[tokio::test]
+async fn patch_or_with_runs_only_the_side_the_request_asks_for() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static PARTS: AtomicUsize = AtomicUsize::new(0);
+    static PAGES: AtomicUsize = AtomicUsize::new(0);
+    let routes = || {
+        Table::new().route(
+            "/",
+            get(|req: Req| async move {
+                req.patch_or_with::<ForOne, crate::Patches, _, _, _, _>(
+                    || async {
+                        PARTS.fetch_add(1, Ordering::Relaxed);
+                        req.patch(html! { <p id={MsgId}>"picks"</p> })
+                    },
+                    || async {
+                        PAGES.fetch_add(1, Ordering::Relaxed);
+                        req.test_page("Home", html! { <p>"home"</p> })
+                    },
+                )
+                .await
+            }),
+        )
+    };
+    let count = || (PARTS.load(Ordering::Relaxed), PAGES.load(Ordering::Relaxed));
+    let (_, headers, body) = call(app(routes(), None), "GET", Some("action")).await;
+    assert_eq!((headers["corten-patch"].to_str().unwrap(), body.as_str(), count()), ("1", r#"<p id="msg">picks</p>"#, (1, 0)));
+    assert!(headers["vary"].to_str().unwrap().split(", ").any(|name| name == "corten"), "{headers:?}");
+    let (status, headers, body) = call(app(routes(), None), "GET", None).await;
+    assert_eq!((status, headers.contains_key("corten-patch"), count()), (StatusCode::OK, false, (1, 1)));
+    assert!(body.contains("<p>home</p>"), "{body}");
+    call(app(routes(), None), "GET", Some("nav")).await;
+    call_with(app(routes(), None), "GET", "/", None, Some("application/json")).await;
+    assert_eq!(count(), (1, 3));
+}
+
 #[cfg(feature = "json")]
 #[derive(crate::json::ToJson)]
 struct Data {
@@ -2664,6 +2703,38 @@ async fn a_route_that_says_patches_answers_the_runtimes_read_with_a_patch() {
     assert_eq!((page.status(), page.headers()["location"].to_str().unwrap()), (StatusCode::SEE_OTHER, "/saved"));
 }
 
+/// A page that draws a part waiting (`ReadAgain::now`, its tag inside the part) preloads the part
+/// module with the runtime, and so does a navigation's answer, which the runtime moves into the
+/// head; a page without one preloads nothing more. The module is served beside the runtime, which
+/// imports it from there, versioned and cached with it (#1400).
+#[tokio::test]
+async fn a_page_that_waits_for_a_part_preloads_the_part_module() {
+    fn page(req: &Req, waits: bool) -> HtmlResult {
+        let now = waits.then(|| ReadAgain::now(url_patches::Saved { after: None }));
+        req.test_page("Home", html! { <p id={MsgId}>"Finding" {now}</p> })
+    }
+    let routes = Table::new()
+        .route("/", get(|req: Req| async move { page(&req, true) }))
+        .route("/plain", get(|req: Req| async move { page(&req, false) }));
+    let preload = format!(r#"<link rel="modulepreload" href="{}" data-corten-part>"#, crate::part_path());
+    assert_eq!(crate::part_path(), format!("/corten/{}/part.js", crate::runtime_version()));
+    for mode in [None, Some("nav")] {
+        let (status, _, body) = call_with(app(routes.clone(), None), "GET", "/", mode, None).await;
+        assert_eq!(status, StatusCode::OK, "{mode:?} {body}");
+        assert!(body.contains(&preload), "{mode:?}: {body}");
+        assert!(
+            body.contains(r#"<p id="msg">Finding<template data-corten-read-now data-from="/saved"></template></p>"#),
+            "{body}"
+        );
+        let (_, _, plain) = call_with(app(routes.clone(), None), "GET", "/plain", mode, None).await;
+        assert!(!plain.contains("part.js"), "{mode:?}: {plain}");
+    }
+    let (status, headers, body) = call_with(app(routes, None), "GET", crate::part_path(), None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, crate::PART_JS));
+    assert_eq!(headers["content-type"], "text/javascript; charset=utf-8");
+    assert!(headers["cache-control"].to_str().unwrap().contains("immutable"), "{headers:?}");
+}
+
 /// A route that says `patches` mounted by hand (`Area::route`) with a `get` handler that answers
 /// one, as its routes module would: the runtime's read of it still gets the patch. One that may
 /// answer the page does not compile (`Methods`'s doctest).
@@ -2872,6 +2943,48 @@ fn what_a_patch_or_request_costs() {
         for _ in 0..requests {
             let (status, headers, _) = call_with(router.clone(), "GET", "/part", (!page).then_some("action"), None).await;
             assert!(status == StatusCode::OK && headers.contains_key("corten-patch") != page, "{status} {headers:?}");
+        }
+    });
+}
+
+/// Instructions per request for a slow part's read, the two ways an app can send it: a route of
+/// its own whose `corten::live` stream sends the part once (`SLOW_PART=stream`, as before
+/// #1400), or the page's own route answering `corten: action` with `req.patch_or_with`'s part
+/// side. Count it as `what_a_patch_or_request_costs` says, with `SLOW_PART_REQUESTS=1200` and
+/// `200` and `--exact tests::what_a_slow_part_read_costs`.
+#[test]
+#[ignore]
+fn what_a_slow_part_read_costs() {
+    let requests: usize = std::env::var("SLOW_PART_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let stream = std::env::var("SLOW_PART").is_ok_and(|m| m == "stream");
+    fn picks() -> impl Patch {
+        html! {
+            <ul id={MsgId}>
+                <li>"Halcyon Health (HLTH) 0.00%"</li>
+                <li>"Northgate Rail (NRTH) 0.00%"</li>
+            </ul>
+        }
+    }
+    async fn send_part() -> LiveResponse {
+        crate::live(futures_util::stream::once(async { picks().to_html() }))
+    }
+    async fn read_part(req: Req) -> HtmlResult<crate::Patches> {
+        req.patch_or_with(|| async { req.patch(picks()) }, || async { req.test_page("Home", html! { <p>"home"</p> }) }).await
+    }
+    let router = if stream {
+        App::new(Routes::from(Table::new().route("/part", get(send_part)))).router()
+    } else {
+        App::new(Routes::from(Table::new().route("/part", get(read_part)))).router()
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, body) = if stream {
+                call_with(router.clone(), "GET", "/part", None, Some("text/event-stream")).await
+            } else {
+                call_with(router.clone(), "GET", "/part", Some("action"), None).await
+            };
+            assert!(status == StatusCode::OK && body.contains("Northgate Rail"), "{status} {body}");
         }
     });
 }
@@ -11503,7 +11616,7 @@ async fn without_a_host_the_app_listens_on_both_loopback_addresses() {
         assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi"), "{addr}: {answer}");
     }
     stop.send(()).unwrap();
-    server.await.unwrap().unwrap();
+    server.await.unwrap();
 }
 
 /// A server for `app` on a free port of `127.0.0.1` until `stop` is sent.
@@ -12193,11 +12306,11 @@ async fn a_switched_connection_after_a_step_counts_against_max_connections() {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // A stand-in for a handshake: the client sends "hello\n" first.
-    async fn hello(mut tcp: tokio::net::TcpStream) -> std::io::Result<tokio::net::TcpStream> {
+    async fn hello(mut tcp: tokio::net::TcpStream) -> std::io::Result<(tokio::net::TcpStream, ())> {
         let mut greeting = [0u8; 6];
         tcp.read_exact(&mut greeting).await?;
         match &greeting {
-            b"hello\n" => Ok(tcp),
+            b"hello\n" => Ok((tcp, ())),
             _ => Err(std::io::Error::other("not a greeting")),
         }
     }
@@ -12374,11 +12487,13 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
     use std::time::{Duration, Instant};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // A stand-in for a handshake: the client sends "hello\n" first, anything else fails it.
-    async fn hello(mut tcp: tokio::net::TcpStream) -> std::io::Result<tokio::net::TcpStream> {
+    async fn hello(
+        mut tcp: tokio::net::TcpStream,
+    ) -> std::io::Result<(tokio::net::TcpStream, crate::ConnectionInfo<&'static str>)> {
         let mut greeting = [0u8; 6];
         tcp.read_exact(&mut greeting).await?;
         match &greeting {
-            b"hello\n" => Ok(tcp),
+            b"hello\n" => Ok((tcp, crate::ConnectionInfo("verified"))),
             _ => Err(std::io::Error::other("not a greeting")),
         }
     }

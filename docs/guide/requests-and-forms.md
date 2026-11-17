@@ -76,7 +76,10 @@ One handler serves every mode, and `req.mode` says which. A `data-patch` form's 
 both of its rows with `req.patch_or(view, || async { req.page(..) }).await`: the patch with
 JavaScript, and otherwise the page (or a redirect), whose closure runs only then, so the patch
 never loads what only the page shows. A patch that needs data of its own, which the page does not,
-or a status or headers of its own, checks `req.mode == Mode::Action` itself; a refusal whose
+is `req.patch_or_with(|| async { .. req.patch(view) }, || async { req.page(..) }).await`, where both
+sides are closures and only the one the request asks for runs (the part's may answer
+`req.patch_with_status`, or set headers on its response, for a status or headers of its own);
+a refusal whose
 form needs a read is `req.invalid_with` (below). A route with no screen goes under
 [`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
 loads only ([the document](views.md#the-document)); every page carries a key hashed from the
@@ -92,6 +95,15 @@ small page with no ids may want. Nothing checks that a form's handler answers a 
 the page read again from its route (`ReadAgain::from`, [below](#a-read-that-has-not-caught-up-yet))
 is the one thing that needs one, so it takes only a route that says `patches`.
 
+Controls may be named `parentElement`, `parentNode`, `id`, `elements` or other DOM members. A
+control, in the form or joined to it by `form=`, is the form's member of its name, so Corten reads
+and calls a form's members through the platform's prototypes: the runtime (patches, navigation),
+`shortcut()` in `corten/keys`, `view()` and `rows()` for a host, root or row that is a form, and
+the classes `#[component(view)]` generates for a hole
+on a form (an attribute, or its whole text), a row that is a form, and a hole whose path starts
+from a form, into it or past it. An app's own script that reads a form directly must take the
+same care: `form.parentElement` can be a control, not its parent.
+
 While a request is on its way, the runtime marks what waits for it with `aria-busy="true"`: a
 `data-patch` form and the button that sent it until its answer is drawn (or, when the answer
 sends the browser to another page, until that page is), and for a navigation `<main>` and the
@@ -99,10 +111,13 @@ link or GET form that started it, with the form's button, until the new page is 
 (through a redirect too). A button outside its form (`form="open"`, a row's action for one form
 the rows share) is marked as well, so the one pressed shows it is working, and the kit's `Button`
 draws that. When another navigation replaces one, or another button sends the same form by GET,
-the first one's marks go at once, and the newer one's stay. A write is never cut short that way:
-a button pressed while it is on its way is marked beside it and sends once its answer is drawn,
-when that answer took the write or refused only its input (a 2xx or a 422); after any other (a
-409, a 5xx, a failed network, another page) its mark goes and it is not sent.
+the first one's marks go at once, and the newer one's stay. An element two of them mark (a form a
+part's read and a submit both wait on) is the one that marked it last: the earlier one's end
+leaves the mark, and the later one's end takes it away even while the earlier one is still on its
+way (the element is not busy again until something marks it). A write is never cut
+short that way: a button pressed while it is on its way is marked beside it and sends once its
+answer is drawn, when that answer took the write or refused only its input (a 2xx or a 422);
+after any other (a 409, a 5xx, a failed network, another page) its mark goes and it is not sent.
 Showing which control is working is then CSS
 alone, in the component's stylesheet:
 
@@ -447,7 +462,7 @@ an exponent (`1e-20`), which Chromium and WebKit read exactly, and bounds that h
 (`min` above `max`, or an exclusive `min` at `f64::MAX`) are drawn as `min="1" max="0"`. A browser
 can still refuse a number the handler holds near a refused end (Chromium and WebKit refuse a
 typed `4e-324`, which reads as `5e-324`); what the input says and where the two differ is
-[Choice 60](../design.md#choice-exclusive-ends).
+[Choice 61](../design.md#choice-exclusive-ends).
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
 handler runs, and the user loses the form: a blank field, `two`, a count past the type, or
@@ -2216,7 +2231,7 @@ while it is still behind. The route's URL carries what the read waits for (the w
 since the page's address does not; its handler answers the part with `req.patch_or`, and so the
 page without JavaScript, at the same URL. The route says `patches`, and its `get` handler returns
 `HtmlResult<Patches>`, which only `req.patch`, `req.patch_with_status`, `req.patch_or`,
-`req.invalid` and `req.invalid_with` make: a page or a redirect there (`req.page(..)` without
+`req.patch_or_with`, `req.invalid` and `req.invalid_with` make: a page or a redirect there (`req.page(..)` without
 `patch_or` around it) does not compile, since the runtime's read would get nothing it can apply,
 and `ReadAgain::from` takes no other route, so a refactor that drops the `patch_or` fails the
 build rather than the page. A route given by hand, a `#[derive(Route)]` struct, is not one: the
@@ -2297,6 +2312,18 @@ req.page(html! {
 ```
 
 `examples/watchlist`'s alerts page has all three.
+
+A part the page does not wait for at all (a slow read, such as recommendations) is read the same
+way, once and with no delay: `ReadAgain::now(route)` inside the part drawn waiting, and the page's
+own handler answers both with `req.patch_or_with(part, page)`, whose sides are closures, so the
+part's read is not the page's and the page's is not the part's. It is read once; a page that
+waits for one and asks in its head to be read again still is, on its interval, and when its
+`<main>` changed it draws the part waiting again, which reads it again, so its interval needs
+room for the part. The runtime marks the element the tag is in, and only it, `aria-busy="true"`
+while the read is on its way and `data-corten-read-failed` if the read does not replace it (no
+patch, an error page, a redirect); a stylesheet hides the link to the page with the part read in,
+which a browser without JavaScript follows, only while the part is busy
+([A slow part](live-data.md#a-slow-part)).
 
 A page whose changing part a `<corten-live>` relays ([live data](live-data.md)) already keeps
 itself fresh with JavaScript; reading it whole would replace the `<corten-live>` and open its

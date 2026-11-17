@@ -10,74 +10,9 @@ For server-rendered parts that change (a status line, a notification count), str
 `corten::live(stream)` turns a stream of rendered HTML into server-sent events, and
 `<corten-live src>` swaps each fragment into the page by `id`, like a form's patch. No script of
 your own; the stream closes when the element leaves the page. When the stream ends the element
-stays as it is instead of reconnecting, so a stream of one fragment is a slow part of a page sent
-when it is ready. A server shutting down ends its streams first, and those browsers reconnect.
-
-```rust,ignore
-// in the routes module: the page, whose `picks` has it read them in (other links to it are
-// `url::Home::default()`), and the stream
-//   #[route("/", get = home)] #[derive(Default)] pub struct Home { pub picks: Option<bool> }
-//   #[route("/live/picks", get = picks)] pub struct Picks;
-
-// the stream: one fragment, when the slow read is done; it replaces the element with its id
-async fn picks(State(shop): State<Shop>) -> LiveResponse {
-    corten::live(futures_util::stream::once(async move {
-        let picks = shop.picks_for_you().await;
-        Picks { picks: &picks }.to_html()
-    }))
-}
-
-// the page: drawn without them and completed by the stream, unless its address asks for them
-async fn home(req: Req, Params(at): Params<url::Home>, State(shop): State<Shop>) -> HtmlResult {
-    let picks = match at.picks {
-        Some(true) => Some(shop.picks_for_you().await),
-        _ => None,
-    };
-    req.page(html! {
-        // .. the rest of the page
-        match &picks {
-            Some(picks) => <Picks picks={picks} />,
-            None => <corten-live src={url::Picks}><PicksLoading /></corten-live>,
-        }
-    })
-}
-
-#[component(css)] // picks_loading.css, below
-fn PicksLoading() -> impl Render {
-    html! {
-        <p id={PicksId}>
-            <span class={Finding}>"Finding picks for you..."</span>
-            <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
-        </p>
-    }
-}
-
-// listed with the app's components, so its stylesheet is served
-App::new(url::router()).components(&[.., PicksLoading])
-```
-
-```css
-/* picks_loading.css: the link shows in place of the line where no stream will bring the picks */
-@media (scripting: enabled) { .show { display: none; } }
-@media (scripting: none) { .finding { display: none; } }
-corten-live[status="closed"] .finding { display: none; }
-corten-live[status="closed"] .show { display: inline; }
-```
-
-A browser without JavaScript opens no stream, and a stream can give up (`closed`, below), so a
-placeholder alone would stay for good. Its link goes to the page's own route with a query field
-its handler reads the part in for, so there is no second route. The component's CSS hides the
-link while a stream may still bring the part, and shows it in place of the line saying the part
-is on its way under `@media (scripting: none)` and inside a `closed` `<corten-live>`; a browser
-without the `scripting` media feature matches neither query and shows both. The query follows
-whether scripts are on, not whether the runtime ran
-([A control only the script makes work](scripts.md#a-control-only-the-script-makes-work)): with
-the runtime blocked or failed, the line stays and the link is hidden. Following the link costs
-one page with the slow read in it: `?picks=true` waits for the read wherever it is opened, with
-JavaScript too, so the link is `rel="nofollow"` and nothing else links there. A page with several
-slow parts reads them all in under one field, and a data client asks the same address for the
-part. What the pattern costs is one field plus one handler branch per page
-([design Choice 44](../design.md#choice-slow-part-link)).
+stays as it is instead of reconnecting. A server shutting down ends its streams first, and those
+browsers reconnect. A part that is only slow to read, and does not change once drawn, needs no
+stream: the page's own handler answers it ([A slow part](#a-slow-part)).
 
 A value that keeps changing is the next section's `corten::live_watch`.
 
@@ -205,8 +140,8 @@ nginx passes their events on as they are written ([Deploying](deploy.md#live-str
 
 A browser without JavaScript gets no stream: a page whose part is relayed while a job runs asks
 it alone to reload, with `ReadAgain { after }.without_javascript()` in its head
-([read again](requests-and-forms.md)), and a slow part sent once links to the page with it read
-in ([Fragments](#fragments-corten-live)).
+([read again](requests-and-forms.md)), and a slow part the runtime reads links to the page with
+it read in ([A slow part](#a-slow-part)).
 
 `<corten-live>` shows its connection on itself, so a page can say a part is stale with CSS alone:
 `status` is `connecting`, `live` once the stream is open, `reconnecting` while the browser
@@ -271,6 +206,147 @@ that decodes to more than 16 KiB only when more of the stream arrives, so the la
 quiet spell would show late ([design Choice 32](../design.md#choice-stream-coding)). Each open
 stream holds about 0.5 MB (zstd) or 0.35 MB (gzip) while it is open; past 256 MB for all of them,
 new streams go out uncompressed.
+
+## A slow part
+
+A part of a page that waits for a slow read (picks for the visitor, a report) and that the page
+can go without at first is drawn waiting, and read once the page is on the screen from the page's
+own route. One handler answers both: the route says `patches`, and its handler answers with
+`req.patch_or_with(part, page)`. The part side runs only for the runtime's read of the part
+(`Mode::Action`) and reads only the part; the page side runs for every other request and draws
+the part waiting, with `ReadAgain::now(route)` inside the waiting element, whose id the part's
+patch replaces.
+
+```rust,ignore
+// in the routes module: `picks` has the page read them in (the link a browser without
+// JavaScript follows); other links to it are `url::Home::default()`
+//   #[route("/", get = home, patches)] #[derive(Default)] pub struct Home { pub picks: Option<bool> }
+
+async fn home(req: Req, Params(at): Params<url::Home>, State(shop): State<Shop>) -> HtmlResult<Patches> {
+    req.patch_or_with(
+        // the runtime's read of the part: the part alone, as a patch
+        || async { req.patch(Picks { picks: &shop.picks_for_you().await }) },
+        // the page: without the part, unless its address asks for it
+        || async {
+            let picks = match at.picks {
+                Some(true) => Some(shop.picks_for_you().await),
+                _ => None,
+            };
+            req.page(html! {
+                // .. the rest of the page
+                match &picks {
+                    Some(picks) => <Picks picks={picks} />,
+                    None => <PicksLoading />,
+                }
+            })
+        },
+    )
+    .await
+}
+
+#[component]
+fn Picks<'a>(picks: &'a [Pick]) -> impl Patch {
+    html! { <ul id={PicksId}> for pick in picks { <li>{&pick.name}</li> } </ul> }
+}
+
+#[component(css)] // picks_loading.css, below
+fn PicksLoading() -> impl Render {
+    html! {
+        <p id={PicksId} class={Waiting}>
+            <span class={Finding}>"Finding picks for you..."</span>
+            <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
+            // read at once from the page's own route, as a patch that replaces #picks, the
+            // element the tag is in
+            {ReadAgain::now(url::Home::default())}
+        </p>
+    }
+}
+
+// listed with the app's components, so its stylesheet is served
+App::new(url::router()).components(&[.., PicksLoading])
+```
+
+```css
+/* picks_loading.css: the line shows while a read is bringing the picks, the link otherwise, in
+   one cell, so the swap moves nothing around them */
+.waiting { display: grid; justify-items: start; }
+.finding, .show { grid-area: 1 / 1; }
+.finding { visibility: hidden; }
+[aria-busy] > .finding { visibility: visible; }
+[aria-busy] > .show { visibility: hidden; }
+```
+
+The runtime fetches the route with `corten: action` as soon as the page is on the screen (a full
+load or a navigation), whether the tab is shown or not, and applies the patch it answers by id.
+The handler runs once for the page and once for the part, and each run reads only what it draws.
+The reads are a script module of their own, which only a page with such a tag loads, preloaded
+with the runtime: a page without a slow part loads nothing for them. The element the tag is in
+(the part: it needs an id, and the runtime logs a tag in an element without one) is
+`aria-busy="true"` while the read is on its way, and a navigation away, or a patch that replaces
+that element, stops the fetch, so the server stops reading. The read depends on that element
+alone: a patch of anything else meanwhile (the next cell of a grid, a live row of the same list,
+another part read first) neither stops it nor marks it. A part is read once; one that should be
+read again later carries `ReadAgain::from` in its answer ([read again](requests-and-forms.md)). A
+part a page, a form's patch, a script's `patch` or a `<corten-live>` fragment draws waiting is
+read, at the pace those come (a fragment that draws the part again ends the read the one before
+started), and so is one the answer to a part read again (`ReadAgain::from`) draws, at its
+interval; one a part's answer draws waiting is marked failed instead, so reads do not chain. The
+module counts as the part's answer's only the tags in that answer's markup, handed to its read
+by the runtime as it parses it, before anything else can run, and kept by nothing after: a part a form's answer or a part read again draws in the same moment (both having waited
+for one stylesheet) is read, even in place of one the part's answer drew or at its address, and
+so are one at an address only a `<template>`'s content in the part's answer names and one your
+script draws while the answer is drawn or its stylesheet linked (from the `focusin` of the focus it moves, or a custom
+element's `connectedCallback`). A
+read the browser cut short by keeping the page in its back-forward cache is made again when the
+page is shown, if its part is still there; a page the browser prerenders reads its parts once it
+is shown. A page whose head asks to be read again (`ReadAgain`) is read on its interval whatever
+its parts' reads: when its `<main>` changed, it draws the part waiting again, which reads it
+again, so give the page an interval longer than its slow part takes.
+
+Two parts one read draws (four panels from one report) each take a tag inside its own element,
+with the same address: the runtime reads it once, and the part side draws both in one patch. A
+`<template>` is allowed in any element a part may be, so each can be a cell of a grid, a row of
+a table or an item of a list. A shared read is as slow as all it reads, so each part waits for the
+slowest: independent slow parts on one route share that one read unless the app gives each a query
+field (`url::Home { part: Some(Part::Picks) }`), so each has an address and a read of its own. A
+page in a `Public`, which shared caches give to anyone, answers its part to anyone too: a part
+read for one visitor there (picks for the visitor on a cached home page) needs a route of its own
+that says `patches`, named in its `ReadAgain::now`. The page side takes any `HtmlResult`, so a
+`req.patch` there compiles too, and a full load would get the fragment (a debug build answers it
+with a 500 that says so): draw the page there
+([#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)).
+
+Without JavaScript nothing reads the part, so the waiting part holds a link to the page's own
+route with a query field its page side reads the part in for: no second route, and nothing of
+Corten's own in the URL. The component's CSS hides the link, and shows the line saying the part is
+on its way, only while a read is bringing the part: the runtime's part module marks the part
+`aria-busy` then. A part that is a form a submit marks too has one mark, the latest's: whichever
+marked it last takes it away when it ends, so a submit's answer drawn first shows the link while
+the read is still on its way. So the link shows without JavaScript, when the runtime or
+its part module (`part.js`) does not load or run, and once the read has failed, in every browser.
+The module marks the part busy once the page is parsed, so the link is drawn for a moment on a
+load before it. A part its read did not replace (offline, the server unreachable, an error page, a
+page, a patch without it) is marked `data-corten-read-failed`, which the CSS may use to say so. A read the server redirects (a sign-in) marks it too, and the page
+stays: its link, a navigation, follows the redirect, as without JavaScript, so a user typing
+elsewhere on the page is not taken away. Only a patch that replaces or removes the part
+answers it: a patch that leaves it where it was (an empty one, or one of other elements) marks it
+too. One of a shared read's parts replaced or removed while the read
+was on its way (a form's answer, a script) is not drawn over: the patch is not applied, and the
+parts still waiting are marked failed at once, so their links show. A part that is itself a live
+region around `<main>`, which a write's page draws in place with a new tag, has the new tag read
+and the old read stopped, so an older answer never lands over a newer one, even one waiting for
+the same stylesheet; a kept part whose attributes the page draws again keeps its busy or failed
+mark, and a kept tag the page draws with another address (a form's page that switches the
+account a part is for) is read at the new address, its old read stopped and an old failure
+forgotten. Following the link costs
+one page with the slow read in it: `?picks=true` waits for the read wherever it is opened, with
+JavaScript too, so the link is `rel="nofollow"` and nothing else links there. A page with several
+slow parts reads them all in under one field, and a data client, which gets the page side, asks
+the same address for them. What the pattern costs is one field and the page side's branch on it
+per page ([design Choice 44](../design.md#choice-slow-part-link)). The page is not streamed in
+parts instead ([design Choice 7](../design.md#choice-whole-pages)): its status and headers wait
+for its own reads, and the part waits for none of them. A part that keeps changing once drawn is
+a `<corten-live>` stream (above).
 
 ## Rows: feeds
 
