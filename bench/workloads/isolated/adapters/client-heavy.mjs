@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join, posix, win32 } from "node:path";
 import { validateSaved } from "../../../client-heavy/verify.mjs";
 import { sourceRoots } from "../../../client-heavy/contract.mjs";
+import { evaluateLatestStable, latestStableSources, candidateLatestStableSchema } from "../../latest-stable.mjs";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -33,7 +34,7 @@ export async function inspectSaved(binding, folder) {
     assert.equal(group, "client-heavy");
     const native = await validateSaved({ folder, round, commit });
     assert.ok(object(native));
-    if (native.schema !== "client-heavy-saved-verification/v2") {
+    if (!["client-heavy-saved-verification/v2", "client-heavy-saved-verification/v3"].includes(native.schema)) {
       // v1 is diagnostic only; it has no source-bound plan, raw clocks or terminal proof.
       assert.equal(native.schema, "client-heavy-saved-verification/v1");
       assert.equal(native.group, group); assert.equal(native.round, round); assert.equal(native.commit, commit);
@@ -56,7 +57,13 @@ export async function inspectSaved(binding, folder) {
       return result;
     }
     const output = read("result.json"), plan = read("plan.json"), effective = binding.execution.effectiveOptions;
-    assert.equal(output.schema, "client-heavy-native/v2");
+    assert.equal(output.schema, native.schema === "client-heavy-saved-verification/v3" ? "client-heavy-native/v3" : "client-heavy-native/v2");
+    if (output.schema === "client-heavy-native/v3") {
+      // This bounded one-measurement recipe still has no ranking admission.
+      result.rankingEligible = false;
+      result.comparisonEligibleApps = [];
+      assert.deepEqual(output.latestStable, native.latestStable);
+    }
     assert.equal(output.group, group); assert.equal(output.round, round); assert.equal(output.provenance.commit, commit);
     assert.equal(plan.schema, "client-heavy-plan/v1"); assert.equal(plan.round, round); assert.equal(plan.commit, commit);
     for (const value of [output, plan, native]) assert.deepEqual(value.selectedApps, apps);
@@ -104,6 +111,7 @@ export async function inspectSaved(binding, folder) {
     // Native v2 permits Git's CRLF checkout conversion, so hash canonical text, not budgets
     // or a self-consistent review-subject/collection manifest.
     let sourceComplete = true;
+    const policyPaths = new Set(Object.values(latestStableSources)), capturedPolicyBytes = new Map(), committedPolicyBytes = new Map();
     if (!native.sources) { sourceComplete = false; block("source-byte-closure-missing"); }
     else {
       const before = read("evidence/source-before.json"), after = read("evidence/source-after.json");
@@ -119,11 +127,29 @@ export async function inspectSaved(binding, folder) {
         const bytes = readFileSync(join(folder, "evidence", "blobs", file.sha256));
         assert.equal(bytes.length, file.bytes); assert.equal(hash(bytes), file.sha256);
         const text = bytes.toString("utf8");
-        assert.ok(file.sha256 === bound.sha256 || (Buffer.from(text).equals(bytes)
-          && hash(Buffer.from(text.replaceAll("\r\n", "\n"))) === bound.sha256));
+        let committedBytes = bytes;
+        if (file.sha256 !== bound.sha256) {
+          committedBytes = Buffer.from(text.replaceAll("\r\n", "\n"));
+          assert.ok(Buffer.from(text).equals(bytes) && !committedBytes.includes(13)
+            && Buffer.from(committedBytes.toString().replaceAll("\n", "\r\n")).equals(bytes)
+            && hash(committedBytes) === bound.sha256);
+        }
+        if (policyPaths.has(file.path)) { capturedPolicyBytes.set(file.path, bytes); committedPolicyBytes.set(file.path, committedBytes); }
       }
       for (const file of binding.sources.files.filter((f) => sourceRoots.some((r) => f.path === r || f.path.startsWith(`${r}/`)))) {
         if (!seen.has(file.path)) { sourceComplete = false; block("source-byte-closure-incomplete"); }
+      }
+    }
+    if (output.schema === "client-heavy-native/v3") {
+      if ([...policyPaths].some((path) => !capturedPolicyBytes.has(path))) {
+        sourceComplete = false; block("candidate-policy-source-closure-missing");
+      } else {
+        const evaluate = (bytes) => evaluateLatestStable({ group: "client-heavy", ...Object.fromEntries(
+          Object.entries(latestStableSources).map(([key, path]) => [key, bytes.get(path)])) });
+        const captured = evaluate(capturedPolicyBytes), committed = evaluate(committedPolicyBytes);
+        assert.equal(captured.schema, candidateLatestStableSchema); assert.equal(captured.valid, true);
+        assert.deepEqual(native.latestStable, captured);
+        assert.deepEqual(binding.latestStable, committed);
       }
     }
     keys(native.intrinsic, ["valid", "complete", "passed", "cleanupPassed"]);
