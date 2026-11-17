@@ -131,6 +131,22 @@ try {
     document.body.append(form);
   });
   check("dev mode reports such a control a patch draws", await patched);
+  const namedInvalid = reportOf("named-invalid");
+  const namedRegion = reportOf("named-region");
+  await drawn.evaluate(() => {
+    const form = document.createElement("form");
+    form.setAttribute("role", "alert");
+    const input = Object.assign(document.createElement("input"), { type: "number", name: "named-invalid", min: "1" });
+    input.setAttribute("value", "0");
+    const region = Object.assign(document.createElement("p"), { id: "named-region" });
+    region.setAttribute("role", "status");
+    for (const name of ["noValidate", "parentElement", "closest", "getAttribute", "id", "localName", "isConnected"]) {
+      form.append(Object.assign(document.createElement("input"), { type: "hidden", name }));
+    }
+    form.append(input, region);
+    document.body.append(form);
+  });
+  check("dev diagnostics read a form past controls named noValidate, parentElement, closest and the like", (await namedInvalid) && (await namedRegion));
   // What the user typed is theirs, not the page's: a bound a script moves past it is not reported.
   await drawn.evaluate(() => {
     const input = /** @type {HTMLInputElement} */ (document.querySelector('input[name="delay"]'));

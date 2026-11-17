@@ -5,6 +5,12 @@ import { ready } from "corten";
 import { LISTED, field, formOf, why } from "./field.js";
 import { parseOn } from "./on.js";
 /** @import { Arg } from "./on.js" */
+// Served without bundling: use the prototypes here too, without another dev-only module.
+const own = Element.prototype;
+/** @param {Element} el @param {string} name */
+const attrOf = (el, name) => own.getAttribute.call(el, name);
+/** @param {Element} el */
+const labelOf = (el) => attrOf(el, "id") || Reflect.get(own, "localName", el);
 
 const CONTROLS = "input,select,textarea";
 // A region a screen reader announces as it changes: the live roles and aria-live, unless
@@ -16,8 +22,8 @@ const reported = new WeakSet();
 
 /** @param {Element} el */
 const liveName = (el) => {
-  const role = el.getAttribute("role");
-  return role && LIVE_ROLES.includes(role) ? `role="${role}"` : `aria-live="${el.getAttribute("aria-live")}"`;
+  const role = attrOf(el, "role");
+  return role && LIVE_ROLES.includes(role) ? `role="${role}"` : `aria-live="${attrOf(el, "aria-live")}"`;
 };
 
 /**
@@ -29,10 +35,11 @@ const liveName = (el) => {
  */
 function nested(root) {
   for (const el of within(root, LIVE)) {
-    const outer = el.parentElement?.closest(LIVE);
+    const parent = /** @type {Element | null} */ (Reflect.get(Node.prototype, "parentElement", el));
+    const outer = parent && own.closest.call(parent, LIVE);
     if (!outer || reported.has(el)) continue;
     reported.add(el);
-    console.error(`corten: ${el.id || el.localName} (${liveName(el)}) is a live region inside another (${liveName(outer)}), which a screen reader may announce twice: draw one`, el);
+    console.error(`corten: ${labelOf(el)} (${liveName(el)}) is a live region inside another (${liveName(outer)}), which a screen reader may announce twice: draw one`, el);
   }
 }
 
@@ -59,7 +66,7 @@ function asDrawn(el) {
 function check(root) {
   const found = /** @type {HTMLInputElement[]} */ (within(root, CONTROLS));
   for (const el of found) {
-    if (reported.has(el) || !el.willValidate || !el.form || el.form.noValidate || el.getAttribute("aria-invalid") === "true" || !asDrawn(el)) continue;
+    if (reported.has(el) || !el.willValidate || !el.form || Reflect.get(HTMLFormElement.prototype, "noValidate", el.form) || el.getAttribute("aria-invalid") === "true" || !asDrawn(el)) continue;
     const { valid, valueMissing, customError } = el.validity;
     if (!valid && !valueMissing && !customError) {
       reported.add(el);
@@ -142,7 +149,7 @@ function displays() {
 /** @param {Element} el @param {string} selector */
 const matching = (el, selector) => {
   try {
-    return el.matches(selector);
+    return own.matches.call(el, selector);
   } catch {
     return false;
   }
@@ -160,7 +167,7 @@ const matching = (el, selector) => {
  */
 function inPlace(root) {
   // One the app hides with `hidden` is meant to be hidden, whatever its rules say.
-  const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !el.hasAttribute("hidden"));
+  const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !own.hasAttribute.call(el, "hidden"));
   if (!closed.length) return;
   const rules = displays();
   for (const el of closed) {
@@ -172,15 +179,16 @@ function inPlace(root) {
     const drawn = applies.find((r) => r.condition && r.display !== "none");
     if (!drawn || applies.some((r) => r.important && r.display !== "none")) continue;
     reported.add(el);
-    const dialog = el.localName === "dialog" && !el.hasAttribute("popover");
+    const dialog = el instanceof HTMLDialogElement && !own.hasAttribute.call(el, "popover");
     const state = dialog ? "[open]" : ":popover-open";
     // Not [hidden] either, so a rail the app hides with the attribute stays hidden.
     const closedState = dialog ? "[open],[hidden]" : ":popover-open,[hidden]";
     // The class as the component's file writes it (`.filters`, which Corten prefixes:
     // `.search-page__filters`), from the rule's own selector.
-    const cls = [...drawn.selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "").find((c) => el.classList.contains(c))?.split("__").pop();
-    const named = cls ? "." + cls : el.localName + (el.id ? "#" + el.id : "");
-    console.warn(`corten: ${el.id || el.localName} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);
+    const cls = [...drawn.selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "").find((c) => /** @type {DOMTokenList} */ (Reflect.get(own, "classList", el)).contains(c))?.split("__").pop();
+    const id = attrOf(el, "id");
+    const named = cls ? "." + cls : Reflect.get(own, "localName", el) + (id ? "#" + id : "");
+    console.warn(`corten: ${labelOf(el)} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);
   }
 }
 
@@ -256,7 +264,7 @@ ready.then(() =>
         else for (const node of r.addedNodes) if (node instanceof Element) drawn.add(node);
       }
       setTimeout(() => {
-        for (const el of drawn) if (/** @type {Element} */ (el).isConnected) checkAll(/** @type {Element} */ (el));
+        for (const el of drawn) if (Reflect.get(Node.prototype, "isConnected", el)) checkAll(/** @type {Element} */ (el));
       });
     }).observe(document.documentElement, {
       childList: true,
