@@ -5168,7 +5168,17 @@ rules something out.
     is not proof of a TLS client's identity. Standard request extensions already provide the
     typed store, so this adds no wire format, metadata map or second connection loop.
 
-    Stands on: platform (`http` 1.5 extensions require a cloneable, sendable, shareable owned
+    Stands on: measured (release, Callgrind 3.19.0 on x86-64 Linux, a typed route returning
+    `served` over one persistent socket, default features off, Tokio 1.54.1 and tokio-rustls
+    0.26.6 with rustls 0.23.46; three rounds alternating before and after, subtracting 200
+    requests from 1,200 and dividing by 1,000: plain HTTP 24,285.154 instructions per request
+    before, range 24,284.606-24,286.526, and 24,287.261 after, range
+    24,286.994-24,288.051, +2.107 or 0.0087%; TLS without metadata 31,337.779 before,
+    range 31,337.769-31,337.898, and 31,337.723 after, range 31,337.483-31,338.365.
+    The ordinary service and hyper poll have identical instruction totals; the small HTTP
+    difference is in task polling, so these counts do not establish literally zero added
+    instructions. A generic ordinary service added about 30 instructions per request and was
+    replaced with the non-generic service above); platform (`http` 1.5 extensions require a cloneable, sendable, shareable owned
     value); reasoned (selecting the ordinary service for unit data leaves no metadata insertion
     on ordinary requests; the tests exercise two connections keeping distinct stand-in
     certificates across repeated requests and `Identify`, a forged header cannot replace one,
@@ -5180,8 +5190,9 @@ rules something out.
     that cannot be cheaply cloned or shared, or the framework changes its connection service
     or request-extension ownership model.
 
-    Last checked: 2026-11-17, the listener and connection service on `6c5f17b11`, and the new
-    metadata path's tests and measurements recorded with its pull request.
+    Last checked: 2026-11-17, before `6c5f17b11`, and the metadata path's Rust sources matching
+    `caebfa19d` in the counts above, the connection-info integration tests and handshake bounds
+    test, and the `Public` compile-fail doctest.
 
 ## Rules
 
