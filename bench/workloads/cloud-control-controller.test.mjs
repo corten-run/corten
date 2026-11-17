@@ -42,6 +42,30 @@ test("routine live collection reads the existing monitor journal without provide
   const after = h.calls.length; assert.equal(await h.task().collect(), 3); assert.equal(h.calls.length, after, "local close embargo is not remote terminal proof");
 });
 
+for (const ending of ["lost", "timeout", "terminal"]) test("cancelled monitor records its actual ending: " + ending, async (t) => {
+  const h = harness(t, { active: true, monitorHold: true });
+  const pending = h.launch({ run(...args) {
+    const result = h.run(...args);
+    if (result.monitor) result.monitor.done = result.monitor.done.then(value => {
+      h.flags.cancelled = true;
+      if (ending === "timeout") throw Object.assign(new Error("foreground timed out"), { controlTreeUncertain: true });
+      return value;
+    });
+    return result;
+  } }).launch();
+  for (let i = 0; i < 100 && (!existsSync(h.statePath) || !h.saved().control.sealed.includes("bootstrap")); i++) await new Promise(setImmediate);
+  assert.ok(h.saved().control.sealed.includes("bootstrap"));
+  const calls = h.calls.length, terminal = ending === "terminal";
+  h.flags.completeMonitor(terminal);
+  await assert.rejects(pending, e => terminal ? /controller cancelled/.test(e.message) : e.controlTreeUncertain === true);
+  assert.equal(h.calls.length, calls);
+  assert.equal(h.saved().control.monitor.phase, terminal ? "closed" : "invalid");
+  assert.equal(existsSync(join(h.local, "operation.lock")), !terminal);
+  assert.equal(existsSync(join(h.base, ".groups-launch.lock")), !terminal);
+  assert.equal(await h.task({ interrupted: () => false }).collect(), 3);
+  assert.equal(h.deletes, 0);
+});
+
 test("lost monitor retains launch and operation custody; failed-only recovery waits for local closure and lease invalidation", async (t) => {
   const h = harness(t, { active: true, monitorHold: true }), { pending } = await liveMonitor(h);
   h.flags.completeMonitor(false); await assert.rejects(pending, (error) => error.controlTreeUncertain === true);
