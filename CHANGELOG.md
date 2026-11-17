@@ -12,7 +12,8 @@ Corten is pre-1.0, so any minor version may change the API.
   names with expression values), hand-written `data-key` (write `key={..}`), and visible HTML
   nesting whose start tags close or discard an open element: blocks in paragraphs, nested list
   and definition items without a boundary, active anchors, forms outside templates, buttons or
-  `nobr` still in scope, and directly nested headings. Diagnostics say what to change.
+  `nobr` still in scope, directly nested headings, and select, option-group, option and ruby
+  starts that close an open element. Diagnostics say what to change.
   Spreads and nesting hidden by components, expressions or `raw` remain unchecked; this is not
   a complete HTML validator ([views](docs/guide/views.md)).
 

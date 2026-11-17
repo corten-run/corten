@@ -4240,7 +4240,10 @@ rules something out.
     no special element but an `<address>`, `<div>` or `<p>` intervenes; an `<a>` acts on an
     active anchor before the last formatting-list marker; a `<button>` or `<nobr>` closes an
     earlier one in scope; a heading directly in a heading closes it; and an inner `<form>`
-    outside a `<template>` is ignored. These now fail at compile time, with or without refs,
+    outside a `<template>` is ignored. A nested `<select>` or `<input>` closes a select in
+    scope; option, option-group and ruby starts generate implied end tags where their scope
+    establishes it, keeping the exceptions for an `<option>` in an `<optgroup>` and an `<rt>`
+    in an `<rtc>`. These now fail at compile time, with or without refs,
     since moved content can leave the component's scope. `html/nesting.rs` walks the parsed
     nodes once with a stack of literal ancestors, preserving it through control-flow bodies
     and starting a fresh unknown context for a component's children. It adds no render code.
@@ -4251,8 +4254,8 @@ rules something out.
     combine in one `data-on` attribute, including repeated events.
 
     Not chosen: a complete HTML validator or table insertion-mode simulation. A `<div>` straight
-    in a `<table>` still compiles (foster parenting), as do the option and ruby implied-end-tag
-    cases, and a `<table>` in a `<p>`, whose closure depends on quirks mode, not just literal
+    in a `<table>` still compiles (foster parenting), as does a `<table>` in a `<p>`, whose
+    closure depends on quirks mode, not just literal
     ancestors. The key check's table limit is in [Choice 46](#choice-ref-values).
     Refusing where the markup does not show the context, which would refuse a
     component's SVG fragment, valid wherever its parent writes it in an `<svg>`. Following the

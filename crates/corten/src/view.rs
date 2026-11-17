@@ -344,6 +344,41 @@ use std::{
 /// let _ = html! { <div><nobr><span><nobr>"Text"</nobr></span></nobr></div> };
 /// ```
 ///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><input></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><select aria-label="Nested"></select></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><option><option>"Next"</option></option></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><optgroup label="One"><optgroup label="Two"></optgroup></optgroup></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><option>"Choice"<hr></option></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><ruby>"Base"<rt><rt>"Reading"</rt></rt></ruby></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><ruby><rtc><rb>"Base"</rb></rtc></ruby></div> };
+/// ```
+///
 /// The doctype is not a second root of a scoped document, but another element still is:
 ///
 /// ```compile_fail

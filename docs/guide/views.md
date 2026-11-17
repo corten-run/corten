@@ -62,7 +62,10 @@ The same rule applies to literal HTML nesting whose start tags close an open ele
 in a `<p>` (`<p><span><div>..</div></span></p>`), an `<li>` in an `<li>` without a list or
 another special element between, a `<dt>` or `<dd>` in either without such a boundary, an `<a>`
 in an active `<a>`, a `<button>` or `<nobr>` in one still in scope, a heading directly in a
-heading, and a `<form>` in an open form outside a `<template>`. Put the elements beside one
+heading, and a `<form>` in an open form outside a `<template>`. A `<select>` is closed by a
+nested `<select>` or `<input>`; option, option-group and ruby starts that imply the current
+element's end are refused too (`<option><option>`, `<rt><rt>`). An option inside an
+`<optgroup>` and an `<rt>` inside an `<rtc>` still compile. Put the elements beside one
 another, use `<div>` rather than `<p>` around blocks, and wrap a nested list in `<ul>` or
 `<ol>`. This is checked even without refs: a ref in content the browser moves may leave its
 component's scope. Control-flow bodies and fragments retain the literal ancestor chain;
@@ -70,8 +73,8 @@ components, their children, expressions and `raw` do not expose what they write 
 write it, so nesting across those boundaries is the app's to keep correct. A top-level `<a>`
 or `<form>` might be foreign content: wrap HTML fragments in an HTML element when their
 namespace needs to be established. This is not a complete HTML validator. It does not check
-table foster parenting (a `<div>` straight in a `<table>`), optional-end-tag rules for options
-or ruby, or a `<table>` in a `<p>` (which closes the paragraph only outside quirks mode).
+insertion modes such as table foster parenting (a `<div>` straight in a `<table>`), or a
+`<table>` in a `<p>` (which closes the paragraph only outside quirks mode).
 
 `#[component]` turns a function into a props struct and a `Render` impl, so the same
 component renders inside a page and on its own as a patch, and the two cannot drift. A view owns

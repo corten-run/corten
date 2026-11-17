@@ -49,6 +49,12 @@ fn nesting_boundaries_and_unknown_namespaces_still_compile() {
             <a href="#outer"><object><a href="#inner">"Independent link"</a></object></a>
             <a href="#outer"><table><caption><a href="#caption">"Caption link"</a></caption></table></a>
             <form><template><form><input></form></template></form>
+            <select aria-label="Choice"><optgroup label="Group"><option>"Choice"</option></optgroup></select>
+            <ruby>
+                "Base"
+                <rtc><rt>"Reading"</rt></rtc>
+            </ruby>
+            <optgroup label="Outside select"><optgroup label="Still outside"></optgroup></optgroup>
             <p><svg><foreignObject><div>"HTML in SVG"</div></foreignObject></svg></p>
             <svg><Drawing /></svg>
             <Wrap><a><a>"SVG children"</a></a></Wrap>

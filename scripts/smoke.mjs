@@ -452,6 +452,46 @@ async function parsesAsHtmlMeans(browser) {
       () => !!document.querySelector("template")?.content.querySelector("form#inner"),
     ],
     [
+        "an input closes a select in scope (refused by html!)",
+        `<div><select id="outer"><input id="inner"></select></div>`,
+        () => !!document.querySelector("#inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "a nested select is ignored and closes the earlier select (refused by html!)",
+        `<div><select id="outer"><select id="inner"></select><option id="after">After</option></select></div>`,
+        () => !document.querySelector("#inner") && !!document.querySelector("#after") && !document.querySelector("#outer #after"),
+      ],
+      [
+        "an option start ends the current option (refused by html!)",
+        `<div><select><option id="outer"><option id="inner">Next</option></option></select></div>`,
+        () => !!document.querySelector("select > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "an optgroup start ends the current optgroup in select scope (refused by html!)",
+        `<div><select><optgroup id="outer" label="One"><optgroup id="inner" label="Two"></optgroup></optgroup></select></div>`,
+        () => !!document.querySelector("select > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "an hr ends the current option in select scope (refused by html!)",
+        `<div><select><option id="outer">Choice<hr id="inner"></option></select></div>`,
+        () => !!document.querySelector("select > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "a ruby reading ends the current reading (refused by html!)",
+        `<div><ruby>Base<rt id="outer"><rt id="inner">Reading</rt></rt></ruby></div>`,
+        () => !!document.querySelector("ruby > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "a ruby base ends the current rtc (refused by html!)",
+        `<div><ruby><rtc id="outer"><rb id="inner">Base</rb></rtc></ruby></div>`,
+        () => !!document.querySelector("ruby > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "an option in an optgroup, a reading in an rtc and optgroups outside select keep their parent",
+        `<div><select><optgroup id="group" label="Group"><option id="choice">Choice</option></optgroup></select><ruby>Base<rtc id="rtc"><rt id="reading">Reading</rt></rtc></ruby><optgroup id="outer" label="Outside"><optgroup id="inner" label="Still outside"></optgroup></optgroup></div>`,
+        () => !!document.querySelector("#group > #choice") && !!document.querySelector("#rtc > #reading") && !!document.querySelector("#outer > #inner"),
+      ],
+      [
       "duplicate attributes keep the first even when the names differ in case (refused by html!)",
       `<input name="first" NAME="second">`,
       () => document.querySelector("input")?.name === "first",

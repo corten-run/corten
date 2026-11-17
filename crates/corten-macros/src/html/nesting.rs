@@ -139,6 +139,8 @@ const SPECIAL: &[&str] = &[
     "xmp",
 ];
 
+const IMPLIED_END: &[&str] = &["dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc"];
+
 struct Open<'a> {
     name: &'a str,
     html: bool,
@@ -152,6 +154,18 @@ fn scope_boundary(el: &Open<'_>) -> bool {
     !el.html || is(el.name, &["applet", "caption", "html", "table", "td", "th", "marquee", "object", "template"])
 }
 
+fn in_scope<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
+    for el in open.iter().rev() {
+        if el.html && el.name.eq_ignore_ascii_case(name) {
+            return Some(el.name);
+        }
+        if scope_boundary(el) {
+            break;
+        }
+    }
+    None
+}
+
 /// The open element this start tag closes or discards, if the literal ancestors establish it.
 fn displaced<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
     // Forms use the form pointer, not element scope. A template allows a nested form, including
@@ -159,6 +173,11 @@ fn displaced<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
     if name.eq_ignore_ascii_case("form") && !open.iter().any(|e| e.html && e.name.eq_ignore_ascii_case("template")) {
         if let Some(form) = open.iter().rev().find(|e| e.html && e.name.eq_ignore_ascii_case("form")) {
             return Some(form.name);
+        }
+    }
+    if is(name, &["select", "input"]) {
+        if let Some(select) = in_scope(open, "select") {
+            return Some(select);
         }
     }
     if is(name, CLOSE_P) {
@@ -197,6 +216,22 @@ fn displaced<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
             if boundary {
                 break;
             }
+        }
+    }
+    if let Some(el) = open.last().filter(|e| e.html) {
+        let implied = is(el.name, IMPLIED_END);
+        let option = is(name, &["option", "optgroup", "hr"])
+            && if in_scope(open, "select").is_some() {
+                implied && !(name.eq_ignore_ascii_case("option") && el.name.eq_ignore_ascii_case("optgroup"))
+            } else {
+                is(name, &["option", "optgroup"]) && el.name.eq_ignore_ascii_case("option")
+            };
+        let ruby = is(name, &["rb", "rtc", "rp", "rt"])
+            && implied
+            && in_scope(open, "ruby").is_some()
+            && !(is(name, &["rp", "rt"]) && el.name.eq_ignore_ascii_case("rtc"));
+        if option || ruby {
+            return Some(el.name);
         }
     }
     let heading = |n| is(n, &["h1", "h2", "h3", "h4", "h5", "h6"]);
@@ -286,6 +321,22 @@ mod tests {
         assert!(!lost(&["button", "object"], "button"));
         assert!(lost(&["h1"], "h2"));
         assert!(!lost(&["h1", "span"], "h2"));
+        assert!(lost(&["select", "option"], "input"));
+        assert!(lost(&["select", "option"], "select"));
+        assert!(!lost(&["select", "object"], "select"));
+        assert!(lost(&["select", "option"], "option"));
+        assert!(lost(&["option"], "optgroup"));
+        assert!(lost(&["select", "optgroup"], "optgroup"));
+        assert!(lost(&["select", "optgroup", "option"], "hr"));
+        assert!(!lost(&["select", "optgroup"], "option"));
+        assert!(!lost(&["optgroup"], "optgroup"));
+        assert!(!lost(&["select", "option", "span"], "option"));
+        assert!(lost(&["ruby", "rt"], "rt"));
+        assert!(lost(&["ruby", "rtc"], "rb"));
+        assert!(lost(&["ruby", "p"], "rt"));
+        assert!(!lost(&["ruby", "rtc"], "rt"));
+        assert!(!lost(&["ruby", "rt", "span"], "rt"));
+        assert!(!lost(&["rt"], "rt"));
     }
 
     #[test]
