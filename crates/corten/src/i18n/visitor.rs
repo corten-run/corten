@@ -97,9 +97,13 @@ mod zones {
             let at = jiff::Timestamp::try_from(at).ok()?;
             // The database changes offsets on whole seconds, and jiff looks an instant up by its
             // second toward zero, which before 1970 is the next one: a millisecond before a change
-            // would get the offset after it. So it is asked at the second the instant is in.
-            let second = at.as_second() - i64::from(at.subsec_nanosecond() < 0);
-            jiff::Timestamp::from_second(second).ok().map(|at| zone.to_offset(at).seconds())
+            // would get the offset after it. So such an instant is asked at the second it is in;
+            // any other (every date since 1970) is asked as it is, with no second timestamp made.
+            let at = match at.subsec_nanosecond() < 0 {
+                true => jiff::Timestamp::from_second(at.as_second() - 1).ok()?,
+                false => at,
+            };
+            Some(zone.to_offset(at).seconds())
         }
     }
 

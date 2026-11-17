@@ -10239,8 +10239,11 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
 /// What a date and time field costs a request, for callgrind: `DATE_FORM_REQUESTS` (200)
 /// requests through the router with `oneshot`, from a browser that reported America/Chicago.
 /// `DATE_FORM_PATH=get` draws the form (the zone's hidden input and name, and the input's
-/// `value`, `min` and `max` from instants), `post` reads it (`Entry<LocalDateTime>` and
-/// `FormZone`, `at_keeping`, the bounds compared). `DATE_FORM=text` is the same markup and post
+/// `value`, `min` and `max` from instants); the others post it, read as `Entry<LocalDateTime>`
+/// and `FormZone` with `at_keeping` and the bounds compared: `post` unchanged (the stored instant
+/// kept, no time resolved), `edit` changed by a minute (resolved in the posted zone), and
+/// `skipped` changed to a time the clocks skip (2027-03-14T02:30 in Chicago, resolved across the
+/// gap). `DATE_FORM=text` is the same markup and post
 /// with the field and the zone as text an app does not read, the cost before this field had a
 /// reader. Build the lib's test binary with `cargo test --release -p corten-run --all-features
 /// --lib --no-run`, run `DATE_FORM_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored
@@ -10263,11 +10266,18 @@ async fn what_a_date_and_time_field_costs() {
         zone: String,
     }
     let requests: usize = std::env::var("DATE_FORM_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
-    let post = std::env::var("DATE_FORM_PATH").is_ok_and(|p| p == "post");
+    // The time posted, and whether the stored instant is kept; none for the page itself.
+    let posted = match std::env::var("DATE_FORM_PATH").as_deref() {
+        Ok("post") => Some(("2026-11-13T14%3A05", "kept")),
+        Ok("edit") => Some(("2026-11-13T14%3A06", "2026-11-13T20:06:00Z")),
+        Ok("skipped") => Some(("2027-03-14T02%3A30", "2027-03-14T08:30:00Z")),
+        _ => None,
+    };
     let text = std::env::var("DATE_FORM").is_ok_and(|f| f == "text");
     let stored = parse_timestamp("2026-11-13T20:05:09.250Z").unwrap();
+    let expected = posted.map(|(_, at)| if at == "kept" { stored } else { parse_timestamp(at).unwrap() });
     let listed = parse_timestamp("2026-11-12T15:30:09Z").unwrap();
-    let until = parse_timestamp("2026-12-31T00:00:00Z").unwrap();
+    let until = parse_timestamp("2027-12-31T00:00:00Z").unwrap();
     let typed = get(move |req: Req| async move {
         let (zone, f) = (DrawZone::from(req.zone()), Repair::FIELDS);
         req.test_page(
@@ -10290,8 +10300,9 @@ async fn what_a_date_and_time_field_costs() {
         )
     })
     .post(move |Form(input): Form<Repair>| async move {
+        // Saved only as the instant each case expects, so a case cannot measure another path.
         let at = input.live_at.at_keeping(&input.zone, stored).filter(|at| *at >= listed && *at <= until);
-        if at.is_some() {
+        if at.is_some() && at == expected {
             "saved"
         } else {
             "refused"
@@ -10310,7 +10321,7 @@ async fn what_a_date_and_time_field_costs() {
                             type="datetime-local"
                             name={f.live_at}
                             min="2026-11-12T09:30"
-                            max="2026-12-30T18:00"
+                            max="2027-12-30T18:00"
                             value="2026-11-13T14:05"
                         >
                     </label>
@@ -10326,17 +10337,18 @@ async fn what_a_date_and_time_field_costs() {
         }
     });
     let router = App::new(Routes::from(Table::new().route("/typed", typed).route("/text", plain))).client_zone().router();
-    let (uri, body) = (if text { "/text" } else { "/typed" }, "live_at=2026-11-13T14%3A05&zone=America%2FChicago");
+    let uri = if text { "/text" } else { "/typed" };
+    let body = posted.map(|(time, _)| format!("live_at={time}&zone=America%2FChicago"));
     for _ in 0..requests {
         let req = Request::builder()
-            .method(if post { "POST" } else { "GET" })
+            .method(if body.is_some() { "POST" } else { "GET" })
             .uri(uri)
             .header("sec-fetch-site", "same-origin")
             .header("cookie", "corten-zone=America/Chicago")
             .header("content-type", "application/x-www-form-urlencoded");
-        let res = router.clone().oneshot(req.body(Body::from(if post { body } else { "" })).unwrap()).await.unwrap();
+        let res = router.clone().oneshot(req.body(Body::from(body.clone().unwrap_or_default())).unwrap()).await.unwrap();
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
-        assert!(!post || &bytes[..] == b"saved", "{bytes:?}");
+        assert!(body.is_none() || &bytes[..] == b"saved", "{bytes:?}");
         std::hint::black_box(bytes);
     }
 }
