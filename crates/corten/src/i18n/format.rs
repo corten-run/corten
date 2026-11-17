@@ -563,6 +563,15 @@ pub enum TimeStyle {
 /// its offset (`GMT-5`), since names like `CDT` are not the same in every locale.
 pub trait Zone {
     fn offset(&self, at: SystemTime) -> i32;
+
+    /// [`offset`](Zone::offset), or `None` where the zone has no rules for `at`: a zone from a
+    /// database whose range ends (jiff's ends late on 9999-12-30 UTC) gives its offset only inside
+    /// it. Reading a form's date and time and drawing one ([`LocalDateTime`](super::LocalDateTime))
+    /// ask this, so a time past the zone's range is refused rather than read at another offset.
+    /// Every offset by default; a zone with a range says where it ends.
+    fn known_offset(&self, at: SystemTime) -> Option<i32> {
+        Some(self.offset(at))
+    }
 }
 
 /// Coordinated Universal Time, written as the locale names it (`UTC`).
@@ -598,6 +607,10 @@ impl Zone for Offset {
 impl<Z: Zone + ?Sized> Zone for &Z {
     fn offset(&self, at: SystemTime) -> i32 {
         (**self).offset(at)
+    }
+
+    fn known_offset(&self, at: SystemTime) -> Option<i32> {
+        (**self).known_offset(at)
     }
 }
 
@@ -1600,15 +1613,37 @@ impl Day {
         (1..=9999).contains(&year).then_some(Day { days })
     }
 
-    /// Midnight UTC of the day, for something that needs an instant (a query's bound); writing
-    /// it is `t.date(day, ..)`, not this. `None` for a day before the earliest `SystemTime` the
-    /// platform has (1601-01-01 on Windows); `t.date` writes every day.
+    /// Midnight UTC of the day: [`start`](Day::start) in [`Utc`].
+    #[deprecated(note = "use day.start(Utc), the same instant; day.start(zone) is where the day begins in any zone")]
     pub fn midnight_utc(self) -> Option<SystemTime> {
-        let seconds = i64::from(self.days) * 86_400;
-        match u64::try_from(seconds) {
-            Ok(after) => UNIX_EPOCH.checked_add(Duration::from_secs(after)),
-            Err(_) => UNIX_EPOCH.checked_sub(Duration::from_secs(seconds.unsigned_abs())),
-        }
+        self.start(Utc)
+    }
+
+    /// The day's first instant in `zone`, for something that needs an instant (a query's bound);
+    /// writing it is `t.date(day, ..)`, not this. `day.start(Utc)` is its midnight UTC. A day the
+    /// visitor picked (`<input type="date">`) begins where they are: in a form, the zone it sends
+    /// back (`day.start(&input.zone)`, a [`FormZone`](crate::form::FormZone), a `GET` form's query
+    /// included), and for a day that comes with no form (a link's parameter), the request's
+    /// (`day.start(req.zone())`). It is the first instant whose clock reads the day, as Temporal's
+    /// `startOfDay` gives: its midnight (the earlier, where midnight repeats), or, where the
+    /// clocks skip midnight, the instant they change. That is not always how
+    /// [`LocalDateTime::at`](super::LocalDateTime::at) reads `00:00`, which moves a skipped time
+    /// forward by the gap: Toronto's clocks went from `23:30` to `00:30` at 1919-03-31T04:30Z, so
+    /// `00:00` reads as `01:00` (05:00Z), and the day began at 04:30Z. `None` before the earliest
+    /// `SystemTime` the platform has.
+    pub fn start(self, zone: impl Zone) -> Option<SystemTime> {
+        super::LocalDateTime::midnight(self).first_reading(zone)
+    }
+
+    /// Days since 1970-01-01.
+    pub(super) fn days(self) -> i64 {
+        i64::from(self.days)
+    }
+
+    /// The day `days` after 1970-01-01, or `None` outside the years `Day::new` takes.
+    pub(super) fn from_days(days: i64) -> Option<Day> {
+        let days = i32::try_from(days).ok()?;
+        (1..=9999).contains(&civil_from_days(i64::from(days)).0).then_some(Day { days })
     }
 }
 
