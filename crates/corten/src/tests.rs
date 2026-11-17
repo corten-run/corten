@@ -4338,7 +4338,7 @@ fn what_the_patch_parse_check_costs() {
     });
     let request = start.elapsed().as_secs_f64() * 1e6 / f64::from(requests);
     println!(
-        "debug={}: {} bytes; check {check:.1} us; req.patch request {request:.1} us (the check is {:.1}% of it)",
+        "debug={}: {} bytes; check {check:.1} us; action.patch request {request:.1} us (the check is {:.1}% of it)",
         cfg!(debug_assertions),
         body.len(),
         100.0 * check / request

@@ -1881,7 +1881,7 @@ const PARSE_REFUSALS: &str = "https://github.com/corten-run/corten/blob/main/doc
 /// to the browsers' parses in `patch-parsing.json`. Every other shape the parse loses depends on
 /// what the patch began with or where the view is written, which a component's markup does not show
 /// (after a first `<tr>`, a `<p>` and a `<tr>` after it are both kept, and an `<svg>` keeps a
-/// `<form>` of fields after a `<tr>`), so it is left to the debug check in `req.patch` and
+/// `<form>` of fields after a `<tr>`), so it is left to the debug check in `Action::patch` and
 /// `corten::live`, which finds it when it is sent.
 fn check_patch_top(nodes: &[Node]) -> Result<(), Error> {
     match patch_top(nodes, TopRead::Open) {

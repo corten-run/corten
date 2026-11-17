@@ -3759,8 +3759,8 @@ rules something out.
     of `HtmlResponse` beside `For` ([Choice 27](#choice-caller-types)): `AnyAnswer` (a page, a
     patch or a redirect, what `HtmlResult` is) or `Patches`, which only `action.patch`,
     `action.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make (the last
-    three a patch in `Mode::Action` and their caller's page or redirect otherwise; the first two a
-    patch whatever the mode, which a debug build refuses to a browser's plain request,
+    three a patch in `Mode::Action` and their caller's page or redirect otherwise; the first two
+    require the borrowed builder from `req.action()`, which checks that effective mode,
     [Choice 58](#choice-plain-request-patch)), since `HtmlResponse`'s
     constructor is the crate's own. A route says `patches` in its routes module; the module checks
     its `get` handler's result is `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it),
