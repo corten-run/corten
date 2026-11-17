@@ -86,6 +86,7 @@ async function supervisedAudit(t, group, flags = {}) {
   flags.active = true;
   const p = productionHarness(t, flags), prefix = group === "json-api" ? "json" : "mixed", campaign = "r21-0123456789abcdef";
   const delivery = syntheticDelivery(group), identities = delivery.bundle.receipts.map((r) => r.identity);
+  if (group === "json-api") delivery.bundle.schema = "json-api-native-audits/v2";
   const body = { schema: "benchmark-" + prefix + "-audit-subject/v1", commit, campaignSha256: "f".repeat(64),
     ...(group === "json-api" ? { identities } : { requests: identities.map((identity) => ({ identity })) }) };
   const subjectSha256 = deploymentSha256(body), subject = Buffer.from(JSON.stringify({ ...body, subjectSha256 }));
