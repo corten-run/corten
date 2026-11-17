@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import test from "node:test";
 import { commands } from "./process.mjs";
+import { spawnSync } from "node:child_process";
 
 test("normal child99 is observable only by the explicit receipt path; legacy commands remain strict", async () => {
   const io = commands(process.cwd());
@@ -31,4 +32,18 @@ test("full stdout bytes are preserved; timeout, cap and file I/O faults never be
     { observeExit: true, stdoutFile: join(folder, "capped"), maxStdoutBytes: 1 }), (e) => e.ioErrors?.some((s) => s.includes("cap exceeded")));
   await assert.rejects(io.command(process.execPath, ["--max-old-space-size=256", "-e", "process.stdout.write('bytes');process.exitCode=99"],
     { observeExit: true, stdoutFile: join(folder, "absent", "events") }), (e) => e.ioErrors?.length > 0);
+});
+
+test("a timed-out command reaps its owned termination helper and permits natural worker exit", () => {
+  const code = `import {commands} from ${JSON.stringify(new URL("./process.mjs", import.meta.url).href)};
+    const io=commands(process.cwd());
+    try {await io.command(process.execPath,['--max-old-space-size=256','-e','setInterval(()=>{},1000)'],{timeout:500,observeExit:true});process.exitCode=2;}
+    catch(e){if(e.exit?.expired!==true)throw e;console.log('owned timeout terminal');}
+    finally{io.dispose();}`;
+  const result = spawnSync(process.execPath, ["--max-old-space-size=256", "--input-type=module", "-e", code], {
+    cwd: process.cwd(), windowsHide: true, encoding: "utf8", timeout: 15000, maxBuffer: 65536,
+  });
+  assert.equal(result.error, undefined, "owned timeout worker did not terminate naturally");
+  assert.equal(result.status, 0, "owned timeout worker failed");
+  assert.match(result.stdout, /owned timeout terminal/);
 });

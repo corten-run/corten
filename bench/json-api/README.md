@@ -237,3 +237,24 @@ prototype cannot opt into it or establish a baseline. Full v2 matrix/report inte
 all-resource/lifetime/cleanup/source joins, failed-API read bounds and native headroom
 qualification remain separate unfinished work. No timing-eligibility policy is finalized
 before reviewing the ordinary pinned-k6 observation.
+
+Replay requires the recorded executable's absolute path, SHA-256 and pinned version,
+the exact experiment source inventory/hashes and argv matching its fixed configuration,
+script and output paths. Source hashes are checked against the verifier's local source
+tree by default; portable callers may explicitly supply an independently trusted source
+manifest and executable digest to `verifyFixedPrototype`. No saved artifact chooses code
+or causes the recorded executable to run. A self-recorded digest is not an independent
+executable attestation. Every custom-clock counter count/rate must join the full raw stream,
+and latency average must match its raw sum/point count, not just its extrema.
+
+The disjoint successor `timed-outcomes.mjs` derives complete or incomplete load observations
+and projects all requested pass/phase cells with failure counts and ranges. Normal exit99
+can retain a complete classified no-drop load observation; it does not itself attribute a
+target failure. Fixed dropped work remains incomplete without an observed monotonic last
+offer/stop; wall timestamps and completion grace do not fill that gap. Ordinary coherent
+late starts are retained without a zero-nanosecond endpoint gate. The closed-only
+`timed-load.js` retains success/timeout/429/5xx counters without changing imported load
+options or thresholds. These modules are not yet wired into the production runner/report:
+they cannot grant app/source/apparatus qualification or comparisons, and the existing
+production v1 gates remain strict. The full v2 matrix/resource/source/cleanup join is
+unfinished; declaring its schema name does not enable it in saved replay.

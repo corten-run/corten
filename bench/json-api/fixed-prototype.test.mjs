@@ -10,6 +10,9 @@ import { prototypeSchema, readFixedStream, streamLimits, timestampNs } from "./f
 import { joinFixedPrototype, prototypeLimits, verifyFixedPrototype, verifyPrototypeLogs } from "./fixed-prototype.mjs";
 import { probeFixture } from "./fixed-probe.mjs";
 import { inspectJson } from "./report.mjs";
+import { fixedPrototypeArgv } from "./fixed-identity.mjs";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function files(t) {
@@ -141,6 +144,11 @@ test("portable replay requires full raw plus exact independent summary/clock/log
     raw: (await readFixedStream(file)).receipt, files: Object.fromEntries(["summary.json", "clock.json", "stderr.jsonl"].map((name) => {
       const bytes = readFileSync(join(folder, name)); return [name, { bytes: bytes.length, sha256: hash(bytes) }];
     })) };
+  const here = dirname(fileURLToPath(import.meta.url));
+  capture.config = { ...capture.config, payload: "catalog-v1", base: "http://127.0.0.1:8080" };
+  capture.executable = { path: "/synthetic/k6", sha256: "a".repeat(64), version: "k6 v2.4.0 (synthetic; not native qualification)" };
+  capture.sources = Object.fromEntries(["fixed-prototype-load.js", "load.js", "load-outcome.js"].map((name) => [name, hash(readFileSync(join(here, name)))]));
+  capture.argv = fixedPrototypeArgv(capture.config, join(folder, "summary.json"), join(here, "fixed-prototype-load.js"), folder);
   capture.command.stdoutBytes = f.bytes().length; capture.command.stderrBytes = 0;
   writeFileSync(join(folder, "capture.json"), JSON.stringify(capture));
   assert.equal((await verifyFixedPrototype(folder)).status, "unqualified");

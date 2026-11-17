@@ -8,6 +8,7 @@ import { isDeepStrictEqual } from "node:util";
 import { commands } from "./process.mjs";
 import { k6Version } from "../load-tool.mjs";
 import { prototypeSchema, readFixedStream, streamLimits } from "./fixed-stream.mjs";
+import { fixedPrototypeArgv, verifyExperimentIdentity } from "./fixed-identity.mjs";
 
 export const prototypeLimits = Object.freeze({ ...streamLimits, logBytes: 4 * 2 ** 20, summaryBytes: 2 * 2 ** 20, clockBytes: 2 * 2 ** 20 });
 const count = (n) => Number.isSafeInteger(n) && n >= 0;
@@ -104,6 +105,7 @@ export function joinFixedPrototype({ summary, clock, command, config, logs }, st
   verifyPrototypeLogs(logs, command.exit.code, { timeouts: outcomes.timeout, dropped: drops });
   const latency = raw("http_req_duration", "trend"), trend = metric(summary, "http_req_duration");
   assert.equal(latency.points, requests); assert.ok(latency.min >= 0); assert.equal(trend?.max, latency.max, "latency raw max differs");
+  close(trend?.avg, latency.sum / latency.points, "latency average differs from raw sample mean");
   assert.ok(["avg", "p(50)", "p(95)", "p(99)", "max"].every((key) => Number.isFinite(trend[key]) && trend[key] >= 0), "invalid latency summary");
   assert.ok(trend.avg <= trend.max && trend["p(50)"] <= trend["p(95)"] && trend["p(95)"] <= trend["p(99)"] && trend["p(99)"] <= trend.max, "latency order differs");
   const capped = counter("json_start_capped"); assert.ok(capped <= requests);
@@ -113,7 +115,15 @@ export function joinFixedPrototype({ summary, clock, command, config, logs }, st
     const saved = metric(clock, `json_start_${name}`);
     assert.equal(saved?.min, gauge.min); assert.equal(saved?.max, gauge.max);
   }
-  assert.equal(metric(clock, "json_started")?.count, requests, "custom summary/start count differs");
+  const customCounters = ["json_started", "json_ok", "json_timeout", "json_http_error", "json_invalid", "json_start_capped"];
+  const customNames = [...customCounters, ...["before_ms", "after_ms", "progress_ns", "scenario_ms", "origin_lower_ns", "origin_upper_ns"].map((name) => `json_start_${name}`)].sort();
+  same(Object.keys(clock.metrics ?? {}).sort(), customNames, "custom clock metric inventory differs");
+  same(Object.keys(summary.metrics).filter((name) => name.startsWith("json_")).sort(), customNames, "custom summary metric inventory differs");
+  for (const name of customCounters) {
+    const observed = metric(clock, name), counted = raw(name, "counter").sum;
+    assert.equal(observed?.count, counted, "custom clock counter count differs from raw samples");
+    close(observed?.rate, counted * 1000 / duration, "custom clock counter rate differs from raw samples/clock");
+  }
   const gauges = stream.metrics;
   assert.ok(gauges.json_start_before_ms.min >= 0 && gauges.json_start_before_ms.min <= gauges.json_start_after_ms.min
     && gauges.json_start_before_ms.max <= gauges.json_start_after_ms.max && gauges.json_start_after_ms.max <= duration, "start instance clocks reversed/outside duration");
@@ -145,7 +155,7 @@ export function joinFixedPrototype({ summary, clock, command, config, logs }, st
       "matrix-runtime-resource-source-functional-cleanup-joins-not-established"] };
 }
 
-export async function verifyFixedPrototype(folder) {
+export async function verifyFixedPrototype(folder, expectedIdentity) {
   folder = realpathSync(folder);
   for (const name of ["capture.json", "events.jsonl", "summary.json", "clock.json", "stderr.jsonl"]) {
     const rel = relative(folder, realpathSync(join(folder, name)));
@@ -153,6 +163,7 @@ export async function verifyFixedPrototype(folder) {
   }
   const capture = json(join(folder, "capture.json"), prototypeLimits.summaryBytes);
   assert.equal(capture.schema, prototypeSchema); same(capture.errors, [], "capture apparatus failure");
+  verifyExperimentIdentity(capture, expectedIdentity);
   same(capture.limits, prototypeLimits, "capture safeguards changed");
   same(capture.instrumentation, { output: "stock-json-stdout", script: "fixed-prototype-load.js", changedGeneratorIO: true, gzip: false, nativeQualified: false }, "prototype I/O provenance differs");
   same(Object.keys(capture.files ?? {}).sort(), ["clock.json", "stderr.jsonl", "summary.json"], "artifact inventory differs");
@@ -197,9 +208,7 @@ export async function captureFixedPrototype({ binary, folder, base, payload = "c
     const version = await io.command(binary, ["version"], { timeout: 10000, maxStdoutBytes: streamLimits.lineBytes, maxStderrBytes: streamLimits.lineBytes });
     assert.match(version, new RegExp(`^k6 v${k6Version.replaceAll(".", "\\.")}(?:\\s|$)`)); capture.executable.version = version;
     for (const path of ["events.jsonl", "stderr.jsonl"]) writeFileSync(join(output, path), "", { flag: "wx" });
-    const args = ["run", "--quiet", "--log-format", "json", "--summary-export", join(output, "summary.json"), "--out", "json=-",
-      ...Object.entries({ BASE: url.origin, PAYLOAD: payload, MODE: "fixed", RATE: String(rate), VUS: "64", DURATION: `${seconds}s`, JSON_PROTOTYPE_OUTPUT: output.replaceAll("\\", "/") })
-        .flatMap(([key, value]) => ["-e", `${key}=${value}`]), join(cwd, "fixed-prototype-load.js")];
+    const args = fixedPrototypeArgv(capture.config, join(output, "summary.json"), join(cwd, "fixed-prototype-load.js"), output);
     capture.argv = args;
     try {
       capture.command = await io.command(binary, args, { observeExit: true, timeout: (seconds + 25) * 1000,

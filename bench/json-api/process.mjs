@@ -2,16 +2,23 @@ import { spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 export function commands(cwd) {
-  const children = new Set(); let interrupted = false;
+  const children = new Set(), terminations = new Map(); let interrupted = false;
   const kill = (child) => {
+    if (terminations.has(child) || child.exitCode !== null || child.signalCode !== null) return;
+    const termination = {}; terminations.set(child, termination);
     if (process.platform === "win32" && child.pid) {
       const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { cwd, windowsHide: true, stdio: "ignore" });
+      termination.helper = killer;
+      termination.done = new Promise((resolve) => killer.once("close", resolve));
       killer.on("error", () => child.kill("SIGKILL"));
     } else if (child.pid) { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
-    const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) {
-      if (process.platform !== "win32" && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }
-      else child.kill("SIGKILL");
-    } }, 2000); timer.unref();
+    termination.timer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        if (process.platform !== "win32" && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }
+        else child.kill("SIGKILL");
+      }
+      if (termination.helper?.exitCode === null && termination.helper.signalCode === null) termination.helper.kill("SIGKILL");
+    }, 2000); termination.timer.unref();
   };
   const interrupt = () => { interrupted = true; for (const child of children) kill(child); };
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, interrupt);
@@ -66,7 +73,17 @@ export function commands(cwd) {
         }
         if (observeExit) return { exit, clock, ioErrors, stdoutBytes, stderrBytes };
         return output.trim();
-      } finally { clearTimeout(timer); children.delete(child); }
+      } finally {
+        clearTimeout(timer); children.delete(child);
+        const termination = terminations.get(child);
+        if (termination) {
+          // taskkill may outlive an already closed target. Do not leak its owned
+          // process handle, or hide it by unref'ing an unfinished child.
+          if (termination.helper?.exitCode === null && termination.helper.signalCode === null) termination.helper.kill("SIGKILL");
+          if (termination.done) await termination.done;
+          clearTimeout(termination.timer); terminations.delete(child);
+        }
+      }
     },
   };
 }
