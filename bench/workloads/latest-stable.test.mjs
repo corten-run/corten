@@ -145,19 +145,22 @@ const mutateCandidate = (key, edit) => {
   const input = candidateInputs(), value = JSON.parse(input[key]); edit(value); input[key] = JSON.stringify(value); return input;
 };
 
-test("production builder recomputes six candidate dispositions, never qualifies peers from a partial latest observation", () => {
+test("production builder recomputes candidate-specific latest targets without inventing latest-all-transitives or native qualification", () => {
   const input = candidateInputs(), result = evaluateLatestStable(input);
   assert.equal(result.schema, candidateLatestStableSchema); assert.equal(result.valid, true, JSON.stringify(result.errors));
   assert.deepEqual(result, readLatestStable());
   assert.deepEqual(result.candidates.map((r) => r.app), selectedApps("client-heavy"));
   for (const row of result.candidates) {
     assert.deepEqual(row.roots, candidateDependencies[row.app]);
-    assert.equal(row.measurements, null); assert.equal(row.latestStableEligible, false);
-    assert.ok(row.blockers.length > 0);
+    assert.equal(row.measurements, null); assert.equal(row.latestStableEligible, row.app !== "solid");
+    assert.equal(row.blockers.length > 0, row.app === "solid");
     assert.equal(row.dependencies.some((d) => d.package === "@babel/core"), row.app === "solid");
-    assert.equal(row.status, row.app === "solid" ? "unsupported" : "blocked");
+    assert.equal(row.status, row.app === "solid" ? "unsupported" : "satisfied");
   }
   assert.equal(result.candidates.find((r) => r.app === "solid").reason, unsupportedSolidReason);
+  const vue = result.candidates.find((r) => r.app === "vue");
+  assert.ok(vue.dependencies.some((d) => d.package === "@babel/parser" && d.version.startsWith("7.")));
+  assert.equal(vue.targets.includes("@babel/parser"), false);
   for (const [key, bytes] of Object.entries(input).filter(([key]) => key !== "group")) assert.equal(result.sources[key].sha256, createHash("sha256").update(bytes).digest("hex"));
   for (const group of groupNames) {
     const evaluated = evaluateLatestStable({ ...input, group }); assert.equal(evaluated.valid, true);
@@ -166,7 +169,10 @@ test("production builder recomputes six candidate dispositions, never qualifies 
 });
 
 for (const [name, key, edit] of [
-  ["invented latest", "policy", (p) => { p.observations["solid-js"].version = "3.0.0"; }],
+  ["invented latest", "policy", (p) => { const r = p.observations.packages["solid-js"]; const body = JSON.parse(r.raw); body.version = "3.0.0"; r.raw = JSON.stringify(body); }],
+  ["missing raw primary bytes", "policy", (p) => { delete p.observations.packages.react.raw; }],
+  ["missing primary package", "policy", (p) => { delete p.observations.packages.react; }],
+  ["forged registry URL", "policy", (p) => { p.observations.packages.react.url = "https://example.test/latest"; }],
   ["stale observation relabeled current", "policy", (p) => { p.checkedOn = "2026-11-18"; }],
   ["candidate missing", "policy", (p) => { delete p.candidates.solid; }],
   ["candidate membership changed", "policy", (p) => { p.candidates.react.push("@babel/core"); }],
@@ -187,7 +193,7 @@ for (const [name, key, edit] of [
 });
 
 test("an actual shared compiler consumer remains blocked instead of borrowing another candidate's disposition", () => {
-  const r = evaluateLatestStable(mutateCandidate("lockfile", (p) => { p.packages["node_modules/react"].dependencies = { "@babel/core": "^7.0.0" }; }));
+  const r = evaluateLatestStable(mutateCandidate("lockfile", (p) => { p.packages["node_modules/scheduler"].dependencies = { "@babel/core": "^7.0.0" }; }));
   assert.equal(r.valid, true, JSON.stringify(r.errors));
   const react = r.candidates.find((row) => row.app === "react");
   assert.ok(react.dependencies.some((d) => d.package === "@babel/core"));

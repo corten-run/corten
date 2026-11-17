@@ -85,7 +85,7 @@ the exact commit, not a saved eligible flag. Historical native v1/v2 and policy
 v1 retain their old semantics; an old group-wide blocker is not reinterpreted as
 candidate qualification.
 
-The reviewed 2026-11-17 registry observation has Solid and `@solidjs/web` 2.0.0
+The reviewed 13-package 2026-11-17 primary registry observation has Solid and `@solidjs/web` 2.0.0
 and Babel 8.1.2, but the stable `babel-preset-solid` 1.9.19 requires Solid
 `^1.9.16` and Babel `^7.0.0`. Solid remains visible as `unsupported`, reason
 `latest-stable-solid-2-needs-compatible-stable-compiler`, with null qualification
@@ -97,9 +97,13 @@ Only Solid's hook loads Babel core. Other candidates retain their own compiler
 and runtime closures; an actual shared consumer of an incompatible package is
 still blocked. This does not remove Solid or any other benchmark inventory,
 change the browser package pins, install an RC, force peers, or hide a compiler
-error. The current four-package observation is not a complete latest-stable
-qualification for any peer. Missing observations stay explicit per-candidate
-blockers. Closure records describe the browser package graph, not authentication
+error. The other browser candidate/build roots and Vue's SFC compiler match
+their observed latest stable versions. This is freshness of those explicit
+targets, not native qualification. Published supported internal dependency pins
+remain intact, including Vue's Babel parser 7 dependency; this does not invent
+a requirement that every transitive package independently use its latest release.
+Every actual consumer of the existing explicit Babel-core target still inherits
+its blocker. Closure records describe the browser package graph, not authentication
 of installed bytes or the full Rust/Playwright/toolchain; existing native,
 source/build, dependency-byte, replay, resource and independent review gates
 remain mandatory. Refresh and review the observation before a new source freeze.

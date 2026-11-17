@@ -19,6 +19,34 @@ const safe = (p) => need(typeof p === "string" && p.length > 0 && p.length <= 10
   && !/[\\:\x00-\x1f]/.test(p), "unsafe-logical-path");
 const names = (v) => need(Array.isArray(v) && v.every((s) => typeof s === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s))
   && same([...new Set(v)].sort(), v), "invalid-configuration-name-union");
+
+// These are the v3 replay gates used below, after the unchanged physical/source
+// readers establish custody. They do not authenticate caller-supplied bytes.
+export function replayCandidatePolicy(output, sourceBytes) {
+  need(output.schema === "client-heavy-native/v3", "candidate-policy-needs-v3-producer");
+  const inputs = Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) => [key, sourceBytes(path)]));
+  const policy = evaluateLatestStable({ group: "client-heavy", ...inputs });
+  need(policy.schema === candidateLatestStableSchema && policy.valid && same(policy, output.latestStable), "candidate-policy-differs-from-source-recomputation");
+  return policy;
+}
+
+export function replayProducerSchema(source, schema) {
+  // The producer's fixed version declaration is a source contract. Read it,
+  // never import/evaluate saved JavaScript or infer legacy from a missing field.
+  const declarations = [...source.toString("utf8").matchAll(/^export const schema = "(client-heavy-native\/v[23])";\r?$/gm)];
+  need(declarations.length === 1 && declarations[0][1] === schema, "native-schema-differs-from-source-producer");
+}
+
+export function replayCandidateDisposition(policy, app, cell, build, filePaths) {
+  need(policy !== null, "candidate-policy-required");
+  const unsupported = policy.candidates.find((row) => row.app === app && row.status === "unsupported");
+  if (unsupported) {
+    need(app === "solid" && unsupported.reason === unsupportedSolidReason && cell.outcome === "unsupported"
+      && cell.reason === unsupported.reason && cell.qualification === null && cell.measurement === null && cell.readyForMeasurement === false
+      && build.outcome === "not-run" && [unsupported.reason, "runner-failed-before-build"].includes(build.reason)
+      && ![...filePaths].some((path) => path.startsWith(`native/${app}/`)), "unsupported-client-has-build-or-capture");
+  } else if (cell.outcome === "unsupported" && cell.qualification === null) need(false, "unsupported-client-without-policy-or-capture");
+}
 function toolIdentity(identity, name) {
   keys(identity, ["version", "requestedExecutable", "executablePath", "executable"], name === "browser" ? ["launch"] : []);
   if (identity.launch !== undefined) {
@@ -211,15 +239,15 @@ export async function validateV2(request) {
       need(saved.equals(bytes) || (!text.includes("\r") && Buffer.from(text).equals(bytes) && saved.equals(Buffer.from(text.replaceAll("\n", "\r\n")))), "source-bytes-differ-from-exact-commit");
     }
     for (const path of sourceMap.keys()) if (!sources.has(path)) block(`uncommitted-source:${path}`);
+    const producer = sourceMap.get("bench/client-heavy/run.mjs");
+    if (producer) replayProducerSchema(blob(producer), output.schema);
     report.sources = { files: [...sourceMap].map(([path, ref]) => ({ path, bytes: ref.bytes, sha256: ref.sha256 })) };
   });
   const sourceRef = (path) => sourceMap.get(path) ?? (path.startsWith("node_modules/") ? nodeDependencies.get(path.slice(13))
     : path.startsWith("bench/browser/node_modules/") ? browserDependencies.get(path.slice(27)) : null);
   let candidatePolicy = null;
   if (output.schema === "client-heavy-native/v3") candidatePolicy = await check("latest-stable", () => {
-    const inputs = Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) => [key, blob(sourceMap.get(path))]));
-    const policy = evaluateLatestStable({ group: "client-heavy", ...inputs });
-    need(policy.schema === candidateLatestStableSchema && policy.valid && same(policy, output.latestStable), "candidate-policy-differs-from-source-recomputation");
+    const policy = replayCandidatePolicy(output, (path) => blob(sourceMap.get(path)));
     report.latestStable = policy;
     return policy;
   }) ?? null;
@@ -287,16 +315,7 @@ export async function validateV2(request) {
       const c = output.cells[app]; keys(c, ["outcome", "qualification", "measurement", "readyForMeasurement"], ["reason"]);
       need(["passed", "failed", "unsupported", "not-run"].includes(c.outcome) && (c.reason === undefined || typeof c.reason === "string" && c.reason.trim()), "invalid-cell-outcome");
       need(same(json(`${app}.json`), c), "raw-app-differs-from-summary");
-      if (output.schema === "client-heavy-native/v3") {
-        need(candidatePolicy !== null, "candidate-policy-required");
-        const unsupported = candidatePolicy.candidates.find((row) => row.app === app && row.status === "unsupported");
-        if (unsupported) {
-          need(app === "solid" && unsupported.reason === unsupportedSolidReason && c.outcome === "unsupported"
-            && c.reason === unsupported.reason && c.qualification === null && c.measurement === null && c.readyForMeasurement === false
-            && output.builds[app].outcome === "not-run" && [unsupported.reason, "runner-failed-before-build"].includes(output.builds[app].reason)
-            && ![...files.keys()].some((path) => path.startsWith(`native/${app}/`)), "unsupported-client-has-build-or-capture");
-        } else if (c.outcome === "unsupported" && c.qualification === null) need(false, "unsupported-client-without-policy-or-capture");
-      }
+      if (output.schema === "client-heavy-native/v3") replayCandidateDisposition(candidatePolicy, app, c, output.builds[app], files.keys());
       for (const phase of ["qualification", "measurement"]) if (c[phase] !== null) report.cells[app][phase] = await check(`${app}:${phase}`, () =>
         replayV2(c[phase], app, phase, plan.workload, plan.settings, plan.timeoutMs, origins)) ?? null;
       for (const phase of ["qualification", "measurement"]) if (c[phase]?.lifecycle.contextCreatedAt !== null && c[phase] !== null) {

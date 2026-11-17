@@ -8,6 +8,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { mock, test } from "node:test";
 import { definition, selectedApps } from "../../registry.mjs";
 import { createClientWorkload } from "../../client.mjs";
+import { readLatestStable } from "../../../client-heavy/build.mjs";
 
 // The native owner lands separately. Resolve only the exact missing static seam in
 // this test process; never create/copy a verifier or add a production injection API.
@@ -68,6 +69,23 @@ test("synthetic v2 intrinsic validity is supported without pretending external a
     outcomes: apps.map((app) => ({ app, outcome: "passed" })), blockers: ["actual-os-resource-inventory-missing"] });
   assert.deepEqual(calls, [{ folder: f.folder, round, commit }]);
   assert.deepEqual(readFileSync(join(f.folder, "result.json")), before);
+});
+
+test("synthetic v3 adapter binds the recomputed policy and preserves unsupported Solid without ranking admission", async (t) => {
+  const f = fixture(t), policy = readLatestStable();
+  report.schema = "client-heavy-saved-verification/v3"; f.output.schema = "client-heavy-native/v3";
+  report.latestStable = structuredClone(policy); f.output.latestStable = structuredClone(policy); f.binding.latestStable = structuredClone(policy);
+  report.status = "failed"; report.intrinsic.passed = false;
+  f.output.builds.solid = { outcome: "not-run" };
+  f.output.cells.solid = { outcome: "unsupported", qualification: null, measurement: null };
+  Object.assign(report.cells.solid, { outcome: "unsupported", qualification: null, measurement: null, replayPassed: false, build: { outcome: "not-run" } });
+  f.save();
+  const value = await inspectSaved(f.binding, f.folder);
+  assert.equal(value.status, "failed", JSON.stringify(value)); assert.equal(value.attemptComplete, true); assert.equal(value.cleanupComplete, true);
+  assert.equal(value.rankingEligible, false); assert.deepEqual(value.comparisonEligibleApps, []);
+  assert.deepEqual(value.outcomes.map((r) => r.outcome), ["passed", "passed", "passed", "unsupported", "passed", "passed"]);
+  f.binding.latestStable.schema = "benchmark-latest-stable-evaluation/v1";
+  assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
 });
 
 test("tracked historical browser inputs are native source bytes, not optional result summaries", async (t) => {
