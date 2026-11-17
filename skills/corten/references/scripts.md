@@ -137,7 +137,7 @@ division: end statements with `;` and keep a division on the line it continues.
 5. A value borrowed from one the view owns: compute it inside `html!` with `let`. A view lent
    to a prop or a call (`action={&html! { .. }}`, `{keep_query(&at, &html! { .. })}`) borrows what it uses, so read the same local in it and
    in the rest of the markup; do not rebind it with `as_ref()` first.
-6. Rows a write removes: `req.patch(html! { for id in &done { {Remove(RowId(id))} } })`
+6. Rows a write removes (in `Mode::Action`): `req.patch(html! { for id in &done { {Remove(RowId(id))} } })`
    (`corten::view::Remove`), with `#[derive(Id)] struct RowId<'a>(&'a str);` and
    `<tr id={RowId(&item.id)}>` on the row. Rows Load more adds: `view::Append(RowsId, rows)`,
    only the new page, never the whole list again.

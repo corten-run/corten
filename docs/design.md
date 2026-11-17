@@ -3752,8 +3752,10 @@ rules something out.
     failing. A handler's result now carries what the runtime's read can get, as a second parameter
     of `HtmlResponse` beside `For` ([Choice 27](#choice-caller-types)): `AnyAnswer` (a page, a
     patch or a redirect, what `HtmlResult` is) or `Patches`, which only `req.patch`,
-    `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make (each a
-    patch in `Mode::Action` and its caller's page or redirect otherwise), since `HtmlResponse`'s
+    `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make (the last
+    three a patch in `Mode::Action` and their caller's page or redirect otherwise; the first two a
+    patch whatever the mode, which a debug build refuses to a browser's plain request,
+    [Choice 58](#choice-plain-request-patch)), since `HtmlResponse`'s
     constructor is the crate's own. A route says `patches` in its routes module; the module checks
     its `get` handler's result is `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it),
     at the handler's name, and only such a route is a `PatchRoute`, the one kind of route
@@ -4684,7 +4686,142 @@ rules something out.
     element's `form=` among them, which the field module of `037bb827b` fails in each), and
     `corten dev`'s reports, on `98e7ca184`.
 
-58. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
+58. <a id="choice-plain-request-patch"></a>**A patch answering a browser's plain request is a debug build's 500 for now; a compile error
+    needs a new way to make a patch, which is its own change.** `req.patch` and
+    `req.patch_with_status` answer whatever request reached the handler. The runtime's
+    `data-patch` fetch (`corten: action`) applies the fragment; a browser that asked by itself (a
+    form without JavaScript, a link, a reload) shows it as the whole document, with no layout,
+    stylesheets or navigation, and every test that sends the runtime's request passes. A debug
+    build now answers that request, a browser's (`text/html`) `Mode::Document` request the runtime
+    did not fetch and whose fetch metadata, where the browser sends it, says it is a top-level
+    navigation (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`), the same test the check
+    for a page at a path with no `GET` makes, which now reads the fetch metadata too
+    ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)), but for any method, with a 500 that names the method
+    and the route (its pattern from `#[corten::routes]`, else the request's path) and says to
+    answer with `req.patch_or` or check `req.mode == Mode::Action` first. It reads the
+    `corten-patch` header every patch-making method sets, after the handler and the app's own steps
+    and beside the other debug checks in `page_or_error`, and carries the handler's `Set-Cookie` and
+    `Clear-Site-Data` to the error as that check does. A release build compiles none of it: the
+    request's method is cloned for the message only under `debug_assertions`, and the release path
+    is the one it was (measured below).
+
+    A handler's return type cannot carry it: what a handler answers is decided by `req.mode`, a
+    value of the request, and one handler answers both modes, so its type cannot be "patch" or
+    "page". [Choice 50](#choice-patch-routes) gave the type what it can carry, that a patch is
+    among the answers (`HtmlResult<Patches>`), which a plain request may still get from a handler
+    that checks nothing
+    ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)).
+    What can carry it is how a patch is made: `req.action() -> Option<Action<'_>>`, `Some` only in
+    `Mode::Action`, whose `Action::patch` and `Action::patch_with_status` would be the only way to
+    make a patch besides `patch_or`, `invalid` and `invalid_with`, as `req.invalid_with` already
+    hands its form side a `FormPatch` only in that mode; `req.patch` and `req.patch_with_status`
+    would go. Weighed in the order the README gives for a conflict: correctness (1) is the same either way once the
+    mistake is found, but a debug check finds it only where a test or a developer sends the plain
+    request, and a compile error finds it in every build; performance at the user's end (2) is the
+    same, since this check is not compiled in a release build and the token would be a borrow of
+    `Req` (reasoned, not measured); compile-time safety and one way to do things (3) favor the
+    token: an unchecked patch would not compile (Values 4), and it leaves one way to answer a
+    patch on a checked path where today there are two, `patch_or` or a hand check of
+    `req.mode == Mode::Action` before `req.patch` (Values 5). So the compile error is the better
+    answer, and this check gives up Values 4 until it lands. It is not this change because it
+    removes two public methods every handler that checks by hand calls (the deck builder's, the
+    watchlist's, the guides' and the agent skill's), and has questions of its own: how a
+    `patches` route's handler that checks by hand gives its page side the `Patches` kind, which
+    `patch_or` does itself, and whether `req.action()` reads a `req.mode` the handler wrote, which
+    [Choice 50](#choice-patch-routes) keeps as the app's override. That is a breaking change to the handler API, proposed
+    in [#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532); this check
+    is the stopgap until then. Also not chosen: `dev.js` saying so on the page, which sees nothing when no JavaScript runs,
+    the one case this is about; and checking only a `POST`, as the #1340 check does: a `GET` route
+    whose handler answers only a patch (a dialog's form, a part read again by the runtime) is drawn
+    bare by a link or a reload the same way.
+
+    What it does not see: a request whose fetch metadata says it is not a top-level navigation (a
+    page's own `fetch` that asks for HTML, an `<iframe>`'s load), whose answer is not shown as the
+    tab's page; a navigation a service worker passes on with `fetch(event.request)`, which reaches
+    the server as `navigate` to `empty` whether it was the tab's or a frame's, so it cannot be
+    told from a frame's and is not checked, though the worker may show its answer as the tab's
+    page (a known gap: Corten's own worker passes one on only when the browser sent no navigation
+    preload for it, as when the worker was not yet active as the navigation began; an app's own
+    worker may pass on every one); an `unstaged` route, which skips the stages it runs in; a fragment sent
+    without `corten-patch` (a response built by hand, or one put in place of the handler's through
+    `DerefMut`), which is not a patch to it; a relayed upstream answer (a `Relay`'s), checked by
+    the upstream; and a release build. A request the runtime makes is
+    never checked, its `corten: page` fetch of a whole page included. Browsers send fetch metadata
+    only to a secure context (HTTPS or `localhost`), so a debug build opened over plain HTTP at
+    another address (a phone on the LAN) gets none, and both checks take a page's own `fetch` that
+    asks for `text/html` there for a navigation: a false 500, which opening the app over HTTPS or
+    at `localhost` avoids.
+
+    Stands on: platform (a browser shows an HTML response to a navigation or a form submit as the
+    document, whatever its markup); platform (the
+    [Fetch Metadata](https://www.w3.org/TR/fetch-metadata/) headers a browser sends, on which both
+    checks' "top-level navigation" stands: `Sec-Fetch-Mode: navigate` with
+    `Sec-Fetch-Dest: document` for a link, a reload or a form it submits, `navigate` with
+    `iframe` for a frame's load, `cors` (or `same-origin`) with `empty` for a page's `fetch`,
+    and none to a URL that is not potentially trustworthy, so none over plain HTTP except to
+    `localhost`; probed in Chromium 156: each of those values at `localhost`, and no
+    `Sec-Fetch-*` header at all over plain HTTP to the machine's LAN address. That a script cannot
+    set them is [Choice 11](#choice-corten-request-header)'s probe); platform (what a navigation
+    a service worker answers carries: the request navigation preload sends keeps the navigation's
+    destination, `document` or `iframe`, and adds `Service-Worker-Navigation-Preload: true`, so
+    it is judged as the browser's own; one the worker passes on with `fetch(event.request)` is a
+    new request, which the
+    [Fetch Request constructor](https://fetch.spec.whatwg.org/#dom-request) gives no destination,
+    and arrives as `navigate` to `empty`, with no `Sec-Fetch-User` and no preload header, for
+    the tab's navigation and a frame's alike; probed in Chromium 156 and WebKit 27.2 at
+    `localhost`, a link, a reload and a frame's load through a worker of each kind. Taking
+    `navigate` to `empty` for the tab's would answer a frame's patch, passed on, with a false
+    500; a header Corten's worker added to say which it was would be a format of Corten's own for
+    one worker's case, and an app's own worker would still pass on navigations unmarked); reasoned (every
+    patch-making method sets `corten-patch` through one constructor, `html_response`, and the app cannot make an `HtmlResponse` but
+    through `Req`);
+    measured (callgrind, release, instructions per request through a route's `patch_or` in
+    process, 1,200 requests less 200 over 1,000, with the `#[ignore]` test
+    `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, alternate runs, the median
+    and the range: `55757d723` (before, six runs) against `55757d723` with only this change's
+    `crates/corten/src/page.rs` (three runs), the patch (`Mode::Action`) 17,969.79 (17,969.76 to
+    17,969.80) and 17,969.83 (17,969.83 to 17,969.87), the page (`Mode::Document`) 18,382.70
+    (18,382.68 to 18,382.82) and 18,382.72 (18,382.71 to 18,382.76), the same within a tenth of an
+    instruction; the whole change (three runs), whose other files are tests, an example and
+    documents, 17,974.49 (17,974.48 to 17,975.89) and 18,388.71 (18,388.59 to 18,388.78), about
+    five and six more, which the build with `page.rs` alone does not show. Those come from the
+    tests: `55757d723` with only `crates/corten/src/tests.rs` as at `019058f59` (three runs,
+    alternating with three of `55757d723` rebuilt) counts 17,975.85 (17,975.82 to 17,975.88)
+    and 18,388.76 (18,388.73 to 18,388.76) against 17,969.86 (17,969.78 to 17,969.86) and
+    18,382.79 (18,382.69 to 18,382.84), six more in each mode with no line of the request path
+    changed. `tests.rs` is `#[cfg(test)]`, compiled into the same test binary as the code it
+    counts, and the release profile builds that binary as one codegen unit with thin LTO, so more
+    tests in it can move what the optimizer inlines and lays out (reasoned; which functions moved
+    was not traced); an app's binary has no `tests.rs`.
+    The counted page asks for no HTML, which in a release build reaches the
+    same code, since the check and the method it clones are not compiled there); value (Values 3, a
+    form works without JavaScript; Values 9, the developer sees it in a test).
+
+    Revisit when: [#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)
+    lands, when an unchecked patch does not compile and this check is kept only for answers built
+    outside those methods, or removed, or is declined, when this Choice says why the debug check
+    is enough; or an app needs a fragment answered to a top-level navigation on purpose, which
+    would need a way to say so; or the runtime stops marking its own
+    requests with the `corten` header ([Choice 11](#choice-corten-request-header)), on which "the
+    runtime did not fetch it" stands; or a browser changes the fetch metadata it sends (a
+    navigation without `navigate` and `document`, a frame or a script's fetch with them, or the
+    headers sent over plain HTTP too), on which "a top-level navigation" stands; or a navigation
+    a service worker passes on can be told from a frame's (a browser keeping its destination, or
+    an app needing the case checked), when the known gap above closes.
+
+    Last checked: 2026-11-16, the router test
+    `a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds` and its release
+    counterpart (the release build's run with `--release`), on `855797ab6`; 2026-11-16, the callgrind runs on
+    `4060b8b27` and, of the tests alone, on `019058f59`'s `tests.rs`; 2026-11-16, the reading of
+    `html_response`'s callers in `crates/corten/src/page.rs` that the reasoned premise rests on, on
+    `855797ab6`; 2026-11-16, the fetch metadata a page's navigation, form submit, `<iframe>` and
+    `fetch` (with `Accept: text/html`) send, probed in Chromium 156 at `localhost` and over plain
+    HTTP at a LAN address, against the Fetch Metadata Working Draft of 21 September 2026;
+    2026-11-16, the fetch metadata of navigations a service worker answers from navigation preload
+    and passes on with `fetch(event.request)`, probed in Chromium 156 and WebKit 27.2 (Firefox was
+    not run).
+
+59. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
     history once its patch is drawn, and Back and Forward between those entries read the patch
     again.** A filter or scope that redraws one part of a screen with a GET `data-patch` form
     left the address as it was: a reload, Back and a bookmark lost the filter, the page's other
