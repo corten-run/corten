@@ -2991,13 +2991,15 @@ fn on_site(to: &HeaderValue) -> bool {
 
 /// The part module (`ReadAgain::now`, [`crate::script::PART_MODULE`]) for a page that draws a
 /// part waiting: preloaded with the runtime, which imports it from beside itself, so the part's
-/// read waits for no round trip of its own. A navigation's answer brings it too, which the
-/// runtime moves into the head.
+/// read waits for no round trip of its own. `data-corten-part` is what the runtime looks for when
+/// the page loads, in the head alone, so a page without one runs none of the module. A
+/// navigation's answer brings it too, which the runtime moves into the head; the runtime imports
+/// the module then from the part's tag in the markup.
 fn part_preload(modules: &[&'static str], out: &mut String) {
     if modules.contains(&crate::script::PART_MODULE) {
         out.push_str(r#"<link rel="modulepreload" href=""#);
         out.push_str(crate::part_path());
-        out.push_str(r#"">"#);
+        out.push_str(r#"" data-corten-part>"#);
     }
 }
 

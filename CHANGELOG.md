@@ -17,23 +17,26 @@ Corten is pre-1.0, so any minor version may change the API.
   parts take a query field each). The part, and only it, is `aria-busy="true"` while the read is
   on its way, so a patch of a cell or row beside it changes nothing; a part its read did not
   replace (no patch, an error page, a redirect, or one of a shared read's parts gone meanwhile) is
-  marked `data-corten-read-failed`, where the app's CSS shows its link to the page with the part
-  read in, which follows a redirect as a navigation (a browser without JavaScript shows it
-  already). A read is its tag's: a part that is a live region a write's page draws again in place
-  with a new tag has the new tag read and the old read stopped, so an old answer never lands over
-  a newer one (even one waiting for the same stylesheet), and a kept part whose own attributes the
-  page draws again keeps its busy or failed mark; and if the part module does not load, each waiting part is marked failed, so its
-  link shows. A read the back-forward cache ended is made again when the page is shown, and a
-  prerendered page reads once it is shown. A part waiting in a part's answer is marked failed,
-  not read, so reads do not chain, and a page whose head asks to be read again waits at most one
-  more interval for a part's read. The reads are a script module of their own, `part.js`, served
-  beside the runtime and preloaded only by a page that draws such a part (and precached once by a
-  PWA's service worker): the runtime grows by 224 bytes gzipped and 169 brotli (15,407 and 13,925
-  on main at `dbe1a34c7`, 15,631 and 14,094 at `0e9535c6b`) and the module is 1,050 gzipped, 913
-  brotli (`npm run build:js`'s `js/dist`, gzip 6 and brotli 11 by Node's `zlib`). An app with such a
-  stream moves to this shape: drop the stream's route and handler, put `ReadAgain::now` inside
-  the part where the `<corten-live>` was, and key the link's CSS on `[data-corten-read-failed]`
-  instead of `corten-live[status="closed"]`. Choices 7 and 44 are rewritten: declarative shadow
+  marked `data-corten-read-failed`. The app's link to the page with the part read in shows unless
+  the part is busy (`[aria-busy] > .show { display: none }`), so it shows without JavaScript, when
+  the part module does not load and once the read failed, and follows a redirect as a navigation.
+  A read is its tag's at its address: a part that is a live region a write's page draws again in
+  place with a new tag has the new tag read and the old read stopped, so an old answer never lands
+  over a newer one (even one waiting for the same stylesheet); a kept tag the page draws with
+  another address is read there, its old read stopped and an old failure forgotten; and a kept
+  part whose own attributes the page draws again keeps its busy or failed mark. A read the
+  back-forward cache ended is made again when the page is shown, and a prerendered page reads
+  once it is shown. A part waiting in a part's answer is marked failed, not read, so reads do not
+  chain; a page whose head asks to be read again is read on its interval, and draws its part
+  waiting again when its `<main>` changed. The reads, and finding the parts, are a script module
+  of their own, `part.js`, served beside the runtime and loaded only by a page that draws such a
+  part (and precached once by a PWA's service worker); the runtime only imports it, on a load
+  whose head preloads it or for markup with a waiting part, and grows by 55 bytes gzipped and 54
+  brotli (15,407 and 13,925 on main at `dbe1a34c7`, 15,462 and 13,979 here), and the module is
+  1,512 gzipped, 1,347 brotli (`npm run build:js`'s `js/dist`, gzip 6 and brotli 11 by Node's
+  `zlib`). An app with such a stream moves to this shape: drop the stream's route and handler,
+  put `ReadAgain::now` inside the part where the `<corten-live>` was, and hide the link under the
+  part's `[aria-busy]` instead of showing it on `corten-live[status="closed"]`. Choices 7 and 44 are rewritten: declarative shadow
   DOM places a part streamed later without a script only at a slot of a shadow tree around the
   page, as a child of a host still open, and Chromium's `<template for>` (on by default since
   Chrome 150) anywhere in the page, but Firefox and WebKit not at all, so Choice 7, reopened, keeps

@@ -232,10 +232,11 @@ slow part sent once is not a stream: the page's own handler answers it (`ReadAga
 `req.patch_or_with`, in [pages-and-routes.md](pages-and-routes.md)). Its placeholder's link,
 `<a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">..</a>`, is the page's own
 route with a query field its handler reads the part in for (the route derives `Default`, so other
-links are `url::Home::default()`). The component's CSS swaps it for the loading line:
-`@media (scripting: enabled) { .show { display: none } }` and
-`@media (scripting: none) { .finding { display: none } }`, and the same swap under
-`[data-corten-read-failed]`, so a browser without the `scripting` feature shows both. See the
+links are `url::Home::default()`). The component's CSS swaps it for the loading line only while
+the part is busy, which the runtime's part module alone marks:
+`.finding { display: none }`, `[aria-busy] > .finding { display: inline }` and
+`[aria-busy] > .show { display: none }`, so the link shows wherever no read is bringing the part
+(no JavaScript, the module not loaded, a failed read), with no `scripting` media query. See the
 live-data guide.
 
 A job's progress is a `<progress value max>` a `corten::live` stream draws again as the job

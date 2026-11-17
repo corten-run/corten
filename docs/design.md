@@ -3110,92 +3110,111 @@ rules something out.
     The reads are `js/part.js`, served beside the runtime (`/corten/{version}/part.js`, versioned
     and cached with it, and precached by an app's service worker), not in the runtime every page
     loads: rendering the tag notes the module (`script::uses`, as a format argument notes
-    `corten-format`), so the page's head preloads it with the runtime and a navigation's answer
-    carries the preload, which the runtime moves into the head; the runtime finds a tag (a query of
-    `<main>` and the page's layout elements on a swap, of the page on a load, and a search of a
-    patch's text) and imports the module, whose fetch the preload has already started, so the
-    part's read waits for no round trip of its own after the first. Served beside the runtime, not
-    with the app's scripts, so an app with no static files or components has it too. The runtime is
-    15,631 bytes gzipped and 14,094 brotli at `0e9535c6b` (15,407 and 13,925 on main at
-    `dbe1a34c7`) and the module 1,050 and 913, where with the reads in the runtime it was 16,685 and 15,059 at
-    `cd6861c76` (Stands on); a page without a slow part fetches nothing more, except once, when a
-    PWA's service worker installs and precaches the module with the runtime. A stub that started the fetch before
-    the module arrived was not needed: the module is preloaded with the page that needs it.
+    `corten-format`), so the page's head preloads it with the runtime, its preload marked
+    `data-corten-part`, and a navigation's answer carries the preload, which the runtime moves into
+    the head. The runtime holds only what starts the module: when the page loads with that mark in
+    its head, or when markup the server sent has a tag (a search of its text, made as the markup
+    goes through the runtime's Trusted Types policy), it imports the module, whose fetch the
+    preload has already started, and hands it the two things only the runtime has: the function
+    that draws a patch through that policy (`trusted-types corten` admits one policy, the
+    runtime's, so the module cannot draw markup itself) and the busy marks it shares with forms.
+    From then on the module finds every tag itself, with a `MutationObserver` of the page: a
+    navigation's page, a form's answer, a `<corten-live>` fragment, a layout element a write's page
+    draws again in place. Served beside the runtime, not with the app's scripts, so an app with no
+    static files or components has it too. The runtime is 15,462 bytes gzipped and 13,979 brotli
+    at this Choice's commit (15,407 and 13,925 on main at `dbe1a34c7`, so 55 and 54 more), and
+    the module 1,512 and 1,347; those 55 bytes are the import, the hand-over, the search of a
+    markup's text and the query of the head on load, which every page runs (a search of text
+    already in hand, one query of the head) and which a page without a slow part ends there. With
+    the module's discovery and its failure marks in the runtime instead, as at `73279ab7a`, it was
+    15,631 and 14,094, and with the reads in it too, 16,685 and 15,059 at `cd6861c76` (Stands
+    on). A page without a slow part fetches nothing more, except once, when a PWA's service worker
+    installs and precaches the module with the runtime. A stub that started the fetch before the
+    module arrived was not needed: the module is preloaded with the page that needs it.
 
     The read depends on its part alone: a patch of another element meanwhile (the next cell of a
     grid, a live row of the same list, another part read first) changes nothing. While the read is
-    on its way the runtime marks the part `aria-busy="true"`, as it does a form and a navigation,
-    and takes its mark away when the read ends, unless a submit marked it since (whoever marked an
-    element last clears it, as between a submit and a navigation). Every part still on the page
-    when its read ends was not drawn, and is marked `data-corten-read-failed`: offline, the server
-    unreachable, an error page, a page, a patch without it, or a redirect. A read is its tag's: it
-    stops once one of its tags leaves the page (a form's answer replaced its part, a page was
-    swapped in, or a layout element kept in place, a live region, took new children with a new
-    tag): its fetch ends, its answer is not drawn over what is there now, even once its
-    stylesheets load or before the page is swept, its other parts are marked at once, and the new
-    tag is read anew while what it left (the part's busy mark, the failure mark) is the new read's.
-    Before an answer is drawn, once its stylesheets have loaded, the runtime takes the page's
-    removals not yet delivered to its observer, so an answer waiting for the same stylesheet as a
-    newer one that replaced the part, and so going on in the same task right after it, has stopped
-    by then. A part a layout element holds with the same tag element keeps its read, and one
-    whose read failed stays failed, even when the element draws the part's own attributes again
-    and so takes away the marks the runtime put on it: the module knows each tag's read and each
-    failed tag, and puts the busy or failed mark back rather than read it again. If the module does not load (offline, a 503 for
-    `part.js`), the runtime marks each waiting part failed, so its link shows, as without
-    JavaScript. A redirect (a sign-in's `corten-location`) is not followed: the
-    part is marked and its link, a navigation, follows it, as without JavaScript. Following it
-    would take a user who is typing elsewhere on the page away unasked, from a read that only the
-    page's own stage or extractor could redirect (the part side answers `HtmlResult<Patches>`,
-    which cannot), and which answered the page itself a moment before; and it needed the runtime
-    to know whether a navigation had started since the read began (a `beforeunload` listener
-    while a read lasted, counts in its navigations, Firefox's ends of a page's fetches as it
-    begins to leave), the source of most of the edge cases the review of
+    on its way the module marks the part `aria-busy="true"`, as the runtime does a form and a
+    navigation, and takes its mark away when the read ends, unless a submit marked it since
+    (whoever marked an element last clears it, as between a submit and a navigation). Every part
+    still on the page when its read ends was not drawn, and is marked `data-corten-read-failed`:
+    offline, the server unreachable, an error page, a page, a patch without it, or a redirect. A
+    read is its tag's at its address: it stops once one of its tags leaves the page (a form's
+    answer replaced its part, a page was swapped in, or a layout element kept in place, a live
+    region, took new children with a new tag) or is drawn again with another `data-from` (a
+    layout element keeps the tag and draws its attributes again, as when a form's whole page
+    switches the account the part is for). Its fetch ends, its answer is not drawn over what is
+    there now, even once its stylesheets load, its other parts are marked at once, and a tag at
+    a new address is read there, whatever the old one's read did (a failure at the old address
+    does not stop the new). The runtime's `apply` reads its signal's `aborted` once, right
+    before it draws, after the patch's stylesheets have loaded; the module's signal looks then
+    whether every tag is still on the page at its address, so an answer drawn first in the same
+    task (a form's, waiting for the same stylesheet, that replaced the part) stops it before any
+    observer could hear of it. A part a layout element holds with the same tag at the same
+    address keeps its read, and one whose read failed there stays failed, even when the element
+    draws the part's own attributes again and so takes away the marks the module put on it: the
+    module knows each tag's read and failed address, and puts the busy or failed mark back rather
+    than read it again. A redirect (a sign-in's `corten-location`) is not followed: the part is
+    marked and its link, a navigation, follows it, as without JavaScript. Following it would take
+    a user who is typing elsewhere on the page away unasked, from a read that only the page's own
+    stage or extractor could redirect (the part side answers `HtmlResult<Patches>`, which cannot),
+    and which answered the page itself a moment before; and it needed the runtime to know whether
+    a navigation had started since the read began (a `beforeunload` listener while a read lasted,
+    counts in its navigations, Firefox's ends of a page's fetches as it begins to leave), the
+    source of most of the edge cases the review of
     [#1483 One handler answers a page and its slow part: ReadAgain::now and Req::patch_or_with](https://github.com/corten-run/corten/pull/1483)
-    found. A read the browser ended by
-    hiding the page (its back-forward cache) is made again once the page is shown, if its parts
-    are still there. A tag in an element with no id, which no patch could replace, is logged and
-    that element marked, so its link shows, as the runtime logs a patch's element with no id.
+    found. A read the browser ended by hiding the page (its back-forward cache) is made again
+    once the page is shown, if its parts are still there at their addresses. A tag in an element
+    with no id, which no patch could replace, is logged and that element marked, as the runtime
+    logs a patch's element with no id.
 
-    Reads do not chain: a part waiting in the answer to a part's read, or to a part read again
-    (`ReadAgain::from`), is marked failed rather than read, so two parts whose answers draw each
-    other waiting cannot read each other without end with no delay; a part's own slow part is
-    read in by the link's page. A part a `<corten-live>` fragment or a script's `patch` draws
-    waiting is read, as one a form's answer draws is: what draws it is not a read the runtime
-    started, so it sets the pace (a stream's fragments, a user's submits), and a fragment that
-    draws the part again ends the read the one before started, so one read at most is on its way
-    for a part. A page whose head asks to be read again (`ReadAgain`) puts its
-    whole read off once, by its interval, while a part's read is on its way: read whole, the page
-    would draw the part waiting again, so a part slower than the interval would never come, and
-    once only, so a read the server never answers does not stop the page's reads. A part's answer
-    that asks to be read again (`ReadAgain::from`) places its tag as any patch's is (in place of
-    the tag beside what it drew, or kept off the page and still read), so such a page goes on
-    being read whole too; placing it inside the part, so the page knew, and hardening
+    Reads do not chain: a part waiting in the answer to a part's read is marked failed rather than
+    read, so two parts whose answers draw each other waiting cannot read each other without end
+    with no delay; a part's own slow part is read in by the link's page. The module knows which
+    markup an answer drew as it draws it: what the page changed before is taken from its observer
+    first, at the moment the answer is let draw, so the next changes it hears of are that answer's.
+    A form's answer drawn in the same task right after it (both waiting for one stylesheet) would
+    be taken with it, and a part that answer draws waiting would show its link rather than be
+    read. A part a periodic read's answer (`ReadAgain::from`), a `<corten-live>` fragment or a
+    script's `patch` draws waiting is read, as one a form's answer draws is: what draws it is not
+    a part's read, so it sets the pace (its interval, a stream's fragments, a user's submits), and
+    one that draws the part again ends the read the one before started, so one read at most is on
+    its way for a part. A page whose head asks to be read again (`ReadAgain`) is read on its
+    interval, whatever its parts' reads: read whole with a changed `<main>`, the page draws its
+    part waiting again, which ends the read on its way and reads the part again, so a part slower
+    than the interval never comes, and the page's interval is chosen with room for it. Putting
+    the page's read off once while a part's is on its way, as the runtime did before, cost every
+    page 33 bytes gzipped (9 brotli) more, measured with `scripts/build-js.mjs`'s esbuild and terser
+    settings and Node's `zlib`; reading a page again faster than its own slow part is the app's
+    interval to change.
+    A part's answer that asks to be read again (`ReadAgain::from`) places its tag as any patch's
+    is (in place of the tag beside what it drew, or kept off the page and still read), so such a
+    page goes on being read whole too; placing it inside the part, so the page knew, and hardening
     `ReadAgain::from`'s own reads (stopping a read whose parts left, a check after its
     stylesheets load) are changes to `ReadAgain::from` of their own, not this Choice's. Not
     `aria-busy="false"` for a failure: busy says whether an element is being updated, and false
     is also the state of every element that is not, so it would say no more than the mark's
-    removal does. A `data-` attribute, as Values 2 extends a standard: the
-    waiting element is the app's, any element, where an attribute of Corten's own like
-    `<corten-live>`'s `status` is valid only on Corten's element; `corten-` is the runtime's
-    prefix, as on the tag.
+    removal does. A `data-` attribute, as Values 2 extends a standard: the waiting element is the
+    app's, any element, where an attribute of Corten's own like `<corten-live>`'s `status` is
+    valid only on Corten's element; `corten-` is the runtime's prefix, as on the tag.
 
     The waiting part holds a link to the page's own route with a query field whose handler branch
     reads the part in (`url::Home { picks: Some(true) }`, `rel="nofollow"`), as an address already
     says what a page reads (the receipt a page waits for): nothing of Corten's own in the URL. The
-    component's CSS hides the link under `@media (scripting: enabled)` and the waiting line under
-    `@media (scripting: none)`, and swaps them under `[data-corten-read-failed]`, so a browser
-    without the `scripting` media feature shows both. Corten draws no link: the server would draw
-    it from a label only the app has, which is the link the app writes; and a query parameter
-    Corten reads on every page would be a second way for an address to say what a page reads. The
-    cost is one field plus one handler branch per page with a slow part (other links name the page
-    through its route's `Default`, `url::Home::default()`), and the address the link opens waits
-    for the slow read wherever it is opened, with JavaScript too. Two cases are left with the line
-    and no link: scripting is on but the runtime never runs (blocked by an extension or the CSP, or
-    failed to load; the part module failing to load is not one, above), as the query follows
-    whether scripts are on, not whether one ran
-    ([scripts guide](guide/scripts.md#a-control-only-the-script-makes-work)); and a read the server
-    never answers, which stays busy as a form's submit does, since Corten sets no timeout of its
-    own.
+    link shows unless a read is bringing the part: the component's CSS hides it, and shows the line
+    saying the part is on its way, under the part's `[aria-busy]`, which only the part module sets.
+    So it shows without JavaScript, when the runtime or the module never runs (blocked by an
+    extension or the CSP, a 503 for `part.js`) and once the read has failed, with no code of the
+    runtime's for any of them, and in every browser, as no media query decides it. The cost is the
+    link drawn from the first paint until the module marks the part busy, a moment on a load, as
+    the module runs once the page is parsed. Corten draws no link: the server would draw it from a
+    label only the app has, which is the link the app writes; and a query parameter Corten reads
+    on every page would be a second way for an address to say what a page reads. The cost is one
+    field plus one handler branch per page with a slow part (other links name the page through its
+    route's `Default`, `url::Home::default()`), and the address the link opens waits for the slow
+    read wherever it is opened, with JavaScript too. One case is left with the line and no link: a
+    read the server never answers, which stays busy as a form's submit does, since Corten sets no
+    timeout of its own.
 
     Not chosen: a `<corten-live>` stream of one item, the shape before, which also left a
     stream that ended after a fragment that failed to apply, or was dropped each time before the
@@ -3205,7 +3224,13 @@ rules something out.
     the elements with an id beside the tag as its part, as `ReadAgain::from` reads them, which in
     a grid of cells made every cell busy and showed the failure link for good when any cell was
     patched during the read; the reads in the runtime, which every page would load for the few
-    with a slow part (Values 1); following a part read's redirect (above); a header of Corten's own
+    with a slow part (Values 1); the runtime finding the tags itself (a query of `<main>` and the
+    layout elements it drew on each swap, a search of each patch's text) and marking every part
+    failed when the module did not load, 224 bytes gzipped (169 brotli) on every page at
+    `73279ab7a`, with the link hidden under `@media (scripting: enabled)` and shown again under
+    `[data-corten-read-failed]`, which needed that mark from the runtime and showed a browser
+    without the `scripting` media feature both the line and the link; following a part read's
+    redirect (above); a header of Corten's own
     for the part's read, where `corten: action` already asks for a patch; the link in a
     `<noscript>`, which a browser with scripting on never draws, so it would never show for a read
     that failed; declarative shadow DOM, whose slots place a part streamed later without a
@@ -3220,25 +3245,25 @@ rules something out.
     Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
     less than a marker Corten reads on every request); measured (`npm run build:js`'s
     `js/dist/corten.js` and `js/dist/part.js`, gzip level 6 and brotli level 11 by Node's
-    `zlib`: the runtime 15,631 and 14,094 bytes at `0e9535c6b` and the module 1,050 and 913, against
-    15,407 and 13,925 for the runtime on main at `dbe1a34c7` and 16,685 and 15,059 with the reads
-    in it at `cd6861c76`, so a page without a slow part loads 1,054 bytes gzipped fewer than it
-    would with them there); platform (with scripting off
-    `@media (scripting: none)` matches and `(scripting: enabled)` does not, with it on the
-    reverse; `aria-busy` means the element is being updated, WAI-ARIA 1.2); reasoned (a browser
-    without Media Queries 5's `scripting` matches neither query, as Media Queries evaluates a
-    feature it does not know to unknown, which a query takes as false, so it shows both; the
-    runtime's read sends `corten: action`, which is `Mode::Action`, so a handler that picks its
+    `zlib`: the runtime 15,462 and 13,979 bytes at this Choice's commit and the module 1,512 and
+    1,347, against 15,407 and 13,925 for the runtime on main at `dbe1a34c7`, 15,631 and 14,094 with
+    the discovery in it at `73279ab7a`, and 16,685 and 15,059 with the reads in it at
+    `cd6861c76`, so a page without a slow part loads 55 bytes gzipped more than on main, where it
+    loaded 224 and 1,278 more); platform (`aria-busy` means the element is being updated, WAI-ARIA
+    1.2; a `MutationObserver` is told of the page's changes in a microtask after them, so its
+    `takeRecords` at the moment a patch is let draw leaves it the patch's own changes, DOM
+    standard); reasoned (the runtime's read sends `corten: action`, which is `Mode::Action`, so a handler that picks its
     side by mode answers the read with the part and every other request with the page; the page's
     handler can call the read the part's side calls, so reading the part in is a branch on the
-    field; the link is in the markup with JavaScript too, so no runtime step draws or removes it);
+    field; the link is in the markup with JavaScript too, and shown unless the module marks its
+    part busy, so no runtime step draws, removes or shows it);
     value (a page works without a script, Values 3, where a part only a script reads would never
     come; one handler serves the page and its part, with one waiting state, Values 5).
 
     Revisit when: the repository's examples and the Chase Sets pilot between them write such a
     field and handler branch on three or more routes (one, watchlist's home, in this repository);
-    or a browser the repository's Playwright runs matches `@media (scripting: none)` with
-    JavaScript on, or not with it off; or Firefox and WebKit, as Chromium does, place a part
+    or the link drawn before the module marks its part busy is seen on a load (a smoke check or a
+    report of it), when the part's waiting state would be the runtime's to draw again; or Firefox and WebKit, as Chromium does, place a part
     streamed later with HTML alone inside the page's own markup ([Choice 7](#choice-whole-pages)).
 
     Last checked: 2026-11-16, the picks read once on load and again after a navigation back, busy
@@ -3249,9 +3274,9 @@ rules something out.
     marked at once), a part replaced while its answer's stylesheet loads, a part a patch appends,
     only the part busy with a cell and a live row beside it patched during its read and a form
     whose controls shadow what the runtime reads drawn as a part, a part waiting in a part's answer
-    and in a part read again marked failed and not read, a tag in an element with no id logged
-    and its element marked, a part slower than its page's read again drawn and one whose read never
-    ends putting the page's read off only once, a read cut by a hidden page read again when shown
+    marked failed and not read and one in a part read again read, a tag in an element with no id
+    logged and its element marked, a page read again on its interval while its part's read never
+    ends, its part drawn waiting again and read again, a read cut by a hidden page read again when shown
     and not over a part a form replaced meanwhile (`pagehide` and `pageshow` dispatched by the
     test), a client navigation away leaving nothing marked, a page left whole and come back to with
     its part, a part in a layout element that is the page's, a part in a live region around
@@ -3262,14 +3287,16 @@ rules something out.
     the part's own attributes drawn again (busy while its read is held, or failed, and not read
     twice), a part's answer and a newer patch that replaced the part waiting for one stylesheet
     (the newer drawn, the answer not), a part replaced while its answer's stylesheet is held
-    ending its read before the stylesheet loads, the part module
-    refused with a 503 and the part's link shown, a part a `<corten-live>` fragment draws and a
+    ending its read before the stylesheet loads, a tag a kept element draws again with another
+    address read there (its held read at the old address cancelled and its answer not drawn, and
+    a failed read at the old address not stopping it), the part module refused with a 503 and the
+    part's link shown with no line and no mark, a part a `<corten-live>` fragment draws and a
     later fragment draws again while the first read is held (the first cancelled, the second
     drawn), a prerendered page read once shown
     (`document.prerendering` and `prerenderingchange` stood in for: Playwright's headless Chromium
-    156 did not prerender a Speculation Rules page in a probe), and `@media (scripting: none)` and
-    `(scripting: enabled)` with JavaScript off and on (`javaScriptEnabled` in Playwright 1.64.1),
-    in Chromium 156, Firefox 157 and WebKit 27.2 by `scripts/smoke.mjs`.
+    156 did not prerender a Speculation Rules page in a probe), and the link shown and the line
+    hidden with JavaScript off (`javaScriptEnabled` in Playwright 1.64.1), in Chromium 156,
+    Firefox 157 and WebKit 27.2 by `scripts/smoke.mjs`.
 
 45. <a id="choice-data-on-single-quoted"></a>**`data-on` is a single-quoted attribute, so the JSON of
     a handler's arguments keeps its quotes.** A script gets what it works on through its handler's

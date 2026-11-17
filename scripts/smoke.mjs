@@ -1780,15 +1780,20 @@ async function run(browser) {
     await held.context().close();
   }
   // The part module does not load (a 503), though the page and the runtime do: no read starts, and
-  // the waiting part shows its link, as without JavaScript (#1400).
+  // the waiting part shows its link, as without JavaScript: nothing marked it busy, which alone
+  // hides the link (#1400).
   {
     const unread = await (await browser.newContext()).newPage();
     let partReads = 0;
-    await unread.route("**/part.js", (route) => route.fulfill({ status: 503, body: "" }));
+    let moduleAsked = 0;
+    await unread.route("**/part.js", (route) => (moduleAsked++, route.fulfill({ status: 503, body: "" })));
     await unread.route(`${base}/`, (route) => (route.request().headers().corten === "action" && partReads++, route.continue()));
     await unread.goto(`${base}/`);
-    await unread.waitForSelector("#picks[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+    await unread.waitForLoadState("load");
+    for (let waited = 0; moduleAsked === 0 && waited < 5000; waited += 100) await unread.waitForTimeout(100);
+    await unread.waitForTimeout(500);
     const without = {
+      asked: moduleAsked,
       reads: partReads,
       failed: await unread.getAttribute("#picks", "data-corten-read-failed"),
       busy: await unread.getAttribute("#picks", "aria-busy"),
@@ -1797,7 +1802,7 @@ async function run(browser) {
     };
     check(
       "a slow part whose read module does not load shows its link, as without JavaScript",
-      without.reads === 0 && without.failed === "" && without.busy === null && without.link && !without.line,
+      without.asked > 0 && without.reads === 0 && without.failed === null && without.busy === null && without.link && !without.line,
       JSON.stringify(without),
     );
     await unread.unrouteAll({ behavior: "ignoreErrors" });
@@ -1841,22 +1846,18 @@ async function run(browser) {
     await both.unrouteAll({ behavior: "ignoreErrors" });
     await both.context().close();
   }
-  // A part slower than the page's own read again, on a page whose data changes each time it is
-  // read: while the part's read is on its way the page waits once more before it reads itself
-  // whole (which would draw the part waiting again and read it again), so a part slower than the
-  // page's interval but not than two comes; and a part whose read never ends does not stop the
-  // page's reads, which wait for it only once (#1400).
-  for (const never of [false, true]) {
+  // A part whose read never ends, on a page that reads itself again and whose data changes each
+  // time it is read: the page's reads are not put off for the part, and each draws the part waiting
+  // again, which cancels the read before and reads it again (a part slower than the page's own
+  // interval never comes; docs/design.md#choice-slow-part-link) (#1400).
+  {
     const slower = await (await browser.newContext()).newPage();
-    let [wholeAnswers, partReads] = [0, 0];
+    let [wholeAnswers, partReads, cancelled] = [0, 0, 0];
+    slower.on("requestfailed", (r) => r.headers().corten === "action" && cancelled++);
     await slower.route(`${base}/`, async (route) => {
       if (route.request().headers().corten === "action") {
         partReads++;
-        if (never) return new Promise(() => {});
-        // With the route's own 600 ms (`PICKS_TAKE`), about 1.1 s: slower than the page's 1 s
-        // interval, with room before two.
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        return route.continue().catch(() => {});
+        return new Promise(() => {});
       }
       const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
       const headers = res.headers();
@@ -1870,16 +1871,12 @@ async function run(browser) {
       await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
     });
     await slower.goto(`${base}/`);
-    if (never) {
-      for (let waited = 0; wholeAnswers < 2 && waited < 6000; waited += 100) await slower.waitForTimeout(100);
-      check("a part whose read never ends puts the page's read again off only once", wholeAnswers >= 2 && partReads >= 1, `page read ${wholeAnswers} times, part ${partReads}`);
-    } else {
-      const came = await slower
-        .waitForSelector("ul#picks li", { state: "attached", timeout: 5000 })
-        .then(() => true)
-        .catch(() => false);
-      check("a part slower than the page's read again comes, as the page waits once more for it before reading itself whole", came, `drawn ${came}, page read ${wholeAnswers} times`);
-    }
+    for (let waited = 0; (wholeAnswers < 3 || partReads < 2) && waited < 8000; waited += 100) await slower.waitForTimeout(100);
+    check(
+      "a part whose read never ends does not put off the page's read again, which draws the part waiting again and reads it again",
+      wholeAnswers >= 3 && partReads >= 2 && cancelled >= 1,
+      `page read ${wholeAnswers} times, part ${partReads}, ${cancelled} cancelled`,
+    );
     await slower.unrouteAll({ behavior: "ignoreErrors" });
     await slower.context().close();
   }
@@ -5037,9 +5034,10 @@ async function run(browser) {
     await page.unroute("**/smoke/sibling-*");
   }
 
-  // Reads do not chain: a part waiting in a part's answer, or in the answer to a part read again
-  // (`ReadAgain::from`), is marked failed rather than read, so two parts whose answers each draw
-  // the other waiting cannot read each other without end (#1400).
+  // Reads do not chain: a part waiting in a part's answer is marked failed rather than read, so two
+  // parts whose answers each draw the other waiting cannot read each other without end. One waiting
+  // in the answer to a part read again (`ReadAgain::from`) is read, as one a form's answer draws:
+  // that read's own interval spaces them (#1400).
   {
     /** @type {string[]} */
     const asked = [];
@@ -5049,7 +5047,8 @@ async function run(browser) {
       asked.push(path);
       if (path === "/smoke/chain-a") return route.fulfill(patchOf('<p id="chain-a">A drawn</p><p id="chain-b">B waiting<template data-corten-read-now data-from="/smoke/chain-b"></template></p>'));
       if (path === "/smoke/chain-b") return route.fulfill(patchOf('<p id="chain-b">B drawn</p><p id="chain-a">A waiting<template data-corten-read-now data-from="/smoke/chain-a"></template></p>'));
-      return route.fulfill(patchOf('<p id="chain-e">Polled<template data-corten-read-now data-from="/smoke/chain-a"></template></p>'));
+      if (path === "/smoke/chain-poll") return route.fulfill(patchOf('<p id="chain-e">Poll part drawn</p>'));
+      return route.fulfill(patchOf('<p id="chain-e">Polled<template data-corten-read-now data-from="/smoke/chain-poll"></template></p>'));
     });
     await page.evaluate(async () => {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="chain-1"><p id="chain-b">B</p><p id="chain-e">Every</p></div>'));
@@ -5058,14 +5057,20 @@ async function run(browser) {
         __html('<div id="chain-1"><p id="chain-a">A waiting<template data-corten-read-now data-from="/smoke/chain-a"></template></p><p id="chain-b">B</p><p id="chain-e">Every</p></div><template data-corten-read-again="1" data-from="/smoke/chain-every"></template>'),
       );
     });
-    await page.waitForFunction(() => document.getElementById("chain-e")?.textContent === "Polled", null, { timeout: 6000 }).catch(() => {});
+    await page.waitForFunction(() => document.getElementById("chain-e")?.textContent === "Poll part drawn", null, { timeout: 6000 }).catch(() => {});
     await page.waitForTimeout(500);
     const chained = await page.evaluate(() =>
       Object.fromEntries(["chain-a", "chain-b", "chain-e"].map((id) => [id, [document.getElementById(id)?.textContent, document.getElementById(id)?.getAttribute("data-corten-read-failed") ?? null]])),
     );
     check(
-      "a part waiting in a part's answer, or in a part read again, is marked failed, not read",
-      chained["chain-a"][0] === "A drawn" && chained["chain-b"][1] === "" && chained["chain-e"][1] === "" && !asked.includes("/smoke/chain-b") && asked.filter((p) => p === "/smoke/chain-a").length === 1,
+      "a part waiting in a part's answer is marked failed, not read; one in a part read again is read",
+      chained["chain-a"][0] === "A drawn" &&
+        chained["chain-b"][1] === "" &&
+        chained["chain-e"][0] === "Poll part drawn" &&
+        chained["chain-e"][1] === null &&
+        !asked.includes("/smoke/chain-b") &&
+        asked.filter((p) => p === "/smoke/chain-a").length === 1 &&
+        asked.filter((p) => p === "/smoke/chain-poll").length === 1,
       `${JSON.stringify(chained)}, asked ${asked.join(" ")}`,
     );
     await page.evaluate(() => document.getElementById("chain-1")?.remove());
@@ -6274,24 +6279,40 @@ async function run(browser) {
     // is cancelled, and its answer, let through later, is not drawn over the newer one. Beside it in a
     // kept element, a part the page draws as it was keeps its read on its way (not read twice), and
     // one whose read failed stays failed (not read again); and so does a part whose own attributes
-    // the page changes, its tag kept, which keeps its marks: busy while its read is held, or failed
-    // (#1400).
+    // the page changes, its tag kept, which keeps its marks: busy while its read is held, or failed.
+    // A tag kept with another address is read at it: its old read, held, is cancelled and its answer
+    // not drawn, and an old read that failed does not stop the new address's (#1400).
     const keptNames = [
       "a part that is a live region kept in place reads its new tag, and its first read is cancelled and not drawn",
       "a part a write's page draws as it was in a kept element keeps its read on its way, not read twice",
       "a part a write's page draws as it was in a kept element stays failed, not read again",
       "a part whose own attributes a write's page changes in a kept element, its tag kept, stays busy while its read is on its way, not read twice",
       "a part whose own attributes a write's page changes in a kept element, its tag kept, stays failed, not read again",
+      "a part whose tag a write's page keeps with another address reads the new address, and its old read is cancelled and not drawn",
+      "a part whose read failed is read at the new address a write's page keeps its tag with",
     ];
     if (swaps) {
       const keptPage = await (await browser.newContext()).newPage();
       let keptTurn = 0;
       /** @type {Record<string, number>} */
-      const keptReads = { "region-old": 0, "region-new": 0, "kept-held": 0, "kept-failed": 0, "turn-held": 0, "turn-failed": 0 };
+      const keptReads = {
+        "region-old": 0,
+        "region-new": 0,
+        "kept-held": 0,
+        "kept-failed": 0,
+        "turn-held": 0,
+        "turn-failed": 0,
+        "moved-one": 0,
+        "moved-two": 0,
+        "refail-one": 0,
+        "refail-two": 0,
+      };
       /** @type {((value?: unknown) => void)[]} */
       const releases = [];
       let oldCancelled = false;
+      let movedCancelled = false;
       keptPage.on("requestfailed", (r) => r.url().endsWith("/smoke/region-old") && (oldCancelled = true));
+      keptPage.on("requestfailed", (r) => r.url().endsWith("/smoke/moved-one") && (movedCancelled = true));
       const tagOf = (/** @type {string} */ from) => `<template data-corten-read-now data-from="/smoke/${from}"></template>`;
       await keptPage.route(
         (url) => url.pathname === "/news",
@@ -6304,9 +6325,15 @@ async function run(browser) {
           const n = keptTurn++;
           const box =
             `<div id="kept-box"><p role="status">Turn ${n}</p><span id="kept-held">Waiting${tagOf("kept-held")}</span><span id="kept-failed">Waiting${tagOf("kept-failed")}</span>` +
-            `<span id="turn-held" data-turn="${n}">Waiting${tagOf("turn-held")}</span><span id="turn-failed" data-turn="${n}">Waiting${tagOf("turn-failed")}</span></div>` +
+            `<span id="turn-held" data-turn="${n}">Waiting${tagOf("turn-held")}</span><span id="turn-failed" data-turn="${n}">Waiting${tagOf("turn-failed")}</span>` +
+            `<span id="kept-moved">Waiting${tagOf(n ? "moved-two" : "moved-one")}</span><span id="kept-refail">Waiting${tagOf(n ? "refail-two" : "refail-one")}</span></div>` +
             `<p id="slow-region" role="status">Waiting ${n}${tagOf(n ? "region-new" : "region-old")}</p>`;
-          await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(/(<header\b[^>]*>)/, `$1${box}`) });
+          // The page draws parts in its layout, so its head preloads the part module, marked, as the
+          // server writes it for such a page.
+          const body = (await res.text())
+            .replace(/(<header\b[^>]*>)/, `$1${box}`)
+            .replace(/(<script type="module" src="([^"]*\/)corten\.js"><\/script>)/, '$1<link rel="modulepreload" href="$2part.js" data-corten-part>');
+          await route.fulfill({ status: res.status(), headers, body });
         },
       );
       await keptPage.route("**/smoke/*", async (route) => {
@@ -6315,21 +6342,27 @@ async function run(browser) {
         keptReads[name] = (keptReads[name] ?? 0) + 1;
         const patch = (/** @type {string} */ body) =>
           route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body }).catch(() => {});
-        if (name === "kept-failed" || name === "turn-failed") return route.fulfill({ status: 500, body: "" });
+        if (name === "kept-failed" || name === "turn-failed" || name === "refail-one") return route.fulfill({ status: 500, body: "" });
         if (name === "region-new") return patch('<p id="slow-region" role="status">New answer</p>');
+        if (name === "moved-two") return patch('<span id="kept-moved">Moved two answer</span>');
+        if (name === "refail-two") return patch('<span id="kept-refail">Refail two answer</span>');
         await new Promise((resolve) => releases.push(resolve));
         if (name === "turn-held") return patch('<span id="turn-held">Turn held answer</span>');
+        if (name === "moved-one") return patch('<span id="kept-moved">Moved one answer</span>');
         return patch(name === "kept-held" ? '<span id="kept-held">Held answer</span>' : '<p id="slow-region" role="status">Old answer</p>');
       });
       await keptPage.goto(`${base}/news#briefing`);
       await keptPage.waitForSelector("#kept-failed[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
       await keptPage.waitForSelector("#turn-failed[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
-      for (let waited = 0; (keptReads["region-old"] === 0 || keptReads["kept-held"] === 0 || keptReads["turn-held"] === 0) && waited < 5000; waited += 100) await keptPage.waitForTimeout(100);
+      await keptPage.waitForSelector("#kept-refail[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+      const heldFirst = () => keptReads["region-old"] === 0 || keptReads["kept-held"] === 0 || keptReads["turn-held"] === 0 || keptReads["moved-one"] === 0;
+      for (let waited = 0; heldFirst() && waited < 5000; waited += 100) await keptPage.waitForTimeout(100);
       await keptPage.evaluate(() => {
         /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
         /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
       });
       await keptPage.waitForFunction(() => document.getElementById("slow-region")?.textContent === "New answer", null, { timeout: 5000 }).catch(() => {});
+      await keptPage.waitForFunction(() => document.getElementById("kept-moved")?.textContent === "Moved two answer", null, { timeout: 5000 }).catch(() => {});
       const turned = await keptPage.evaluate(() => document.querySelector("#kept-box p")?.textContent ?? "");
       // The parts whose attributes the write's page changed, before the held reads are let through.
       await keptPage.waitForTimeout(300);
@@ -6357,9 +6390,14 @@ async function run(browser) {
           failedText: at("kept-failed")?.textContent,
           turnHeld: at("turn-held")?.textContent,
           turnFailed: at("turn-failed")?.getAttribute("data-corten-read-failed") ?? null,
+          moved: at("kept-moved")?.textContent,
+          movedBusy: at("kept-moved")?.getAttribute("aria-busy") ?? null,
+          movedFailed: at("kept-moved")?.getAttribute("data-corten-read-failed") ?? null,
+          refail: at("kept-refail")?.textContent,
+          refailFailed: at("kept-refail")?.getAttribute("data-corten-read-failed") ?? null,
         };
       });
-      const keptSaw = JSON.stringify({ ...kept, turned, turnedParts, reads: keptReads, oldCancelled });
+      const keptSaw = JSON.stringify({ ...kept, turned, turnedParts, reads: keptReads, oldCancelled, movedCancelled });
       check(
         keptNames[0],
         turned === "Turn 1" && kept.region === "New answer" && kept.regionBusy === null && kept.regionFailed === null && keptReads["region-new"] === 1 && oldCancelled,
@@ -6373,6 +6411,22 @@ async function run(browser) {
         keptSaw,
       );
       check(keptNames[4], turnedParts.failedTurn === "1" && turnedParts.failedMark === "" && keptReads["turn-failed"] === 1 && kept.turnFailed === "", keptSaw);
+      check(
+        keptNames[5],
+        turned === "Turn 1" &&
+          kept.moved === "Moved two answer" &&
+          kept.movedBusy === null &&
+          kept.movedFailed === null &&
+          keptReads["moved-one"] === 1 &&
+          keptReads["moved-two"] === 1 &&
+          movedCancelled,
+        keptSaw,
+      );
+      check(
+        keptNames[6],
+        turned === "Turn 1" && kept.refail === "Refail two answer" && kept.refailFailed === null && keptReads["refail-one"] === 1 && keptReads["refail-two"] === 1,
+        keptSaw,
+      );
       await keptPage.unrouteAll({ behavior: "ignoreErrors" });
       await keptPage.context().close();
     } else for (const name of keptNames) skip(name, noSwaps);

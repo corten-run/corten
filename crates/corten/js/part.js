@@ -1,31 +1,67 @@
 // @ts-check
 // The reads of the parts a page waits for (`ReadAgain::now`): a module of its own, which only a
-// page that draws a part waiting loads (its head preloads it with the runtime, and a navigation's
-// answer preloads it too); every page's runtime carries only the few lines that find such a part
-// and hand it here. Built into dist/part.js and served beside the runtime, at
-// `/corten/{version}/part.js` (docs/design.md#choice-slow-part-link).
+// page that draws a part waiting loads. Its head preloads the module with the runtime, and the
+// runtime imports it once that page loads, or once markup the server sent draws such a part; from
+// then on it finds the parts itself, so every page's runtime carries only the few lines that start
+// it. Built into dist/part.js and served beside the runtime, at `/corten/{version}/part.js`
+// (docs/design.md#choice-slow-part-link).
+//
+// A part's link to the page with it read in is the app's markup, shown unless a read is bringing
+// the part (`aria-busy`, which this module alone sets on it): without JavaScript, when this module
+// does not load, and once its read has failed (`data-corten-read-failed`).
 
 /** A part the page waits for: its tag, in the element its read's patch replaces. */
 const PART_NOW = "template[data-corten-read-now][data-from]";
-/** The mark of a part no read will bring, where the app's CSS shows its link. */
+/** The mark of a part no read will bring, where the app's CSS may say so. */
 const FAILED = "data-corten-read-failed";
-/**
- * The tags a read is on its way for, each with the read's busy mark (its `busyBy` owner). A layout
- * element kept and drawn again in place (a live region) keeps the part but takes new children: its
- * new tag is read anew, and the old tag's read stops.
- * @type {WeakMap<Element, object>}
- */
-const reading = new WeakMap();
-/**
- * The tags no read will bring their part for. A layout element that keeps a tag but draws its part
- * again (the part's own attributes changed) takes away the marks the runtime put on it; those of
- * a tag kept, this read's busy and this failure, are put back, and the tag is not read again.
- */
-const failed = new WeakSet();
 // Read through Element's and Node's own, as a form's controls may shadow them.
 const own = Element.prototype;
 /** @param {Element} el */
 const inPage = (el) => !!Reflect.get(Node.prototype, "isConnected", el);
+/** @param {Element} tag */
+const fromOf = (tag) => /** @type {string} */ (own.getAttribute.call(tag, "data-from"));
+
+/**
+ * The runtime's `apply`: draws the patch `html` unless `signal.aborted`, which it reads once,
+ * right before it draws (after the patch's modules and stylesheets have loaded); `asked` is the
+ * tag of the read it answers.
+ * @typedef {(html: string, signal: AbortSignal, sent: null, took: undefined, own: boolean, asked: Element) => Promise<void>} Apply
+ */
+/**
+ * A read on its way: the address it is of, the tags that wait for it, the parts they are in, its
+ * busy mark (its `busyBy` owner) and what stops it.
+ * @typedef {{ from: string, tags: Element[], parts: Element[], mine: object, stop: AbortController }} Read
+ */
+
+/** @type {Apply} */
+let draw;
+/** The work that last marked each element `aria-busy` (the runtime's, shared with forms). @type {WeakMap<Element, object>} */
+let busyBy;
+/** @type {MutationObserver | undefined} */
+let observer;
+/**
+ * The read each tag waits for. A layout element kept and drawn again in place (a live region)
+ * keeps the tag: a tag that keeps its address keeps its read, and one whose address changed has
+ * its old read stopped and the new address read.
+ * @type {WeakMap<Element, Read>}
+ */
+const reading = new WeakMap();
+/** The reads on their way, each stopped once one of its tags leaves the page. @type {Set<Read>} */
+const live = new Set();
+/**
+ * The address each tag's read did not bring its part for: the tag is not read again for it, and
+ * the part keeps its mark (a layout element drawn again in place takes the marks away). The same
+ * tag with another address is read anew.
+ * @type {WeakMap<Element, string>}
+ */
+const failed = new WeakMap();
+/**
+ * The read whose answer is being drawn: the tags the drawing puts on the page are marked failed
+ * rather than read, so one read's answer cannot start another, and two parts whose answers each
+ * draw the other waiting do not read each other without end.
+ * @type {Read | null}
+ */
+let drawing = null;
 
 /** How many times the browser has hidden the page (the back-forward cache), and whether it is now. */
 let hidden = 0;
@@ -37,98 +73,164 @@ addEventListener("pagehide", () => {
 addEventListener("pageshow", () => (away = false));
 
 /**
- * The runtime's `apply`: draws the patch `html` unless `signal` has aborted once its modules and
- * stylesheets have loaded; `asked` is the tag of the read it answers.
- * @typedef {(html: string, signal: AbortSignal, sent: null, took: undefined, own: boolean, asked: Element) => Promise<void>} Apply
+ * Starts reading the parts the page waits for, and those markup later draws (a navigation's page,
+ * a form's answer, a `<corten-live>` fragment, a layout element a write's page draws again): each
+ * tag's part is the element it is in, which needs an id (the patch replaces it by its id). Tags
+ * that name the same address share one read, whose patch draws each of their parts. Once only:
+ * the runtime calls it each time it sees such markup. A page the browser renders before it is
+ * shown (Speculation Rules' prerender) reads them once it is: the server's slow read is for a page
+ * someone sees.
+ * @param {Apply} apply @param {WeakMap<Element, object>} busy
  */
-
-/**
- * Reads the parts `roots` draw waiting: each tag's part is the element it is in, which needs an
- * id (the patch replaces it by its id). Tags that name the same address share one read, whose
- * patch draws each of their parts. `chained`: `roots` are what an answer to a part's read drew,
- * whose parts are marked failed rather than read, so one read cannot start another without end.
- * A page the browser renders before it is shown (Speculation Rules' prerender) reads them once
- * it is: the server's slow read is for a page someone sees.
- * @param {Element[]} roots @param {boolean} chained @param {Apply} apply
- * @param {(el: Element) => AbortSignal} signalOf aborts when `el` leaves the page
- * @param {WeakMap<Element, object>} busyBy the work that last marked each element `aria-busy`
- */
-export function read(roots, chained, apply, signalOf, busyBy) {
+export function start(apply, busy) {
+  if (observer) return;
   // Not in lib.dom yet; a browser without it never prerenders.
   if (Reflect.get(document, "prerendering") === true) {
-    document.addEventListener("prerenderingchange", () => read(roots, chained, apply, signalOf, busyBy), { once: true });
+    document.addEventListener("prerenderingchange", () => start(apply, busy), { once: true });
     return;
   }
-  /** @type {Map<string, [Element[], Element[]]>} */
-  const reads = new Map();
-  for (const root of roots) {
-    for (const tag of Array.from(own.querySelectorAll.call(root, PART_NOW))) {
-      const part = tag.parentElement;
-      if (!part || !inPage(tag)) continue;
-      // One a read is on its way for, or that one ended without, already has its read: a layout
-      // element that kept the tag keeps it, with its mark.
-      const mine = reading.get(tag);
-      if (mine) {
-        if (busyBy.get(part) === mine) own.setAttribute.call(part, "aria-busy", "true");
-        continue;
-      }
-      const ended = failed.has(tag) || own.hasAttribute.call(part, FAILED);
-      if (ended || chained || !own.hasAttribute.call(part, "id")) {
-        if (!ended && !chained) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
-        failed.add(tag);
-        own.setAttribute.call(part, FAILED, "");
-        continue;
-      }
-      const from = /** @type {string} */ (own.getAttribute.call(tag, "data-from"));
-      let found = reads.get(from);
-      if (!found) reads.set(from, (found = [[], []]));
-      found[0].push(tag);
-      if (!found[1].includes(part)) found[1].push(part);
-    }
-  }
-  for (const [from, [tags, parts]] of reads) readPart(from, tags, parts, apply, signalOf, busyBy);
+  draw = apply;
+  busyBy = busy;
+  observer = new MutationObserver(changed);
+  observer.observe(document.documentElement, { childList: true, subtree: true, attributeFilter: ["data-from", "aria-busy", FAILED] });
+  take(Array.from(own.querySelectorAll.call(document.documentElement, PART_NOW)), false);
 }
 
 /**
- * One read of {@link read}: fetches `from` as a part read again is (`corten: action`) and draws
- * the patch it answers. Its parts are `aria-busy` until it ends. It stops once one of its tags
- * leaves the page (a form's answer replaced its part, a page was swapped in, or a layout element
- * kept in place took new children): its fetch ends, and its answer is not drawn over what is there
- * now. Every part whose tag is still on the page when it ends was not drawn (offline, an error
- * page, a page, a redirect, or a patch without it, or another of its parts left): it is marked
- * `data-corten-read-failed`, where the app's CSS shows the link a browser without JavaScript
- * gets, which follows a redirect as any navigation does. A part whose tag left belongs to what
- * replaced it, which this read does not mark. A read the browser ended by hiding the page (the
- * back-forward cache) is made again once the page is shown.
- * @param {string} from @param {Element[]} tags @param {Element[]} parts @param {Apply} apply
- * @param {(el: Element) => AbortSignal} signalOf @param {WeakMap<Element, object>} busyBy
+ * What changed in the page: tags that joined it, a tag whose address changed, and a part whose
+ * marks a layout element drawn again in place took away, are taken ({@link take}); a read one of
+ * whose tags left stops.
+ * @param {MutationRecord[]} records
  */
-async function readPart(from, tags, parts, apply, signalOf, busyBy) {
+function changed(records) {
+  const chained = !!drawing;
+  drawing = null;
+  /** @type {Set<Element>} */
+  const tags = new Set();
+  let removed = false;
+  for (const record of records) {
+    const el = record.target;
+    if (record.type === "attributes") {
+      if (!(el instanceof Element)) continue;
+      if (own.matches.call(el, PART_NOW)) tags.add(el);
+      else for (const tag of Array.from(own.querySelectorAll.call(el, `:scope > ${PART_NOW}`))) tags.add(tag);
+      continue;
+    }
+    if (record.removedNodes.length) removed = true;
+    for (const node of Array.from(record.addedNodes)) {
+      if (!(node instanceof Element)) continue;
+      if (own.matches.call(node, PART_NOW)) tags.add(node);
+      for (const tag of Array.from(own.querySelectorAll.call(node, PART_NOW))) tags.add(tag);
+    }
+  }
+  // Its answer is for what is no longer there (a form's answer replaced its part, a page was
+  // swapped in, a layout element kept in place took new children).
+  if (removed) for (const read of live) if (!read.tags.every(inPage)) read.stop.abort();
+  take(Array.from(tags), chained);
+}
+
+/**
+ * Reads the parts of `tags`, or marks them as they were: a tag whose read is on its way for its
+ * address keeps it, and its part its busy mark; one whose read did not bring it keeps its part's
+ * failed mark. `chained`: they are what a read's answer drew, marked failed rather than read.
+ * @param {Element[]} tags @param {boolean} chained
+ */
+function take(tags, chained) {
+  /** @type {Map<string, [Element[], Element[]]>} */
+  const reads = new Map();
+  for (const tag of tags) {
+    const part = tag.parentElement;
+    if (!part || !inPage(tag)) continue;
+    const from = fromOf(tag);
+    const now = reading.get(tag);
+    if (now?.from === from) {
+      if (busyBy.get(part) === now.mine && !own.hasAttribute.call(part, "aria-busy")) own.setAttribute.call(part, "aria-busy", "true");
+      continue;
+    }
+    if (now) {
+      // Its address changed: the read for the old one stops, and its other tags are read again
+      // (its answer would have drawn this part as it was).
+      now.stop.abort();
+      for (const other of now.tags) {
+        if (reading.get(other) !== now) continue;
+        reading.delete(other);
+        if (other !== tag) tags.push(other);
+      }
+    }
+    const ended = failed.get(tag);
+    if (ended === from) {
+      if (!own.hasAttribute.call(part, FAILED)) own.setAttribute.call(part, FAILED, "");
+      continue;
+    }
+    if (ended !== undefined) failed.delete(tag), own.removeAttribute.call(part, FAILED);
+    if (chained || !own.hasAttribute.call(part, "id")) {
+      if (!chained) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
+      fail(tag, from);
+      continue;
+    }
+    let found = reads.get(from);
+    if (!found) reads.set(from, (found = [[], []]));
+    if (!found[0].includes(tag)) found[0].push(tag);
+    if (!found[1].includes(part)) found[1].push(part);
+  }
+  for (const [from, [tags, parts]] of reads) readPart(from, tags, parts);
+}
+
+/** Marks `tag`'s part as one no read will bring for `from`. @param {Element} tag @param {string} from */
+function fail(tag, from) {
+  failed.set(tag, from);
+  if (tag.parentElement) own.setAttribute.call(tag.parentElement, FAILED, "");
+}
+
+/**
+ * One read of {@link take}: fetches `from` as a part read again is (`corten: action`) and draws
+ * the patch it answers. Its parts are `aria-busy` until it ends. It stops once one of its tags
+ * leaves the page or takes another address: its fetch ends, and its answer is not drawn over what
+ * is there now. That is checked as the answer is drawn, after the stylesheets it waits for, so an
+ * answer drawn first in the same task (a form's, waiting for the same stylesheet) that replaced a
+ * part stops it before an observer could hear of it. Every part whose tag is still on the page,
+ * at the same address, when it ends was not drawn (offline, an error page, a page, a redirect, or
+ * a patch without it, or another of its parts left): it is marked `data-corten-read-failed`, and
+ * shows the link a browser without JavaScript gets, which follows a redirect as any navigation
+ * does. A part whose tag left belongs to what replaced it, which this read does not mark. A read
+ * the browser ended by hiding the page (the back-forward cache) is made again once it is shown.
+ * @param {string} from @param {Element[]} tags @param {Element[]} parts
+ */
+async function readPart(from, tags, parts) {
   const stop = new AbortController();
   const { signal } = stop;
+  /** @type {Read} */
+  const read = { from, tags, parts, mine: {}, stop };
+  live.add(read);
+  for (const tag of tags) reading.set(tag, read);
   // Busy is this read's own: a submit that marks a part meanwhile keeps the mark it made.
-  const mine = {};
-  for (const tag of tags) {
-    reading.set(tag, mine);
-    signalOf(tag).addEventListener("abort", () => stop.abort(), { signal });
-  }
   for (const part of parts) {
-    busyBy.set(part, mine);
+    busyBy.set(part, read.mine);
     own.setAttribute.call(part, "aria-busy", "true");
   }
   const at = hidden;
   let again = false;
-  // Settled once a part leaves, even while the answer waits for a stylesheet that never loads:
-  // `apply` draws nothing once `signal` has aborted.
+  const here = () => tags.every((tag) => inPage(tag) && reading.get(tag) === read && fromOf(tag) === from);
+  // Read by `apply` once, right before it draws: what the page changed before is taken first, so
+  // only what this answer draws counts as drawn by a read.
+  const now = /** @type {AbortSignal} */ (
+    /** @type {unknown} */ ({
+      get aborted() {
+        if (signal.aborted || !here()) return true;
+        const pending = observer?.takeRecords() ?? [];
+        if (pending.length) changed(pending);
+        drawing = read;
+        return false;
+      },
+    })
+  );
+  // Settled once a part leaves, even while the answer waits for a stylesheet that never loads.
   const left = new Promise((resolve) => signal.addEventListener("abort", resolve));
   try {
     const res = await fetch(from, { headers: { corten: "action" }, signal });
     if (res.headers.has("corten-patch") && res.url !== "" && new URL(res.url).origin === location.origin) {
       const html = await res.text();
-      // A tag that left as the answer came (a layout element kept in place took new children)
-      // stops the read before the page is swept: its answer is for what is no longer there.
-      if (!tags.every(inPage)) stop.abort();
-      await Promise.race([apply(html, signal, null, undefined, true, /** @type {Element} */ (tags[0])).catch(reportError), left]);
+      if (here()) await Promise.race([draw(html, now, null, undefined, true, /** @type {Element} */ (tags[0])).catch(reportError), left]);
     } else if (res.ok && !res.headers.has("corten-location")) {
       // A success that is not a patch is the app's mistake (the route answered its page).
       console.error("corten: ReadAgain::now needs a patch from this origin, at", from, res);
@@ -137,18 +239,17 @@ async function readPart(from, tags, parts, apply, signalOf, busyBy) {
     // Offline, the server unreachable, or the body cut short: hidden meanwhile, read again.
     again = !signal.aborted && hidden !== at;
   }
+  // An answer that drew nothing leaves no drawing to hear of.
+  if (drawing === read) drawing = null;
   stop.abort();
-  for (const tag of tags) reading.delete(tag);
-  for (const part of parts) if (busyBy.get(part) === mine) own.removeAttribute.call(part, "aria-busy");
-  // Made again only for the same tags: a part a form's answer replaced meanwhile is not read over,
-  // and the rest are marked failed, as when a part leaves while the read is on its way.
+  live.delete(read);
+  // Made again only for the same tags, while it is still theirs: kept busy meanwhile.
   const end = () => {
-    if (again && tags.every(inPage)) readPart(from, tags, parts, apply, signalOf, busyBy);
-    else {
-      for (const tag of tags) {
-        if (inPage(tag) && tag.parentElement) failed.add(tag), own.setAttribute.call(tag.parentElement, FAILED, "");
-      }
-    }
+    if (again && here()) return void readPart(from, tags, parts);
+    const mine = tags.filter((tag) => reading.get(tag) === read);
+    for (const tag of mine) reading.delete(tag);
+    for (const part of parts) if (busyBy.get(part) === read.mine) busyBy.delete(part), own.removeAttribute.call(part, "aria-busy");
+    for (const tag of mine) if (inPage(tag) && fromOf(tag) === from) fail(tag, from);
   };
   if (again && away) addEventListener("pageshow", end, { once: true });
   else end();

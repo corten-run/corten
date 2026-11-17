@@ -254,11 +254,12 @@ fn LastTrade(text: &str) -> impl Render {
 struct PicksId;
 
 /// The picks waiting, with the runtime's read of them inside them (`ReadAgain::now`), which the
-/// page's own handler answers (`page`) with the picks that replace them. Its link goes to the same page
-/// with the picks read in, and shows where no read will bring them (`picks_loading.css`): without JavaScript, which reads
-/// nothing, and once the read has failed (`data-corten-read-failed`), when the line saying they
-/// are on their way is hidden instead. A browser without the `scripting` media feature shows
-/// both. `nofollow`, as the page it opens waits for the slow read.
+/// page's own handler answers (`page`) with the picks that replace them. Its link goes to the same
+/// page with the picks read in, and shows unless a read is bringing them (`aria-busy`,
+/// `picks_loading.css`): without JavaScript, which reads nothing, when the runtime's part module
+/// does not load, and once the read has failed (`data-corten-read-failed`); the line saying they
+/// are on their way shows only while one is. `nofollow`, as the page it opens waits for the slow
+/// read.
 #[component(css)]
 pub(crate) fn PicksLoading() -> impl Render {
     html! {

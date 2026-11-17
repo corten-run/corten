@@ -84,10 +84,13 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    part answered to everyone, so a part read for one visitor there gets a route of its own that
    says `patches`, named in its `ReadAgain::now`; otherwise no second route. Its waiting line has a
    link to the page with the part read in (a query field the handler reads it in for,
-   `rel="nofollow"`), hidden under `@media (scripting: enabled)` and shown on
-   `[data-corten-read-failed]`, which the runtime sets when the read does not replace the part
-   (no patch, an error, a redirect: the link follows it). A part waiting in a part's answer is
-   marked failed, not read: reads do not chain.
+   `rel="nofollow"`), hidden only under the part's `[aria-busy]` (`[aria-busy] > .show`), which
+   the runtime's part module sets while its read is on its way, so the link shows without
+   JavaScript, when the module does not load and once the read failed (no patch, an error, a
+   redirect: the link follows it; the part is then `[data-corten-read-failed]`); never hide it
+   under `@media (scripting: enabled)`. A part waiting in a part's answer is marked failed, not
+   read: reads do not chain. A page that reads itself again (`ReadAgain`) needs an interval
+   longer than its slow part takes.
    Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
    `raw` or an expression inside `<script>` (that does not compile).
 3. A client navigation gets only the `<title>`, the head tags, `<main>`'s children and the layout's

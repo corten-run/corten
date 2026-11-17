@@ -63,8 +63,22 @@ const trusted = (() => {
  * @param {string} url
  */
 const fromHere = (url) => url !== "" && new URL(url).origin === location.origin;
-/** @param {string} text */
-const trustedHTML = (text) => /** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createHTML(text) : text));
+/** The part module, beside the runtime: a variable, so the build leaves it a module of its own. */
+const PART = "./part.js";
+/**
+ * Has the part module (`js/part.js`) read the parts the page waits for (`ReadAgain::now`): imported
+ * once the page loaded with one (its head preloads the module) or markup the server sent draws one,
+ * and handed what draws its answers; from then on it finds the parts itself, so later calls (the
+ * browser's own module, imported once) do nothing. A page that never draws one fetches and runs
+ * none of it, and one whose module does not load shows each part's link, as without JavaScript
+ * (docs/design.md#choice-slow-part-link).
+ */
+const readParts = () => import(PART).then((/** @type {typeof import("./part.js")} */ part) => part.start(apply, busyBy));
+/** The server's markup, through the policy; markup with a part waiting has the part module read it. @param {string} text */
+const trustedHTML = (text) => {
+  if (text.includes(" data-corten-read-now")) readParts();
+  return /** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createHTML(text) : text));
+};
 
 const scriptsMeta = document.querySelector('meta[name="corten-scripts"]');
 const scriptsDir = scriptsMeta?.getAttribute("content") ?? "/assets/scripts/";
@@ -1026,13 +1040,6 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
-  // Another answer waiting for the same stylesheet may have been drawn just now, in this task:
-  // its removals are taken now, so a signal tied to an element it took away (a part's read whose
-  // tag it replaced) has aborted before this one is drawn.
-  if (signal) {
-    const pending = observer.takeRecords();
-    if (pending.length) observed(pending);
-  }
   if (signal?.aborted) return;
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
@@ -1074,10 +1081,6 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
     if (beside) beside.replaceWith(again);
     readPatchAgain(again, put);
   }
-  // A part the patch draws waiting (a form's answer that puts it back waiting) is read as on a
-  // page. Looked for in the text first, so a patch without one (a ticker's) queries nothing; a
-  // script's is `TrustedHTML`, whose text is its markup.
-  if (String(html).includes(" data-corten-read-now")) readNow(put, asked);
 }
 
 /**
@@ -1142,34 +1145,6 @@ const PART_AGAIN = "template[data-corten-read-again][data-from]";
 function readPartsAgain(main) {
   for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) {
     readPatchAgain(tag, [tag, ...Array.from(childrenOf(/** @type {Element} */ (tag.parentElement))).filter((el) => idOf(el))]);
-  }
-}
-
-/** A part the page waits for (`ReadAgain::now`), its tag in the element its read's patch replaces. */
-const PART_NOW = "template[data-corten-read-now][data-from]";
-
-/**
- * Reads the parts `roots` draw waiting (`ReadAgain::now`) with the part module (`js/part.js`,
- * served beside the runtime), which only a page that waits for one loads: its head preloads the
- * module with the runtime, and a navigation's answer preloads it ({@link preload}). `asked`, the
- * tag of the read whose answer drew them, if any: then they are marked failed rather than read,
- * so one read's answer cannot start another (`docs/design.md#choice-slow-part-link`). A module
- * that does not load (offline, a 503) stays unloaded for the page and reads none: each part on the
- * page is marked failed, so its link shows, as without JavaScript.
- * @param {Element[]} roots @param {Element} [asked]
- */
-function readNow(roots, asked) {
-  if (roots.some((root) => queryOne(root, PART_NOW))) {
-    import(new URL("part.js", import.meta.url).href).then(
-      (/** @type {typeof import("./part.js")} */ part) => part.read(roots, !!asked, apply, signalOf, busyBy),
-      (/** @type {unknown} */ error) => {
-        for (const tag of Array.from(document.querySelectorAll(PART_NOW))) {
-          const part = tag.parentElement;
-          if (part) elementOwn.setAttribute.call(part, "data-corten-read-failed", "");
-        }
-        reportError(error);
-      },
-    );
   }
 }
 
@@ -1515,8 +1490,8 @@ function focusNear(el, root, fresh) {
  * @param {boolean} [stay] keep the user's place: the scroll position (Chromium can reset it when
  *   <main> empties), what scrolls inside the page and the `<details>` open on screen
  * @param {Notice} [notice] the answer's, kept if the page has to load in full instead
- * @param {{ apply: () => Element[], fresh: Element[] } | null} [layout] what changes around `<main>`,
- *   drawn in the same frame as the page ({@link swapDocument})
+ * @param {{ apply: () => void } | null} [layout] what changes around `<main>`, drawn in the same
+ *   frame as the page ({@link swapDocument})
  * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
  * @returns {Promise<boolean>} false when it loaded the page in full instead
  */
@@ -1590,7 +1565,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   main.replaceChildren(content);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
   if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
-  const laid = layout?.apply() ?? [];
+  layout?.apply();
   scrolledIn.clear();
   sideways.clear();
   const kept = view?.() ?? [];
@@ -1601,7 +1576,6 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   markCurrent(kept);
   readAgainLater();
   readPartsAgain(main);
-  readNow([main, ...parts.map(([, part]) => part), ...laid]);
   return true;
 }
 
@@ -1744,9 +1718,7 @@ let frame = { parts: new Set(frameOf(document)), sent: null };
  * around `<main>`, more or fewer elements beside one, or another frame ({@link frameOf}). One that
  * shows the notice the page drew is replaced even when its markup is the same, since the last one
  * a script hid (a toast) is drawn again by the same text.
- * @param {Document} doc @param {Notice} notice @returns {{ fresh: Element[], apply: () => Element[] } | null}
- *   `apply` returns the elements it drew, as they are in the page: `fresh`'s own where one took an
- *   element's place, the element on screen where it was drawn in place (a live region's)
+ * @param {Document} doc @param {Notice} notice @returns {{ fresh: Element[], apply: () => void } | null}
  */
 function layoutChanges(doc, notice) {
   const said = notice?.has("d") ? notice.get("m") || null : null;
@@ -1779,8 +1751,6 @@ function layoutChanges(doc, notice) {
   return {
     fresh: changed.map(([, el]) => el),
     apply() {
-      /** @type {Element[]} */
-      const laid = [];
       // An entry the load had and this page lacks stays: the runtime cannot tell the server's (a
       // theme it stopped writing) from a script's or an extension's (a theme set before first paint).
       frame = { parts: frame.parts, sent };
@@ -1802,9 +1772,7 @@ function layoutChanges(doc, notice) {
         // A page's part the write's page drew anew is what the next navigation compares with.
         if (now !== old) for (const [part, sent] of parts) partSent.set(part, sent);
         setVars(now);
-        laid.push(now);
       }
-      return laid;
     },
   };
 }
@@ -1923,9 +1891,8 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
       return false;
     }
     // Its section stylesheets are the page's, which are on the page already.
-    const laid = layout.apply();
+    layout.apply();
     readAgainLater();
-    readNow(laid);
     return true;
   }
   // The nodes parsed above, not the text parsed again.
@@ -2446,11 +2413,8 @@ const READ_AGAIN = Symbol("corten.readAgain");
  * navigation to another history entry (or a page that no longer asks) stops it, and one on its
  * way puts it off: the page it brings starts its own. A page that also asks for parts of it to be read again
  * ({@link readPartsAgain}) is not read whole: its head's tag is for a browser without JavaScript.
- * One whose part a read is bringing ({@link readNow}) waits one more interval for it, once
- * (`held`), so a read that never ends does not stop the page's.
- * @param {boolean} [held] this wait is that once
  */
-function readAgainLater(held = false) {
+function readAgainLater() {
   const page = ++readAgainPage;
   const tag = document.head.querySelector("noscript[data-corten-read-again]");
   const seconds = Number(tag?.getAttribute("data-corten-read-again"));
@@ -2462,7 +2426,6 @@ function readAgainLater(held = false) {
     seconds,
     () => page === readAgainPage && (navigation ? navigation.currentEntry?.key === entry : location.pathname === path),
     () => {
-      if (!held && document.querySelector(`[aria-busy] > ${PART_NOW}`)) return readAgainLater(true);
       if (!navigation) return reload();
       // A read cancelled on its way (a script's `replaceState`, as a sort in place does) is read
       // again later while this is still the entry: only a swapped page starts the next. A read
@@ -3285,7 +3248,8 @@ readAgainLater();
   const main = document.querySelector("main");
   if (main) readPartsAgain(main);
 }
-readNow([document.body]);
+// The server marks the part module's preload when the page draws a part waiting.
+if (metas.querySelector("[data-corten-part]")) readParts();
 
 /** Resolves once the script modules the first page's handlers use are imported. */
 export const ready = Promise.all(loading.values()).then(() => undefined);

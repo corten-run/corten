@@ -2716,7 +2716,7 @@ async fn a_page_that_waits_for_a_part_preloads_the_part_module() {
     let routes = Table::new()
         .route("/", get(|req: Req| async move { page(&req, true) }))
         .route("/plain", get(|req: Req| async move { page(&req, false) }));
-    let preload = format!(r#"<link rel="modulepreload" href="{}">"#, crate::part_path());
+    let preload = format!(r#"<link rel="modulepreload" href="{}" data-corten-part>"#, crate::part_path());
     assert_eq!(crate::part_path(), format!("/corten/{}/part.js", crate::runtime_version()));
     for mode in [None, Some("nav")] {
         let (status, _, body) = call_with(app(routes.clone(), None), "GET", "/", mode, None).await;

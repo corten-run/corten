@@ -267,11 +267,10 @@ App::new(url::router()).components(&[.., PicksLoading])
 ```
 
 ```css
-/* picks_loading.css: the link shows in place of the line where no read will bring the picks */
-@media (scripting: enabled) { .show { display: none; } }
-@media (scripting: none) { .finding { display: none; } }
-[data-corten-read-failed] .finding { display: none; }
-[data-corten-read-failed] .show { display: inline; }
+/* picks_loading.css: the line shows while a read is bringing the picks, the link otherwise */
+.finding { display: none; }
+[aria-busy] > .finding { display: inline; }
+[aria-busy] > .show { display: none; }
 ```
 
 The runtime fetches the route with `corten: action` as soon as the page is on the screen (a full
@@ -287,14 +286,13 @@ another part read first) neither stops it nor marks it. A part is read once; one
 read again later carries `ReadAgain::from` in its answer ([read again](requests-and-forms.md)). A
 part a page, a form's patch, a script's `patch` or a `<corten-live>` fragment draws waiting is
 read, at the pace those come (a fragment that draws the part again ends the read the one before
-started); one a part's answer, or the answer to a part read again, draws waiting is marked failed
-instead, so reads do not chain. A read the
-browser cut short by keeping the page in its back-forward cache is made again when the page is
-shown, if its part is still there; a page the browser prerenders reads its parts once it is shown.
-A page whose head asks to be read again (`ReadAgain`) waits once more, one interval, while a
-part's read is on its way, since its answer would draw the part waiting again: a part slower than
-the interval but not than two still comes, and a read that never ends holds the page's reads up
-only once.
+started), and so is one the answer to a part read again (`ReadAgain::from`) draws, at its
+interval; one a part's answer draws waiting is marked failed instead, so reads do not chain. A
+read the browser cut short by keeping the page in its back-forward cache is made again when the
+page is shown, if its part is still there; a page the browser prerenders reads its parts once it
+is shown. A page whose head asks to be read again (`ReadAgain`) is read on its interval whatever
+its parts' reads: when its `<main>` changed, it draws the part waiting again, which reads it
+again, so give the page an interval longer than its slow part takes.
 
 Two parts one read draws (four panels from one report) each take a tag inside its own element,
 with the same address: the runtime reads it once, and the part side draws both in one patch. A
@@ -310,11 +308,13 @@ that says `patches`, named in its `ReadAgain::now`. The page side takes any `Htm
 
 Without JavaScript nothing reads the part, so the waiting part holds a link to the page's own
 route with a query field its page side reads the part in for: no second route, and nothing of
-Corten's own in the URL. The component's CSS hides the link while a read may still bring the
-part, and shows it in place of the line saying the part is on its way under
-`@media (scripting: none)` and once the read has failed: a part its read did not replace
-(offline, the server unreachable, an error page, a page, a patch without it) is marked
-`data-corten-read-failed`. A read the server redirects (a sign-in) marks it too, and the page
+Corten's own in the URL. The component's CSS hides the link, and shows the line saying the part is
+on its way, only while a read is bringing the part: the runtime's part module marks the part
+`aria-busy` then, and nothing else does. So the link shows without JavaScript, when the runtime or
+its part module (`part.js`) does not load or run, and once the read has failed, in every browser.
+The module marks the part busy once the page is parsed, so the link is drawn for a moment on a
+load before it. A part its read did not replace (offline, the server unreachable, an error page, a
+page, a patch without it) is marked `data-corten-read-failed`, which the CSS may use to say so. A read the server redirects (a sign-in) marks it too, and the page
 stays: its link, a navigation, follows the redirect, as without JavaScript, so a user typing
 elsewhere on the page is not taken away. Only a patch that replaces or removes the part
 answers it: a patch that leaves it where it was (an empty one, or one of other elements) marks it
@@ -324,12 +324,9 @@ parts still waiting are marked failed at once, so their links show. A part that 
 region around `<main>`, which a write's page draws in place with a new tag, has the new tag read
 and the old read stopped, so an older answer never lands over a newer one, even one waiting for
 the same stylesheet; a kept part whose attributes the page draws again keeps its busy or failed
-mark. If the part module
-(`part.js`) does not load, each waiting part is marked failed, so its link shows. A browser without the
-`scripting` media feature matches neither query and shows both. The query follows whether
-scripts are on, not whether the runtime ran
-([A control only the script makes work](scripts.md#a-control-only-the-script-makes-work)): with
-the runtime itself blocked or failed, the line stays and the link is hidden. Following the link costs
+mark, and a kept tag the page draws with another address (a form's page that switches the
+account a part is for) is read at the new address, its old read stopped and an old failure
+forgotten. Following the link costs
 one page with the slow read in it: `?picks=true` waits for the read wherever it is opened, with
 JavaScript too, so the link is `rel="nofollow"` and nothing else links there. A page with several
 slow parts reads them all in under one field, and a data client, which gets the page side, asks
