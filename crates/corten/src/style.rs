@@ -1397,7 +1397,12 @@ mod tests {
         async fn refused(req: crate::Req) -> crate::HtmlResult {
             let mut errors = crate::Errors::new();
             errors.refuse(crate::Refusal::Conflict, "The badge moved on.");
-            req.invalid_with(&errors, |form| async move { form.draw(BadgeNote {}) }, || async { req.redirect(&crate::Local::parse("/").unwrap()) }).await
+            req.invalid_with(
+                &errors,
+                |form| async move { form.draw(BadgeNote {}) },
+                || async { req.redirect(&crate::Local::parse("/").unwrap()) },
+            )
+            .await
         }
         async fn plain(req: crate::Req) -> crate::HtmlResult {
             req.action().ok_or_else(crate::Error::not_found)?.patch(PlainNote {})

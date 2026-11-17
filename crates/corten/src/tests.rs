@@ -1167,7 +1167,10 @@ async fn a_submit_key_with_no_value_outside_a_template_is_an_error_in_a_debug_bu
             }
         };
         let patch = move |req: Req| async move {
-            let answer: HtmlResult = req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <form id={MsgId} method="post">{field()}</form> });
+            let answer: HtmlResult = req
+                .action()
+                .ok_or_else(crate::Error::not_found)?
+                .patch(html! { <form id={MsgId} method="post">{field()}</form> });
             answer
         };
         App::new(Routes::from(Table::new().route("/", get(page)).route("/patch", get(patch))))
@@ -3133,13 +3136,17 @@ async fn plain_patch_only(mut req: Req) -> HtmlResult {
 /// The same, read from a route with a parameter.
 async fn plain_patch_item(Params(_): Params<plain_patch_url::Item>) -> HtmlResult {
     // A raw response is outside the checked builder, but still reaches the debug guard.
-    Ok(HtmlResponse::new(([("content-type", "text/html; charset=utf-8"), ("corten-patch", "1")], r#"<p id="msg">item</p>"#).into_response()))
+    Ok(HtmlResponse::new(
+        ([("content-type", "text/html; charset=utf-8"), ("corten-patch", "1")], r#"<p id="msg">item</p>"#).into_response(),
+    ))
 }
 
 /// A refusal answered as a patch whatever asked.
 async fn plain_patch_refused(mut req: Req) -> HtmlResult {
     req.mode = crate::Mode::Action; // A checked builder cannot detect this override.
-    req.action().ok_or_else(crate::Error::not_found)?.patch_with_status(StatusCode::UNPROCESSABLE_ENTITY, html! { <p id={MsgId}>"refused"</p> })
+    req.action()
+        .ok_or_else(crate::Error::not_found)?
+        .patch_with_status(StatusCode::UNPROCESSABLE_ENTITY, html! { <p id={MsgId}>"refused"</p> })
 }
 
 /// The patch for the runtime, the page otherwise.
@@ -4045,8 +4052,12 @@ fn lost_after_script() -> impl crate::Patch {
 #[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_patch_lost_after_a_script_with_a_comment_in_its_text_is_an_error_in_debug_builds() {
-    let routes = Table::new()
-        .route("/", crate::router::post(|req: Req| async move { req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(lost_after_script()) }));
+    let routes = Table::new().route(
+        "/",
+        crate::router::post(|req: Req| async move {
+            req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(lost_after_script())
+        }),
+    );
     let (status, _, body) = call_with(app(routes, None), "POST", "/", Some("action"), None).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     let named = crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#);
@@ -4096,7 +4107,9 @@ async fn a_patch_the_parse_check_cannot_read_is_logged_in_debug_builds() {
     let routes = Table::new().route(
         "/list",
         crate::router::post(|req: Req| async move {
-            req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(html! { <ul id={MsgId}>{crate::raw("<li>one<li>two")}</ul> })
+            req.action()
+                .ok_or_else(crate::Error::not_found)?
+                .patch::<ForOne, AnyAnswer>(html! { <ul id={MsgId}>{crate::raw("<li>one<li>two")}</ul> })
         }),
     );
     let lines = Lines(Arc::default());
@@ -4180,7 +4193,9 @@ async fn a_patch_with_tokens_the_parse_check_does_not_read_is_sent_and_logged_in
         .route(
             "/col",
             crate::router::post(|req: Req| async move {
-                req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(html! { <div id={MsgId}>{crate::raw("</div><col data-note='")}</div> })
+                req.action()
+                    .ok_or_else(crate::Error::not_found)?
+                    .patch::<ForOne, AnyAnswer>(html! { <div id={MsgId}>{crate::raw("</div><col data-note='")}</div> })
             }),
         )
         .route(
@@ -4324,8 +4339,12 @@ fn what_the_patch_parse_check_costs() {
         std::hint::black_box(crate::html::patch_parse_problem(std::hint::black_box(&body)));
     }
     let check = start.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
-    let routes =
-        Table::new().route("/", crate::router::post(|req: Req| async move { req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(fifty_rows()) }));
+    let routes = Table::new().route(
+        "/",
+        crate::router::post(|req: Req| async move {
+            req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(fifty_rows())
+        }),
+    );
     let router = app(routes, None);
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
     let requests = rounds / 10;
@@ -13638,7 +13657,8 @@ async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
             .route(
                 "/patch",
                 get(|req: Req| async move {
-                    let answer: HtmlResult = req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <p id={QtyId}>"3 left."</p> });
+                    let answer: HtmlResult =
+                        req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <p id={QtyId}>"3 left."</p> });
                     answer
                 }),
             ),
@@ -14056,7 +14076,9 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         req.test_page("Keyed", html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
     }
     async fn keyed_patch(req: Req) -> HtmlResult {
-        req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <form id={MsgId} method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
+        req.action()
+            .ok_or_else(crate::Error::not_found)?
+            .patch(html! { <form id={MsgId} method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
     }
     async fn keyed_rendered(req: Req) -> HtmlResult {
         let form = req.rendered(html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> });
@@ -16136,8 +16158,14 @@ mod layout_reads {
     #[cfg(debug_assertions)]
     #[tokio::test(start_paused = true)]
     async fn a_place_in_a_patch_is_an_error_and_one_never_written_draws_nothing() {
-        let routes =
-            Table::new().route("/patch", get(|req: Req| async move { req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(PatchBadge {}) })).route(
+        let routes = Table::new()
+            .route(
+                "/patch",
+                get(|req: Req| async move {
+                    req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(PatchBadge {})
+                }),
+            )
+            .route(
                 "/dropped",
                 get(|req: Req| async move {
                     req.page::<ForOne>(html! {

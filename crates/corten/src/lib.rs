@@ -759,8 +759,8 @@ pub use middleware::{Middleware, Next};
 #[cfg(feature = "json")]
 pub use page::JsonLd;
 pub use page::{
-    Action, Corten, DrawnPatch, ErrorPageFn, Failure, FormPatch, Mode, Nav, NavLink, NavLinks, NavTarget, NavTo, Notice, ReadAgain,
-    ReadAgainFrom, ReadAgainWithoutJavaScript, Req, MODE_HEADER,
+    Action, Corten, DrawnPatch, ErrorPageFn, Failure, FormPatch, Mode, Nav, NavLink, NavLinks, NavTarget, NavTo, Notice,
+    ReadAgain, ReadAgainFrom, ReadAgainWithoutJavaScript, Req, MODE_HEADER,
 };
 pub use route::{routes, Elsewhere, Href, Local, Methods, OnSite, Params, ParamsRejection, Prefix, Route, Routes, UrlValue};
 pub use router::Router;
@@ -805,8 +805,8 @@ pub mod prelude {
         script::{el, refs, Handler, Ref},
         style::ClassList,
         view::Id,
-        Action, Api, App, Area, Bounds, Caller, Challenge, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form,
-        FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Patches, Public,
+        Action, Api, App, Area, Bounds, Caller, Challenge, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files,
+        Form, FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Patches, Public,
         ReadAgain, Refused, Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
     };
     #[cfg(feature = "json")]

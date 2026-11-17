@@ -1074,7 +1074,6 @@ impl Action<'_> {
         }
         Ok(HtmlResponse::new(res))
     }
-
 }
 
 /// What draws the form's patch in [`Req::invalid_with`]: a patch and nothing else.
@@ -2388,7 +2387,6 @@ impl Req {
     pub fn action(&self) -> Option<Action<'_>> {
         (self.mode == Mode::Action).then_some(Action(self))
     }
-
 
     /// Answers a `data-patch` form (a write, Load more) both ways: with JavaScript
     /// ([`Mode::Action`]) `view` as a patch; otherwise `page()`, the whole page or a redirect, so
