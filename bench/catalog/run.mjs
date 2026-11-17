@@ -265,7 +265,7 @@ try {
         log(`building ${app}`);
         const context = app === "corten" ? repo : join(repo, "bench/fullstack/apps", app);
         const dockerfile = app === "corten" ? join(here, "corten/Dockerfile") : join(context, "Dockerfile");
-        await docker(["build", "-t", entry.image, "-f", dockerfile, context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
+        await docker(["build", "-t", entry.image, "-f", dockerfile, ...(app === "corten" ? ["--build-arg", "CATALOG_LEAN=1"] : []), context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
       }
       const image = JSON.parse(await docker(["image", "inspect", entry.image]))[0];
       entry.imageId = image.Id;

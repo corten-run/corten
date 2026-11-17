@@ -64,8 +64,12 @@ benchmark-only fast path in the framework.
 
 Catalog is the lean rendering workload, not a production-hardening comparison.
 The standalone Corten app builds without optional response compression (load
-requests use identity encoding), and sets the handler deadline, header timeout
-and send timeout to `None` through the public `App` configuration. Its HTTP
+requests use identity encoding), and its exact `PROFILE=catalog-lean` sets the
+handler deadline, header timeout and send timeout to `None` through the public
+`App` configuration. The catalog runner alone selects `CATALOG_LEAN=1` at build
+time to omit the app's default compression feature. The JSON API group shares
+this source but retains its default compression-enabled build and blank runtime
+profile, including the original timers. Its HTTP
 source still bounds each upstream request to ten seconds. Error logging stays
 enabled. Other Corten apps and the framework's production defaults are unchanged.
 

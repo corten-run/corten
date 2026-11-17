@@ -79,6 +79,9 @@ jobs:
       - name: Test the standalone Corten app
         if: matrix.app == 'corten'
         run: cargo test --manifest-path bench/catalog/corten/Cargo.toml --locked
+      - name: Test the lean standalone Corten app
+        if: matrix.app == 'corten'
+        run: cargo test --manifest-path bench/catalog/corten/Cargo.toml --locked --no-default-features
       - name: Test the localized Corten app
         if: matrix.app == 'corten'
         run: cargo test --manifest-path bench/marketplace/corten/Cargo.toml --locked

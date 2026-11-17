@@ -6,6 +6,10 @@ publish = false
 
 [workspace]
 
+[features]
+default = ["compression"]
+compression = ["corten/compress"]
+
 [dependencies]
 corten = { package = "corten-run", path = "../../../crates/corten", features = ["json"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

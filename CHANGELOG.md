@@ -14,7 +14,9 @@ Corten is pre-1.0, so any minor version may change the API.
   workload: omit optional compression and remove handler/header/send timers using
   supported settings, while keeping page stages, error logs, full correctness
   checks and the HTTP-source timeout. Production defaults and richer benchmarks
-  are unchanged; historical results keep their measured configuration.
+  are unchanged; historical results keep their measured configuration. Keep the
+  shared JSON API consumer's default compression build and timers by selecting
+  lean build/runtime settings only in the catalog runner.
 
 - Preserve completed catalog load/request failures as versioned, replayable failed
   app outcomes, separate from successful baselines and apparatus failures. Retain
