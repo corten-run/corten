@@ -219,9 +219,15 @@ for (const [fault, shutdown = "drained"] of [
   const s = setupGroup("client-heavy");
   s.plan.round = "r21";
   const h = await begin(s), parent = new AbortController();
+  let clock = Date.now(), tick;
+  // Manual sampling must include the seed observer: otherwise its attachment
+  // queues real interval samples while storage drains, before this control starts.
+  t.mock.method(Date, "now", () => clock);
+  t.mock.method(globalThis, "setInterval", (callback) => { tick = callback; return null; });
   const f = await samplingControl(t);
   const flushed = (step) => step === "sync" ? null : undefined;
   f.before = flushed; await f.finish(); f.removed = false;
+  assert.equal(f.samples().length, 3, "seed observer must not accumulate interval samples");
   const run = lifetimeRun = { started: false, cancels: 0 };
   const nativeStarted = new Promise((resolve) => { run.start = resolve; });
   let kills = 0;
@@ -235,10 +241,7 @@ for (const [fault, shutdown = "drained"] of [
       kills++; f.members = []; run.child.close(null, "SIGKILL");
     });
   }
-  let tick, settled = false, pause, failing = false;
-  // Drive actual interval work explicitly; filesystem setup/sealing time is not
-  // the notification latency under test, whose separate bound stays one second.
-  t.mock.method(globalThis, "setInterval", (callback) => { tick = callback; return null; });
+  let settled = false, pause, failing = false;
   const advancing = s.campaign.advance(h, { signal: parent.signal }).then(
     (value) => { settled = true; return { value }; },
     (error) => { settled = true; return { error }; });
@@ -255,14 +258,14 @@ for (const [fault, shutdown = "drained"] of [
       f.before = (step, path) => { if (step === "write" && path.endsWith("samples.jsonl")) { failing = true; throw ioError(); } return flushed(step); };
       tick(); await until(() => failing && f.live.size === 0);
     } else if (fault === "continuity") {
-      const now = Date.now;
-      t.mock.method(Date, "now", () => now() + 1909);
+      clock += 1909;
     } else {
       if (fault === "pending-storage") {
         pause = f.pause("write", (path) => path.endsWith("samples.jsonl"));
         const before = f.before;
         f.before = async (...args) => { await before(...args); return flushed(args[0]); };
         tick(); await pause.entered;
+        assert.equal(run.cancels, 0, "held write must not cancel before observation fault injection");
       }
       const read = fs.readFileSync;
       t.mock.method(fs, "readFileSync", (path, ...args) => {
@@ -339,10 +342,12 @@ test("actual campaign attachment gap cancels before native start or interval cre
   t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
   const s = setupGroup("client-heavy"); s.plan.round = "r21";
   const h = await begin(s), parent = new AbortController();
-  const f = await samplingControl(t); f.before = (step) => step === "sync" ? null : undefined;
-  await f.finish(); f.removed = false;
   let clock = 10000, intervals = 0, settled = false;
   t.mock.method(Date, "now", () => clock);
+  t.mock.method(globalThis, "setInterval", () => null);
+  const f = await samplingControl(t); f.before = (step) => step === "sync" ? null : undefined;
+  await f.finish(); f.removed = false;
+  assert.equal(f.samples().length, 3, "seed observer must not accumulate interval samples");
   t.mock.method(globalThis, "setInterval", () => { intervals++; return null; });
   const run = lifetimeRun = { started: false, cancels: 0, beforeAttach() { clock += 1909; } };
   const started = new Promise((resolve) => { run.start = resolve; });
