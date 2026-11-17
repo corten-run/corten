@@ -10,9 +10,21 @@ import { cancellationState, mixedDigest, mixedWait, originalMixedControls, owned
 
 // This migration is not a general old-source collection or validation override.
 export const failedNativeCommit = "9f3d35884c67d90524f978d173fabeb3a17bc970";
+const failedNativeCases = [
+  { identity: { commit: failedNativeCommit, round: "r21" }, policy: "r21-9f-failed-native-custody-only-no-qualification" },
+  { identity: { commit: "dbe1a34c753ee8ef4ac9927484dc3930d36f6e37", round: "r21", group: "catalog-page",
+    id: "620052965", token: "39fa09440f45df00", name: "corten-bench-groups-r21-39fa09440f45df00",
+    tag: "corten-bench-groups-run-39fa09440f45df00", unit: "corten-bench-groups-r21-39fa09440f45df00.service" },
+    policy: "r21-dbe-exact-catalog-attempt-custody-only-no-qualification" },
+];
+// Eligibility only; original custody, current terminal proof and exact approval still apply.
+export function failedNativePolicy(state) {
+  const found = failedNativeCases.find(({ identity }) => Object.entries(identity).every(([key, value]) => state[key] === value));
+  assert.ok(found, "unsupported failed-native migration identity");
+  return found.policy;
+}
 export function failedNativeRoots(state) {
-  assert.equal(state.commit, failedNativeCommit, "unsupported failed-native measured source");
-  assert.equal(state.round, "r21", "unsupported failed-native round");
+  failedNativePolicy(state);
   if (state.group === "mixed-production") {
     ownedMixedWait(state); cancellationState(state.mixedCancellation);
     return ["/bench/campaign", "/bench/repo/bench/mixed-production/results/w21", "/bench/mixed-cancel-intent.json"];
