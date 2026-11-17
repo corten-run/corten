@@ -703,9 +703,14 @@ impl<A: Send + 'static> Tools<A> {
             let tools = tools.clone();
             async move {
                 let (parts, body) = request.into_parts();
-                let limit = crate::extract::body_limit(&parts.extensions);
+                // Only the headers go on: the rest of the head is dropped before the body is read,
+                // as the `Bytes` extractor did, so a guard in its extensions is not held meanwhile.
+                let (limit, headers) = {
+                    let mut parts = parts;
+                    (crate::extract::body_limit(&parts.extensions), std::mem::take(&mut parts.headers))
+                };
                 match crate::extract::whole(body, limit).await {
-                    Ok(body) => tools.handle(parts.headers, &body).await,
+                    Ok(body) => tools.handle(headers, &body).await,
                     Err(error) => error.into_response(),
                 }
             }
@@ -1295,6 +1300,35 @@ mod tests {
             Body::from_stream(futures_util::stream::once(async { Err::<Bytes, _>(std::io::Error::other("broken body")) }));
         let request = Request::post("/mcp").body(broken).unwrap();
         assert_eq!(app.oneshot(request).await.unwrap().status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// The request's head, all but its headers, is released before the body is read, as the
+    /// `Bytes` extractor did: a guard a middleware put in its extensions (a permit) is not held
+    /// through the read or the tool call.
+    #[tokio::test]
+    async fn a_tool_request_releases_its_extensions_before_reading_the_body() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        #[derive(Clone)]
+        struct Permit {
+            _held: Arc<()>,
+        }
+        let tools = Tools::new("test", "1").read_tool("ping", "Pong", |(), _: Nothing| async { Ok(Pong { pong: true }) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let permit = Arc::new(());
+        let watch = Arc::downgrade(&permit);
+        let released = Arc::new(AtomicBool::new(false));
+        let seen = released.clone();
+        let body = Body::from_stream(futures_util::stream::once(async move {
+            seen.store(watch.upgrade().is_none(), Ordering::SeqCst);
+            Ok::<_, std::io::Error>(Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#))
+        }));
+        let request = Request::post("/mcp")
+            .header("content-type", "application/json")
+            .extension(Permit { _held: permit })
+            .body(body)
+            .unwrap();
+        app.oneshot(request).await.unwrap();
+        assert!(released.load(Ordering::SeqCst), "the extension was still held when the body was read");
     }
 
     /// A value inside a tool's output that serde cannot write (here, one whose `Serialize`
