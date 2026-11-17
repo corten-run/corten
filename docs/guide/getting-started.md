@@ -53,7 +53,7 @@ created inside a workspace adds itself to the root lock without moving the versi
 it. Local `corten dev`, `corten build` and ordinary Cargo builds still create or update the lock,
 so editing dependencies needs no extra flag. The image build also uses `--locked`
 ([Building the image](deploy.md#building-the-image)). This is always checked, not a CI-only
-opt-in ([Choice 61](../design.md#choice-locked-check)).
+opt-in ([Choice 62](../design.md#choice-locked-check)).
 
 `corten dev`, `fmt` and `check` format and check the way the corten they were built from does, so
 they compare it with the one the app's `Cargo.lock` pins (a release, or a git revision): when they

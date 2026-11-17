@@ -357,6 +357,19 @@ standard resilience handler (Microsoft.Extensions.Http.Resilience) both handle a
 or more. Each takes a setting for which answers to retry; a client of the app that sends a method
 no route serves can leave 501 out of it.
 
+## Access logs
+
+Access logging is off, also in the app `corten new` writes. Set `App::access_log(true)` to get
+one `INFO` event with target `corten::access` for each response through the app's tracing
+subscriber, including refused hosts, cross-site writes and conditional `304`s. The path has no
+query; bytes describe the final body after compression (or `"stream"` for an unknown size), and
+duration ends when the response is ready, not when its body finishes sending. The line costs
+each request: measured, a small parameter route's instructions grow by about half ([Access
+logs](app.md#access-logs) has the numbers). See
+[Access logs](app.md#access-logs). Keep the proxy's logs for requests it answers without calling
+the app; when they are enough, leave the switch off. An app's own middleware is not an access
+logger: it cannot see the host check, a later error page or a `304`.
+
 ## Benchmark Hosts
 
 The grouped benchmark's [disposable-host preparation](../../bench/workloads/CLOUD.md#evidence-and-cleanup)

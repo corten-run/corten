@@ -5508,7 +5508,88 @@ rules something out.
     integration tests and handshake bounds test, the `Public` compile-fail doctest, and the
     OpenAPI test of a documented route taking it.
 
-61. <a id="choice-locked-check"></a>**Checking and shipping use the lock; local builds update it.**
+61. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
+    and an event through the existing tracing subscriber after the response is finished.**
+    `App::access_log(true)` emits an `INFO` event with target `corten::access`, with method,
+    path without the query, the route that answered when one did, final status, final body's known size
+    (or `"stream"`) and elapsed time until the response is ready. The status is what the client
+    gets: a final `100` or `103`, which hyper's HTTP/1 server replaces with an empty `500` before
+    closing the connection, is logged as that `500`, and a `101` as itself. A response future
+    dropped before it is ready writes nothing; a ready response's line is not changed by a later
+    disconnect. It sees the host check's
+    `421`, cross-site refusals, error-page replacements, conditional `304`s, compression and
+    app layers. It never polls a body to count it, so a live stream is logged when its answer
+    is ready, not at a close it may never reach; a body HTTP gives no content (a `204`, a `304`,
+    a `1xx`, a `2xx` to `CONNECT`) counts zero. The existing subscriber still owns formatting,
+    escaping and routing, including a filter on the line's fields: the check before a request
+    names them. No access-log format or dependency is added. With the switch off,
+    no clock is read and no request metadata is retained for logging.
+    Ordinary enabled requests keep the route beside the answer's future, without a response
+    extension, second wrapper or URI clone; the route's name is the router's own `Arc<str>`,
+    counted, not copied. Only an app with tower layers
+    needs a shared route handoff: a layer can dispatch
+    on another task and replace the whole response, defeating both response extensions and
+    task-local storage, so a layer that sends clones of one request to several routes is logged
+    with the last one matched. The enabled wrapper repeats the route-name lookup in an index built
+    only when enabled, separate from normal dispatch so its lookup keeps its original caller,
+    and makes the two decisions after the match that dispatch makes: a segment without the text
+    its route writes after a parameter is the app's `404`, and a path an API's prefix holds that a
+    route outside it matched is the API's (`Scopes::foreign`, the stages' check), so neither names
+    a route. Disabled dispatch has no recording branch, additional caller or logging index.
+
+    Measured with CONTRIBUTING's request-path count (release build, Callgrind 3.19, (1,200
+    requests minus 200) / 1,000, three runs in alternating order;
+    `log::tests::what_an_access_request_costs`, an unlayered app answering through `oneshot` with
+    the body collected). "Before" is `38587c414` with only that test added (its framework and
+    lockfile are those of `main` then); the others are `65ac1dc47`, this change merged with `main`
+    at `e006be831`. Instructions per request, median [min, max]:
+
+    | Request | Before | Off | On | Accepting subscriber |
+    | --- | --- | --- | --- | --- |
+    | Parameter route | 17,681.0 [17,680.9, 17,681.1] | 17,679.0 [17,678.9, 17,679.1] | 27,299.7 [27,258.1, 27,300.7] | 19,101.1 [19,101.0, 19,102.6] |
+    | Unknown URL `404` | 19,135.0 [19,135.0, 19,135.0] | 19,123.0 [19,122.9, 19,123.1] | 27,307.7 [27,307.5, 27,314.4] | 20,505.0 [20,505.0, 20,505.0] |
+
+    The line adds 9,619 (54%) and 8,173 (43%). Preparing the event and handing it to `tracing`
+    is about 1,400 of that (the accepting subscriber takes the event and writes nothing); the rest
+    is Corten's subscriber formatting the line (timestamp, fields, escaping) into its buffer and
+    handing the bytes to a sink that discards them. Writing them to stdout is not counted: its
+    system call, and any wait when stdout is a slow pipe or terminal, come on top, as do an app's
+    tower layers and their shared route handoff. With the switch off a request costs 2 and 12
+    instructions fewer than before, and the ranges do not overlap, but the off path runs nothing
+    of the feature: this is code layout, not saved work.
+
+    Not chosen: an app middleware, which cannot see early refusals or the response after
+    the error page, conditional GET and compression; a tower layer each app writes, which
+    repeats framework knowledge and dependencies; always-on logging, which changes existing
+    apps and charges apps that already log at their proxy; enabling it in the app `corten new`
+    writes, which would charge every new app the measured cost for a line its proxy may already
+    write; carrying dispatch's own match out to the log, which would put a check in the request
+    path of every app, logging or not; a separate text format such as
+    Common Log Format, which makes logs a second output channel beside tracing; or wrapping
+    every body to count bytes and time to close, which costs streams for a different measure.
+
+    Stands on: reasoned (only the outer router boundary sees the final response, and unknown-size
+    bodies cannot be counted without polling them); measured (the instruction counts above);
+    bet (deployments that want a request line from the app set the switch, and the rest already
+    log at their proxy); value (README Values 1, 6 and 7, and the conflict order's performance at
+    the user's end before developer convenience: the line is opt-in, shares the existing
+    subscriber and adds no dependency).
+
+    Revisit when: an app needs body-completion timing or actual streamed byte counts rather than
+    response-readiness timing and a stream marker, or a tracing event cannot express the fields
+    an operator needs without a separate log format; or an enabled line costs a small share of
+    a request (then the template could turn it on); or the switch off costs more than the
+    measured difference above; or the stages decide after the match in another way the index
+    does not repeat; or the HTTP server Corten runs on sends a final informational status other
+    than `101` (then the line logs it as itself).
+
+    Last checked: 2026-11-16, the request stages, final HTTP handling, the API boundary and
+    subscriber read, at `f5f2132aa`; 2026-11-17, hyper 1.12's HTTP/1 server answering a final
+    `100` and `103` with an empty `500` over a socket, at `67d888836`; 2026-11-17, a subscriber
+    filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
+    above, at `65ac1dc47` against `38587c414`.
+
+62. <a id="choice-locked-check"></a>**Checking and shipping use the lock; local builds update it.**
     `corten check` uses `--locked` on the full Cargo metadata it already reads, before formatting
     or compiling, and on lint, build and tests. The starter Dockerfile and the examples' also
     build with `--locked`, all but card-market's, which changes with its paired benchmark recipe
