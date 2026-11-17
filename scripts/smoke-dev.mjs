@@ -83,6 +83,11 @@ try {
       '<div class="outerScope"><div class="innerScope"><dialog id="doubleScope" class="doubleScope"></dialog></div></div><div class="innerScope"><dialog id="outsideDoubleScope" class="doubleScope"></dialog></div>',
       '<div class="outerExact"><div class="innerExact"><dialog id="exactScope"></dialog></div><div><div class="innerExact"><dialog id="outsideExact"></dialog></div></div></div>',
       '<dialog id="documentScope" data-note=":scope"></dialog><dialog id="documentAmp" data-note="&"></dialog><dialog id="notDocumentScope"></dialog><dialog id="notDocumentAmp"></dialog>',
+      // A scope's limit cuts its own subjects and the roots and subjects of a scope inside it.
+      '<div class="limitOuter"><div class="limitStop"><div class="limitInner"><dialog id="limitCut"></dialog></div></div><div class="limitInner"><dialog id="limitKept"></dialog></div></div>',
+      '<div class="limitDraws"><div class="limitStop"><dialog id="limitDrawn" class="limitDrawn"></dialog></div><dialog id="limitShown" class="limitDrawn"></dialog></div>',
+      // A scope without a start has the stylesheet's parent element as its root.
+      '<section><link rel="stylesheet" href="/dialog-implicit.css"><dialog id="implicitIn" class="implicitChild"></dialog><div><dialog id="implicitDeep" class="implicitChild"></dialog></div></section><dialog id="implicitOut" class="implicitChild"></dialog>',
       '<dialog id="lastrail" class="rail"></dialog>',
     ].join("");
     const sheet = '<link rel="stylesheet" href="/dialog-in-place.css">';
@@ -116,8 +121,14 @@ try {
         "@scope (.outerScope) { @scope (.innerScope) { @media (min-width: 1px) { :scope > .doubleScope { display: grid; } } } }",
         "@scope (.outerExact) { @scope (:scope > .innerExact:not(:scope)) { @media (min-width: 1px) { :scope > dialog:not(:scope) { display: flex; outline-style: solid; } } } }",
         '@media (min-width: 1px) { :scope > body > #documentScope[data-note=":scope"], & > body > #documentAmp[data-note="&"], :scope#notDocumentScope, &#notDocumentAmp { display: flex; outline-style: solid; } }',
+        "@scope (.limitOuter) to (.limitStop) { @scope (.limitInner) { @media (min-width: 1px) { dialog { display: flex; outline-style: solid; } } } }",
+        "@media (min-width: 1px) { .limitDrawn { display: flex; } }",
+        "@scope (.limitDraws) to (.limitStop) { .limitDrawn { display: grid !important; outline-style: solid; } }",
       ].join("\n"),
     }),
+  );
+  await drawn.route(base + "/dialog-implicit.css", (route) =>
+    route.fulfill({ contentType: "text/css", body: "@scope { @media (min-width: 1px) { :scope > body dialog, :scope > .implicitChild { display: flex; outline-style: solid; } } }" }),
   );
   const loaded = reportOf("last");
   const loadedLive = reportOf("lastlive");
@@ -129,7 +140,7 @@ try {
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
   const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
   const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
-  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,sameRoot,listPlain,listExplicit,literalAttribute,literalEscape,relativeScope,relativeAmp,relativeList,relativeOther,scopedPopover,nestedScope,doubleScope,exactScope,documentScope,documentAmp,lastrail", railNames);
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,sameRoot,listPlain,listExplicit,literalAttribute,literalEscape,relativeScope,relativeAmp,relativeList,relativeOther,scopedPopover,nestedScope,doubleScope,exactScope,documentScope,documentAmp,limitKept,limitDrawn,implicitIn,lastrail", railNames);
   const warned = new Set(railOnLoad.map((e) => e.split(" ")[1]));
   check("plain scoped selectors stay descendants, independently in each selector-list member", !warned.has("scopedSelf") && !warned.has("outsideAncestor") && !warned.has("listSelf") && warned.has("listPlain") && warned.has("listExplicit"));
   check("every :scope in a selector binds the same root", warned.has("sameRoot") && !warned.has("differentRoots"));
@@ -142,6 +153,13 @@ try {
   const anchorCases = ["exactScope", "outsideExact", "documentScope", "documentAmp", "notDocumentScope", "notDocumentAmp"];
   const anchorLooks = await drawn.evaluate((ids) => ids.map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle === "solid"), anchorCases);
   check("exact nested roots and unscoped document roots agree with native styles", anchorLooks.join(",") === "true,false,true,true,false,false" && anchorCases.every((id, i) => warned.has(id) === anchorLooks[i]), anchorLooks.join(","));
+  // The limited rule's outline marks where it applies: its !important display hides nothing it misses.
+  const limitCases = ["limitCut", "limitKept", "limitDrawn", "limitShown"];
+  const limitLooks = await drawn.evaluate((ids) => ids.map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle === "solid"), limitCases);
+  check("a scope's limit cuts nested scopes and its own rules as the browser does, both ways", limitLooks.join(",") === "false,true,false,true" && limitCases.map((id) => warned.has(id)).join(",") === "false,true,true,false", limitLooks.join(","));
+  const implicitCases = ["implicitIn", "implicitDeep", "implicitOut"];
+  const implicitLooks = await drawn.evaluate((ids) => ids.map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle === "solid"), implicitCases);
+  check("a scope without a start is the stylesheet parent's, as the browser applies it", implicitLooks.join(",") === "true,false,false" && implicitCases.every((id, i) => warned.has(id) === implicitLooks[i]), implicitLooks.join(","));
   check(
     "its warning names the rule, the query, the rule that draws it in place and the open one's look",
     !!railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") &&
@@ -288,6 +306,13 @@ try {
     // Keep the deep fixture out of layout; the browser still computes the dialog's style.
     const nested = await dialogWork("<div hidden>" + scopeRoot.repeat(depth) + dialog(0) + "</div>".repeat(depth + 1), `@scope (.workScope) { @scope (.workScope) { ${scopedRule} } }`, 1);
     check(`overlapping nested scopes do linear work at depth ${depth}`, nested.ok && nested.reads <= 2 && nested.queries === 0 && nested.matches <= 4 * depth, nested.detail);
+    // A start with more after its :scope (the review's), and one that names its root twice, which
+    // needs each root exactly: only an element that could be the start's subject is tried.
+    const panel = "<div hidden>" + scopeRoot.repeat(depth) + '<div class="workPanel">' + dialog(0) + "</div>".repeat(depth + 2);
+    for (const start of [":scope:not(.disabled) > .workPanel", ":scope > .workPanel:not(:scope)"]) {
+      const exact = await dialogWork(panel, `@scope (.workScope) { @scope (${start}) { ${scopedRule} } }`, 1);
+      check(`a nested start \`${start}\` does linear work at depth ${depth}`, exact.ok && exact.reads <= 2 && exact.queries === 0 && exact.matches <= 4 * depth, exact.detail);
+    }
   }
   const flatScopes = await dialogWork(scopeRoot + dialog(0) + "</div>" + (scopeRoot + "</div>").repeat(count - 1), `@scope (.workScope) { @media (min-width: 1px) { ${Array.from({ length: 64 }, (_, i) => `.workDialog:not(.workSkip${i}) { display: flex; outline-style: solid; }`).join("")} } }`, 1);
   check("64 scoped rules do not scan 1,600 sibling roots", flatScopes.ok && flatScopes.reads <= 64 && flatScopes.queries === 0 && flatScopes.matches <= 128, flatScopes.detail);

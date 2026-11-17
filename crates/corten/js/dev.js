@@ -98,14 +98,17 @@ function within(root, selector) {
 // CSSOM cannot contain a NUL. Mark actual scope references once, before substituting a root.
 const SCOPE = "\0";
 /** @param {string} selector @param {string} root */
-const bindScope = (selector, root) => selector.replaceAll(SCOPE, () => root);
+const bindScope = (selector, root) => selector.replaceAll(SCOPE, () => `:is(${root})`);
 
 /**
  * A nested rule's selector as one that matches on its own: `&` is the parent's, and a selector
- * without one is inside it.
+ * without one is inside it. It is `flat` when each member names its root once, positively, with
+ * the subject inside that root, so any eligible root can stand in; `filter` is what the subject
+ * must match whatever its root.
  * @param {string} selector
- * @param {string | null} parent
+ * @param {{ text: string, flat: boolean } | null} parent
  * @param {boolean} scoped
+ * @returns {{ text: string, flat: boolean, filter: string }}
  */
 const resolved = (selector, parent, scoped) => {
   // CSSOM normalizes pseudo-class names. Keep strings and identifiers (including CSS escapes)
@@ -120,38 +123,65 @@ const resolved = (selector, parent, scoped) => {
     if (token === "(" || token === "[") depth++;
     if (token === ")" || token === "]") depth--;
   }
-  let anchored = true;
+  let flat = true;
+  /** @type {string[]} */
+  const filters = [];
   const text = members.map((member) => {
     let scope = false;
     const nesting = member.includes("&");
-    const text = member.map((token, i) => {
-      if (token === "&") return parent ? `:is(${parent})` : SCOPE;
+    const out = member.map((token, i) => {
+      if (token === "&") return parent ? `:is(${parent.text})` : SCOPE;
       if (token === ":" && member[i + 1]?.toLowerCase() === "scope") {
         scope = true;
         return SCOPE;
       }
-      if (token.toLowerCase() === "scope" && member[i - 1] === ":") return "";
-      return token;
-    }).join("");
-    const relative = /^[>+~]/.test(text.trimStart());
+      return token.toLowerCase() === "scope" && member[i - 1] === ":" ? "" : token;
+    }).filter((token) => token);
+    while (out[0]?.trim() === "") out.shift();
+    while (out.at(-1)?.trim() === "") out.pop();
+    const relative = /^[>+~]$/.test(out[0] ?? "");
     // Each plain member selects descendants. A leading combinator still needs an anchor when
     // :scope or & occurs later in the member.
-    const anchor = parent ?? (scoped && (relative || !scope && !nesting) ? SCOPE : null);
-    const result = anchor && (!nesting || relative) ? `:is(${anchor}) ${text}` : text;
-    // One positive reference on the left, with only descendants (or the root itself) as
-    // subjects, can match any eligible root directly. Other uses need one exact root at a time.
-    const head = result.trimStart();
-    const prefix = head.startsWith(`:is(${SCOPE}) `) ? `:is(${SCOPE})` : SCOPE;
-    const tail = head.slice(prefix.length);
-    anchored &&= head.startsWith(prefix) && !tail.includes(SCOPE) &&
-      (!tail || /^[\s>]/.test(tail) && !/^[+~|]/.test(tail.trimStart()));
-    return result;
+    const anchor = parent ? `:is(${parent.text})` : scoped && (relative || !scope && !nesting) ? SCOPE : null;
+    if (anchor && (!nesting || relative)) out.unshift(anchor, " ");
+    // A combinator outside brackets ends a compound; the last compound is the subject. One root
+    // reference outside any function, followed only by descendant and child combinators, keeps
+    // the subject inside whichever root it matches. Other uses need one exact root at a time.
+    let level = 0, refs = 0, escapes = false, subject = 0;
+    for (const [i, token] of out.entries()) {
+      if (token.includes(SCOPE)) refs += level || (token !== SCOPE && !parent?.flat) ? 2 : 1;
+      else if (!level && /^[\s>+~|]$/.test(token)) {
+        subject = i + 1;
+        escapes ||= refs > 0 && /[+~|]/.test(token);
+      }
+      level += +(token === "(" || token === "[") - +(token === ")" || token === "]");
+    }
+    flat &&= refs === 1 && !escapes;
+    // The subject less each part that names a root (a whole `:not(:scope)`) matches more.
+    const rest = out.slice(subject);
+    let filter = "";
+    for (let i = 0, j = 0; i < rest.length; i = j) {
+      j = i + 1;
+      for (let open = 0; rest[i] === ":" && rest[i + 2] === "(" && j < rest.length;) {
+        const token = rest[j++];
+        if (token === "(") open++;
+        if (token === ")" && !--open) break;
+      }
+      const part = rest.slice(i, j).join("");
+      if (!part.includes(SCOPE)) filter += part;
+    }
+    filters.push(filter);
+    return out.join("");
   }).join(",");
-  return { text, anchored };
+  return { text, flat, filter: filters.every((f) => f) ? filters.join(",") : "*" };
 };
 
-/** @typedef {{ start: ReturnType<typeof resolved>, parent: Scope | null, selector: string | null }} Scope */
-/** @typedef {{ selector: string, scope: Scope | null, written: string, display: string, condition: string | null, important: boolean, classes: string[] }} Display */
+/**
+ * A scope's start and limit (`to`), the stylesheet's parent element (the root without a start),
+ * and its roots as one selector when no limit cuts them or the scopes around them short.
+ * @typedef {{ start: ReturnType<typeof resolved> | null, end: ReturnType<typeof resolved> | null, owner: Element, parent: Scope | null, selector: string | null }} Scope
+ */
+/** @typedef {{ selector: string, filter: string, scope: Scope | null, text: string, written: string, display: string, condition: string | null, important: boolean }} Display */
 
 /**
  * Each style rule of the page's stylesheets that sets `display`: its selector (resolved, and as
@@ -165,6 +195,7 @@ function displays() {
   const found = [];
   /** @type {Map<Scope | null, Map<string, Scope>>} */
   const scopes = new Map();
+  let owner = document.documentElement;
   /**
    * @param {CSSRuleList} rules
    * @param {string | null} condition
@@ -174,28 +205,29 @@ function displays() {
    */
   const walk = (rules, condition, selector, written, scope) => {
     for (const rule of rules) {
-      const prelude = globalThis.CSSScopeRule && rule instanceof CSSScopeRule ? rule.start : null;
-      if (prelude) {
-        const start = resolved(prelude, selector?.text ?? null, !!scope);
+      if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule) {
+        const start = rule.start ? resolved(rule.start, selector, !!scope) : null;
+        // `&` and `:scope` in a limit are the root it limits.
+        const end = rule.end ? resolved(rule.end, null, true) : null;
         let siblings = scopes.get(scope);
         if (!siblings) scopes.set(scope, siblings = new Map());
-        let child = siblings.get(start.text);
-        if (!child) {
-          const root = !scope ? ":root" : start.anchored && scope.selector ? `:is(${scope.selector})` : null;
-          siblings.set(start.text, child = { start, parent: scope, selector: root ? bindScope(start.text, root) : null });
+        const key = `${start?.text}\n${end?.text}`;
+        let child = siblings.get(key);
+        if (!child || !start && child.owner !== owner) {
+          const root = !scope ? ":root" : start?.flat && !scope.end ? scope.selector : null;
+          siblings.set(key, child = { start, end, owner, parent: scope, selector: start && root ? bindScope(start.text, root) : null });
         }
-        walk(/** @type {CSSScopeRule} */ (rule).cssRules, condition, null, ":scope", child);
+        walk(rule.cssRules, condition, null, ":scope", child);
         continue;
       }
       const style = /** @type {CSSStyleRule} */ (rule).style;
       // A nested rule's own selector, or a nested block of declarations, which has its parent's.
       const asWritten = rule instanceof CSSStyleRule ? rule.selectorText : written;
-      const own = rule instanceof CSSStyleRule ? resolved(asWritten ?? "", selector?.text ?? null, !!scope) : selector ?? (scope ? { text: SCOPE, anchored: true } : null);
+      const own = rule instanceof CSSStyleRule ? resolved(asWritten ?? "", selector, !!scope) : selector ?? (scope ? { text: SCOPE, flat: true, filter: "*" } : null);
       if (style && own && asWritten && style.display) {
         // matches() normally binds :scope to the candidate. Unscoped rules use the document root.
-        const root = !scope ? ":root" : own.anchored && scope.selector ? `:is(${scope.selector})` : null;
-        const classes = [...own.text.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "");
-        found.push({ selector: root ? bindScope(own.text, root) : own.text, scope: root ? null : scope, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important", classes });
+        const root = !scope ? ":root" : own.flat && !scope.end ? scope.selector : null;
+        found.push({ selector: root ? bindScope(own.text, root) : own.text, filter: own.filter, scope: root ? null : scope, text: own.text, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
       }
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
@@ -206,24 +238,32 @@ function displays() {
   };
   for (const sheet of document.styleSheets) {
     try {
+      // A scope without a start has the parent element of the stylesheet's own element.
+      owner = sheet.ownerNode?.parentElement ?? document.documentElement;
       walk(sheet.cssRules, null, null, null, null);
     } catch {}
   }
   return found;
 }
 
-/** @param {Element} el @param {string} selector */
-function matches(el, selector) {
+/**
+ * Whether `el` matches `selector`; one the engine cannot read is `unread` (a filter rules nothing
+ * out).
+ * @param {Element} el @param {string} selector
+ */
+function matches(el, selector, unread = false) {
   try {
     return own.matches.call(el, selector);
   } catch {
-    return false;
+    return unread;
   }
 }
 
 /**
- * Match one candidate, not a scope's entire subtree. When a selector needs an exact root,
- * identify it by its position without changing the DOM or depending on unique author IDs.
+ * Match one candidate, not a scope's entire subtree: its roots are among its own ancestors, and
+ * it is in a root's scope if no element from that root down to it matches the root's limit.
+ * When a selector needs an exact root, identify it by its position without changing the DOM or
+ * depending on unique author IDs, and only for an element whose subject could match.
  * @param {Element} el
  * @param {Map<Element, string>} positions
  */
@@ -250,19 +290,22 @@ function scopedMatches(el, positions) {
     return path;
   };
   /** @param {Element} target @param {string} selector @param {Element} root */
-  const at = (target, selector, root) => matches(target, bindScope(selector, `:is(${position(root)})`));
+  const at = (target, selector, root) => matches(target, bindScope(selector, position(root)));
+  /** @param {Element} node */
+  const depth = (node) => indices.get(node) ?? -1;
   /** @param {Scope} scope @returns {Element[]} */
   const roots = (scope) => {
     const known = cache.get(scope);
     if (known) return known;
-    const parents = !scope.selector && scope.parent ? roots(scope.parent) : [];
-    // An ordinary nested start can match all eligible parent roots with one selector, even if
-    // discovering those parents required exact matching.
-    const selector = scope.selector ?? (scope.start.anchored && parents.length
-      ? bindScope(scope.start.text, `:is(${parents.map(position).join(",")})`) : null);
-    const found = [];
-    for (const [i, node] of ancestors.entries()) {
-      if (selector ? matches(node, selector) : parents.some((parent) => (indices.get(parent) ?? -1) >= i && at(node, scope.start.text, parent))) found.push(node);
+    // The roots around it whose scope holds the candidate, nearest first.
+    const parents = scope.parent && !scope.selector ? roots(scope.parent) : null;
+    const { start, end, selector } = scope;
+    let found = parents?.length === 0 ? [] : ancestors.filter((node, i) => selector ? matches(node, selector)
+      : !start ? node === scope.owner && (!parents || parents.some((parent) => depth(parent) >= i))
+      : matches(node, start.filter, true) && !!parents?.some((parent) => depth(parent) >= i && at(node, start.text, parent)));
+    if (end) {
+      const limits = ancestors.filter((node) => matches(node, end.filter, true));
+      found = found.filter((root) => !limits.some((node) => depth(node) <= depth(root) && at(node, end.text, root)));
     }
     cache.set(scope, found);
     return found;
@@ -292,8 +335,9 @@ function inPlace(root) {
     if (getComputedStyle(el).display !== "none") continue;
     /** @type {ReturnType<typeof scopedMatches> | undefined} */
     let scoped;
+    // A rule whose subject cannot match the candidate needs no root.
     const applies = rules.filter((rule) => rule.scope
-      ? (scoped ??= scopedMatches(el, positions))(rule.selector, rule.scope)
+      ? matches(el, rule.filter, true) && (scoped ??= scopedMatches(el, positions))(rule.selector, rule.scope)
       : matches(el, rule.selector));
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
@@ -307,7 +351,7 @@ function inPlace(root) {
     const closedState = dialog ? "[open],[hidden]" : ":popover-open,[hidden]";
     // The class as the component's file writes it (`.filters`, which Corten prefixes:
     // `.search-page__filters`), from the rule's own selector.
-    const cls = drawn.classes.find((c) => /** @type {DOMTokenList} */ (Reflect.get(own, "classList", el)).contains(c))?.split("__").pop();
+    const cls = [...drawn.text.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "").find((c) => /** @type {DOMTokenList} */ (Reflect.get(own, "classList", el)).contains(c))?.split("__").pop();
     const id = attrOf(el, "id");
     const named = cls ? "." + cls : Reflect.get(own, "localName", el) + (id ? "#" + id : "");
     console.warn(`corten: ${labelOf(el)} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);

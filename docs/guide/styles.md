@@ -75,15 +75,15 @@ sheet do. Since nothing fails when a rail is missing (the page answers, the rail
 drawn), `corten dev` warns in the console of each closed dialog or popover that a rule inside
 `@media` or `@container` gives a `display`, at the width the page is at or any other, with both
 rules: the page cannot tell a rail from an open look written without `[open]`. The check keeps
-an explicit `@scope` root, including for `:scope`, `&` and declarations directly in the scope,
-so it warns only inside that root. Each selector-list member without `:scope` or `&` selects
-descendants, not the root itself; every `:scope` in a selector refers to the same root. A leading
-combinator stays relative to that root, even with `:scope` or `&` later in the member. Quoted
-text and escaped class names are left as written. It does not narrow the warning by a scope's
-`to (limit)`. When only areas have stylesheets,
-each area's file starts with these rules. An app with no component stylesheet has neither file,
-so if its `static/style.css` gives a hidden element, a popover or a dialog a `display` (styling
-corten-ui's parts there, say), it adds them itself:
+an `@scope` root, including for `:scope`, `&` and declarations directly in the scope, so it
+warns only inside that root and above its `to (limit)`, which also bounds a scope nested in it;
+a scope with no root has the element around its stylesheet. Each selector-list member without
+`:scope` or `&` selects descendants, not the root itself; every `:scope` in a selector refers to
+the same root. A leading combinator stays relative to that root, even with `:scope` or `&` later
+in the member. Quoted text and escaped class names are left as written. When only areas have
+stylesheets, each area's file starts with these rules. An app with no component stylesheet has
+neither file, so if its `static/style.css` gives a hidden element, a popover or a dialog a
+`display` (styling corten-ui's parts there, say), it adds them itself:
 
 ```css
 [hidden]:where(:not([hidden=until-found i])) { display: none !important; }
