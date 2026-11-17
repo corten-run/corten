@@ -30,16 +30,19 @@
 //!   [`ClassList`].
 //! - A class the file does not have is a compile error, and so is a class of the file written as
 //!   text (`class="list"`), which would not match the scoped rule.
-//! - Every top-level selector must require one of the file's classes.
-//!   `h2 { .. }` alone is a compile error; `.list h2 { .. }` is fine. A class in `:is()`
-//!   or `:where()` counts only if every branch requires a class; classes inside other
-//!   functions, such as `:not()` or `:has()`, are prefixed but do not count.
+//! - Every selector must match only elements the component owns: the element it styles, or one
+//!   that element is inside (by a descendant or child combinator), has one of the file's classes.
+//!   `h2 { .. }` alone is a compile error; `.list h2 { .. }` is fine, and so is `.list li + li`,
+//!   whose siblings share the list, but not `.list + main`, which is beside it. A class in
+//!   `:is()` or `:where()` counts only if every selector in it does; classes inside other
+//!   functions, such as `:not()` or `:has()`, are prefixed but only filter. A nested selector is
+//!   checked where its `&` stands (`.list { :not(&) { .. } }` does not compile).
 //!   Element defaults, resets and fonts belong in the app's `static/style.css`.
 //! - An `@scope` rule's root and limit (CSS Cascade 6) are prefixed as any selector is:
-//!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When every selector in
-//!   the root requires one of the file's classes, its rules can start anywhere
-//!   (`:scope`, `li`, `> li`); under any other root at the top of the file, such as
-//!   `@scope ([data-theme="dark"])`, each rule starts at one of the classes, as at the top.
+//!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When its root matches
+//!   only elements the component owns, its rules can start anywhere (`:scope`, `li`, `> li`);
+//!   under any other root, such as `@scope ([data-theme="dark"])` or, in a rule,
+//!   `@scope (& + main)`, each rule must name a class itself, as at the top.
 //! - Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks
 //!   a class, so a variant without a rule does not compile.
 //! - A helper component shares another's stylesheet: `#[component(css = OfferList)]` in the same
@@ -272,7 +275,8 @@
 //! }
 //! ```
 //!
-//! A class under `:not()` does not make a rule local (`negated_list.css` has `:not(.list) p`):
+//! A class under `:not()` does not make a rule local (`negated_list.css` has `:not(.list) p`;
+//! for a `p` in the list, write `.list p`):
 //!
 //! ```compile_fail
 //! use corten::prelude::*;
@@ -297,6 +301,24 @@
 //! fn RelatedList() -> impl ClassList { List }
 //! ```
 //!
+//! Nor does a class on a sibling, which is beside the element, not around it
+//! (`sibling_list.css` has `.list + main`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn SiblingList() -> impl ClassList { List }
+//! ```
+//!
+//! A nested selector is checked where its `&` is, so `:not(&)` leaves the component
+//! (`negated_nest.css` has `.list { :not(&) { .. } }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NegatedNest() -> impl ClassList { List }
+//! ```
+//!
 //! An `@scope` rule's root and limit are prefixed as any selector is (`scoped_list.css` has
 //! `@scope (.list) to (.slot) { li { padding: 0; } }` and
 //! `@scope ([data-theme="dark"]) { .list { color: plum; } }`):
@@ -318,8 +340,8 @@
 //! assert_eq!(ScopedList {}.to_html(), r#"<ul class="scoped-list__list"><li class="scoped-list__slot"></li></ul>"#);
 //! ```
 //!
-//! but under a root that names none of the file's classes, at the top of the file, a rule that
-//! does not start at one of them would style elements the component does not render
+//! but under a root that can match elements outside the component, a rule that names none of
+//! the file's classes would style elements the component does not render
 //! (`leaky_scope.css` has `@scope (main) { li { .. } }`), so it does not compile:
 //!
 //! ```compile_fail
@@ -338,6 +360,15 @@
 //! use corten::prelude::*;
 //! #[component(css)]
 //! fn NegatedScope() -> impl ClassList { List }
+//! ```
+//!
+//! A root nested in a rule is checked the same way, from the rule's elements
+//! (`sibling_scope.css` has `.list { @scope (& + main) { p { .. } } }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn SiblingScope() -> impl ClassList { List }
 //! ```
 //!
 //! Nor does an `@scope` with no root (`rootless_scope.css` has `@scope { li { .. } }`), which

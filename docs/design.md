@@ -5791,12 +5791,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
 9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting and `@media`, `@supports`, `@container`,
    `@layer`, `@scope`, `@keyframes` and `@font-face`; `@import`, `@scope` with no root and
-   escaped class names are not supported. Each top-level selector must require a class, either
-   directly or in every branch of a `:is()` or `:where()`. A class inside another function does
-   not count, though it is still prefixed. This also determines whether a top-level `@scope`
-   owns its root; if it does not, each selector in its body must pass the top-level check. A root
-   nested in a rule, or in an `@scope` with an owned root, is relative to
-   that one's elements and is not checked; one nested in any other `@scope` is checked as at the top.
+   escaped class names are not supported. Each selector must match only elements that have one
+   of the file's classes or are inside one (by a descendant or child combinator; `+`, `~` and `||`
+   from the class's element lead outside it), directly or through every selector of an `:is()`
+   or `:where()` the browser keeps. A class inside another function only filters, though it is
+   still prefixed. A nested selector is checked where its `&` stands, as the elements of the rule
+   it is in. The same check decides whether an `@scope` root, at the top or nested in a rule, is
+   owned; if it is not, each selector in its body must pass on its own. A root in an owned
+   `@scope` is relative to its elements and is not checked. The check reads selectors without a
+   CSS parser, so it is conservative: a selector it cannot show is owned does not compile.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's
    root.

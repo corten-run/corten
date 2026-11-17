@@ -5,9 +5,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- Require a component class in every top-level selector branch, including in `:is()` and
-  `:where()` when they supply the class. A class only inside `:not()` or `:has()` no longer
-  makes a selector or an `@scope` root count as component-owned.
+- **Breaking:** a component stylesheet's selector compiles only when the element it styles, or
+  one that element is inside, has one of the file's classes, in every selector of the list and
+  of an `:is()` or `:where()` that supplies the class. A class only in `:not()` or `:has()`, or
+  reached through `+` or `~` (`.list + main`), no longer counts, and a nested selector is
+  checked where its `&` stands (`.list { :not(&) { .. } }`), for selectors and `@scope` roots
+  alike. Write the anchor out: `main:has(.list) p` becomes `main .list p`, and
+  `.pick:checked + span` becomes `:where(.cuts) .pick:checked + span`; page-wide rules belong in
+  `static/style.css` (docs/guide/styles.md). The kit's `stepper.css` anchors its unit rules this
+  way; `corten ui diff stepper` shows the change for a copy.
 
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.

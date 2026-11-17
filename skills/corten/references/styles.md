@@ -1,10 +1,12 @@
 # Styles
 
-A component's styles are `snake_name.css` next to it. Every rule starts at one of the file's
-classes; Corten prefixes them (`.offer-list__row`) and generates a constant for each. An `@scope`
-rule's root and limit are prefixed the same way (`@scope (.list) to (.slot)`); when the root is
-one of the classes, the rules inside start anywhere (`:scope`, `li`), and under any other root
-(`@scope ([data-theme="dark"])`) each starts at one of them.
+A component's styles are `snake_name.css` next to it. Every selector styles an element that has
+one of the file's classes or is inside one (`.list p`, `.list li + li`; not `.list + main`,
+`:not(.list) p` or `main:has(.list) p`); Corten prefixes them (`.offer-list__row`) and generates
+a constant for each. An `@scope` rule's root and limit are prefixed the same way
+(`@scope (.list) to (.slot)`); when the root is one of the classes, the rules inside start
+anywhere (`:scope`, `li`), and under any other root (`@scope ([data-theme="dark"])`) each names
+one of them.
 
 ```css
 /* src/views/offer_list.css */

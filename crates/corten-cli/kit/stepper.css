@@ -26,5 +26,6 @@
   .stepper input::-webkit-inner-spin-button { appearance: auto; }
 }
 .unit { order: 1; font-size: .875rem; color: var(--muted-foreground); }
-.unit ~ * > input { order: 2; }
-.unit ~ * > button:last-child { order: 3; }
+/* `.unit ~` alone would reach past the stepper; `:where()` adds no specificity. */
+:where(.stepper) .unit ~ * > input { order: 2; }
+:where(.stepper) .unit ~ * > button:last-child { order: 3; }

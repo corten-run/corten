@@ -41,8 +41,9 @@ const SYNTAXES: &[(&str, &str)] = &[
     ("<time>", "Time"),
 ];
 
-/// Prefixes every class in `src` with `{prefix}__`. Every branch of a top-level selector or
-/// `@scope` root must require a class for the selector or root to count as component-owned.
+/// Prefixes every class in `src` with `{prefix}__`. Every selector, nested ones included, must
+/// match only elements that have one of the file's classes or are inside one
+/// (`Scoper::prefixed`); under an `@scope` root that does not, each rule in it must.
 pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
     if let Some(line) = conflict_marker(src) {
         return Err(format!(
@@ -60,7 +61,7 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
         prefix,
         scope_root: None,
     };
-    s.block(Ctx::Top, true)?;
+    s.block(Ctx::Top, Some(Anchor::default()), true)?;
     let names: Vec<&str> = s.properties.iter().map(|(name, _)| name.as_str()).collect();
     if let Some(name) = s.media.iter().find(|m| names.contains(&m.as_str())) {
         return Err(format!(
@@ -487,11 +488,12 @@ enum Ctx {
     /// Rules, which must be scoped: at the top of the file, or in an `@scope` there whose root
     /// is not the component's.
     Top,
-    /// Inside a style rule, or an `@scope` rule nested in one: declarations and nested rules.
+    /// Inside a style rule, or an `@scope` rule nested in one: declarations and nested rules,
+    /// checked against the rule's elements.
     Style,
-    /// Inside an `@scope` rule at the top of the file whose root names one of its classes: as in a
-    /// style rule, since its rules match only under the root, but name-defining at-rules such as
-    /// `@property` are valid there and not scoped (CSS Cascade 6).
+    /// Inside an `@scope` rule at the top of the file whose root is the component's: as in a
+    /// style rule, and not checked, since its rules match only under the root, but name-defining
+    /// at-rules such as `@property` are valid there and not scoped (CSS Cascade 6).
     Scope,
     /// `@keyframes`, `@font-face` and the like: copied as written.
     Raw,
@@ -525,7 +527,11 @@ impl Scoper<'_> {
         self.out.push('}');
     }
 
-    fn block(&mut self, ctx: Ctx, top: bool) -> Result<(), String> {
+    /// The rules and declarations up to the end of the block. `nest` is what the elements the
+    /// block's rules are relative to require (the parent rule's, or none at the top of the file or
+    /// in an `@scope` whose root is not the component's); with `None`, in an `@scope` whose root
+    /// is, its selectors are not checked.
+    fn block(&mut self, ctx: Ctx, nest: Option<Anchor>, top: bool) -> Result<(), String> {
         loop {
             self.skip_space();
             match self.bytes.get(self.i) {
@@ -545,6 +551,7 @@ impl Scoper<'_> {
                 self.i += 1;
                 let mut scope_rule = None;
                 let mut unowned_root = None;
+                let mut inner_nest = nest;
                 let inner = if let Some(rule) = text.strip_prefix('@') {
                     // At-rule names are case-insensitive in CSS: `@MEDIA` is `@media`.
                     let name =
@@ -561,18 +568,26 @@ impl Scoper<'_> {
                             return Err(self.error(start, "@property registers a property for the whole page: put it at the top of the stylesheet, outside any rule"))
                         }
                         (_, "scope") => {
-                            let (prelude, unowned) = self.scope_prelude(&rule["scope".len()..], ctx == Ctx::Top, start)?;
+                            let (prelude, unowned) = self.scope_prelude(&rule["scope".len()..], nest, start)?;
                             scope_rule = Some(prelude);
                             // A root the component owns lets its rules start anywhere; any other
-                            // root at the top of the file matches elements outside it, so its
-                            // rules must each start at one of the file's classes.
-                            match (ctx, unowned) {
-                                (Ctx::Top, Some(root)) => {
+                            // can match elements outside it, so its rules are checked as at the
+                            // top of the file, and `&` and `:scope` in them are that root.
+                            match (nest, unowned) {
+                                (Some(_), Some(root)) => {
                                     unowned_root = Some(root);
-                                    Ctx::Top
+                                    inner_nest = Some(Anchor::default());
+                                    ctx
                                 }
-                                (Ctx::Top, None) => Ctx::Scope,
-                                _ => ctx,
+                                (Some(_), None) => {
+                                    inner_nest = None;
+                                    if ctx == Ctx::Top {
+                                        Ctx::Scope
+                                    } else {
+                                        ctx
+                                    }
+                                }
+                                (None, _) => ctx,
                             }
                         }
                         (_, "media" | "supports" | "container" | "layer" | "starting-style") => ctx,
@@ -591,6 +606,9 @@ impl Scoper<'_> {
                 } else {
                     Ctx::Style
                 };
+                if inner == Ctx::Raw {
+                    inner_nest = None;
+                }
                 let media = ctx != Ctx::Raw && text.get(..6).is_some_and(|at| at.eq_ignore_ascii_case("@media"));
                 if let Some(prelude) = scope_rule {
                     self.out.push_str(&prelude);
@@ -600,13 +618,14 @@ impl Scoper<'_> {
                 } else if text.starts_with('@') || ctx == Ctx::Raw {
                     self.out.push_str(&text);
                 } else {
-                    let selector = self.selector(&text, ctx == Ctx::Top, start)?;
+                    let (selector, anchor) = self.selector(&text, nest, start)?;
+                    inner_nest = nest.map(|_| anchor);
                     self.out.push_str(&selector);
                 }
                 self.out.push('{');
                 let body = self.out.len();
                 let outer_root = unowned_root.map(|root| self.scope_root.replace(root));
-                self.block(inner, false)?;
+                self.block(inner, inner_nest, false)?;
                 if let Some(outer) = outer_root {
                     self.scope_root = outer;
                 }
@@ -646,11 +665,12 @@ impl Scoper<'_> {
                 }
                 continue;
             }
-            if ctx == Ctx::Top {
+            // A declaration styles the elements the block's rules are relative to.
+            if !nest.is_none_or(|anchor| anchor.owned) {
                 if let Some(root) = &self.scope_root {
                     return Err(self.error(
                         start,
-                        format!("`{text}` styles the root of `@scope ({root})`, which can be outside the component: put it in a rule that starts at one of the stylesheet's classes"),
+                        format!("`{text}` styles the root of `@scope ({root})`, which can be outside the component: put it in a rule for an element with one of the stylesheet's classes or inside one, like `.list {{ {text} }}`"),
                     ));
                 }
                 return Err(self.error(start, format!("`{text}` is outside any rule")));
@@ -712,11 +732,11 @@ impl Scoper<'_> {
 
     /// An `@scope` prelude, `(.list) to (.slot)` (CSS Cascade 6: `(<scope-start>) to
     /// (<scope-end>)`, each a selector list), with the classes of its root and limit prefixed and
-    /// recorded, and with `top`, the root as written when a selector in it does not require a
-    /// class of the file. Nested in a rule or an owned `@scope`, the root is relative to that one's
-    /// elements. With no root, the scope is the parent of the stylesheet's owner node, the element
-    /// around the page's stylesheet link, which no component owns.
-    fn scope_prelude(&mut self, prelude: &str, top: bool, at: usize) -> Result<(String, Option<String>), String> {
+    /// recorded, and, unless `nest` is `None`, the root as written when it can match an element
+    /// the component does not own. Nested in a rule or an `@scope`, the root is relative to that
+    /// one's elements, `nest`. With no root, the scope is the parent of the stylesheet's owner
+    /// node, the element around the page's stylesheet link, which no component owns.
+    fn scope_prelude(&mut self, prelude: &str, nest: Option<Anchor>, at: usize) -> Result<(String, Option<String>), String> {
         let prelude = prelude.trim();
         let usage = format!(
             "`@scope {prelude}`: the browser drops an @scope whose prelude is not a root and an optional limit; write `@scope (.list)` or `@scope (.list) to (.slot)`"
@@ -754,14 +774,14 @@ impl Scoper<'_> {
                 ));
             }
         }
-        let (start, unowned) = self.prefixed(root.trim(), at)?;
+        let (start, _, unowned) = self.prefixed(root.trim(), nest.unwrap_or_default(), at)?;
         let mut out = format!("@scope ({start})");
         if let Some(limit) = limit {
             out.push_str(" to (");
-            out.push_str(&self.selector(limit.trim(), false, at)?);
+            out.push_str(&self.selector(limit.trim(), None, at)?.0);
             out.push(')');
         }
-        Ok((out, (top && unowned.is_some()).then(|| root.trim().to_string())))
+        Ok((out, (nest.is_some() && unowned.is_some()).then(|| root.trim().to_string())))
     }
 
     /// Records an `@property` rule, whose declarations are in `self.out` from `body`: its name,
@@ -927,26 +947,39 @@ impl Scoper<'_> {
         Ok(None)
     }
 
-    /// The selector with its classes prefixed. With `check`, every selector in the list must
-    /// require a class of the file.
-    fn selector(&mut self, text: &str, check: bool, at: usize) -> Result<String, String> {
-        match self.prefixed(text, at)? {
-            (_, Some(part)) if check => Err(self.unowned(&part, at)),
-            (out, _) => Ok(out),
+    /// The selector with its classes prefixed, and what its elements require. With `nest`, what
+    /// `&` requires, every selector in the list must match only elements the component owns.
+    fn selector(&mut self, text: &str, nest: Option<Anchor>, at: usize) -> Result<(String, Anchor), String> {
+        match self.prefixed(text, nest.unwrap_or_default(), at)? {
+            (_, _, Some(unowned)) if nest.is_some() => Err(self.unowned(&unowned, at)),
+            (out, anchor, _) => Ok((out, anchor)),
         }
     }
 
-    /// The selector with its classes prefixed, and the first selector in the list that does not
-    /// require a class of the file. Classes in any function are still prefixed, but only
-    /// `:is()` and `:where()` can supply ownership: all their branches must require a class.
-    fn prefixed(&mut self, text: &str, at: usize) -> Result<(String, Option<String>), String> {
+    /// The selector list with its classes prefixed, what all of its selectors require of the
+    /// elements they match, and the first that does not require them to be the component's: to
+    /// have one of the file's classes or be inside an element that has one.
+    ///
+    /// A class counts on the element's own compound selector or on one it is inside, by a
+    /// descendant or child combinator; a sibling shares what it is inside (`.list > li + li`),
+    /// but `+` and `~` from the class's element, or `||`, lead outside it. In `:is()` and
+    /// `:where()` every selector must count, but those the browser drops from these forgiving
+    /// lists, one that is empty or starts or ends with a combinator (Selectors 4). A class in any
+    /// other function, `:not()`, `:has()` or `:nth-child(2 of .row)`, is prefixed but only
+    /// filters. `&` is the parent rule's elements, `nest`; a nested selector with no `&` anywhere
+    /// in it is relative to them (CSS Nesting).
+    fn prefixed(&mut self, text: &str, nest: Anchor, at: usize) -> Result<(String, Anchor, Option<Unowned>), String> {
         let chars: Vec<char> = text.chars().collect();
         let mut out = String::with_capacity(text.len() + 16);
         let (mut i, mut brackets, mut parens) = (0, 0usize, 0usize);
         let mut quote = None;
         let mut part_start = 0;
-        let mut part_scoped = false;
-        let mut lists = Vec::<PositiveList>::new();
+        // The rule's selector list, the `:is()` and `:where()` lists open in it, and for the
+        // current selector, whether it has `&` and why it might not count.
+        let mut top = Branches::new();
+        let mut lists = Vec::<Branches>::new();
+        let (mut nests, mut why) = (false, Why::default());
+        let mut all = Anchor::ALL;
         let mut unowned = None;
         while i < chars.len() {
             let c = chars[i];
@@ -960,6 +993,25 @@ impl Scoper<'_> {
                 }
                 i += 1;
                 continue;
+            }
+            // In a compound selector of the list or an `:is()` in it, rather than in another
+            // function or an attribute selector: a combinator, or a token that starts or continues
+            // a compound selector.
+            if brackets == 0 && parens == lists.len() {
+                let list = lists.last_mut().unwrap_or(&mut top);
+                match c {
+                    c if c.is_whitespace() => list.space(),
+                    '>' | '+' | '~' => list.combinator = Some(c),
+                    '|' if chars.get(i + 1) == Some(&'|') => {
+                        list.combinator = Some('|');
+                        out.push_str("||");
+                        i += 2;
+                        continue;
+                    }
+                    ',' | ')' => {}
+                    '/' if chars[i..].starts_with(&['/', '*', '*', '/']) => {}
+                    _ => list.token(nest, &mut why),
+                }
             }
             match c {
                 '"' | '\'' => quote = Some(c),
@@ -976,6 +1028,14 @@ impl Scoper<'_> {
                 }
                 '[' => brackets += 1,
                 ']' => brackets = brackets.saturating_sub(1),
+                '&' if brackets == 0 => {
+                    nests = true;
+                    if parens == lists.len() {
+                        lists.last_mut().unwrap_or(&mut top).add(nest);
+                    } else {
+                        why.filtered = true;
+                    }
+                }
                 ':' if brackets == 0 && parens == lists.len() => {
                     if chars.get(i + 1) == Some(&':') {
                         out.push_str("::");
@@ -983,7 +1043,7 @@ impl Scoper<'_> {
                         continue;
                     }
                     if let Some(open) = positive_list_open(&chars, i + 1) {
-                        lists.push(PositiveList { all: true, branch: false });
+                        lists.push(Branches::new());
                         parens += 1;
                         out.extend(&chars[i..=open]);
                         i = open + 1;
@@ -993,22 +1053,26 @@ impl Scoper<'_> {
                 '(' if brackets == 0 => parens += 1,
                 ')' if brackets == 0 => {
                     if parens == lists.len() {
-                        if let Some(list) = lists.pop() {
-                            *lists.last_mut().map_or(&mut part_scoped, |list| &mut list.branch) |= list.all && list.branch;
+                        if let Some(mut list) = lists.pop() {
+                            list.next();
+                            why.alternative |= list.any && !list.all.owned;
+                            lists.last_mut().unwrap_or(&mut top).add(list.all);
                         }
                     }
                     parens = parens.saturating_sub(1);
                 }
                 ',' if brackets == 0 && parens == lists.len() => {
                     if let Some(list) = lists.last_mut() {
-                        list.all &= list.branch;
-                        list.branch = false;
+                        list.next();
                     } else {
-                        if !part_scoped && unowned.is_none() {
-                            unowned = Some(chars[part_start..i].iter().collect::<String>().trim().to_string());
+                        let anchor = top.end(!nests, true).unwrap_or_default();
+                        all = all.and(anchor);
+                        if !anchor.owned && unowned.is_none() {
+                            unowned =
+                                Some(Unowned { part: chars[part_start..i].iter().collect::<String>().trim().to_string(), why });
                         }
                         part_start = i + 1;
-                        part_scoped = false;
+                        (nests, why) = (false, Why::default());
                     }
                 }
                 '.' if brackets == 0 && ident_start(&chars[i + 1..]) => {
@@ -1035,7 +1099,9 @@ impl Scoper<'_> {
                         self.classes.push(class);
                     }
                     if parens == lists.len() {
-                        *lists.last_mut().map_or(&mut part_scoped, |list| &mut list.branch) = true;
+                        lists.last_mut().unwrap_or(&mut top).class();
+                    } else {
+                        why.filtered = true;
                     }
                     i = end;
                     continue;
@@ -1045,31 +1111,158 @@ impl Scoper<'_> {
             out.push(c);
             i += 1;
         }
-        if !part_scoped && unowned.is_none() {
-            unowned = Some(chars[part_start..].iter().collect::<String>().trim().to_string());
+        let anchor = top.end(!nests, true).unwrap_or_default();
+        all = all.and(anchor);
+        if !anchor.owned && unowned.is_none() {
+            unowned = Some(Unowned { part: chars[part_start..].iter().collect::<String>().trim().to_string(), why });
         }
-        Ok((out, unowned))
+        Ok((out, all, unowned))
     }
 
-    /// The error for a selector that does not require a class of the file.
-    fn unowned(&self, part: &str, at: usize) -> String {
+    /// The error for a selector that can match an element the component does not own.
+    fn unowned(&self, unowned: &Unowned, at: usize) -> String {
+        let Unowned { part, why } = unowned;
+        let mut reason = String::new();
+        if why.alternative {
+            reason.push_str("; an `:is()` or `:where()` counts only when every selector in it does");
+        }
+        if why.filtered {
+            reason.push_str("; a class or `&` in `:not()`, `:has()` or another function only filters");
+        }
+        if why.sibling {
+            reason.push_str("; `+` and `~` lead to an element beside the class's, not inside it");
+        }
         match &self.scope_root {
             Some(root) => self.error(
                 at,
-                format!("`{part}` styles elements this component does not own: `@scope ({root})` can start outside the component, so require a class in each rule, like `.list p`, or in each selector of the scope root, like `@scope (.list)`"),
+                format!("`{part}` styles elements this component does not own: `@scope ({root})` can start outside the component{reason}. Give each rule one of the stylesheet's classes on the element or one it is inside, like `.list p`, or each selector of the scope root, like `@scope (.list)`"),
             ),
             None => self.error(
                 at,
-                format!("`{part}` styles elements this component does not own: require one of the stylesheet's classes in every selector, like `.list {part}`"),
+                format!("`{part}` styles elements this component does not own: in every selector, the element it styles or one it is inside needs one of the stylesheet's classes{reason}. Name the class where that element is, like `.list p` or `main .list p`; styles for the whole page belong in the app's stylesheet"),
             ),
         }
     }
 }
 
-struct PositiveList {
-    /// Whether all the branches before the current one require a class.
-    all: bool,
-    branch: bool,
+/// What a selector requires of the elements it matches: one of the file's classes on the
+/// element itself, on an element it is inside, or, `owned`, either (`:is(.list, .grid p)`).
+#[derive(Clone, Copy, Default)]
+struct Anchor {
+    class: bool,
+    ancestor: bool,
+    owned: bool,
+}
+
+impl Anchor {
+    const ALL: Anchor = Anchor { class: true, ancestor: true, owned: true };
+
+    fn and(self, other: Anchor) -> Anchor {
+        Anchor { class: self.class && other.class, ancestor: self.ancestor && other.ancestor, owned: self.owned && other.owned }
+    }
+
+    fn or(self, other: Anchor) -> Anchor {
+        Anchor { class: self.class || other.class, ancestor: self.ancestor || other.ancestor, owned: self.owned || other.owned }
+    }
+
+    /// The element a combinator leads to: a descendant or child is inside this one, a sibling
+    /// inside what this one is inside, and a table cell after `||` neither.
+    fn across(self, combinator: char) -> Anchor {
+        let ancestor = match combinator {
+            ' ' | '>' => self.owned,
+            '+' | '~' => self.ancestor,
+            _ => false,
+        };
+        Anchor { class: false, ancestor, owned: ancestor }
+    }
+}
+
+/// A selector list being read: a rule's, or an `:is()` or `:where()` in it.
+struct Branches {
+    /// What every selector before the current one requires, and whether any is owned.
+    all: Anchor,
+    any: bool,
+    /// What the current compound selector requires, as written and with the `& ` a nested
+    /// selector without `&` has in front.
+    now: Anchor,
+    nested: Anchor,
+    /// Whether the selector has a compound selector yet, the combinator after the last one (a
+    /// space for a descendant), and whether one came first.
+    compound: bool,
+    combinator: Option<char>,
+    leading: bool,
+}
+
+impl Branches {
+    fn new() -> Branches {
+        Branches {
+            all: Anchor::ALL,
+            any: false,
+            now: Anchor::default(),
+            nested: Anchor::default(),
+            compound: false,
+            combinator: None,
+            leading: false,
+        }
+    }
+
+    fn space(&mut self) {
+        if self.compound && self.combinator.is_none() {
+            self.combinator = Some(' ');
+        }
+    }
+
+    /// A token of a compound selector: after a combinator, it starts the next one.
+    fn token(&mut self, nest: Anchor, why: &mut Why) {
+        let combinator = self.combinator.take();
+        if !self.compound {
+            self.compound = true;
+            self.leading = combinator.is_some();
+            self.nested = nest.across(combinator.unwrap_or(' '));
+        } else if let Some(c) = combinator {
+            let (now, nested) = (self.now.across(c), self.nested.across(c));
+            why.sibling |= (self.now.owned && !now.owned) || (self.nested.owned && !nested.owned);
+            (self.now, self.nested) = (now, nested);
+        }
+    }
+
+    fn class(&mut self) {
+        self.add(Anchor { class: true, ancestor: false, owned: true });
+    }
+
+    fn add(&mut self, anchor: Anchor) {
+        (self.now, self.nested) = (self.now.or(anchor), self.nested.or(anchor));
+    }
+
+    /// The end of a selector: what it requires, written `nested` or not, or `None` when it is
+    /// empty, ends with a combinator or, not `relative`, starts with one.
+    fn end(&mut self, nested: bool, relative: bool) -> Option<Anchor> {
+        let valid = self.compound && (relative || !self.leading) && self.combinator.is_none_or(|c| c == ' ');
+        let anchor = if nested { self.nested } else { self.now };
+        *self = Branches { all: self.all, any: self.any, ..Branches::new() };
+        valid.then_some(anchor)
+    }
+
+    /// The end of a selector in an `:is()` or `:where()`, which drops one the browser drops.
+    fn next(&mut self) {
+        if let Some(anchor) = self.end(false, false) {
+            self.all = self.all.and(anchor);
+            self.any |= anchor.owned;
+        }
+    }
+}
+
+/// Why a selector does not count, for the error.
+#[derive(Clone, Copy, Default)]
+struct Why {
+    filtered: bool,
+    alternative: bool,
+    sibling: bool,
+}
+
+struct Unowned {
+    part: String,
+    why: Why,
 }
 
 /// The opening parenthesis of a matches-any pseudo-class after its colon, if present.
@@ -1673,6 +1866,104 @@ mod tests {
     }
 
     #[test]
+    fn a_class_reached_through_a_sibling_does_not_own_the_element() {
+        // `+` and `~` lead to an element beside the class's, which is not inside it; a sibling of
+        // an element inside it is, since the two share their ancestors.
+        for selector in [
+            ".list + main",
+            ".list ~ p",
+            r".list + #outside\,main",
+            ":is(.list + main, .grid) p",
+            ":is(.list, .grid p) + main",
+            ".list || td",
+        ] {
+            let css = format!("{selector} {{ color: red }}");
+            let error = scope(&css, "t").expect_err(&css);
+            assert!(error.contains("styles elements this component does not own"), "{error}");
+        }
+        for selector in [".list > li + li", ".list li ~ p", ":is(.list > li, .grid p) + p", ".list + .row", ".list ~ p .row"] {
+            assert!(scope(&format!("{selector} {{ color: red }}"), "t").is_ok(), "{selector}");
+        }
+        let error = scope("@scope (.list + main) { p { color: red } }", "t").unwrap_err();
+        assert!(error.contains("`@scope (.list + main)` can start outside the component"), "{error}");
+        assert!(scope("@scope (.list > li + li) { p { color: red } }", "t").is_ok());
+    }
+
+    #[test]
+    fn a_nested_selector_is_checked_where_its_ampersand_is() {
+        // CSS Nesting: a nested selector without `&` is under the parent rule's elements; one with
+        // it means them where it stands, which `:not()` or a sibling combinator leaves.
+        for css in [
+            ".list { :not(&) { color: red } }",
+            ".list { :is(&, main) { color: red } }",
+            ".list { & + main { color: red } }",
+            ".list { + main { color: red } }",
+            ".list { ~ p { color: red } }",
+            ".list { p:has(&) { color: red } }",
+            ".list { &.on { & + main { color: red } } }",
+            ".list { @media print { :not(&) { color: red } } }",
+            ".list { @scope (& + main) { p { color: red } } }",
+        ] {
+            let error = scope(css, "t").expect_err(css);
+            assert!(error.contains("styles elements this component does not own"), "{css}: {error}");
+        }
+        let error = scope(".list { @scope (& + main) { p { color: red } } }", "t").unwrap_err();
+        assert!(error.contains("`@scope (& + main)` can start outside the component"), "{error}");
+        let error = scope(".list { @scope (& + main) { color: red } }", "t").unwrap_err();
+        assert!(error.contains("styles the root of `@scope (& + main)`"), "{error}");
+        for css in [
+            ".list { p { color: red } }",
+            ".list { > p { color: red } }",
+            ".list { & p, &.on { color: red } }",
+            ".list { main & { color: red } }",
+            ".list { :is(&, .row) { color: red } }",
+            ".list { li { & + li { color: red } } }",
+            ".list { @media print { p { color: red } } }",
+            ".list { @scope (main) { p { color: red } } }",
+            ".list { @scope (& > li) { color: red; p { color: red } } }",
+            ".list { @scope (& + main) { .row { color: red } } }",
+            "@scope (.list) { & + main { color: red } :not(&) { color: red } }",
+        ] {
+            assert!(scope(css, "t").is_ok(), "{css}: {:?}", scope(css, "t"));
+        }
+    }
+
+    #[test]
+    fn a_forgiving_list_drops_the_branches_the_browser_drops() {
+        // Selectors 4: `:is()` and `:where()` drop an empty or invalid selector and match by
+        // the rest; a relative one (`> p`) is invalid there.
+        for (input, expected) in [
+            (":is(.list,) p { color: red }", ":is(.t__list,) p{color:red}"),
+            (":where(.list, > p) p { color: red }", ":where(.t__list, > p) p{color:red}"),
+            (":is(.list, main >) p { color: red }", ":is(.t__list, main >) p{color:red}"),
+            (":is( .list , ) p { color: red }", ":is( .t__list , ) p{color:red}"),
+        ] {
+            assert_eq!(scope(input, "t").map(|s| s.css), Ok(expected.to_string()), "{input}");
+        }
+        for css in [":is(.list, main ) p { color: red }", ":is(, main) p { color: red }", ".list, { color: red }"] {
+            assert!(scope(css, "t").is_err(), "{css}");
+        }
+    }
+
+    #[test]
+    fn an_unowned_selector_s_error_names_what_is_missing() {
+        let error = |css: &str| scope(css, "t").unwrap_err();
+        // No suggestion of a selector that cannot match, like `.list main:has(.list) p`.
+        let related = error("main:has(.list) p { color: red }");
+        assert!(!related.contains(".list main"), "{related}");
+        assert!(related.contains("`.list p` or `main .list p`"), "{related}");
+        assert!(related.contains("only filters"), "{related}");
+        assert!(error(":not(.list) p { color: red }").contains("only filters"));
+        let optional = error(":is(.list, main) p { color: red }");
+        assert!(optional.contains("every selector in it"), "{optional}");
+        assert!(!optional.contains("only filters"), "{optional}");
+        assert!(error(".list + main { color: red }").contains("`+` and `~`"));
+        assert!(error("h2 { color: red }").contains("one of the stylesheet's classes"));
+        let root = error("@scope (main) { color: red }");
+        assert!(!root.contains("starts at"), "{root}");
+    }
+
+    #[test]
     fn selector_functions_keep_their_classes_and_specificity() {
         let css = r#":IS(.list, :where(.row:not(.hidden), .card:has(> .image))) > p, :is(main, aside).label { color: red }"#;
         let sheet = scope(css, "t").unwrap();
@@ -1727,7 +2018,7 @@ mod tests {
         );
         let error = |css: &str| scope(css, "t").unwrap_err();
         // A root at the top of the file that names none of its classes matches elements outside
-        // the component, so each rule inside starts at one of them, as at the top of the file.
+        // the component, so each rule inside names one of them, as at the top of the file.
         assert_eq!(
             scope("@scope ([data-theme=\"dark\"]) { .title { color: plum } }", "t").unwrap().css,
             "@scope ([data-theme=\"dark\"]){.t__title{color:plum}}"
@@ -1798,6 +2089,12 @@ mod tests {
             ("negated_list.css", "`:not(.list) p` styles elements this component does not own"),
             ("optional_list.css", "`:is(.list, main) p` styles elements this component does not own"),
             ("related_list.css", "`main:has(.list) p` styles elements this component does not own"),
+            ("sibling_list.css", "`.list + main` styles elements this component does not own"),
+            ("negated_nest.css", "`:not(&)` styles elements this component does not own"),
+            (
+                "sibling_scope.css",
+                "`p` styles elements this component does not own: `@scope (& + main)` can start outside the component",
+            ),
             (
                 "negated_scope.css",
                 "`p` styles elements this component does not own: `@scope (:not(.list))` can start outside the component",

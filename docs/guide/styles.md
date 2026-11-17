@@ -39,13 +39,29 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
 | `var(--color-accent)` in a component's stylesheet | a startup error unless a stylesheet on the same pages declares it (the token file, a listed component's, a `.css` file in the static directory, or for an area's component one linked from its area), naming the file and the property; `var(--x, fallback)` is not checked |
 | `App::area(\|area\| admin::area(area).components(&[SalesChart, ...]))` | those stylesheets in a file of their own, `sections/admin.css`, linked only from pages at and under `/admin`, and from the patches their handlers answer; a component listed in two places, or tokens in an area, is a startup error, and a page or a patch handler outside the area that renders one is an error in a debug build |
 
-Every comma-separated selector needs a class at its own level, or a
-[matches-any function](https://www.w3.org/TR/selectors-4/#matches-pseudo) (`:is()` or `:where()`)
-whose branches all require a class, including nested lists. `:is(.list, .grid) p` and
-`.list:has(img) p` compile; `:is(.list, main) p`, `:not(.list) p` and `main:has(.list) p`
-do not. Classes inside other functions are still prefixed, but do not count toward this check.
-The same test determines whether a top-level `@scope` root is owned: `@scope (:not(.list))` can
-stay as a filter, but it does not let a bare `p` through in the body.
+Every comma-separated selector must match only elements the component owns: the element it
+styles, or one that element is inside (by a descendant or child combinator), has one of the
+file's classes. A sibling of such an element shares what it is inside, so `.list li + li`
+compiles, but `+` and `~` from the class's own element lead beside it, so `.list + main` does
+not. A [matches-any function](https://www.w3.org/TR/selectors-4/#matches-pseudo) (`:is()` or
+`:where()`) counts when every selector in it does, leaving out the ones the browser drops from
+these forgiving lists (an empty one, or one starting or ending with a combinator):
+`:is(.list, .grid) p`, `:is(.list,) p` and `.list:has(img) p` compile; `:is(.list, main) p`,
+`:not(.list) p` and `main:has(.list) p` do not. Classes inside other functions are still
+prefixed, but only filter. A nested selector is checked where its `&` stands, so
+`.list { :not(&) { .. } }` and `.list { & + main { .. } }` do not compile, while
+`.list { p { .. } }` does. The same test decides whether an `@scope` root is owned, at the top
+of the file or nested in a rule: `@scope (:not(.list))` and `.list { @scope (& + main) { .. } }`
+can stay as filters, but a bare `p` in their body does not compile.
+
+A selector that compiled before this check may need its anchor written out:
+
+| Before | After |
+|---|---|
+| `main:has(.list) p`, meaning the list's paragraphs | `.list p`, or `main .list p` to keep the condition |
+| `:not(.list) p` or `:is(.list, main) p` | `.list p` for the component's paragraphs, or the rule in the app's `static/style.css` when it styles the page |
+| `.pick:checked + span` | `:where(.cuts) .pick:checked + span`: `:where()` adds no specificity |
+| `.list { :not(&) { .. } }` | the rule in the app's `static/style.css`, or `@scope (.list) to (.slot) { .. }` for the list's elements down to a slot |
 
 Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks the
 class, so adding a variant without a rule does not compile. A component library is a crate that
