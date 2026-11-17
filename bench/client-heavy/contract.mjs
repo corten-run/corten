@@ -7,6 +7,13 @@ import { createClientWorkload } from "../workloads/client.mjs";
 export const defaults = Object.freeze({ rows: 14, large: 110, append: 7, cards: 24, seed: 7,
   "cleanup-ms": 2000, "observation-ms": 100, "timeout-ms": 30000, cargo: "cargo" });
 export const localRoot = resolve(fileURLToPath(new URL("../../", import.meta.url)));
+// Compiler and runtime package entry points actually loaded by build.mjs. These
+// are dependency roots, not a statement that their installed closure is current.
+export const candidateDependencies = Object.freeze(Object.fromEntries(Object.entries({
+  corten: ["esbuild"], react: ["esbuild", "react", "react-dom"], vue: ["esbuild", "vue"],
+  solid: ["esbuild", "@babel/core", "babel-preset-solid", "solid-js"],
+  svelte: ["esbuild", "svelte"], remix: ["esbuild", "remix"],
+}).map(([app, roots]) => [app, Object.freeze(roots)])));
 export function options(args, root = localRoot, platform = process.platform) {
   const path = platform === "win32" ? win32 : posix;
   assert.ok(Array.isArray(args) && args.every((a) => typeof a === "string"), "invalid argv");

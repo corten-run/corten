@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
@@ -8,7 +8,7 @@ import { Worker } from "node:worker_threads";
 import test from "node:test";
 import { harness } from "./cloud-fixtures.mjs";
 import { inspectCampaign, validationLimit, validationStopLimit } from "./cloud-validation.mjs";
-import { captureValidation, validationPaths, validationTask, typescriptPath } from "./cloud-validation-snapshot.mjs";
+import { captureValidation, validationPaths, validationTask, typescriptPath, semverIntegrity, semverSources } from "./cloud-validation-snapshot.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 function git(root, ...args) {
@@ -17,9 +17,9 @@ function git(root, ...args) {
 }
 const sharedDependencies = resolve(checkout, git(checkout, "rev-parse", "--git-common-dir"), "..", "node_modules");
 function removeDependencyLink(repo) {
-  const link = join(repo, "node_modules");
+  const link = join(repo, "node_modules/typescript");
   assert.ok(lstatSync(link).isSymbolicLink());
-  assert.equal(realpathSync(link), realpathSync(sharedDependencies));
+  assert.equal(realpathSync(link), realpathSync(join(sharedDependencies, "typescript")));
   if (process.platform === "win32") rmdirSync(link);
   else unlinkSync(link);
 }
@@ -46,11 +46,22 @@ async function fakeNative(t, source, { realGraph = false, unconfirmed = false } 
   }
   if (realGraph) for (const path of ["package.json", "bench/marketplace/labels.json"])
     copyFileSync(join(checkout, path), join(repo, path));
-  // Synthetic committed modules, never benchmarks. Reuse the main install only.
-  symlinkSync(realpathSync(sharedDependencies), join(repo, "node_modules"), "junction");
+  // The TypeScript link targets only the main install. Semver's small package is
+  // copied so replacement controls cannot alter either source install.
+  mkdirSync(join(repo, "node_modules"));
+  symlinkSync(realpathSync(join(sharedDependencies, "typescript")), join(repo, "node_modules/typescript"), "junction");
+  cpSync(join(checkout, "node_modules/semver"), join(repo, "node_modules/semver"), { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(checkout, "package.json"), "utf8"));
+  manifest.devDependencies.semver = "7.8.6";
+  const lock = JSON.parse(readFileSync(join(checkout, "package-lock.json"), "utf8"));
+  lock.packages[""].devDependencies.semver = "7.8.6";
+  lock.packages["node_modules/semver"] = { version: "7.8.6", resolved: "https://registry.npmjs.org/semver/-/semver-7.8.6.tgz",
+    integrity: "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==", dev: true };
+  writeFileSync(join(repo, "package.json"), JSON.stringify(manifest));
+  writeFileSync(join(repo, "package-lock.json"), JSON.stringify(lock));
   if (source !== undefined) writeFileSync(join(root, "isolated/campaign-verify.mjs"), source);
   git(repo, "init", "--initial-branch=main");
-  git(repo, "add", "--", ...validationPaths, "bench/workloads/cloud-validation.mjs", "bench/workloads/cloud-validation-snapshot.mjs");
+  git(repo, "add", "--", ...validationPaths, "bench/workloads/cloud-validation.mjs", "bench/workloads/cloud-validation-snapshot.mjs", "package.json", "package-lock.json");
   git(repo, "-c", "user.name=Synthetic validation test", "-c", "user.email=synthetic@example.invalid", "-c", "core.hooksPath=", "commit", "-qm", "Synthetic validation fixture");
   const approvedCommit = git(repo, "rev-parse", "HEAD");
   const native = await import(pathToFileURL(join(root, "cloud-validation.mjs")));
@@ -130,6 +141,81 @@ test("same-read snapshot survives replacement after capture and before real Work
   writeFileSync(join(h.repo, typescriptPath), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "unapproved dependency"); module.exports = {version:"forged"};`);
   assert.deepEqual(await validationTask(h.input, { snapshot }).result, { synthetic: true, typescript: "5.9.3" });
   assert.equal(existsSync(marker), false);
+});
+
+test("pinned semver CommonJS graph evaluates captured extensionless dependencies", { timeout: 15000 }, async (t) => {
+  const h = await fakeNative(t, `import semver from "../../../node_modules/semver/index.js";
+    export function validateCampaign() { return {
+      stable: semver.satisfies("3.5.28", "^3.5.0"),
+      prerelease: semver.satisfies("3.5.28-rc.1", "^3.5.0"),
+      override: semver.satisfies("0.28.2", "^0.27.1"),
+      union: semver.satisfies("7.8.6", "^6 || >=7.8.0 <8"),
+    }; }`);
+  assert.deepEqual(await h.inspect(h.input), { stable: true, prerelease: false, override: false, union: true });
+});
+
+function semverSnapshot(t, edit = () => {}) {
+  const h = harness(t), commit = "a".repeat(40);
+  mkdirSync(join(h.repo, "node_modules"));
+  symlinkSync(realpathSync(join(sharedDependencies, "typescript")), join(h.repo, "node_modules/typescript"), "junction");
+  cpSync(join(checkout, "node_modules/semver"), join(h.repo, "node_modules/semver"), { recursive: true });
+  const marker = join(h.repo, "unapproved-semver");
+  const manifest = { devDependencies: { semver: "7.8.6" } };
+  const lock = { packages: { "": structuredClone(manifest), "node_modules/semver": { version: "7.8.6", integrity: semverIntegrity,
+    resolved: "https://registry.npmjs.org/semver/-/semver-7.8.6.tgz" } } };
+  const source = `import semver from "../../../node_modules/semver/index.js";
+    export function validateCampaign() { return { stable: semver.satisfies("3.5.28", "^3.5.0"),
+      prerelease: semver.satisfies("3.5.28-rc.1", "^3.5.0"), override: semver.satisfies("0.28.2", "^0.27.1") }; }`;
+  edit({ manifest, lock, repo: h.repo });
+  const paths = [...validationPaths, "package.json", "package-lock.json"];
+  const objects = paths.map((path) => {
+    const bytes = Buffer.from(path === "package.json" ? JSON.stringify(manifest) : path === "package-lock.json" ? JSON.stringify(lock)
+      : path.endsWith("/isolated/campaign-verify.mjs") ? source : readFileSync(join(checkout, path)));
+    return Buffer.concat([Buffer.from(`${createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex")} blob ${bytes.length}\n`), bytes, Buffer.from("\n")]);
+  });
+  // Trusted Git seam only, not evidence-selected code. Existing controls above
+  // exercise real Git; these isolate package capture and the actual worker.
+  const capture = () => captureValidation(commit, { root: h.repo, readGit(command, args, options) {
+    assert.equal(command, "git"); assert.equal(args[0], "--no-replace-objects");
+    if (args.includes("rev-parse")) return { status: 0, stdout: commit + "\n" };
+    assert.equal(options.input, paths.map((path) => `${commit}:${path}\n`).join(""));
+    return { status: 0, stdout: Buffer.concat(objects) };
+  } });
+  return { ...h, marker, capture, input: { round: "r21", commit, folder: h.repo } };
+}
+
+test("semver snapshot pins same-read library bytes before actual worker execution", { timeout: 15000 }, async (t) => {
+  const h = semverSnapshot(t), snapshot = h.capture();
+  assert.ok(snapshot.sources.length <= 200);
+  assert.equal(Object.keys(semverSources).length, 48);
+  for (const path of ["index.js", "classes/range.js", "internal/re.js"])
+    writeFileSync(join(h.repo, "node_modules/semver", path), `require("node:fs").writeFileSync(${JSON.stringify(h.marker)}, "unapproved");`);
+  const task = validationTask(h.input, { snapshot });
+  assert.deepEqual(await task.result, { stable: true, prerelease: false, override: false });
+  assert.equal(existsSync(h.marker), false);
+  assert.throws(h.capture, /validation unavailable/);
+});
+
+test("semver snapshot rejects unpinned dependency declarations and absent captured members", { timeout: 15000 }, async (t) => {
+  for (const edit of [({ manifest }) => { manifest.devDependencies.semver = "^7.8.6"; },
+    ({ lock }) => { lock.packages[""].devDependencies.semver = "7.8.5"; },
+    ({ lock }) => { lock.packages["node_modules/semver"].integrity = "sha512-forged"; },
+    ({ lock }) => { lock.packages["node_modules/semver"].dependencies = { unapproved: "*" }; }]) {
+    const h = semverSnapshot(t, edit); assert.throws(h.capture, /validation unavailable/);
+  }
+  const h = semverSnapshot(t), snapshot = h.capture();
+  snapshot.sources = snapshot.sources.filter((row) => row.path !== "node_modules/semver/internal/re.js");
+  assert.throws(() => validationTask(h.input, { snapshot }), /validation unavailable/);
+});
+
+test("semver snapshot never falls back to an unlisted package file", { timeout: 15000 }, async (t) => {
+  const h = semverSnapshot(t), snapshot = h.capture();
+  const row = snapshot.sources.find((row) => row.path.endsWith("/isolated/campaign-verify.mjs"));
+  row.source = 'export async function validateCampaign() { await import("../../../node_modules/semver/unlisted.js"); return { forged: true }; }';
+  row.sha256 = createHash("sha256").update(row.source).digest("hex");
+  writeFileSync(join(h.repo, "node_modules/semver/unlisted.js"), `require("node:fs").writeFileSync(${JSON.stringify(h.marker)}, "unapproved");`);
+  await assert.rejects(validationTask(h.input, { snapshot }).result, /validation unavailable/);
+  assert.equal(existsSync(h.marker), false);
 });
 
 test("unlisted project and package imports never evaluate mutable code", { timeout: 15000 }, async (t) => {

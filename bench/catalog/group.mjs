@@ -57,7 +57,7 @@ export function inspectGroupEvidence(summary, phases, aggregate) {
   assert.deepEqual(summary.group, group, "catalog group descriptor/contract differs");
   assert.deepEqual(summary.options.apps, group.apps, "group requires the exact registry apps");
   const warnings = [];
-  const timed = summary.savedEvidence?.schema === timedSchema;
+  const timed = [timedSchema, "catalog-saved-evidence/v4"].includes(summary.savedEvidence?.schema);
   let targetFailed = false;
   const missing = (message) => warnings.push(message);
   if (!/^[0-9a-f]{40}$/.test(summary.commitAfter ?? "") || summary.commitAfter !== summary.commit

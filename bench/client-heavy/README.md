@@ -6,7 +6,7 @@ benchmark. All six selected frameworks stay in the result, including failures.
 Each application owns its mutations and renders through its native framework.
 
 Implementation checks:
-1. Build the six native apps against the same explicit fixture; retain build failures.
+1. Keep all six native apps inventoried against the same explicit fixture; retain build failures and reviewed unsupported dispositions.
 2. Capture actual loaded data, every operation's DOM and node identities, network,
    errors and owned resources. Validate with the offline oracle before timing.
 3. Run a separate measured journey only after qualification, validate it again,
@@ -73,6 +73,61 @@ collected only in the separate measurement pass after qualification. `readyMs`
 is mount-to-visible-screen-and-subscription readiness, not document load time.
 These local bounded numbers are diagnostics, not a
 ranking or cloud/load readiness. Offline `readyForLoad` remains false.
+
+## Candidate freshness
+
+New output is `client-heavy-native/v3`. It saves the recomputed
+`benchmark-latest-stable-evaluation/v2` alongside the native observations. The
+policy, browser manifest/lock and root tooling manifest/lock byte identities are retained, with exact
+candidate roots and their resolved dependency/optional/peer paths. Saved replay
+recomputes that policy from the complete source snapshot and checks it against
+the exact commit, not a saved eligible flag. Historical native v1/v2 and policy
+v1 retain their old semantics; an old group-wide blocker is not reinterpreted as
+candidate qualification.
+
+The reviewed 13-package 2026-11-17 primary registry observation has Solid and `@solidjs/web` 2.0.0
+and Babel 8.1.2, but the stable `babel-preset-solid` 1.9.19 requires Solid
+`^1.9.16` and Babel `^7.0.0`. Solid remains visible as `unsupported`, reason
+`latest-stable-solid-2-needs-compatible-stable-compiler`, with null qualification
+and measurement. Its compiler hook is not invoked and it has no build artifacts.
+Replay rejects attempted Solid builds/captures, missing or mixed policy, and
+invented unsupported peers. A failed build is never renamed unsupported.
+
+Only Solid's hook loads Babel core. Other candidates retain their own compiler
+and runtime closures; an actual shared consumer of an incompatible package is
+still blocked. This does not remove Solid or any other benchmark inventory,
+change the browser package pins, install an RC, force peers, or hide a compiler
+error. The other browser candidate/build roots and Vue's SFC compiler match
+their observed latest stable versions. This is freshness of those explicit
+targets, not native qualification. Published supported internal dependency pins
+remain intact, including Vue's Babel parser 7 dependency; this does not invent
+a requirement that every transitive package independently use its latest release.
+Every actual consumer of the existing explicit Babel-core target still inherits
+its blocker. Closure records describe the browser package graph, not authentication
+of installed bytes or the full Rust/Playwright/toolchain; existing native,
+source/build, dependency-byte, replay, resource and independent review gates
+remain mandatory. Refresh and review the observation before a new source freeze.
+
+Every resolved dependency, installed optional dependency and peer edge must also
+satisfy its declared npm range, checked with exact `semver` 7.8.6 from the root
+tooling dependency. Absent optional edges are allowed; an installed incompatible
+optional or peer is not. An incompatible edge blocks each actual consumer,
+without imposing latest-every-transitive or hiding that consumer. Remix remains
+blocked: its consumed `@remix-run/test` declares esbuild `^0.27.1`, while the
+unchanged browser override resolves `0.28.2`. Root tooling source/lock identity
+is part of candidate replay; no global or transitive parser fallback is used.
+The parser is verification tooling only and is not shipped in client bundles.
+
+The isolated adapter retains exact captured policy input lengths/hashes and
+recomputes the native policy from those raw bytes. It separately recomputes the
+binding policy from custody-verified committed-equivalent inputs. Only the
+existing exact-byte or uniform LF-to-CRLF checkout conversion is accepted;
+different policy dispositions, invented hashes or mixed conversion fail closed.
+
+Composition can consider each candidate separately only after freshness and
+native admission. The current small one-measurement recipe still reports
+`rankingEligible: false` and no comparison-eligible apps. This change provides
+no framework performance qualification, no new baseline, and no ranking.
 
 Integration left to the parent: add `node --test bench/client-heavy/*.test.mjs`
 to the check command and route the client-heavy group's native execution to
@@ -185,6 +240,10 @@ observed abort. Missing closure evidence, a failed close or a fired deadline bar
 measurement even if an oracle reports a semantic pass. Terminal browser/server
 closure and received SIGINT/SIGTERM abort observations are saved separately.
 Synchronous native build interruption is not independently authenticated.
+
+Invalid or missing policy inputs stop before builds, but still save every selected
+app as not-run, the policy failure and cleanup evidence. They never qualify a
+candidate or reuse that attempt's output directory.
 
 Finalization writes every selected app file, including failed, unsupported and
 not-run cells. `collection.accounting: "complete"` means all six outcomes were
