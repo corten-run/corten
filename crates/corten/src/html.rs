@@ -301,14 +301,14 @@ fn script_end(html: &str, from: usize) -> usize {
 }
 
 /// Whether the `<form>` whose start tag ends at `from` in `html` holds what a page shows: a
-/// start tag, or text that shows ([`text_shows`]; a `<` that starts no tag among it), before its
+/// start tag ended by its `>`, or text that shows ([`text_shows`]; a `<` that starts no tag among it), before its
 /// end tag `</form>`, past comments ended by `-->`, bogus ones (`<!note>`, `<?x>`, `</ x>`), a
 /// `<!DOCTYPE html>`, a `</>` and a void element's end tag (`</input>`), which show nothing. A `<form>` a
 /// table's reading puts in empty moves what it holds out of it, which loses an element or text
 /// from it, and a form of only whitespace or a comment shows the same either way. Any other token
 /// before a start tag or text (another end tag, `</form >`, a comment a browser ends elsewhere
-/// than at its `-->`, another doctype, text with a named character reference it does not decode) is
-/// not read: `Err` with where it starts and ends.
+/// than at its `-->`, another doctype, text with a named character reference it does not decode, a
+/// start tag the patch ends in) is not read: `Err` with where it starts and ends.
 #[cfg(any(debug_assertions, test))]
 fn holds_shown(html: &str, from: usize) -> Result<bool, (usize, usize)> {
     let bytes = html.as_bytes();
@@ -333,7 +333,11 @@ fn holds_shown(html: &str, from: usize) -> Result<bool, (usize, usize)> {
             return Err((start, to_gt));
         }
         match bytes.get(start + 1) {
-            Some(c) if c.is_ascii_alphabetic() => return Ok(true),
+            // A start tag counts once it ends at its `>`: one the patch ends in is dropped, and its
+            // `</form>` with it (`<b title='</form>`), so it is not read.
+            Some(c) if c.is_ascii_alphabetic() => {
+                return if start_tag(html, start).complete { Ok(true) } else { Err((start, html.len())) };
+            }
             Some(b'/') if bytes.get(start + 2).is_some_and(u8::is_ascii_alphabetic) => match exact_end_tag(html, start) {
                 Some((name, _)) if name.eq_ignore_ascii_case("form") => return Ok(false),
                 Some((name, end)) if ignored_end_tag(name) => at = end,
@@ -726,14 +730,60 @@ fn placed(within: Within, tag: &Tag) -> Option<(bool, Within)> {
         Within::AnnotationXml if is("svg") => Some((true, Within::Svg)),
         Within::Math | Within::AnnotationXml if any(MATH_HTML_POINTS) => Some((true, Within::MathText)),
         Within::Math | Within::AnnotationXml if is("annotation-xml") => {
-            // An HTML integration point by its first `encoding`.
+            // An HTML integration point by its first `encoding`, its character references decoded.
             let html = tag.attr("encoding").is_some_and(|encoding| {
+                let encoding = encoding_decoded(encoding);
                 encoding.eq_ignore_ascii_case("text/html") || encoding.eq_ignore_ascii_case("application/xhtml+xml")
             });
             Some((true, if html { Within::Html } else { Within::AnnotationXml }))
         }
         Within::Math | Within::AnnotationXml => Some((true, Within::Math)),
     }
+}
+
+/// An `<annotation-xml>`'s `encoding` as the tokenizer gives it, as far as whether it is
+/// `text/html` or `application/xhtml+xml` (in any letter case): a numeric character reference
+/// decoded, with or without its `;` (U+FFFD for one that is no character, which neither has),
+/// and `&sol;` and `&plus;`, the only named ones for a character of theirs (no named one
+/// is a letter). Any other is left as written, which neither is either way.
+#[cfg(any(debug_assertions, test))]
+fn encoding_decoded(value: &str) -> std::borrow::Cow<'_, str> {
+    if !value.contains('&') {
+        return value.into();
+    }
+    let bytes = value.as_bytes();
+    let mut out = String::with_capacity(value.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            let rest = &value[i..];
+            if let Some((name, c)) = [("&sol;", '/'), ("&plus;", '+')].into_iter().find(|(name, _)| rest.starts_with(name)) {
+                out.push(c);
+                i += name.len();
+                continue;
+            }
+            if bytes.get(i + 1) == Some(&b'#') {
+                let hex = matches!(bytes.get(i + 2), Some(b'x' | b'X'));
+                let digits = i + 2 + usize::from(hex);
+                let mut end = digits;
+                let mut number: u32 = 0;
+                while let Some(digit) = bytes.get(end).and_then(|c| (*c as char).to_digit(if hex { 16 } else { 10 })) {
+                    number = number.saturating_mul(if hex { 16 } else { 10 }).saturating_add(digit);
+                    end += 1;
+                }
+                if end > digits {
+                    // U+FFFD for one that is no character, as the tokenizer gives it.
+                    out.push(char::from_u32(number).filter(|c| *c != '\0').unwrap_or('\u{fffd}'));
+                    i = end + usize::from(bytes.get(end) == Some(&b';'));
+                    continue;
+                }
+            }
+        }
+        let c = value[i..].chars().next().unwrap_or_default();
+        out.push(c);
+        i += c.len_utf8().max(1);
+    }
+    out.into()
 }
 
 /// The HTML standard's special elements, at which the walk up the open elements for an `<li>`,
@@ -955,12 +1005,18 @@ fn misplaced(open: &[Open], tag: &Tag) -> Option<String> {
     if name == "form" && open.iter().any(|el| !el.foreign && el.name == "form") {
         return Some("a <form> in a <form>, which Chromium and Firefox ignore and WebKit keeps".into());
     }
-    if matches!(name, "a" | "button" | "nobr") {
-        // An `<a>` closes the `<a>` open up to a cell, a caption or a `<template>`.
-        let boundary = |el: &str| scope(el) && (name != "a" || !matches!(el, "html" | "table"));
-        if open_in(&[name], &boundary) {
+    if name == "a" {
+        // An `<a>` closes the `<a>` in the list of active formatting elements back to its last
+        // marker (an `<applet>`, `<object>`, `<marquee>`, `<template>`, cell or caption), which an
+        // SVG or MathML integration point between them is not: there it takes the outer `<a>` off
+        // the elements open, and what follows the `<svg>` or `<math>` lands outside it.
+        let marker = |el: &Open| ["applet", "caption", "marquee", "object", "td", "template", "th"].contains(&el.name.as_str());
+        if open.iter().rev().filter(|el| !el.foreign).take_while(|el| !marker(el)).any(|el| el.name == "a") {
             return closes(name);
         }
+    }
+    if matches!(name, "button" | "nobr") && open_in(&[name], &scope) {
+        return closes(name);
     }
     let implied = ["dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc"];
     if matches!(name, "option" | "optgroup") && current == Some("option")
@@ -1263,8 +1319,11 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         }
         let tag = start_tag(html, i);
         if !tag.complete {
-            // The patch ends in it, and the browser drops it.
-            unread!(usize::MAX; "{}, a start tag the patch ends in before its >", shown(&html[tag.start..]));
+            // The patch ends in it, and the browser drops it, with what the patch writes after its
+            // `<`, an end tag in a value included: as where an end tag is left out, a loss found in
+            // the elements open around it is not kept.
+            let since = open.first().map_or(usize::MAX, |outer| outer.start);
+            unread!(since; "{}, a start tag the patch ends in before its >", shown(&html[tag.start..]));
         }
         i = tag.end;
         let Some((foreign_element, within)) = placed(open.last().map_or(Within::Html, |last| last.within), &tag) else {
@@ -1277,6 +1336,23 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             // The browser ignores the `/` of an HTML element's start tag and opens it, which
             // `html!` never writes (it writes `<div></div>` for `<div />`).
             unread!(usize::MAX; "{}, an HTML element's start tag ending />, which a browser leaves open", shown(written));
+        }
+        if name == "template"
+            && !foreign_element
+            && foreign.is_some()
+            && template.is_none()
+            && matches!(reading, Reading::Table | Reading::TableBody | Reading::Row | Reading::ColumnGroup)
+        {
+            // Past its end tag, Firefox reads the rest of the patch as a body's (it drops a later
+            // row, and a form keeps what it holds), and Chromium and WebKit by the table's rules,
+            // as the HTML standard does.
+            let holder = open.last().map_or("", |last| last.name.as_str());
+            unread!(
+                usize::MAX;
+                "{} in <{holder}>, an SVG or MathML integration point, past whose end tag Firefox reads the rest by other rules than a table's{}",
+                shown(written),
+                since(first)
+            );
         }
         let part = TABLE_PARTS.contains(&name);
         let head = HEAD_TAGS.contains(&name);
@@ -1621,6 +1697,47 @@ mod tests {
             ),
             (r#"<tr id="r"></tr><form id="f"></form ><input name="q"></form>"#, "</form > in <form"),
             (r#"<tr id="r"></tr><div id="d"><form><!--->x--></form></div>"#, "<!---> in <form>"),
+            // A start tag the patch ends in, in a form: its `</form>` is in the tag's value, and the
+            // browser drops the tag, keeping the form empty.
+            (
+                r#"<tr id="r"></tr><form id="f"><b title='</form>"#,
+                r#"<b title='</form> in <form id="f">, which the check of what a form holds does not read"#,
+            ),
+            (r#"<tr id="r"></tr><div id="d"><form><b title="</form></div>"#, r#"<b title="</form></div> in <form>"#),
+            // A loss found in the elements open around a start tag the patch ends in is not kept,
+            // as where an end tag is left out.
+            (r#"<tr id="r"></tr><div id="d"><table></table><b title='"#, "<b title=', a start tag the patch ends in"),
+            // An `<annotation-xml>` whose `encoding` is `text/html` written with a character
+            // reference is an HTML integration point.
+            (
+                r#"<tr id="r"></tr><div id="d"><math><annotation-xml encoding="text&#x2F;html"><form><label>x</label></form></annotation-xml></math></div>"#,
+                "<form> in <annotation-xml>, an SVG or MathML integration point",
+            ),
+            (
+                r#"<tr id="r"></tr><div id="d"><math><annotation-xml encoding="text&sol;html"><form></form></annotation-xml></math></div>"#,
+                "<form> in <annotation-xml>, an SVG or MathML integration point",
+            ),
+            // An `<a>` in an `<a>` across an integration point, which is no marker: the browser takes
+            // the outer `<a>` off the elements open, and the `<span>` lands outside it.
+            (
+                r#"<p id="p"><a href="/x"><svg><foreignObject><a href="/y">t</a></foreignObject></svg><span>u</span></a></p>"#,
+                r#"<a href="/y"> in <foreignobject>, which closes the <a> open around it"#,
+            ),
+            (r#"<p id="p"><a href="/x"><math><mi><a href="/y">t</a></mi></math></a></p>"#, "which closes the <a> open around it"),
+            (
+                r#"<colgroup id="c"><script></script></colgroup>"#,
+                "<script> in <colgroup>, which a browser moves out of the <colgroup>",
+            ),
+            // A `<template>` in an integration point under a table's reading: past it Firefox reads
+            // the rest as a body's (the row after is dropped, a form keeps what it holds).
+            (
+                r#"<tr id="a"><td><svg><foreignObject><template></template></foreignObject></svg></td></tr><tr id="b"></tr>"#,
+                "<template> in <foreignobject>, an SVG or MathML integration point, past whose end tag Firefox",
+            ),
+            (
+                r#"<tbody id="b"></tbody><math><mi><template></template></mi></math><span id="s"><form><p>x</p></form></span>"#,
+                "<template> in <mi>, an SVG or MathML integration point",
+            ),
             // A start tag the patch ends in, which the browser drops: the `<div>` is kept whole.
             (r#"<div id="d"></div><col data-note='</div>"#, "<col data-note='</div>, a start tag the patch ends in before its >"),
             (r#"<p id="m"></p><tr id="r" title="</tr>"#, "a start tag the patch ends in"),
@@ -1681,6 +1798,9 @@ mod tests {
             r#"<a id="a"><b>x</b></a><a id="b"><button>y</button></a><p id="p" title = "a>b"><button><p>z</p></button></p>"#,
             r#"<svg id="s"><foreignObject><div><table><tr><td><p>x</p></td></tr></table></div></foreignObject></svg>"#,
             r#"<template id="t"><tr><td>1</td></tr></template><caption id="c"><p>x</p></caption>"#,
+            // An `<object>` is a marker: the `<a>` in it does not close the one around it.
+            r#"<div id="d"><a href="/x"><object><a href="/y">t</a></object><span>u</span></a></div>"#,
+            r#"<math id="m"><annotation-xml encoding="text&#x2F;plain"><mi>x</mi></annotation-xml></math>"#,
             // In a top-level cell, a table's reading is a cell's, which reads an integration point's
             // content as written.
             r#"<tr id="a"><td><svg><foreignObject><form><p>x</p></form></foreignObject></svg></td></tr>"#,
@@ -1738,6 +1858,24 @@ mod tests {
                 let _ = (super::patch_parse(cut).problem, patch_problem(cut), super::start_tags(cut).count());
                 let _ = super::holds_shown(cut, 0);
             }
+        }
+    }
+
+    /// An `<annotation-xml>`'s `encoding` is compared with its character references decoded, as the
+    /// tokenizer gives it: numeric ones with or without their `;`, `&sol;` and `&plus;`.
+    #[test]
+    fn an_annotation_xml_s_encoding_is_read_decoded() {
+        for (written, decoded) in [
+            ("text/html", "text/html"),
+            ("text&#x2F;html", "text/html"),
+            ("text&#47html", "text/html"),
+            ("&#x54;ext&sol;HTML", "Text/HTML"),
+            ("application/xhtml&plus;xml", "application/xhtml+xml"),
+            ("text&sol html", "text&sol html"),
+            ("&#0;&#x110000;&#;&", "\u{fffd}\u{fffd}&#;&"),
+            ("\u{e9}&#xe9;", "\u{e9}\u{e9}"),
+        ] {
+            assert_eq!(super::encoding_decoded(written), decoded, "{written}");
         }
     }
 
@@ -2419,6 +2557,16 @@ mod tests {
             r#"<tr id="z" title="</tr>"#,
             "<p \u{e9}",
         ];
+        /// A start tag or comment the patch ends in, in a `<form>`, and what is written after it,
+        /// which is its value or text.
+        const UNFINISHED_IN_FORM: &[(&str, &str)] = &[
+            ("<b title='", "</form>"),
+            (r#"<label class="a"#, "</form>"),
+            ("<input name='q", "</form></div>"),
+            ("<p", ""),
+            (r#"<span id="s" "#, ""),
+            ("<!--x", "</form>"),
+        ];
         /// The unfinished tokens a browser keeps as text: a `<` or `</` the patch ends in.
         const UNFINISHED_TEXT: &[&str] = &["<", "</"];
         const PARTS: &[&str] = &["tr", "td", "th", "tbody", "thead", "tfoot", "caption", "col", "colgroup"];
@@ -2819,7 +2967,20 @@ mod tests {
                     };
                     patch.add(piece);
                 }
-                if self.tricky && self.rng.one_in(6) {
+                if self.tricky && self.rng.one_in(12) {
+                    // A form the patch ends in, holding a start tag or comment the patch ends in:
+                    // its `</form>`, when written, is the tag's value or the comment's text, and
+                    // the browser keeps the form empty.
+                    let (unfinished, end) = UNFINISHED_IN_FORM[self.rng.below(UNFINISHED_IN_FORM.len())];
+                    let id = !self.rng.one_in(4);
+                    let id = self.id(id);
+                    let id_attr = id.as_ref().map(|id| format!(r#" id="{id}""#)).unwrap_or_default();
+                    patch.add(Piece {
+                        html: format!("<form{id_attr}>{unfinished}{end}"),
+                        shown: vec![Self::shown("form", &id, &Piece::default(), false)],
+                        text: false,
+                    });
+                } else if self.tricky && self.rng.one_in(6) {
                     let unfinished = self.rng.pick(UNFINISHED);
                     // A `<` or `</` the patch ends in is text; an unfinished tag or comment is dropped.
                     patch.add(if UNFINISHED_TEXT.contains(&unfinished) {

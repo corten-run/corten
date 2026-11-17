@@ -1108,7 +1108,8 @@ stops at any other, whether `html!` writes it (a `<div>` in a `<p>`, a `<form>` 
    closes no element open (a `</p>` or `</br>`, which adds an element or, in an `<svg>` or
    `<math>`, closes it);
 2. an HTML element's start tag ending `/>`, and a start tag the patch ends in before its `>`
-   (`<col data-note='` at the end, which the browser drops);
+   (`<col data-note='` at the end, which the browser drops with what follows its `<`, so a loss
+   found in an element open around it is not reported);
 3. a comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, `--!>` in it), a
    CDATA section outside an `<svg>` or `<math>` or not ended by `]]>`, and a doctype other than
    `<!DOCTYPE html>` (a quoted `>` in one ends it early);
@@ -1126,13 +1127,15 @@ stops at any other, whether `html!` writes it (a `<div>` in a `<p>`, a `<form>` 
    whose content Firefox reads as text and Chromium and WebKit as elements; and an `<html>`,
    `<body>`, `<head>`, `<frame>` or `<frameset>`;
 9. an element the browser does not put where it is written: a table part outside a table;
-   anything in a `<table>`, row group, row or column group (a `<colgroup>`) but its own parts and
-   a `<script>`, `<style>` or `<template>`; an element that closes one open around it (a `<div>`
-   in a `<p>`, an `<li>` in an `<li>`, an `<a>` in an `<a>`, a heading in a heading, an
-   `<option>` in an `<option>`); a `<form>` in a `<form>`; what a `<select>` holds but its
+   anything in a `<table>`, row group or row but its own parts and a `<script>`, `<style>` or
+   `<template>`, and in a column group (a `<colgroup>`) anything but a `<col>` or `<template>`;
+   an element that closes one open around it (a `<div>` in a `<p>`, an `<li>` in an `<li>`, a
+   heading in a heading, an `<option>` in an `<option>`, an `<a>` in an `<a>`, an `<svg>` or
+   `<math>` between them too); a `<form>` in a `<form>`; what a `<select>` holds but its
    options; and, after a first table part, a `<form>`, `<table>` or table part in an SVG or
    MathML integration point (`<foreignObject>`, `<desc>`, `<title>`, `<mi>` ..) that is not in a
-   top-level table part.
+   top-level table part, and a `<template>` in one anywhere, past which Firefox reads the rest of
+   the patch as a body's (a later row is dropped there, and kept in Chromium and WebKit).
 
 A row or cell written straight in a `<table>` is read as kept, since the browser only adds the
 `<tbody>` or `<tr>` around it. At a stop the check still reports a loss found before, and
@@ -1141,7 +1144,9 @@ written through `raw` is checked only as far as these rules reach. It does not c
 a page's table takes apart too). A patch that
 begins with a `<col>` from an area's handler is refused even on a page that already has the area's
 stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know
-what the page linked, so send the `<col>`s in a `<colgroup>` with an id.
+what the page linked, so send the `<col>`s in a `<colgroup>` with an id. Neither the check nor
+`html!` reads how deep markup nests: Chromium attaches an element nested deeper than 512 elements
+at depth 512, in a page as in a patch.
 
 ## Work that must not run twice at once
 

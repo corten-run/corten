@@ -39,9 +39,15 @@ Corten is pre-1.0, so any minor version may change the API.
   a `<!--` and a `<script` carry past its first `</script>` and over an element; in a form a
   table's reading empties, any token before what it holds but a comment; a start tag the patch
   ends in; an HTML `<image>`, `<plaintext>`, `<noscript>`, `<html>`, `<body>`, `<head>`,
-  `<frame>` or `<frameset>`; an element the browser does not put where it is written, such as a
-  table part outside a table or a `<div>` in a `<p>`; the full list is Limit 2), is checked up to
-  there and sent, with a warning naming where it stopped; a release build is unchanged
+  `<frame>` or `<frameset>`; after a first table part, a `<template>` in an SVG or MathML
+  integration point, past which Firefox reads the rest as a body's; an element the browser does
+  not put where it is written, such as a table part outside a table, a `<div>` in a `<p>` or an
+  `<a>` in an `<a>`; the full list is Limit 2), is checked up to there and sent, with a warning
+  naming where it stopped. A release build sends what it sent before; only `corten dev`'s check
+  that each `data-vars` has a style rule, which reads start tags with the same code, now reads them
+  as the browser's tokenizer does (whitespace around `=`, a `/` not before the `>`, names past
+  ASCII, and the text of an `<xmp>`, `<iframe>`, `<noembed>` or `<noframes>`), which only markup
+  placed with `raw` writes
   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 
 - The watchlist smoke's check that a submit which waited for a write the network failed is not

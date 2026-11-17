@@ -1,5 +1,5 @@
 {
-  "//": "How a browser parses a patch's top level as a <template>'s content (the runtime's parse in corten.js). parsed is each top-level element as name#id, (its child elements) and a template's {content}, without text, as the HTML standard and Firefox parse it; parsedIn, where an engine differs (Chromium and WebKit let a leading <title>, <base>, <basefont>, <bgsound> or <noframes> decide how the rest is read). lost is what the server's debug check (patch_parse in html.rs) reports, null when it reports nothing: html.rs's tests hold it to report exactly the cases here a browser does not parse as written, and hold the shapes html! refuses at compile time (a table part after a first <table>; an element HTML's wherever it lands after a first <col>; after a first other table part, a <table> at the top level or in a later element, and a <form> that holds an element with one HTML's wherever it lands in or around it), written first and after each table part, to be lost in every engine. unread, where it is set, is where the check stops (a construct it does not follow, named in docs/design.md Limit 2), reporting no loss and logging a warning instead. scripts/smoke.mjs checks parsed in Chromium, Firefox and WebKit.",
+  "//": "How a browser parses a patch's top level as a <template>'s content (the runtime's parse in corten.js). parsed is each top-level element as name#id, (its child elements) and a template's {content}, without text, as the HTML standard and Firefox parse it; parsedIn, where an engine differs (Chromium and WebKit let a leading <title>, <base>, <basefont>, <bgsound> or <noframes> decide how the rest is read, and Firefox, unlike the standard, reads what follows a <template> in an SVG or MathML integration point under a table's reading as a body's). lost is what the server's debug check (patch_parse in html.rs) reports, null when it reports nothing: html.rs's tests hold it to report exactly the cases here a browser does not parse as written, and hold the shapes html! refuses at compile time (a table part after a first <table>; an element HTML's wherever it lands after a first <col>; after a first other table part, a <table> at the top level or in a later element, and a <form> that holds an element with one HTML's wherever it lands in or around it), written first and after each table part, to be lost in every engine. unread, where it is set, is where the check stops (a construct it does not follow, named in docs/design.md Limit 2), reporting no loss and logging a warning instead. scripts/smoke.mjs checks parsed in Chromium, Firefox and WebKit.",
   "cases": [
     {
       "html": "<tr id=\"a\"><td>1</td></tr><tr id=\"b\"><td>2</td></tr>",
@@ -7162,6 +7162,165 @@
         ]
       },
       "lost": "<form> loses what it holds, since <td id=\"c\"> comes first"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><form id=\"f\"><b title='</form>",
+      "parsed": [
+        "tr#r",
+        "form#f"
+      ],
+      "unread": "<b title='</form> in <form id=\"f\">, which the check of what a form holds does not read"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><div id=\"d\"><form><b title=\"</form></div>",
+      "parsed": [
+        "tr#r",
+        "div#d(form)"
+      ],
+      "unread": "in <form>, which the check of what a form holds does not read"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><div id=\"d\"><table></table><b title='",
+      "parsed": [
+        "tr#r",
+        "div#d"
+      ],
+      "unread": "a start tag the patch ends in before its >"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><div id=\"d\"><math><annotation-xml encoding=\"text&#x2F;html\"><form><label>x</label></form></annotation-xml></math></div>",
+      "parsed": [
+        "tr#r",
+        "div#d(math(annotation-xml(form,label)))"
+      ],
+      "unread": "<form> in <annotation-xml>, an SVG or MathML integration point"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><div id=\"d\"><math><annotation-xml encoding=\"text&sol;html\"><form><label>x</label></form></annotation-xml></math></div>",
+      "parsed": [
+        "tr#r",
+        "div#d(math(annotation-xml(form,label)))"
+      ],
+      "unread": "<form> in <annotation-xml>, an SVG or MathML integration point"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><div id=\"d\"><math><annotation-xml encoding=\"text&#47html\"><form><label>x</label></form></annotation-xml></math></div>",
+      "parsed": [
+        "tr#r",
+        "div#d(math(annotation-xml(form,label)))"
+      ],
+      "unread": "<form> in <annotation-xml>, an SVG or MathML integration point"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><div id=\"d\"><math><annotation-xml encoding=\"&#x54;ext/HTML\"><form><label>x</label></form></annotation-xml></math></div>",
+      "parsed": [
+        "tr#r",
+        "div#d(math(annotation-xml(form,label)))"
+      ],
+      "unread": "<form> in <annotation-xml>, an SVG or MathML integration point"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><div id=\"d\"><math><annotation-xml encoding=\"application/xhtml&plus;xml\"><form><label>x</label></form></annotation-xml></math></div>",
+      "parsed": [
+        "tr#r",
+        "div#d(math(annotation-xml(form,label)))"
+      ],
+      "unread": "<form> in <annotation-xml>, an SVG or MathML integration point"
+    },
+    {
+      "html": "<p id=\"p\"><a href=\"/x\"><svg><foreignObject><a href=\"/y\">t</a></foreignObject></svg><span>u</span></a></p>",
+      "parsed": [
+        "p#p(a(svg(foreignObject(a))),span)"
+      ],
+      "unread": "<a href=\"/y\"> in <foreignobject>, which closes the <a> open around it"
+    },
+    {
+      "html": "<p id=\"p\"><a href=\"/x\"><math><mi><a href=\"/y\">t</a></mi></math><span>u</span></a></p>",
+      "parsed": [
+        "p#p(a(math(mi(a))),span)"
+      ],
+      "unread": "<a href=\"/y\"> in <mi>, which closes the <a> open around it"
+    },
+    {
+      "html": "<p id=\"p\"><a href=\"/x\"><svg><desc><a href=\"/y\">t</a></desc></svg><span>u</span></a></p>",
+      "parsed": [
+        "p#p(a(svg(desc(a))),span)"
+      ],
+      "unread": "<a href=\"/y\"> in <desc>, which closes the <a> open around it"
+    },
+    {
+      "html": "<div id=\"d\"><a href=\"/x\"><object><a href=\"/y\">t</a></object><span>u</span></a></div>",
+      "parsed": [
+        "div#d(a(object(a),span))"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<colgroup id=\"c\"><script></script></colgroup>",
+      "parsed": [
+        "colgroup#c",
+        "script"
+      ],
+      "unread": "<script> in <colgroup>, which a browser moves out of the <colgroup> or closes it for"
+    },
+    {
+      "html": "<tbody id=\"e1\"></tbody><math><mi><template></template></mi></math><span id=\"e5\"><form><section id=\"e3\">x</section></form></span>",
+      "parsed": [
+        "tbody#e1",
+        "math(mi(template{}))",
+        "span#e5(form,section#e3)"
+      ],
+      "parsedIn": {
+        "firefox": [
+          "tbody#e1",
+          "math(mi(template{}))",
+          "span#e5(form(section#e3))"
+        ]
+      },
+      "unread": "<template> in <mi>, an SVG or MathML integration point, past whose end tag Firefox reads the rest by other rules than a table's"
+    },
+    {
+      "html": "<tr id=\"a\"><td><svg><foreignObject><template></template></foreignObject></svg></td></tr><tr id=\"b\"></tr>",
+      "parsed": [
+        "tr#a(td(svg(foreignObject(template{}))))",
+        "tr#b"
+      ],
+      "parsedIn": {
+        "firefox": [
+          "tr#a(td(svg(foreignObject(template{}))))"
+        ]
+      },
+      "unread": "<template> in <foreignobject>, an SVG or MathML integration point"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><math><mi><template><td>1</td></template></mi></math><tr id=\"b\"></tr>",
+      "parsed": [
+        "tr#a",
+        "math(mi(template{td}))",
+        "tr#b"
+      ],
+      "parsedIn": {
+        "firefox": [
+          "tr#a",
+          "math(mi(template{td}))"
+        ]
+      },
+      "unread": "<template> in <mi>, an SVG or MathML integration point"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><math><annotation-xml encoding=\"text/html\"><template></template></annotation-xml></math><tr id=\"b\"></tr>",
+      "parsed": [
+        "tr#a",
+        "math(annotation-xml(template{}))",
+        "tr#b"
+      ],
+      "parsedIn": {
+        "firefox": [
+          "tr#a",
+          "math(annotation-xml(template{}))"
+        ]
+      },
+      "unread": "<template> in <annotation-xml>, an SVG or MathML integration point"
     }
   ]
 }

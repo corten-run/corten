@@ -4936,15 +4936,20 @@ by design; where it is known, a limit says what would lift it or why it is so.
    element, which the markup does not say was written as its text; in a `<form>` a table's
    reading would put in empty, any token before what it holds but a comment, a bogus comment, a
    `<!DOCTYPE html>` and a void element's end tag; a start tag the patch ends in before its `>` (`<col data-note='`
-   at the end, which the browser drops); an HTML `<image>`, which the browser reads as an `<img>`;
+   at the end, which the browser drops with what follows its `<`, an end tag in its value too, so a
+   loss found in an element open around it is not reported); an HTML `<image>`, which the browser reads as an `<img>`;
    a `<plaintext>`, and a `<noscript>`, whose content Firefox reads as text and Chromium and
    WebKit as elements; and an element the browser does not put where it is written: a table part
-   outside a table, anything in a `<table>`, row group, row or column group but its own parts, a
-   `<script>`, `<style>` or `<template>` (and text there), an element that closes one open around it
-   (a `<div>` in a `<p>`, an `<li>` in an `<li>`, an `<a>` in an `<a>`, a heading in a heading),
+   outside a table, anything in a `<table>`, row group or row but its own parts, a `<script>`,
+   `<style>` or `<template>`, anything in a column group but a `<col>` or `<template>` (a `<script>`
+   or `<style>` there closes it), and text in any of them, an element that closes one open around it
+   (a `<div>` in a `<p>`, an `<li>` in an `<li>`, a heading in a heading, an `<a>` in an `<a>`, an
+   `<svg>` or `<math>` between them too, since only a cell, caption, `<object>`, `<applet>`,
+   `<marquee>` or `<template>` keeps the outer one open),
    a `<form>` in a `<form>`, what a `<select>` holds but its options, an `<html>`, `<body>`,
    `<head>`, `<frame>` or `<frameset>`, and, after a first table part, a `<form>`, `<table>` or
-   table part in an SVG or MathML integration point. There it
+   table part in an SVG or MathML integration point, and a `<template>` in one, past whose end tag
+   Firefox, unlike the standard and the other engines, reads the rest of the patch as a body's. There it
    reports a loss found before and otherwise logs a warning naming where it stopped, so markup
    written through `raw` is checked only as far as these rules reach, and what a patch loses after
    one of them is found by neither the check nor `html!`. `scripts/patch-generated.json` holds
@@ -4953,7 +4958,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
    which the smoke parses in all three engines, text included: it reports a loss only where an
    engine loses something, and where one does, reports it or says where it stopped; and the id
    check reports an element without an id or text outside one only where the engine's parse has
-   one at its top level or loses something.
+   one at its top level or loses something. Neither reads how deep markup nests: Chromium attaches
+   an element nested deeper than 512 elements at depth 512 (measured in Chromium 156; Firefox and
+   WebKit not checked), in a page as in a patch, which a recursive component (a comment thread)
+   can reach.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating
