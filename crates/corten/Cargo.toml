@@ -22,7 +22,7 @@ name = "corten"
 # reuses, so one sent a few bytes at a time does not allocate per piece.
 bytes = "1"
 corten-macros.workspace = true
-# `alloc` for `try_join_all` over the listeners.
+# `alloc` for `join_all` over the listeners.
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 getrandom = "0.3"
 # The HTTP vocabulary (`StatusCode`, `HeaderMap`, `Uri`, `request::Parts`), which apps name as
