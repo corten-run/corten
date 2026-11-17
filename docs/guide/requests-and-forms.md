@@ -752,6 +752,12 @@ html! {
 errors.add(f.domains.at(&Domain::SellerPortal).max_concurrent, "At least 1.");
 ```
 
+Group, row and key types may be paths: `#[fields(group)] ship_to: addresses::Address`,
+`#[fields(rows)] #[serde(default)] lines: BTreeMap<keys::Sku, items::Line>` and
+`#[fields(map)] #[serde(default)] counts: BTreeMap<keys::Sku, u32>` need no imports of the
+types' bare names. A path back to the form's own type is still recursive and does not compile;
+a path to a different type with the same name is allowed.
+
 A key is a `RowKey`: text, an integer, or a `#[derive(UrlValue)]` enum, whose key is the word
 serde reads (`seller-portal`), so it reads back as the same variant. Its characters other than letters, digits, `-` and `_` are %-encoded in the name, so any text is
 a key, and a key sent any other way (`%61` for `a`) is refused, so one key cannot reach a row two
