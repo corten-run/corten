@@ -5934,8 +5934,10 @@ async function run(browser) {
         JSON.stringify({ linked, written }),
       );
       // Back and Forward between the form's entries put the user where they were on each, as the
-      // browser does for the pages: the patch is drawn, then the entry's scroll restored.
-      await scope.goto(`${base}/smoke/scope`);
+      // browser does for the pages: the patch is drawn, then the entry's scroll restored. Loaded at
+      // an address the tab's last entry is not: Firefox drops the entry ahead of one of two document
+      // entries at the same address when Back to it is intercepted, whatever intercepts it.
+      await scope.goto(`${base}/smoke/scope?scope=day`);
       const y = () => scope.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(Math.round(scrollY)))));
       await scope.evaluate(() => scrollTo(0, 1500));
       // Sent from a script: a click would scroll the button into view first.
@@ -5951,8 +5953,8 @@ async function run(browser) {
       const restored = { afterSend, back: { at: await traverse("back"), y: await y() }, forward: { at: await traverse("forward"), y: await y() }, asked: asked.splice(0) };
       check(
         "Back and Forward between a data-address form's entries restore each entry's scroll",
-        restored.afterSend === 1500 && restored.back.at === "/smoke/scope" && restored.back.y === 1500 && restored.forward.at === "/smoke/scope?scope=week" &&
-          restored.forward.y === 700 && restored.asked.join() === "action ,action ?scope=week",
+        restored.afterSend === 1500 && restored.back.at === "/smoke/scope?scope=day" && restored.back.y === 1500 && restored.forward.at === "/smoke/scope?scope=week" &&
+          restored.forward.y === 700 && restored.asked.join() === "action ?scope=day,action ?scope=week",
         JSON.stringify(restored),
       );
     }
