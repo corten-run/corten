@@ -53,8 +53,9 @@ Corten is pre-1.0, so any minor version may change the API.
   `500`, as that `500`), body bytes (or `"stream"`) and duration to response readiness; a
   request dropped before its answer is ready writes none. Off
   unless set, also in the app `corten new` writes. Uses the existing subscriber and escaping,
-  which now copies text between control characters a run at a time. Measured: +9,618
-  instructions on a parameter route (+54%), +8,168 on a `404`; off, within 12 of before.
+  which now copies text between control characters a run at a time. Measured: +9,610
+  instructions on a parameter route (+54%), +8,172 on a `404`, with the line written to a sink,
+  not stdout; off, within 12 of before.
 
 - Clear only an already stopped, masked firmware unit's failed state during
   fresh benchmark setup, then recheck the mask, inactive state and service PID.

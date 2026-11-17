@@ -4844,14 +4844,26 @@ rules something out.
     route outside it matched is the API's (`Scopes::foreign`, the stages' check), so neither names
     a route. Disabled dispatch has no recording branch, additional caller or logging index.
 
-    Measured with CONTRIBUTING's request-path count (release build, Callgrind, (1,200 requests
-    minus 200) / 1,000, median of three alternating runs, Corten's subscriber writing to a sink;
-    `log::tests::what_an_access_request_costs`): a parameter route costs 17,681 instructions on
-    unchanged `main` and 27,299 with the line (+9,618, 54%); an unknown URL's `404`, 19,135 and
-    27,303 (+8,168, 43%). Of that, preparing the event and handing it to `tracing` is about 1,400
-    (an accepting subscriber that writes nothing: 19,094 and 20,499); the rest is the line the
-    subscriber writes. With the switch off a request costs 17,679 and 19,123, within 12
-    instructions of `main` (code layout, not work: the off path runs nothing of the feature).
+    Measured with CONTRIBUTING's request-path count (release build, Callgrind 3.19, (1,200
+    requests minus 200) / 1,000, three runs in alternating order;
+    `log::tests::what_an_access_request_costs`, an unlayered app answering through `oneshot` with
+    the body collected). "Before" is `38587c414` with only that test added (its framework and
+    lockfile are those of `main` then); the others are `67d888836`. Instructions per request,
+    median [min, max]:
+
+    | Request | Before | Off | On | Accepting subscriber |
+    | --- | --- | --- | --- | --- |
+    | Parameter route | 17,681.1 [17,681.0, 17,681.1] | 17,679.0 [17,679.0, 17,679.0] | 27,291.5 [27,291.3, 27,299.9] | 19,097.0 [19,097.0, 19,097.0] |
+    | Unknown URL `404` | 19,135.0 [19,135.0, 19,135.0] | 19,123.0 [19,123.0, 19,123.0] | 27,306.6 [27,298.6, 27,307.8] | 20,503.0 [20,503.0, 20,503.1] |
+
+    The line adds 9,610 (54%) and 8,172 (43%). Preparing the event and handing it to `tracing`
+    is about 1,400 of that (the accepting subscriber takes the event and writes nothing); the rest
+    is Corten's subscriber formatting the line (timestamp, fields, escaping) into its buffer and
+    handing the bytes to a sink that discards them. Writing them to stdout is not counted: its
+    system call, and any wait when stdout is a slow pipe or terminal, come on top, as do an app's
+    tower layers and their shared route handoff. With the switch off a request costs 2 and 12
+    instructions fewer than before, and the ranges do not overlap, but the off path runs nothing
+    of the feature: this is code layout, not saved work.
 
     Not chosen: an app middleware, which cannot see early refusals or the response after
     the error page, conditional GET and compression; a tower layer each app writes, which
@@ -4879,7 +4891,9 @@ rules something out.
     than `101` (then the line logs it as itself).
 
     Last checked: 2026-11-16, the request stages, final HTTP handling, the API boundary and
-    subscriber read, and the costs measured, at `f5f2132aa`.
+    subscriber read, at `f5f2132aa`; 2026-11-17, hyper 1.12's HTTP/1 server answering a final
+    `100` and `103` with an empty `500` over a socket, and the costs measured, at `67d888836`
+    against `38587c414`.
 
 ## Rules
 

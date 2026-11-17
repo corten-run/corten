@@ -215,6 +215,8 @@ writing to a sink, [design Choice 59](../design.md#choice-access-logs)): a param
 from about 17,700 to 27,300 (+54%), and an unknown URL's `404` from about 19,100 to 27,300
 (+43%). About 1,400 of that is preparing the event; the rest is formatting the line. With the
 switch off a request costs what it did before the switch existed, within a dozen instructions.
+Writing the line to stdout is not counted: its system call, and any wait when stdout is slow,
+come on top.
 
 ## Host names
 
