@@ -5880,7 +5880,8 @@ async function run(browser) {
         }
       });
       const linkSent = scope.waitForRequest((r) => linkAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      await scope.getByRole("link", { name: "Elsewhere", exact: true }).click();
+      // Clicked from a script: Playwright's click waits for the navigation it starts, held here.
+      await scope.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector("nav a[href='/smoke/scope-elsewhere']")).click());
       const linkWent = await linkSent;
       asked.length = 0;
       await scope.getByRole("button", { name: "Week", exact: true }).click();
