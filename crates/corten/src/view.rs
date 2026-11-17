@@ -265,8 +265,9 @@ use std::{
 /// relative path (`items/7`, `?page=2`) and a URL inside another attribute's text
 /// (`<meta http-equiv="refresh" content="0; url=/items">`). Write a route there too.
 ///
-/// An attribute name may be written only once per element, case-insensitively, including names
-/// whose values are expressions. A spread's names are not known here and are not checked:
+/// A literal HTML attribute name may be written only once per element, case-insensitively,
+/// including names whose values are expressions. A spread's names are not known here and are
+/// not checked. Handler calls (`on:..`) share one generated attribute and still combine:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;

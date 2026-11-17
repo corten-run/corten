@@ -4245,9 +4245,10 @@ rules something out.
     nodes once with a stack of literal ancestors, preserving it through control-flow bodies
     and starting a fresh unknown context for a component's children. It adds no render code.
     Each rule keeps its own scope boundaries; a nested list in a `<ul>` and a form in a
-    `<template>` still compile. A duplicate written attribute name is refused case-insensitively,
+    `<template>` still compile. A duplicate written HTML attribute name is refused case-insensitively,
     with an expression value too; spreads remain opaque, so the first `encoding` rule still
-    matters when a spread precedes or follows a written one.
+    matters when a spread precedes or follows a written one. Handler calls (`on:..`) still
+    combine in one `data-on` attribute, including repeated events.
 
     Not chosen: a complete HTML validator or table insertion-mode simulation. A `<div>` straight
     in a `<table>` still compiles (foster parenting), as do the option and ruby implied-end-tag

@@ -1423,7 +1423,8 @@ impl Cursor {
                 Some(TokenTree::Ident(_)) => {
                     let mut name = self.attr_name()?;
                     let written = name.to_ascii_lowercase();
-                    if !names.insert(written.clone()) {
+                    // Handler calls share one generated data-on attribute, including repeated events.
+                    if !name.starts_with("on:") && !names.insert(written.clone()) {
                         let instead = if written == "style" {
                             "give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}"
                         } else {

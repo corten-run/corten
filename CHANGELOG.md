@@ -8,7 +8,7 @@ Corten is pre-1.0, so any minor version may change the API.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 
-- **Breaking:** `html!` refuses duplicate written attribute names (case-insensitively, including
+- **Breaking:** `html!` refuses duplicate written HTML attribute names (case-insensitively, including
   names with expression values), hand-written `data-key` (write `key={..}`), and visible HTML
   nesting whose start tags close or discard an open element: blocks in paragraphs, nested list
   and definition items without a boundary, active anchors, forms outside templates, buttons or
