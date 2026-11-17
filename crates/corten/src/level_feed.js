@@ -3,7 +3,7 @@
 import { subscribe } from "corten";
 /** @import { FeedUrl } from "corten" */
 
-/** @typedef {{ id: string, qty: number }} Level A row of the levels feed. */
+/** @typedef {import("./types/app").Level} Level */
 
 /** @param {HTMLTableSectionElement} body @param {FeedUrl<Level>} feed @param {AbortSignal} signal */
 export function follow(body, feed, signal) {
