@@ -156,6 +156,11 @@ Corten is pre-1.0, so any minor version may change the API.
   start, including response delivery, and refuse expired DELETEs after asynchronous
   HTTPS socket/TLS setup without queuing a mutation before readiness.
 
+- Extend failed-native custody eligibility only to the exact r21 catalog host
+  attempt measured at `dbe1a34c753ee8ef4ac9927484dc3930d36f6e37`. Retain original
+  failed evidence and all terminal/deletion fences without qualifying it or
+  changing ordinary collection or the original migration.
+
 - Add an explicitly approved r21 failed-native custody/retirement action, separate
   from benchmark qualification. Preserve original failure evidence and all reserved
   native roots before fresh terminal-host checks and one owned deletion attempt;
