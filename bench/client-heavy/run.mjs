@@ -211,14 +211,12 @@ export async function run(args) {
     node: process.version, platform: platform(), release: release(), cpu: cpus()[0]?.model ?? "unknown", logicalCpus: cpus().length,
     browser: null, browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 2, note: "Bounded local verification on an uncontrolled host; no throughput or ranking claim. No OS CPU or memory isolation." };
   const output = { schema, group: "client-heavy", round: config.round, effectiveWorkload: config.workload, settings: config.settings, timeoutMs: config.timeoutMs, provenance,
-    latestStable: readLatestStable(),
+    latestStable: null,
     selectedApps: selectedApps("client-heavy"), definition: definition("client-heavy"),
     builds: Object.fromEntries(selectedApps("client-heavy").map((app) => [app, { outcome: "not-run", reason: "runner-failed-before-build" }])),
     cells: {}, passed: false, readyForLoad: false,
     collection: { accounting: "incomplete", proof: "blocked", blockers: evidence.blockers, isolation: "unknown", rankingEligible: false,
       reviewSubject: "review-subject.json" } };
-  for (const row of output.latestStable.candidates.filter((row) => row.status === "unsupported")) output.cells[row.app] = {
-    outcome: "unsupported", reason: row.reason, qualification: null, measurement: null, readyForMeasurement: false };
   let server, browser, closeBrowser, interrupted = false, interruptCleanup, sourceBefore;
   const signals = [], abort = new AbortController(), dependencyBefore = new Map();
   const interrupt = (signal) => {
@@ -231,6 +229,9 @@ export async function run(args) {
   const onInt = () => interrupt("SIGINT"), onTerm = () => interrupt("SIGTERM");
   process.on("SIGINT", onInt); process.on("SIGTERM", onTerm);
   try {
+    output.latestStable = readLatestStable();
+    for (const row of output.latestStable.candidates.filter((row) => row.status === "unsupported")) output.cells[row.app] = {
+      outcome: "unsupported", reason: row.reason, qualification: null, measurement: null, readyForMeasurement: false };
     await evidence.save("native/workload.json", config.workload);
     await evidence.save("native/build.json", output.builds);
     sourceBefore = await evidence.source("before"); provenance.commit = sourceBefore.commit;
@@ -283,7 +284,8 @@ export async function run(args) {
     }
     output.passed = output.selectedApps.every((app) => output.cells[app].outcome === "passed");
   } catch (error) {
-    output.failure = { reason: interrupted ? "native-runner-interrupted" : "runner-failed", name: error.name, diagnosticSha256: sha256(String(error)) };
+    output.failure = { reason: interrupted ? "native-runner-interrupted" : output.latestStable === null ? "candidate-policy-unavailable" : "runner-failed",
+      name: error.name, diagnosticSha256: sha256(String(error)) };
   } finally {
     try {
       await finishRun(output, config.out, { browser, server, closeBrowser, interruptCleanup, isInterrupted: () => interrupted, signals });

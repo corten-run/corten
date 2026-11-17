@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Preserve every client benchmark candidate's not-run record when policy input
+  is invalid or missing. Such attempts still fail before any native build.
+
 - Capture the benchmark validator's pinned semver library and committed tooling
   declaration before replay. Resolve its CommonJS imports only from those
   verified bytes, without reopening installed files or enabling package fallback.

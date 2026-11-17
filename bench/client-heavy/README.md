@@ -241,6 +241,10 @@ measurement even if an oracle reports a semantic pass. Terminal browser/server
 closure and received SIGINT/SIGTERM abort observations are saved separately.
 Synchronous native build interruption is not independently authenticated.
 
+Invalid or missing policy inputs stop before builds, but still save every selected
+app as not-run, the policy failure and cleanup evidence. They never qualify a
+candidate or reuse that attempt's output directory.
+
 Finalization writes every selected app file, including failed, unsupported and
 not-run cells. `collection.accounting: "complete"` means all six outcomes were
 retained, not that all succeeded. Unavailable measurements remain `null`.
