@@ -26,6 +26,7 @@ Corten is pre-1.0, so any minor version may change the API.
   on any-step bounds and `Bounds::any_step(0u32, 3)` do not compile. corten-ui's `NumberField`
   takes either kind of bounds; with any step it shows the number as it is and draws both buttons
   disabled. ui-gallery's listing has a discount, above 0 and below 100 percent with any decimals.
+
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
