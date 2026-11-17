@@ -1226,13 +1226,15 @@ const formProperty = (form, name) => Reflect.get(HTMLFormElement.prototype, name
 const formCall = (form, name, ...args) => /** @type {(...args: Parameters<HTMLFormElement[K]>) => unknown} */ (formProperty(form, name)).call(form, ...args);
 
 /**
- * Focuses `el` without scrolling to it. A form's `focus` goes through formCall, as a control may
- * shadow it; any other element's is its own, which for an SVG or MathML element is not
- * HTMLElement's (the one formCall would call, and which throws on them).
+ * Focuses `el`, without scrolling to it unless `scroll` (a field the server refused, which the
+ * user must see). A form's `focus` goes through formCall, as a control may shadow it; any other
+ * element's is its own, which for an SVG or MathML element is not HTMLElement's (the one formCall
+ * would call, and which throws on them).
  * @param {Element} el
+ * @param {boolean} [scroll]
  */
-const focusOn = (el) => {
-  const how = { preventScroll: true };
+const focusOn = (el, scroll = false) => {
+  const how = { preventScroll: !scroll };
   if (el instanceof HTMLFormElement) formCall(el, "focus", how);
   else /** @type {HTMLElement} */ (el).focus(how);
 };
@@ -2205,7 +2207,7 @@ function focusInvalid(form) {
   const active = document.activeElement;
   if (active && active !== document.body && (!home || !holds(home, active))) return;
   const field = (home && queryOne(home, '[aria-invalid="true"]')) ?? document.querySelector('main [aria-invalid="true"]');
-  if (field instanceof HTMLElement) focusOn(field);
+  if (field instanceof HTMLElement) focusOn(field, true);
 }
 
 /**

@@ -5721,8 +5721,8 @@ rules something out.
     Not chosen either: the runtime's record of the writes (the numbers, the undrawn and failed
     sets, `drew`) in a script module of its own, loaded before a page's first write is sent, as
     `upload.js` is for a form with progress, with only the calls to it in the runtime. Built with
-    the runtime's settings (esbuild and terser, gzip by Node's `zlib`), the runtime would be 44,961
-    bytes and 16,021 with gzip where it is 45,017 and 16,066, 45 less, and the module 490 and 326:
+    the runtime's settings (esbuild and terser, gzip by Node's `zlib`), the runtime would be 44,971
+    bytes and 16,029 with gzip where it is 45,027 and 16,074, 45 less, and the module 490 and 326:
     a page that writes would load 281 bytes more in all, and its first write would wait for one more
     script before it is sent: a module of Corten's own (`corten-upload.js`) imported cold from the
     watchlist over loopback takes a median of 10.3 ms in Chromium, 33 in Firefox and 22 in WebKit
@@ -5799,8 +5799,8 @@ rules something out.
     the head and the request's signal freed where before they leaked, `_int_free`, `free` and
     `malloc_consolidate` 4,253 more per request and `malloc` and `_int_malloc` 1,669 less
     (`callgrind_annotate`, each function's own instructions, 1,200 requests of each build), the
-    memory the leak took handed back. The runtime is 1,171 bytes larger raw and 454 with gzip
-    (15,612 to 16,066 at zlib's default level, against `main` at `27c29d7d2`), numbering the
+    memory the leak took handed back. The runtime is 1,181 bytes larger raw and 462 with gzip
+    (15,612 to 16,074 at zlib's default level, against `main` at `27c29d7d2`), numbering the
     writes a layout draws and which of them failed in view.
 
     Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`,

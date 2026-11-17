@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A field the server marked invalid in a `data-patch` form's answer is scrolled into view again as
+  the runtime focuses it; since the runtime read form members through the platform's prototypes
+  (the entry on controls named after DOM members), it was focused without scrolling, so a refused field below the fold was focused out of
+  sight.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
@@ -1100,7 +1104,7 @@ Corten is pre-1.0, so any minor version may change the API.
   takes about 31,300 where it took 22,900; one that answers patches alone (`HtmlResult<Patches>`)
   keeps none, about 25,900 where it took 23,532. A navigation takes 22,358 where it took 22,221, a whole
   document 53,072 where it took 52,782, a patch in an app without layout reads 23,269 where it took
-  22,752. The runtime is 454 bytes larger with gzip. A read an `Ahead` starts
+  22,752. The runtime is 462 bytes larger with gzip. A read an `Ahead` starts
   before the handler may not see the write. With two writes out at once, whichever page is drawn
   last may be older than the other write, a patch to a layout element included, so the next
   navigation reads the whole page; so does one after a write a navigation cut off before its
