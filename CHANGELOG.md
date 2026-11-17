@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- The watchlist smoke's first field change after a link now tests a same-shell page swap, with
+  the field module held back, rather than racing the scripts of a full document load.
+
 - Permit custody-only terminal retirement of the exact r21 lean catalog attempt
   if ordinary native collection refuses its failed evidence. Keep original raw
   failures, source/reservation/archive binding, live-job refusal, current ownership
