@@ -2520,6 +2520,28 @@ impl Req {
     /// # let _ = App::new(url::router()).router();
     /// ```
     ///
+    /// A shared answer keeps its inference: `Public` finds `HtmlResult<Patches>` from the call.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    /// use std::time::Duration;
+    ///
+    /// async fn shared(req: Req) -> Public<HtmlResult<Patches>> {
+    ///     Public::new(
+    ///         Duration::from_secs(60),
+    ///         req.patch_or_with(
+    ///             |action| async move { action.patch(html! { <p>"part"</p> }) },
+    ///             || async {
+    ///                 req.page(html! {
+    ///                     <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html>
+    ///                 })
+    ///             },
+    ///         )
+    ///         .await,
+    ///     )
+    /// }
+    /// ```
+    ///
     /// The part side answers the runtime's read, so a page there does not compile:
     ///
     /// ```compile_fail,E0271
