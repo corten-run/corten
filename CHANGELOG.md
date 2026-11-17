@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `serve_wrapped_with` carries a TLS handshake's value to each request as
+  `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
+  nothing to the document) and `Identify`. The existing serve paths carry no value;
+  connection limits, timeouts and shutdown still cover the handshake.
+
 - The watchlist smoke's first field change after a link now tests a same-shell page swap, with
   the field module held back, rather than racing the scripts of a full document load.
 

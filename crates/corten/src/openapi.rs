@@ -632,6 +632,11 @@ impl Argument for corten_feed::Since {
 
 impl<T> Argument for crate::extract::State<T> {}
 
+/// What the connection's handshake learned (a client certificate): the server's, not something
+/// the request carries, so it adds nothing to the document. An app that authenticates with it
+/// says so through its [`crate::Caller`] type.
+impl<T> Argument for crate::ConnectionInfo<T> {}
+
 /// What its caller type says: the header an API key is read from (an app's type implements
 /// [`Argument`], as a caller type of an API with a document must).
 impl<T: Argument> Argument for crate::Caller<T> {
@@ -1280,6 +1285,56 @@ mod tests {
 
     async fn sorted(Params(_): Params<unwritten::Sorted>) -> &'static str {
         "sorted"
+    }
+
+    #[crate::routes(api = InformedRoot, openapi = InformedDoc)]
+    mod informed {
+        #[route("/api")]
+        pub struct InformedRoot;
+
+        #[route("/api/openapi.json")]
+        pub struct InformedDoc;
+
+        #[route("/api/bare", get = bare)]
+        pub struct Bare;
+
+        #[route("/api/certified", get = certified)]
+        pub struct Certified;
+
+        #[route("/api/maybe", get = maybe)]
+        pub struct Maybe;
+    }
+
+    async fn bare() -> &'static str {
+        "bare"
+    }
+
+    async fn certified(_: crate::ConnectionInfo<u8>) -> &'static str {
+        "certified"
+    }
+
+    async fn maybe(_: Option<crate::ConnectionInfo<u8>>) -> &'static str {
+        "maybe"
+    }
+
+    /// A documented route may take a connection's handshake value, required or optional, and its
+    /// operation is the one a handler without it has: no parameter, body or credential (#1576
+    /// review).
+    #[tokio::test]
+    async fn a_connections_value_adds_nothing_to_the_document() {
+        let answer = App::new(Routes::new()).api(informed::api).test().get(&informed::InformedDoc).await;
+        assert_eq!(answer.status(), StatusCode::OK);
+        let doc: Value = serde_json::from_str(answer.text()).expect("the document is JSON");
+        let operation = |path: &str| {
+            let mut operation = doc["paths"][path]["get"].as_object().expect("the route is documented").clone();
+            operation.remove("operationId");
+            operation
+        };
+        let bare = operation("/api/bare");
+        assert!(["parameters", "requestBody", "security"].iter().all(|key| !bare.contains_key(*key)), "{bare:?}");
+        assert_eq!(operation("/api/certified"), bare);
+        assert_eq!(operation("/api/maybe"), bare);
+        assert!(doc["components"].get("securitySchemes").is_none(), "{}", doc["components"]);
     }
 
     /// Credentials two arguments check are both required; one argument's are either; an optional

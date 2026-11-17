@@ -750,6 +750,11 @@ A step that fails closes the connection, and shutdown ends the steps in progress
 the app's own that ran the handshake before `serve_on` saw the connection would have it outside
 both limits.
 
+When the step learns something the request needs, use `serve_wrapped_with`: it returns
+`(io, value)` and each request receives `ConnectionInfo<T>`. The value is cloned for each
+request, never read from a header. [Client certificates](deploy.md#client-certificates)
+shows mTLS and how `Identify` reads a verified certificate.
+
 An app behind a proxy that ends TLS needs none of this: `serve` is plain HTTP for the proxy
 ([Deploying](deploy.md) lists what the proxy must do).
 The proxy is also where HTTP/2 or HTTP/3 to browsers comes from (Corten speaks HTTP/1.1), which an
