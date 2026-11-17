@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Breaking: direct patch answers require `Some(action)` from `req.action()`, then
+  `action.patch(view)` or `action.patch_with_status(status, view)`. The unchecked
+  `Req::patch` and `Req::patch_with_status` methods are removed. `patch_or`, `invalid`
+  and `invalid_with` keep their APIs; the plain-request debug guard still covers
+  explicit mode overrides and raw marked responses.
+
 - Preserve type-token punctuation in `#[derive(Fields)]`, so group, row and key types
   written as paths compile, including keys of `#[fields(map)]` fields.
 

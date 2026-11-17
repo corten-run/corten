@@ -1092,9 +1092,9 @@ fn hinted(case: &'static str) -> Router {
     // A patch that redraws a hint alone, its control on the page; a row with both, unnamed.
     let patch = move |req: Req| async move {
         let answer: HtmlResult = if case == "hint alone" {
-            req.patch(html! { <p id={HintId(&QtyId)}>"3 left."</p> })
+            req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <p id={HintId(&QtyId)}>"3 left."</p> })
         } else {
-            req.patch(html! {
+            req.action().ok_or_else(crate::Error::not_found)?.patch(html! {
                 <div id={QtyRowId}>
                     <input id={QtyId}>
                     <p id={HintId(&QtyId)}>"From 1 to 5."</p>
@@ -1167,7 +1167,7 @@ async fn a_submit_key_with_no_value_outside_a_template_is_an_error_in_a_debug_bu
             }
         };
         let patch = move |req: Req| async move {
-            let answer: HtmlResult = req.patch(html! { <form id={MsgId} method="post">{field()}</form> });
+            let answer: HtmlResult = req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <form id={MsgId} method="post">{field()}</form> });
             answer
         };
         App::new(Routes::from(Table::new().route("/", get(page)).route("/patch", get(patch))))
@@ -3088,23 +3088,58 @@ async fn a_page_answering_a_post_to_a_path_with_no_get_is_sent_in_release_builds
     }
 }
 
+/// The direct builder is available only for Action, including a GET part read. It may borrow
+/// across a read's await, and after consuming it the request's mode is writable again.
+#[tokio::test]
+async fn a_direct_patch_requires_the_effective_action_mode() {
+    async fn checked(mut req: Req) -> HtmlResult {
+        if let Some(action) = req.action() {
+            tokio::task::yield_now().await;
+            let res = action.patch_with_status(StatusCode::ACCEPTED, html! { <p id={MsgId}>"queued"</p> })?;
+            req.mode = crate::Mode::Document;
+            assert!(req.action().is_none(), "the token does not outlive its effective mode");
+            return Ok(res);
+        }
+        req.redirect(&plain_patch_url::Or)
+    }
+    let routes = Table::new().route("/part", get(checked));
+    let router = App::new(Routes::from(routes)).router();
+    for (mode, request_headers) in [
+        (crate::Mode::Document, &[][..]),
+        (crate::Mode::Navigation, &[("corten", "nav")][..]),
+        (crate::Mode::Data, &[("accept", "application/json")][..]),
+        (crate::Mode::Action, &[("corten", "action")][..]),
+    ] {
+        let (status, headers, body) = plain_patch_send(&router, "GET", "/part", request_headers).await;
+        let action = mode == crate::Mode::Action;
+        assert_eq!(status, if action { StatusCode::ACCEPTED } else { StatusCode::SEE_OTHER }, "{mode:?}: {body}");
+        assert_eq!(headers.contains_key("corten-patch"), action, "{mode:?}: {headers:?}");
+        if action {
+            assert_eq!(body, r#"<p id="msg">queued</p>"#);
+        }
+    }
+}
+
 /// A write that answers a patch whatever asked, with a cookie, `Clear-Site-Data` and a header of
 /// the patch's own.
-async fn plain_patch_only(req: Req) -> HtmlResult {
-    let mut res = req.patch(html! { <p id={MsgId}>"saved"</p> })?;
+async fn plain_patch_only(mut req: Req) -> HtmlResult {
+    req.mode = crate::Mode::Action; // Deliberate override: the debug guard checks the original request.
+    let mut res = req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <p id={MsgId}>"saved"</p> })?;
     res.headers_mut().insert("clear-site-data", HeaderValue::from_static("\"cache\""));
     res.headers_mut().insert("x-drawn", HeaderValue::from_static("saved"));
     Ok(res.with_cookie(SetCookie::new("saved", "1")))
 }
 
 /// The same, read from a route with a parameter.
-async fn plain_patch_item(req: Req, Params(_): Params<plain_patch_url::Item>) -> HtmlResult {
-    req.patch(html! { <p id={MsgId}>"item"</p> })
+async fn plain_patch_item(Params(_): Params<plain_patch_url::Item>) -> HtmlResult {
+    // A raw response is outside the checked builder, but still reaches the debug guard.
+    Ok(HtmlResponse::new(([("content-type", "text/html; charset=utf-8"), ("corten-patch", "1")], r#"<p id="msg">item</p>"#).into_response()))
 }
 
 /// A refusal answered as a patch whatever asked.
-async fn plain_patch_refused(req: Req) -> HtmlResult {
-    req.patch_with_status(StatusCode::UNPROCESSABLE_ENTITY, html! { <p id={MsgId}>"refused"</p> })
+async fn plain_patch_refused(mut req: Req) -> HtmlResult {
+    req.mode = crate::Mode::Action; // A checked builder cannot detect this override.
+    req.action().ok_or_else(crate::Error::not_found)?.patch_with_status(StatusCode::UNPROCESSABLE_ENTITY, html! { <p id={MsgId}>"refused"</p> })
 }
 
 /// The patch for the runtime, the page otherwise.
@@ -3122,8 +3157,8 @@ async fn plain_patch_relayed() -> crate::Result<crate::Relay> {
 
 /// A patch of its own status for the runtime, checked by the handler, and a redirect otherwise.
 async fn plain_patch_moded(req: Req) -> HtmlResult {
-    if req.mode == crate::Mode::Action {
-        return req.patch_with_status(StatusCode::ACCEPTED, html! { <p id={MsgId}>"queued"</p> });
+    if let Some(action) = req.action() {
+        return action.patch_with_status(StatusCode::ACCEPTED, html! { <p id={MsgId}>"queued"</p> });
     }
     req.redirect(&plain_patch_url::Or)
 }
@@ -3197,7 +3232,7 @@ async fn a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds(
         body.contains("plain POST to /note (no data-patch, asking for HTML) was answered with a patch"),
         "it names the route outside dev too: {body}"
     );
-    assert!(body.contains("req.patch_or") && body.contains("req.mode == Mode::Action"), "and what to answer instead: {body}");
+    assert!(body.contains("req.patch_or") && body.contains("req.action()"), "and what to answer instead: {body}");
     assert!(!headers.contains_key("corten-patch"), "the error page, not the patch: {headers:?}");
     let cookies: Vec<_> = headers.get_all("set-cookie").iter().map(|c| c.to_str().unwrap()).collect();
     assert!(cookies.iter().any(|c| c.starts_with("saved=1;")), "the handler's cookie is kept: {cookies:?}");
@@ -5463,19 +5498,19 @@ fn what_a_patch_costs() {
     let requests: usize = std::env::var("PATCH_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
     let kind = std::env::var("PATCH_KIND").unwrap_or_else(|_| "component".to_string());
     async fn note(req: Req) -> HtmlResult {
-        req.patch(CostNote {})
+        req.action().ok_or_else(crate::Error::not_found)?.patch(CostNote {})
     }
     async fn bare(req: Req) -> HtmlResult {
-        req.patch(html! { <p id={CostNoteId}>"Saved"</p> })
+        req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <p id={CostNoteId}>"Saved"</p> })
     }
     async fn list(req: Req) -> HtmlResult {
-        req.patch(CostList {})
+        req.action().ok_or_else(crate::Error::not_found)?.patch(CostList {})
     }
     async fn remove(req: Req) -> HtmlResult {
-        req.patch(crate::view::Remove(CostNoteId))
+        req.action().ok_or_else(crate::Error::not_found)?.patch(crate::view::Remove(CostNoteId))
     }
     async fn bare_list(req: Req) -> HtmlResult {
-        req.patch(html! {
+        req.action().ok_or_else(crate::Error::not_found)?.patch(html! {
             <ul id={CostListId}>
                 for n in 0..100u32 {
                     <li>"Row "{n}" of the list a patch sends"</li>
@@ -5543,7 +5578,7 @@ fn what_a_patch_in_an_area_costs() {
     let requests: usize = std::env::var("PATCH_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
     let at = std::env::var("PATCH_WHERE").unwrap_or_else(|_| "plain".to_string());
     async fn cost_patch(req: Req) -> HtmlResult {
-        req.patch(CostNote {})
+        req.action().ok_or_else(crate::Error::not_found)?.patch(CostNote {})
     }
     // The styled component in the area, or in the app's one stylesheet, which no patch links.
     let (shared, listed): (&'static [crate::Component], &'static [crate::Component]) =
@@ -13166,7 +13201,7 @@ async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
             .route(
                 "/patch",
                 get(|req: Req| async move {
-                    let answer: HtmlResult = req.patch(html! { <p id={QtyId}>"3 left."</p> });
+                    let answer: HtmlResult = req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <p id={QtyId}>"3 left."</p> });
                     answer
                 }),
             ),
@@ -13584,7 +13619,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         req.test_page("Keyed", html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
     }
     async fn keyed_patch(req: Req) -> HtmlResult {
-        req.patch(html! { <form id={MsgId} method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
+        req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <form id={MsgId} method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> })
     }
     async fn keyed_rendered(req: Req) -> HtmlResult {
         let form = req.rendered(html! { <form method="post">{crate::SubmitKey::field(KeyedWrite::FIELDS.submit)}</form> });
@@ -13600,7 +13635,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         )
     }
     async fn plain_patch(req: Req) -> HtmlResult {
-        req.patch(html! { <p id={MsgId}>"read again"</p> })
+        req.action().ok_or_else(crate::Error::not_found)?.patch(html! { <p id={MsgId}>"read again"</p> })
     }
     fn html(extra: &[(&'static str, &'static str)]) -> crate::response::Response {
         use crate::response::IntoResponse;
@@ -15665,7 +15700,7 @@ mod layout_reads {
     #[tokio::test(start_paused = true)]
     async fn a_place_in_a_patch_is_an_error_and_one_never_written_draws_nothing() {
         let routes =
-            Table::new().route("/patch", get(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(PatchBadge {}) })).route(
+            Table::new().route("/patch", get(|req: Req| async move { req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(PatchBadge {}) })).route(
                 "/dropped",
                 get(|req: Req| async move {
                     req.page::<ForOne>(html! {

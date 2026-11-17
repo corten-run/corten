@@ -46,7 +46,10 @@ These are what the framework is built around. Code that breaks them fights the f
    have go to the server. Do not default to a server patch for something the browser can do.
 5. **Pages and actions work without JavaScript.** Links are links, and forms post and get the
    whole page back. A handler that makes a server action instant keeps the form that does it
-   without; a feature only a browser can provide (drag and drop, a canvas) needs JavaScript.
+   without. Direct patches require `Some(action)` from `req.action()`, then
+   `action.patch(view)` or `action.patch_with_status(status, view)`; otherwise return a page
+   or redirect. Prefer `req.patch_or(view, page)` when no custom branch is needed. Never
+   unwrap `req.action()` to avoid writing a fallback; a feature only a browser can provide (drag and drop, a canvas) needs JavaScript.
 6. **Cleanup is `signal`.** A handler that takes `signal` gets an `AbortSignal` that aborts
    when its element leaves the page; pass it to `addEventListener`, `fetch`, `subscribe` and
    `mount`. On the server, spawned work watches `req.signal()`, and a handler that claims

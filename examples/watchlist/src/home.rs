@@ -388,18 +388,19 @@ async fn not_listed(req: &Req, viewer: Option<&Viewer>, market: &Market, watchin
 /// (`not_listed`). The patch leaves the picks as they are, so until the page is read again they
 /// can still name a stock just watched.
 fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut Watching, message: String) -> HtmlResult {
-    if !matches!(req.mode, Mode::Action | Mode::Data) {
-        return Ok(watching.with_cookie(req.redirect_with_notice(&url::Home::default(), message)?));
+    if let Some(action) = req.action() {
+        let home = Home::new(market, watching, message, None);
+        let res = action.patch(html! {
+            <LivePrices stocks={&home.stocks} t={req.t()} />
+            <WatchForm others={&home.others} message={&home.message} notice={None} />
+        })?;
+        return Ok(watching.with_cookie(res));
     }
-    let home = Home::new(market, watching, message, None);
     if req.mode == Mode::Data {
+        let home = Home::new(market, watching, message, None);
         return home_screen(req, viewer, watching, &home);
     }
-    let res = req.patch(html! {
-        <LivePrices stocks={&home.stocks} t={req.t()} />
-        <WatchForm others={&home.others} message={&home.message} notice={None} />
-    })?;
-    Ok(watching.with_cookie(res))
+    Ok(watching.with_cookie(req.redirect_with_notice(&url::Home::default(), message)?))
 }
 
 #[cfg(test)]

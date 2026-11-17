@@ -272,7 +272,7 @@ impl<A: sealed::PatchAnswer> KindOf<A> for Patches {
 pub enum NotAFeed {}
 
 /// A page, a patch or a redirect, as a whole response (status and headers too): what
-/// [`Req::page`], [`Req::patch`] and [`Req::redirect`] give. A cookie is
+/// [`Req::page`], [`Action::patch`](crate::Action::patch) and [`Req::redirect`] give. A cookie is
 /// [`HtmlResponse::with_cookie`]; it derefs to the response for any other header of the
 /// handler's own (`res.headers_mut().insert(..)`).
 ///
@@ -320,7 +320,7 @@ pub struct ForAll;
 /// struct PartId;
 ///
 /// async fn part(req: Req) -> corten::Result<impl Answer<Inputs = AnyInputs>> {
-///     req.patch::<ForOne, AnyAnswer>(html! { <p id={PartId}>"Saved"</p> })
+///     req.action().ok_or_else(corten::Error::not_found)?.patch::<ForOne, AnyAnswer>(html! { <p id={PartId}>"Saved"</p> })
 /// }
 ///
 /// async fn either(req: Req) -> corten::Result<impl Answer<Inputs = AnyInputs>> {
@@ -364,7 +364,7 @@ pub struct AnyAnswer;
 
 /// An answer that is a patch whenever the runtime asked ([`crate::Mode::Action`]), and the page
 /// or a redirect only without JavaScript: `HtmlResult<Patches>`, which only
-/// [`Req::patch`](crate::Req::patch), [`Req::patch_with_status`](crate::Req::patch_with_status),
+/// [`Action::patch`](crate::Action::patch), [`Action::patch_with_status`](crate::Action::patch_with_status),
 /// [`Req::patch_or`](crate::Req::patch_or), [`Req::invalid`](crate::Req::invalid) and
 /// [`Req::invalid_with`](crate::Req::invalid_with) make. It is what the `get` handler of a
 /// route that says `patches` returns, so the handler's answer to the runtime's read of a part of
@@ -440,8 +440,8 @@ pub trait ScreenKind<U: ?Sized>: sealed::Kind {}
 impl<U: ?Sized> ScreenKind<U> for AnyAnswer {}
 impl<T: ?Sized, U: ?Sized + sealed::DataOf<T>> ScreenKind<U> for Screen<T> {}
 
-/// The kinds the `Req` methods that answer a patch make ([`Req::patch`](crate::Req::patch),
-/// [`Req::patch_with_status`](crate::Req::patch_with_status), [`Req::patch_or`](crate::Req::patch_or),
+/// The kinds the methods that answer a patch make ([`Action::patch`](crate::Action::patch),
+/// [`Action::patch_with_status`](crate::Action::patch_with_status), [`Req::patch_or`](crate::Req::patch_or),
 /// [`Req::invalid`](crate::Req::invalid), [`Req::invalid_with`](crate::Req::invalid_with)):
 /// [`AnyAnswer`] and [`Patches`]. Not [`Screen<T>`], which only `Req::screen`, given a `T`,
 /// makes: a patch, a redirect or another value's screen in `patch_or`'s other side would answer
@@ -459,10 +459,10 @@ impl<T: ?Sized, U: ?Sized + sealed::DataOf<T>> ScreenKind<U> for Screen<T> {}
 /// struct PartId;
 ///
 /// async fn patch(req: Req) -> HtmlResult {
-///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+///     req.action().ok_or_else(corten::Error::not_found)?.patch(html! { <p id={PartId}>"Saved"</p> })
 /// }
 /// async fn patch_with_status(req: Req) -> HtmlResult {
-///     req.patch_with_status(corten::http::StatusCode::ACCEPTED, html! { <p id={PartId}>"Saved"</p> })
+///     req.action().ok_or_else(corten::Error::not_found)?.patch_with_status(corten::http::StatusCode::ACCEPTED, html! { <p id={PartId}>"Saved"</p> })
 /// }
 /// async fn patch_or(req: Req) -> HtmlResult {
 ///     let order = Order { id: "7".into() };
@@ -500,7 +500,7 @@ impl<T: ?Sized, U: ?Sized + sealed::DataOf<T>> ScreenKind<U> for Screen<T> {}
 /// struct PartId;
 ///
 /// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
-///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+///     req.action().ok_or_else(corten::Error::not_found)?.patch(html! { <p id={PartId}>"Saved"</p> })
 /// }
 /// ```
 ///
@@ -518,7 +518,7 @@ impl<T: ?Sized, U: ?Sized + sealed::DataOf<T>> ScreenKind<U> for Screen<T> {}
 /// struct PartId;
 ///
 /// async fn set(req: Req) -> HtmlResult<corten::Screen<SetListing>> {
-///     req.patch_with_status(corten::http::StatusCode::ACCEPTED, html! { <p id={PartId}>"Saved"</p> })
+///     req.action().ok_or_else(corten::Error::not_found)?.patch_with_status(corten::http::StatusCode::ACCEPTED, html! { <p id={PartId}>"Saved"</p> })
 /// }
 /// ```
 ///
@@ -612,12 +612,12 @@ impl<T: ?Sized, U: ?Sized + sealed::DataOf<T>> ScreenKind<U> for Screen<T> {}
 /// #[derive(Id)]
 /// struct PartId;
 ///
-/// fn saved<K: PatchingKind>(req: &Req) -> corten::Result<HtmlResponse<ForOne, K>> {
-///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+/// fn saved<K: PatchingKind>(action: Action<'_>) -> corten::Result<HtmlResponse<ForOne, K>> {
+///     action.patch(html! { <p id={PartId}>"Saved"</p> })
 /// }
 ///
 /// async fn save(req: Req) -> HtmlResult<Patches> {
-///     saved(&req)
+///     saved(req.action().ok_or_else(corten::Error::not_found)?)
 /// }
 /// ```
 ///
@@ -629,12 +629,12 @@ impl<T: ?Sized, U: ?Sized + sealed::DataOf<T>> ScreenKind<U> for Screen<T> {}
 /// #[derive(Id)]
 /// struct PartId;
 ///
-/// fn saved<K: AnswerKind>(req: &Req) -> corten::Result<HtmlResponse<ForOne, K>> {
-///     req.patch(html! { <p id={PartId}>"Saved"</p> })
+/// fn saved<K: AnswerKind>(action: Action<'_>) -> corten::Result<HtmlResponse<ForOne, K>> {
+///     action.patch(html! { <p id={PartId}>"Saved"</p> })
 /// }
 /// ```
 #[diagnostic::on_unimplemented(
-    message = "a patch-making `Req` method cannot answer as `{Self}`: only req.screen, given the route's data, makes a `Screen<..>`",
+    message = "a patch-making method cannot answer as `{Self}`: only req.screen, given the route's data, makes a `Screen<..>`",
     label = "this answer is said to be `{Self}`",
     note = "answer the data with req.screen(&data, page), or return `HtmlResult` (or `HtmlResult<Patches>`) from a handler whose route does not say `data`"
 )]
@@ -698,7 +698,7 @@ pub(crate) mod sealed {
     #[diagnostic::on_unimplemented(
         message = "`{Self}` cannot say `Kind = Patches`: only Corten's patch answers can",
         label = "this answer says `Kind = Patches`",
-        note = "only `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), which req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, is a patch whenever the runtime asked; an answer type of the app's own says `type Kind = AnyAnswer;`"
+        note = "only `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), which action.patch, action.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, is a patch whenever the runtime asked; an answer type of the app's own says `type Kind = AnyAnswer;`"
     )]
     pub trait PatchAnswer {}
     impl<For> PatchAnswer for HtmlResponse<For, Patches> {}
@@ -713,7 +713,7 @@ pub(crate) mod sealed {
     #[diagnostic::on_unimplemented(
         message = "the route says `patches`, and its get handler's answer may answer the runtime's read with a page or a redirect (its kind is `{Self}`, not `Patches`)",
         label = "this handler",
-        note = "return `HtmlResult<Patches>`, which only req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
+        note = "return `HtmlResult<Patches>`, which only action.patch, action.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
     )]
     pub trait PatchKind {}
     impl PatchKind for Patches {}
@@ -890,7 +890,7 @@ pub trait ForEveryone: IntoResponse {
     fn for_all(self) -> <Self::Named as Shareable>::ForAll;
 }
 
-// One impl for every `Kind`, so `Public::new(age, req.patch(..))` finds its `For` and `Kind` from
+// One impl for every `Kind`, so `Public::new(age, action.patch(..))` finds its `For` and `Kind` from
 // the handler's `Public<HtmlResult>` (or `Public<HtmlResult<Patches>>`): with one impl per kind,
 // `For` stays open and the call needs a turbofish.
 impl<Kind> ForEveryone for HtmlResponse<ForAll, Kind>
@@ -1960,7 +1960,7 @@ impl<A: Shareable> Public<A> {
     /// # let _: Methods = get(home);
     /// ```
     ///
-    /// A public answer may be a patch, and `Public::new` finds its type around `req.patch` and
+    /// A public answer may be a patch, and `Public::new` finds its type around `action.patch` and
     /// `req.patch_or` as around `req.page`, with no turbofish, for a `Public<HtmlResult>` and for
     /// the `Public<HtmlResult<Patches>>` of a route that says `patches`
     /// ([`Patches`](crate::Patches)):
@@ -1989,7 +1989,11 @@ impl<A: Shareable> Public<A> {
     /// }
     ///
     /// async fn price(req: Req) -> Public<HtmlResult> {
-    ///     Public::new(Duration::from_secs(60), req.patch(html! { <p id={PriceId}>"$12"</p> }))
+    ///     let answer = match req.action() {
+    ///         Some(action) => action.patch(html! { <p id={PriceId}>"$12"</p> }),
+    ///         None => page(&req),
+    ///     };
+    ///     Public::new(Duration::from_secs(60), answer)
     /// }
     ///
     /// async fn quote(req: Req) -> Public<HtmlResult> {

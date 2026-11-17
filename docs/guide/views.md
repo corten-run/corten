@@ -261,7 +261,7 @@ keeps an unknown URL a scanner asks for as cheap as before. For any other failur
 refused before anything runs) it starts none and waits for none: it draws a value only if its read is
 in by the time the page is drawn, since what made the request fail (a database that is down) is
 likely what the read needs too. A patch or a live fragment is not a page and fills no place: pass it the
-value instead (`req.patch(Badge { count })` in `Mode::Action`). A `later` whose `to_html()` string the page never
+value instead (`action.patch(Badge { count })` with `action` from `req.action()`). A `later` whose `to_html()` string the page never
 writes draws nothing and is no error, and the page does not wait for its read. In a debug build, a
 `later` for a read the app does not start, one inside `<main>` (which a navigation would not fill),
 one in a patch, one rendered as text or whose `to_html()` string is placed twice, or one on a page
@@ -379,9 +379,9 @@ fn CartBadge(count: Option<u32>) -> impl Patch {
 
 async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> HtmlResult {
     carts.add(&viewer, ..).await?;
-    if req.mode == Mode::Action {
+    if let Some(action) = req.action() {
         let count = carts.count(&viewer).await;
-        return req.patch(CartBadge { count: Some(count) });
+        return action.patch(CartBadge { count: Some(count) });
     }
     req.redirect(&url::Cart)
 }
@@ -481,7 +481,7 @@ html! {
     <p>{t.item_show_all_offers(item.offers.len())}</p>
     <li id={OfferId(&offer.id)}>{offer.seller}</li>                         // a patch's target
 }
-req.patch(html! { {Remove(OfferId(&sold.id))} })                             // the same id, in Mode::Action
+action.patch(html! { {Remove(OfferId(&sold.id))} })                             // the same id, in Mode::Action
 ```
 
 | What | Fails to compile when |

@@ -728,8 +728,8 @@ pub use corten_macros::UrlValue;
 ///
 /// A route a part of a page is read again from ([`crate::ReadAgain::from`]) says `patches`: the
 /// runtime reads it with `corten: action` and can apply nothing but a patch, so its `get`
-/// handler returns `HtmlResult<Patches>` ([`crate::Patches`]), which only `req.patch`,
-/// `req.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make, and the
+/// handler returns `HtmlResult<Patches>` ([`crate::Patches`]), which only `action.patch`,
+/// `action.patch_with_status`, `req.patch_or`, `req.invalid` and `req.invalid_with` make, and the
 /// route is then one `ReadAgain::from` takes ([`PatchRoute`]):
 ///
 /// ```
@@ -790,7 +790,7 @@ pub use corten_macros::UrlValue;
 /// }
 ///
 /// async fn save(req: Req) -> HtmlResult<Patches> {
-///     req.patch(html! {})
+///     req.action().ok_or_else(corten::Error::not_found)?.patch(html! {})
 /// }
 /// # fn main() { let _ = url::router(); }
 /// ```
@@ -822,7 +822,7 @@ pub use corten_macros::UrlValue;
 /// }
 ///
 /// async fn alerts(req: Req) -> HtmlResult<Patches> {
-///     req.patch(html! {})
+///     req.action().ok_or_else(corten::Error::not_found)?.patch(html! {})
 /// }
 /// # fn main() { let _ = url::router(); }
 /// ```
@@ -1706,7 +1706,10 @@ pub struct HasData<T: ?Sized>(std::marker::PhantomData<fn(&T)>);
 /// }
 ///
 /// async fn alerts(req: Req) -> Mine {
-///     Mine(req.patch(html! { <ul id={ListId}></ul> }))
+///     Mine(match req.action() {
+///         Some(action) => action.patch(html! { <ul id={ListId}></ul> }),
+///         None => Err(corten::Error::not_found()),
+///     })
 /// }
 ///
 /// fn main() {

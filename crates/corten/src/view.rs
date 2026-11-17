@@ -1137,7 +1137,7 @@ impl<T: Id, V: Render> Render for Append<T, V> {
     }
 }
 
-/// What a `<form data-patch>` answer sends ([`crate::Req::patch`]): elements the runtime puts in
+/// What a `<form data-patch>` answer sends ([`crate::Action::patch`]): elements the runtime puts in
 /// place of the page's elements with the same ids. An element without an id would be dropped in
 /// the browser, so a view is a patch only when the compiler can see that each of its top-level
 /// elements has one:

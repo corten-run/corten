@@ -46,13 +46,18 @@ a path of its own. Either answers `req.redirect` or `req.redirect_with_notice` o
 draws a page only to refuse (`req.invalid`); a page with named posts gives every form an
 `action`. A debug build answers 500 to a successful page drawn at a path with no `GET`, to a
 page with named posts drawn at a `do` address with a post form that has no `action`, and to a
-patch answering a browser's plain request (no `data-patch`): never call `req.patch` without
-`req.mode == Mode::Action` around it, or use `req.patch_or`. A post's
+patch answering a browser's plain request (no `data-patch`). Direct builders require
+`if let Some(action) = req.action() { return action.patch(view); }` (or
+`action.patch_with_status(status, view)`), with a page or redirect otherwise; unchecked
+`req.patch` and `req.patch_with_status` do not exist. Prefer `req.patch_or` for the usual case.
+`Action` borrows the request, has no public constructor, cannot be cloned or copied, and
+consumes itself. It checks the effective mode, including an app override; the debug guard
+still catches a marked patch built through an override or raw response. A post's
 address is the view the page was drawn at; a tab that changes the address in the browser rewrites
 no form, so send such a tab as a field if a write must follow it.
 
 A patch may hold several top-level elements; each replaces the element with the same `id`, so
-each needs one, a `#[derive(Id)]` type: `req.patch` and `req.invalid` take a `Patch`, and a view
+each needs one, a `#[derive(Id)]` type: `action.patch` and `req.invalid` take a `Patch`, and a view
 whose top level has text, an element without an id or an id written as text does not compile. A
 component a patch sends is rooted at the element with the id and declared `-> impl Patch`. Fields
 the user edited (after the form was sent), the files chosen in a file input (until a successful
