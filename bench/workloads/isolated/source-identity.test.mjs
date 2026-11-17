@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,6 +14,7 @@ test("private replacement refs plus hidden matching working bytes cannot bind an
     // Replacement refs are repository-wide: never create them in a shared worktree.
     git(["clone", "--shared", "--no-checkout", "--no-hardlinks", repo, checkout]);
     execFileSync("git", ["checkout", "--detach", git(["rev-parse", "HEAD"])], { cwd: checkout, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    cpSync(join(repo, "node_modules/semver"), join(checkout, "node_modules/semver"), { recursive: true, errorOnExist: true, force: false });
     const output = execFileSync(process.execPath, ["--input-type=module", "-e", `
       import fs from 'node:fs'; import cp from 'node:child_process'; import crypto from 'node:crypto';
       import {bindExecution,validateBinding} from './bench/workloads/isolated/contract.mjs';
