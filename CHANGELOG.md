@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
+  Trusted Types enforcement would reject. The scripts guide shows how to read a part again
+  with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
+
 - The watchlist smoke's check that a submit which waited for a write the network failed is not
   sent holds that write until the newer press is made, and presses both buttons in the page, where
   it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the

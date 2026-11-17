@@ -4,7 +4,7 @@
 // Handler parameters need nothing here: the Rust markup's calls are checked against each
 // handler's JSDoc when the crate compiles. What crosses into scripts as JSON or as an event is
 // declared from the Rust types in examples/*/types/app.d.ts.
-import { keep, subscribe } from "corten";
+import { keep, patch, subscribe } from "corten";
 import { shortcut } from "corten/keys";
 import { read, ReadError } from "corten/read";
 import { field } from "../crates/corten/js/field.js";
@@ -19,6 +19,14 @@ import { register } from "corten";
 /** @typedef {import("../examples/watchlist/types/app").Stock} Stock Generated from the Rust struct. */
 /** @typedef {import("../examples/seller-desk/types/app").Level} Level Generated from the Rust struct. */
 /** @import { FeedUrl } from "corten" */
+
+/** @param {import("corten").TrustedHTML} html @param {AbortSignal} signal */
+export async function patchHTML(html, signal) {
+  await patch(html);
+  await patch(html, signal);
+  // @ts-expect-error Pages require TrustedHTML: a script's string is refused by the browser.
+  await patch("<p id=\"status\">Updated</p>");
+}
 
 /** @param {AbortSignal} signal @param {FeedUrl<Stock>} stocks */
 export function connect(signal, stocks) {
