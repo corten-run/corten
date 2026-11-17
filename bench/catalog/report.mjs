@@ -50,6 +50,7 @@ export function inspectCatalog(summary, expectedCommit) {
   assert.ok(Array.isArray(summary.failures) && Array.isArray(summary.cleanupFailures), "missing failure records");
   const group = inspectGroupEvidence(summary, phases, aggregate);
   const timed = summary.savedEvidence?.schema === "catalog-saved-evidence/v3";
+  assert.ok(!timed || group?.descriptor.group === "catalog-page", "timed catalog reporting requires --group catalog-page");
   const expectedApps = group?.descriptor.apps ?? inventory;
   const reportKeys = group?.keys ?? keys;
   const warnings = [...(group?.warnings ?? [])];

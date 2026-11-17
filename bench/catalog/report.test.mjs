@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { allApps } from "../fullstack/apps.mjs";
+import { aggregate, phases } from "./contract.mjs";
+import { groupDescriptor, groupResultSchema, qualificationIdentity } from "./group.mjs";
 import { records } from "./fixtures.mjs";
 import { inspectCatalog, renderCatalog } from "./report.mjs";
 
@@ -36,6 +43,90 @@ test("historical catalog validation does not acquire group-only provenance or ag
   s.dirtyAfter = true;
   assert.equal(inspectCatalog(s).baseline, true, "optional new fields do not change legacy validation");
 });
+// Summary-only synthetic fixtures, not raw evidence or native measurements.
+function timedResult(grouped, failed) {
+  const s = result(), group = groupDescriptor("catalog-page"), imageId = `sha256:${"b".repeat(64)}`;
+  s.savedEvidence = { schema: "catalog-saved-evidence/v3", fixtureSha256: s.fixtureSha256 };
+  s.attemptComplete = true; s.targetFailures = [];
+  if (grouped) {
+    s.schema = groupResultSchema; s.group = group; s.options.group = "catalog-page"; s.options.apps = group.apps;
+    s.options.startupTimeout = 30; s.commitAfter = s.commit; s.dirtyAfter = false;
+    s.apps = Object.fromEntries(group.apps.map((app) => [app, s.apps[app]]));
+  }
+  for (const [app, entry] of Object.entries(s.apps)) {
+    entry.phases = {};
+    if (grouped) {
+      entry.imageId = imageId;
+      for (const source of group.sources) entry.checks[source].qualification = qualificationIdentity(group, app, source, imageId);
+      entry.runs = Object.fromEntries(group.cases.map(({ source, target }) => [`${source}-${target}`, entry.runs[`${source}-${target}`]]));
+    }
+    for (const [key, runs] of Object.entries(entry.runs)) {
+      for (const run of runs) {
+        const phase = { ...run.phases.sat64, outcome: "passed", requests: 100, successfulRequests: 100,
+          successfulRps: run.phases.sat64.rps, timeouts: 0, httpErrors: 0, p50: 1, p99: 3, cpuUsec: 60000000, memAvgMiB: 8 };
+        run.phases = Object.fromEntries(phases.map((p) => [p, structuredClone(phase)]));
+        run.warmup = structuredClone(phase); run.outcome = "passed";
+        if (grouped) {
+          run.evidence = { app, ...group.cases.find(({ source, target }) => key === `${source}-${target}`), imageId };
+          run.cold = { path: "/catalog/record_1", containerStartedAt: s.startedAt, first200At: "2026-11-07T16:00:00.200Z",
+            first200MsFromContainerStart: 200, measuredBeforeReadinessOrWarmup: true, attempts: 2, bytes: 1000, successfulRequestMs: 2 };
+        }
+        if (failed && app === "corten" && key === "fixture-page" && run.pass === 1) {
+          Object.assign(run.phases.sat64, { outcome: "failed", failed: 1, timeouts: 1, successfulRequests: 99, successfulRps: phase.rps * 99 / 100 });
+          run.outcome = "failed";
+          s.targetFailures.push({ app, source: "fixture", target: "page", pass: 1, phase: "sat64", failed: 1, timeouts: 1, httpErrors: 0, dropped: 0 });
+          s.complete = false;
+        }
+      }
+      entry.phases[key] = Object.fromEntries(phases.map((p) => [p, { ...aggregate(runs.map((r) => r.phases[p])), asked: s.options.passes }]));
+    }
+  }
+  return s;
+}
+
+function strictReport(summary) {
+  const folder = mkdtempSync(join(tmpdir(), "catalog-report-scope-")), path = join(folder, "summary.json");
+  const bytes = JSON.stringify(summary);
+  try {
+    writeFileSync(path, bytes);
+    const cli = spawnSync(process.execPath, ["--max-old-space-size=384", fileURLToPath(new URL("./report.mjs", import.meta.url)),
+      path, "--commit", summary.commit, "--require-complete"], { encoding: "utf8" });
+    assert.equal(cli.error, undefined); assert.equal(cli.signal, null);
+    assert.equal(readFileSync(path, "utf8"), bytes, "reporting must not rewrite its input");
+    return cli;
+  } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
+}
+
+test("supported grouped v3 summaries preserve successful and failed dispositions through strict CLI", () => {
+  for (const failed of [false, true]) {
+    const s = timedResult(true, failed), report = inspectCatalog(s, s.commit), cli = strictReport(s);
+    assert.equal(report.baseline, !failed); assert.equal(report.attemptComplete, true);
+    assert.equal(report.timedCells.find((c) => c.app === "corten" && c.profile === "fixture-page" && c.phase === "sat64").outcomes.failed, failed ? 1 : 0);
+    assert.equal(cli.status, failed ? 1 : 0); assert.equal(cli.stderr, "");
+    assert.match(cli.stdout, failed ? /COMPLETE ATTEMPT: observed load\/request failure; not a baseline/ : /\*\*COMPLETE\*\*/);
+  }
+});
+
+for (const failed of [false, true]) for (const scope of ["absent", "legacy schema", "unsupported"]) {
+  const input = () => {
+    const s = timedResult(false, failed);
+    // Preserve the contradictory flags from the reviewed reproduction.
+    s.complete = true; s.targetFailures = [];
+    if (scope === "legacy schema") s.schema = "catalog-results/v1";
+    if (scope === "unsupported") { s.schema = groupResultSchema; s.options.group = "json-api"; }
+    return s;
+  };
+  test(`v3 ${failed ? "failed" : "successful"} summary rejects ${scope} group scope`, () => {
+    const s = input(), before = structuredClone(s);
+    assert.throws(() => inspectCatalog(s, s.commit), /catalog-page/);
+    assert.deepEqual(s, before);
+  });
+  test(`strict CLI refuses v3 ${failed ? "failed" : "successful"} summary with ${scope} group scope`, () => {
+    const cli = strictReport(input());
+    assert.equal(cli.status, 1); assert.match(cli.stderr, /catalog-page/); assert.equal(cli.stdout, "");
+  });
+}
+
 test("unfinished, failed, dirty, check-only, missing checks and subset runs are never baselines", () => {
   for (const change of [
     (s) => { delete s.finishedAt; s.complete = false; },
