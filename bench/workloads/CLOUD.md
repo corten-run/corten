@@ -659,8 +659,13 @@ code. `cloud-validation-snapshot.mjs` reads its fixed project-module closure fro
 immutable Git blobs at the approved installed commit, with bounded no-lazy-fetch
 reads. The closure includes the observer's durable writer; transitive observer
 imports use those captured bytes under the same deny-unlisted loader.
-The fixed TypeScript bundle is captured once and checked against its pinned
-package hash. The nested worker executes captured entry bytes and installs a
+The fixed TypeScript bundle and the semver library are captured once and checked
+against their pinned package-file hashes. Semver's exact tooling declaration and
+npm archive integrity must also match the installed commit's manifest and lock.
+Its extensionless CommonJS imports resolve only within the captured library;
+the CLI, preload entry and unlisted files cannot execute. This adds no package
+resolver or filesystem fallback and retains the existing source-count limit.
+The nested worker executes captured entry bytes and installs a
 deny-unlisted loader before project or package code evaluates; it never reopens
 mutable executable paths or falls back to a package loader. The snapshot helper is
 also part of the outer controller/fleet approval closure. Its API remains exactly:

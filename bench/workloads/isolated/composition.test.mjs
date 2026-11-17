@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { composePhase } from "./composition.mjs";
-import { latestStableSchema } from "../latest-stable.mjs";
+import { latestStableSchema, candidateLatestStableSchema, unsupportedSolidReason } from "../latest-stable.mjs";
+import { readLatestStable } from "../../client-heavy/build.mjs";
 const policy = (group, status = "not-applicable") => ({ schema: latestStableSchema, group, valid: true, status, groupComparisonEligible: status === "not-applicable" ? null : false });
 const binding = { request: { group: "live-delivery" }, latestStable: policy("live-delivery"), preparation: { fixtures: [] }, selection: { apps: ["a", "b", "c"] } };
 const native = { status: "failed", attemptComplete: true, cleanupComplete: true, resources: "verified",
@@ -95,5 +96,42 @@ test("latest-stable blockers preserve complete native outcomes but never qualify
     { ...binding.latestStable, schema: "untrusted" }, { ...binding.latestStable, status: "blocked" }]) {
     const invalid = composePhase({ ...binding, latestStable }, native, { cleanupComplete: true, resources: "verified" }, [command]);
     assert.ok(invalid.appOutcomes.every((row) => !row.comparisonEligible));
+  }
+});
+
+test("candidate policy keeps all six rows, explicit unsupported Solid and the bounded native ranking gate", () => {
+  const p = readLatestStable(), apps = p.candidates.map((r) => r.app);
+  const b = { ...binding, request: { group: "client-heavy" }, selection: { apps }, latestStable: p };
+  const n = { ...native, outcomes: apps.map((app) => ({ app, outcome: app === "solid" ? "unsupported" : "passed" })), rankingEligible: false, comparisonEligibleApps: apps };
+  const host = { cleanupComplete: true, resources: "verified" };
+  const current = composePhase(b, n, host, [command]);
+  assert.equal(current.outcome, "native-validated"); assert.equal(current.appOutcomes.length, 6);
+  assert.ok(current.appOutcomes.every((r) => !r.comparisonEligible));
+  // Hypothetical independently admitted future recipe. This is NOT a current
+  // native result or permission to promote the one-measurement runner.
+  const qualified = structuredClone(p), react = qualified.candidates.find((r) => r.app === "react");
+  Object.assign(react, { status: "satisfied", latestStableEligible: true, blockers: [] });
+  assert.equal(composePhase({ ...b, latestStable: qualified }, n, host, [command]).appOutcomes.find((r) => r.app === "react").comparisonEligible, false);
+  const future = { ...n, rankingEligible: true, comparisonEligibleApps: ["react"] };
+  const result = composePhase({ ...b, latestStable: qualified }, future, host, [command]);
+  assert.deepEqual(result.appOutcomes.map((r) => r.comparisonEligible), [false, true, false, false, false, false]);
+  // Even independent native admission cannot waive the actual forced Remix edge.
+  const allAdmitted = { ...future, comparisonEligibleApps: apps };
+  const gated = composePhase(b, allAdmitted, host, [command]);
+  assert.equal(gated.appOutcomes.find((r) => r.app === "remix").comparisonEligible, false);
+  assert.equal(p.candidates.find((r) => r.app === "remix").status, "blocked");
+  assert.equal(gated.appOutcomes.find((r) => r.app === "react").comparisonEligible, true);
+  for (const [policy, hostState, audit] of [
+    [null, host, true], [undefined, host, true], [{ ...qualified, schema: latestStableSchema }, host, true],
+    [{ ...qualified, group: "json-api" }, host, true], [{ ...qualified, valid: false }, host, true],
+    [{ ...qualified, candidates: qualified.candidates.slice(1) }, host, true],
+    [{ ...qualified, candidates: [...qualified.candidates, react] }, host, true],
+    [qualified, { ...host, cleanupComplete: false }, true], [qualified, host, false],
+  ]) assert.ok(composePhase({ ...b, latestStable: policy }, future, hostState, [command], audit).appOutcomes.every((r) => !r.comparisonEligible));
+  assert.equal(qualified.schema, candidateLatestStableSchema);
+  assert.equal(qualified.candidates.find((r) => r.app === "solid").reason, unsupportedSolidReason);
+  for (const edit of [(r) => { r.outcome = "passed"; }, (r) => { r.measurement = {}; }]) {
+    const bad = structuredClone(n); edit(bad.outcomes.find((r) => r.app === "solid"));
+    assert.throws(() => composePhase(b, bad, host, [command]), /unsupported client/);
   }
 });
