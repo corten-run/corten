@@ -15144,6 +15144,69 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 2, "a patch starts no read");
     }
 
+    /// An extension each request carries ([`Tracks`]): while a copy of the request's head lives,
+    /// so does one of these.
+    #[derive(Clone)]
+    struct Alive(Arc<()>);
+
+    /// The app's middleware: puts [`Alive`] in every request, and for `/passes` and `/hangs`
+    /// takes `Req` before the route and passes the request on (a guard that reads who is asking).
+    struct Tracks(Arc<()>);
+
+    impl crate::Middleware for Tracks {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            req.extensions_mut().insert(Alive(self.0.clone()));
+            if req.uri().path() == "/early" {
+                return next.run(req).await;
+            }
+            use crate::extract::FromRequestParts;
+            let (mut parts, body) = req.into_parts();
+            let taken = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            drop(taken);
+            next.run(crate::http::Request::from_parts(parts, body)).await
+        }
+    }
+
+    /// The head a `Req` taken before a write's route keeps for a page made with it is let go
+    /// when the request is answered, or dropped unanswered: nothing of the request outlives it,
+    /// whether the middleware made the page, passed on to a patch, or the request was cut off
+    /// (#1370).
+    #[tokio::test]
+    async fn the_head_a_req_keeps_before_a_writes_route_goes_with_the_request() {
+        let alive = Arc::new(());
+        let routes = Table::new()
+            .route("/early", crate::router::post(|req: Req| async move { refused(&req, "the route") }))
+            .route(
+                "/passes",
+                crate::router::post(
+                    |req: Req| async move { req.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> }) },
+                ),
+            )
+            .route(
+                "/hangs",
+                crate::router::post(|req: Req| async move {
+                    std::future::pending::<()>().await;
+                    req.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"never"</p> })
+                }),
+            );
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware((Tracks(alive.clone()), AnswersEarly))
+            .router();
+        // The test's and the middleware's.
+        let before = Arc::strong_count(&alive);
+        let (status, _, body) = call_with(router.clone(), "POST", "/early", Some("action"), None).await;
+        assert!(status.is_success() && body.contains("<p>early</p>") && body.contains("count"), "{body}");
+        assert_eq!(Arc::strong_count(&alive), before, "the middleware's page");
+        let (_, headers, body) = call_with(router.clone(), "POST", "/passes", Some("action"), None).await;
+        assert!(headers.contains_key("corten-patch") && body.contains("saved"), "{headers:?} {body}");
+        assert_eq!(Arc::strong_count(&alive), before, "passed on to a patch");
+        let cut = call_with(router, "POST", "/hangs", Some("action"), None);
+        assert!(tokio::time::timeout(Duration::from_millis(50), cut).await.is_err());
+        assert_eq!(Arc::strong_count(&alive), before, "cut off unanswered");
+    }
+
     /// [`AnswersEarly`]'s page with a body that never ends, or one that fails as it is read.
     struct AnswersEarlyBroken {
         fails: bool,
