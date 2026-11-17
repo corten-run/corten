@@ -9,6 +9,7 @@ import { selectedApps } from "../workloads/registry.mjs";
 import { closeObserved } from "./evidence.mjs";
 import { replayV2 } from "./replay-v2.mjs";
 import { launchBrowser } from "./launch.mjs";
+import { readLatestStable } from "./build.mjs";
 
 const directory = process.env.CLIENT_NATIVE_DIR;
 
@@ -34,13 +35,22 @@ test("real browser deadline interruption observes context, browser and server cl
   // a claim that this test received an OS SIGINT/SIGTERM.
   t.diagnostic(JSON.stringify({ schema: "client-heavy-native-interruption-diagnostic/v1", pass, terminal }));
 });
-test("all six native assets qualify and pass a separate measured journey", { skip: !directory && "Set CLIENT_NATIVE_DIR to a runner's native build directory", timeout: 180000 }, async (t) => {
+test("all six clients retain their disposition and supported native assets pass a separate measured journey", { skip: !directory && "Set CLIENT_NATIVE_DIR to a runner's native build directory", timeout: 180000 }, async (t) => {
   const dir = resolve(directory), workload = JSON.parse(await readFile(join(dir, "workload.json"), "utf8"));
+  const builds = JSON.parse(await readFile(join(dir, "build.json"), "utf8")), policy = readLatestStable();
+  assert.deepEqual(Object.keys(builds), selectedApps("client-heavy"));
   const server = await serve(dir);
   let browser, launched;
   try {
     launched = await launchBrowser(chromium); browser = launched.browser;
     for (const app of selectedApps("client-heavy")) await t.test(app, async () => {
+      const disposition = policy.candidates.find((row) => row.app === app);
+      if (disposition.status === "unsupported") {
+        assert.deepEqual(builds[app], { outcome: "not-run", reason: disposition.reason });
+        await assert.rejects(readFile(join(dir, app, "app.js")), { code: "ENOENT" });
+        return;
+      }
+      assert.equal(builds[app].outcome, "built");
       const calls = [];
       const result = await qualifyAndMeasure((phase) => {
         calls.push(phase);

@@ -11,7 +11,9 @@ import { sampleStats } from "./stats.mjs";
 import { commandOutput } from "./output.mjs";
 import { readFailedCheck } from "./check-result.mjs";
 import { describeK6, k6Image } from "../load-tool.mjs";
-import { collectTimedPhase, timedRawSchema } from "./timed.mjs";
+import { collectTimedPhase, verifyTimedPhase } from "./timed.mjs";
+import { apparatus, digest, sourceProof, workerCommand, workerRawSchema } from "./apparatus.mjs";
+import { admission, preflightArtifacts, preflightBinding, preflightCases, preflightSchema, requiredRoundArtifacts } from "./preflight.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -53,6 +55,8 @@ const summary = { workload, round: options.round, runId, options, startedAt: new
 summary.host.checkout = repo.replaceAll("\\", "/").replace(/\/$/, "");
 if (group) Object.assign(summary, { schema: groupResultSchema, group,
   scope: "catalog-page group: page-only cold/warmup/load timing in both sources; native page AND JSON correctness gates retained; no browser timing, build-cost, bytes or instruction measurements" });
+if (group) Object.assign(summary.measurement, { apparatus,
+  upstream: "two fixed request workers plus coordinator in the unchanged two-CPU/512-MiB budget; no respawn; skew and aggregate headroom independently checked" });
 const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
 const log = (message) => { const line = `${new Date().toISOString()} ${message}`; console.log(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
 const active = new Set();
@@ -140,6 +144,13 @@ const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
 const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;
 const apiBase = `http://${upstreamName}:8080`;
+let upstreamBase;
+async function upstreamControl(value) {
+  const response = await fetch(`${upstreamBase}/__catalog/${value?.observation ? "observe" : "control"}`, { method: value === undefined ? "GET" : "POST",
+    ...(value === undefined ? {} : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }), signal: AbortSignal.timeout(5000) });
+  assert.equal(response.status, 200, "upstream worker administration failed");
+  return response.json();
+}
 function appArgs(name, source, image) {
   const app = name.slice(`${runId}-`.length);
   return ["--network", network, ...cpus.app.args, "--memory", "1g", "-p", "127.0.0.1::8080",
@@ -193,7 +204,7 @@ async function cpu(containers) {
   return { ids: Object.fromEntries(ids), values: Object.fromEntries(ids.map(([name, id]) => { assert.ok(Number.isSafeInteger(usage[id]), "missing CPU counter"); return [name, usage[id]]; })) };
 }
 async function load(name, target, phase, seconds, raw) {
-  if (group) return collectTimedPhase({ summary, raw, docker, owned, inspect, remove, cpu, sampleStats, cpus, mount, k6Image }, {
+  if (group) return collectTimedPhase({ summary, raw, docker, owned, inspect, remove, cpu, sampleStats, cpus, mount, k6Image, upstreamControl }, {
     app: name.slice(`${runId}-`.length), source: summary.currentSource, target, phase, seconds,
     instance: JSON.parse(readFileSync(join(raw, "container.json"), "utf8")),
   });
@@ -255,7 +266,12 @@ try {
   const generated = (await import("./fixtures.mjs")).records();
   assert.deepEqual(catalog, generated, "generated fixture is stale: run node bench/catalog/fixtures.mjs");
   summary.fixtureSha256 = createHash("sha256").update(fixture).digest("hex");
-  summary.savedEvidence = { schema: group ? timedRawSchema : rawSchema, fixtureSha256: summary.fixtureSha256 };
+  summary.savedEvidence = { schema: group ? workerRawSchema : rawSchema, fixtureSha256: summary.fixtureSha256 };
+  if (group) {
+    const proof = JSON.stringify(sourceProof(summary.commit), null, 2);
+    writeFileSync(join(folder, "apparatus-source.json"), proof);
+    summary.savedEvidence.apparatusSourceSha256 = digest(proof);
+  }
   if (group) summary.targetFailures = [];
   writeFileSync(join(folder, "fixture.json"), fixture);
   for (const app of options.apps) {
@@ -279,12 +295,13 @@ try {
   await docker(["network", "create", "--label", `${label}=${runId}`, network]);
   summary.networkCreated = true;
   await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
-    "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, "node", "/bench/catalog/upstream.mjs"], upstreamName);
+    "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, ...(group ? workerCommand : ["node", "/bench/catalog/upstream.mjs"])], upstreamName);
   const upstreamImageId = (await inspect(upstreamName)).Image;
   const upstreamImageInfo = JSON.parse(await docker(["image", "inspect", upstreamImageId]))[0];
   assert.equal(upstreamImageInfo.Id, upstreamImageId);
   summary.tools = { upstream: { image: nodeImage, imageId: upstreamImageId, execution: imageCommandEvidence(upstreamImageInfo) } };
   const upstream = await portOf(upstreamName);
+  upstreamBase = upstream;
   const upstreamDeadline = Date.now() + 20000;
   while (true) {
     try { const response = await fetch(`${upstream}/health`, { signal: AbortSignal.timeout(1000) }); await response.text(); if (response.ok) break; } catch {}
@@ -318,6 +335,7 @@ try {
         // reliably reap it, so timeout cleanup removes its entire owned PID namespace.
         // Share ONLY the app's network namespace, not its PID namespace: loopback
         // stays a trustworthy browser origin without disabling security features.
+        const workerBefore = group ? await upstreamControl() : undefined;
         await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "2g", "--shm-size", "1g", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
           "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", checker.Id, "node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, apiBase, "/results/checks.json"], checkContainer);
         let checkerFailure, boundary;
@@ -326,7 +344,8 @@ try {
         finally {
           try {
             boundary = { checker: checkBoundaryEvidence(await inspect(checkContainer)), runtime: checkBoundaryEvidence(await inspect(name)), upstream: checkBoundaryEvidence(await inspect(upstreamName)),
-              exit: checkerFailure ? checkerFailure.exit : { code: 0, signal: null, expired: false, interrupted: false } };
+              exit: checkerFailure ? checkerFailure.exit : { code: 0, signal: null, expired: false, interrupted: false },
+              ...(group ? { workerBefore, workerAfter: await upstreamControl() } : {}) };
             writeFileSync(join(out, "checker.json"), JSON.stringify(boundary, null, 2));
           } finally { await remove(checkContainer); }
         }
@@ -365,6 +384,34 @@ try {
     writeFileSync(join(folder, "tools.json"), JSON.stringify(summary.tools, null, 2));
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
+    if (group) {
+      const receipt = { schema: preflightSchema, binding: preflightBinding(summary), passed: false, hashes: {}, cleanup: null };
+      try {
+        for (const subject of preflightCases) {
+          const name = `${runId}-corten`, raw = join(folder, "preflight", subject.source);
+          mkdirSync(raw, { recursive: true });
+          try {
+            await owned(["run", "-d", ...appArgs(name, subject.source, summary.apps.corten.imageId)], name);
+            await ready(await portOf(name));
+            const instance = containerEvidence(await inspect(name));
+            writeFileSync(join(raw, "container.json"), JSON.stringify(instance, null, 2));
+            for (const phase of ["warmup", "sat256"]) {
+              const timedSubject = { ...subject, phase, seconds: phase === "warmup" ? options.warmup : options.duration, instance };
+              log(`apparatus preflight corten ${subject.source} ${phase}`);
+              await collectTimedPhase({ summary, raw, docker, owned, inspect, remove, cpu, sampleStats, cpus, mount, k6Image, upstreamControl }, timedSubject);
+              admission(summary, verifyTimedPhase(summary, timedSubject, {
+                readJson: (key) => JSON.parse(readFileSync(join(raw, key), "utf8")), readText: (key) => readFileSync(join(raw, key), "utf8"),
+              }));
+            }
+          } finally { await remove(name); }
+        }
+        const containers = (await docker(["ps", "-a", "--filter", `name=^/${runId}-corten$`, "--format", "{{.ID}}"])).split("\n").filter(Boolean);
+        receipt.cleanup = { containers }; assert.equal(containers.length, 0, "preflight app remains");
+        for (const key of preflightArtifacts()) receipt.hashes[key] = digest(readFileSync(join(folder, key)));
+        receipt.passed = true;
+      } catch (e) { receipt.error = e.message; throw e; }
+      finally { writeFileSync(join(folder, "preflight.json"), JSON.stringify(receipt, null, 2)); }
+    }
     for (const { app, pass, source, target, ...profile } of plan) {
       const entry = summary.apps[app];
       const name = `${runId}-${app}`;
@@ -407,6 +454,12 @@ try {
     && Object.values(summary.apps).every((entry) => Object.values(entry.runs).every((runs) => runs.length === options.passes && runs.every((r) => r.complete)));
 } catch (e) { fail(null, null, "suite", e); }
 finally {
+  if (group && summary.tools?.upstream) {
+    try {
+      assert.equal((await inspect(upstreamName, true)).Config.Labels?.[label], runId, "refusing unowned upstream log collection");
+      await docker(["logs", upstreamName], { file: join(folder, "upstream.log"), capture: false, cleanup: true });
+    } catch (e) { fail(null, null, "upstream logs", e); summary.complete = false; summary.attemptComplete = false; }
+  }
   for (const name of [...active].reverse()) {
     try { await remove(name); } catch (e) { summary.cleanupFailures.push({ resource: name, error: e.message }); }
   }
@@ -438,6 +491,13 @@ finally {
   summary.finishedAt = new Date().toISOString();
   summary.complete &&= !interrupted && summary.cleanupFailures.length === 0;
   if (summary.attemptComplete !== undefined) summary.attemptComplete &&= !interrupted && summary.cleanupFailures.length === 0 && summary.failures.length === 0;
+  if (group && summary.failures.length === 0 && !options.checkOnly) {
+    try {
+      const index = JSON.stringify({ schema: "catalog-artifact-index/v1", commit: summary.commit, sourceSha256: summary.savedEvidence.apparatusSourceSha256,
+        hashes: Object.fromEntries(requiredRoundArtifacts(summary).map((key) => [key, digest(readFileSync(join(folder, key)))])) }, null, 2);
+      writeFileSync(join(folder, "evidence-index.json"), index); summary.savedEvidence.artifactsSha256 = digest(index);
+    } catch (e) { summary.complete = false; summary.attemptComplete = false; fail(null, null, "artifact index", e); }
+  }
   save();
 }
 log(`${workload} ${options.round}: ${summary.complete ? "PASS" : "FAIL"}; ${join(folder, "summary.json")}`);
