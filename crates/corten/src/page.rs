@@ -2526,11 +2526,14 @@ impl Req {
     /// use corten::prelude::*;
     /// use std::time::Duration;
     ///
+    /// #[derive(Id)]
+    /// struct PartId;
+    ///
     /// async fn shared(req: Req) -> Public<HtmlResult<Patches>> {
     ///     Public::new(
     ///         Duration::from_secs(60),
     ///         req.patch_or_with(
-    ///             |action| async move { action.patch(html! { <p>"part"</p> }) },
+    ///             |action| async move { action.patch(html! { <p id={PartId}>"part"</p> }) },
     ///             || async {
     ///                 req.page(html! {
     ///                     <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html>
