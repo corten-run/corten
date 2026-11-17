@@ -23,10 +23,10 @@ const fromOf = (tag) => /** @type {string} */ (own.getAttribute.call(tag, "data-
 
 /**
  * The runtime's `apply`: draws the patch `html` unless `signal.aborted`, which it reads right
- * before it draws (after the patch's modules and stylesheets have loaded) and again right after,
- * in the same task, once the patch's elements are in the page; `asked` is the tag of the read it
- * answers.
- * @typedef {(html: string, signal: AbortSignal, sent: null, took: undefined, own: boolean, asked: Element) => Promise<void>} Apply
+ * before it draws (after the patch's modules and stylesheets have loaded); `asked` is the tag of
+ * the read it answers. It parses the patch as soon as it is called, before its first `await`,
+ * and keeps what it parsed as its `p`: the elements it will put in the page.
+ * @typedef {((html: string, signal: AbortSignal, sent: null, took: undefined, own: boolean, asked: Element) => Promise<void>) & { p?: DocumentFragment }} Apply
  */
 /**
  * A read on its way: the address it is of, the tags that wait for it, the parts they are in, its
@@ -57,12 +57,14 @@ const live = new Set();
  */
 const failed = new WeakMap();
 /**
- * The tags a part's answer drew, taken from the page's changes as `apply` finishes drawing it,
- * before anything else can change the page: these elements alone are marked failed rather than
- * read, so one read's answer cannot start another, and two parts whose answers each draw the
- * other waiting do not read each other without end. Any other tag is read, whatever its address:
- * one a form's answer drew (in the same task, when it waited for the same stylesheet), one that
- * replaced a tag the part's answer drew, or one at the address of a tag in a template's content.
+ * The tags a part's answer holds, taken from the markup `apply` parsed before any of it is in the
+ * page ({@link owned}): these elements alone are marked failed rather than read, so one read's
+ * answer cannot start another, and two parts whose answers each draw the other waiting do not read
+ * each other without end. Any other tag is read, whatever its address and whenever it joins the
+ * page: one a form's answer drew (in the same task, when it waited for the same stylesheet), one
+ * that replaced a tag the part's answer drew, one a script draws as the answer is drawn (on focus
+ * it moves, or as a custom element in it connects), or one at the address of a tag in a
+ * template's content.
  * @type {WeakSet<Element>}
  */
 const chained = new WeakSet();
@@ -95,7 +97,7 @@ export function start(apply, busy) {
   }
   draw = apply;
   busyBy = busy;
-  observer = new MutationObserver((records) => changed(records));
+  observer = new MutationObserver(changed);
   observer.observe(document.documentElement, { childList: true, subtree: true, attributeFilter: ["data-from", "aria-busy", FAILED] });
   take(Array.from(own.querySelectorAll.call(document.documentElement, PART_NOW)));
 }
@@ -103,10 +105,10 @@ export function start(apply, busy) {
 /**
  * What changed in the page: tags that joined it, a tag whose address changed, and a part whose
  * marks a layout element drawn again in place took away, are taken ({@link take}); a read one of
- * whose tags left stops. `chain`: the changes are a part's answer's, whose tags are {@link chained}.
- * @param {MutationRecord[]} records @param {boolean} [chain]
+ * whose tags left stops.
+ * @param {MutationRecord[]} records
  */
-function changed(records, chain = false) {
+function changed(records) {
   /** @type {Set<Element>} */
   const tags = new Set();
   let removed = false;
@@ -121,13 +123,9 @@ function changed(records, chain = false) {
     if (record.removedNodes.length) removed = true;
     for (const node of Array.from(record.addedNodes)) {
       if (!(node instanceof Element)) continue;
+      if (own.matches.call(node, PART_NOW)) tags.add(node);
       // Not a template's content: a tag there is not in the page.
-      const added = Array.from(own.querySelectorAll.call(node, PART_NOW));
-      if (own.matches.call(node, PART_NOW)) added.push(node);
-      for (const tag of added) {
-        tags.add(tag);
-        if (chain) chained.add(tag);
-      }
+      for (const tag of Array.from(own.querySelectorAll.call(node, PART_NOW))) tags.add(tag);
     }
   }
   // Its answer is for what is no longer there (a form's answer replaced its part, a page was
@@ -185,6 +183,21 @@ function take(tags) {
   for (const [from, [tags, parts]] of reads) readPart(from, tags, parts);
 }
 
+/**
+ * Takes the waiting tags in a part's answer, as `apply` parsed it and before any of it is drawn,
+ * as that answer's ({@link chained}): those in its elements, and in the content of a template
+ * that appends it, which goes into the page; not those in any other template's content, which
+ * does not. One whose element the page has no target for is never drawn, so never taken.
+ * @param {DocumentFragment | undefined} content
+ */
+function owned(content) {
+  if (!content) return;
+  const tags = Array.from(content.querySelectorAll(PART_NOW));
+  for (const el of Array.from(content.children))
+    if (el instanceof HTMLTemplateElement && own.hasAttribute.call(el, "data-append")) tags.push(...Array.from(el.content.querySelectorAll(PART_NOW)));
+  for (const tag of tags) chained.add(tag);
+}
+
 /** Marks `tag`'s part as one no read will bring for `from`. @param {Element} tag @param {string} from */
 function fail(tag, from) {
   failed.set(tag, from);
@@ -219,29 +232,22 @@ async function readPart(from, tags, parts) {
   }
   const at = hidden;
   let again = false;
-  let looked = false;
   const here = () => tags.every((tag) => inPage(tag) && reading.get(tag) === read && fromOf(tag) === from);
-  // Read by `apply` right before it draws, where what the page changed before is taken first, and
-  // right after, where the changes left are its answer's alone: their tags are {@link chained}.
-  const now = /** @type {AbortSignal} */ (
-    /** @type {unknown} */ ({
-      get aborted() {
-        if (looked) return changed(observer?.takeRecords() ?? [], true), false;
-        looked = true;
-        if (signal.aborted || !here()) return true;
-        const pending = observer?.takeRecords() ?? [];
-        if (pending.length) changed(pending);
-        return false;
-      },
-    })
-  );
+  // Read by `apply` right before it draws: its answer is for what is no longer there.
+  const now = /** @type {AbortSignal} */ (/** @type {unknown} */ ({ get aborted() { return signal.aborted || !here(); } }));
   // Settled once a part leaves, even while the answer waits for a stylesheet that never loads.
   const left = new Promise((resolve) => signal.addEventListener("abort", resolve));
   try {
     const res = await fetch(from, { headers: { corten: "action" }, signal });
     if (res.headers.has("corten-patch") && res.url !== "" && new URL(res.url).origin === location.origin) {
       const html = await res.text();
-      if (here()) await Promise.race([draw(html, now, null, undefined, true, /** @type {Element} */ (tags[0])).catch(reportError), left]);
+      if (here()) {
+        // Not one an earlier call left, should this one fail before it parses.
+        draw.p = undefined;
+        const drawn = draw(html, now, null, undefined, true, /** @type {Element} */ (tags[0]));
+        owned(draw.p);
+        await Promise.race([drawn.catch(reportError), left]);
+      }
     } else if (res.ok && !res.headers.has("corten-location")) {
       // A success that is not a patch is the app's mistake (the route answered its page).
       console.error("corten: ReadAgain::now needs a patch from this origin, at", from, res);

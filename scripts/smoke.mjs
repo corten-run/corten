@@ -5215,9 +5215,114 @@ async function run(browser) {
     await page.unroute(`**${at}.css`);
   }
 
+
+  // A script that draws a waiting part while a part's answer is drawn, from a callback the drawing
+  // runs (the focus it moves to the answer's field, a custom element in it connecting), draws a
+  // part of its own, which is read: only the tags in the answer's markup are the answer's. So is
+  // one it draws a microtask later or with a patch of its own (#1400).
+  for (const [on, how] of [
+    ["focus", "sync"],
+    ["focus", "micro"],
+    ["focus", "patch"],
+    ["connect", "sync"],
+    ["connect", "micro"],
+    ["connect", "patch"],
+  ]) {
+    const id = `cb-${on}-${how}`;
+    /** @type {(value?: unknown) => void} */
+    let releasePart = () => {};
+    const partHeld = new Promise((resolve) => (releasePart = resolve));
+    /** @type {(value?: unknown) => void} */
+    let partAsked = () => {};
+    const partSent = new Promise((resolve) => (partAsked = resolve));
+    /** @type {string[]} */
+    const reads = [];
+    const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
+    await page.route(`**/smoke/${id}-*`, async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      reads.push(path.slice(`/smoke/${id}-`.length));
+      if (path.endsWith("-a")) {
+        partAsked();
+        await partHeld;
+        const drew = on === "focus" ? `<input id="${id}-field" aria-label="Field">` : `<smoke-part-maker data-into="${id}-b" data-how="${how}"></smoke-part-maker>`;
+        return route.fulfill(patchOf(`<section id="${id}-a">A done${drew}</section>`)).catch(() => {});
+      }
+      return route.fulfill(patchOf(`<span id="${id}-bp">B drawn</span>`));
+    });
+    await page.evaluate(
+      async ({ id, on }) => {
+        const w = /** @type {any} */ (window);
+        w.__corten ??= await import(/** @type {string} */ ("corten"));
+        // Draws B waiting in `into`: at once, a microtask later, or with a patch of its own.
+        w.__makePart ??= (/** @type {string} */ into, /** @type {string} */ how) => {
+          const markup = `<span id="${into}p">B waiting<template data-corten-read-now data-from="/smoke/${into}"></template></span>`;
+          const put = () => document.getElementById(into)?.insertAdjacentHTML("beforeend", __html(markup));
+          if (how === "sync") put();
+          else if (how === "micro") queueMicrotask(put);
+          else w.__corten.patch(__html(`<div id="${into}">${markup}</div>`));
+        };
+        if (!customElements.get("smoke-part-maker"))
+          customElements.define(
+            "smoke-part-maker",
+            class extends HTMLElement {
+              connectedCallback() {
+                w.__makePart(this.dataset.into, this.dataset.how);
+              }
+            },
+          );
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="${id}-1"></div>`));
+        const field = on === "focus" ? `<input id="${id}-field" aria-label="Field">` : "";
+        await w.__corten.patch(
+          __html(`<div id="${id}-1"><section id="${id}-a">A waiting${field}<template data-corten-read-now data-from="/smoke/${id}-a"></template></section><div id="${id}-b"></div></div>`),
+        );
+      },
+      { id, on },
+    );
+    await Promise.race([partSent, page.waitForTimeout(5000)]);
+    if (on === "focus") {
+      await page.focus(`#${id}-field`);
+      // Armed once the field has focus: the focus the answer's drawing moves to its own field.
+      await page.evaluate(
+        ({ id, how }) =>
+          document.addEventListener("focusin", function made(event) {
+            if (/** @type {Element} */ (event.target).id !== `${id}-field`) return;
+            document.removeEventListener("focusin", made);
+            /** @type {any} */ (window).__makePart(`${id}-b`, how);
+          }),
+        { id, how },
+      );
+    }
+    const partAnswered = page.waitForResponse((r) => r.url().endsWith(`/smoke/${id}-a`), { timeout: 5000 }).catch(() => null);
+    releasePart();
+    await partAnswered;
+    await page.waitForFunction((id) => document.getElementById(`${id}-bp`)?.textContent === "B drawn", id, { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(200);
+    const state = await page.evaluate(
+      (id) => ({
+        a: document.getElementById(`${id}-a`)?.textContent,
+        focused: document.activeElement?.id ?? null,
+        b: document.getElementById(`${id}-bp`)?.textContent ?? null,
+        marked: Array.from(document.querySelectorAll(`#${id}-1 [aria-busy], #${id}-1 [data-corten-read-failed]`), (el) => el.id),
+      }),
+      id,
+    );
+    check(
+      `a part a script draws ${{ sync: "at once", micro: "a microtask later", patch: "with a patch of its own" }[how]} as ${on === "focus" ? "the focus moves to a part's answer's field" : "a custom element in a part's answer connects"} is read`,
+      state.a === "A done" && state.b === "B drawn" && state.marked.length === 0 && reads.filter((read) => read === "b").length === 1 && (on !== "focus" || state.focused === `${id}-field`),
+      `${JSON.stringify(state)}, reads ${reads.join(" ")}`,
+    );
+    await page.evaluate((id) => document.getElementById(`${id}-1`)?.remove(), id);
+    await page.unroute(`**/smoke/${id}-*`);
+  }
+
   // A script's patch that draws a page's first waiting part has the part module, which the page's
-  // head did not preload, read it (#1400).
-  {
+  // head did not preload, read it, however its markup spells the tag's attribute: after a newline,
+  // a tab, in capitals, as HTML reads them (#1400).
+  for (const [spelling, tag] of [
+    ["as the server writes it", "<template data-corten-read-now data-from=\"/smoke/cold-part\">"],
+    ["after a newline", "<template\ndata-corten-read-now data-from=\"/smoke/cold-part\">"],
+    ["after a tab, in capitals", "<template\tDATA-CORTEN-READ-NOW data-from=\"/smoke/cold-part\">"],
+  ]) {
     const cold = await (await browser.newContext()).newPage();
     let moduleAsked = 0;
     cold.on("request", (r) => new URL(r.url()).pathname.endsWith("/part.js") && moduleAsked++);
@@ -5227,15 +5332,15 @@ async function run(browser) {
     await cold.goto(`${base}/news`);
     const preloaded = await cold.evaluate(() => !!document.querySelector("[data-corten-part]"));
     const askedBefore = moduleAsked;
-    await cold.evaluate(async () => {
+    await cold.evaluate(async (tag) => {
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="cold-1"></div>'));
       const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
-      await corten.patch(__html('<div id="cold-1"><p id="cold-a">Waiting<template data-corten-read-now data-from="/smoke/cold-part"></template></p></div>'));
-    });
+      await corten.patch(__html(`<div id="cold-1"><p id="cold-a">Waiting${tag}</template></p></div>`));
+    }, tag);
     await cold.waitForFunction(() => document.getElementById("cold-a")?.textContent === "Cold drawn", null, { timeout: 5000 }).catch(() => {});
     const coldText = await cold.textContent("#cold-a");
     check(
-      "a script's patch that draws a page's first waiting part loads the part module, which reads it",
+      `a script's patch that draws a page's first waiting part, its tag written ${spelling}, loads the part module, which reads it`,
       !preloaded && askedBefore === 0 && moduleAsked === 1 && coldText === "Cold drawn",
       `preloaded ${preloaded}, module asked ${askedBefore} then ${moduleAsked}, ${coldText}`,
     );

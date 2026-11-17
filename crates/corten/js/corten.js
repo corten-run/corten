@@ -69,7 +69,8 @@ const PART = "./part.js";
 /**
  * Has the part module (`js/part.js`) read the parts the page waits for (`ReadAgain::now`): imported
  * once the page loaded with one (its head preloads the module) or markup the server sent, or a
- * script's {@link patch}, draws one, and handed what draws its answers; from then on it finds the parts itself, so later calls (the
+ * script's {@link patch}, draws one, and handed what draws its answers ({@link apply}, whose `p` is
+ * the markup it parsed last); from then on it finds the parts itself, so later calls (the
  * browser's own module, imported once) do nothing. A page that never draws one fetches and runs
  * none of it, and one whose module does not load shows each part's link, as without JavaScript
  * (docs/design.md#choice-slow-part-link).
@@ -77,11 +78,13 @@ const PART = "./part.js";
 const readParts = () => import(PART).then((/** @type {typeof import("./part.js")} */ part) => part.start(apply, busyBy));
 /**
  * The server's markup, through the policy, or a script's (`own` false, {@link patch}) as it is;
- * markup with a part waiting has the part module read it.
+ * markup with a part waiting has the part module read it. The tag's name is searched for in any
+ * case and after any separator, as HTML reads it: a script's markup need not be written as the
+ * server writes it, and a name in the text that is no tag only fetches the module.
  * @param {string | TrustedHTML} text @param {boolean} [own]
  */
 const trustedHTML = (text, own = true) => {
-  if (`${text}`.includes(" data-corten-read-now")) readParts();
+  if (/data-corten-read-now/i.test(/** @type {string} */ (text))) readParts();
   return /** @type {string} */ (/** @type {unknown} */ (trusted && own ? trusted.createHTML(/** @type {string} */ (text)) : text));
 };
 
@@ -1046,7 +1049,9 @@ export function patch(html, signal) {
  *   it replaces takes ({@link opened})
  */
 async function apply(html, signal, sent, took, own = true, asked, within) {
-  const content = parse(html, own);
+  // Kept for the part module, which reads it as soon as it calls this, before anything is drawn:
+  // the waiting parts in it are its answer's own.
+  const content = (/** @type {{ p?: DocumentFragment }} */ (/** @type {unknown} */ (apply)).p = parse(html, own));
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
@@ -1084,8 +1089,7 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
   // The server marked a nav link in the patch against the request that made it (a form's action),
   // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
   // only looks through what it put.
-  // Read again once drawn: a part's read (part.js) takes the waiting parts this patch drew as its own.
-  if (!signal?.aborted && (navs || put.some(holdsNav))) markCurrent();
+  if (navs || put.some(holdsNav)) markCurrent();
   for (const el of put) setVars(el);
   if (again) {
     const beside = asked?.isConnected ? asked : partTagBeside(put);
