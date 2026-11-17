@@ -43,10 +43,24 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
-  const save = () => {
-    check(); controllerState(state, options.round);
-    durable(`${statePath}.tmp`, `${JSON.stringify(state, null, 2)}\n`);
+  const writeState = (value) => {
+    controllerState(value, options.round);
+    durable(`${statePath}.tmp`, `${JSON.stringify(value, null, 2)}\n`);
     renameSync(`${statePath}.tmp`, statePath); syncDirectory(local);
+  };
+  const save = () => { check(); writeState(state); };
+  // Cancellation forbids further work, not recording how the owned monitor ended.
+  // Change only the phase in the saved reservation, never other in-flight edits.
+  const recordMonitorEnd = (phase) => {
+    const alreadyUncertain = preserveOperationLock;
+    preserveOperationLock = true;
+    const saved = read();
+    assert.equal(saved.token, state.token);
+    assert.equal(saved.control.monitor.id, state.control.monitor.id);
+    assert.equal(saved.control.monitor.registrationSha256, state.control.monitor.registrationSha256);
+    assert.equal(saved.control.monitor.phase, "live");
+    saved.control.monitor.phase = phase; writeState(saved); state = saved;
+    if (phase === "closed") preserveOperationLock = alreadyUncertain;
   };
   async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration) {
     if (deleteProofExpiresAtMs !== undefined) {
@@ -416,18 +430,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
             if (!monitor) throw error;
             preserveOperationLock = true; monitor.cancel();
             try { await monitor.done; } catch { /* Unsettled transport retains custody. */ }
-            state.control.monitor.phase = "invalid"; save();
+            recordMonitorEnd("invalid");
             throw Object.assign(new Error("bootstrap seal failed after monitor registration; preserve host and custody"), { controlTreeUncertain: true });
           }
           if (monitor) {
             let result;
             try { result = await monitor.done; }
-            catch (error) { preserveOperationLock = true; state.control.monitor.phase = "invalid"; save(); throw error; }
-            state.control.monitor.phase = result.terminal ? "closed" : "invalid"; save();
+            catch (error) { recordMonitorEnd("invalid"); throw error; }
+            recordMonitorEnd(result.terminal ? "closed" : "invalid");
             if (!result.terminal) {
-              preserveOperationLock = true;
               throw Object.assign(new Error("supervised monitor lost before terminal proof; retain host and custody"), { controlTreeUncertain: true });
             }
+            check();
           }
           return structuredClone(state);
         });
