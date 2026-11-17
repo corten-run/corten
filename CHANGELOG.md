@@ -9,7 +9,8 @@ Corten is pre-1.0, so any minor version may change the API.
   faults, retains verified phases of incomplete passes, and leaves independently
   complete peers comparable. Raw stock-load output, counted resources, source
   and cleanup gates still apply. Its producer assets must match the measured
-  commit; historical v1 evidence retains its original strict verifier.
+  commit, and current campaigns reject schema downgrades; standalone historical v1
+  evidence retains its original exact fixed-offer and zero-error verifier.
 
 - The catalog benchmark uses a fixed two-worker upstream within its existing CPU
   and memory budget, retaining per-process headroom and a first-host preflight.

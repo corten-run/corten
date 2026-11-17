@@ -50,7 +50,9 @@ test("JSON v2 producer assets must match the bound commit even when local produc
     writeFileSync(join(folder, "summary.json"), JSON.stringify(changed));
     assert.throws(() => inspectEvidence(binding, folder));
   }
-  summary.schema = "json-api-results/v1"; delete summary.producer; save();
-  // Historical v1 stays on its existing raw verifier; it never gains a v2 source claim.
-  assert.equal(inspectEvidence({ ...binding, sources: undefined }, folder).attemptComplete, true);
+  for (const schema of ["json-api-results/v1", "json-api-results/v3", undefined]) {
+    summary.schema = schema; save();
+    assert.throws(() => inspectEvidence(binding, folder), /current JSON campaign requires v2 evidence/);
+    assert.throws(() => inspectEvidence({ ...binding, sources: undefined }, folder), /current JSON campaign requires v2 evidence/);
+  }
 });

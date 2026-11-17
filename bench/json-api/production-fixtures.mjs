@@ -14,7 +14,7 @@ import { reader } from "./artifacts.mjs";
 
 // Retain exact independent path bytes, compressed ONLY inside the test store.
 // get() returns original JSON bytes. No production reader or raw stream is compressed.
-class ByteStore extends Map {
+export class ByteStore extends Map {
   set(path, bytes) { return super.set(path, gzipSync(bytes)); }
   get(path) { const bytes = super.get(path); return bytes === undefined ? undefined : gunzipSync(bytes).toString(); }
 }

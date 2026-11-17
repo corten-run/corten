@@ -131,20 +131,19 @@ export function inspectEvidence(binding, root) {
       options: binding.execution.effectiveOptions, cpus: binding.resources.expectedCpus }, inspectCatalog);
     report = rawProofBlocked(group, diagnosticNativeReport, inspectRawSupport(group, summary, root, before));
   } else if (group === "json-api") {
-    if (summary.schema === timedSummarySchema) {
-      assert.equal(summary.producer?.schema, "json-api-producer/v2");
-      assert.deepEqual(Object.keys(summary.producer.sources).sort(), [...producerSources].sort(), "JSON producer inventory differs");
-      assert.equal(binding.sources?.commit, commit, "JSON producer commit differs");
-      const files = binding.sources.files;
-      assert.ok(Array.isArray(files), "JSON bound sources missing");
-      const sources = new Map(files.map((row) => [row.path, row.sha256]));
-      assert.equal(sources.size, files.length, "duplicate bound source");
-      for (const name of producerSources) {
-        const path = `bench/json-api/${name}`;
-        assert.ok(sources.has(path), "JSON producer missing from bound commit");
-        assert.match(summary.producer.sources[name], /^[a-f0-9]{64}$/);
-        assert.equal(summary.producer.sources[name], sources.get(path), "JSON producer differs from bound commit");
-      }
+    assert.equal(summary.schema, timedSummarySchema, "current JSON campaign requires v2 evidence");
+    assert.equal(summary.producer?.schema, "json-api-producer/v2");
+    assert.deepEqual(Object.keys(summary.producer.sources).sort(), [...producerSources].sort(), "JSON producer inventory differs");
+    assert.equal(binding.sources?.commit, commit, "JSON producer commit differs");
+    const files = binding.sources.files;
+    assert.ok(Array.isArray(files), "JSON bound sources missing");
+    const sources = new Map(files.map((row) => [row.path, row.sha256]));
+    assert.equal(sources.size, files.length, "duplicate bound source");
+    for (const name of producerSources) {
+      const path = `bench/json-api/${name}`;
+      assert.ok(sources.has(path), "JSON producer missing from bound commit");
+      assert.match(summary.producer.sources[name], /^[a-f0-9]{64}$/);
+      assert.equal(summary.producer.sources[name], sources.get(path), "JSON producer differs from bound commit");
     }
     report = inspectJson(summary, { load: reader(root), commit });
     assert.equal(report.attemptComplete, true, "strict JSON native attempt incomplete");

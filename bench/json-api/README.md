@@ -125,21 +125,13 @@ Every load phase retains host start/end clocks and k6's measured `testRunDuratio
 [`handleSummary`](https://grafana.com/docs/k6/latest/results-output/end-of-test/custom-summary/).
 The k6 duration must cover the configured interval without exceeding its existing 10-second
 graceful stop; the host bracket must contain that duration with at most 10 seconds of control
-overhead. Request count/rate must agree with that measured k6 clock. Fixed phases must complete
-at least the configured `rate * duration` arrivals, with no failures or dropped iterations,
-not merely report zero failures. Historical v1 uses a conservative nominal-count
-eligibility policy based on the pinned
-[k6 v2.4.0 scheduler](https://github.com/grafana/k6/blob/v2.4.0/lib/executor/constant_arrival_rate.go):
-index zero is immediate, subsequent arrivals use an integer-nanosecond period
-`floor(1e9 / rate)` ([period conversion](https://github.com/grafana/k6/blob/v2.4.0/lib/executor/helpers.go)),
-and the last timer races the duration deadline. The v1 eligibility ceiling is
-`floor(duration * 1e9 / floor(1e9 / rate)) + 1`: 9000 or 9001 at the defaults.
-This is not a guaranteed physical scheduler maximum: Go's select can repeatedly dispatch
-an overdue arrival while cancellation is also ready. V1 lacks observations that could
-certify such an overrun, so it conservatively rejects counts outside this nominal policy.
-This is not a percentage tolerance or permission to extend arrivals into grace.
-Counts below the configured offer or above that policy fail, even if checks and upstream
-reads are rewritten consistently. Every request still needs both passing named checks and,
+overhead. Request count/rate must agree with that measured k6 clock. Historical v1 fixed
+phases must complete exactly the configured `rate * duration` requests, with no failures
+or dropped iterations, not merely report zero failures. V1 has no scheduling observations
+that could certify an extra arrival, so its original exact-count rule is unchanged.
+Counts below or above that offer fail, even if checks and upstream reads are rewritten
+consistently. V2 uses its separate raw scheduling replay, described below, rather than
+relaxing historical evidence. Every request still needs both passing named checks and,
 in API mode, exactly one upstream read. Retained `iterations` must match the request count
 and its rate (if supplied) must match the measured clock; retained dropped counters must be
 zero, including their rate if supplied. These optional standard k6 counters are cross-checked
@@ -186,8 +178,10 @@ gate cannot inject redirects; the marketplace gate does exercise refusal of redi
 ## Production V2
 
 New `run.mjs` captures use `json-api-results/v2`. The reader explicitly dispatches
-that schema; historical v1 stays readable and zero-error strict with its conservative,
-non-guaranteed nominal accounting policy. Thresholds, rates, VUs, durations, budgets,
+that schema; the standalone reader keeps historical v1 readable with its original
+exact fixed-offer and zero-error checks. Current isolated campaigns require v2 evidence;
+a self-declared v1 schema cannot bypass the producer-to-measured-commit join.
+Thresholds, rates, VUs, durations, budgets,
 the full nine-app/four-profile roster and pass rotation are unchanged.
 
 Production fixed phases use the instrumented fixed script below and retain **all**

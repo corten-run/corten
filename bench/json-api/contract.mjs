@@ -220,12 +220,9 @@ export function deriveLoad(raw, expected, phase, options, tools, context) {
   const rate = metrics.requests * 1000 / duration;
   assert.ok(Math.abs(metrics.rps - rate) <= Math.max(1e-9, rate * 1e-9), "request count/rate/phase duration differ");
   if (phase === "fixed") {
-    // Historical v1 conservative eligibility policy, not a physical k6 ceiling.
-    // Missing scheduler-stop observations cannot certify delayed endpoint dispatch.
-    const periodNs = Math.floor(1e9 / raw.config.rate);
-    const lastArrival = Math.floor(raw.config.seconds * 1e9 / periodNs);
-    assert.ok(metrics.requests >= raw.config.rate * raw.config.seconds && metrics.requests <= lastArrival + 1,
-      "fixed phase must complete all offered requests without unexplained extra work");
+    // Historical v1 has no scheduler observations that can certify extra arrivals.
+    assert.equal(metrics.requests, options.rate * options.duration,
+      "historical v1 fixed phase must complete exactly the configured offer");
     // v1 captures need not retain these counters. When present, they must agree
     // with this script's one request per completed iteration and zero drops.
     if (Object.hasOwn(raw.k6.metrics, "iterations")) {
