@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Document script testing without runtime stubs: import-free shared logic in Node, including
+  Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
+
 - JSON benchmark v2 keeps classified target failures separate from apparatus
   faults, retains verified phases of incomplete passes, and leaves independently
   complete peers comparable. Raw stock-load output, counted resources, source
