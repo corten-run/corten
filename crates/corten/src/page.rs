@@ -2823,7 +2823,7 @@ fn patch_where_a_page_belongs(res: Response, shared: &Shared, method: &http::Met
 /// A navigation a service worker answers from navigation preload keeps its destination. One the
 /// worker passes on with `fetch(event.request)` arrives as `navigate` to `empty`, the tab's and
 /// a frame's alike, so it is not taken for the tab's: a known gap, since the worker may show its
-/// answer as the tab's page (design Choice 58).
+/// answer as the tab's page (`docs/design.md#choice-plain-request-patch`).
 ///
 /// Browsers send fetch metadata only to a secure context (HTTPS, `localhost`): a debug build
 /// reached over plain HTTP at another address (a phone on the LAN) gets none, so a page's own

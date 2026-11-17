@@ -3228,7 +3228,7 @@ async fn a_patch_answering_a_browsers_plain_request_is_an_error_in_debug_builds(
     // A navigation a service worker answers with navigation preload keeps its destination (probed
     // in Chromium 156 and WebKit 27.2): the tab's is checked, a frame's is not. One the worker
     // passes on with `fetch(event.request)` arrives as `navigate` to `empty`, the tab's and a
-    // frame's alike, so it is not checked (a known gap, design Choice 58).
+    // frame's alike, so it is not checked (a known gap, `docs/design.md#choice-plain-request-patch`).
     let preload = |dest| [("accept", "text/html"), ("sec-fetch-mode", "navigate"), ("sec-fetch-dest", dest), PRELOADED];
     let (status, _, body) = plain_patch_send(&router, "GET", "/items/7", &preload("document")).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "a navigation preload for the tab: {body}");
