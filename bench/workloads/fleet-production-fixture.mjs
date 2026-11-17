@@ -62,7 +62,8 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     setImmediate(() => { frame("registered", { ...registration, ...expected }); frame("progress", { state: "active" }); });
     const deadline = Date.now() + 5000, timer = setInterval(() => {
       if (state().control.sealed.includes("bootstrap")) {
-        clearInterval(timer); frame("terminal", { id: expected.id, nativeTerminal: true, sealSha256: "f".repeat(64) });
+        clearInterval(timer); frame("terminal", { id: expected.id, nativeTerminal: true,
+          campaign: `${expected.binding.round}-${expected.binding.token}`, sealSha256: "f".repeat(64) });
       } else if (Date.now() > deadline) close(255);
     }, 10);
     return child;
