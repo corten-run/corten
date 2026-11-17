@@ -675,7 +675,7 @@ export function pauseKey(event, button, prices, changes) {
 ```
 
 The handler hears every key, so it asks `shortcut(event)` whether the key is the page's to take.
-`corten/keys` is a module of its own (1,691 bytes, 871 gzipped): an app serves it only when one
+`corten/keys` is a module of its own (1,803 bytes, 916 gzipped): an app serves it only when one
 of its listed scripts imports it (a component's or a `script!` module, not a static file's), and
 a page whose handlers are in that script fetches it with the script, on a full load and on a page
 the runtime swaps in (not a patch).

@@ -116,6 +116,13 @@ Corten is pre-1.0, so any minor version may change the API.
   Trusted Types enforcement would reject. The scripts guide shows how to read a part again
   with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
 
+- Form controls named `parentElement`, `parentNode` or other DOM members no longer hang
+  patching or stand in for the form's members that the runtime (patches, navigation),
+  `shortcut()`, `view()`, `rows()` and the generated view classes read. A generated class now
+  reads a hole whose path starts from a form, into it or past it, and a form's whole text through
+  the platform's getters; its steps from any other element are unchanged
+  ([#1531 Patching a form with a control named parentElement hangs the tab: the runtime walks parentElement, which the control shadows](https://github.com/corten-run/corten/issues/1531)).
+
 - Apply supported lean settings to catalog-page competitors as well as Corten:
   reduce optional access logging, compression and timer work where supported,
   record the exact profile in container evidence and reports, and retain full
