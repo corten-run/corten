@@ -3127,13 +3127,17 @@ rules something out.
     navigation's page, a form's answer, a `<corten-live>` fragment, a layout element a write's page
     draws again in place. Served beside the runtime, not with the app's scripts, so an app with no
     static files or components has it too. The runtime is 15,466 bytes gzipped and 13,976 brotli
-    at `e12287ab3` (15,407 and 13,925 on main at `b0c2abd4d`, so 59 and 51 more), and the module 1,537 and 1,365; those 59 bytes are the import, the hand-over, the search
+    at `2d697e24d` (15,407 and 13,925 on main at `b0c2abd4d`, so 57 and 63 more), and the module 1,534 and 1,359; those 57 bytes are the import, the hand-over, the search
     of a markup's text (the server's or a script's patch), the query of the head on load and the
-    call that shows a part's read what its `apply` parsed (`signal.o`, below), which every page
-    runs (a search of text already in hand, one query of the head, one property read) and which a
-    page without a slow part ends there. Without that call it would be 55 and 49 more than main;
-    the parsed patch kept on `apply` for the module to read after the call (round 15) cost the same
-    59 bytes gzipped (56 brotli) but was shared by every call, a parameter of `apply` 61 and 59, a
+    call that shows a part's read what its `apply` parsed (`own`, below), which every page
+    runs (a search of text already in hand, one query of the head, one test of an argument) and
+    which a page without a slow part ends there. Without that call it would be 55 and 49 more than
+    main; a method `o` of the call's signal (round 16) cost 59 and 51, but a script's `patch()`
+    passes its own signal, so a script's signal with an `o` refused the patch or was shown its
+    markup (round 17); the parsed patch kept on `apply` for the module to read after the call
+    (round 15) cost 59 bytes gzipped (56 brotli) but was shared by every call, a seventh parameter
+    of `apply` 61 and 59, a test of `own` as a function in `apply` rather than in its parse 61 and
+    60, a key of a `WeakMap` the runtime hands the module 68 and 55, a private `Symbol` 73 and 70, a
     method named `parsed` 60 and 58, a variable of the runtime read through a function handed to
     the module 69 and 69, a call into the module with it 73 and 73, and a second read of a part
     read's `signal.aborted` once its answer was drawn (round 14) 63 and 68 with the search; a search for the name only after a space or a `/` cost 5 bytes more than one
@@ -3187,8 +3191,10 @@ rules something out.
     with no delay; a part's own slow part is read in by the link's page. The module knows which
     tags an answer drew from the elements of its markup, before anything else can run: the
     runtime's `apply` parses a patch as soon as it is called and, before it links a stylesheet or
-    loads a module the patch needs, calls `o` on the call's signal, if it has one, with what it
-    parsed. A part's read gives its signal an `o` that takes the waiting tags in that markup (those
+    loads a module the patch needs, hands what it parsed to its `own` argument when that is a
+    function, which only a part's read passes: the module has `apply` from the runtime, which never
+    exports it, and a script's `patch()` passes `false`, its signal only a signal, whatever
+    properties it has. A part's read passes a function that takes the waiting tags in that markup (those
     in its elements and in the content of a template that appends, not those in any other
     template's content, which never joins the page). The markup goes from the call to its own read
     and nowhere else, so nothing keeps it once the call is over (drawn, cancelled, aborted, or
@@ -3212,7 +3218,8 @@ rules something out.
     back draw in it, synchronously, as the answer's (round 15); and the patch `apply` parsed last,
     kept on `apply` and read by the module right after its call, which a script's patch made from
     a stylesheet link's `connectedCallback` as `apply` linked it had already replaced, and which
-    kept a cancelled answer's markup until the next patch (round 16). A part a periodic read's answer (`ReadAgain::from`), a `<corten-live>` fragment or a
+    kept a cancelled answer's markup until the next patch (round 16); and a method `o` of the
+    call's signal, which a script's `patch()` passes as the script gave it (round 17). A part a periodic read's answer (`ReadAgain::from`), a `<corten-live>` fragment or a
     script's `patch` draws waiting is read, as one a form's answer draws is: what draws it is not
     a part's read, so it sets the pace (its interval, a stream's fragments, a user's submits), and
     one that draws the part again ends the read the one before started, so one read at most is on
@@ -3284,10 +3291,10 @@ rules something out.
     Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
     less than a marker Corten reads on every request); measured (`npm run build:js`'s
     `js/dist/corten.js` and `js/dist/part.js`, gzip level 6 and brotli level 11 by Node's
-    `zlib`: the runtime 15,466 and 13,976 bytes and the module 1,537 and 1,365 at `e12287ab3`,
+    `zlib`: the runtime 15,464 and 13,988 bytes and the module 1,534 and 1,359 at `2d697e24d`,
     against 15,407 and 13,925 for the runtime on main at `b0c2abd4d`, 15,631 and 14,094 with
     the discovery in it at `73279ab7a`, and 16,685 and 15,059 with the reads in it at
-    `cd6861c76`, so a page without a slow part loads 59 bytes gzipped more than on main, where it
+    `cd6861c76`, so a page without a slow part loads 57 bytes gzipped more than on main, where it
     loaded 224 and 1,278 more); platform (`aria-busy` means the element is being updated, WAI-ARIA
     1.2; the elements a patch draws are the ones its parse made, moved into the page, not copies,
     so the objects the module takes before the patch is drawn are the ones the page gains, and a

@@ -320,7 +320,9 @@ Without JavaScript nothing reads the part, so the waiting part holds a link to t
 route with a query field its page side reads the part in for: no second route, and nothing of
 Corten's own in the URL. The component's CSS hides the link, and shows the line saying the part is
 on its way, only while a read is bringing the part: the runtime's part module marks the part
-`aria-busy` then, and nothing else does. So the link shows without JavaScript, when the runtime or
+`aria-busy` then. A part that is a form a submit marks too has one mark, the latest's: whichever
+marked it last takes it away when it ends, so a submit's answer drawn first shows the link while
+the read is still on its way. So the link shows without JavaScript, when the runtime or
 its part module (`part.js`) does not load or run, and once the read has failed, in every browser.
 The module marks the part busy once the page is parsed, so the link is drawn for a moment on a
 load before it. A part its read did not replace (offline, the server unreachable, an error page, a
