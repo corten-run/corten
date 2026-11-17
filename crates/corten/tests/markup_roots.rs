@@ -67,9 +67,8 @@ fn nesting_boundaries_and_unknown_namespaces_still_compile() {
     assert!(markup.contains("<a><a>SVG children</a></a>"));
 }
 
-/// Browsers keep these trees: an anchor reached through an SVG or MathML integration point is
-/// independent of one around the drawing, and a template's forms do not see the form pointer.
-/// The twin of the nested-form `compile_fail` example in `view`: the same document with one form.
+/// A document's body follows `<Corten />`, which `html!` does not see, so a nested form there
+/// compiles (a miss: a browser ignores the inner start tag), as does one form.
 #[component]
 fn Checkout() -> impl Document {
     html! {
@@ -79,6 +78,19 @@ fn Checkout() -> impl Document {
                 <Corten />
             </head>
             <body><main><form><div><input></div></form></main></body>
+        </html>
+    }
+}
+
+#[component]
+fn NestedCheckout() -> impl Document {
+    html! {
+        <html>
+            <head>
+                <title>"Checkout"</title>
+                <Corten />
+            </head>
+            <body><main><form><div><form><input></form></div></form></main></body>
         </html>
     }
 }
@@ -102,6 +114,7 @@ fn nested_forms_compile_where_a_template_may_hold_them() {
     assert_eq!(html! { <FormTemplate><div><form><form><input></form></form></div></FormTemplate> }.to_html(), nested);
     assert_eq!(html! { <template><NestedForms /></template> }.to_html(), nested);
     assert!(Checkout {}.to_html().contains("<main><form><div><input></div></form></main>"));
+    assert!(NestedCheckout {}.to_html().contains("<main><form><div><form><input></form></div></form></main>"));
 }
 
 #[test]
@@ -528,8 +541,211 @@ fn no_refusal_reaches_across_a_script_whose_text_may_write_tags() {
     );
 }
 
-/// `<Corten />` is Corten's head marker by any path that names it; a component of the same name
-/// does not compile (the `compile_fail` examples in `view`).
+/// A script whose text holds `<!--<script>` stays open past its literal end tag (the tokenizer's
+/// double-escaped state), so what follows is its text until a second `</script>`, here written
+/// by `raw`: a later literal `<svg>`, `<p>` or `<textarea>` shows nothing, and browsers keep
+/// each of these as written. So does markup after a script `raw` or a component opens, in a
+/// `<template>` too, and children a component writes after one.
+#[test]
+fn nothing_after_a_script_left_open_is_refused() {
+    let x = r#"<script type="text/x-template">"#;
+    let comment = r#"<div><script type="text/x-template"><!--<script></script>"#;
+    for (markup, expected) in [
+        (
+            html! {
+                <div>
+                    <script type="text/x-template">"<!--<script>"</script>
+                    <svg><div>"Detail"</div></svg>
+                    {raw("</script>")}
+                </div>
+            }
+            .to_html(),
+            format!("{comment}<svg><div>Detail</div></svg></script></div>"),
+        ),
+        (
+            html! {
+                <div>
+                    <script type="text/x-template">"<!--<script>"</script>
+                    <p><div>"Detail"</div></p>
+                    {raw("</script>")}
+                </div>
+            }
+            .to_html(),
+            format!("{comment}<p><div>Detail</div></p></script></div>"),
+        ),
+        (
+            html! {
+                <div>
+                    <script type="text/x-template">"<!--<script>"</script>
+                    <div><textarea><g></g></textarea></div>
+                    {raw("</script>")}
+                </div>
+            }
+            .to_html(),
+            format!("{comment}<div><textarea><g></g></textarea></div></script></div>"),
+        ),
+        (
+            html! {
+                <div>
+                    {raw(x)}
+                    <svg><div>"Detail"</div></svg>
+                    {raw("</script>")}
+                </div>
+            }
+            .to_html(),
+            format!("<div>{x}<svg><div>Detail</div></svg></script></div>"),
+        ),
+        (
+            html! {
+                <div>
+                    {raw(x)}
+                    <p><div>"Detail"</div></p>
+                    {raw("</script>")}
+                </div>
+            }
+            .to_html(),
+            format!("<div>{x}<p><div>Detail</div></p></script></div>"),
+        ),
+        (
+            html! {
+                <div>
+                    {raw(x)}
+                    <template><p><div>"Detail"</div></p></template>
+                    {raw("</script>")}
+                </div>
+            }
+            .to_html(),
+            format!("<div>{x}<template><p><div>Detail</div></p></template></script></div>"),
+        ),
+        (
+            html! {
+                <div>
+                    <Writes markup={x} />
+                    <div><textarea><g></g></textarea></div>
+                    <Writes markup="</script>" />
+                </div>
+            }
+            .to_html(),
+            format!("<div>{x}<div><textarea><g></g></textarea></div></script></div>"),
+        ),
+        (
+            html! {
+                <div>
+                    <Writes markup={x} />
+                    <svg><foreignObject><p><div>"Detail"</div></p></foreignObject></svg>
+                    <Writes markup="</script>" />
+                </div>
+            }
+            .to_html(),
+            format!("<div>{x}<svg><foreignObject><p><div>Detail</div></p></foreignObject></svg></script></div>"),
+        ),
+        (
+            html! { <div><Within open={x} close="</script>"><p><div>"Detail"</div></p></Within></div> }.to_html(),
+            format!("<div>{x}<p><div>Detail</div></p></script></div>"),
+        ),
+    ] {
+        assert_eq!(markup, expected);
+    }
+}
+
+mod custom {
+    use corten::prelude::*;
+
+    /// An app's component that shares the head marker's name.
+    #[component]
+    pub fn Corten() -> impl Render {
+        html! { <p>"App component"</p> }
+    }
+}
+
+mod opens {
+    use corten::prelude::*;
+
+    /// One that writes what it is given, unbalanced.
+    #[component]
+    pub fn Corten(markup: &'static str) -> impl Render {
+        html! { {raw(markup)} }
+    }
+}
+
+mod wraps {
+    use corten::prelude::*;
+
+    /// One that writes a `<button>` before its children and leaves it open.
+    #[component]
+    pub fn Corten(children: impl Render) -> impl Render {
+        html! { {raw("<button>")}{children} }
+    }
+}
+
+/// Every component is unseen, `<Corten />` too: `html!` knows it only by its name, which an app's
+/// component may share, so a component named `Corten` compiles by any path, with or without
+/// children, and no refusal reaches across it. Browsers keep each of these as written.
+#[test]
+fn a_component_named_corten_is_unseen_like_any_other() {
+    assert_eq!(html! { <div><custom::Corten /></div> }.to_html(), "<div><p>App component</p></div>");
+    let kept = "<p><button><div>Detail</div></button></p>";
+    assert_eq!(
+        html! {
+            <p>
+                <opens::Corten markup="<button>" />
+                <div>"Detail"</div>
+                {raw("</button>")}
+            </p>
+        }
+        .to_html(),
+        kept
+    );
+    assert_eq!(
+        html! {
+            <p>
+                <wraps::Corten><div>"Detail"</div></wraps::Corten>
+                {raw("</button>")}
+            </p>
+        }
+        .to_html(),
+        kept
+    );
+    {
+        use opens::Corten;
+        assert_eq!(
+            html! {
+                <p>
+                    <Corten markup="<button>" />
+                    <div>"Detail"</div>
+                    {raw("</button>")}
+                </p>
+            }
+            .to_html(),
+            kept
+        );
+        let open = true;
+        assert_eq!(
+            html! {
+                <p>
+                    if open { <Corten markup="<button>" /> }
+                    <div>"Detail"</div>
+                    {raw("</button>")}
+                </p>
+            }
+            .to_html(),
+            kept
+        );
+        assert_eq!(
+            html! {
+                <p>
+                    <span><Corten markup="</span><button><span>" /></span>
+                    <div>"Detail"</div>
+                    {raw("</button>")}
+                </p>
+            }
+            .to_html(),
+            "<p><span></span><button><span></span><div>Detail</div></button></p>"
+        );
+    }
+}
+
+/// Corten's own head marker still compiles by any path that names it, and writes the head.
 #[component]
 fn QualifiedMarker() -> impl Document {
     html! {

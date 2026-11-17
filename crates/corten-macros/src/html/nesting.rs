@@ -1,15 +1,17 @@
 //! Literal HTML nesting whose start tags close or discard an open element. This is not an HTML
 //! validator. A refusal rests only on literal markup of the same `html!` that lies between the two
 //! elements: what the markup does not show (its caller's context, a component's output or
-//! children, an expression's output, `raw` among them) may open or close anything, so after one
-//! nothing open before it is known to be open, how the markup is parsed is not known until an
-//! element shows it again, and nothing is known to be outside a `<template>`. The content of a
-//! `<template>` and of a foreign element (an `<svg>`, a `<math>`, their integration points, or
-//! one whose namespace the markup does not show) starts with no element open too. A `<script>`
-//! or `<style>` whose literal text holds a `<` is unseen as well: `html!` writes that text as is,
-//! and `</script>` in it ends the element where the text says, not where the markup does.
+//! children, `<Corten />` among them, an expression's output, `raw` among them) may open or close
+//! anything. It may also leave a browser reading text: a `<script>`, a `<textarea>`, a
+//! `<plaintext>` or a comment it opens runs on past any later literal start tag, which is then
+//! not a tag at all. So once the walk passes one, nothing after it in the same `html!` is
+//! refused, whatever it shows. The content of a `<template>` and of a foreign element (an `<svg>`,
+//! a `<math>`, their integration points, or one whose namespace the markup does not show) starts
+//! with no element open. A `<script>` or `<style>` whose literal text holds a `<` is unseen as
+//! well: `html!` writes that text as is, and `</script>` in it ends the element where the text
+//! says, not where the markup does (and `<!--<script>` keeps it open past the literal end tag).
 
-use super::{as_html, breaks_out, is_corten, parsing_within, writes_tags, Attr, Error, Node, Parsing};
+use super::{as_html, breaks_out, parsing_within, writes_tags, Attr, Error, Node, Parsing};
 use crate::tokens::err;
 use proc_macro::Span;
 
@@ -149,17 +151,6 @@ const SPECIAL: &[&str] = &[
 
 const IMPLIED_END: &[&str] = &["dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc"];
 
-/// Whether the markup being walked is in a template's content, as far as it shows. Only a
-/// document's markup (`is_document`) is known to be outside one, and only before anything it does
-/// not show (`Walk::opaque`), which may open a `<template>`: any other `html!`, and a component's
-/// children, may be written into a `<template>` by a caller.
-#[derive(Clone, Copy, PartialEq)]
-enum Template {
-    Inside,
-    Outside,
-    Unknown,
-}
-
 struct Open<'a> {
     name: &'a str,
     html: bool,
@@ -168,31 +159,21 @@ struct Open<'a> {
 /// The walk's state, in document order.
 struct Walk<'a> {
     open: Vec<Open<'a>>,
-    /// The elements of `open` below this index are not known to be open where the walk is: they
-    /// were opened before something the markup does not show, or outside the template or foreign
-    /// element whose content is being walked.
+    /// The elements of `open` below this index are outside the template or foreign element whose
+    /// content is being walked, and are not open in it.
     floor: usize,
-    /// How many nodes the markup does not show have been passed (expressions, components and
-    /// their children, but `<Corten />`, whose head tags open nothing, and a `<script>` or
-    /// `<style>` whose text may write tags).
-    opaque: usize,
-}
-
-impl Walk<'_> {
-    /// Past a node the markup does not show: what it writes may close the open elements, or open
-    /// others (a `<button>`, an `<svg>`, a `<template>`) that change what follows.
-    fn unseen(&mut self) {
-        self.opaque += 1;
-        self.floor = self.open.len();
-    }
+    /// Whether a node the markup does not show comes before this point (`holds_unseen`). What it
+    /// writes may close the open elements or open others, and may leave a browser reading text,
+    /// so from there to the end of the `html!` no start tag is known to be read as one.
+    unseen: bool,
 }
 
 /// Whether `nodes` hold something the markup does not show, at any depth: an expression, a
-/// component, or a `<script>` or `<style>` whose text may write tags (`writes_tags`).
+/// component (`<Corten />` too: the macro sees only its name, which an app's component may
+/// share), or a `<script>` or `<style>` whose text may write tags (`writes_tags`).
 pub(super) fn holds_unseen(nodes: &[Node]) -> bool {
     nodes.iter().any(|node| match node {
-        Node::Expr(_) => true,
-        Node::Component { path, .. } => !is_corten(path),
+        Node::Expr(_) | Node::Component { .. } => true,
         Node::Element { name, children, .. } => writes_tags(name, children) || holds_unseen(children),
         Node::Block { bodies, .. } => bodies.iter().any(|body| holds_unseen(body)),
         Node::Text(_) | Node::Markup(_) | Node::Let(_) => false,
@@ -221,16 +202,12 @@ fn in_scope<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
 
 /// The open element this start tag closes or discards, if the literal ancestors establish it.
 /// `open` holds only the elements known to be open: those written since the last thing the
-/// markup does not show, in the content being walked. Every rule but the form's searches it from
-/// the innermost element out and stops at a literal match or boundary, and finds nothing past its
-/// end. The form pointer is not reset by scope, and a template's content does not use it, so a
-/// nested form is refused only where the markup shows it is outside every template.
-fn displaced<'a>(open: &[Open<'a>], name: &str, template: Template) -> Option<&'a str> {
-    if name.eq_ignore_ascii_case("form") && template == Template::Outside {
-        if let Some(form) = open.iter().rev().find(|e| e.html && e.name.eq_ignore_ascii_case("form")) {
-            return Some(form.name);
-        }
-    }
+/// markup does not show, in the content being walked. Every rule searches it from the innermost
+/// element out and stops at a literal match or boundary, and finds nothing past its end. A nested
+/// `<form>` is not among them: a browser ignores one only outside every `<template>`, which no
+/// markup the walk reaches shows (a fragment's caller may write it into one, and a document's
+/// body follows `<Corten />`, which is unseen).
+fn displaced<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
     if is(name, &["select", "input"]) {
         if let Some(select) = in_scope(open, "select") {
             return Some(select);
@@ -294,100 +271,67 @@ fn displaced<'a>(open: &[Open<'a>], name: &str, template: Template) -> Option<&'
     open.last().filter(|e| e.html && heading(e.name) && heading(name)).map(|e| e.name)
 }
 
-/// `document`: the markup is a whole document (`<!DOCTYPE html>` and `<html>`), the page itself,
-/// so outside every template. Written into a template it would not be kept as written anyway:
-/// a browser drops its `<html>`, `<head>` and `<body>` tags there.
-pub(super) fn check(nodes: &[Node], document: bool) -> Result<(), Error> {
-    let template = if document { Template::Outside } else { Template::Unknown };
-    walk(nodes, Parsing::Unknown, template, &mut Walk { open: Vec::new(), floor: 0, opaque: 0 })
+pub(super) fn check(nodes: &[Node]) -> Result<(), Error> {
+    walk(nodes, Parsing::Unknown, &mut Walk { open: Vec::new(), floor: 0, unseen: false })
 }
 
-fn walk<'a>(nodes: &'a [Node], mut parsing: Parsing, template: Template, w: &mut Walk<'a>) -> Result<(), Error> {
+fn walk<'a>(nodes: &'a [Node], parsing: Parsing, w: &mut Walk<'a>) -> Result<(), Error> {
     for node in nodes {
-        let seen = w.opaque;
+        // Past something the markup does not show, a browser may be reading text that a later
+        // literal end tag does not end (`<!--<script>`, `<plaintext>`), or what follows may be
+        // anywhere: nothing after it is refused.
+        if w.unseen {
+            return Ok(());
+        }
         match node {
             Node::Element { name, attrs, children } => {
                 let html = html_element(parsing, name, attrs);
                 if html {
-                    let template = if template == Template::Outside && w.opaque > 0 { Template::Unknown } else { template };
-                    if let Some(parent) = displaced(&w.open[w.floor..], name, template) {
-                        let action = if name.eq_ignore_ascii_case("form") && parent.eq_ignore_ascii_case("form") {
-                            "ignores the nested <form> start tag".into()
-                        } else {
-                            format!("closes <{parent}> before <{name}>")
-                        };
+                    if let Some(parent) = displaced(&w.open[w.floor..], name) {
                         return err(
                             Span::call_site(),
                             format!(
-                                "<{name}> cannot be nested in the open <{parent}>: a browser {action}, so refs can leave their component's scope; put them beside one another, or use a container that can hold both (a <div> instead of a <p>)"
+                                "<{name}> cannot be nested in the open <{parent}>: a browser closes <{parent}> before <{name}>, so refs can leave their component's scope; put them beside one another, or use a container that can hold both (a <div> instead of a <p>)"
                             ),
                         );
                     }
                 }
                 w.open.push(Open { name, html });
-                // Text a `<script>` or `<style>` writes as is may end it and open anything: from
-                // there, nothing open is known, nor how what it holds and what follows is parsed.
-                let escapes = writes_tags(name, children);
-                if escapes {
-                    w.unseen();
-                }
+                // Text a `<script>` or `<style>` writes as is may end it and open anything.
                 // Text holders are already checked by the parser; noscript is text with
                 // scripting enabled and markup without it, so do not assume either here. What
                 // they hold is not walked, but an expression there may still close them.
-                if html && (super::reads_as_text(parsing, name) || name.eq_ignore_ascii_case("noscript")) {
-                    if holds_unseen(children) {
-                        w.unseen();
-                    }
+                if writes_tags(name, children)
+                    || (html && (super::reads_as_text(parsing, name) || name.eq_ignore_ascii_case("noscript")))
+                {
+                    w.unseen |= holds_unseen(std::slice::from_ref(node));
                 } else {
-                    let within = if escapes { Parsing::Unknown } else { parsing_within(parsing, name, attrs) };
                     // A template's content, and a foreign element's, start with no element open.
-                    let template_content = name.eq_ignore_ascii_case("template");
-                    let fresh = template_content || !html;
-                    let (floor, before) = (w.floor, w.opaque);
-                    if fresh {
+                    let floor = w.floor;
+                    if name.eq_ignore_ascii_case("template") || !html {
                         w.floor = w.open.len();
                     }
-                    walk(children, within, if template_content { Template::Inside } else { template }, w)?;
-                    if fresh && w.opaque == before {
-                        w.floor = floor;
-                    }
+                    walk(children, parsing_within(parsing, name, attrs), w)?;
+                    w.floor = floor;
                 }
                 w.open.pop();
-                w.floor = w.floor.min(w.open.len());
             }
             // One body or another, or one again: each is walked from where the block starts, as
-            // the first time it is written; what follows the block follows any of them.
+            // the first time it is written (a refusal in the first run holds whenever it runs);
+            // what follows the block follows any of them.
             Node::Block { bodies, .. } => {
-                let (floor, before) = (w.floor, w.opaque);
                 let mut unseen = false;
                 for body in bodies {
-                    (w.floor, w.opaque) = (floor, before);
-                    walk(body, parsing, template, w)?;
-                    unseen |= w.opaque != before;
+                    w.unseen = false;
+                    walk(body, parsing, w)?;
+                    unseen |= w.unseen;
                 }
-                (w.floor, w.opaque) = (floor, before);
-                if unseen {
-                    w.unseen();
-                }
+                w.unseen = unseen;
             }
-            // `<Corten />` marks where Corten writes its own head tags, which open nothing.
-            Node::Component { path, .. } if is_corten(path) => {}
-            // A component writes what it likes around its children, perhaps a template of its
-            // own; inside a template they stay in it, and they are walked as markup of their own.
-            Node::Component { children, .. } => {
-                w.unseen();
-                if let Some(children) = children {
-                    walk(children, Parsing::Unknown, template, w)?;
-                    w.unseen();
-                }
-            }
-            Node::Expr(_) => w.unseen(),
+            // A component writes what it likes before its children, a `<script>` perhaps, so
+            // nothing in them or after them is refused; `<Corten />` is one like any other.
+            Node::Component { .. } | Node::Expr(_) => w.unseen = true,
             Node::Text(_) | Node::Markup(_) | Node::Let(_) => {}
-        }
-        // Past something the markup does not show, it shows nothing of how what follows is
-        // parsed, until an element shows it again.
-        if w.opaque != seen {
-            parsing = Parsing::Unknown;
         }
     }
     Ok(())
@@ -406,7 +350,7 @@ mod tests {
 
     fn lost(ancestors: &[&str], name: &str) -> bool {
         let open: Vec<_> = ancestors.iter().map(|name| Open { name, html: true }).collect();
-        displaced(&open, name, Template::Outside).is_some()
+        displaced(&open, name).is_some()
     }
 
     #[test]
@@ -426,10 +370,8 @@ mod tests {
         assert!(lost(&["a", "div", "span"], "a"));
         assert!(!lost(&["a", "object"], "a"));
         assert!(!lost(&["a", "table", "caption"], "a"));
-        assert!(lost(&["form", "table", "td"], "form"));
-        for template in [Template::Inside, Template::Unknown] {
-            assert!(displaced(&[Open { name: "form", html: true }], "form", template).is_none());
-        }
+        // A browser ignores a nested form only outside every template, which no markup shows.
+        assert!(!lost(&["form", "div"], "form"));
         assert!(lost(&["button", "span"], "button"));
         assert!(!lost(&["button", "object"], "button"));
         assert!(lost(&["h1"], "h2"));
@@ -476,7 +418,7 @@ mod tests {
             el("div", vec![el("form", vec![el("form", vec![el("input", Vec::new())])])]),
         ];
         for node in kept {
-            assert!(check(std::slice::from_ref(&node), false).is_ok());
+            assert!(check(std::slice::from_ref(&node)).is_ok());
         }
     }
 
@@ -544,54 +486,68 @@ mod tests {
             ];
             for nodes in between {
                 let node = wrap(around, nodes.into_iter().next().unwrap());
-                assert!(check(std::slice::from_ref(&node), false).is_ok(), "{outer} {inner}");
+                assert!(check(std::slice::from_ref(&node)).is_ok(), "{outer} {inner}");
             }
-            // Before the outer, inside the elements that showed HTML: what it writes may open an
-            // <svg>, whose <a> or <option> are SVG's.
-            // (An element taken out of foreign content shows HTML again itself, so a <p> after
-            // one is still refused.)
-            if !breaks_out(outer, &[]) {
-                let node = wrap(
-                    around,
-                    Node::Block {
-                        head: Vec::new(),
-                        bodies: vec![vec![expr(), el(outer, vec![el(inner, Vec::new())])]],
-                        arms: false,
-                    },
-                );
-                assert!(check(std::slice::from_ref(&node), false).is_ok(), "{outer} {inner} after an expression");
+            // Before the outer, anywhere earlier: what it writes may open an <svg>, whose <a> or
+            // <option> are SVG's, or leave a browser reading a script's text, which a literal
+            // element taken out of foreign content (a <p>) does not end.
+            let refused = || wrap(around, el(outer, vec![el(inner, Vec::new())]));
+            let befores: [fn() -> Node; 7] = [
+                expr,
+                || component(None),
+                || component(Some(Vec::new())),
+                || el("span", vec![expr()]),
+                || el("title", vec![expr()]),
+                || writes("script", "<!--<script>"),
+                || Node::Block { head: Vec::new(), bodies: vec![vec![expr()], Vec::new()], arms: false },
+            ];
+            for (i, before) in befores.iter().enumerate() {
+                assert!(check(&[before(), refused()]).is_ok(), "{outer} {inner} after {i}");
+                // Into a fresh context: a template's content, an <svg>'s integration point.
+                for fresh in [el("template", vec![refused()]), el("svg", vec![el("foreignObject", vec![refused()])])] {
+                    assert!(check(&[before(), fresh]).is_ok(), "{outer} {inner} in a fresh context after {i}");
+                }
             }
+            // A component's children follow what it writes first.
+            assert!(check(&[component(Some(vec![refused()]))]).is_ok(), "{outer} {inner} as children");
         }
-        // A nested form in a whole document, after an expression (`raw("<template>")`) or a
-        // component anywhere before it.
-        let document = |before: Node| {
-            let forms = el("form", vec![el("form", vec![el("input", Vec::new())])]);
-            el("html", vec![el("head", vec![before]), el("body", vec![el("main", vec![forms])])])
-        };
-        for before in [
-            expr(),
-            component(None),
-            el("header", vec![expr()]),
-            el("title", vec![expr()]),
-            writes("script", "</script><template><script>"),
-            el("header", vec![writes("style", "</style><template><style>")]),
-        ] {
-            assert!(check(&[document(before)], true).is_ok());
-        }
+        // A nested form in a whole document compiles, after `<Corten />` as before anything.
+        let forms = el("form", vec![el("form", vec![el("input", Vec::new())])]);
+        let document = el("html", vec![el("head", vec![component(None)]), el("body", vec![el("main", vec![forms])])]);
+        assert!(check(&[document]).is_ok());
     }
 
     /// A script's text that may write tags leaves what follows it unseen: `</script><svg><script>`
-    /// makes the `<a>`s after it SVG's, which browsers keep nested.
+    /// makes the `<a>`s after it SVG's, which browsers keep nested, and `<!--<script>` keeps the
+    /// script open past its literal end tag, so a later literal `<svg>`, `<p>` or `<textarea>`
+    /// shows nothing either.
     #[test]
     fn a_script_whose_text_may_write_tags_shows_neither_namespace_nor_open_elements() {
         for holder in [writes("script", "</script><svg><script>"), writes("style", "</style><svg><style>")] {
-            assert!(check(&[el("div", vec![holder, el("a", vec![el("a", Vec::new())])])], false).is_ok());
+            assert!(check(&[el("div", vec![holder, el("a", vec![el("a", Vec::new())])])]).is_ok());
+        }
+        let detail = || el("div", vec![Node::Text("Detail".into())]);
+        let laters = [
+            || el("svg", vec![el("div", vec![Node::Text("Detail".into())])]),
+            || el("p", vec![el("div", vec![Node::Text("Detail".into())])]),
+            || el("svg", vec![el("foreignObject", vec![el("p", vec![el("div", Vec::new())])])]),
+            || el("template", vec![el("p", vec![el("div", Vec::new())])]),
+            || el("div", vec![el("textarea", vec![el("g", Vec::new())])]),
+        ];
+        for (i, later) in laters.iter().enumerate() {
+            for opener in [writes("script", "<!--<script>"), expr(), component(None)] {
+                assert!(check(&[el("div", vec![opener, later(), expr()])]).is_ok(), "{i}");
+            }
+            // Inside a block, which what follows it follows.
+            let block = Node::Block { head: Vec::new(), bodies: vec![vec![expr()]], arms: false };
+            assert!(check(&[el("div", vec![block, later()]), el("p", vec![detail()])]).is_ok(), "{i} after a block");
         }
         assert!(holds_unseen(&[writes("style", "</style>")]));
         assert!(holds_unseen(&[el("div", vec![writes("script", "a <b")])]));
         assert!(!holds_unseen(&[writes("script", "track();")]));
         // Only a script's or a style's text is written as is; a <title>'s is escaped.
         assert!(!holds_unseen(&[writes("title", "</title>")]));
+        assert!(holds_unseen(&[component(None)]));
     }
 
     /// A literal `<svg>` or `<math>` where how the browser parses is not known does not show its
@@ -601,11 +557,11 @@ mod tests {
     fn a_foreign_root_whose_namespace_the_markup_does_not_show_shows_no_integration_point() {
         let links = |root: &str, point: &str| el(root, vec![el(point, vec![el("a", vec![el("a", Vec::new())])])]);
         for (root, point) in [("math", "mtext"), ("math", "mi"), ("svg", "title"), ("svg", "foreignObject"), ("svg", "desc")] {
-            assert!(check(&[links(root, point)], false).is_ok(), "{root} {point}");
+            assert!(check(&[links(root, point)]).is_ok(), "{root} {point}");
             // Supplied as a component's children, which it may write into the other one.
-            assert!(check(&[component(Some(vec![links(root, point)]))], false).is_ok(), "{root} {point} as children");
+            assert!(check(&[component(Some(vec![links(root, point)]))]).is_ok(), "{root} {point} as children");
             // After an expression in an element that showed HTML.
-            assert!(check(&[el("div", vec![expr(), links(root, point)])], false).is_ok(), "{root} {point} after an expression");
+            assert!(check(&[el("div", vec![expr(), links(root, point)])]).is_ok(), "{root} {point} after an expression");
         }
     }
 
@@ -630,7 +586,7 @@ mod tests {
         for _ in 0..3 {
             let start = std::time::Instant::now();
             for _ in 0..rounds {
-                check(std::hint::black_box(&nodes), false).unwrap();
+                check(std::hint::black_box(&nodes)).unwrap();
             }
             println!("nesting check, 3001 elements: {:.1} us/expansion", start.elapsed().as_secs_f64() * 1e6 / rounds as f64);
         }

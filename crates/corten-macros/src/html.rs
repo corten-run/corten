@@ -50,7 +50,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             mark_scope(&mut nodes, scope)?;
         }
         check_raw_text(&nodes, None)?;
-        nesting::check(&nodes, is_document(&nodes))?;
+        nesting::check(&nodes)?;
         check_pages(&nodes)?;
         if could_patch(&nodes) {
             check_patch_top(&nodes)?;
@@ -1199,7 +1199,10 @@ struct Cursor {
     parsing: Parsing,
     /// Inside a `<script>` or a `<style>`, whose text `Gen` writes as is (`writes_tags`).
     raw_text: bool,
-    /// How many nodes the markup does not show this cursor has passed (`nesting::holds_unseen`).
+    /// How many nodes the markup does not show come before this point (`nesting::holds_unseen`).
+    /// After one a browser may be reading text that no later literal end tag ends (a `<script>`
+    /// whose text holds `<!--<script>`, a `<plaintext>`, a comment), so from there to the end of
+    /// the `html!` no literal element shows how it is parsed or that it holds text.
     opaque: usize,
 }
 
@@ -1231,8 +1234,8 @@ impl Cursor {
     }
 
     /// Past an expression, a component or a block holding one: what it writes may close the
-    /// element whose content is read as text, or open an `<svg>` or an integration point, so the
-    /// markup shows neither until an element shows it again.
+    /// element whose content is read as text, open an `<svg>` or an integration point, or leave
+    /// a browser reading text, so the markup shows none of them again (`tag`).
     fn unseen(&mut self) {
         self.opaque += 1;
         self.parsing = Parsing::Unknown;
@@ -1240,13 +1243,14 @@ impl Cursor {
     }
 
     /// The body of a `for`, `if` or `match` here, inside an `<svg>` or an element read as text
-    /// when this is.
+    /// when this is, and after what the markup does not show when this is.
     fn inner(&self, group: &Group) -> Self {
         Cursor {
             aria_svg: self.aria_svg,
             text_only: self.text_only.clone(),
             parsing: self.parsing,
             raw_text: self.raw_text,
+            opaque: self.opaque,
             ..Cursor::of(group)
         }
     }
@@ -1649,10 +1653,17 @@ impl Cursor {
         } else {
             let outer = self.aria_svg;
             self.aria_svg = within_aria_svg(outer, &name);
-            // A component's children go where it writes them, which this markup does not see.
-            let holder = (!component && reads_as_text(self.parsing, &name)).then(|| name.clone());
+            // A component's children go where it writes them, after what it writes first, which
+            // this markup does not see. After what it does not see, a literal element shows
+            // neither how its content is parsed nor that it is read as text: a browser may still
+            // be reading a script's text there.
+            if component {
+                self.unseen();
+            }
+            let shown = self.opaque == 0;
+            let holder = (shown && reads_as_text(self.parsing, &name)).then(|| name.clone());
             let outer_text = std::mem::replace(&mut self.text_only, holder);
-            let inner = if component { Parsing::Unknown } else { parsing_within(self.parsing, &name, &attrs) };
+            let inner = if shown { parsing_within(self.parsing, &name, &attrs) } else { Parsing::Unknown };
             let outer_parsing = std::mem::replace(&mut self.parsing, inner);
             let outer_raw = std::mem::replace(&mut self.raw_text, !component && RAW_TEXT.contains(&name.as_str()));
             let seen = self.opaque;
@@ -2322,12 +2333,7 @@ impl Gen {
         let literal = stream([TokenTree::Group(Group::new(Delimiter::Brace, fields))]);
         let mut out = path.clone();
         out.extend(literal);
-        if !is_corten(path) {
-            return out;
-        }
-        // The checks take `<Corten />` for Corten's head marker, which writes only closed head
-        // tags; a compile-time assertion, with no code at render, that the path names it.
-        q("{ const _: () = ::corten::view::__private::head_marker::<__A0>(); __A1 }", &[path.clone(), out])
+        out
     }
 
     fn finish(mut self) -> TokenStream {

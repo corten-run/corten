@@ -294,9 +294,12 @@ use std::{
 /// Put the elements beside one another, or use a container that can hold them (`<div>` rather
 /// than `<p>` for a block). A refusal rests only on literal markup of the same `html!` between
 /// the two elements, followed through control flow. What the markup does not show may write
-/// anything: after an expression (`raw` among them) or a component, with or without children,
-/// nothing written before it is taken to be open, and how the browser parses what follows is
-/// not known until an element shows it, so `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
+/// anything: an expression (`raw` among them), a component, with or without children
+/// (`<Corten />` too: the macro knows it only by its name, which a component of the app's may
+/// share), and a `<script>` or `<style>` whose literal text holds a `<`, which `html!` writes as
+/// is. What it writes may close the open elements, open others, or leave a browser reading a
+/// script's text past any later literal end tag (`<!--<script>` does), so nothing after it in the
+/// same `html!` is refused, whatever it shows: `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
 /// compiles, as browsers keep it. Nor does a literal `<svg>` or `<math>` show its namespace where
 /// the markup does not (a `<math>` an `<svg>` holds is SVG's), so its integration points do not
 /// show HTML there. A `<template>`'s content and an `<svg>`'s or a `<math>`'s start with
@@ -332,81 +335,14 @@ use std::{
 /// let _ = html! { <div><a href="#one"><span><a href="#two">"Two"</a></span></a></div> };
 /// ```
 ///
-/// A nested `<form>` is refused only in a document's markup, the page itself, before anything the
-/// markup does not show (but `<Corten />`, whose head tags open nothing): any other view may be
-/// written into a `<template>` by its caller, and an expression, a component, or a `<script>` or
-/// `<style>` whose text holds a `<` (written as is, so `</script>` there ends it) may open one,
-/// where a browser keeps a form in a form.
-///
-/// ```compile_fail
-/// use corten::prelude::*;
-/// #[component]
-/// fn Checkout() -> impl Document {
-///     html! {
-///         <html><head><title>"Checkout"</title><Corten /></head><body><main><form><div><form><input></form></div></form></main></body></html>
-///     }
-/// }
-/// ```
-///
 /// ```compile_fail
 /// use corten::prelude::*;
 /// let _ = html! { <div><button><span><button>"Again"</button></span></button></div> };
 /// ```
 ///
-/// `<Corten />` is taken as seen because it is Corten's head marker, `corten::Corten`, and
-/// `html!` checks that the path names it: a component of the same name, by its path or a `use`,
-/// does not compile, since what it writes would be taken as seen. Rename it.
-///
-/// ```compile_fail,E0277
-/// use corten::prelude::*;
-/// mod custom {
-///     use corten::prelude::*;
-///     #[component]
-///     pub fn Corten() -> impl Render {
-///         raw("<button>")
-///     }
-/// }
-/// #[component]
-/// fn Summary() -> impl Render {
-///     html! { <p><custom::Corten /><div>"Detail"</div>{raw("</button>")}</p> }
-/// }
-/// # fn main() {}
-/// ```
-///
-/// ```compile_fail,E0277
-/// use corten::prelude::*;
-/// mod custom {
-///     use corten::prelude::*;
-///     #[component]
-///     pub fn Corten() -> impl Render {
-///         raw("<button>")
-///     }
-/// }
-/// use custom::Corten;
-/// #[component]
-/// fn Summary(open: bool) -> impl Render {
-///     html! { <div>if open { <Corten /> }</div> }
-/// }
-/// # fn main() {}
-/// ```
-///
-/// One with type parameters (children) fails too, its path naming a type without them:
-///
-/// ```compile_fail
-/// use corten::prelude::*;
-/// mod custom {
-///     use corten::prelude::*;
-///     #[component]
-///     pub fn Corten(children: impl Render) -> impl Render {
-///         html! { {raw("<button>")}{children} }
-///     }
-/// }
-/// #[component]
-/// fn Summary() -> impl Render {
-///     html! { <p><custom::Corten><div>"Detail"</div></custom::Corten></p> }
-/// }
-/// # fn main() {}
-/// ```
+/// A nested `<form>` is not refused: a browser ignores one only outside every `<template>`, which
+/// no markup shows. A fragment's caller may write it into one, and a document's body follows
+/// `<Corten />`, which the check does not see.
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -469,9 +405,10 @@ use std::{
 /// ```
 ///
 /// Three kinds of markup a browser parses differently from how it is written do not compile, where
-/// the markup shows how the browser parses it: an element inside one whose content a browser reads
-/// as text, a `<plaintext>`, and an element a browser takes out of an `<svg>` or a `<math>`
-/// (and a patch's top level a browser loses, under [`Patch`]).
+/// the markup shows how the browser parses it, before anything it does not show (above): an
+/// element inside one whose content a browser reads as text, a `<plaintext>`, and an element a
+/// browser takes out of an `<svg>` or a `<math>` (and a patch's top level a browser loses, under
+/// [`Patch`]).
 /// Table foster parenting (a `<div>` straight in a `<table>`) is not checked here.
 /// An element written inside one whose content a browser parsing HTML reads as
 /// text would show its tags as text, or put them in a field's value, rather than make an element.
@@ -2492,18 +2429,6 @@ pub mod __private {
         super::mark_head_tags(&scratch, out);
         HEAD_SCRATCH.set(scratch);
     }
-
-    /// Corten's head marker, the one component `html!` takes as writing only closed head tags.
-    #[diagnostic::on_unimplemented(
-        message = "`{Self}` is not Corten's head marker, which `<Corten />` in `html!` names",
-        label = "html! takes a component named `Corten` for `corten::Corten`, whose tags open nothing",
-        note = "rename this component, so html! treats what it writes as unseen markup, or write `<corten::Corten />`"
-    )]
-    pub trait HeadMarker {}
-    impl HeadMarker for crate::Corten {}
-
-    /// `<Corten />` names `corten::Corten`: checked when it compiles, by `html!`.
-    pub const fn head_marker<T: HeadMarker>() {}
 
     /// The id of an element of the layout that is the page's (`page`), which the runtime finds on
     /// screen by it: a `#[derive(Id)]` type without a key, not text, so it is the same on every

@@ -4307,8 +4307,7 @@ rules something out.
     closes a paragraph in button scope; an `<li>`, `<dd>` or `<dt>` closes an earlier item when
     no special element but an `<address>`, `<div>` or `<p>` intervenes; an `<a>` acts on an
     active anchor before the last formatting-list marker; a `<button>` or `<nobr>` closes an
-    earlier one in scope; a heading directly in a heading closes it; and an inner `<form>`
-    outside a `<template>` is ignored. A nested `<select>` or `<input>` closes a select in
+    earlier one in scope; and a heading directly in a heading closes it. A nested `<select>` or `<input>` closes a select in
     scope; option, option-group and ruby starts generate implied end tags where their scope
     establishes it, keeping the exceptions for an `<option>` in an `<optgroup>` and an `<rt>`
     in an `<rtc>`. These now fail at compile time, with or without refs,
@@ -4324,37 +4323,46 @@ rules something out.
     says and the rest is markup, `<!--<script>` keeps a script open past its end tag, and in an
     `<svg>` or `<math>` any `<` may start an element; a `<` split across adjacent literals is in
     one of them), and the namespace of a literal `<svg>` or `<math>` written
-    where the markup does not show HTML. `<Corten />` is the one component taken as seen: Corten
-    writes only its own head tags there (`<meta>`, `<link>`, `<script>`, `<style>`), each
-    closed, none of which changes what follows, and `html!` asserts when it compiles that the
-    path names `corten::Corten` (`view::__private::head_marker`), so a component of the same
-    name, by its path or a `use`, does not compile rather than be taken as seen. Kind by kind:
+    where the markup does not show HTML. Every component is unseen, `<Corten />` included: the
+    macro knows a component only by the name it is written with, which an app's own component may
+    share, and proving the path names `corten::Corten` would refuse such a component, which is
+    valid markup. Unseen output may also leave a browser reading text rather than tags: a
+    `<script>` it opens (or one whose text holds `<!--<script>`) runs past any literal
+    `</script>` until a second one, a `<plaintext>` to the end of the page, a comment to its
+    `-->`, a `<textarea>` to its end tag. So the tokenizer's state is a fact apart from the
+    namespace and the open elements, and a later literal start tag proves none of them: once
+    the walk or the parser passes an unseen node, nothing after it in the same `html!` is
+    refused, in a `<template>`, an `<svg>` or a `<foreignObject>` it opens too (one body of a
+    block does not follow another, so a refusal in a body with nothing unseen before it stands).
+    The one context taken as known is the tokenizer's at the top of the markup: an `html!` is
+    taken to start where a browser reads tags. A caller can write a component's markup into a
+    script's text or a comment (by `raw`, or after a script whose text holds `<!--<script>`),
+    where a browser keeps a refused shape as text rather than as the elements written; that is
+    the one place a refusal stops output a browser serializes back unchanged. Kind by kind:
     an element read as text needs its holder to be parsed as HTML (an element that is HTML's
     wherever it lands, or an integration point of an `<svg>` or `<math>` such an element holds,
-    with nothing unseen between it and the holder) and the holder's content up to the element to
-    be literal; an expression there may write `</textarea>`. A `<plaintext>` needs the first of
+    with nothing unseen before the holder in the same `html!`) and the holder's content up to
+    the element to be literal; an expression there may write `</textarea>`. A `<plaintext>` needs the first of
     those. An element taken out of foreign content needs to be written in a literal `<svg>` or
     `<math>`, through elements that are an integration point in neither namespace, with nothing
-    unseen between them, which may write a `<foreignObject>`; it does not need the root's own
+    unseen before it in the same `html!` (between them it may write a `<foreignObject>`, before
+    them leave a script open); it does not need the root's own
     namespace, since a start tag of that list leaves SVG and MathML alike. A nesting rule needs
-    both elements to be HTML's, as above, and every element open between them to be literal and
-    written after the last unseen node: an expression between them may close the outer element
+    both elements to be HTML's, as above, every element open between them to be literal, and
+    nothing unseen before the inner one in the same `html!`: an expression between them may close the outer element
     (`raw("</p>")`) or open a boundary that stops the browser's search (`<button>`, `<object>`,
     `<ul>`, `<dl>`, a `<span>` under a heading or an option, a `<ruby>`, an `<svg>`, a
     `<template>`), and browsers then keep the inner element where it is written. The search
     starts at the inner element and stops at the first literal match or boundary within that
-    range, finding nothing past it, so what lies before the last unseen node cannot change its
-    answer. A nested `<form>` needs more: the form pointer is not reset by scope and a template's
-    content does not use it, so it needs the markup to show that no `<template>` is open anywhere
-    around the inner form and that nothing has reset the pointer. Only a document's markup
-    (`<!DOCTYPE html>` and `<html>`, the page itself, which a browser would not keep as written
-    inside a template anyway, since it drops the `<html>`, `<head>` and `<body>` tags there)
-    shows that, and only up to its first unseen node: in practice a document whose head and body
-    are literal down to the inner form (an expression in its `<title>` ends it). Any other
-    `html!`, a component's children, and what follows an expression or a component may be
-    written into a `<template>`, where browsers keep a form in a form, so a nested form there
-    compiles. A duplicate attribute and a hand-written `data-key` are refused by the one start tag
-    that writes them, which needs no context. A patch's top-level shape needs its first element
+    range, finding nothing past it; one before the outer element may leave a script open, which
+    makes both literal start tags text. A nested `<form>` is not refused: the form pointer is not
+    reset by scope and a template's content does not use it, so it needs the markup to show that
+    no `<template>` is open anywhere around the inner form. Only a document's markup shows that,
+    and a document's body follows its `<Corten />`, which is unseen, so no markup proves it, and
+    the rule is gone rather than kept for a document's `<head>`. A duplicate attribute and a hand-written `data-key` are refused by the one start tag
+    that writes them, which needs no context; after unseen output that start tag may be a
+    script's text, which a browser keeps, and it is refused still, since two values for one name,
+    or a key written two ways, is a mistake in the source wherever it lands. A patch's top-level shape needs its first element
     and the later one to be literal top-level elements of a view that could be a patch, with
     nothing unseen before the lost element's start tag: in the first element, between the two,
     or in a later element that holds the lost one, before it. Unseen output there may leave an
@@ -4370,31 +4378,33 @@ rules something out.
     needed: the shapes are the ones lost wherever they are written.
 
     `html/nesting.rs` walks the parsed nodes once in document order with a stack of literal
-    ancestors: past an expression or a component it treats nothing below as open, the parsing
-    context as unknown and no template as absent, and each control-flow body starts from where
-    its block does (any body is written first some time), what follows the block following any
-    of them. The parser does the same for the text-holder and foreign-content refusals. That
-    gives up the shapes a browser would change anyway whose proof crosses an unseen node:
+    ancestors and stops refusing at the first unseen node; each control-flow body starts from
+    where its block does (any body is written first some time, and a refusal in a loop's first
+    run holds whenever it runs), what follows the block following any of them. The parser does
+    the same for the text-holder and foreign-content refusals: after an unseen node a literal
+    `<svg>`, a breakout element or a `<textarea>` shows neither the namespace nor a text holder.
+    That gives up the shapes a browser would change anyway whose proof crosses an unseen node:
     `<p>{text}<div>` compiles though no text can keep the `<div>` in the `<p>`, and so does
     `<svg><foreignObject><textarea><b>` at the top of a component, which a browser changes in
     either namespace, and so does whatever follows a script or style whose text holds a `<`
-    without closing it (`if (a < b)`), which proves nothing about the elements after it;
-    misses, rather than refusals that would also stop the shapes browsers keep.
-    It adds no render code: what `html!` writes renders as before, and the one addition to
-    `Gen`, the `<Corten />` assertion, is a `const _` item that compiles to nothing. Its compile-time
+    without closing it (`if (a < b)`), and anything in a document's body, which follows its
+    `<Corten />`, and a nested `<form>` anywhere; misses, rather than refusals that would also
+    stop the shapes browsers keep.
+    It adds no render code: `Gen` writes what it wrote before this change (the `<Corten />`
+    assertion an earlier round of it added is gone). Its compile-time
     cost, measured at `960b2d5a0` by the ignored `nesting_check_cost` test in a release build
     (one Linux container, 4 CPUs): a 3,001-element list four elements deep, walked 1,000 times
     a sample, took 308.2, 304.1 and 280.5 µs a walk (median 304.1 µs, about 0.1 µs an element).
-    Not measured: the whole macro expansion, the duplicate-attribute check, and how the walk
-    grows with ancestor depth.
+    Not measured: the whole macro expansion, the duplicate-attribute check, how the walk
+    grows with ancestor depth, and the walk as this round leaves it (one flag in place of the
+    unseen count and the template state, and no form rule, so no more work a node; not run
+    again).
     Each rule keeps its own scope boundaries; a nested list in a `<ul>` and a form in a
     `<template>` still compile. The content of a `<template>` and of a foreign element (an
     `<svg>`, a `<math>`, their integration points, or an element whose namespace the markup does
     not show) starts with nothing open rather than modelling the tree builder further: an `<a>`
     reached through a `<foreignObject>`, `<title>`, `<desc>`, `<mi>` or `<mtext>` inside an
-    outer `<a>`, and nested forms under a root `<template>`, are kept by browsers and compile.
-    That gives up refusing a nested `<form>` inside a `<foreignObject>` within a form, which
-    browsers do drop, as an acceptable miss next to refusing markup they keep.
+    outer `<a>` is kept by browsers and compiles.
     A duplicate written HTML attribute name is refused case-insensitively, with an expression
     value too; spreads remain opaque, so the first `encoding` rule still
     matters when a spread precedes or follows a written one. Handler calls (`on:..`) still
@@ -4443,8 +4453,9 @@ rules something out.
     sees its own markup and nothing around it, so what its top and a component's children land
     in is not known, nor what a component or an expression writes, since `raw` prints trusted
     text as is with no promise that it is balanced, nor what a `<script>` or `<style>` writes,
-    whose text `Gen` writes as is; `<Corten />` writes only Corten's own closed head tags, and
-    the `head_marker` assertion holds the path to it; `html!` writes an element's attributes in the order they are written, spreads in their
+    whose text `Gen` writes as is, nor which component a path names (`<Corten />` may be an
+    app's); what any of those writes may leave the tokenizer in a script's, a comment's or a
+    `<plaintext>`'s text, which no later literal start tag leaves; `html!` writes an element's attributes in the order they are written, spreads in their
     place (`open_tag` in `crates/corten-macros/src/html.rs`), so the first `encoding` in the
     markup is the first the browser reads; the refusals add no code to what `html!`
     writes, so a view that compiles renders as before); value (correct output above the rest, the
@@ -4463,12 +4474,23 @@ rules something out.
     after a text expression, a row after a `<table>` whose rows an expression writes), when
     following the context across components ([Limit 30](#limit-markup-context)) would have to be
     weighed against its cost to every render; or `raw` is made to promise balanced markup, when an
-    expression could be taken to leave the open elements as they were; or `<Corten />` writes
-    anything but closed head tags, or a type other than `corten::Corten` can satisfy
-    `head_marker`; or `html!` escapes a script's or a style's text (or refuses a `<` in it),
-    when such an element stops being unseen output.
+    expression could be taken to leave the open elements as they were and the tokenizer reading
+    tags; or `html!` escapes a script's or a style's text (or refuses a `<` in it),
+    when such an element stops being unseen output; or a refused shape is found written into a
+    script's text or a comment by its caller and kept there, when the one context taken as known
+    (the tokenizer's at the top of the markup) goes too, and with it every refusal outside a
+    patch's top level but the two of a single start tag.
 
-    Last checked: 2026-11-17, after a fourth review found refusals of kept markup across a
+    Last checked: 2026-11-17, after a fifth review found refusals of kept markup after a script
+    left open (a later literal `<svg>`, `<p>` or `<textarea>` regained certainty) and asked that
+    every component, `<Corten />` included, be unseen, the outputs of the new passing cases (a
+    `<div>` in an `<svg>`, a `<div>` in a `<p>`, and a `<g>` in a `<textarea>`, each after a
+    script whose text holds `<!--<script>` and before `raw("</script>")`; the same after a script
+    `raw` opens, in a `<template>` too; and after one a component writes, in a `<foreignObject>`
+    too and as its children, and what a component named `Corten` writing `</span><button><span>`
+    makes of a `<div>` in a `<p>`) serialized back unchanged in Chromium 156.0.8078.4, Firefox
+    157.0 and WebKit 27.2, which still drop a nested form in a document's `<main>` (the miss),
+    and were added to `parsesAsHtmlMeans`; 2026-11-17, after a fourth review found refusals of kept markup across a
     `<script>` whose text `html!` writes as is and across an app component named `Corten`, the
     outputs of the new passing cases (a `<div>` in a `<p>` after `</script><button><script>` in a
     script and after the same in a style, a nested form in a template a script's text opens in a
@@ -5837,17 +5859,19 @@ by design; where it is known, a limit says what would lift it or why it is so.
     literal `<svg>` or `<math>` at the top of the markup or among a component's children does not
     show its namespace either (a `<math>` an `<svg>` holds is SVG's), so only an element taken out
     of foreign content is refused straight in it, and nothing in its integration points. Nor does
-    the markup show what an expression or a component writes (`raw` may open or close any
-    element), nor what a `<script>` or `<style>` whose literal text holds a `<` writes: `html!`
-    writes that text as is, so `</script>` in it ends the element and what follows is markup.
-    After one, nothing written before it is taken to be open, the parsing context is not
-    known until an element shows it again, and no `<template>` is taken to be absent, so none of
-    the refusals reaches across one; `<p>{text}<div>` compiles, though a browser closes the
-    paragraph, and so does `<p><script>"if (a < b) go();"</script><div>`. A nested `<form>` is
-    refused only in a document's markup, the one place the markup shows no `<template>` holds
-    it, and only before its first expression, component or such script or style, but
-    `<Corten />`, which `html!` checks names `corten::Corten` (a component of the same name does
-    not compile). Following the parsing context across components would lift the first of these: each
+    the markup show what an expression or any component writes, `<Corten />` included (`raw`
+    may open or close any element), nor what a `<script>` or `<style>` whose literal text holds
+    a `<` writes: `html!` writes that text as is, so `</script>` in it ends the element and what
+    follows is markup, and `<!--<script>` keeps it open past its end tag. What one writes may
+    leave a browser reading a script's text, a comment or a `<plaintext>`, which a later
+    literal start tag does not end, so after one nothing in the same `html!` is refused, in a
+    `<template>` or an `<svg>` written after it too; `<p>{text}<div>` compiles, though a browser
+    closes the paragraph, and so does `<p><script>"if (a < b) go();"</script><div>`, and so does
+    anything in a document's body, which follows `<Corten />`. A nested `<form>` is refused
+    nowhere: only a document's markup could show that no `<template>` holds it, and its body
+    follows `<Corten />`. The one context taken as known is that the top of an `html!` is where
+    a browser reads tags: a caller that writes a component's markup into a script's text keeps
+    a refused shape as text, and it is refused still. Following the parsing context across components would lift the first of these: each
     component's render would tell the next what it is written into, at a cost to every render,
     for markup few apps write. What an expression writes is the app's: `raw` is trusted text.
 

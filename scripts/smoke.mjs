@@ -417,7 +417,7 @@ async function parsesAsHtmlMeans(browser) {
       () => document.querySelectorAll("a").length === 2 && !document.querySelector("a a"),
     ],
     [
-      "a nested form start tag is ignored (refused by html!)",
+      "a nested form start tag is ignored (not refused by html!: no markup shows it is outside every template)",
       `<div><form id="outer"><div><form id="inner"><input></form></div></form></div>`,
       () => !!document.querySelector("#outer") && !document.querySelector("#inner"),
     ],
@@ -589,6 +589,25 @@ async function parsesAsHtmlMeans(browser) {
       markup,
       () => !!document.getElementById("outer")?.contains(document.getElementById("inner")),
     ])),
+    // After a script left open (its text holds `<!--<script>`, or `raw` or a component opened
+    // it), what follows is its text until a second `</script>`, and a component named `Corten`
+    // may write a boundary: html! refuses nothing after either, and browsers serialize each back
+    // as written (crates/corten/tests/markup_roots.rs).
+    ...[
+      `<div><script type="text/x-template"><!--<script></script><svg><div>Detail</div></svg></script></div>`,
+      `<div><script type="text/x-template"><!--<script></script><p><div>Detail</div></p></script></div>`,
+      `<div><script type="text/x-template"><!--<script></script><div><textarea><g></g></textarea></div></script></div>`,
+      `<div><script type="text/x-template"><svg><div>Detail</div></svg></script></div>`,
+      `<div><script type="text/x-template"><p><div>Detail</div></p></script></div>`,
+      `<div><script type="text/x-template"><template><p><div>Detail</div></p></template></script></div>`,
+      `<div><script type="text/x-template"><div><textarea><g></g></textarea></div></script></div>`,
+      `<div><script type="text/x-template"><svg><foreignObject><p><div>Detail</div></p></foreignObject></svg></script></div>`,
+      `<p><span></span><button><span></span><div>Detail</div></button></p>`,
+    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+      `a browser keeps markup after unseen output as written: ${markup}`,
+      markup,
+      () => document.body.innerHTML === markup,
+    ])),
   ];
   for (const [name, markup, keeps] of shapes) {
     await page.setContent(`<!DOCTYPE html><html><head><title>Shapes</title></head><body>${markup}</body></html>`);
@@ -611,7 +630,6 @@ function refusedNesting() {
   shapes.push([["ul"], "li", "span", "li"], [["ul"], "li", "div", "li"], [["dl"], "dt", "div", "dd"]);
   for (const outer of ["dd", "dt"]) for (const inner of ["dd", "dt"]) shapes.push([["dl"], outer, "", inner]);
   for (const name of ["a", "button", "nobr"]) for (const between of ["span", "div"]) shapes.push([["div"], name, between, name]);
-  shapes.push([["div"], "form", "div", "form"]);
   const headings = ["h1", "h2", "h3", "h4", "h5", "h6"];
   for (const outer of headings) for (const inner of headings) shapes.push([["div"], outer, "", inner]);
   shapes.push([["div"], "select", "option", "input"], [["div"], "select", "option", "select"]);

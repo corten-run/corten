@@ -11,14 +11,15 @@ Corten is pre-1.0, so any minor version may change the API.
 - **Breaking:** `html!` refuses duplicate written HTML attribute names (case-insensitively, including
   names with expression values), hand-written `data-key` (write `key={..}`), and visible HTML
   nesting whose start tags close or discard an open element: blocks in paragraphs, nested list
-  and definition items without a boundary, active anchors, nested forms in a document's markup
-  outside templates, buttons or `nobr` still in scope, directly nested headings, and select,
+  and definition items without a boundary, active anchors, buttons or `nobr` still in scope,
+  directly nested headings, and select,
   option-group, option and ruby starts that close an open element. Diagnostics say what to change. The content of a
   `<template>` or of SVG and MathML is checked apart from the elements around it, where browsers
   keep what is written.
-  A refusal rests only on literal markup between the two elements: nesting across a component
-  or an expression (`raw` may write any element) and spreads remain unchecked; this is not
-  a complete HTML validator ([views](docs/guide/views.md)).
+  A refusal rests only on literal markup of the same `html!` before the inner element: nothing
+  after a component (`<Corten />` too, so nothing in a document's body), an expression (`raw`
+  may write any element, or leave a script open) or a spread is checked, nor is a nested form;
+  this is not a complete HTML validator ([views](docs/guide/views.md)).
 
 - `html!` no longer refuses an element in a `<textarea>`, `<title>` or another element read as
   text, or a `<plaintext>`, under the `<foreignObject>`, `<desc>`, `<title>` or `<mtext>` of an
@@ -34,9 +35,12 @@ Corten is pre-1.0, so any minor version may change the API.
   compiles, as browsers keep it, and a `<div>` after `<script>"if (a < b) go();"</script>` in a
   `<p>` is no longer refused either (a miss).
 
-- **Breaking:** a component named `Corten` other than `corten::Corten` (`<custom::Corten />`, or
-  one brought in by `use`) no longer compiles in `html!`, which takes `<Corten />` for Corten's
-  head marker and so treats what it writes as seen: rename it.
+- `html!` refuses nothing after unseen output in the same markup, even where a later literal
+  `<svg>`, `<p>` or `<textarea>` would have shown the context: what an expression, a component
+  or a script whose text holds `<!--<script>` writes may leave a browser reading the script's
+  text, so `<script>"<!--<script>"</script><p><div>..</div></p>{raw("</script>")}` compiles, as
+  browsers keep it. `<Corten />` is unseen like any other component, so a component of the
+  app's named `Corten` compiles, and nothing in a document's body is refused (a miss).
 
 - The patch shapes `html!` refuses (below) compile where output the markup does not show (an
   expression, a component, or a `<script>` or `<style>` whose text holds a `<`) comes before the
