@@ -6,7 +6,7 @@ import { replayCatalog } from "./raw.mjs";
 import { summarizeSamples } from "./stats.mjs";
 import { digest, verifyControl } from "./apparatus.mjs";
 import { inspectCatalog, renderCatalog } from "./report.mjs";
-import { preflightArtifacts } from "./preflight.mjs";
+import { preflightArtifacts, requiredRoundArtifacts } from "./preflight.mjs";
 
 const failure = { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 1 };
 const prefix = "api/fastapi/p1-page";
@@ -91,7 +91,9 @@ test("whole-round v4 replay requires the exact source closure, first-host prefli
   ];
   for (const mutate of mutations) {
     f.files.clear(); for (const [k, v] of originals) f.files.set(k, v); f.summary = structuredClone(summary);
-    mutate(); assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
+    mutate();
+    if (requiredRoundArtifacts(f.summary).every((key) => f.files.has(key))) indexRound(f);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
   }
 });
 
