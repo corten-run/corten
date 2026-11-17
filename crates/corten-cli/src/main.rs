@@ -19,6 +19,7 @@ mod pin;
 mod scripts;
 mod ui;
 
+use std::io::Write;
 use std::process::{Command, ExitCode};
 
 const HELP: &str = "corten: create, run and check Corten apps
@@ -134,7 +135,7 @@ fn main() -> ExitCode {
 /// Reuse the command's sections of the full help, before any app inspection or work.
 fn command_help(args: &[String]) -> Option<String> {
     let command = args.first()?;
-    if !args[1..].iter().take_while(|arg| arg.as_str() != "--").any(|arg| arg == "--help" || arg == "-h") {
+    if !asks_help(&args[1..]) {
         return None;
     }
     let name = match command.as_str() {
@@ -155,6 +156,22 @@ fn command_help(args: &[String]) -> Option<String> {
             .map(|section| format!("  corten {section}\n"))
             .collect(),
     )
+}
+
+/// Whether `--help` or `-h` stands in a flag position of a command's arguments: before `--`, and
+/// not as the value of an option that takes one (`--corten-path --help` names a directory).
+fn asks_help(args: &[String]) -> bool {
+    let mut args = args.iter().take_while(|arg| arg.as_str() != "--");
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => return true,
+            "--name" | "--corten-path" | "--port" => {
+                args.next();
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// `corten check`'s flags: whether `--no-script-types` skips the scripts' type check.
@@ -195,11 +212,12 @@ fn check(skip: bool) -> Result<(), String> {
 
 /// Cargo's output is inherited already. Name even a silent or cached step in redirected logs.
 fn check_step<T>(name: &str, run: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-    eprintln!("corten check: {name}");
+    // Progress only: a closed stderr must not stop a step or lose its result.
+    let _ = writeln!(std::io::stderr(), "corten check: {name}");
     let start = std::time::Instant::now();
     let result = run();
     let outcome = if result.is_ok() { "finished in" } else { "failed after" };
-    eprintln!("corten check: {name} {outcome} {:.2}s", start.elapsed().as_secs_f64());
+    let _ = writeln!(std::io::stderr(), "corten check: {name} {outcome} {:.2}s", start.elapsed().as_secs_f64());
     result
 }
 
@@ -242,8 +260,19 @@ fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String>
 
 #[cfg(test)]
 mod tests {
-    use super::{check_flags, lint_build_test};
+    use super::{asks_help, check_flags, lint_build_test};
     use std::cell::RefCell;
+
+    #[test]
+    fn help_is_asked_only_in_a_flag_position() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert!(asks_help(&args(&["app", "--help"])));
+        assert!(asks_help(&args(&["app", "--name", "shop", "-h"])));
+        assert!(!asks_help(&args(&["app", "--corten-path", "--help"])));
+        assert!(!asks_help(&args(&["app", "--name", "-h"])));
+        assert!(!asks_help(&args(&["--port", "--help"])));
+        assert!(!asks_help(&args(&["app", "--", "--help"])));
+    }
 
     #[test]
     fn check_takes_only_the_flag_that_skips_script_types() {
