@@ -32,6 +32,7 @@
 
 import { patchOf, snapshotOf } from "./feed.js";
 import { parseOn } from "./on.js";
+import { getter } from "./dom.js";
 
 // Trusted Types (the CSP's `require-trusted-types-for 'script'`, `trusted-types corten`): markup and
 // the worker's URL reach the DOM only through this policy, which only this module holds, so it
@@ -185,18 +186,19 @@ function load(name) {
  * focuses one through focusOn, sets the custom properties of one through styleOf, and dispatches
  * to, listens on and marks one busy through formCall.
  * A field it reads (an input, select or textarea) has no controls, so its members are read
- * directly. Some members it still reads or calls directly on any element: `parentElement`,
- * `localName`, `nodeName`, `childNodes`, `childElementCount`, `outerHTML`, `textContent`,
- * `cloneNode`, `showPopover`, and the layout a nav link's ancestors are measured by
- * (`getBoundingClientRect`, `getClientRects`, `scrollWidth`, `clientWidth`, `clientLeft`,
- * `scrollBy`). These are names no form gives a field, and the first ones are read on every walk
- * up the page; a control named one breaks that read or call (`childElementCount` only makes a
- * patch fall back to a scan of the children). (It writes `tabIndex`, which sets the attribute
- * whatever a control is named.) Being the prototype's own, these also skip a custom element's
+ * directly. Navigation, identity and markup reads use the captured getters in dom.js.
+ * It writes `tabIndex`, which sets the attribute
+ * whatever a control is named. Being the prototype's own, these also skip a custom element's
  * override of the member. Held as `elementOwn.closest` rather than taken off the prototype by
  * name: the runtime ships smaller.
  */
 const elementOwn = Element.prototype;
+const parentElementOf = getter(Node.prototype, "parentElement");
+const childNodesOf = getter(Node.prototype, "childNodes");
+const nodeNameOf = getter(Node.prototype, "nodeName");
+const textOf = getter(Node.prototype, "textContent");
+const localNameOf = getter(elementOwn, "localName");
+const outerOf = getter(elementOwn, "outerHTML");
 /** @param {Element} el @param {string} name */
 const attrOf = (el, name) => elementOwn.getAttribute.call(el, name);
 /** @param {Element} el @param {string} name */
@@ -762,7 +764,7 @@ function observed(records) {
     if (record.removedNodes.length) removed = true;
     const added = record.addedNodes;
     const parent = record.target;
-    if (added.length > MANY && parent instanceof Element && added.length * 2 >= parent.childElementCount) wide.add(parent);
+    if (added.length > MANY && parent instanceof Element && added.length * 2 >= childrenOf(parent).length) wide.add(parent);
     else for (const node of Array.from(added)) if (node instanceof Element && inPage(node)) scan(node, names);
   }
   // Wiring is the same however often it runs, so a parent scanned whole may hold rows wired before.
@@ -1045,20 +1047,22 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
     if (hasAttr(el, "data-corten-read-again")) again = el;
     else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
       // Focus in it goes to the nearest element around it that can take focus.
-      const up = !!target && holds(target, document.activeElement) && target.parentElement;
+      const parent = target && parentElementOf(target);
+      const up = !!target && holds(target, document.activeElement) && parent;
       navs ||= !!target && holdsNav(target);
-      if (target?.parentElement) changedIn(target.parentElement, ["x", id, []]);
+      if (parent) changedIn(parent, ["x", id, []]);
       if (target) elementOwn.remove.call(target);
       if (up) focusNear(up);
     }
-    else if (!target) console.error(`corten: patch element <${el.localName}> needs an id that exists on the page`, el);
+    else if (!target) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
     else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
       put.push(...Array.from(el.content.children));
       serve(el.content);
-      changedIn(target, ["a", id, Array.from(el.content.childNodes)]);
+      changedIn(target, ["a", id, Array.from(childNodesOf(el.content))]);
       elementOwn.append.call(target, el.content);
     } else {
-      if (target.parentElement) changedIn(target.parentElement, ["r", id, [el]]);
+      const parent = parentElementOf(target);
+      if (parent) changedIn(parent, ["r", id, [el]]);
       replaceKeeping(target, el, sent, took, true, within);
       put.push(el);
     }
@@ -1084,8 +1088,9 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
  */
 function partTagBeside(put) {
   for (const el of put) {
-    if (!idOf(el) || !el.parentElement) continue;
-    const tag = Array.from(childrenOf(el.parentElement)).find((sibling) => matchesOf(sibling, PART_AGAIN));
+    const parent = parentElementOf(el);
+    if (!idOf(el) || !parent) continue;
+    const tag = Array.from(childrenOf(parent)).find((sibling) => matchesOf(sibling, PART_AGAIN));
     if (tag) return tag;
   }
 }
@@ -1135,8 +1140,8 @@ const PART_AGAIN = "template[data-corten-read-again][data-from]";
  * @param {Element} main
  */
 function readPartsAgain(main) {
-  for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) {
-    readPatchAgain(tag, [tag, ...Array.from(childrenOf(/** @type {Element} */ (tag.parentElement))).filter((el) => idOf(el))]);
+  for (const tag of Array.from(queryAll(main, PART_AGAIN))) {
+    readPatchAgain(tag, [tag, ...Array.from(childrenOf(/** @type {Element} */ (parentElementOf(tag)))).filter((el) => idOf(el))]);
   }
 }
 
@@ -1275,12 +1280,12 @@ function counterpart(root, fresh, el, exact, ids) {
   if (exact) return null;
   /** @type {Element | undefined} */
   let found = home;
-  for (let at = el, path = []; ; at = /** @type {Element} */ (at.parentElement)) {
+  for (let at = el, path = []; ; at = /** @type {Element} */ (parentElementOf(at))) {
     if (at === anchor) {
       for (const i of path) found = found && childrenOf(found)[i];
-      return found?.localName === el.localName ? found : null;
+      return found && localNameOf(found) === localNameOf(el) ? found : null;
     }
-    path.unshift(Array.prototype.indexOf.call(childrenOf(/** @type {Element} */ (at.parentElement)), at));
+    path.unshift(Array.prototype.indexOf.call(childrenOf(/** @type {Element} */ (parentElementOf(at))), at));
   }
 }
 
@@ -1348,8 +1353,8 @@ function opened(root, fresh, ids, within) {
     if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) continue;
     // A dialog or popover only by id: by place, another row's could open over the page.
     const to = counterpart(root, fresh, el, dialog || popover, ids);
-    if (!to || to.localName !== el.localName) continue;
-    if (shown && hasAttr(to, "popover")) later.push(() => /** @type {HTMLElement} */ (to).showPopover());
+    if (!to || localNameOf(to) !== localNameOf(el)) continue;
+    if (shown && hasAttr(to, "popover")) later.push(() => HTMLElement.prototype.showPopover.call(to));
     if (!toggles) continue;
     const drawnOpen = /** @type {HTMLDialogElement} */ (to).open;
     // Unchanged since the server sent it (or unknown, markup a script added): the fresh markup
@@ -1412,9 +1417,9 @@ function replaceKeeping(root, fresh, sent, took, focus = true, within) {
     // Only a field found by id or name gets the user's text: by place, rows that moved could
     // put it into another row's field.
     const field = /** @type {HTMLInputElement} */ (f);
-    const file = field.type === "file";
+    const file = f instanceof HTMLInputElement && field.type === "file";
     const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true, ids);
-    if (!to || to.localName !== f.localName) continue;
+    if (!to || localNameOf(to) !== localNameOf(f)) continue;
     typedFields.add(to);
     // An input, as `f` is: the names are the same.
     if (file) files.push([/** @type {HTMLInputElement} */ (to), field.files]);
@@ -1431,8 +1436,10 @@ function replaceKeeping(root, fresh, sent, took, focus = true, within) {
   if (next instanceof HTMLElement) {
     focusOn(next);
     try {
-      const { selectionStart, selectionEnd, selectionDirection } = /** @type {HTMLInputElement} */ (focused);
-      if (selectionStart !== null) /** @type {HTMLInputElement} */ (next).setSelectionRange(selectionStart, selectionEnd, selectionDirection ?? undefined);
+      if (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement) {
+        const { selectionStart, selectionEnd, selectionDirection } = focused;
+        if (selectionStart !== null) /** @type {HTMLInputElement} */ (next).setSelectionRange(selectionStart, selectionEnd, selectionDirection ?? undefined);
+      }
     } catch {}
   }
   // The focused element went with the patch, or its counterpart cannot take focus.
@@ -1466,9 +1473,9 @@ function focusNear(el, root, fresh) {
       if (made) elementOwn.removeAttribute.call(to, "tabindex");
     }
     if (fresh && el === root) {
-      el = fresh.parentElement;
+      el = parentElementOf(fresh);
       fresh = undefined;
-    } else el = el.parentElement;
+    } else el = parentElementOf(el);
   }
 }
 
@@ -1526,7 +1533,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   }
   const title = content.querySelector("title");
   if (title) {
-    document.title = title.textContent ?? "";
+    document.title = textOf(title) ?? "";
     title.remove();
   }
   const tags = Array.from(content.querySelectorAll("[data-corten-head]"));
@@ -1550,7 +1557,8 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   for (const [old, part] of parts) {
     // One inside an element the layout drew changes what a write's page is compared with, as a
     // patch there does; one that is such an element takes its place (`replaceKeeping`).
-    if (!drawn.has(old) && old.parentElement) changedIn(old.parentElement, ["r", /** @type {string} */ (idOf(part)), [part]]);
+    const parent = parentElementOf(old);
+    if (!drawn.has(old) && parent) changedIn(parent, ["r", /** @type {string} */ (idOf(part)), [part]]);
     // A link followed moves the focus as one in the header does; a read again keeps it.
     replaceKeeping(old, part, null, false, !!stay);
   }
@@ -1578,7 +1586,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
  * (`markCurrent`).
  * @param {Element} el
  */
-const markupOf = (el) => comparable(el.outerHTML);
+const markupOf = (el) => comparable(outerOf(el));
 /**
  * Each pattern runs only on markup that holds its start: a load compares the head's tags, which
  * hold none, and a pattern's first use costs more than the rest of the load's comparison.
@@ -1629,7 +1637,7 @@ const partSent = new WeakMap();
  */
 function changedIn(el, [how, id, nodes]) {
   partSent.delete(/** @type {Element} */ (closestOf(el, "[data-corten-page]")));
-  for (let up = /** @type {Element | null} */ (el); up; up = up.parentElement) {
+  for (let up = /** @type {Element | null} */ (el); up; up = parentElementOf(up)) {
     const was = drawn.get(up);
     if (was === undefined) continue;
     // Parsed at the first patch into it, not at load.
@@ -1640,7 +1648,7 @@ function changedIn(el, [how, id, nodes]) {
       drawn.set(up, `\0${(patched += 1)}`);
       return;
     }
-    const fresh = nodes.map((n) => n.cloneNode(true));
+    const fresh = nodes.map((n) => Node.prototype.cloneNode.call(n, true));
     if (how === "x") elementOwn.remove.call(at);
     else if (how === "a") elementOwn.append.call(at, ...fresh);
     else elementOwn.replaceWith.call(at, ...fresh);
@@ -1661,12 +1669,13 @@ let patched = 0;
  * @param {string | Patched} was @returns {string | null}
  */
 function drawnAs(was) {
-  if (typeof was !== "string") return was.copy.outerHTML;
+  if (typeof was !== "string") return outerOf(was.copy);
   return was.startsWith("\0") ? null : was;
 }
-for (let el = document.querySelector("main"); el && el !== document.body; el = el.parentElement) {
+for (let el = document.querySelector("main"); el && el !== document.body; el = parentElementOf(el)) {
   // As sent, made comparable only if a write's page is compared with it, so a load pays for the copy alone.
-  for (const beside of el.parentElement ? Array.from(childrenOf(el.parentElement)) : []) if (beside !== el) drawn.set(beside, beside.outerHTML);
+  const parent = parentElementOf(el);
+  for (const beside of parent ? Array.from(childrenOf(parent)) : []) if (beside !== el) drawn.set(beside, outerOf(beside));
 }
 for (const part of Array.from(document.querySelectorAll("[data-corten-page]"))) partSent.set(part, markupOf(part));
 
@@ -1680,14 +1689,14 @@ function frameOf(doc) {
   const parts = [];
   // Each element by its distance from <main>, so two <div>s around it are two entries.
   let depth = 0;
-  for (let el = doc.querySelector("main"); el; el = el.parentElement, depth++) {
-    parts.push(`${depth}<${el.localName}`);
+  for (let el = doc.querySelector("main"); el; el = parentElementOf(el), depth++) {
+    parts.push(`${depth}<${localNameOf(el)}`);
     for (const a of Array.from(attributesOf(el))) if (a.name !== "nonce" && a.name !== "aria-busy") parts.push(`${depth} ${a.name}="${a.value}"`);
   }
   for (const el of Array.from(doc.head.children)) {
     // The page's values (`style={..}`) are its own, set on what is swapped in (`setVars`).
-    if (el.localName === "style" && el.textContent?.startsWith("[data-vars=")) continue;
-    if (!el.matches('title, script, [data-corten-head], link[data-corten-style], link[rel="modulepreload"]')) parts.push(markupOf(el));
+    if (localNameOf(el) === "style" && textOf(el)?.startsWith("[data-vars=")) continue;
+    if (!matchesOf(el, 'title, script, [data-corten-head], link[data-corten-style], link[rel="modulepreload"]')) parts.push(markupOf(el));
   }
   return parts;
 }
@@ -1722,16 +1731,16 @@ function layoutChanges(doc, notice) {
   let here = document.querySelector("main");
   let there = doc.querySelector("main");
   while (here && there && here !== document.body) {
-    const up = here.parentElement;
-    const upThere = there.parentElement;
-    if (!up || !upThere || up.localName !== upThere.localName) return null;
+    const up = parentElementOf(here);
+    const upThere = parentElementOf(there);
+    if (!up || !upThere || localNameOf(up) !== localNameOf(upThere)) return null;
     const mine = Array.from(childrenOf(up)).filter((el) => el === here || drawn.has(el));
     const theirs = Array.from(childrenOf(upThere));
     if (mine.length !== theirs.length || mine.indexOf(here) !== theirs.indexOf(there)) return null;
     for (const [i, el] of mine.entries()) {
       const their = theirs[i];
       if (el === here) continue;
-      if (!their || el.localName !== their.localName) return null;
+      if (!their || localNameOf(el) !== localNameOf(their)) return null;
       const was = drawn.get(el);
       const as = was === undefined ? "" : drawnAs(was);
       if (as === null || comparable(as) !== markupOf(their) || shows(their, said)) changed.push([el, their, was]);
@@ -1778,7 +1787,7 @@ const LIVE = '[role="status"], [role="alert"], [aria-live]';
  * @param {Element} el @param {string | null} said
  */
 const shows = (el, said) =>
-  said !== null && [...(matchesOf(el, LIVE) ? [el] : []), ...Array.from(queryAll(el, LIVE))].some((live) => live.textContent?.includes(said));
+  said !== null && [...(matchesOf(el, LIVE) ? [el] : []), ...Array.from(queryAll(el, LIVE))].some((live) => textOf(live)?.includes(said));
 /**
  * Draws `fresh`, the server's markup for the layout element `old`, in its place, as a patch
  * replaces an element ({@link replaceKeeping}), except that a live region in it (a toaster's)
@@ -1790,7 +1799,7 @@ const shows = (el, said) =>
  * @param {Element} old @param {Element} fresh @param {Element | null} before @param {string | null} said @param {boolean} [inside]
  */
 function drawLayout(old, fresh, before, said, inside = false) {
-  if (old.localName !== fresh.localName || !(inside || matchesOf(old, LIVE) || queryOne(old, LIVE))) return replaceKeeping(old, fresh, null);
+  if (localNameOf(old) !== localNameOf(fresh) || !(inside || matchesOf(old, LIVE) || queryOne(old, LIVE))) return replaceKeeping(old, fresh, null);
   // Changed in place: a page's part that is or holds it is drawn by the next navigation.
   partSent.delete(/** @type {Element} */ (closestOf(old, "[data-corten-page]")));
   const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => attrOf(old, a)).join("\n");
@@ -1821,14 +1830,14 @@ function drawLayout(old, fresh, before, said, inside = false) {
   }
   if (matchesOf(old, LIVE)) {
     const content = document.createDocumentFragment();
-    content.append(...Array.from(fresh.childNodes));
+    content.append(...Array.from(childNodesOf(fresh)));
     serve(content);
     elementOwn.replaceChildren.call(old, content);
     return;
   }
-  const [mine, theirs] = [Array.from(old.childNodes), Array.from(fresh.childNodes)];
-  if (mine.length !== theirs.length || mine.some((n, i) => n.nodeName !== theirs[i]?.nodeName)) return replaceKeeping(old, fresh, null);
-  const then = before && before.childNodes.length === theirs.length ? before.childNodes : null;
+  const [mine, theirs] = [Array.from(childNodesOf(old)), Array.from(childNodesOf(fresh))];
+  if (mine.length !== theirs.length || mine.some((n, i) => nodeNameOf(n) !== (theirs[i] ? nodeNameOf(theirs[i]) : undefined))) return replaceKeeping(old, fresh, null);
+  const then = before && childNodesOf(before).length === theirs.length ? childNodesOf(before) : null;
   mine.forEach((n, i) => {
     const [there, was] = [theirs[i], then?.[i]];
     // The same length as `mine`, checked above.
@@ -1838,7 +1847,7 @@ function drawLayout(old, fresh, before, said, inside = false) {
       return;
     }
     const fresh = /** @type {Element} */ (there);
-    const same = was instanceof Element && was.localName === n.localName && comparable(was.outerHTML) === markupOf(fresh);
+    const same = was instanceof Element && localNameOf(was) === localNameOf(n) && comparable(outerOf(was)) === markupOf(fresh);
     if (!same || shows(fresh, said)) drawLayout(n, fresh, was instanceof Element ? was : null, said, true);
   });
 }
@@ -1873,7 +1882,7 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
   const head = [doc.querySelector("title"), ...Array.from(doc.head.querySelectorAll("[data-corten-head], link[data-corten-style]"))].filter(
     (el) => el !== null,
   );
-  const text = head.map((el) => el.outerHTML).join("") + main.innerHTML;
+  const text = head.map((el) => outerOf(el)).join("") + main.innerHTML;
   const whole = comparableText(text);
   // Read again with nothing new in the page: it stays as it is, with what the user typed and its
   // live streams, and only what changed around it (a count the layout reads) is drawn.
@@ -1889,7 +1898,7 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
   }
   // The nodes parsed above, not the text parsed again.
   const content = document.createDocumentFragment();
-  content.append(...head, ...Array.from(main.childNodes));
+  content.append(...head, ...Array.from(childNodesOf(main)));
   const swappedIn = await swapPage(text, signal, stay, notice, layout, content);
   if (swappedIn) swappedWhole = whole;
   return swappedIn;
@@ -1959,13 +1968,13 @@ function viewOf(root, fresh) {
   /** The rows the user scrolled sideways, back to their start too. @type {Element[]} */
   const rows = [];
   const around = new Set(scrolledIn);
-  for (let el = document.activeElement; el && el !== root; el = el.parentElement) around.add(el);
+  for (let el = document.activeElement; el && el !== root; el = parentElementOf(el)) around.add(el);
   for (const el of around) {
     const top = scrollOf(el, "scrollTop");
     const left = scrollOf(el, "scrollLeft");
     if (!holds(root, el) || !(top || left || sideways.has(el))) continue;
     const there = counterpart(root, to, el);
-    if (there?.localName !== el.localName) continue;
+    if ((there ? localNameOf(there) : undefined) !== localNameOf(el)) continue;
     if (top || left) scrolled.push([/** @type {Element} */ (there), top, left]);
     // Scrolled sideways now, or before (back to its start too): a scroll in the same frame as the
     // swap has not had its event yet.
@@ -2035,7 +2044,7 @@ async function stylesOf(content) {
  * @param {ParentNode} content
  */
 function preload(content) {
-  for (const link of Array.from(content.querySelectorAll('link[rel="modulepreload"]:not([data-corten-head])'))) {
+  for (const link of Array.from(queryAll(content, 'link[rel="modulepreload"]:not([data-corten-head])'))) {
     link.remove();
     const href = link.getAttribute("href");
     if (href && !document.head.querySelector(`link[rel="modulepreload"][href="${CSS.escape(href)}"]`)) document.head.append(link);
@@ -2098,6 +2107,9 @@ function markCurrent(kept = []) {
 
 /** The nav links `markCurrent` has seen. @type {WeakSet<Element>} */
 const seenNav = new WeakSet();
+const scrollWidthOf = getter(Element.prototype, "scrollWidth");
+const clientWidthOf = getter(Element.prototype, "clientWidth");
+const clientLeftOf = getter(Element.prototype, "clientLeft");
 
 /**
  * When `el` is shown and not wholly in view in the nearest box around it that overflows sideways
@@ -2113,10 +2125,10 @@ const seenNav = new WeakSet();
  */
 function inView(el, leave) {
   if (!el.getClientRects().length) return;
-  for (let box = el.parentElement; box && box !== document.body; box = box.parentElement) {
-    if (box.scrollWidth <= box.clientWidth || !/auto|scroll/.test(getComputedStyle(box).overflowX)) continue;
+  for (let box = parentElementOf(el); box && box !== document.body; box = parentElementOf(box)) {
+    if (scrollWidthOf(box) <= clientWidthOf(box) || !/auto|scroll/.test(getComputedStyle(box).overflowX)) continue;
     if (leave.includes(box)) return;
-    const [b, e] = [box.getBoundingClientRect(), el.getBoundingClientRect()];
+    const [b, e] = [elementOwn.getBoundingClientRect.call(box), el.getBoundingClientRect()];
     if (e.left >= b.left && e.right <= b.right) return;
     // A link wider than the box: its start at the start of the box's content, inside its border
     // and padding.
@@ -2126,14 +2138,14 @@ function inView(el, leave) {
         ? (e.left + e.right - b.left - b.right) / 2
         : style.direction === "rtl"
           ? e.right - (b.right - parseFloat(style.borderRightWidth) - parseFloat(style.paddingRight))
-          : e.left - (b.left + box.clientLeft + parseFloat(style.paddingLeft));
-    box.scrollBy({ left, behavior: "instant" });
+          : e.left - (b.left + clientLeftOf(box) + parseFloat(style.paddingLeft));
+    /** @type {(options: ScrollToOptions) => void} */ (elementOwn.scrollBy).call(box, { left, behavior: "instant" });
     return;
   }
 }
 
 /** The shell key the server printed for this document. */
-const shellKey = metas.querySelector('meta[name="corten-shell"]')?.getAttribute("content") ?? null;
+const shellKey = queryOne(metas, 'meta[name="corten-shell"]')?.getAttribute("content") ?? null;
 
 /**
  * True when a page response belongs to another shell: the document must be loaded in full.
@@ -2155,7 +2167,7 @@ function focusInvalid(form) {
   const active = document.activeElement;
   if (active && active !== document.body && (!home || !holds(home, active))) return;
   const field = (home && queryOne(home, '[aria-invalid="true"]')) ?? document.querySelector('main [aria-invalid="true"]');
-  if (field instanceof HTMLElement) field.focus();
+  if (field instanceof HTMLElement) focusOn(field);
 }
 
 /**
@@ -2576,7 +2588,7 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
         id = decodeURIComponent(id);
       } catch {}
       const at = id ? document.getElementById(id) : null;
-      if (at) at.scrollIntoView();
+      if (at) elementOwn.scrollIntoView.call(at);
       else scrollTo(0, 0);
     };
     interceptVisit(event, (precommit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, precommit), after, { scroll: "manual" });
@@ -2585,14 +2597,14 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   const after = () => {
     // Back to the control, unless the user has moved on meanwhile.
     const now = document.activeElement;
-    const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? placeAt(place) : undefined);
+    const el = place && (!now || now === document.body) ? placeAt(place) : undefined;
     if (!el || !place) return;
     focusOn(el);
     // One that cannot take focus (disabled, hidden, inert) did not: no other control is tried.
     if (document.activeElement !== el) return;
     try {
       const [start, end, direction] = place.caret;
-      if (start !== null) el.setSelectionRange(start, end, direction);
+      if (start !== null && (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) el.setSelectionRange(start, end, direction);
     } catch {}
   };
   const visiting = (/** @type {Precommit | undefined} */ precommit) => visit(url, event.signal, redirected, again, place, startedBy(event), written, precommit);
@@ -2750,7 +2762,7 @@ function unkept(f) {
 const fieldDrawn = (f) => {
   const field = /** @type {HTMLInputElement} */ (f);
   const more = f instanceof HTMLSelectElement ? Array.from(f.options, (o) => `\0${o.value}`).join("") : /^(checkbox|radio)$/.test(field.type) ? `\0${field.value}` : "";
-  return `${f.localName}\0${field.type}\0${stateOf(f, true)}${more}`;
+  return `${localNameOf(f)}\0${field.type}\0${stateOf(f, true)}${more}`;
 };
 
 /**
@@ -2851,11 +2863,11 @@ function placeOf(el) {
   const main = !id && control ? `main ${control}` : "";
   const at = id ? `#${CSS.escape(id)}` : anchor ? `#${CSS.escape(anchor)} ${control}` : main;
   if (!at) return null;
-  const f = /** @type {HTMLInputElement} */ (el);
+  const f = el;
   /** @type {[number | null, number | null, "forward" | "backward" | "none" | undefined]} */
   let caret = [null, null, undefined];
   try {
-    caret = [f.selectionStart, f.selectionEnd, f.selectionDirection ?? undefined];
+    if (f instanceof HTMLInputElement || f instanceof HTMLTextAreaElement) caret = [f.selectionStart, f.selectionEnd, f.selectionDirection ?? undefined];
   } catch {}
   const nth = (/** @type {string} */ selector) => Array.prototype.indexOf.call(document.querySelectorAll(selector), el);
   return { at, nth: nth(at), main, mainNth: main ? nth(main) : -1, caret };
@@ -2876,7 +2888,7 @@ function placeAt(place) {
 function anchorOf(root, el) {
   let anchor = el;
   while (anchor !== root) {
-    anchor = /** @type {Element} */ (anchor.parentElement);
+    anchor = /** @type {Element} */ (parentElementOf(anchor));
     if (idOf(anchor)) break;
   }
   return anchor;
@@ -2890,7 +2902,7 @@ function anchorOf(root, el) {
 function named(el, name) {
   const value = attrOf(el, "value");
   const choice = /^(checkbox|radio)$/.test(attrOf(el, "type") ?? "") ? (value === null ? ":not([value])" : `[value="${CSS.escape(value)}"]`) : "";
-  return `${el.localName}[name="${CSS.escape(name)}"]${choice}`;
+  return `${localNameOf(el)}[name="${CSS.escape(name)}"]${choice}`;
 }
 /**
  * How many times the page began to be left (the runtime reloads it, or the browser hides it for a
@@ -2974,9 +2986,11 @@ function asking(form, submitter) {
   const focused = document.activeElement;
   const el = submitter ?? (focused && Array.from(formProperty(form, "elements")).includes(focused) ? focused : form);
   const ids = new Set();
-  for (let at = closestOf(el, "dialog, details"); at; at = at.parentElement && closestOf(at.parentElement, "dialog, details")) {
+  for (let at = closestOf(el, "dialog, details"); at;) {
     const id = attrOf(at, "id");
     if (id) ids.add(id);
+    const parent = parentElementOf(at);
+    at = parent && closestOf(parent, "dialog, details");
   }
   return ids;
 }
@@ -3164,7 +3178,7 @@ function sendAgain(form, submitter, within) {
       ? submitter
       : all.find(
           (el) =>
-            el.localName === submitter.localName &&
+            localNameOf(el) === localNameOf(submitter) &&
             ["type", "name", "value", "formaction", "formmethod", "formenctype", "formnovalidate"].every((a) => el.getAttribute(a) === submitter.getAttribute(a)),
         );
   if (by !== undefined) send(now, by, sendsAs(now, by), within);
@@ -3261,7 +3275,7 @@ try {
 // Under `corten dev` the server sends the time it started; after a restart (a rebuild) the stream
 // reconnects to a server that started later, and the page reloads. Its other checks are a module
 // only a dev server serves (js/dev.js).
-const devStart = metas.querySelector('meta[name="corten-dev"]')?.getAttribute("content");
+const devStart = queryOne(metas, 'meta[name="corten-dev"]')?.getAttribute("content");
 if (devStart) {
   new EventSource("/corten/dev").addEventListener("message", (event) => {
     if (/** @type {MessageEvent<string>} */ (event).data !== devStart) reload();
@@ -3274,11 +3288,11 @@ if (devStart) {
 
 // App::client_zone: the browser's time zone, kept in a cookie for the server's ClientZone. Written
 // on each full load, so a visitor who travels is followed from their next page.
-if (metas.querySelector('meta[name="corten-zone"]')) {
+if (queryOne(metas, 'meta[name="corten-zone"]')) {
   document.cookie = `corten-zone=${Intl.DateTimeFormat().resolvedOptions().timeZone};path=/;max-age=31536000;samesite=lax`;
 }
 
-const worker = metas.querySelector('meta[name="corten-sw"]')?.getAttribute("content");
+const worker = queryOne(metas, 'meta[name="corten-sw"]')?.getAttribute("content");
 if (worker && "serviceWorker" in navigator) {
   addEventListener("load", () => {
     navigator.serviceWorker.register(/** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createScriptURL(worker) : worker))).catch((error) => console.error("corten: service worker registration failed", error));

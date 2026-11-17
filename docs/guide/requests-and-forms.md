@@ -92,6 +92,11 @@ small page with no ids may want. Nothing checks that a form's handler answers a 
 the page read again from its route (`ReadAgain::from`, [below](#a-read-that-has-not-caught-up-yet))
 is the one thing that needs one, so it takes only a route that says `patches`.
 
+Controls may be named `parentElement`, `parentNode`, `id`, `elements` or other DOM members.
+The runtime reads the form's own DOM members through the platform's prototypes, so these names
+do not change its patching, navigation or view operations. An app's own script that reads a form
+directly must take the same care: `form.parentElement` can be a control, not its parent.
+
 While a request is on its way, the runtime marks what waits for it with `aria-busy="true"`: a
 `data-patch` form and the button that sent it until its answer is drawn (or, when the answer
 sends the browser to another page, until that page is), and for a navigation `<main>` and the
