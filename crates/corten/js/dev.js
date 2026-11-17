@@ -107,40 +107,55 @@ const resolved = (selector, parent) => {
   return /^\s*[>+~]/.test(selector) ? `:is(${parent}) ${selector}` : `:is(${parent}) :is(${selector})`;
 };
 
+/** @param {string} selector @param {string | null} parent @param {string | null} scope */
+const inScope = (selector, parent, scope) => {
+  if (!scope) return resolved(selector, parent);
+  const scoped = selector.replaceAll(":scope", `:is(${scope})`);
+  // Unlike nesting in a style rule, a scope's plain selector can match the root itself.
+  return resolved(scoped, parent ?? (selector.includes("&") || /^\s*[>+~]/.test(selector) ? scope : null));
+};
+
 /**
  * Each style rule of the page's stylesheets that sets `display`: its selector (resolved, and as
  * written), the `@media` or
  * `@container` query it is inside (`@media (min-width: 64rem)`, or null) and whether it is
  * `!important`. Read again for each check, as a dev server's stylesheets change; a sheet the page
  * may not read is skipped.
- * @returns {{ selector: string, written: string, display: string, condition: string | null, important: boolean }[]}
+ * @returns {{ selector: string, scope: string | null, written: string, display: string, condition: string | null, important: boolean }[]}
  */
 function displays() {
-  /** @type {{ selector: string, written: string, display: string, condition: string | null, important: boolean }[]} */
+  /** @type {{ selector: string, scope: string | null, written: string, display: string, condition: string | null, important: boolean }[]} */
   const found = [];
   /**
    * @param {CSSRuleList} rules
    * @param {string | null} condition
    * @param {string | null} selector
    * @param {string | null} written
+   * @param {string | null} scope
    */
-  const walk = (rules, condition, selector, written) => {
+  const walk = (rules, condition, selector, written, scope) => {
     for (const rule of rules) {
+      if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule && rule.start) {
+        const root = inScope(rule.start, selector, scope);
+        const contained = scope ? `:is(${root}):is(${scope}, :is(${scope}) *)` : root;
+        walk(rule.cssRules, condition, null, ":scope", contained);
+        continue;
+      }
       const style = /** @type {CSSStyleRule} */ (rule).style;
       // A nested rule's own selector, or a nested block of declarations, which has its parent's.
-      const own = rule instanceof CSSStyleRule ? resolved(rule.selectorText, selector) : selector;
+      const own = rule instanceof CSSStyleRule ? inScope(rule.selectorText, selector, scope) : selector ?? scope;
       const asWritten = rule instanceof CSSStyleRule ? rule.selectorText : written;
-      if (style && own && asWritten && style.display) found.push({ selector: own, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
+      if (style && own && asWritten && style.display) found.push({ selector: own, scope, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
       // A width (or a container's size) is a breakpoint; @supports is not, and passes its own on.
       const query = rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
-      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), own, asWritten);
+      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), rule instanceof CSSStyleRule ? own : selector, asWritten, scope);
     }
   };
   for (const sheet of document.styleSheets) {
     try {
-      walk(sheet.cssRules, null, null, null);
+      walk(sheet.cssRules, null, null, null, null);
     } catch {}
   }
   return found;
@@ -172,7 +187,7 @@ function inPlace(root) {
   const rules = displays();
   for (const el of closed) {
     if (getComputedStyle(el).display !== "none") continue;
-    const applies = rules.filter((r) => matching(el, r.selector));
+    const applies = rules.filter((r) => matching(el, r.selector) && (!r.scope || matching(el, `${r.scope}, :is(${r.scope}) *`)));
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
     if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;

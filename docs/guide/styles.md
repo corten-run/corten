@@ -74,7 +74,10 @@ dialog at a width goes under `[open]` (`.modal[open] { display: grid }`), as the
 sheet do. Since nothing fails when a rail is missing (the page answers, the rail is simply not
 drawn), `corten dev` warns in the console of each closed dialog or popover that a rule inside
 `@media` or `@container` gives a `display`, at the width the page is at or any other, with both
-rules: the page cannot tell a rail from an open look written without `[open]`. When only areas
+rules: the page cannot tell a rail from an open look written without `[open]`. The check keeps
+an explicit `@scope` root, including for `:scope`, `&` and declarations directly in the scope,
+so it warns only inside that root. It does not narrow the warning by a scope's `to (limit)`.
+When only areas
 have stylesheets,
 each area's file starts with these rules. An app with no component stylesheet has neither file,
 so if its `static/style.css` gives a hidden element, a popover or a dialog a `display` (styling

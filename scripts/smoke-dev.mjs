@@ -61,7 +61,17 @@ try {
       '<dialog id="gone" class="gone"></dialog><dialog id="inplace" class="inplace"></dialog>',
       '<dialog id="enhanced" class="enhanced"></dialog><dialog id="modal" class="modal"></dialog>',
       '<div id="nav" class="nav" popover></div><div class="page"><dialog id="side" class="side"></dialog></div>',
-      '<dialog id="keptHidden" class="kept" hidden></dialog><dialog id="lastrail" class="rail"></dialog>',
+      '<dialog id="keptHidden" class="kept" hidden></dialog>',
+      '<div class="scoped"><dialog id="scopedPlain" class="scopedPlain"></dialog></div><dialog id="outsidePlain" class="scopedPlain"></dialog>',
+      '<div class="scoped"><dialog id="scopedRoot" class="scopedRoot"></dialog></div><dialog id="outsideRoot" class="scopedRoot"></dialog>',
+      '<div class="scoped"><dialog id="scopedAmp" class="scopedAmp"></dialog></div><dialog id="outsideAmp" class="scopedAmp"></dialog>',
+      '<dialog id="scopedDeclarations" class="scopedDeclarations"></dialog>',
+      '<div class="scoped"><dialog id="scopedContainer" class="scopedContainer"></dialog></div><dialog id="outsideContainer" class="scopedContainer"></dialog>',
+      '<dialog id="scopedSelf" class="scopedSelf"></dialog>',
+      '<div class="scoped"><div id="scopedPopover" class="scopedPopover" popover></div></div><div id="outsidePopover" class="scopedPopover" popover></div>',
+      '<div class="scopeHost"><div class="scopeInner"><dialog id="nestedScope" class="nestedScope"></dialog></div></div><div class="scopeInner"><dialog id="outsideNestedScope" class="nestedScope"></dialog></div>',
+      '<div class="outerScope"><div class="innerScope"><dialog id="doubleScope" class="doubleScope"></dialog></div></div><div class="innerScope"><dialog id="outsideDoubleScope" class="doubleScope"></dialog></div>',
+      '<dialog id="lastrail" class="rail"></dialog>',
     ].join("");
     const sheet = '<link rel="stylesheet" href="/dialog-in-place.css">';
     await route.fulfill({ response: res, body: (await res.text()).replace("</head>", `${sheet}</head>`).replace("</body>", `${controls}</body>`) });
@@ -78,6 +88,11 @@ try {
         "@supports (display: grid) { .enhanced { display: grid; } }",
         "@media (min-width: 1px) { .nav { display: grid; } }",
         ".page { .side { @media (min-width: 1px) { display: block; } } }",
+        "@media (min-width: 1px) { @scope (.scoped) { .scopedPlain { display: flex; } :scope > .scopedRoot { display: grid; } & > .scopedAmp { display: block; } :scope > .scopedPopover { display: block; } } @scope (.scopedDeclarations) { display: flex; } }",
+        "@container (min-width: 1px) { @scope (.scoped) { :scope > .scopedContainer { display: flex; } } }",
+        "@scope (.scopedSelf) { @media (min-width: 1px) { dialog { display: grid; } } }",
+        ".scopeHost { @scope (.scopeInner) { @media (min-width: 1px) { :scope > .nestedScope { display: flex; } } } }",
+        "@scope (.outerScope) { @scope (.innerScope) { @media (min-width: 1px) { :scope > .doubleScope { display: grid; } } } }",
       ].join("\n"),
     }),
   );
@@ -91,7 +106,7 @@ try {
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
   const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
   const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
-  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,lastrail", railNames);
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,scopedSelf,scopedPopover,nestedScope,doubleScope,lastrail", railNames);
   check(
     "its warning names the rule, the query, the rule that draws it in place and the open one's look",
     !!railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") &&
