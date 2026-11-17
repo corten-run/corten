@@ -161,6 +161,9 @@ struct Inner {
 const LATE: u8 = 1;
 /// [`Inner::late`]: its route is reached, and kept the head if it needs one.
 const HEAD_KEPT: u8 = 2;
+/// [`Inner::late`], beside the others: a `Req` taken before its route kept a head on the signal
+/// (`page::EarlyHeads`), to be let go when the write is answered.
+const EARLY_KEPT: u8 = 4;
 
 impl Signal {
     /// A request's signal in an app.
@@ -250,7 +253,18 @@ impl Signal {
     /// ([`crate::layout::at_late_route`]), or the head a page was made with is kept to fill it: a
     /// `Req` taken after this keeps none.
     pub(crate) fn keep_head(&self) {
-        self.0.late.store(HEAD_KEPT, Ordering::Relaxed);
+        self.0.late.fetch_or(HEAD_KEPT, Ordering::Relaxed);
+    }
+
+    /// A `Req` taken before a late write's route kept a head on this signal (`page::EarlyHeads`).
+    pub(crate) fn mark_early_kept(&self) {
+        self.0.late.fetch_or(EARLY_KEPT, Ordering::Relaxed);
+    }
+
+    /// Whether a `Req` taken before a late write's route kept a head on this signal: only then is
+    /// there one to let go.
+    pub(crate) fn early_kept(&self) -> bool {
+        self.0.late.load(Ordering::Relaxed) & EARLY_KEPT != 0
     }
 
     /// A write whose own page is filled after it answers ([`Signal::mark_late`]): `Some(true)`
@@ -259,7 +273,7 @@ impl Signal {
     pub(crate) fn late_write(&self) -> Option<bool> {
         match self.0.late.load(Ordering::Relaxed) {
             0 => None,
-            late => Some(late == HEAD_KEPT),
+            late => Some(late & HEAD_KEPT != 0),
         }
     }
 
@@ -424,6 +438,14 @@ impl Signal {
         let cell = Arc::new(tokio::sync::OnceCell::new());
         found.push(cell.clone());
         cell
+    }
+
+    /// Takes the request's cell for a lookup of its type out, if one was made ([`Signal::found`]),
+    /// for the caller to drop outside the lock.
+    pub(crate) fn forget<T: Send + Sync + 'static>(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+        let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let at = found.iter().position(|kept| kept.is::<tokio::sync::OnceCell<T>>())?;
+        Some(found.swap_remove(at))
     }
 
     /// Marks the answer as differing by something of the visitor's that does not change the page

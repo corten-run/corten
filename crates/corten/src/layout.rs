@@ -555,6 +555,11 @@ pub(crate) async fn fill_made_early(
     if res.extensions().get::<NotAPageAnswer>().is_some() {
         here.lock().state = State::NotAPage;
     } else if let Some(EarlyHead(head)) = res.extensions_mut().remove::<EarlyHead>() {
+        // The middleware has answered, so no page made later is the answer: the request's early
+        // heads are let go now (dropped outside the signal's lock), which leaves this one the only
+        // owner of its head, taken without a copy.
+        let signal = head.extensions.get::<crate::Signal>().cloned();
+        drop(signal.as_ref().and_then(crate::Signal::forget::<crate::page::EarlyHeads>));
         let parts = Arc::unwrap_or_clone(head);
         // A read that takes `Req` itself keeps no head of its own.
         if let Some(signal) = parts.extensions.get::<crate::Signal>() {

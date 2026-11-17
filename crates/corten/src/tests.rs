@@ -15398,7 +15398,9 @@ mod layout_reads {
     /// An extension each request carries ([`Tracks`]): while a copy of the request's head lives,
     /// so does one of these.
     #[derive(Clone)]
-    struct Alive(Arc<()>);
+    struct Alive {
+        _held: Arc<()>,
+    }
 
     /// The app's middleware: puts [`Alive`] in every request, and for `/passes` and `/hangs`
     /// takes `Req` before the route and passes the request on (a guard that reads who is asking).
@@ -15406,7 +15408,7 @@ mod layout_reads {
 
     impl crate::Middleware for Tracks {
         async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
-            req.extensions_mut().insert(Alive(self.0.clone()));
+            req.extensions_mut().insert(Alive { _held: self.0.clone() });
             if req.uri().path() == "/early" {
                 return next.run(req).await;
             }
@@ -15445,17 +15447,24 @@ mod layout_reads {
             .layout_read(SignedIn)
             .middleware((Tracks(alive.clone()), AnswersEarly))
             .router();
-        // The test's and the middleware's.
+        // The test's and the middleware's; each case adds what outlives its request.
         let before = Arc::strong_count(&alive);
+        let left = || Arc::strong_count(&alive) - before;
         let (status, _, body) = call_with(router.clone(), "POST", "/early", Some("action"), None).await;
         assert!(status.is_success() && body.contains("<p>early</p>") && body.contains("count"), "{body}");
-        assert_eq!(Arc::strong_count(&alive), before, "the middleware's page");
+        let page = left();
         let (_, headers, body) = call_with(router.clone(), "POST", "/passes", Some("action"), None).await;
         assert!(headers.contains_key("corten-patch") && body.contains("saved"), "{headers:?} {body}");
-        assert_eq!(Arc::strong_count(&alive), before, "passed on to a patch");
-        let cut = call_with(router, "POST", "/hangs", Some("action"), None);
+        let patch = left() - page;
+        // A clone: the router itself, and the middleware's count with it, outlives the request.
+        let cut = call_with(router.clone(), "POST", "/hangs", Some("action"), None);
         assert!(tokio::time::timeout(Duration::from_millis(50), cut).await.is_err());
-        assert_eq!(Arc::strong_count(&alive), before, "cut off unanswered");
+        let dropped = left() - page - patch;
+        assert_eq!(
+            (page, patch, dropped),
+            (0, 0, 0),
+            "outlived: (the middleware's page, passed on to a patch, cut off unanswered)"
+        );
     }
 
     /// [`AnswersEarly`]'s page with a body that never ends, or one that fails as it is read.

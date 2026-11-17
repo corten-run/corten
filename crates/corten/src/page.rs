@@ -1229,11 +1229,13 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
     }
 }
 
-/// The heads `Req`s taken before a late write's route kept ([`Req::early`]), on its signal.
-type EarlyHeads = std::sync::Mutex<Vec<Arc<Parts>>>;
+/// The heads `Req`s taken before a late write's route kept ([`Req::early`]), on its signal until the
+/// write is answered ([`ReleasesEarlyHeads`]).
+pub(crate) type EarlyHeads = std::sync::Mutex<Vec<Arc<Parts>>>;
 
 /// Keeps `head` among the request's early heads, and gives its number (from 1).
 fn keep_early_head(signal: &crate::Signal, head: Parts) -> u8 {
+    signal.mark_early_kept();
     let cell = signal.found::<EarlyHeads>();
     let _ = cell.set(EarlyHeads::default());
     let Some(heads) = cell.get() else { return 0 };
@@ -3172,7 +3174,29 @@ fn late_write<'f, 's: 'f, 'n: 'f, 'g: 'f, S: crate::app::Steps + 'f>(
 ) -> std::pin::Pin<Box<dyn Future<Output = Response> + Send + 'f>> {
     signal.mark_late();
     let next = FillsLate { next, shared, until };
-    Box::pin(page_or_error(shared, req, next, deadline, signal, asked))
+    // Moved into the future, so it goes with it whether it is answered or dropped unpolled.
+    let release = ReleasesEarlyHeads(signal);
+    Box::pin(async move {
+        let _release = release;
+        page_or_error(shared, req, next, deadline, signal, asked).await
+    })
+}
+
+/// Lets go of the heads `Req`s took before a late write's route ([`EarlyHeads`]) once the write
+/// is answered, or dropped unanswered (the client gone, a middleware's timeout): they are kept on
+/// the request's signal, which each holds in its extensions, so left there a head and the signal
+/// would keep each other, and all the head holds, past the request. A `Req` taken after this keeps
+/// none (#1370).
+struct ReleasesEarlyHeads<'g>(&'g crate::Signal);
+
+impl Drop for ReleasesEarlyHeads<'_> {
+    fn drop(&mut self) {
+        self.0.keep_head();
+        // Looked for only where one was kept; dropped here, outside the signal's lock.
+        if self.0.early_kept() {
+            drop(self.0.forget::<EarlyHeads>());
+        }
+    }
 }
 
 /// What answers a request under its deadline and panic catch: the app's middleware and the route
