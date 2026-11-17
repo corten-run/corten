@@ -5,6 +5,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Document and test that `Json<T>` reports the same field path in a 422 with the derived
+  and serde-only readers.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
