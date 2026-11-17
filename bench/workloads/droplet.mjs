@@ -47,7 +47,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     durable(`${statePath}.tmp`, `${JSON.stringify(state, null, 2)}\n`);
     renameSync(`${statePath}.tmp`, statePath); syncDirectory(local);
   };
-  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs) {
+  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining) {
     if (deleteProofExpiresAtMs !== undefined) {
       assert.equal(binary, "doctl"); assert.equal(args[2], "delete");
       assert.ok(Number.isSafeInteger(deleteProofExpiresAtMs));
@@ -59,10 +59,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.ok(current < expiry && expiry - current <= 60000, "current retirement proof expired");
       }
       let r;
-      try { r = await run(binary, argv, timeout, permittedFailure, expiry); }
+      const limit = remaining ? Math.min(timeout, remaining()) : timeout;
+      try { r = await run(binary, argv, limit, permittedFailure, expiry); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (r.controlTreeUncertain || r.controlUncertain) { preserveOperationLock = true; throw new Error("control uncertain; preserve locks"); }
       check();
+      if (remaining) remaining();
       if (!permittedFailure) assert.ok(!r.error && r.status === 0, "control process failed; host preserved");
       return r;
     };
@@ -78,13 +80,31 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     return result;
   }
   const list = async () => { const d = JSON.parse((await execute("doctl", ["compute", "droplet", "list", "--output", "json"])).stdout); assert.ok(Array.isArray(d)); return d; };
-  const exactHost = async () => {
-    const result = await execute("doctl", ["compute", "droplet", "get", state.id, "--output", "json"], 60000, true);
+  const exactHost = async (remaining) => {
+    const result = await execute("doctl", ["compute", "droplet", "get", state.id, "--output", "json"], 60000, true, undefined, remaining);
     if (result.status === 1 && providerFailure(result)?.code === "get-http" && providerFailure(result)?.httpStatus === 404) return undefined;
     assert.equal(result.status, 0, "exact host observation failed; preserve state");
     const rows = JSON.parse(result.stdout);
     assert.ok(Array.isArray(rows) && rows.length === 1 && String(rows[0]?.id) === state.id, "exact host identity differs");
     return rows[0];
+  };
+  const confirmDeleted = async () => {
+    assert.ok(state.deletionIntentAt, "deletion intent required before absence confirmation");
+    let previous = now(); const deadline = previous + 120000;
+    const uncertain = "deletion not confirmed; outcome uncertain; no automatic repeated deletion; preserve intent without another DELETE";
+    const remaining = () => {
+      check(); const current = now();
+      assert.ok(Number.isFinite(current) && Number.isFinite(deadline) && current >= previous && current < deadline, uncertain);
+      previous = current; return Math.max(1, Math.floor(deadline - current));
+    };
+    // The attempt cap also bounds synthetic/stalled clocks. Every account/GET/account
+    // call shares the same deadline; an accepted DELETE is never repeated.
+    for (let attempt = 0; attempt < 121; attempt++) {
+      remaining();
+      if (await exactHost(remaining) === undefined) return;
+      await sleep(Math.min(1000, remaining()));
+    }
+    assert.fail(uncertain);
   };
   const own = async () => {
     const found = state.id ? await exactHost() : undefined;
@@ -218,7 +238,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
     verifyRetirement();
     await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
-    assert.equal(await exactHost(), undefined, "deletion not confirmed; preserve intent without another DELETE");
+    await confirmDeleted();
     state.destroyedAt = new Date().toISOString(); save(); return 1;
   };
   const retireUnused = async () => {
@@ -356,16 +376,13 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       return locked(async () => {
         if (state.status === "retired") {
           verifyRetirement();
-          assert.equal(await exactHost(), undefined, "delete outcome uncertain; no automatic repeated deletion");
+          await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return 1;
         }
         if (state.deletionIntentAt) {
           verifyArchive(); await validateEvidence();
-          if (await exactHost() === undefined) {
-            state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
-          }
-          assert.ok(!state.destroyedAt, "deleted host still listed; preserve identity");
-          assert.fail("delete outcome uncertain; no automatic repeated deletion");
+          await confirmDeleted();
+          state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
         assert.ok(state.createIntentAt, "no create intent; reservation requires operator inspection");
         bind(await own());
@@ -402,7 +419,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.ok(await unit(), "unit became active; preserve host"); await own(); check();
         state.deletionIntentAt = new Date().toISOString(); save();
         await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
-        assert.equal(await exactHost(), undefined, "deletion not confirmed; host state uncertain");
+        await confirmDeleted();
         verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save(); return deletedCode();
       });
     },
@@ -416,7 +433,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (state.status === "retired") {
           assert.equal(state.retirement.kind, "native-failed");
           verifyFailedNativeRetirement(local, state);
-          assert.equal(await exactHost(), undefined, "delete outcome uncertain; no automatic repeated deletion");
+          await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return 1;
         }
         assert.ok(["starting", "running"].includes(state.status) && !state.deletionIntentAt && !state.collectedAt
@@ -508,7 +525,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         durable(receiptPath, bytes);
         Object.assign(state, { status: "retired", retirement: { kind: "native-failed", evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
         await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
-        assert.equal(await exactHost(), undefined, "deletion not confirmed; preserve intent without another DELETE");
+        await confirmDeleted();
         state.destroyedAt = new Date().toISOString(); save(); return 1;
       });
     },

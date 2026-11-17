@@ -25,6 +25,9 @@ Corten is pre-1.0, so any minor version may change the API.
   load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
+- The watchlist smoke's first field change after a link now tests a same-shell page swap, with
+  the field module held back, rather than racing the scripts of a full document load.
+
 - Permit custody-only terminal retirement of the exact r21 lean catalog attempt
   if ordinary native collection refuses its failed evidence. Keep original raw
   failures, source/reservation/archive binding, live-job refusal, current ownership
@@ -1289,6 +1292,17 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- Catalog timed-load evidence initializes its four outcome counter series once
+  per active VU and increments only the classified outcome per request. Preserve
+  exact totals and zero-valued categories with less load-generator bookkeeping;
+  request settings, checks, thresholds and qualification gates are unchanged.
+
+- Grouped benchmark collection and retirement confirm delayed provider deletion
+  with bounded, exact-ID, read-only observations instead of failing on the first
+  still-present response. Account checks share the deadline, and uncertainty
+  retains the deletion intent without issuing another DELETE or qualifying
+  failed results.
 
 - `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,
   so a `const` assertion only a binary's `main` reaches fails it as it fails `cargo build`: a
