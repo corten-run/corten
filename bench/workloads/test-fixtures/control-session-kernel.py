@@ -38,12 +38,13 @@ class patch:
                 else:
                     target[key] = value
 
-argument = json.loads(sys.stdin.read())
+interactive = sys.argv[1:] == ["setup-fleet"]
+argument = json.loads(sys.stdin.readline() if interactive else sys.stdin.read())
 source = argument["source"]
 scope = {"__name__": "source_bound_fixture"}
 exec(compile(source, "<reviewed-control-session>", "exec"), scope)
 mode = argument["mode"]
-token = "0123456789abcdef"
+token = argument["token"] if interactive else "0123456789abcdef"
 commit = "a" * 40
 boot = {"hostname": "synthetic-host", "bootId": "01234567-89ab-cdef-0123-456789abcdef"}
 
@@ -187,7 +188,9 @@ class Child:
     def wait(self, timeout):
         assert timeout > 0 and self.stdin.transferred == current["payload"]
         assert str(root / ("registration-" + current["id"] + ".json")) in data, "payload before registration"
-        if mode.startswith("setup-") and current["id"] == format(3, "032x"):
+        if current.get("pack"):
+            scope["custody"](root)
+        if current.get("query") or (not interactive and mode.startswith("setup-") and current["id"] == format(3, "032x")):
             # Execute the actual source's pre-entry query producer while its own
             # guardian and outside-session watcher are still alive.
             query_pid, timeout_pid = 405, 404
@@ -200,7 +203,8 @@ class Child:
             for pid, inode in ((query_pid, 401), (timeout_pid, 402)):
                 rows[pid]["executable"] = {"device": "1", "inode": str(inode)}
                 rows[pid]["commandSha256"] = hashlib.sha256(commands[pid]).hexdigest()
-            scope["custody"](root)
+            if not interactive:
+                scope["custody"](root)
             if mode == "setup-unknown": rows[999] = row(999, current["guardian"], "/foreign.scope")
             if mode == "setup-user-manager": rows[999] = row(999, 1, "/user.slice/user-0.slice/user@0.service")
             if mode == "setup-unknown-unit": rows[999] = row(999, 1, "/system.slice/corten-bench-control-foreign.service")
@@ -236,7 +240,7 @@ def run(args, **kwargs):
         assert args[-3] == "watch"
         identifier = args[-1]
         unit = next(p.split("=", 1)[1] for p in args if p.startswith("--unit="))
-        observer = 200 + len(units)
+        observer = (2000 if interactive else 200) + len(units)
         rows[observer] = row(observer, 1, "/system.slice/" + unit)
         commands[observer] = command(["/usr/bin/python3", "-I", str(root / "helper.py"), "watch", token, identifier])
         rows[observer]["commandSha256"] = hashlib.sha256(commands[observer]).hexdigest()
@@ -300,21 +304,35 @@ binding = {"round": "r21", "commit": commit, "token": token, "helperSha256": has
 with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subprocess"], "Popen", Child), \
         patch.object(scope["subprocess"], "run", run), patch.object(scope["os"], "getpid", lambda: getattr(local, "pid", current["guardian"])), \
         patch.dict(scope["os"].environ, {"SSH_CONNECTION": "192.0.2.20 40000 192.0.2.10 22"}), patch.object(sys, "stderr", frames):
-    for sequence, channel in enumerate(["ssh", "sftp", "ssh"]):
+    for sequence, item in enumerate(sys.stdin if interactive else ["ssh", "sftp", "ssh"]):
+        if interactive:
+            assert sequence < 64 and len(item) <= 1024 * 1024
+            step = json.loads(item)
+            channel = step["request"]["invocation"]["channel"]
+        else:
+            channel = item
         identifier = format(sequence + 1, "032x")
         payload = b"set -euo pipefail\n:\n" if channel == "ssh" else b"synthetic-sftp-protocol"
-        if mode.startswith("setup-") and sequence == 2:
+        if not interactive and mode.startswith("setup-") and sequence == 2:
             payload = argument["queryPayload"].encode()
         invocation = {"schema": "benchmark-control-invocation/v1", "round": "r21", "commit": commit, "token": token,
                       "id": identifier, "channel": channel, "purpose": "bootstrap", "requestSha256": hashlib.sha256(payload).hexdigest(), "deadlineMs": 1000}
         request = {"invocation": invocation, "helperSha256": binding["helperSha256"], "epoch": "bootstrap", "sequence": sequence}
-        if mode.startswith("setup-") and sequence < 2:
+        if not interactive and mode.startswith("setup-") and sequence < 2:
             request = argument["expected"]["requests"][sequence]
             invocation = request["invocation"]
-        if mode.startswith("setup-") and sequence == 2:
+        if not interactive and mode.startswith("setup-") and sequence == 2:
             request["epoch"] = "collection"
             invocation["purpose"] = "collection"
             invocation["requestSha256"] = argument["querySha256"]
+        if interactive:
+            request = step["request"]
+            invocation = request["invocation"]
+            identifier = invocation["id"]
+            payload = step["payload"].encode()
+            current.update({"pack": step.get("pack"), "query": "expected" in step})
+            if current["query"]:
+                argument["expected"] = step["expected"]
         invocations.append(invocation)
         if sequence == 2 and not mode.startswith("setup-"):
             request["seal"] = [{"id": p["id"], "sha256": hashlib.sha256(scope["encoded"](p)[:-1]).hexdigest()} for p in invocations]
@@ -346,9 +364,17 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             rows.pop(ancestor, None)
         threads[-1].join(3)
         assert not threads[-1].is_alive(), "test watcher leaked"
+        if interactive:
+            assert not errors, errors
+            response = {"proof": current["proof"]} if current["query"] else {}
+            if current["pack"]:
+                response["custody"] = {p.rsplit("/", 1)[-1]: v.hex() for p, v in data.items() if p.startswith("/bench/control/")}
+            print(json.dumps(response), flush=True)
         if mode in ("disconnect", "ancestor-survives", "ancestor-zombie"):
             assert str(root / ("receipt-" + identifier + ".json")) not in data
             break
+    if interactive:
+        sys.exit(0)
     if mode.startswith("setup-"):
         output = {"proof": current.get("proof"), "rejected": current.get("rejected", False),
                   "custody": {p.rsplit("/", 1)[-1]: value.hex() for p, value in data.items() if p.startswith("/bench/control/")}}

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
-import { roundName, selection, validateState } from "./cloud-contract.mjs";
+import { roundName, selection, terminalUnit, validateState } from "./cloud-contract.mjs";
 
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
   "account-request", "account-http", "get-request", "get-http", "get-response", "list-request", "list-http", "list-response",
@@ -115,11 +116,12 @@ export function cancellationState(value) {
   for (const key of ["intentSha256", "reservationSha256", ...(value.signalSha256 === undefined ? [] : ["signalSha256"])])
     full(value[key], /[a-f0-9]{64}/, "cancellation evidence hash");
 }
+export const unitQuery = (s) => `systemctl show ${s.unit} --property=Id --property=LoadState --property=FragmentPath --property=ActiveState --property=Restart --property=MainPID --property=ExecMainCode --property=ExecMainStartTimestamp`;
 export function controllerState(s, round) {
   validateState(s, round);
   const allowed = ["schema", "round", "commit", "token", "name", "tag", "unit", "host", "selection", "createdAt", "status", "id", "ip",
     "createIntentAt", "archiveSha256", "evidenceSha256", "extractionAttempts", "evidence", "evidenceOutcome", "collectedAt", "deletionIntentAt", "destroyedAt",
-    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "mixedCancellation", "control"];
+    "fullGroupQualified", "exitCode", "validation", "auditIntent", "auditIntents", "provider", "group", "fleet", "retirement", "bootstrapReady", "preBootstrapTerminal", "mixedCancellation", "control"];
   assert.ok(Object.keys(s).every((k) => allowed.includes(k)), "unknown controller state field");
   providerIdentity(s.provider);
   if (s.fleet) assert.deepEqual(s.provider, s.fleet.provider, "fleet account/context differs");
@@ -128,6 +130,21 @@ export function controllerState(s, round) {
   if (s.status === "reserved") assert.ok(!s.createIntentAt && !s.id, "reserved host already has create intent");
   if (s.status === "creating") assert.ok(!s.id, "creating host unexpectedly bound");
   assert.equal(s.fullGroupQualified, false, "this provisional contract cannot qualify a campaign");
+  if (s.preBootstrapTerminal !== undefined) {
+    const p = s.preBootstrapTerminal, m = s.control?.monitor;
+    assert.deepEqual(Object.keys(p).sort(), ["hostId", "invocation", "ip", "monitorId", "stdout"]);
+    assert.ok(s.status === "starting" || s.status === "retired" && s.retirement?.kind === "setup-failed");
+    assert.ok(m?.phase === "pending" && !m.registrationSha256 && !s.bootstrapReady && !s.control.sealed.length);
+    assert.ok(!s.validation && !s.collectedAt && !s.evidenceOutcome && s.exitCode === undefined);
+    assert.ok(s.id === p.hostId && s.ip === p.ip && m.id === p.monitorId);
+    assert.ok(typeof p.stdout === "string" && Buffer.byteLength(p.stdout) <= 4096 && terminalUnit(p.stdout, s));
+    const rows = s.control.ledger.filter((r) => r.request.epoch === "bootstrap"), last = rows.at(-1);
+    const matched = (row, command) => row.localTerminal && row.code === 0 && row.request.invocation.channel === "ssh"
+      && row.request.invocation.requestSha256 === createHash("sha256").update(`set -euo pipefail\n${command}\n`).digest("hex");
+    assert.ok(rows.length > 1 && rows.every((r, i) => r === s.control.ledger[i] && r.localTerminal && !r.request.seal)
+      && s.control.ledger.slice(rows.length).every((r) => r.request.epoch === "collection"));
+    assert.ok(rows.some((r) => matched(r, `systemctl start ${s.unit}`)) && matched(last, unitQuery(s)) && last.request.invocation.id === p.invocation);
+  }
   if (s.mixedCancellation !== undefined) {
     assert.equal(s.group, "mixed-production"); assert.equal(s.round, "r21");
     assert.equal(s.commit, "9f3d35884c67d90524f978d173fabeb3a17bc970");

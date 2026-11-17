@@ -7,8 +7,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, ownedDroplet, reservation, tags, terminalUnit, validateFleet } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles } from "./cloud-remote.mjs";
-import { archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
-import { campaignOutcome, controllerFailure, controllerState, full, providerAccount, providerFailure, validateOptions } from "./cloud-options.mjs";
+import { archiveLimit, archiveMembers, digest, durable, durableCopy, extractArchive, fileHash, physical, regular, resolveStateRoot, syncDirectory, treeHash } from "./cloud-local.mjs";
+import { campaignOutcome, controllerFailure, controllerState, full, providerAccount, providerFailure, unitQuery, validateOptions } from "./cloud-options.mjs";
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
@@ -155,7 +155,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const ssh = (script, timeout = 60000, allowFail = false) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail);
   const scp = (from, to) => transport("scp", ["-q", from, to], 15 * 60000);
-  const unit = async () => terminalUnit((await ssh(`systemctl show ${state.unit} --property=Id --property=LoadState --property=FragmentPath --property=ActiveState --property=Restart --property=MainPID --property=ExecMainCode --property=ExecMainStartTimestamp`)).stdout, state);
+  const unit = async () => terminalUnit((await ssh(unitQuery(state))).stdout, state);
+  const requireActiveStartup = async (message) => {
+    const { stdout } = await ssh(unitQuery(state));
+    if (!terminalUnit(stdout, state)) return;
+    // An acknowledged start and positive terminal observation, not an SSH
+    // failure or missing monitor. Keep the original output and its ledger row.
+    state.preBootstrapTerminal = { hostId: state.id, ip: state.ip, monitorId: state.control.monitor.id,
+      invocation: state.control.ledger.at(-1).request.invocation.id, stdout };
+    state.status = "starting"; save(); assert.fail(message);
+  };
   async function sealControl(epoch) {
     if (!state.control) return;
     assert.equal(controlEpoch, epoch);
@@ -174,7 +183,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     };
     for (;;) {
       remaining();
-      assert.equal(await unit(), false, "first group ended before common bootstrap admission; collect its evidence");
+      await requireActiveStartup("first group ended before common bootstrap admission; collect its evidence");
       const result = await ssh(bootstrapReadScript, Math.min(30000, remaining()), true);
       remaining();
       if (result.status === 0 && !result.error) {
@@ -421,9 +430,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           }
           await ssh(`bash -n /bench/job.sh && bash -n /bench/pack.sh && install -m 644 /bench/${state.unit} /etc/systemd/system/${state.unit} && systemd-analyze verify /etc/systemd/system/${state.unit} && systemctl daemon-reload`);
           state.status = "starting"; save(); await ssh(`systemctl start ${state.unit}`);
-          const ended = await unit();
-          if (state.group !== undefined && state.group !== state.fleet.jobs[0].group)
-            assert.equal(ended, false, "group ended before running admission; collect its evidence");
+          await requireActiveStartup("group ended before running admission; collect its evidence");
           state.status = "running"; save();
           try { await commonBootstrap(); }
           catch (error) {
@@ -460,7 +467,11 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       // No monitor exists then. The ordinary exclusive lock and fresh unused-host
       // proof still apply; neither a pending registration nor local state permits deletion.
       const unusedCandidate = neverProvisioned(observed);
-      if (observed.control?.monitor && !unusedCandidate) {
+      const beforeRegistration = (s) => s.preBootstrapTerminal && s.control.ledger.every((row) => row.localTerminal)
+        && !existsSync(join(base, ".groups-launch.lock")) && !readdirSync(local).some((name) => name.startsWith("monitor-"));
+      const setupCandidate = !!observed.preBootstrapTerminal;
+      if (setupCandidate) assert.ok(beforeRegistration(observed), "ambiguous pre-bootstrap custody; preserve host");
+      if (observed.control?.monitor && !unusedCandidate && !setupCandidate) {
         const { localStreamStatus, streamRecoveryReady } = await import("./cloud-control-stream.mjs");
         const status = localStreamStatus(local);
         if (["pending", "progress"].includes(status.kind)) {
@@ -473,6 +484,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       return locked(async () => {
         if (unusedCandidate) assert.ok(neverProvisioned(state), "unused allocation changed; preserve host");
+        assert.equal(!!state.preBootstrapTerminal, setupCandidate, "pre-bootstrap reservation changed; preserve host");
+        if (setupCandidate) assert.ok(beforeRegistration(state), "ambiguous pre-bootstrap custody; preserve host");
         if (state.status === "retired") {
           verifyRetirement();
           await confirmDeleted();
@@ -488,10 +501,18 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         assert.ok(state.createIntentAt, "no create intent; reservation requires operator inspection");
         bind(await own());
         if (state.status === "preparing") return retireUnused();
-        if (!await unit()) return 3; // Exactly one look, never waits for a live campaign.
+        if (setupCandidate) {
+          const { stdout } = await ssh(unitQuery(state) + `\njob=$(systemctl show ${state.unit} --all --property=Job); test "$job" = 'Job='`);
+          assert.ok(terminalUnit(stdout, state) && stdout === state.preBootstrapTerminal.stdout, "startup unit no longer identically terminal");
+        } else if (!await unit()) return 3; // Exactly one look, never waits for a live campaign.
         if (!state.archiveSha256) {
           assert.ok(!existsSync(archive) && !existsSync(`${archive}.download`), "unrecorded download/archive retained; inspect before retry");
-          await ssh("timeout 600 /bin/bash /bench/pack.sh", 11 * 60000);
+          // pack.sh copies current control custody before its archive-exists
+          // check. Never change the snapshot beside a pre-existing exit archive.
+          const pack = "timeout 600 /bin/bash /bench/pack.sh";
+          await ssh(setupCandidate ? `if test -e /bench/results.tgz || test -L /bench/results.tgz; then
+test -f /bench/results.tgz && test ! -L /bench/results.tgz && test "$(stat -c '%s' -- /bench/results.tgz)" -le ${archiveLimit}
+else ${pack}; fi` : pack, 11 * 60000);
           const hashLine = (await ssh("sha256sum /bench/results.tgz")).stdout;
           full(hashLine, /[a-f0-9]{64}  \/bench\/results\.tgz\n/, "invalid remote archive hash");
           const hash = hashLine.slice(0, 64), download = `${archive}.download`;
@@ -508,6 +529,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           const hash = await extractArchive(archive, extracted, state.archiveSha256); check();
           state.evidence = basename(extracted); state.evidenceSha256 = hash; save();
         }
+        if (setupCandidate) return retireFailedSetup(); // Never inspect/publish native evidence without supervision.
         try { await validateEvidence(); }
         catch (error) {
           // No native report can exist before entry. Only a separate fresh,
