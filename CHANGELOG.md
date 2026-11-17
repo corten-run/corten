@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
+  so `data-keep-place` restores them after the page swap, without another runtime behavior.
+
 - The catalog benchmark uses a fixed two-worker upstream within its existing CPU
   and memory budget, retaining per-process headroom and a first-host preflight.
   Saved worker evidence joins every preflight to the timed upstream and the
