@@ -152,6 +152,9 @@ test("second exact approval dispatches all remaining captured production workers
   const state = p.saved(), group = groupNames[0], campaign = `r21-${state.token}`;
   const local = path.join(p.h.base, group, "groups-r21"), evidence = path.join(local, "evidence-Synthetic");
   const folder = path.join(evidence, "campaign"), report = syntheticInspection("verified");
+  const terminal = JSON.parse(fs.readFileSync(path.join(local, "monitor-terminal.json")));
+  assert.equal(terminal.campaign, campaign); assert.equal(terminal.id, state.control.monitor.id);
+  report.supervisedTerminal = { registrationSha256: state.control.monitor.registrationSha256, sealSha256: terminal.sealSha256 };
   Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", campaign,
     selection: state.selection, groups: report.groups.filter((row) => row.group === group) });
   fs.mkdirSync(path.join(folder, campaign), { recursive: true });
