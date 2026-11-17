@@ -44,8 +44,10 @@ Each handler takes the page's `Params` and redirects back to the same view; neve
 per write to carry the page's query, and never write `?do=` by hand. A write several pages use has
 a path of its own. Either answers `req.redirect` or `req.redirect_with_notice` once done, and
 draws a page only to refuse (`req.invalid`); a page with named posts gives every form an
-`action`. A debug build answers 500 to a successful page drawn at a path with no `GET`, and to a
-page with named posts drawn at a `do` address with a post form that has no `action`. A post's
+`action`. A debug build answers 500 to a successful page drawn at a path with no `GET`, to a
+page with named posts drawn at a `do` address with a post form that has no `action`, and to a
+patch answering a browser's plain request (no `data-patch`): never call `req.patch` without
+`req.mode == Mode::Action` around it, or use `req.patch_or`. A post's
 address is the view the page was drawn at; a tab that changes the address in the browser rewrites
 no form, so send such a tab as a field if a write must follow it.
 

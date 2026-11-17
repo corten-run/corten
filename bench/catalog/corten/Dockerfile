@@ -2,13 +2,15 @@
 FROM rust:1.100.0-trixie@sha256:e19840879045c951c905d0eaa9887f3439c62000e429963371b376bac8d38c31 AS build
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libzstd-dev && rm -rf /var/lib/apt/lists/*
 ENV ZSTD_SYS_USE_PKG_CONFIG=1
+ARG CATALOG_LEAN=0
 WORKDIR /src
 COPY . .
 ENV CARGO_HOME=/var/cache/cargo
 RUN --mount=type=cache,target=/var/cache/cargo \
     --mount=type=cache,id=bench-catalog-corten.target,target=/src/bench/catalog/corten/target,sharing=locked \
     find crates bench/catalog/corten -name target -prune -o -type f -exec touch {} + \
-    && cargo build --manifest-path bench/catalog/corten/Cargo.toml --release --locked \
+    && case "$CATALOG_LEAN" in 1) set -- --no-default-features ;; 0) set -- ;; *) exit 1 ;; esac \
+    && cargo build --manifest-path bench/catalog/corten/Cargo.toml --release --locked "$@" \
     && cp bench/catalog/corten/target/release/catalog-corten /server
 
 FROM debian:trixie-20261104-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
@@ -9,6 +10,7 @@ import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
 import { digest, treeHash } from "./cloud-local.mjs";
 import { parseDropletArgs } from "./cloud-options.mjs";
+import { bootstrapMarker } from "./cloud-remote.mjs";
 import { productionMain, productionPlan } from "./cloud-production.mjs";
 import { verifyFleet } from "./fleet-verify.mjs";
 import * as retirement from "./cloud-retirement.mjs";
@@ -21,16 +23,23 @@ test("failed-native retirement is a deliberate exclusive action, not a collect o
 });
 
 const repairCommit = "c".repeat(40), campaign = "r21-abcdef0123456789";
+const dbeAttempt = { commit: "dbe1a34c753ee8ef4ac9927484dc3930d36f6e37", round: "r21", group: "catalog-page",
+  id: "620052965", token: "39fa09440f45df00", name: "corten-bench-groups-r21-39fa09440f45df00",
+  tag: "corten-bench-groups-run-39fa09440f45df00", unit: "corten-bench-groups-r21-39fa09440f45df00.service" };
 const canonical = (value) => JSON.stringify(value, (key, v) => v && typeof v === "object" && !Array.isArray(v)
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v);
 const fileTree = (bytes) => digest(Buffer.concat([Buffer.from(`f\0\0${bytes.length}\0`), bytes]));
 
-async function recoveryHarness(t, flags = {}, group = "catalog-page") {
+async function recoveryHarness(t, flags = {}, group = "catalog-page", measuredCommit = retirement.failedNativeCommit) {
+  if (measuredCommit === dbeAttempt.commit) Object.assign(flags, { hostId: dbeAttempt.id, token: dbeAttempt.token });
   const h = harness(t, flags); h.seed();
   const tokens = Object.fromEntries(groupNames.map((g, i) => [g, g === group ? h.saved().token : (i + 1).toString(16).padStart(16, "0")]));
-  const fleet = fleetPlan({ round: "r21", commit: retirement.failedNativeCommit, token: "f".repeat(16), tokens, provider: { accountId, context }, sshKey: "42" });
+  const fleet = fleetPlan({ round: "r21", commit: measuredCommit, token: "f".repeat(16), tokens, provider: { accountId, context }, sshKey: "42" });
   const bound = reservation({ round: "r21", commit: fleet.commit, token: tokens[group], group, fleet });
   h.change((s) => Object.assign(s, bound, { status: "running" }));
+  if (measuredCommit === dbeAttempt.commit) h.change((s) => {
+    s.bootstrapReady = { sha256: digest(`${JSON.stringify(bootstrapMarker(s))}\n`), observedAt: "2026-11-16T12:00:00.000Z" };
+  });
   const root = retirement.failedNativeRoots(h.saved())[1].slice("/bench/repo/".length);
   const pending = group === "hardening" ? [] : [{ group, phase: group === "json-api" ? "prepare" : "timing", artifactRoot: root }];
   const plan = { schema: "benchmark-isolated-group-campaign/v1", commit: fleet.commit, round: "r21", order: [group],
@@ -47,9 +56,13 @@ async function recoveryHarness(t, flags = {}, group = "catalog-page") {
   const originalState = readFileSync(h.statePath), old = h.saved(), oldTree = treeHash(join(h.local, old.evidence));
   const native = join(h.temp, "native"); mkdirSync(native);
   writeFileSync(join(native, "do-not-run.mjs"), "throw new Error('evidence must not execute');\n");
+  if (measuredCommit === dbeAttempt.commit)
+    writeFileSync(join(native, "failed-load.json"), '{"exitCode":99,"timeouts":6,"targets":[]}\n');
+  const nativeBytes = readFileSync(join(native, "do-not-run.mjs")).length
+    + (measuredCommit === dbeAttempt.commit ? readFileSync(join(native, "failed-load.json")).length : 0);
   const roots = retirement.failedNativeRoots(old).map((path, index) => index > 1 || flags.absentRoot && index === 1 ? { path, present: false }
-    : { path, present: true, treeSha256: treeHash(index === 0 ? join(h.local, old.evidence, "campaign") : native), nodes: index === 0 ? 5 : 2,
-      bytes: index === 0 ? 100 : readFileSync(join(native, "do-not-run.mjs")).length });
+    : { path, present: true, treeSha256: treeHash(index === 0 ? join(h.local, old.evidence, "campaign") : native),
+      nodes: index === 0 ? 5 : measuredCommit === dbeAttempt.commit ? 3 : 2, bytes: index === 0 ? 100 : nativeBytes });
   for (const name of ["run.log", "host.txt", "exit-code", "results.tgz"]) {
     const bytes = name === "results.tgz" ? originalArchive : readFileSync(join(h.local, old.evidence, name));
     roots.push({ path: `/bench/${name}`, present: true, treeSha256: fileTree(bytes), nodes: 1, bytes: bytes.length });
@@ -59,7 +72,11 @@ async function recoveryHarness(t, flags = {}, group = "catalog-page") {
     { name: "campaign/custody-metadata.json", body: metadataBytes }, { name: "campaign/custody-files.json", body: "{}" },
     { name: "campaign/custody-snapshot.json", body: snapshot },
     ...entries.filter((e) => e.name.startsWith("campaign")).map((e) => ({ ...e, name: e.name.replace(/^campaign/, "campaign/root-0") }))];
-  if (roots[1].present) custodyEntries.push({ name: "campaign/root-1/" }, { name: "campaign/root-1/do-not-run.mjs", body: readFileSync(join(native, "do-not-run.mjs")) });
+  if (roots[1].present) {
+    custodyEntries.push({ name: "campaign/root-1/" }, { name: "campaign/root-1/do-not-run.mjs", body: readFileSync(join(native, "do-not-run.mjs")) });
+    if (measuredCommit === dbeAttempt.commit)
+      custodyEntries.push({ name: "campaign/root-1/failed-load.json", body: readFileSync(join(native, "failed-load.json")) });
+  }
   const custodyArchive = archive(custodyEntries);
   let probes = 0, settlements = 0;
   const calls = [];
@@ -76,7 +93,7 @@ async function recoveryHarness(t, flags = {}, group = "catalog-page") {
       if (flags.badFinal && probes === 2) observation.snapshotSha256 = "f".repeat(64);
       if (flags.badFence && probes === 3) observation.metadataSha256 = "f".repeat(64);
       if (flags.staleProbe) observation.observedAtMs -= 600000;
-      return { status: 0, stdout: JSON.stringify(observation) };
+      return { status: 0, stdout: JSON.stringify(flags.nativeProof ? flags.nativeProof(observation) : observation) };
     }
     if (binary === "scp" && args.at(-2).endsWith(":/bench/failed-native-custody.tgz")) {
       writeFileSync(args.at(-1), flags.badDownload ? "corrupt" : custodyArchive);
@@ -254,8 +271,8 @@ test("fleet inspection reports failed retirement without replay or qualification
 });
 
 test("operator-gated production recovery rechecks merged source and exact locked reservation before any provider operation", async (t) => {
-  for (const mode of ["valid", "changed", "unmerged", "unsettled"]) {
-    const r = await recoveryHarness(t), output = [], calls = [];
+  for (const measuredCommit of [retirement.failedNativeCommit, dbeAttempt.commit]) for (const mode of ["valid", "changed", "unmerged", "unsettled"]) {
+    const r = await recoveryHarness(t, {}, "catalog-page", measuredCommit), output = [], calls = [];
     let closed = 0;
     const args = ["r21", "--state-dir", r.h.base, "--retire-failed-native"];
     const spawn = (binary, argv, options) => {
@@ -281,7 +298,7 @@ test("operator-gated production recovery rechecks merged source and exact locked
       assert.ok(closed); assert.equal(r.h.deletes, 0); continue;
     }
     assert.equal(await productionMain([...args, "--print-approval"], deps), 3);
-    assert.equal(output[0].recovery.measuredCommit, retirement.failedNativeCommit);
+    assert.equal(output[0].recovery.measuredCommit, measuredCommit);
     assert.equal(output[0].controllerCommit, repairCommit);
     assert.ok(calls.every(([binary]) => binary === "git")); calls.length = 0;
     const approved = [...args, "--approve-reviewed-merged-ready", output[0].approvalSha256];
@@ -318,6 +335,7 @@ test("approval binds old measured reservation and new repair source; ordinary so
   const r = await recoveryHarness(t), options = { round: "r21", stateDir: r.h.base, retireFailedNative: true };
   const plan = await productionPlan(options, { repo: r.h.repo, run: localGit(r) });
   assert.equal(plan.subject.controllerCommit, repairCommit); assert.equal(plan.subject.recovery.measuredCommit, retirement.failedNativeCommit);
+  assert.equal(plan.subject.recovery.policy, "r21-9f-failed-native-custody-only-no-qualification");
   assert.equal(plan.subject.reservationSha256, digest(r.originalState));
   assert.equal(plan.subject.recovery.archiveSha256, r.old.archiveSha256);
   const other = await productionPlan(options, { repo: r.h.repo, run: localGit(r, "d".repeat(40)) });
@@ -332,4 +350,144 @@ test("failed-native recovery supports only the measured migration source and its
   assert.deepEqual(retirement.failedNativeRoots(state), ["/bench/campaign", "/bench/repo/bench/json-api/results/j42", "/bench/repo/bench/json-api/results/j43"]);
   for (const change of [{ commit: "a".repeat(40) }, { round: "r22" }, { group: "mixed-production" }, { group: undefined }])
     assert.throws(() => retirement.failedNativeRoots({ ...state, ...change }));
+});
+
+test("dbe retirement rejects other sources, groups, rounds and host attempts", () => {
+  for (const change of [{ commit: "a".repeat(40) }, ...groupNames.filter((group) => group !== "catalog-page").map((group) => ({ group })), { group: undefined }, { round: "r22" },
+    { id: "620052966" }, { id: undefined }, { token: "0".repeat(16) }, { name: "foreign" }, { tag: "foreign" }, { unit: "foreign.service" }])
+    assert.throws(() => retirement.failedNativeRoots({ ...dbeAttempt, ...change }));
+});
+
+test("dbe retirement admits only the exact catalog attempt's existing custody roots", () => {
+  assert.ok(JSON.stringify(retirement.failedNativeRoots(dbeAttempt)) === JSON.stringify([
+    "/bench/campaign", "/bench/repo/bench/catalog/results/c21"]));
+});
+
+test("dbe retirement retains failed and incomplete native bytes without execution or qualification", async (t) => {
+  const r = await recoveryHarness(t, {}, "catalog-page", dbeAttempt.commit);
+  assert.equal(await r.task({ inspect: () => assert.fail("native validation forbidden") }).retireFailedNative(), 1);
+  const saved = r.h.saved(), receipt = retirement.verifyFailedNativeRetirement(r.h.local, saved);
+  assert.equal(saved.commit, dbeAttempt.commit); assert.equal(saved.fullGroupQualified, false);
+  assert.equal(saved.status, "retired"); assert.equal(saved.retirement.kind, "native-failed"); assert.ok(saved.destroyedAt);
+  for (const key of ["validation", "exitCode", "collectedAt", "evidenceOutcome"]) assert.equal(saved[key], undefined);
+  assert.equal(digest(readFileSync(join(r.h.local, "failed-native-reservation.json"))), digest(r.originalState));
+  assert.equal(digest(readFileSync(join(r.h.local, "failed-native-results.tgz"))), digest(r.custodyArchive));
+  assert.equal(saved.archiveSha256, r.old.archiveSha256); assert.equal(saved.evidenceSha256, r.old.evidenceSha256);
+  assert.equal(treeHash(join(r.h.local, saved.evidence)), r.oldTree);
+  assert.equal(readFileSync(join(r.h.local, receipt.capture.evidence, "campaign/root-1/failed-load.json"), "utf8"),
+    '{"exitCode":99,"timeouts":6,"targets":[]}\n');
+  assert.equal(r.h.deletes, 1); assert.equal(r.probes, 3);
+  assert.equal(await r.task().retireFailedNative(), 1); assert.equal(r.h.deletes, 1); assert.equal(r.probes, 3);
+  assert.ok(!r.calls.some(([binary, ...args]) => binary === "ssh" && /systemctl (?:start|stop|restart)/.test(args.at(-1))));
+});
+
+test("dbe retirement refuses partial, ambiguous, running and foreign-host custody observations", async (t) => {
+  const proofs = [() => ({ custody: true }), (proof) => [proof, proof],
+    () => ({ schema: "benchmark-failed-native-host/v1", custody: false }),
+    (proof) => ({ ...proof, hostId: "620052966" }), (proof) => ({ ...proof, unit: "foreign.service" }),
+    (proof) => ({ ...proof, roots: proof.roots.slice(1) })];
+  for (const nativeProof of proofs) {
+    const r = await recoveryHarness(t, { nativeProof }, "catalog-page", dbeAttempt.commit);
+    await assert.rejects(r.task().retireFailedNative());
+    assert.equal(r.h.deletes, 0); assert.equal(r.h.saved().deletionIntentAt, undefined);
+  }
+});
+
+test("dbe retirement keeps archive, extraction, identity and final-fence refusal gates", async (t) => {
+  for (const mode of ["missing-archive", "old-archive", "old-tree", "missing-extraction", "partial-state", "badDownload", "badFinal", "badFence", "final-custody", "account", "provider-host"]) {
+    const flags = { [mode]: true }, r = await recoveryHarness(t, flags, "catalog-page", dbeAttempt.commit);
+    if (mode === "missing-archive") r.h.change((s) => { delete s.archiveSha256; });
+    if (mode === "old-archive") writeFileSync(join(r.h.local, "results.tgz"), "changed");
+    if (mode === "old-tree") writeFileSync(join(r.h.local, r.old.evidence, "run.log"), "changed");
+    if (mode === "missing-extraction") r.h.change((s) => { delete s.evidence; });
+    if (mode === "partial-state") r.h.change((s) => { delete s.ip; });
+    if (mode === "final-custody") flags.finalHook = () => writeFileSync(join(r.h.local, "failed-native-results.tgz"), "changed");
+    if (mode === "account") flags.accountId = "foreign-account";
+    if (mode === "provider-host") r.h.hosts([{ id: Number(dbeAttempt.id), name: "foreign-host" }]);
+    await assert.rejects(r.task().retireFailedNative(), undefined, mode);
+    assert.equal(r.h.deletes, 0, mode); assert.equal(r.h.saved().deletionIntentAt, undefined, mode);
+  }
+});
+
+test("dbe retirement requires original failure and a terminal campaign even with resealed local fixtures", async (t) => {
+  for (const mode of ["success", "running", "wrong-source", "wrong-group", "wrong-round", "ambiguous-campaign"]) {
+    const r = await recoveryHarness(t, {}, "catalog-page", dbeAttempt.commit), extracted = join(r.h.local, r.old.evidence);
+    const dir = join(extracted, "campaign", campaign), planPath = join(dir, "plan.json"), resultPath = join(dir, "campaign-result.json");
+    const plan = JSON.parse(readFileSync(planPath)), result = JSON.parse(readFileSync(resultPath));
+    if (mode === "success") writeFileSync(join(extracted, "exit-code"), "0\n");
+    if (mode === "running") result.status.state = "active";
+    if (mode === "wrong-source") plan.commit = "a".repeat(40);
+    if (mode === "wrong-group") plan.order = ["json-api"];
+    if (mode === "wrong-round") plan.round = "r22";
+    if (mode === "ambiguous-campaign") mkdirSync(join(extracted, "campaign/r21-0000000000000000"));
+    writeFileSync(planPath, JSON.stringify(plan)); writeFileSync(resultPath, JSON.stringify(result));
+    r.h.change((s) => { s.evidenceSha256 = treeHash(extracted); });
+    await assert.rejects(r.task().retireFailedNative(), undefined, mode);
+    assert.equal(r.h.deletes, 0, mode); assert.equal(r.probes, 0, mode);
+  }
+});
+
+test("dbe retirement uncertain deletion never permits a second DELETE", async (t) => {
+  for (const mode of ["deleteUnconfirmed", "deleteLost", "deleteError", "deleteRejected"]) {
+    const r = await recoveryHarness(t, { [mode]: true }, "catalog-page", dbeAttempt.commit);
+    await assert.rejects(r.task().retireFailedNative()); assert.equal(r.h.deletes, 1, mode);
+    if (["deleteUnconfirmed", "deleteError"].includes(mode)) await assert.rejects(r.task().retireFailedNative());
+    r.h.hosts([]); assert.equal(await r.task().retireFailedNative(), 1);
+    assert.equal(r.h.deletes, 1, mode); assert.equal(r.h.saved().fullGroupQualified, false);
+  }
+});
+
+test("dbe retirement approval is source-, reservation- and archive-bound with no ordinary collection override", async (t) => {
+  const r = await recoveryHarness(t, {}, "catalog-page", dbeAttempt.commit);
+  const options = { round: "r21", stateDir: r.h.base, retireFailedNative: true };
+  const plan = await productionPlan(options, { repo: r.h.repo, run: localGit(r) });
+  assert.equal(plan.subject.recovery.measuredCommit, dbeAttempt.commit);
+  assert.equal(plan.subject.recovery.policy, "r21-dbe-exact-catalog-attempt-custody-only-no-qualification");
+  assert.equal(plan.subject.reservationSha256, digest(r.originalState));
+  assert.equal(plan.subject.recovery.archiveSha256, r.old.archiveSha256);
+  assert.equal(plan.subject.recovery.evidenceSha256, r.old.evidenceSha256);
+  assert.equal(r.calls.length, 0, "approval preview must not contact provider or host");
+  await assert.rejects(productionPlan({ round: "r21", stateDir: r.h.base, collect: true }, { repo: r.h.repo, run: localGit(r) }), /measured integrated/);
+  for (const change of [{ archiveSha256: "a".repeat(64) }, { id: "620052966" }]) {
+    r.h.change((s) => Object.assign(s, change));
+    if (change.id) await assert.rejects(productionPlan(options, { repo: r.h.repo, run: localGit(r) }));
+    else assert.notEqual((await productionPlan(options, { repo: r.h.repo, run: localGit(r) })).approvalSha256, plan.approvalSha256);
+  }
+});
+
+const python = process.platform === "win32" ? "python" : "python3";
+const pythonAvailable = spawnSync(python, ["--version"], { encoding: "utf8", timeout: 3000, windowsHide: true }).status === 0;
+test("dbe retirement emitted unit gate rejects active, restartable, live-PID, partial and ambiguous units", { skip: !pythonAvailable }, async (t) => {
+  const r = await recoveryHarness(t, {}, "catalog-page", dbeAttempt.commit), script = retirement.failedNativeScript(r.old);
+  // Execute the emitted systemd checks only, with synthetic command output.
+  // No systemd, metadata, filesystem custody or cloud operations run here.
+  const start = script.indexOf("    properties = "), end = script.indexOf("    assert json.loads(command(['cloud-init'");
+  assert.ok(start > 0 && end > start);
+  const fixture = `import json, sys
+c = json.load(sys.stdin)
+unit = c['unit']
+rows = dict(Id=unit, LoadState='loaded', FragmentPath='/etc/systemd/system/' + unit,
+    ActiveState='inactive', Restart='no', MainPID='0', Job='', ExecMainCode='1', ExecMainStatus='2', ExecMainStartTimestamp='started')
+rows.update(c['changes'])
+lines = [k + '=' + v for k, v in rows.items()]
+if c['mode'] == 'partial': lines.pop()
+if c['mode'] == 'ambiguous': lines[-1] = lines[0]
+def command(args):
+    return '\\n'.join(lines) if args[1] == 'show' else c.get('jobs', '')
+def observe():
+${script.slice(start, end)}
+try:
+    observe()
+    print('accepted')
+except AssertionError:
+    print('refused')
+`;
+  for (const [mode, changes, jobs] of [["inactive", {}], ["failed", { ActiveState: "failed" }], ["active", { ActiveState: "active" }],
+    ["restart", { Restart: "always" }], ["pid", { MainPID: "1" }], ["job", { Job: "1" }], ["jobs", {}, "pending"],
+    ["partial", {}], ["ambiguous", {}], ["foreign", { Id: "foreign.service" }], ["success", { ExecMainStatus: "0" }]]) {
+    const output = spawnSync(python, ["-c", fixture], { input: JSON.stringify({ unit: r.old.unit, mode, changes, jobs }),
+      encoding: "utf8", timeout: 3000, maxBuffer: 16384, windowsHide: true });
+    assert.equal(output.status, 0, mode); assert.equal(output.stderr, "", mode);
+    assert.equal(output.stdout.trim(), ["inactive", "failed"].includes(mode) ? "accepted" : "refused", mode);
+  }
 });
