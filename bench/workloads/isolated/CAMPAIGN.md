@@ -396,12 +396,16 @@ No whole-host deletion is appropriate while state is blocked-review-needed.
     "findings": [],
     "decision": "approved"
   },
-  "bundle": { "schema": "json-api-native-audits/v1", "receipts": [] }
+  "bundle": { "schema": "json-api-native-audits/v2", "receipts": [] }
 }
 ```
 
-The bundle must contain all 36 real existing json-api-native-audit/v1 receipts, with exact
-current image/CPU/source/commit identities and audited adapter source files. The empty
+The bundle must contain one independent receipt per selected app and profile, with exact
+current image/CPU/source/commit identities and audited adapter source files. The cloud
+inbox and campaign accept the v1 and v2 JSON bundle formats. For a failed API phase,
+only an extended v2 receipt can establish the transport guarantees; a bundle version alone
+cannot. The timing replay checks the receipt and its source bytes against the accepted
+delivery. Preparation and timing must both use the current commit-bound producer. The empty
 array above only illustrates the envelope, and is rejected. Operator-authorized transport
 and actual independent review are separate trust boundaries, journaled explicitly. The
 unsigned JSON cannot authenticate a human or make itself authoritative; the parent must
@@ -410,7 +414,7 @@ obtain the real review. No new signing/approval service is required or implied.
 After acceptance the same handle stages `json-native-audits.json`, rechecks sources,
 original/copy hashes and actual built image IDs, then runs timing with --receipts and
 without --build in the paired fresh round. The native runner repeats its real checks and
-requires all 36 audits before timing. Images are checked again after timing. Accepted
+requires the complete set of audits before timing. Images are checked again after timing. Accepted
 inbox bytes and review records are sealed; no serialized receipt resumes a crashed job.
 
 ## Remaining handoffs

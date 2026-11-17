@@ -125,8 +125,19 @@ Every load phase retains host start/end clocks and k6's measured `testRunDuratio
 [`handleSummary`](https://grafana.com/docs/k6/latest/results-output/end-of-test/custom-summary/).
 The k6 duration must cover the configured interval without exceeding its existing 10-second
 graceful stop; the host bracket must contain that duration with at most 10 seconds of control
-overhead. Request count/rate must agree with that measured k6 clock. Fixed phases must complete
-exactly `rate * duration` requests (9000 at the defaults), not merely report zero failures.
+overhead. Request count/rate must agree with that measured k6 clock. Historical v1 fixed
+phases must complete exactly the configured `rate * duration` requests, with no failures
+or dropped iterations, not merely report zero failures. V1 has no scheduling observations
+that could certify an extra arrival, so its original exact-count rule is unchanged.
+Counts below or above that offer fail, even if checks and upstream reads are rewritten
+consistently. V2 uses its separate raw scheduling replay, described below, rather than
+relaxing historical evidence. Every request still needs both passing named checks and,
+in API mode, exactly one upstream read. Retained `iterations` must match the request count
+and its rate (if supplied) must match the measured clock; retained dropped counters must be
+zero, including their rate if supplied. These optional standard k6 counters are cross-checked
+when present, not new mandatory evidence in `json-api-results/v1`. Historical v1 captures
+without them retain the request/check/clock/source accounting checks; no independent started
+iteration count is inferred from a metric that was not captured.
 Raw statistics must have strictly increasing timestamps inside the host bracket, with no gap
 or uncovered edge over five seconds. These evidence limits reject incomplete measurements;
 they do not establish machine admission or saturation. Existing raw artifacts missing these
@@ -151,11 +162,16 @@ from status/content type/JSON/value, never from the checker's assertion message.
 retains the actual normal child exit one and clock alongside raw responses and existing
 image/source/CPU/upstream context. Missing responses, timeouts, control failures and errors
 outside this bounded sweep remain incomplete attempts, not failed-target qualification.
+For a current API sweep, before the checker resets the upstream, the runner takes
+one more control reading. Its per-record starts must match the sweep counter, and
+the response-finish observer must show one completed 200 for every start and no
+aborts. A missing witness, non-200 answer, or unhealthy upstream setting leaves
+the observed app responses on disk but cannot establish a target failure.
 All 36 cells are attempted and all native source audits remain required, even for a negative
 cell. Any such negative gates timing globally (`timingDisposition: "gated-functional"`),
 with empty runs/aggregates and retained owned-container/network cleanup inventory.
 `inspectJson` returns `attemptComplete`, per-app `outcomes` and `comparisonEligibleApps`
-separately from `baseline`. A complete negative attempt has `baseline: false`, no eligible
+separately from `baseline`. A complete functional negative attempt has `baseline: false`, no eligible
 comparisons and process exit one. Check-only preparation remains unqualified pending the
 independent exact-image audit, whether its observed functional outcome passed or failed.
 
@@ -163,3 +179,188 @@ This implementation has unit/fake-operation and HTTP test coverage, not a measur
 native baseline. It makes no independent-review, serialization-audit, deployment-parity,
 build-cost, instruction-count or browser-experience claim. The catalog upstream's functional
 gate cannot inject redirects; the marketplace gate does exercise refusal of redirects.
+
+## Production V2
+
+New `run.mjs` captures use `json-api-results/v2`. The reader explicitly dispatches
+that schema; the standalone reader keeps historical v1 readable with its original
+exact fixed-offer and zero-error checks. Current isolated campaigns require v2 evidence;
+a self-declared v1 schema cannot bypass the producer-to-measured-commit join.
+Thresholds, rates, VUs, durations, budgets,
+the full nine-app/four-profile roster and pass rotation are unchanged.
+
+Production fixed phases use the instrumented fixed script below and retain **all**
+original stock JSON stdout, not a selected-event replacement. Closed phases use
+`timed-load.js`. The producer receipt binds the verifier-known load source hashes,
+exact inspected native commands/environments, unchanged pinned tools and added generator
+I/O. Every fixed stream has an independently replayed path/hash/length/event/point/metric/
+timestamp receipt; summaries, custom clocks, starts/iterations/requests/classifications,
+named checks, thresholds and actual normal exit 0/99 must agree. Stderr UTF-8 byte length
+must equal the retained command count before log parsing. Raw fixed latency quantiles
+are independently sorted/interpolated using pinned k6 TrendSink semantics.
+
+Normal 99 with coherent classified timeout/429/5xx evidence is saved, not automatically
+thrown away as a missing load phase. Later phases and matrix cells continue. Warmup
+failure, abnormal/signal/expired/interrupted exits, I/O/output/marshal faults, bad parity,
+source evidence, runtime or cleanup remain apparatus/incomplete failures, never app blame.
+Every saved metric, aggregate and pass-cell projection is recomputed. Reports retain
+failed and missing passes, response counts and min/median/max ranges. Each saved pass
+replays on its own, so an invalid pass cannot hide later ones. A pass ended by an
+apparatus fault keeps the phases before it that independently replay (including a
+coherent normal 99), but its row, app and attempt stay incomplete, never failed or
+comparable. An incomplete attempt has no comparison eligibility. In a complete timed
+attempt, a supported coherent target failure blames only its app: that app's rows stay
+`comparisonEligible: null`, and `comparisonEligibleApps` lists only apps whose every row
+independently completed. Any warning (harness, provenance, source/native audit, headroom,
+continuity or cleanup) leaves all public v2 app verdicts incomplete and no app comparable;
+independently replayed per-phase counts remain visible. Such an attempt is not a baseline,
+and `--require-complete` still fails it, as it does a functional negative.
+When the native load command itself faults (timeout, signal, I/O), the raw phase keeps
+its first message line, at most 512 characters, before any capture check it provoked;
+the phase stays an apparatus fault with null metrics.
+
+App/upstream/load runtime budgets, executable/mount/ownership/identity and lifetimes are
+captured before and after every phase. The upstream's cold identity and start lifetime
+must continue through every phase and adjacent timing cell for the same payload. The load
+container's nanosecond lifetime must contain the measured k6 duration and all fixed-stream
+event timestamps; nonzero generator samples outside it contradict the observation.
+All three roles need window-covering CPU/memory
+samples below their memory budgets. Counted app CPU and, for API mode, upstream CPU stay
+mandatory. Observed generator peak CPU must be below 80% of its unchanged four-core quota.
+The existing upstream is **one Node process**, not a worker pool: API attribution requires
+both sampled peak and counted average below 80% of one core. These observations include
+the instrumented load's added I/O; synthetic fixtures do not establish native headroom.
+Counter windows conservatively include observation overhead; these limits do not prove
+CPU saturation or a machine-admission/peak-memory guarantee.
+
+Success keeps exact zero fixture / one API upstream read per request. Failed API read
+bounds (`successful requests <= reads <= total requests`) require a new independent
+`json-api-native-audit/v2` receipt: the existing source guarantees plus
+`atMostOneUpstreamFetch`, `noTransportRetries`, `noBackgroundUpstream` and
+`responseAfterUpstreamCompletion`, all true. `transportSourceFiles` names a nonempty,
+duplicate-free subset of hash-bound `sourceFiles` inspected for the actual transport,
+including retry behavior. The bundle may use `json-api-native-audits/v2`. No positive
+audit is generated here. V1 audits still admit successful phases but cannot establish
+failed-API bounds. Audit truth/independence remains the operator's source-review boundary.
+
+For v2 the runner preloads a JSON-only observer in the two upstream Node processes.
+The original control body reports request starts and configured status. On the same
+control GET the observer returns actual record responses finished by HTTP status, plus
+aborted responses; control and health requests are not counted. A successful control
+reset begins a new counter epoch. Before, after and settled phase observations must
+show only completed 200s, one per cumulative read, with no abort or pending read.
+A v2 transport audit permits checking zero-or-one fetch bounds, not blaming the app
+when an individual failed request may never have reached the upstream. Without a
+completed 200 for every API request, the failed load remains observed but unattributed.
+Server-side finish is not a claim that the client received every byte.
+
+Read counters must join cold → warmup → all phases → teardown, across the actual ordered
+matrix, and to a final upstream observation. Fresh app containers, unchanged participating
+identities and no overlapping timing cells are replayed, not inferred from the saved plan.
+Counter movement between phases/cases or during/after teardown invalidates the attempt.
+Check-only preparation replays the actual functional attempts and cleanup and requires
+empty runs, aggregates and projections with no observed phases. It does not assert that
+a timing schedule executed or admit a baseline.
+Client timeouts do not observe app-handler completion: their classification is retained,
+but attribution remains incomplete, as do later phases with an unresolved server tail.
+No quiet interval or favorable counter count is taken as a server-drain proof.
+
+Fixed nominal arrivals, all observed starts/offers and observed endpoint variation remain
+separate. A late ordinary start is not rejected at zero nanoseconds or nominal-plus-N.
+The conditional last-start count check is an evidence-consistency check, not a wall-to-
+monotonic conversion or scheduler-stop proof. Fixed drops lack stock monotonic last-offer/
+stop observations and remain incomplete/unattributed even with plausible load pressure.
+Completion grace is never an offered-arrival budget. Neither the standalone prototype nor
+the parent-operated tiny native capture alone enables production eligibility.
+
+Capture hard-caps stdout at 512 MiB (fixed) / 2 MiB (closed), stderr at 4 MiB; any cap/write
+fault invalidates the retained prefix. Summary/clock admission caps are 2 MiB each after
+timing. At least 528 MiB free disk is checked before each phase; this is not a filesystem
+reservation. Fixed replay uses 64 KiB chunks/lines, at most 2,000,000 events / 128 metrics,
+and a growing typed latency vector capped at 16 MiB final size (under 32 MiB across growth
+allocations). Original bytes are never decompressed: no gzip is accepted on this path.
+At defaults, 108 fixed captures can retain at most **54 GiB of admitted raw streams**;
+stderr/auxiliary/raw-JSON/stat/app logs are additional. This is an evidence cap, not an
+estimate of native output or generator/internal-k6 memory. Actual native output, added
+CPU, collector/disk behavior and headroom still need measurement with pinned k6 before
+any execution/readiness claim. Disk exhaustion or incomplete samples cannot qualify.
+
+## Standalone Experiment
+
+`fixed-probe.mjs ABSOLUTE_PINNED_K6_BINARY NEW_OUTPUT_DIRECTORY` is an operator-run,
+local-only stock-k6 clock experiment, **not** the production matrix runner. It verifies
+the binary's 2.4.0 version, retains its executable/source hashes, and performs one ordinary
+all-200 JSON fixed phase at 150/s for two seconds against an owned loopback fixture. The
+fixture is not a native framework or source audit. Production defaults, matrix selection,
+CPU allocations, thresholds, VUs and timeout/grace settings are unchanged. No binary is
+downloaded and no Docker/cloud/provider is started by the prototype.
+
+The instrumented script imports the original load options and request/check behavior.
+It adds exhaustive wire-outcome/start counters, Gauge clock extrema and stock
+`--out json=-` output. **This adds generator CPU, allocation, serialization and pipe/disk
+I/O.** Its headroom has not been measured under pinned native k6. New Gauges retain only
+extrema; they do not add a per-request Trend. Stock k6 still has its existing trends and
+output buffers, whose peak memory cannot be established by synthetic Node fixtures.
+
+`events.jsonl` retains the full, unfiltered original output bytes. `capture.json` binds
+its SHA-256, byte/event/point/metric counts and exact first/last timestamps, plus normal
+exit/host clocks and separate summary, custom-clock and stderr hashes/lengths. There is
+no gzip/decompression path. Replay is `node bench/json-api/fixed-prototype.mjs verify
+OUTPUT_DIRECTORY`. It streams at 64KiB, with a 64KiB line limit, 512MiB raw limit,
+2,000,000 event limit and 128-metric limit. Oversize/partial/malformed output, missing
+final newline, I/O errors, output/marshal/write log errors, abnormal exits and inconsistent
+count/rate/check/iteration/drop/clock joins invalidate the observation. Limits are evidence
+admission safeguards, not workload settings. Capture stops on stdout/stderr cap errors;
+any retained prefix is explicitly incomplete, never accepted as the full stream.
+
+The stdout writer cannot write beyond 512MiB; stderr cannot exceed 4MiB. Summary and
+clock admission limits are 2MiB each, checked after timing, not hard filesystem quotas.
+The collector reserves at least 528MiB free disk before launching. Exact native output
+volume/peak heap/CPU at the production defaults is **not measured**; 9000 nominal arrivals
+is not a physical scheduler maximum. The fixed caps bound admitted evidence independently
+of that unknown cost. The parent-operated tiny probe must retain measured volume and
+resource observations before any extrapolation or qualification.
+
+Instance duration is wall-clock based and has a different origin from scenario progress.
+Uncapped scenario progress brackets an origin interval; capped progress is not an exact
+elapsed time. Conversion uses explicit outward nanosecond enclosures, retaining the
+separate millisecond uncertainty of the scenario wall epoch. Built-in drop point times
+remain wall observations, **not** a monotonic scheduler-stop proof. Completion grace never
+becomes an offered-arrival budget. Nominal count, actual offers and last-start variation
+are reported separately; no nominal-plus-one or zero-nanosecond endpoint gate is imposed
+by this experiment. Ordinary endpoint variation is retained for native review, not labeled
+an application failure. A conditional last-start count check is only a consistency check.
+
+Every replay returns `json-api-fixed-prototype/v1`, `status: "unqualified"`,
+`attemptComplete: false`, `targetOutcome: null`, `comparisonEligible: null` and
+`scheduling.endpointEligible: null`. A coherent load exit99 preserves classified counts,
+not app-failure attribution. The production v1 reader stays zero-error strict; this
+prototype cannot opt into it or establish a baseline. Production v2 uses the separate
+joins above. Native headroom qualification and independent exact-source audits are not
+established by this experiment or its synthetic tests.
+
+Replay requires the recorded executable's absolute path, SHA-256 and pinned version,
+the exact experiment source inventory/hashes and argv matching its fixed configuration,
+script and output paths. Source hashes are checked against the verifier's local source
+tree by default; portable callers may explicitly supply an independently trusted source
+manifest and executable digest to `verifyFixedPrototype`. No saved artifact chooses code
+or causes the recorded executable to run. A self-recorded digest is not an independent
+executable attestation. Every custom-clock counter count/rate must join the full raw stream,
+and latency average must match its raw sum/point count, not just its extrema.
+
+The isolated controller also joins all four production v2 load-asset hashes and the upstream observer hash to
+its measured-commit source binding. Matching a mutable local producer alone is
+not sufficient. Its captured verifier includes the complete fixed-stream and
+timed-outcome import closure; neither evidence nor a recorded producer path can
+select executable code. Historical v1 evidence stays on its original verifier.
+
+The disjoint successor `timed-outcomes.mjs` derives complete or incomplete load observations
+and projects all requested pass/phase cells with failure counts and ranges. Normal exit99
+can retain a complete classified no-drop load observation; it does not itself attribute a
+target failure. Fixed dropped work remains incomplete without an observed monotonic last
+offer/stop; wall timestamps and completion grace do not fill that gap. Ordinary coherent
+late starts are retained without a zero-nanosecond endpoint gate. The closed-only
+`timed-load.js` retains success/timeout/429/5xx counters without changing imported load
+options or thresholds. Production v2 wires these observations through the separate
+runtime/resource/source/cleanup joins described above; this observation module alone
+cannot grant app attribution or comparisons. Historical v1 gates remain strict.
