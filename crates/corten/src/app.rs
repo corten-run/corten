@@ -1719,8 +1719,8 @@ where
 }
 
 /// The step on a connection that has none: the listener's IO itself.
-pub(crate) async fn plain<I>(io: I) -> Result<(I, ()), std::convert::Infallible> {
-    Ok((io, ()))
+pub(crate) fn plain<I>(io: I) -> std::future::Ready<Result<(I, ()), std::convert::Infallible>> {
+    std::future::ready(Ok((io, ())))
 }
 
 /// Serves `app` on `listeners` with its tasks running until `stop` resolves; then tells the tasks
