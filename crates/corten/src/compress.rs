@@ -133,21 +133,12 @@ fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
             } else {
                 continue;
             };
-            let q = params.map_or(1000, quality);
-            if q > 0 {
+            // A malformed weight skips its coding, so it cannot make that coding preferable.
+            if let Some(q @ 1..) = params.map_or(Some(1000), crate::http::weight) {
                 f(q, coding);
             }
         }
     }
-}
-
-/// The q-value among an item's parameters (`q=0.5`), in thousandths; 1000 when absent,
-/// 0 when invalid, so a malformed weight cannot make its coding preferable.
-fn quality(params: &[u8]) -> u16 {
-    params
-        .split(|&b| b == b';')
-        .find_map(|p| p.trim_ascii().strip_prefix(b"q=").or_else(|| p.trim_ascii().strip_prefix(b"Q=")))
-        .map_or(1000, |q| crate::http::qvalue(q).unwrap_or(0))
 }
 
 fn compressible(content_type: &str) -> bool {
@@ -738,6 +729,21 @@ mod tests {
             let header = format!("zstd;q={weight}, gzip;q=0.001");
             assert_eq!(accepted(&accept(&header), &all), Some(Coding::Gzip), "{header}");
             assert_eq!(negotiate(&accept(&header)).streamed(), Some(Coding::Gzip), "{header}");
+        }
+    }
+
+    /// Whitespace at a weight's `=` makes it invalid, so its coding is skipped and a valid
+    /// sibling still counts; whitespace around `;` is allowed.
+    #[test]
+    fn negotiation_skips_a_weight_with_whitespace_at_its_equals_sign() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for header in ["zstd;q =0, gzip;q=0.5", "zstd;Q\t=0, gzip;q=0.5", "zstd;q= 0, gzip;q=0.5", "zstd;q, gzip;q=0.5"] {
+            assert_eq!(accepted(&accept(header), &all), Some(Coding::Gzip), "{header}");
+            assert_eq!(negotiate(&accept(header)).streamed(), Some(Coding::Gzip), "{header}");
+        }
+        for header in ["zstd;Q=0.5, gzip;q=0.4", "zstd \t; \tQ=0.5 , gzip;q=0.4"] {
+            assert_eq!(accepted(&accept(header), &all), Some(Coding::Zstd), "{header}");
+            assert_eq!(negotiate(&accept(header)).streamed(), Some(Coding::Zstd), "{header}");
         }
     }
 

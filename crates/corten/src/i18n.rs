@@ -482,15 +482,12 @@ pub fn negotiate(locales: &[&str], accept_language: Option<&str>) -> usize {
     let listed = |tag: &str| locales.iter().position(|l| l.eq_ignore_ascii_case(tag));
     let mut best: Option<(u16, usize)> = None;
     for part in accept_language.unwrap_or("").split(',') {
-        let mut pieces = part.trim().split(';');
-        let tag = pieces.next().unwrap_or("").trim();
-        let q = match pieces.find_map(|p| p.trim().strip_prefix("q=").or_else(|| p.trim().strip_prefix("Q="))) {
-            Some(q) => match crate::http::qvalue(q.as_bytes()) {
-                Some(q) => q,
-                None => continue,
-            },
-            None => 1000,
+        let part = part.trim();
+        let (tag, q) = match part.split_once(';') {
+            Some((tag, params)) => (tag.trim(), crate::http::weight(params.as_bytes())),
+            None => (part, Some(1000)),
         };
+        let Some(q) = q else { continue };
         if tag.is_empty() || tag == "*" || q == 0 || best.is_some_and(|(b, _)| q <= b) {
             continue;
         }
@@ -1991,6 +1988,24 @@ mod tests {
             ] {
                 assert_eq!(locales[negotiate(&locales, Some(&header))], expected, "{header}");
             }
+        }
+    }
+
+    /// RFC 9110 allows whitespace around a weight's `;` but not around its `=`: a `q` parameter
+    /// spelled with it skips its range, as any invalid weight does, and the next range still counts.
+    #[test]
+    fn negotiation_skips_a_weight_with_whitespace_at_its_equals_sign() {
+        let locales = ["en", "fr"];
+        for header in ["fr;q =0, en;q=0.5", "fr;q\t=0, en;q=0.5", "fr;q= 0, en;q=0.5", "fr;Q =1, en;q=0.5", "fr;q, en;q=0.5"] {
+            assert_eq!(locales[negotiate(&locales, Some(header))], "en", "{header}");
+        }
+        for (header, expected) in [
+            ("fr;Q=0.5, en;q=0.4", "fr"),
+            ("fr;q=0.4, en;Q=0.5", "en"),
+            ("fr \t; \tq=0.5 , en;q=0.4", "fr"),
+            ("en;q=0.4, fr;Q=0.5", "fr"),
+        ] {
+            assert_eq!(locales[negotiate(&locales, Some(header))], expected, "{header}");
         }
     }
 

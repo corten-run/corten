@@ -56,9 +56,38 @@ pub(crate) fn qvalue(value: &[u8]) -> Option<u16> {
     Some(quality)
 }
 
+/// The weight among a list item's parameters (the text after its first `;`), in thousandths:
+/// 1000 without a `q` parameter, `None` when its `q` is not exactly `q=` (either case) and a
+/// [`qvalue`]. RFC 9110 (sections 5.6.6 and 12.4.2) allows whitespace around `;`, not around `=`.
+pub(crate) fn weight(params: &[u8]) -> Option<u16> {
+    fn trim(mut s: &[u8]) -> &[u8] {
+        while let [b' ' | b'\t', rest @ ..] = s {
+            s = rest;
+        }
+        while let [rest @ .., b' ' | b'\t'] = s {
+            s = rest;
+        }
+        s
+    }
+    for param in params.split(|&b| b == b';') {
+        let param = trim(param);
+        let (name, value) = match param.iter().position(|&b| b == b'=') {
+            Some(at) => (&param[..at], Some(&param[at + 1..])),
+            None => (param, None),
+        };
+        if trim(name).eq_ignore_ascii_case(b"q") {
+            return match value {
+                Some(value) if name.len() == 1 => qvalue(value),
+                _ => None,
+            };
+        }
+    }
+    Some(1000)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::qvalue;
+    use super::{qvalue, weight};
 
     #[test]
     fn qvalues_follow_the_rfc_grammar() {
@@ -89,6 +118,24 @@ mod tests {
             assert_eq!(qvalue(text.as_bytes()), None, "{text:?}");
         }
         assert_eq!(qvalue(b"0.\xff"), None);
+    }
+
+    #[test]
+    fn a_weight_is_q_equals_a_qvalue_with_whitespace_only_around_its_semicolon() {
+        for (params, expected) in [
+            ("", 1000),
+            ("level=1", 1000),
+            ("q=0.5", 500),
+            ("Q=0.5", 500),
+            (" \tq=0.5\t ", 500),
+            ("level=1; q=0", 0),
+            ("qs=2;q=0.25", 250),
+        ] {
+            assert_eq!(weight(params.as_bytes()), Some(expected), "{params:?}");
+        }
+        for params in ["q =0", "q\t=0", "q= 0", "Q =0.5", "q", "q=", "q=nan", "level=1;q =1"] {
+            assert_eq!(weight(params.as_bytes()), None, "{params:?}");
+        }
     }
 }
 
