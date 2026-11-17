@@ -71,6 +71,10 @@ fn nesting_boundaries_and_unknown_namespaces_still_compile() {
 /// independent of one around the drawing, and a template's forms do not see the form pointer.
 #[test]
 fn templates_and_foreign_content_start_with_nothing_open() {
+    #[component]
+    fn Holder(children: impl Render) -> impl Render {
+        html! { <div>{children}</div> }
+    }
     for (markup, expected) in [
         (
             html! { <div><a><svg><foreignObject><a>"Link"</a></foreignObject></svg></a></div> }.to_html(),
@@ -86,6 +90,10 @@ fn templates_and_foreign_content_start_with_nothing_open() {
         ),
         (
             html! { <template><div><form><form><input></form></form></div></template> }.to_html(),
+            "<template><div><form><form><input></form></form></div></template>",
+        ),
+        (
+            html! { <template><Holder><form><form><input></form></form></Holder></template> }.to_html(),
             "<template><div><form><form><input></form></form></div></template>",
         ),
     ] {

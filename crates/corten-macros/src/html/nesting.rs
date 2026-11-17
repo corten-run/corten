@@ -170,10 +170,10 @@ fn in_scope<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
 }
 
 /// The open element this start tag closes or discards, if the literal ancestors establish it.
-fn displaced<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
-    // Forms use the form pointer, not element scope. `walk` never puts a template here (its
-    // content starts afresh), and in a template the pointer is not used.
-    if name.eq_ignore_ascii_case("form") {
+/// `in_template`: the tag is in a literal `<template>`'s content.
+fn displaced<'a>(open: &[Open<'a>], name: &str, in_template: bool) -> Option<&'a str> {
+    // Forms use the form pointer, not element scope, and a template's content does not use it.
+    if name.eq_ignore_ascii_case("form") && !in_template {
         if let Some(form) = open.iter().rev().find(|e| e.html && e.name.eq_ignore_ascii_case("form")) {
             return Some(form.name);
         }
@@ -242,16 +242,16 @@ fn displaced<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
 }
 
 pub(super) fn check(nodes: &[Node]) -> Result<(), Error> {
-    walk(nodes, Parsing::Unknown, &mut Vec::new())
+    walk(nodes, Parsing::Unknown, &mut Vec::new(), false)
 }
 
-fn walk<'a>(nodes: &'a [Node], parsing: Parsing, open: &mut Vec<Open<'a>>) -> Result<(), Error> {
+fn walk<'a>(nodes: &'a [Node], parsing: Parsing, open: &mut Vec<Open<'a>>, in_template: bool) -> Result<(), Error> {
     for node in nodes {
         match node {
             Node::Element { name, attrs, children } => {
                 let html = html_element(parsing, name, attrs);
                 if html {
-                    if let Some(parent) = displaced(open, name) {
+                    if let Some(parent) = displaced(open, name, in_template) {
                         let action = if name.eq_ignore_ascii_case("form") && parent.eq_ignore_ascii_case("form") {
                             "ignores the nested <form> start tag".into()
                         } else {
@@ -271,20 +271,22 @@ fn walk<'a>(nodes: &'a [Node], parsing: Parsing, open: &mut Vec<Open<'a>>) -> Re
                 if !(html && (super::reads_as_text(parsing, name) || name.eq_ignore_ascii_case("noscript"))) {
                     let within = parsing_within(parsing, name, attrs);
                     // A template's content, and a foreign element's, start with no element open.
-                    if !html || name.eq_ignore_ascii_case("template") {
-                        walk(children, within, &mut Vec::new())?;
+                    let template = name.eq_ignore_ascii_case("template");
+                    if !html || template {
+                        walk(children, within, &mut Vec::new(), in_template || template)?;
                     } else {
-                        walk(children, within, open)?;
+                        walk(children, within, open, in_template)?;
                     }
                 }
                 open.pop();
             }
             Node::Block { bodies, .. } => {
                 for body in bodies {
-                    walk(body, parsing, open)?;
+                    walk(body, parsing, open, in_template)?;
                 }
             }
-            Node::Component { children: Some(children), .. } => check(children)?,
+            // A component's children go where it writes them, but still in this template.
+            Node::Component { children: Some(children), .. } => walk(children, Parsing::Unknown, &mut Vec::new(), in_template)?,
             _ => {}
         }
     }
@@ -304,7 +306,7 @@ mod tests {
 
     fn lost(ancestors: &[&str], name: &str) -> bool {
         let open: Vec<_> = ancestors.iter().map(|name| Open { name, html: true }).collect();
-        displaced(&open, name).is_some()
+        displaced(&open, name, false).is_some()
     }
 
     #[test]
@@ -325,6 +327,7 @@ mod tests {
         assert!(!lost(&["a", "object"], "a"));
         assert!(!lost(&["a", "table", "caption"], "a"));
         assert!(lost(&["form", "table", "td"], "form"));
+        assert!(displaced(&[Open { name: "form", html: true }], "form", true).is_none());
         assert!(lost(&["button", "span"], "button"));
         assert!(!lost(&["button", "object"], "button"));
         assert!(lost(&["h1"], "h2"));
