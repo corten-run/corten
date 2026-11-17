@@ -263,6 +263,31 @@ test("production entry forwards source-bound stream registration and settles asy
   assert.ok(existsSync(join(p.h.local, "monitor-invalid.json"))); assert.equal(p.h.deletes, 0);
 });
 
+for (const phase of ["pending", "live"]) test("wire registration survives launch cancellation while " + phase, async (t) => {
+  const p = productionHarness(t, { active: true }), local = p.h.local, registration = join(local, "monitor-registration.json");
+  let atCancel;
+  p.deps.interrupted = () => {
+    if (atCancel === undefined && existsSync(registration) && p.h.saved().control.monitor.phase === phase) atCancel = p.calls.length;
+    return atCancel !== undefined;
+  };
+  await assert.rejects(productionMain(await p.approve("--detach"), p.deps), (e) => e.controlTreeUncertain === true && e.controllerStage === "controller-launch");
+  assert.equal(p.calls.length, atCancel, "no transport command after cancellation");
+  const { control } = p.h.saved(), reg = JSON.parse(readFileSync(registration));
+  assert.equal(control.monitor.phase, "invalid"); assert.equal(control.monitor.id, reg.id);
+  assert.equal(control.monitor.registrationSha256, digest(JSON.stringify(reg)));
+  assert.deepEqual(control.sealed, []); assert.ok(!control.ledger.some((r) => r.request.seal));
+  assert.ok(existsSync(join(local, "operation.lock")) && existsSync(join(p.h.base, ".groups-launch.lock")));
+  const close = JSON.parse(readFileSync(join(local, "monitor-local-closed.json")));
+  assert.equal(close.id, reg.id); assert.equal(close.remoteDrained, false); assert.ok(existsSync(join(local, "monitor-invalid.json")));
+
+  // Fresh approval, after actual local closure and the unchanged embargo.
+  t.mock.timers.enable({ apis: ["Date"], now: close.recoverAfterMs + 1 });
+  p.deps.interrupted = () => false;
+  assert.equal(await productionMain(await p.approve("--collect"), p.deps), 3);
+  assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
+  assert.ok(existsSync(join(local, "operation.lock")) && existsSync(join(p.h.base, ".groups-launch.lock")));
+});
+
 test("production entry keeps the single stream alive through bootstrap seal and awaits local close before teardown", async (t) => {
   const p = productionHarness(t, { active: true }); let started = 0, streamClosed = false, providerClosed = 0;
   p.deps.streamSpawn = (binary, argv) => {

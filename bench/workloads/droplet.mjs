@@ -15,6 +15,7 @@ import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, v
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript,
   verifyFailedNativeCustody, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
 import { controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { controlCheckpoint } from "./cloud-transport.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -50,15 +51,26 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const save = () => { check(); writeState(state); };
   // Cancellation forbids further work, not recording how the owned monitor ended.
-  // Change only the phase in the saved reservation, never other in-flight edits.
+  // Record only the ending and, if cancellation beat the live-state write,
+  // the registration already received from this stream. Never adopt a file alone.
   const recordMonitorEnd = (phase) => {
     const alreadyUncertain = preserveOperationLock;
     preserveOperationLock = true;
     const saved = read();
     assert.equal(saved.token, state.token);
     assert.equal(saved.control.monitor.id, state.control.monitor.id);
-    assert.equal(saved.control.monitor.registrationSha256, state.control.monitor.registrationSha256);
-    assert.equal(saved.control.monitor.phase, "live");
+    if (saved.control.monitor.phase === "pending") {
+      assert.equal(phase, "invalid");
+      assert.equal(saved.control.monitor.registrationSha256, undefined);
+      const registered = JSON.parse(regular(join(local, "monitor-registration.json")));
+      assert.deepEqual(registered, monitor.registration);
+      assert.equal(registered.id, saved.control.monitor.id);
+      assert.deepEqual(registered.binding, { round: saved.round, commit: saved.commit, token: saved.token, helperSha256: saved.control.helperSha256 });
+      saved.control.monitor.registrationSha256 = digest(JSON.stringify(registered));
+    } else {
+      assert.equal(saved.control.monitor.registrationSha256, state.control.monitor.registrationSha256);
+      assert.equal(saved.control.monitor.phase, "live");
+    }
     saved.control.monitor.phase = phase; writeState(saved); state = saved;
     if (phase === "closed") preserveOperationLock = alreadyUncertain;
   };
@@ -77,6 +89,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       const limit = remaining ? Math.min(timeout, remaining()) : timeout;
       try { r = await run(binary, argv, limit, permittedFailure, expiry, registration); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
+      if (registration?.stream && r.monitor) {
+        monitor = r.monitor;
+        assert.equal(monitor.registration.id, registration.expected.id);
+        assert.deepEqual(monitor.registration.binding, registration.expected.binding);
+        await controlCheckpoint(interrupted);
+      }
       if (r.controlTreeUncertain || r.controlUncertain) { preserveOperationLock = true; throw new Error("control uncertain; preserve locks"); }
       check();
       if (remaining) remaining();
@@ -196,10 +214,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.equal(state.control.monitor.phase, "pending");
           const expected = { id: state.control.monitor.id, binding: { round: state.round, commit: state.commit,
             token: state.token, helperSha256: state.control.helperSha256 } };
-          const result = await execute("ssh", [...sshOptions, 'root@' + state.ip], 30000, false, undefined, undefined,
+          await execute("ssh", [...sshOptions, 'root@' + state.ip], 30000, false, undefined, undefined,
             { stream: true, expected, local, interrupted });
-          assert.ok(result.monitor && result.monitor.registration.id === expected.id);
-          monitor = result.monitor;
+          assert.ok(monitor);
           state.control.monitor.registrationSha256 = digest(JSON.stringify(monitor.registration));
           state.control.monitor.phase = "live"; save();
         }
