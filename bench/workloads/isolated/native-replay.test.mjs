@@ -8,6 +8,7 @@ import { join, resolve, sep } from "node:path";
 import { mock, test } from "node:test";
 import { groupNames, selectedApps } from "../registry.mjs";
 import { result as jsonResult, failedResult } from "../../json-api/test-fixtures.mjs";
+import { apparatusSources } from "../../catalog/apparatus.mjs";
 
 const seams = new Map();
 for (const group of groupNames.filter((g) => !["catalog-page", "json-api", "localized-marketplace"].includes(g)))
@@ -47,6 +48,30 @@ function fixture(t, group) {
   writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); writeFileSync(join(folder, "raw.log"), "synthetic\n");
   return { folder, binding, summary };
 }
+
+test("catalog worker source receipts must match the bound commit even after fully rehashing", async (t) => {
+  const f = fixture(t, "catalog-page"), hash = (text) => createHash("sha256").update(text).digest("hex");
+  const proof = { schema: "catalog-apparatus-source/v1", commit: f.binding.request.commit,
+    files: Object.fromEntries(apparatusSources.map((path) => [path, hash(path)])) };
+  f.binding.sources = { commit: proof.commit, files: Object.entries(proof.files).map(([path, sha256]) => ({ path, sha256 })) };
+  const save = (value) => {
+    const text = JSON.stringify(value);
+    f.summary.savedEvidence = { schema: "catalog-saved-evidence/v4", apparatusSourceSha256: hash(text) };
+    writeFileSync(join(f.folder, "apparatus-source.json"), text);
+    writeFileSync(join(f.folder, "summary.json"), JSON.stringify(f.summary));
+  };
+  action = "normal"; save(proof);
+  assert.equal((await inspectNative(f.binding, f.folder)).status, "verified");
+  for (const change of [
+    (p) => { p.files[apparatusSources[0]] = hash("different source"); },
+    (p) => { delete p.files[apparatusSources[0]]; },
+    (p) => { p.files["bench/catalog/unreviewed.mjs"] = hash("extra source"); },
+    (p) => { p.commit = "b".repeat(40); },
+  ]) {
+    const changed = structuredClone(proof); change(changed); save(changed);
+    assert.equal((await inspectNative(f.binding, f.folder)).status, "invalid");
+  }
+});
 
 test("client registered replay uses the same saved verifier for exact historical v2 and candidate v3, never unknown schemas", async (t) => {
   const f = fixture(t, "client-heavy");

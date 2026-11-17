@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- The catalog benchmark uses a fixed two-worker upstream within its existing CPU
+  and memory budget, retaining per-process headroom and a first-host preflight.
+  Saved worker evidence joins every preflight to the timed upstream and the
+  apparatus source hashes to the bound measured commit; failed capacity checks
+  remain unqualified rather than attributed to the measured framework.
+
 - Preserve every client benchmark candidate's not-run record when policy input
   is invalid or missing. Such attempts still fail before any native build.
 

@@ -9,16 +9,19 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 
 export const validationPaths = Object.freeze([
+  "bench/catalog/apparatus.mjs",
   "bench/catalog/check.mjs",
   "bench/catalog/contract.mjs",
   "bench/catalog/droplet-contract.mjs",
   "bench/catalog/fixtures.mjs",
+  "bench/catalog/preflight.mjs",
   "bench/catalog/group.mjs",
   "bench/catalog/raw.mjs",
   "bench/catalog/record-attempt.mjs",
   "bench/catalog/report.mjs",
   "bench/catalog/stats.mjs",
   "bench/catalog/timed.mjs",
+  "bench/catalog/upstream-workers.mjs",
   "bench/catalog/verify.mjs",
   "bench/client-heavy/build-replay.mjs",
   "bench/client-heavy/compiler.mjs",

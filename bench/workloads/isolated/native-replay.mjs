@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { groupNames } from "../registry.mjs";
 import { inspectEvidence, readRegular, tree } from "./evidence.mjs";
 import { admitted } from "../../marketplace/feature-contract.mjs";
+import { apparatusSources, workerAware } from "../../catalog/apparatus.mjs";
 
 // Fixed code imports only. Saved evidence cannot select a module or a validator.
 const adapters = Object.freeze({
@@ -28,6 +29,22 @@ function httpAttempt(binding, report) {
 function missing(binding) {
   return { status: "blocked", attemptComplete: false, cleanupComplete: false, resources: "blocked",
     outcomes: binding.selection.apps.map((app) => ({ app, outcome: "not-run" })), blockers: ["fixed-native-replay-not-available"] };
+}
+function catalogSource(binding, summary, folder) {
+  if (!workerAware(summary)) return;
+  const text = readRegular(join(folder, "apparatus-source.json"));
+  assert.equal(createHash("sha256").update(text).digest("hex"), summary.savedEvidence.apparatusSourceSha256);
+  const proof = JSON.parse(text);
+  assert.equal(proof.schema, "catalog-apparatus-source/v1");
+  assert.equal(proof.commit, binding.request.commit);
+  assert.equal(binding.sources.commit, binding.request.commit);
+  assert.deepEqual(Object.keys(proof.files), apparatusSources, "catalog apparatus source inventory differs");
+  const sources = new Map(binding.sources.files.map((row) => [row.path, row.sha256]));
+  assert.equal(sources.size, binding.sources.files.length, "duplicate bound source");
+  for (const path of apparatusSources) {
+    assert.ok(sources.has(path), "catalog apparatus source missing from bound commit");
+    assert.equal(proof.files[path], sources.get(path), "catalog apparatus source differs from bound commit");
+  }
 }
 export function validateNativeResult(binding, result) {
   assert.ok(result && states.includes(result.status));
@@ -94,6 +111,7 @@ export async function inspectNative(binding, folder) {
       assert.equal(summary.round, round); assert.equal(summary.commit, commit);
       assert.deepEqual(summary.options, binding.execution.effectiveOptions);
       assert.deepEqual(summary.measurement?.cpus, binding.resources.expectedCpus);
+      if (group === "catalog-page") catalogSource(binding, summary, folder);
       result = missing(binding); result.blockers = ["native-replay-incomplete"];
       if (group === "localized-marketplace") {
         // This fixed native API returns its fully replayed summary, not a status
