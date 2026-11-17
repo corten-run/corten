@@ -4900,26 +4900,35 @@ rules something out.
     ([Choice 10](#choice-app-owns-document)), drawing `<main>` and each element around it that
     changed, in the same document. Until it is in, every navigation reads the whole page, as after a
     write that redirects, so one that leaves it on its way still shows what the write changed. The
-    runtime keeps the writes whose change no layout has drawn, numbered as their outcomes come. A
-    page's layout stands for those answered before it was asked for and the write it answers, and
-    drawing it makes every other write answered since it was asked for undrawn again: with two
-    writes out, whichever page is drawn last, its layout may be older than the other write, so the
-    next navigation reads the whole page. A navigation that cuts off a write not yet drawn (waiting
+    runtime keeps the writes whose change no layout has drawn, numbered as their outcomes come: a
+    write's whole own page, a redirect, and a patch (or `<main>`) that took the write, each
+    undrawn until it is in. A page's layout stands for those answered before it was asked for and
+    the write it answers, and drawing it makes every other write answered since it was asked for
+    undrawn again: with two writes out, whichever page is drawn last, its layout may be older than
+    the other write, so the next navigation reads the whole page. That holds for a patch too: one
+    that drew a layout element (a count with an id) and is then drawn over by an older write's own
+    page is undrawn again, so the next navigation reads the whole page. A navigation that cuts off a write not yet drawn (waiting
     for its answer, or a patch that took it whose scripts are loading; only a navigation does: a
     newer submit of the form waits for it) reads the whole page,
     and the write, which the server may have applied, counts too, numbered as the navigation starts
     and after the writes that page draws: the server may still be running it as that page is read,
     so the navigation after reads the whole page again. One that failed in view (the network failed,
-    a 5xx), which the server may have applied too, counts for the next navigation but not for the
+    a 5xx, or the body of an answer that took it was cut off, or did not draw, after its headers
+    came), which the server may have applied too, counts for the next navigation but not for the
     page reading itself again (`ReadAgain`, or a navigation to its own address): the page says so (a toast in `<main>`) and the user
     sends it again under the same key, and a read of the whole page would draw that failure away.
+    That includes a page whose own page drew and asks to be read again, which reads itself whole
+    while its write lands: while such a failure is undrawn it reads `<main>` alone.
     The limit: a page reading itself again after such a failure keeps the layout as it was until the
     user leaves it or sends the write again, and a write the server applies after the navigation
     after its cut-off (a slow write still running then) shows at the next whole page read for another
     reason (another write, a reload). A page the app's or an area's
     middleware makes with `Req` in the route's place is filled as the middleware answers, under the
     request's deadline and before the error page, from the head that `Req` was taken with, as the
-    route's own page is. A
+    route's own page is. That head is kept on the request's `Signal` (a `Req` stays the size it was
+    on `main`), which the head's extensions hold in turn, so it is let go when the write is answered
+    or its future dropped unanswered (the client gone, a middleware's timeout), and a `Req` taken
+    after that keeps none: nothing of the request outlives it. A
     `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
     layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
     page's, as a navigation does, and the next navigation reads the whole page; it cannot load in
@@ -4936,6 +4945,17 @@ rules something out.
     or a second handler model: what the issue asks for is a page, which the server already draws.
     So a patch still fills no layout read; a write whose answer must change one answers its page,
     and a layout value a patch updates is a component with an id, passed its value as a prop.
+
+    Not chosen either: the runtime's record of the writes (the numbers, the undrawn and failed
+    sets, `drew`) in a script module of its own, loaded before a page's first write is sent, as
+    `upload.js` is for a form with progress, with only the calls to it in the runtime. Built with
+    the runtime's settings (esbuild and terser, gzip by Node's `zlib`), the runtime would be 44,742
+    bytes and 15,813 with gzip where it is 44,798 and 15,853, 40 less, and the module 490 and 326:
+    a page that writes would load 286 bytes more in all, and its first write would wait for one more
+    script before it is sent (measured below). A navigation reads the record as it starts, before it
+    can wait for anything, so one that starts while the module loads would need a record of its own
+    in the runtime for the writes it cuts off. 40 bytes on every page do not pay for a slower first
+    write and a second record (Values 1 and 2).
 
     What it costs: a write's own page in `Mode::Action` sends the layout's markup and waits for its
     reads, which start only once the handler has answered. In the crate's test app (two layout
@@ -4990,10 +5010,11 @@ rules something out.
     adds to it is within its runs' range (up to 430 instructions here, against at most 3 on the
     crate's patch) and is not resolved. The route's
     fill is boxed: with the box only around the reads, past the handler, an `HtmlResult` patch took
-    262 less but every other write about 480 to 590 more, as each route's future grew. The runtime
-    is 1,180 bytes larger raw and 437 with gzip (15,407 to 15,844 at zlib's default level, against
-    `main` at `dbe1a34c7`), numbering
-    the writes a layout draws and which of them failed in view.
+    262 less but every other write about 480 to 590 more, as each route's future grew. Letting go of
+    the heads a `Req` kept before the route costs a late write one look among the request's
+    lookups as it ends (measured below). The runtime is 1,178 bytes larger raw and 446 with gzip
+    (15,407 to 15,853 at zlib's default level, against `main` at `76b5126b7`), numbering the
+    writes a layout draws and which of them failed in view.
 
     Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`,
     `what_a_page_with_layout_reads_costs` and the watchlist's `what_a_watch_costs`, the difference

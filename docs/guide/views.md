@@ -386,12 +386,15 @@ leaves it on its way still shows what the write changed. With two writes out at 
 page is drawn last may be older than the other write, so the next navigation reads the whole page
 again. So does one after a write a navigation cut off before its answer, which the server may have
 applied, and the navigation after that one, since the server may still have been running the write
-when that page was read. A write that failed in view (the network failed, a 5xx) leaves the page as
+when that page was read. A patch that took a write counts too: one that drew a layout element (a
+count with an id), drawn over by an older write's own page that came after it, leaves the next
+navigation to read the whole page. A write that failed in view (the network failed, a 5xx, or its
+answer was cut off after its headers came) leaves the page as
 it is, with its failure shown, for the user to send again; the server may have applied it, so the
 next navigation reads the whole page, but the page reading itself again
 ([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), or a navigation to its own
 address) does not, as that would draw
-the failure away. A page the app's or an area's middleware makes with `Req` in the
+the failure away, not even a write's own page that reads itself whole while its write lands. A page the app's or an area's middleware makes with `Req` in the
 route's place (a sign-in page) is filled the same way, from the request's head as it had it,
 within the request's deadline, and a failure to fill it gets the error page. Only a `GET` form's page (a search) is
 `<main>` alone, as a navigation's is, since a `GET` changes nothing the layout shows. Such an answer

@@ -870,11 +870,12 @@ Corten is pre-1.0, so any minor version may change the API.
   takes 31,180 where it took 22,900; one that answers patches alone (`HtmlResult<Patches>`) keeps
   none, 25,716 where it took 23,532. A navigation takes 22,358 where it took 22,221, a whole
   document 53,072 where it took 52,782, a patch in an app without layout reads 23,269 where it took
-  22,752. The runtime is 437 bytes larger with gzip. A read an `Ahead` starts
+  22,752. The runtime is 446 bytes larger with gzip. A read an `Ahead` starts
   before the handler may not see the write. With two writes out at once, whichever page is drawn
-  last may be older than the other write, so the next navigation reads the whole page; so does one
-  after a write a navigation cut off before its answer, or one that failed in view (the network
-  failed, a 5xx), either of which the server may have applied; a page reading itself again
+  last may be older than the other write, a patch to a layout element included, so the next
+  navigation reads the whole page; so does one after a write a navigation cut off before its
+  answer, or one that failed in view (the network failed, a 5xx, its answer cut off after its
+  headers), either of which the server may have applied; a page reading itself again
   (`ReadAgain`, or a navigation to its own address) after such a failure reads only `<main>`, so the failure stays shown. A page the app's or an area's middleware makes with `Req` in the route's place is
   filled too, within the request's deadline. **Breaking:** an app that skips a layout value of its own when
   `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
