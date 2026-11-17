@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- The watchlist smoke's first field change after a link now tests a same-shell page swap, with
+  the field module held back, rather than racing the scripts of a full document load.
+
 - **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in a shape
   the runtime's parse loses wherever it is written no longer compiles: a table part (`<tr>`,
   `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`, `<colgroup>`) after a

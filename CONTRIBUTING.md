@@ -230,6 +230,14 @@ The first request is captured before editing its fields; file output is polled o
 independent of animation frames. Neither the six-second outcome bound nor the window for
 detecting forbidden sends is extended.
 
+The watchlist's first-change-after-a-link field check starts on `/smoke/quoted`, which has the
+same shell key as `/smoke/fields` and no field arguments. `/news` has another shell key, so a
+link from it loads the document in full instead of swapping the page. A visible control on that
+full load can precede its scripts, when events correctly get the browser's default. The check
+holds the field module's response, verifies that the control is not inserted while it waits,
+then checks the first change and that the document stayed the same. Its five-second output
+bound is unchanged.
+
 ## Cluster integration tests
 
 `corten-cluster`'s tests run against real Postgres and NATS JetStream when two variables are
