@@ -330,7 +330,7 @@ missing previously observed marker refuses, as does any native campaign data.
 ### Failed Native Custody And Retirement
 
 `--retire-failed-native` is a separate, deliberately approved recovery action,
-not a relaxation of `--collect` or native validation. Its migration policy supports
+not a relaxation of `--collect` or native validation. Its original migration policy supports
 only round r21 measured at `9f3d35884c67d90524f978d173fabeb3a17bc970`, for the
 eight nonmixed group reservations with preserved
 original archives/extractions and raw exit `2`. A different, clean repair-controller
@@ -339,9 +339,26 @@ proof. Preview and exact approval bind both source identities, exact reservation
 bytes, original evidence hashes, physical state root and fixed custody roots.
 This exception does not permit a source override for collection, audit or launch.
 
+The shared `cloud-retirement.mjs:failedNativePolicy` allowlist also admits only the
+exact `catalog-page` attempt measured at
+`dbe1a34c753ee8ef4ac9927484dc3930d36f6e37`, round `r21`, host ID 620052965,
+token 39fa09440f45df00, name `corten-bench-groups-r21-39fa09440f45df00`,
+tag `corten-bench-groups-run-39fa09440f45df00` and that name's `.service` unit.
+Its fixed custody roots are `/bench/campaign` and
+`/bench/repo/bench/catalog/results/c21`, plus the original wrapper metadata/archive.
+It uses the same terminal custody fences below, only after natural termination
+with the original saved exit `2`. It cannot stop, restart or cancel a running job.
+Incomplete or invalid catalog files remain original failed evidence: this action
+does not repair or qualify them, change catalog validation, or depend on a newer
+catalog runner's evidence semantics. The allowlist is eligibility, not runtime
+authority. A later observed terminal archive and its hashes, exact reservation,
+fresh host/account proofs and separate exact operator approval must still bind
+the action. No archive hash, terminal observation or approval is inferred from
+this documented identity. The original migration's rules remain unchanged.
+
 ### Cancelled Mixed Wait
 
-The sole additional migration is the exact r21/9f mixed review wait described by
+The cancelled mixed migration is the exact r21/9f review wait described by
 `cloud-cancellation.mjs:mixedWait`. `--cancel-mixed-wait` is an exclusive action of
 the existing `cloud-production.mjs` CLI, not an audit option. Its local
 `--print-approval` binds the clean repair-controller commit, physical state root,
