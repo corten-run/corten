@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Capture the benchmark validator's pinned semver library and committed tooling
+  declaration before replay. Resolve its CommonJS imports only from those
+  verified bytes, without reopening installed files or enabling package fallback.
+
 - Stop an isolated benchmark command cooperatively when its host observer detects
   an irrecoverable observation/storage failure, broken continuity or a recorded
   Docker-participant gap. Preserve invalid evidence and uncertain ownership;
