@@ -282,8 +282,8 @@ client offers it. Measure bytes for both client groups, CPU for pages compressed
 and browser load time on a throttled link if the replacement sends more. A faster encoder on
 the server is not enough if the extra bytes make the page slower for the visitor.
 
-Without a system zstd, `zstd-sys` builds its bundled C sources. The starter's Dockerfile
-instead sets `ZSTD_SYS_USE_PKG_CONFIG=1` to use the build image's libzstd, which needs
+By default `zstd-sys` builds its bundled C sources, which needs a C compiler, even when a
+system zstd is installed. The starter's Dockerfile instead sets `ZSTD_SYS_USE_PKG_CONFIG=1` to use the build image's libzstd, which needs
 `libzstd.so.1` in the runtime image. To keep compression in an image without that shared
 library, remove the setting so the build compiles zstd and links it into the app. To avoid
 zstd altogether, turn off the `compress` feature in the app's `Cargo.toml`.
