@@ -1607,13 +1607,21 @@ struct SetListing {
     products: Vec<String>,
 }
 
-/// The doctests' `types/app.d.ts` writes `Options` and `SetListing` by hand: they are what
+/// `level_feed.follow`'s rows, as the doctests' `Level` is.
+#[cfg_attr(feature = "json", derive(crate::json::ToJson))]
+#[allow(dead_code)]
+struct Level {
+    id: String,
+    qty: u32,
+}
+
+/// The doctests' `types/app.d.ts` writes these interfaces by hand: they are what
 /// `corten::types` generates.
 #[cfg(feature = "types")]
 #[test]
 fn the_hand_written_declarations_are_the_generated_ones() {
-    let generated = crate::types::Types::new().add::<Options>().add::<SetListing>().typescript();
-    for name in ["Options", "SetListing"] {
+    let generated = crate::types::Types::new().add::<Options>().add::<SetListing>().add::<Level>().typescript();
+    for name in ["Options", "SetListing", "Level"] {
         let block = |ts: &str| {
             let start = ts.find(&format!("export interface {name} {{")).expect("the interface");
             let end = start + ts[start..].find("\n}").expect("its end") + 2;
