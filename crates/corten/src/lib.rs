@@ -560,9 +560,9 @@ pub use answer::{
 #[cfg(feature = "json")]
 pub use answer::{JsonError, JsonResponse, JsonResult};
 pub use api::Api;
-pub use app::{listeners, serve, serve_on, serve_wrapped, App, Area};
+pub use app::{listeners, serve, serve_on, serve_wrapped, serve_wrapped_with, App, Area};
 pub use caller::{Caller, Challenge, Identify, Refused};
-pub use client::{ClientIp, ClientZone, PeerAddr};
+pub use client::{ClientIp, ClientZone, ConnectionInfo, PeerAddr};
 /// Form field names as constants: `#[derive(Fields)] struct AlertInput { email: String }`
 /// gives `AlertInput::FIELDS.email`, the [`FieldName`] `"email"` (serde `rename` and `rename_all`
 /// applied). Use them for `name=` in the form and in [`Errors::add`], and a renamed or misspelled

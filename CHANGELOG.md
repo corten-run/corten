@@ -50,6 +50,11 @@ Corten is pre-1.0, so any minor version may change the API.
   the lost top-level element itself does not save it (`<table id={..}>{text}</table>` after a
   first row, or a row holding an expression after a first `<table>`, is still refused).
 
+- `serve_wrapped_with` carries a TLS handshake's value to each request as
+  `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
+  nothing to the document) and `Identify`. The existing serve paths carry no value;
+  connection limits, timeouts and shutdown still cover the handshake.
+
 - The watchlist smoke's first field change after a link now tests a same-shell page swap, with
   the field module held back, rather than racing the scripts of a full document load.
 
@@ -1317,6 +1322,11 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Fixed
+
+- Catalog timed-load evidence initializes its four outcome counter series once
+  per active VU and increments only the classified outcome per request. Preserve
+  exact totals and zero-valued categories with less load-generator bookkeeping;
+  request settings, checks, thresholds and qualification gates are unchanged.
 
 - Grouped benchmark collection and retirement confirm delayed provider deletion
   with bounded, exact-ID, read-only observations instead of failing on the first

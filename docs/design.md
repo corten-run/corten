@@ -5302,6 +5302,77 @@ rules something out.
     from its first, with `Visitor::known_offset` asking jiff at the second an instant is in,
     passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`.
 
+60. <a id="choice-connection-info"></a>**A connection's handshake value reaches requests through an opt-in typed extension.**
+    `serve_wrapped_with` takes a step returning `(Io, T)`, where
+    `T: Clone + Send + Sync + 'static`, and inserts `ConnectionInfo<T>` into each request's
+    standard `http::Extensions`. A handler takes that extractor; `Identify` borrows it with
+    `ConnectionInfo::of`. Reading it makes the answer private, like reading `ClientIp`, but
+    a page whose layout depends on the caller still uses `Caller`: an arbitrary handshake
+    value is not required to be hashable or to identify a layout. An app groups several facts
+    in one struct and uses `Arc` for a value expensive to clone. The wrapper prevents a value
+    of a framework extension's type from replacing that extension.
+
+    The old `serve_wrapped` keeps its return shape, and `serve_on` still needs no step. Their
+    step returns a zero-sized no-data value selecting the unchanged, non-generic connection
+    service, not an optional box or a dynamic dispatch on every request. Only the new entry
+    point wraps that service to clone and insert an extension. All three use the same listener
+    loop, connection permit, watch and drain; the step still runs after accept, inside the
+    header timeout and connection limit.
+    No TLS library or new dependency belongs to Corten.
+
+    Changing `serve_wrapped`'s return shape would break existing apps for a feature they do not
+    need. A thread-local cannot carry a certificate through middleware that spawns a task;
+    an extension follows the request. Letting a custom listener finish TLS before returning
+    its IO puts that handshake outside Corten's timeout and connection limit. A request header
+    is not proof of a TLS client's identity. Standard request extensions already provide the
+    typed store, so this adds no wire format, metadata map or second connection loop.
+
+    What it costs, in the conflict order. Every plain HTTP request pays 2.1 instructions more
+    (24,287.261 against 24,285.154, 0.0087%, measured below; the ranges do not overlap, so it is
+    real), and this Choice accepts that. It is not work the feature does on that path: the
+    ordinary service runs the same instructions and inserts nothing, and the difference is in how
+    the compiled connection task, now generic over its step's value, is polled. What was tried
+    within one loop cost as much or more: the generic service with a no-op insert about 30
+    instructions, that service kept out of line about 10, and an async plain step or choosing the
+    service when the handshake ends no less than 2.1. The way left to keep the plain task
+    unchanged is a second connection loop for the new entry point, rejected above: its permit,
+    header clock, send timeout and drain would be kept in step with the first by hand, a
+    reliability cost, and reliability ranks before performance in the README's order. It was not
+    measured. Value 1 refuses a feature that costs every user to help a few; here every user's
+    cost is two instructions in 24,000, estimated at about a nanosecond, which no time or latency
+    measured at the user's end resolves. A TLS request without a value measured no change.
+
+    Stands on: measured (release, Callgrind 3.19.0 on x86-64 Linux, a typed route returning
+    `served` over one persistent socket, default features off, Tokio 1.54.1 and tokio-rustls
+    0.26.6 with rustls 0.23.46; three rounds alternating before and after, subtracting 200
+    requests from 1,200 and dividing by 1,000: plain HTTP 24,285.154 instructions per request
+    before, range 24,284.606-24,286.526, and 24,287.261 after, range
+    24,286.994-24,288.051, +2.107 or 0.0087%; TLS without metadata 31,337.779 before,
+    range 31,337.769-31,337.898, and 31,337.723 after, range 31,337.483-31,338.365.
+    The ordinary service and hyper poll have identical instruction totals; the small HTTP
+    difference is in task polling, so these counts do not establish literally zero added
+    instructions. A generic ordinary service added about 30 instructions per request and was
+    replaced with the non-generic service above); platform (`http` 1.5 extensions require a cloneable, sendable, shareable owned
+    value); reasoned (selecting the ordinary service for unit data leaves no metadata insertion
+    on ordinary requests; the tests exercise two connections keeping distinct stand-in
+    certificates across repeated requests and `Identify`, a forged header cannot replace one,
+    reads make answers private, a plain connection has none, the metadata step obeys
+    connection and header limits and shutdown, and a documented API's handler takes the value,
+    required or optional, with its operation in the document unchanged); value (correctness
+    before speed, one way to do each thing and a small default surface, README Values).
+
+    Revisit when: a change to the connection task raises a plain HTTP request above the
+    24,287.261 instructions accepted here on the same harness (that count is the baseline; the
+    2.1 above is not a regression still to fix); a compiler or code change lets the one loop poll
+    the plain task at the 24,285.154 it cost before, which removes the residual; an app needs a
+    connection value that cannot be cheaply cloned or shared; or the framework changes its
+    connection service or request-extension ownership model.
+
+    Last checked: 2026-11-17, before `6c5f17b11` (merged as `b08c48d23`), and the metadata
+    path's Rust sources matching `caebfa19d` in the counts above, the connection-info
+    integration tests and handshake bounds test, the `Public` compile-fail doctest, and the
+    OpenAPI test of a documented route taking it.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
