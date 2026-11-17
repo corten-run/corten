@@ -23,7 +23,11 @@ put back, so running it again starts over (a file that cannot be put back is nam
 that line, or takes it from the workspace (then editing the workspace's `Cargo.toml` too when its
 `corten` line says so); otherwise it says to add it by hand, naming the manifest. When it edits a
 manifest, it then updates `Cargo.lock` (`cargo update --workspace`, which moves no version the
-lock already has), so `corten check`, which refuses a stale lock, passes after it.
+lock already has), so `corten check`, which refuses a stale lock, passes after it. That update runs after the files and manifests are written, so
+putting back on failure covers only the writing: when Cargo cannot resolve (offline, a registry
+it cannot reach), the files and manifest edits stay and the command says so; fix what Cargo names
+and run `cargo build` or `corten dev` to update the lock, rather than the command again, which
+would refuse the files it wrote.
 
 | Command | Writes |
 |---|---|
