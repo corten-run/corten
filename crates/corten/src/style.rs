@@ -1156,12 +1156,13 @@ mod tests {
     }
 
     #[component(css)]
-    fn CommentedProperties() -> impl ClassList {
-        Example
+    fn CommentedProperties() -> impl Render {
+        html! { <div class={Example}></div> }
     }
 
     #[test]
     fn a_commented_property_rule_declares_its_scoped_name_at_startup() {
+        assert_eq!(CommentedProperties {}.to_html(), r#"<div class="commented-properties__example"></div>"#);
         let css = CommentedProperties.style.unwrap().css;
         let (declared, needed) = custom_properties(css);
         assert!(css.contains("@property/**/--commented-properties__w"), "{css}");
