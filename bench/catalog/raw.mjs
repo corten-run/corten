@@ -317,6 +317,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
       "all positive checks must finish before cold timing begins");
     if (workers) {
       const preflight = verifyPreflight(summary, { readJson, readText });
+      for (const observed of preflight) assert.equal(observed.upstreamId, upstreamId, "preflight upstream identity changed");
       workerWindows.push(...preflight);
       timedParticipants.push(...preflight.flatMap((o) => o.participants));
       const starts = preflight.map((o) => o.workerEvidence.processes[0].samples[0].wallMs);

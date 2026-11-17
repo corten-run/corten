@@ -6,7 +6,7 @@ import { replayCatalog } from "./raw.mjs";
 import { summarizeSamples } from "./stats.mjs";
 import { digest, verifyControl } from "./apparatus.mjs";
 import { inspectCatalog, renderCatalog } from "./report.mjs";
-import { preflightArtifacts, requiredRoundArtifacts } from "./preflight.mjs";
+import { preflightArtifacts, requiredRoundArtifacts, verifyArtifactIndex, verifyPreflight } from "./preflight.mjs";
 
 const failure = { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 1 };
 const prefix = "api/fastapi/p1-page";
@@ -128,4 +128,31 @@ test("first-host admission enforces headroom even on healthy phases, with self-c
   const receipt = f.reader.readJson("preflight.json");
   receipt.hashes = Object.fromEntries(preflightArtifacts().map((key) => [key, digest(f.reader.readText(key))])); f.put("preflight.json", receipt); indexRound(f);
   assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /busy upstream worker\/coordinator/);
+});
+
+test("each preflight phase must use the correctness and official timing upstream, even after fully rehashing", () => {
+  const prefixes = ["fixture", "api"].flatMap((source) => ["warmup", "sat256"].map((phase) => `preflight/${source}/${phase}`));
+  for (const replaced of [...prefixes.map((key) => [key]), prefixes]) {
+    const f = workerRound(), upstreamName = `${f.summary.runId}-upstream`, other = digest("other upstream container");
+    const official = f.reader.readJson("api/corten/p1-page/sat256-boundary.json").after.upstream.id;
+    assert.notEqual(other, official);
+    for (const prefix of replaced) {
+      const boundary = f.reader.readJson(`${prefix}-boundary.json`);
+      for (const edge of ["before", "after"]) boundary[edge].upstream.id = other;
+      f.put(`${prefix}-boundary.json`, boundary);
+      const counters = f.reader.readJson(`${prefix}-cpu-counters.json`);
+      counters.ids[upstreamName] = other; f.put(`${prefix}-cpu-counters.json`, counters);
+      const workers = f.reader.readJson(`${prefix}-workers.json`);
+      workers.binding.container = other; f.put(`${prefix}-workers.json`, workers);
+    }
+    const receipt = f.reader.readJson("preflight.json");
+    receipt.hashes = Object.fromEntries(preflightArtifacts().map((key) => [key, digest(f.reader.readText(key))]));
+    f.put("preflight.json", receipt); indexRound(f);
+    verifyArtifactIndex(f.summary, f.reader);
+    const observations = verifyPreflight(f.summary, f.reader);
+    assert.equal(observations.filter((o) => o.upstreamId === other).length, replaced.length,
+      "the substituted phases remain internally valid, including their rehashed receipts");
+    assert.equal(f.reader.readJson("api/corten/p1-page/sat256-boundary.json").after.upstream.id, official);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /preflight upstream identity changed/, replaced.join(", "));
+  }
 });
