@@ -436,13 +436,22 @@ macro_rules! float {
                 // between the doubles next to it: Chromium and WebKit took every one written out
                 // in up to 19 digits and refused about half of those in 20 or more; in exponent
                 // form, none. Firefox took them all.
+                // The exponent form is written first, as it is short (`5e-324`, where written out
+                // is 326 characters); the digits written out follow from its digits and exponent.
+                use std::fmt::Write;
                 let start = out.len();
-                self.render(out);
-                if out.as_bytes()[start..].iter().filter(|b| b.is_ascii_digit()).count() > 18 {
-                    use std::fmt::Write;
+                // Digits, a point, `e` and `-`: nothing to escape.
+                let _ = write!(out, "{self:e}");
+                let text = &out[start..];
+                let Some((mantissa, exponent)) = text.split_once('e') else { return };
+                let Ok(exponent) = exponent.parse::<i32>() else { return };
+                let digits = mantissa.bytes().filter(u8::is_ascii_digit).count() as i32;
+                // `d.ddd` times ten to `exponent`, written out: the digits and the zeros a whole
+                // number ends with, or `0.` and the zeros before the first digit.
+                let written_out = if exponent >= 0 { digits.max(exponent + 1) } else { digits - exponent };
+                if written_out <= 18 {
                     out.truncate(start);
-                    // Digits, a point, `e` and `-`: nothing to escape.
-                    let _ = write!(out, "{self:e}");
+                    self.render(out);
                 }
             }
             fn read(text: &str) -> Option<Self> {
