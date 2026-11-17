@@ -29,6 +29,15 @@ records return 404; upstream errors are errors, not an empty 200. `GET /api/cata
 serializes the same record through the framework's normal JSON support. It does not return a
 pre-serialized body. No marketplace view-model conversion is in either path.
 
+The stand-in upstream alone pre-serializes and UTF-8 encodes its records at
+startup. Canonical record GETs reuse those bytes without URL parsing or an
+asynchronous handler; other URL forms retain normal URL parsing. Controlled
+overrides, pretty JSON, errors and exact per-record read counters still apply.
+This reduces apparatus work, not the measured apps' fetch, parse, render or
+serialization work. It remains one server process; the existing CPU-headroom
+checks and busy-upstream warnings are unchanged, and a local optimization is
+not proof that a particular measurement had sufficient upstream capacity.
+
 Every page uses the app's normal layout and the same `catalog.css`, with this content inside
 `main` (framework-only wrappers and hydration attributes are not part of the contract):
 

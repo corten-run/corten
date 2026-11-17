@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- The catalog stand-in upstream reuses UTF-8 record bytes and handles canonical
+  reads synchronously, retaining exact controls and read counts. Measured apps
+  still fetch, parse and render or serialize per request; apparatus capacity
+  checks, resource budgets and failure interpretation are unchanged.
+
 - `serve_wrapped_with` carries a TLS handshake's value to each request as
   `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
   nothing to the document) and `Identify`. The existing serve paths carry no value;
