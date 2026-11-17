@@ -246,6 +246,16 @@ test("missing custody, stale/uncertain proof, changed evidence, identity and uns
   }
 });
 
+test("failed-native retirement confirms delayed exact-ID absence and keeps the result failed", async (t) => {
+  const r = await recoveryHarness(t, { deleteUnconfirmed: true }); let observations = 0;
+  r.h.flags.hook = (binary, args) => {
+    if (binary === "doctl" && args[2] === "get" && r.h.deletes && ++observations === 3) r.h.hosts([]);
+  };
+  assert.equal(await r.task().retireFailedNative(), 1);
+  assert.equal(observations, 3); assert.equal(r.h.deletes, 1); assert.ok(r.h.saved().destroyedAt);
+  assert.equal(r.h.saved().fullGroupQualified, false);
+  assert.equal(await r.task().retireFailedNative(), 1); assert.equal(r.h.deletes, 1);
+});
 test("failed-native uncertain DELETE outcomes permit absence reconciliation only, never another DELETE", async (t) => {
   for (const mode of ["deleteUnconfirmed", "deleteLost", "deleteError", "deleteRejected"]) {
     const r = await recoveryHarness(t, { [mode]: true });

@@ -58,6 +58,14 @@ test("failed setup cleanup refuses live, entered, invalid or unverifiable work w
     if (mode === "uncertain-validator") assert.ok(existsSync(join(h.local, "operation.lock")));
   }
 });
+test("failed-setup retirement confirms delayed exact-ID absence without qualifying results", async (t) => {
+  const h = failedSetup(t, { deleteUnconfirmed: true }); let observations = 0;
+  h.flags.hook = (binary, args) => {
+    if (binary === "doctl" && args[2] === "get" && h.deletes && ++observations === 3) h.hosts([]);
+  };
+  assert.equal(await h.task(noNative).collect(), 1); assert.equal(h.deletes, 1); assert.equal(observations, 3);
+  assert.ok(h.saved().destroyedAt); assert.equal(h.saved().fullGroupQualified, false);
+});
 test("failed-setup lost delete acknowledgement never permits another DELETE", async (t) => {
   const h = failedSetup(t, { deleteUnconfirmed: true });
   await assert.rejects(h.task(noNative).collect()); assert.equal(h.deletes, 1);

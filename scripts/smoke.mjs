@@ -1573,19 +1573,45 @@ async function run(browser) {
   {
     const linked = await browser.newPage();
     let filled = "";
+    let stayed = false;
+    let waited = false;
+    let release = () => {};
+    const held = new Promise((resolve) => (release = () => resolve(undefined)));
     try {
-      await linked.goto(`${base}/news`);
-      await linked.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-fields" href="/smoke/fields">Fields</a>')));
-      await linked.click("#to-fields");
+      await linked.route((url) => url.pathname.endsWith("/scripts/corten-field.js"), async (route) => {
+        await held;
+        await route.continue();
+      });
+      // /news has another shell key, so that link reloads the document and can expose the control
+      // before its first-page scripts run. This case needs a swap, not a full load's readiness.
+      await linked.goto(`${base}/smoke/quoted`);
+      await linked.evaluate(() => {
+        /** @type {any} */ (window).__fieldsDocument = true;
+        document.addEventListener("corten:module", (event) => {
+          if (/** @type {CustomEvent} */ (event).detail.name === "ship_form") /** @type {any} */ (window).__fieldsHandlerReady = true;
+        });
+        document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-fields" href="/smoke/fields">Fields</a>'));
+      });
+      const requested = linked.waitForRequest((r) => new URL(r.url()).pathname.endsWith("/scripts/corten-field.js"));
+      const following = linked.click("#to-fields").then(() => null, (error) => error);
+      await requested;
+      // The handler's own module has run, so only its held field dependency can hold the swap.
+      await linked.waitForFunction(() => /** @type {any} */ (window).__fieldsHandlerReady, undefined, { polling: 100 });
+      waited = await linked.evaluate(() => !!/** @type {any} */ (window).__fieldsDocument && !document.querySelector("#ship-form select"));
+      release();
+      const error = await following;
+      if (error) throw error;
       await linked.waitForSelector("#ship-form select", { timeout: 5000 });
       await linked.selectOption('#ship-form select[name="service"]', "air");
       filled = await linked
         .waitForFunction(() => document.querySelector("#ship-form output")?.textContent || null, undefined, { timeout: 5000 })
         .then((h) => h.jsonValue().then(String), () => "");
+      stayed = await linked.evaluate(() => !!/** @type {any} */ (window).__fieldsDocument);
     } finally {
+      release();
       await linked.close();
     }
-    check("a link to a page whose handlers take a field loads the field module, and the first change runs its handler", filled.startsWith("select,"), filled);
+    check("a link to a page whose handlers take a field loads the field module, and the first change runs its handler", waited && stayed && filled.startsWith("select,"), `waited: ${waited}, same document: ${stayed}, ${filled}`);
   }
   // The field module answered 503 while a link brings its page in (the page's preload of it and
   // the runtime's import): the swap goes ahead, a change then gets the browser's default, and once
