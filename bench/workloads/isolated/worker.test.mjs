@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,8 @@ for (const phase of ["ownership", "validation", "unsafe", "unsupported"]) test(`
   try {
     git(["worktree", "add", "--detach", checkout, "HEAD"]); added = true;
     cpSync(join(repo, "node_modules/semver"), join(checkout, "node_modules/semver"), { recursive: true, errorOnExist: true, force: false });
+    assert.equal(JSON.parse(readFileSync(join(checkout, "node_modules/semver/package.json"), "utf8")).version,
+      JSON.parse(readFileSync(join(checkout, "package.json"), "utf8")).devDependencies.semver, "fixture semver must match the committed pin");
     let output = "";
     const child = spawn(process.execPath, [join(checkout, "bench/workloads/isolated/test-fixtures/worker.mjs"), phase], {
       cwd: checkout, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: false,

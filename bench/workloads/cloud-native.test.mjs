@@ -80,6 +80,7 @@ for (const group of ["client-heavy", "mixed-production"]) test(`collector retain
   assert.equal(latestStable.valid, true);
   assert.equal(latestStable.status, failed ? "not-applicable" : "blocked");
   const unsupported = new Set((latestStable.candidates ?? []).filter((r) => r.status === "unsupported").map((r) => r.app));
+  assert.deepEqual([...unsupported], group === "client-heavy" ? ["solid"] : []);
   const native = { status: failed ? "failed" : "verified", attemptComplete: true, cleanupComplete: true,
     resources: "verified", comparisonEligibleApps: [],
     outcomes: apps.map((app, i) => ({ app, outcome: unsupported.has(app) ? "unsupported" : failed && i === 0 ? "failed" : "passed" })) };
