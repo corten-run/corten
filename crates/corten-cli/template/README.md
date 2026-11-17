@@ -9,6 +9,10 @@ corten build    # release binary in target/release
 docker build -t {{name}} . && docker run -p 8080:8080 {{name}}
 ```
 
+For a local build, the `compress` feature normally needs a C compiler for `zstd-sys`.
+Remove `features = ["compress"]` from the `corten` dependency in `Cargo.toml` to build
+without it and serve responses without Corten's compression.
+
 | Path | What |
 |---|---|
 | `src/lib.rs` | the app: routes, handlers, `app()` and its tests; declare modules here |

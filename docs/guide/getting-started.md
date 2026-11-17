@@ -28,6 +28,11 @@ artifact attestations and `SHA256SUMS`, not a minisign signature
 with a script, a
 test and a Dockerfile.
 
+The starter enables Corten's `compress` feature. A local build normally needs a C compiler for
+`zstd-sys`, the starter's only C dependency. To build without it, remove `features = ["compress"]`
+from the `corten` dependency in `Cargo.toml`. This turns off Corten's response compression.
+See [Response compression](deploy.md#response-compression) for the Docker build and the codecs.
+
 | Command | What it does |
 |---|---|
 | `corten new <dir>` | Creates an app that depends on the release matching the command's version, as `corten = { package = "corten-run", version = ".." }`: the package is `corten-run` and the library `corten`, so the app's code names it `corten`. `--name` sets the crate name, `--corten-path` uses a local checkout instead (the repository's root or its `crates/corten`; another directory is refused before anything is written). |

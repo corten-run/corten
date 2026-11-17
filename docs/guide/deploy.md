@@ -269,6 +269,25 @@ its clean build 361 s against 206 s. One codegen unit against sixteen costs abou
 process, builds about a third slower and makes the binary a fifth smaller. The workspace keeps it to match the benchmarks' other apps and the published numbers,
 not for speed.
 
+## Response compression
+
+The starter enables `compress`: zstd, Brotli and gzip for responses compressed per request;
+Brotli and gzip for assets and held JSON compressed once; and zstd or gzip, never Brotli,
+for event streams ([Choice 32](../design.md#choice-stream-coding)).
+
+Revisit Brotli when a zstd/gzip-only build can serve supported clients without a slowdown.
+Compare release builds on the same item pages, runtime, kit CSS and held JSON: use gzip for
+clients that do not offer zstd, and try high-level zstd for assets and held JSON where the
+client offers it. Measure bytes for both client groups, CPU for pages compressed per request,
+and browser load time on a throttled link if the replacement sends more. A faster encoder on
+the server is not enough if the extra bytes make the page slower for the visitor.
+
+Without a system zstd, `zstd-sys` builds its bundled C sources. The starter's Dockerfile
+instead sets `ZSTD_SYS_USE_PKG_CONFIG=1` to use the build image's libzstd, which needs
+`libzstd.so.1` in the runtime image. To keep compression in an image without that shared
+library, remove the setting so the build compiles zstd and links it into the app. To avoid
+zstd altogether, turn off the `compress` feature in the app's `Cargo.toml`.
+
 ## Building the image
 
 The Dockerfile `corten new` writes compiles the app with two BuildKit
