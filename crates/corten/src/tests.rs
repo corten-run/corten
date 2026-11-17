@@ -2974,7 +2974,11 @@ fn what_a_slow_part_read_costs() {
         crate::live(futures_util::stream::once(async { picks().to_html() }))
     }
     async fn read_part(req: Req) -> HtmlResult<crate::Patches> {
-        req.patch_or_with(|action| async move { action.patch(picks()) }, || async { req.test_page("Home", html! { <p>"home"</p> }) }).await
+        req.patch_or_with(
+            |action| async move { action.patch(picks()) },
+            || async { req.test_page("Home", html! { <p>"home"</p> }) },
+        )
+        .await
     }
     let router = if stream {
         App::new(Routes::from(Table::new().route("/part", get(send_part)))).router()
