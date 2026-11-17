@@ -49,6 +49,12 @@ Corten is pre-1.0, so any minor version may change the API.
   pages whole; `scripts/dsd-probe.mjs` checks both again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+- Permit custody-only terminal retirement of the exact r21 lean catalog attempt
+  if ordinary native collection refuses its failed evidence. Keep original raw
+  failures, source/reservation/archive binding, live-job refusal, current ownership
+  and quiescence proofs, separate reviewed approval and single-delete confirmation.
+  This is cleanup eligibility, not benchmark validation or permission to stop a run.
+
 - **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in a shape
   the runtime's parse loses wherever it is written no longer compiles: a table part (`<tr>`,
   `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`, `<colgroup>`) after a
@@ -154,6 +160,11 @@ Corten is pre-1.0, so any minor version may change the API.
 - Show the grouped controller's closed failure stage and allowed provider detail
   in direct CLI errors, without reflecting raw exceptions or changing recovery,
   cleanup or benchmark acceptance rules.
+
+- `FeedUrl<Row>` now requires `Row` to resolve to the declarations `corten::types` generates
+  (`import("../types/app").Row`), as `ScreenUrl<Data>` does. A local typedef, an import from
+  another module, or an undeclared row name does not compile; generated imports and their
+  aliases keep the feed's row type tied to the server's.
 
 - A handler is given a form's control by its `#[derive(Fields)]` field,
   `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
