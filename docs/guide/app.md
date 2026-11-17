@@ -569,7 +569,7 @@ What it sends is what the app's own pages send, typed the same way:
    no `GET`, gets a 500 that says why ([Where a form posts](requests-and-forms.md#where-a-form-posts)).
    `Mode::Action` sends `Prefer: corten-draws=whole` as the runtime does, so a write that answers
    its own page (`req.page(..)`) is answered with the whole document, layout and layout reads
-   included ([Choice 60](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
+   included ([Choice 61](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
    that, which is answered with `<main>`, add
    `.header(HeaderName::from_static("prefer"), "corten-draws=main")` (`corten::http::HeaderName`):
    a preference the test sets is sent first, and the first is the one read.
@@ -756,6 +756,11 @@ sends its ClientHello, or never sends a request after the handshake, is closed a
 A step that fails closes the connection, and shutdown ends the steps in progress. A listener of
 the app's own that ran the handshake before `serve_on` saw the connection would have it outside
 both limits.
+
+When the step learns something the request needs, use `serve_wrapped_with`: it returns
+`(io, value)` and each request receives `ConnectionInfo<T>`. The value is cloned for each
+request, never read from a header. [Client certificates](deploy.md#client-certificates)
+shows mTLS and how `Identify` reads a verified certificate.
 
 An app behind a proxy that ends TLS needs none of this: `serve` is plain HTTP for the proxy
 ([Deploying](deploy.md) lists what the proxy must do).
