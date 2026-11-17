@@ -171,7 +171,7 @@ for (const failure of ["helper-error", "invalid-json"]) test(`failed executable 
   f.pending.close(); assert.equal(f.held.size, 0);
 });
 
-async function fixture(t, nativePids = [], browser = false) {
+async function fixture(t, nativePids = [], browser = false, onFault) {
   const original = Object.fromEntries(["readFileSync", "writeFileSync", "mkdirSync", "rmdirSync", "lstatSync", "statSync", "readlinkSync", "readdirSync", "fsyncSync", "openSync", "closeSync", "writeSync"]
     .map((key) => [key, fs[key]]));
   const exec = childProcess.execFileSync;
@@ -308,7 +308,7 @@ async function fixture(t, nativePids = [], browser = false) {
       "cpuset.cpus.effective": "0-7\n", "memory.current": "10\n", "memory.peak": "20\n", "memory.max": "max\n", "memory.events": "oom_kill 0\n" }[key];
   });
   syncBuiltinESMExports();
-  observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid }); await observer.attach(pid);
+  observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid, onFault }); await observer.attach(pid);
   f.capture = f.tick; f.drain = () => observer.drain();
   f.tick = async () => { f.capture(); await f.drain(); };
   f.samples = () => original.readFileSync(join(directory, "samples.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
@@ -474,11 +474,34 @@ test("a late sample gets only the remaining continuity budget and failure does n
 });
 
 test("a coherent 1909ms sampling gap stays accounting-blocked without inventing an observer error", async (t) => {
-  const f = await fixture(t); f.clock += 1909; await f.tick();
+  let faults = 0;
+  const f = await fixture(t, [], false, () => { faults++; }); f.clock += 1909; await f.tick();
+  assert.equal(faults, 1); await f.tick(); assert.equal(faults, 1);
   const proof = await f.finish();
   assert.equal(proof.status, "blocked"); assert.equal(proof.checks.accounting, false);
   for (const key of ["terminal", "empty", "observer", "unforced", "leader"]) assert.equal(proof.checks[key], true);
   assert.equal(f.terminal.observerError, null); assert.equal(f.terminal.observerFailures.count, 0);
+});
+
+test("fault notification is one-shot and a throwing callback cannot escape the sampler", async (t) => {
+  let faults = 0;
+  const f = await fixture(t, [], false, () => { faults++; throw new Error("PRIVATE_CALLBACK_FAILURE"); });
+  f.override = (path) => { if (path === "/proc/4242/stat") throw missing("EIO"); };
+  await f.tick(); await f.tick(); assert.equal(faults, 1);
+  f.override = () => {};
+  const proof = await f.finish();
+  assert.equal(proof.status, "blocked"); assert.equal(proof.checks.observer, false);
+  assert.equal(f.terminal.observerFailures.count, 2);
+  assert.equal(f.terminal.observerFailures.first.code, "EIO");
+  assert.equal(f.terminal.observerFailures.last.code, "EIO");
+  assert.ok(!JSON.stringify(f.terminal).includes("PRIVATE_CALLBACK_FAILURE"));
+});
+
+test("healthy observation never notifies and retains verified lifetime proof", async (t) => {
+  let faults = 0;
+  const f = await fixture(t, [], false, () => { faults++; });
+  f.clock += 100; await f.tick();
+  assert.equal((await f.finish()).status, "verified"); assert.equal(faults, 0);
 });
 
 test("a retry that runs past the one-second budget cannot publish a sample", async (t) => {

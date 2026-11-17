@@ -202,7 +202,7 @@ function browserDocker(excluded, executables, pending) {
 }
 
 /** Own one fresh delegated child cgroup. No budgets, pinning or parent controls are changed. */
-export async function beginLifetime({ campaign, binding, invocation, directory, command, pid, signal, startupSignal }) {
+export async function beginLifetime({ campaign, binding, invocation, directory, command, pid, signal, startupSignal, onFault }) {
   function checkStartup() {
     signal?.throwIfAborted(); startupSignal?.throwIfAborted();
   }
@@ -250,9 +250,16 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     throw error;
   }
   const executables = new Map(); pending = browser ? participantExecutables() : null;
-  let samples = 0, observerError = null, attached = false;
+  let samples = 0, observerError = null, attached = false, faultNotified = false;
   const observerFailures = { count: 0, first: null, last: null };
   let sampleOperation, lastSampleAt = null;
+  function notifyFault() {
+    if (faultNotified) return;
+    faultNotified = true;
+    // Request cooperative shutdown without waiting for storage or replacing
+    // the original observation/command failure evidence.
+    try { onFault?.(); } catch { /* The observer remains failed closed. */ }
+  }
   function failure(phase, error) {
     // Retain fixed public codes only, never messages, stacks, paths or arbitrary
     // error properties. First/last plus a count bound disk and memory on failure.
@@ -301,10 +308,19 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         if (browser) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
         // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
         writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
-        timer = setInterval(() => { try { sample(); } catch (error) {
-          observerError = "host-observation-gap"; failure("interval", error);
-          if (writer.error) clearInterval(timer);
-        } }, sampleIntervalMs);
+        timer = setInterval(() => {
+          const previous = lastSampleAt;
+          try {
+            sample();
+            // A coherent but late capture still irreversibly breaks accounting.
+            // Notify without inventing a caught observation error.
+            if (lastSampleAt < previous || lastSampleAt - previous > maximumSampleGapMs) notifyFault();
+          } catch (error) {
+            observerError = "host-observation-gap"; failure("interval", error);
+            if (writer.error) clearInterval(timer);
+            notifyFault();
+          }
+        }, sampleIntervalMs);
         await writer.drain();
         checkStartup(); assert.equal(closed, false); releaseStartup();
       } catch (error) { dispose(); throw error; }
