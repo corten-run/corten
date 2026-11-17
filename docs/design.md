@@ -5792,8 +5792,19 @@ rules something out.
     Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the mark goes; or the
     runtime gains a general way to hand a module its events, when the hooks here become that.
 
-    Last checked: 2026-11-17, the module's size on `9c1b723d6` against `1bc469a9f`'s, and the runtime's on
-    `9c1b723d6`, unchanged since `1bc469a9f`; 2026-11-17, the watchlist smoke on `9c1b723d6`, Chromium
+    Last checked: 2026-11-17, the runtime's and the module's sizes on `168a5ddd4` against main
+    `8d0ae1f82`'s runtime and `ea2069c6b`'s; 2026-11-17, the watchlist smoke on `168a5ddd4`,
+    Chromium 156.0.8078.4 520 checks and Firefox 157.0 517, each run alone after two Chromium core
+    checks (a navigation abandoning a submit, its console error) and a 1 px Firefox scroll check
+    failed under load in the three-engine run, WebKit 27.2 385 and 5 over HTTP, 105 skipped in
+    WebKit, the `data-address` checks 59 in each browser, all passed; 2026-11-17, the steps for a
+    press in the moment before a submit that waited for its form's write goes again (another
+    marked GET, a write of the form), a newer queued write of a third marked form, and a write
+    answered with another shell's page, against `ea2069c6b`'s runtime and module served in
+    `168a5ddd4`'s place: all four fail in all three engines (the fourth by what the page's script
+    fetched as it was left), and all pass with `168a5ddd4`'s; 2026-11-17, the
+    module's size on `9c1b723d6` against `1bc469a9f`'s, and the runtime's on `9c1b723d6`,
+    unchanged since `1bc469a9f`; 2026-11-17, the watchlist smoke on `9c1b723d6`, Chromium
     156.0.8078.4 516 checks, Firefox 157.0 513 (run again alone after a feed-reconnect timing check failed under load in the three-engine run), WebKit 27.2 381 and 5 over HTTP, 105 skipped in WebKit, the
     `data-address` checks 55 in each browser, all passed; 2026-11-17, the steps for a GET waiting for
     writes of its own form and another, answered in either order with a save, a 409 or a failure,
