@@ -34,9 +34,10 @@ startup. Canonical record GETs reuse those bytes without URL parsing or an
 asynchronous handler; other URL forms retain normal URL parsing. Controlled
 overrides, pretty JSON, errors and exact per-record read counters still apply.
 This reduces apparatus work, not the measured apps' fetch, parse, render or
-serialization work. It remains one server process; the existing CPU-headroom
-checks and busy-upstream warnings are unchanged, and a local optimization is
-not proof that a particular measurement had sufficient upstream capacity.
+serialization work. Explicit catalog-page group runs use two fixed request
+workers and a coordinator in the existing upstream container, as described below.
+Ungrouped runs and callers without `--fixed-workers` retain the single-process
+upstream. Neither topology alone proves sufficient native capacity.
 
 Every page uses the app's normal layout and the same `catalog.css`, with this content inside
 `main` (framework-only wrappers and hydration attributes are not part of the contract):
@@ -156,7 +157,7 @@ Such failures remain incomplete and block timing; they do not become replayable 
 attempts or passing checks.
 
 Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT` to replay
-`catalog-saved-evidence/v2` or `catalog-saved-evidence/v3` observations without running Docker, Git or a browser.
+`catalog-saved-evidence/v2`, `catalog-saved-evidence/v3` or `catalog-saved-evidence/v4` observations without running Docker, Git or a browser.
 This schema requires the selected k6 image, platform and actual executable version;
 older evidence is not retroactively assigned that identity.
 The native producer preserves the fixture, checker receipts, native build/image
@@ -251,7 +252,7 @@ native group run has passed or that a dedicated-host baseline exists.
 
 ### Completed timed request outcomes
 
-New group runs write `catalog-saved-evidence/v3`. This separates an observed
+V3 group observations separate an observed
 load/request failure from an incomplete apparatus attempt and from a successful
 baseline. It does not diagnose the framework, event loop or underlying cause.
 The v2 replay rules remain unchanged; an old partial run cannot acquire v3 proof
@@ -318,6 +319,71 @@ not replace raw replay or retrofit old evidence. Reports expose all phase/pass o
 median [minimum, maximum] ranges, separating successful req/s from attempted
 req/s, request failures and dropped work. Campaign host/source/lifecycle gates
 remain independent and unchanged.
+
+### Fixed upstream workers
+
+New explicit group runs write `catalog-saved-evidence/v4` and
+`catalog-timed-phase/v2`. The version selects `node-cluster-2/v1`: exactly two
+long-lived Node request workers and one coordinator, all inside the unchanged
+2-CPU/512-MiB upstream container. Each Node process has a 64-MiB V8 old-space cap;
+this is not an increase in container memory. There is no respawn, retry,
+adaptive worker count, proxy allocation or app/load budget change. The separate
+JSON producer and ungrouped catalog runner do not select this apparatus.
+
+Record GETs retain the encoded-byte fast path and local exact counters. Cluster
+distributes connections, not individual HTTP requests over IPC. Administrative
+operations alone cross worker IPC. Reset/status/override freezes both workers,
+applies one shared epoch, requires both acknowledgements, then releases queued
+requests. GET control takes a frozen snapshot and sums each worker once. The
+control response adds the epoch, coordinator identity and both worker receipts;
+record routes, bodies, status controls and pretty overrides are unchanged.
+Missing/late acknowledgement, worker loss, identity change, observation overflow
+or bounded administrative/request queue overflow terminates the apparatus.
+Readiness requires both listeners; shutdown closes both workers. The separate
+POST `/__catalog/observe` endpoint starts/stops bounded phase CPU observations
+without resetting or changing ordinary control state.
+
+Each `*-workers.json` binds source, actual upstream container/image/lifetime and
+budget to all three roles. Identities use PID, Linux process start ticks, boot ID
+and cgroup-v2 identity. Raw samples retain monotonic nanosecond read windows,
+wall milliseconds and cumulative `process.cpuUsage()` microseconds. The nominal
+interval is 500 ms, with no gap above two seconds; a short final interval is
+merged into the preceding interval. Missing windows, counters moving backwards,
+epoch changes and churn reject replay, including across source/app/pass boundaries.
+Portable test identities cannot qualify native evidence.
+
+On attributed API negatives, each worker AND the coordinator must have sampled
+peak CPU strictly below 80% of one core, and upstream container peak must be
+strictly below 160%. Aggregate headroom cannot excuse a busy/skewed worker.
+Generator peak remains strictly below 320%; failed warmup, closed-loop drops and
+the fixed-drop target-pressure rules are unchanged. Old v2/v3 evidence keeps the
+single-process interpretation and its original strict 80% gate, never v4 limits.
+
+After all native correctness checks, before repeated timing, the runner makes
+one bounded first-host qualification attempt with the unchanged Corten image:
+fixture warmup/sat256, then API warmup/sat256, using the round's existing full
+warmup/duration and VU settings. All four must have successful requests, zero
+drops, complete worker/container observations, generator and upstream headroom,
+and owned app cleanup. These observations live under `preflight/`, never in
+official repetitions or aggregates. Failure preserves `preflight.json` and raw
+artifacts, exits through ordinary owned cleanup, and stops before repeated timing.
+It does not authorize provisioning or claim qualification before a native run.
+
+`apparatus-source.json` lists and hashes the apparatus dependency closure exported
+as `apparatusSources`; the campaign still owns the complete application/framework,
+image/build and shared source audit. `evidence-index.json` hashes the exact required
+replay artifact list exported by `requiredRoundArtifacts`, including first-host
+proof, worker observations and `upstream.log`. Replay checks source/index hashes,
+native observations, controls, global continuity and every summary aggregate.
+V4 command-line reports join this raw replay even without `--require-complete`;
+an invalid/missing preflight or index cannot become a complete summary-only report.
+A valid timed-negative replay still reports a complete attempt, not a baseline.
+
+Portable bounded checks (synthetic evidence is not native qualification):
+
+```sh
+node --max-old-space-size=256 --test --test-concurrency=1 bench/catalog/workers.test.mjs bench/catalog/workers-replay.test.mjs bench/catalog/workers-producer.test.mjs
+```
 
 ### Explicit catalog-page droplet
 
