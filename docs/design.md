@@ -4404,7 +4404,13 @@ rules something out.
     there on `2ae79c0a5`, among them a `<col>` the patch ends in before its `>`, an `<image>` read
     as an `<img>` and a `<div>` in a `<p>`, and of the 3,000 patches of
     `scripts/patch-generated.json` (seed 1409), where the debug check reported a loss only in an
-    engine that loses something and, where one did, reported it or stopped; 2026-11-16, a one-off probe, not a repository check, in Chromium
+    engine that loses something and, where one did, reported it or stopped; 2026-11-16, the same
+    check of the 802 shapes there on `81d83650e`, among them a doctype a quoted `>` ends early, a
+    `<form>` holding only `&#32;` after a `<tr>`, kept, names past ASCII, and a `<template>`'s
+    `<form>` holding a `<label>` after a `<td>`, moved out of it in every engine, and of the 3,000
+    patches of `scripts/patch-generated.json` (seed 1409, now with characters past ASCII, character
+    references, NUL and doctypes, compared with their text and the id check's verdict), with the
+    same result and the id check reporting only what an engine's parse shows at its top level; 2026-11-16, a one-off probe, not a repository check, in Chromium
     156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): each kind of the third shape (a `<table>` at the top level, in a `<div>` and in a
     `<label>`'s `<span>`; a `<form>` holding a `<div>` or a `<p>`, one in a `<div>`, and one
     holding a `<label>`'s `<span>`), after each of the eight first table parts but `<col>`, parsed
