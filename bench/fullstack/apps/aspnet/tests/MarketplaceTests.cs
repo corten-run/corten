@@ -10,6 +10,24 @@ using Xunit;
 
 public sealed class MarketplaceTests
 {
+    [Fact]
+    public void CatalogLeanDisablesOnlySupportedKestrelTimeAndRateGuards()
+    {
+        var previous = Environment.GetEnvironmentVariable("PROFILE");
+        try
+        {
+            Environment.SetEnvironmentVariable("PROFILE", "catalog-lean");
+            using var app = new App(new Upstream());
+            using var client = app.CreateClient();
+            var limits = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>>().Value.Limits;
+            Assert.Equal(TimeSpan.MaxValue, limits.RequestHeadersTimeout);
+            Assert.Equal(TimeSpan.MaxValue, limits.KeepAliveTimeout);
+            Assert.Null(limits.MinRequestBodyDataRate);
+            Assert.Null(limits.MinResponseDataRate);
+        }
+        finally { Environment.SetEnvironmentVariable("PROFILE", previous); }
+    }
+
     static string Spaces(string value) => value.Replace('\u00a0', ' ').Replace('\u202f', ' ');
     [Fact]
     public void NativeFormattingAndPluralRules()

@@ -6,6 +6,8 @@ export const workload = "catalog-v1";
 export const sources = ["fixture", "api"];
 export const targets = ["page", "json"];
 export const phases = ["fixed", "sat64", "sat256"];
+export const leanProfile = "catalog-lean";
+export const leanApps = Object.freeze(groupDescriptor("catalog-page").apps);
 export function cpuSettings(env) {
   const quotas = { app: 1, load: 4, api: 2 };
   const used = new Map();

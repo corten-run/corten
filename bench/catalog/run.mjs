@@ -29,7 +29,7 @@ try {
   observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
-const { aggregate, cpuSettings, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
+const { aggregate, cpuSettings, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
 const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
@@ -47,7 +47,8 @@ const summary = { workload, round: options.round, runId, options, startedAt: new
   scope: "catalog rendering/JSON load only; fullstack bytes, build-cost, instructions and browser-timing measurements are not ported",
   measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", fixedRate: options.rate,
     upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
-    cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec" } };
+    cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec",
+    leanProfile: { name: leanProfile, apps: leanApps } } };
 summary.host.checkout = repo.replaceAll("\\", "/").replace(/\/$/, "");
 if (group) Object.assign(summary, { schema: groupResultSchema, group,
   scope: "catalog-page group: page-only cold/warmup/load timing in both sources; native page AND JSON correctness gates retained; no browser timing, build-cost, bytes or instruction measurements" });
@@ -139,9 +140,11 @@ const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;
 const apiBase = `http://${upstreamName}:8080`;
 function appArgs(name, source, image) {
+  const app = name.slice(`${runId}-`.length);
   return ["--network", network, ...cpus.app.args, "--memory", "1g", "-p", "127.0.0.1::8080",
     "-v", `${fixtureDir}:/fixtures:ro`, "-e", `CATALOG_SOURCE=${source}`, "-e", "CATALOG_FIXTURE_PATH=/fixtures/catalog.json",
-    "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`, image];
+    "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`,
+    ...(leanApps.includes(app) ? ["-e", `PROFILE=${leanProfile}`] : []), image];
 }
 async function ready(base) {
   const deadline = Date.now() + options.startupTimeout * 1000;

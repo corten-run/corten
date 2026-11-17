@@ -9,7 +9,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { syncBuiltinESMExports } from "node:module";
 import { allApps } from "../fullstack/apps.mjs";
-import { aggregate, cpuSettings, expectedPageChecks, parseArgs, phases, readLoad, sources, targets } from "./contract.mjs";
+import { aggregate, cpuSettings, expectedPageChecks, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
 import { inspectCatalog } from "./report.mjs";
@@ -160,6 +160,23 @@ test("catalog negative raw replay retains every selected app without timing or b
 });
 
 const boundaryFile = "fixture/corten/checker.json";
+test("catalog lean profile is bound to the saved runtime without relabeling historical boundaries", () => {
+  const f = failedFixture();
+  const original = JSON.parse(f.files.get(boundaryFile));
+  verifyCheckBoundary(original, f.summary, "corten", "fixture", true);
+  f.summary.measurement.leanProfile = { name: leanProfile, apps: leanApps };
+  assert.throws(() => verifyCheckBoundary(original, f.summary, "corten", "fixture", true), /lean profile/);
+  const lean = structuredClone(original);
+  lean.runtime.Config.Env.push(`PROFILE=${leanProfile}`);
+  verifyCheckBoundary(lean, f.summary, "corten", "fixture", true);
+  for (const value of ["PROFILE=matched", "PROFILE=default"]) {
+    const changed = structuredClone(lean);
+    changed.runtime.Config.Env.push(value);
+    assert.throws(() => verifyCheckBoundary(changed, f.summary, "corten", "fixture", true), /lean profile/);
+  }
+  f.summary.measurement.leanProfile = { name: leanProfile, apps: ["corten"] };
+  assert.throws(() => verifyCheckBoundary(lean, f.summary, "corten", "fixture", true), /lean configuration/);
+});
 const overlays = [
   ["checker", "/repo/bench/catalog/check.mjs"], ["runtime", "/app"], ["upstream", "/bench/catalog/upstream.mjs"],
 ].map(([role, Destination]) => ({ name: `${role} source overlay`, mutate: (p) => {

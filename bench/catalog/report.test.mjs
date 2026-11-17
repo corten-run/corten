@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { allApps } from "../fullstack/apps.mjs";
 import { records } from "./fixtures.mjs";
 import { inspectCatalog, renderCatalog } from "./report.mjs";
+import { leanApps, leanProfile } from "./contract.mjs";
 
 function result() {
   const names = Object.keys(allApps).filter((name) => allApps[name].pages !== false);
@@ -24,6 +25,15 @@ test("a clean complete result requires all twenty apps and requested passes", ()
   assert.equal(Object.keys(report.apps).length, 20);
   assert.deepEqual(report.apps.corten["fixture-page"].rps, { median: 200, min: 100, max: 300 });
   assert.match(renderCatalog(report), /200 \[100, 300\] \(3\/3\)/);
+});
+
+test("reports preserve the exact new lean configuration without relabeling historical evidence", () => {
+  const s = result();
+  assert.ok(!renderCatalog(inspectCatalog(s)).includes("Speed configuration:"));
+  s.measurement.leanProfile = { name: leanProfile, apps: [...leanApps] };
+  assert.match(renderCatalog(inspectCatalog(s)), /Speed configuration: `catalog-lean`/);
+  s.measurement.leanProfile.apps.pop();
+  assert.throws(() => inspectCatalog(s), /catalog lean configuration differs/);
 });
 
 test("historical catalog validation does not acquire group-only provenance or aggregate requirements", () => {

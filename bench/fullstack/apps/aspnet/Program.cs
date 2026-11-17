@@ -15,6 +15,17 @@ var builder = WebApplication.CreateBuilder(args);
 // The matched tier's production profile (bench/fullstack/README.md, "The matched tier"), from
 // ASP.NET Core's own middleware and settings; without it the app is as the template starts it.
 var matched = Environment.GetEnvironmentVariable("PROFILE") == "matched";
+var catalogLean = Environment.GetEnvironmentVariable("PROFILE") == "catalog-lean";
+if (catalogLean)
+{
+    builder.WebHost.ConfigureKestrel(o =>
+    {
+        o.Limits.RequestHeadersTimeout = Timeout.InfiniteTimeSpan;
+        o.Limits.KeepAliveTimeout = Timeout.InfiniteTimeSpan;
+        o.Limits.MinRequestBodyDataRate = null;
+        o.Limits.MinResponseDataRate = null;
+    });
+}
 builder.Services.AddRazorPages();
 builder.Services.AddRequestTimeouts(options => options.AddPolicy("Marketplace", new RequestTimeoutPolicy
 {

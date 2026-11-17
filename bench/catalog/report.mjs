@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { allApps } from "../fullstack/apps.mjs";
-import { aggregate, cpuSettings, expectedPageChecks, phases } from "./contract.mjs";
+import { aggregate, cpuSettings, expectedPageChecks, phases, leanApps, leanProfile } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { inspectGroupEvidence } from "./group.mjs";
 
@@ -47,6 +47,9 @@ export function inspectCatalog(summary, expectedCommit) {
   assert.ok([1, 3, 5].includes(passes), "invalid requested pass count");
   assert.ok(summary.apps && !Array.isArray(summary.apps), "missing apps");
   assert.ok(Array.isArray(summary.failures) && Array.isArray(summary.cleanupFailures), "missing failure records");
+  if (summary.measurement?.leanProfile !== undefined) {
+    assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: leanApps }, "catalog lean configuration differs");
+  }
   const group = inspectGroupEvidence(summary, phases, aggregate);
   const expectedApps = group?.descriptor.apps ?? inventory;
   const reportKeys = group?.keys ?? keys;
@@ -63,6 +66,7 @@ export function inspectCatalog(summary, expectedCommit) {
   if (!fixtureMatches) warnings.push("Fixture identity is missing or differs from the canonical catalog-v1 fixture.");
   const config = { duration: summary.options.duration, warmup: summary.options.warmup, rate: summary.options.rate,
     cpus: summary.measurement?.cpus, encoding: summary.measurement?.encoding, fixtureSha256: summary.fixtureSha256,
+    ...(summary.measurement?.leanProfile ? { leanProfile: summary.measurement.leanProfile } : {}),
     startedAt: summary.startedAt, finishedAt: summary.finishedAt,
     ...(group ? { commitAfter: summary.commitAfter, dirtyAfter: summary.dirtyAfter } : {}) };
   const configurationComplete = [config.duration, config.warmup, config.rate].every((n) => Number.isSafeInteger(n) && n > 0)
@@ -140,6 +144,7 @@ export function renderCatalog(report) {
     `Fixture SHA-256: \`${c.fixtureSha256 ?? "unknown"}\`.`, "",
     "| CPU role | Quota, cores | Logical CPU pinning |", "|---|---:|---|"];
   for (const role of ["app", "load", "api"]) lines.push(`| ${role} | ${number(c.cpus?.[role]?.quota, 1)} | ${c.cpus?.[role]?.cpuset === null ? "unpinned" : c.cpus?.[role]?.cpuset ?? "unknown"} |`);
+  if (c.leanProfile) lines.push("", `Speed configuration: \`${c.leanProfile.name}\`; configured contenders: ${c.leanProfile.apps.map((app) => `\`${app}\``).join(", ")}.`);
   if (report.group) lines.push("", `Group: \`${report.group.group}\`; registry: \`${report.group.registrySchema}\`; contract SHA-256: \`${report.group.contractSha256}\`.`,
     `After-run commit: \`${c.commitAfter ?? "not recorded"}\`; tree dirty after run: ${c.dirtyAfter ?? "not recorded"}.`,
     `Exact apps: ${report.group.apps.map((app) => `\`${app}\``).join(", ")}.`,

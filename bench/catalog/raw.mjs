@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { aggregate, phases, readLoad } from "./contract.mjs";
+import { aggregate, leanApps, leanProfile, phases, readLoad } from "./contract.mjs";
 import { inspectCatalog, completeChecks } from "./report.mjs";
 import { records } from "./fixtures.mjs";
 import { qualificationIdentity } from "./group.mjs";
@@ -25,7 +25,7 @@ export function checkBoundaryEvidence(info) {
     State: Object.fromEntries(["Status", "Running", "OOMKilled", "Dead", "Paused", "Restarting", "ExitCode", "Error", "StartedAt", "FinishedAt"].map((key) => [key, info.State[key]])),
     HostConfig: Object.fromEntries(["NanoCpus", "CpusetCpus", "Memory", "NetworkMode"].map((key) => [key, info.HostConfig[key]])),
     Config: { Entrypoint: info.Config.Entrypoint ?? null, Cmd: info.Config.Cmd ?? null, Labels: { "run.corten.catalog": info.Config.Labels?.["run.corten.catalog"] },
-      Env: info.Config.Env?.filter((e) => ["CATALOG_SOURCE", "CATALOG_FIXTURE_PATH", "API_BASE"].includes(e.split("=")[0])) ?? [] } };
+      Env: info.Config.Env?.filter((e) => ["CATALOG_SOURCE", "CATALOG_FIXTURE_PATH", "API_BASE", "PROFILE"].includes(e.split("=")[0])) ?? [] } };
 }
 export function containerEvidence(info) {
   return { id: info.Id, imageId: info.Image, startedAt: info.State.StartedAt,
@@ -87,6 +87,11 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   assert.equal(containerEvidence(runtime).source, source);
   assert.ok(runtime.Config.Env.includes("CATALOG_FIXTURE_PATH=/fixtures/catalog.json"));
   assert.ok(runtime.Config.Env.includes(`API_BASE=http://${summary.runId}-upstream:8080`));
+  if (summary.measurement.leanProfile !== undefined) {
+    assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: leanApps }, "catalog lean configuration differs");
+    assert.deepEqual(runtime.Config.Env.filter((value) => value.startsWith("PROFILE=")),
+      leanApps.includes(app) ? [`PROFILE=${leanProfile}`] : [], "catalog runtime lean profile differs");
+  }
   running(upstream, summary.tools.upstream.imageId, "api", 512 * 2 ** 20);
   assert.deepEqual(upstream.networks, [`${summary.runId}-net`]);
   mounts(upstream, [mount(`${checkout}/bench/catalog/fixtures`, "/fixtures"), mount(`${checkout}/bench`, "/bench")]);

@@ -79,6 +79,33 @@ catalog's working form. No output cache, pre-rendered response or framework
 internal bypass is used. Both sources retain the complete page/JSON correctness
 gate, browser checks, field filtering and fresh request-time rendering.
 
+The runner selects `PROFILE=catalog-lean` for the registry's catalog-page
+contenders in both correctness and timed containers. Other diagnostic adapters
+retain their existing profile; richer group runners keep their production or
+matched settings. This is one supported lean recipe per contender, not an
+unbounded search across runtimes, compilers or framework internals.
+
+| Contender | Supported lean configuration |
+|---|---|
+| Corten | No optional response compression or handler/header/send timers; normal page stages and error logs remain. |
+| Axum + Maud | Existing lean router without the optional matched production middleware. |
+| ASP.NET Razor | Kestrel header/keepalive timeouts disabled and minimum request/response data rates unset; Razor rendering, source failures and logging remain. |
+| Express | Production EJS view cache; no ETag generation or HTTP header/request/keepalive timers; fresh response rendering remains. |
+| FastAPI | Uvicorn access logging disabled; error logging, worker count, event loop and parser selection unchanged. |
+| Gin | Release mode with `gin.New()` plus panic recovery, without the per-request access logger. |
+| Drogon | Gzip/Brotli disabled; warning/error logging, release build and existing thread selection retained. |
+
+These use public [Node HTTP options](https://nodejs.org/api/http.html),
+[Kestrel limits](https://learn.microsoft.com/aspnet/core/fundamentals/servers/kestrel/options),
+[Uvicorn settings](https://uvicorn.dev/settings/),
+[Gin router constructors](https://github.com/gin-gonic/gin/blob/v1.12.0/gin.go)
+and [Drogon configuration](https://github.com/drogonframework/drogon/blob/v1.9.14/lib/inc/drogon/HttpAppFramework.h).
+Different stacks still retain different mandatory stages and transport behavior;
+settings not safely supported as disabled stay unchanged. In particular, Uvicorn's
+keepalive setting stays at its normal value rather than incorrectly treating zero
+as an unlimited timeout. Raw container evidence and reports record the selected
+profile; historical evidence without it is not relabeled.
+
 Results measured before these settings changed retain their original settings.
 The next measurement establishes the lean configuration; do not relabel earlier
 numbers or attribute their gap to these settings without a matched A/B measurement.

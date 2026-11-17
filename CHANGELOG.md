@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Apply supported lean settings to catalog-page competitors as well as Corten:
+  reduce optional access logging, compression and timer work where supported,
+  record the exact profile in container evidence and reports, and retain full
+  source/rendering correctness. Richer groups keep their existing configuration.
+
 - Configure the standalone catalog Corten benchmark for the lean rendering
   workload: omit optional compression and remove handler/header/send timers using
   supported settings, while keeping page stages, error logs, full correctness
