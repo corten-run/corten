@@ -318,9 +318,10 @@ field (`url::Home { part: Some(Part::Picks) }`), so each has an address and a re
 page in a `Public`, which shared caches give to anyone, answers its part to anyone too: a part
 read for one visitor there (picks for the visitor on a cached home page) needs a route of its own
 that says `patches`, named in its `ReadAgain::now`. Only the part closure gets the checked
-builder (its `Action`); the page closure gets none and runs only for a request that is not an
-action, where `req.action()` is `None` too, so it answers a page or a redirect and a full load
-never gets the fragment
+builder (its `Action`); the page closure gets none and runs only for a request whose effective
+mode is not an action, where `req.action()` is `None` too, so it answers a page or a redirect. A
+full load gets the fragment only if the app overrides the request's mode to an action, and debug
+builds refuse a fragment that reaches a full load
 ([#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)).
 
 Without JavaScript nothing reads the part, so the waiting part holds a link to the page's own

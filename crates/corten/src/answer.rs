@@ -285,9 +285,9 @@ pub enum NotAFeed {}
 /// methods that answer one make. A handler names it in its return type, `HtmlResult<Patches>`,
 /// for a route that says `patches` ([`crate::routes`]).
 ///
-/// An app cannot make one but through those methods, so a patch answer is always built behind
-/// [`Req::action`]'s check (docs/design.md#choice-plain-request-patch). It cannot construct one
-/// from a response:
+/// An app cannot make one but through those methods, so a patch answer is always built behind a
+/// mode check: [`Req::action`]'s, or the one `invalid` and `invalid_with` make themselves
+/// (docs/design.md#choice-plain-request-patch). It cannot construct one from a response:
 ///
 /// ```compile_fail,E0624
 /// use corten::{prelude::*, ForOne, HtmlResponse};
