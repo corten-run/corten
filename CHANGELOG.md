@@ -1270,6 +1270,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- Grouped benchmark collection and retirement confirm delayed provider deletion
+  with bounded, exact-ID, read-only observations instead of failing on the first
+  still-present response. Account checks share the deadline, and uncertainty
+  retains the deletion intent without issuing another DELETE or qualifying
+  failed results.
+
 - `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,
   so a `const` assertion only a binary's `main` reaches fails it as it fails `cargo build`: a
   route that a bin-only app's `main` alone mounts by hand, outside its area or saying `patches`

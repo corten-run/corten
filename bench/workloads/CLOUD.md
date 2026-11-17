@@ -516,7 +516,14 @@ not a historical accounting or native qualification pass.
 script hashes before a durable `native-failed` retirement intent and one DELETE.
 The same private provider worker and pre-unlock settlement apply. A lost or
 uncertain deletion acknowledgement permits exact-ID absence reconciliation only,
-never another DELETE. Existing locks are never taken over or cleared by recovery.
+never another DELETE. Grouped collection and retirement confirm exact-ID absence
+with read-only account/GET/account observations for at most two minutes, paced
+one second apart. Every provider call shares the same remaining deadline. Only
+an authenticated exact-ID 404 confirms absence; account changes, malformed or
+failed reads, cancellation, a reversed clock or an exhausted deadline preserve
+uncertainty. A bounded observation count also refuses a stalled clock. A later
+invocation verifies retained evidence and repeats only those reads, not DELETE.
+Existing locks are never taken over or cleared by recovery.
 The saved measured commit and failure evidence remain unchanged; no validation,
 successful exit or collection result is invented. Fleet inspection reports
 `native-failed-retired` or `cleanup-pending`, never a qualified baseline.
