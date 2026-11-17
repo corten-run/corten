@@ -3521,7 +3521,7 @@ async function run(browser) {
         scrollTo(0, 0);
         const brand = /** @type {HTMLElement} */ (document.querySelector("header span"));
         brand.id = "smoke-brand";
-        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        const corten = /** @type {typeof import("../crates/corten/js/corten.js")} */ (await import(/** @type {string} */ ("corten")));
         await corten.patch(__html('<span id="smoke-brand">Patched</span>'));
       });
       await thank();
@@ -3559,6 +3559,7 @@ async function run(browser) {
         // Firefox logs the refusal after the call has thrown: wait for it before leaving it out.
         const said = page.waitForEvent("console", { predicate: (m) => /trusted/i.test(m.text()), timeout: 3000 }).catch(() => {});
         const refused = await page.evaluate(async () => {
+          // Deliberately bypass patch's TrustedHTML type to exercise the browser's refusal too.
           const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
           const brand = /** @type {HTMLElement} */ (document.querySelector("header span"));
           brand.id = "smoke-brand";
@@ -3577,7 +3578,7 @@ async function run(browser) {
         let patchedLate = false;
         await page.route(lateStyle, async (route) => {
           await page.evaluate(async () => {
-            const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+            const corten = /** @type {typeof import("../crates/corten/js/corten.js")} */ (await import(/** @type {string} */ ("corten")));
             await corten.patch(__html('<span id="smoke-brand">Late</span>'));
           });
           patchedLate = true;
@@ -4546,7 +4547,7 @@ async function run(browser) {
       await page.evaluate(async (more) => {
         const badge = /** @type {Element} */ (document.getElementById("viewer-badge")).cloneNode(true);
         if (more) badge.appendChild(document.createTextNode(" (patched)"));
-        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        const corten = /** @type {typeof import("../crates/corten/js/corten.js")} */ (await import(/** @type {string} */ ("corten")));
         await corten.patch(__html(/** @type {Element} */ (badge).outerHTML));
       }, more);
       await page.evaluate(() => {
