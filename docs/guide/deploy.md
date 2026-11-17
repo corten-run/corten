@@ -291,13 +291,15 @@ no route serves can leave 501 out of it.
 
 ## Access logs
 
-The app `corten new` writes enables `App::access_log(true)`. Add it to an existing app to get
-one `INFO` event with target `corten::access` through its tracing subscriber, including refused
-hosts, cross-site writes and conditional `304`s. The path has no query; bytes describe the
-final body after compression (or `"stream"` for an unknown size), and duration ends when the
-response is ready, not when its body finishes sending. See [Access logs](app.md#access-logs).
-Keep the proxy's logs for requests it answers without calling the app, and use
-`.access_log(false)` when those logs are sufficient. An app's own middleware is not an access
+Access logging is off, also in the app `corten new` writes. Set `App::access_log(true)` to get
+one `INFO` event with target `corten::access` for each response through the app's tracing
+subscriber, including refused hosts, cross-site writes and conditional `304`s. The path has no
+query; bytes describe the final body after compression (or `"stream"` for an unknown size), and
+duration ends when the response is ready, not when its body finishes sending. The line costs
+each request: measured, a small parameter route's instructions grow by about half ([Access
+logs](app.md#access-logs) has the numbers). See
+[Access logs](app.md#access-logs). Keep the proxy's logs for requests it answers without calling
+the app; when they are enough, leave the switch off. An app's own middleware is not an access
 logger: it cannot see the host check, a later error page or a `304`.
 
 ## Benchmark Hosts

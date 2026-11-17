@@ -48,9 +48,11 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
 
 - `App::access_log(true)` writes one tracing `INFO` event with target `corten::access` after
-  every stage and app layer, with method, path without the query, matched route when present,
-  final status, body bytes (or `"stream"`) and duration to response readiness. Off for existing
-  apps; `corten new` enables it in the app it writes. Uses the existing subscriber and escaping.
+  every stage and app layer, with method, path without the query, the route that answered when
+  one did, final status, body bytes (or `"stream"`) and duration to response readiness. Off
+  unless set, also in the app `corten new` writes. Uses the existing subscriber and escaping,
+  which now copies text between control characters a run at a time. Measured: +9,618
+  instructions on a parameter route (+54%), +8,168 on a `404`; off, within 12 of before.
 
 - Clear only an already stopped, masked firmware unit's failed state during
   fresh benchmark setup, then recheck the mask, inactive state and service PID.

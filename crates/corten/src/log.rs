@@ -204,25 +204,41 @@ impl Visit for Fields<'_> {
 
 /// Text with every control character but a tab written as an escape: `\x1b` for the escape that
 /// starts a terminal's color or cursor command, `\n` and `\r` for a line break, `\u{9b}` for a C1
-/// control.
+/// control. The text between them is copied as it is, a run at a time.
 struct Escaped<'a>(&'a mut String);
 
 impl fmt::Write for Escaped<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        for ch in s.chars() {
-            match ch {
-                '\n' => self.0.push_str("\\n"),
-                '\r' => self.0.push_str("\\r"),
-                '\t' => self.0.push('\t'),
-                '\0'..='\x1f' | '\x7f' => {
-                    let _ = write!(self.0, "\\x{:02x}", ch as u32);
-                }
-                '\u{80}'..='\u{9f}' => {
-                    let _ = write!(self.0, "\\u{{{:x}}}", ch as u32);
-                }
-                ch => self.0.push(ch),
+        let bytes = s.as_bytes();
+        let (mut run, mut at) = (0, 0);
+        while at < bytes.len() {
+            // Each control is one byte, or a C1 control's two (`0xc2` then `0x80..=0x9f`), so
+            // `at` is always where a character starts.
+            let len = match bytes[at] {
+                b'\t' => 0,
+                0..=0x1f | 0x7f => 1,
+                0xc2 if matches!(bytes.get(at + 1), Some(0x80..=0x9f)) => 2,
+                _ => 0,
+            };
+            if len == 0 {
+                at += 1;
+                continue;
             }
+            self.0.push_str(&s[run..at]);
+            match bytes[at] {
+                b'\n' => self.0.push_str("\\n"),
+                b'\r' => self.0.push_str("\\r"),
+                0xc2 => {
+                    let _ = write!(self.0, "\\u{{{:x}}}", bytes[at + 1]);
+                }
+                control => {
+                    let _ = write!(self.0, "\\x{control:02x}");
+                }
+            }
+            at += len;
+            run = at;
         }
+        self.0.push_str(&s[run..]);
         Ok(())
     }
 }
@@ -346,6 +362,21 @@ mod tests {
         assert_eq!(lines[0], format!("  WARN {escaped} host={escaped} quoted={:?}", forged));
     }
 
+    /// Each control at either end of the text and beside another, and every other character,
+    /// multibyte ones and the one after the C1 controls (`\u{a0}`) among them, copied as it is.
+    #[test]
+    fn escaping_copies_all_but_the_controls() {
+        let escape = |text: &str| {
+            let mut out = String::new();
+            let _ = fmt::Write::write_str(&mut Escaped(&mut out), text);
+            out
+        };
+        assert_eq!(escape(""), "");
+        assert_eq!(escape("plain é € 😀"), "plain é € 😀");
+        assert_eq!(escape("\0a\x7f\x1f\t\u{80}\u{9f}\u{a0}ÿ\n"), "\\x00a\\x7f\\x1f\t\\u{80}\\u{9f}\u{a0}ÿ\\n");
+        assert_eq!(escape("\r\r\u{85}é\u{9b}"), "\\r\\r\\u{85}é\\u{9b}");
+    }
+
     #[crate::routes]
     mod access_test_url {
         #[route("/items/{id}", get = access_test_item)]
@@ -373,7 +404,7 @@ mod tests {
 
     fn access_lines(f: impl std::future::Future<Output = ()>) -> Vec<String> {
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        ours(false, || runtime.block_on(f)).into_iter().filter(|line| line.contains("corten: request ")).collect()
+        ours(false, || runtime.block_on(f)).into_iter().filter(|line| line.contains("corten: request method=")).collect()
     }
 
     #[test]
@@ -592,6 +623,99 @@ mod tests {
     }
 
     #[crate::routes]
+    mod access_named_url {
+        #[route("/pay/{step}", get = access_pay_step)]
+        pub struct PayStep<'a> {
+            pub step: &'a str,
+        }
+
+        #[route("/feeds/{name}.xml", get = access_feed)]
+        pub struct Feed<'a> {
+            pub name: &'a str,
+        }
+
+        #[route("/counts/{n}", get = access_count)]
+        pub struct Count {
+            pub n: u32,
+        }
+
+        // The app's only `POST`, so another route's is a `405`, not a `501`.
+        #[route("/drafts", post = access_draft)]
+        pub struct Drafts;
+    }
+
+    #[crate::routes(api = PayApi)]
+    mod access_named_api {
+        #[route("/pay/api")]
+        pub struct PayApi;
+
+        #[route("/pay/api/go", get = access_go)]
+        pub struct Go;
+    }
+
+    async fn access_pay_step(at: crate::Params<access_named_url::PayStep<'_>>) -> String {
+        format!("step {}", at.step)
+    }
+
+    async fn access_feed(at: crate::Params<access_named_url::Feed<'_>>) -> String {
+        at.name.to_string()
+    }
+
+    async fn access_count(at: crate::Params<access_named_url::Count>) -> Result<String, crate::Error> {
+        match at.n {
+            0 => Err(crate::Error::status(crate::http::StatusCode::INTERNAL_SERVER_ERROR)),
+            n => Ok(n.to_string()),
+        }
+    }
+
+    async fn access_draft() -> &'static str {
+        "draft"
+    }
+
+    async fn access_go() -> &'static str {
+        "go"
+    }
+
+    /// The route named is the one that answered: not `/pay/{step}` for the API's own unknown URL,
+    /// nor `/feeds/{name}.xml` for a segment without `.xml`, which are `404`s no route answered;
+    /// but the route that matched, for its `400`, `405` and `500`. With an app layer and without.
+    #[test]
+    fn access_log_names_only_the_route_that_answered() {
+        let cases = [
+            ("GET", "/pay/one", 200, Some("/pay/{step}")),
+            ("GET", "/pay/api", 404, None),
+            ("GET", "/pay/api/go", 200, Some("/pay/api/go")),
+            ("GET", "/feeds/news.xml", 200, Some("/feeds/{name}.xml")),
+            ("GET", "/feeds/news.rss", 404, None),
+            ("GET", "/counts/seven", 400, Some("/counts/{n}")),
+            ("POST", "/counts/7", 405, Some("/counts/{n}")),
+            ("GET", "/counts/0", 500, Some("/counts/{n}")),
+        ];
+        for layered in [false, true] {
+            let lines = access_lines(async {
+                let app = crate::App::new(access_named_url::router()).api(access_named_api::api).access_log(true);
+                let router = match layered {
+                    true => app.layer(tower::util::MapRequestLayer::new(|req: crate::http::Request| req)).router(),
+                    false => app.router(),
+                };
+                for (method, path, status, _) in cases {
+                    let res = access_call(router.clone(), method, path, &[]).await;
+                    assert_eq!(res.status().as_u16(), status, "{method} {path} layered {layered}");
+                }
+            });
+            assert_eq!(lines.len(), cases.len(), "{lines:?}");
+            for (line, (method, path, status, route)) in lines.iter().zip(cases) {
+                assert!(line.contains(&format!("method={method} path={path:?}")), "{line}");
+                assert!(line.contains(&format!(" status={status} ")), "{line}");
+                match route {
+                    Some(route) => assert!(line.contains(&format!(" route={route:?} ")), "layered {layered}: {line}"),
+                    None => assert!(!line.contains("route="), "layered {layered}: {line}"),
+                }
+            }
+        }
+    }
+
+    #[crate::routes]
     mod access_url {
         #[route("/items/{id}/edit", get = access_item)]
         pub struct Item {
@@ -606,7 +730,8 @@ mod tests {
     /// CONTRIBUTING's request-path instruction count, with Corten's own subscriber writing to
     /// a sink. Run the release test binary under callgrind with `ACCESS_REQUESTS=1200` and 200,
     /// then subtract and divide by 1,000. `ACCESS_LOG=1` enables logging, `ACCESS_TARGET=missing`
-    /// selects the 404. No socket or fixture is needed.
+    /// selects the 404, and `ACCESS_SINK=none` takes each event without formatting it, so the
+    /// line's preparation and its formatting can be told apart. No socket or fixture is needed.
     #[test]
     #[ignore]
     fn what_an_access_request_costs() {
@@ -615,13 +740,11 @@ mod tests {
         let requests: usize = std::env::var("ACCESS_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
         let enabled = std::env::var("ACCESS_LOG").is_ok_and(|v| v == "1");
         let missing = std::env::var("ACCESS_TARGET").is_ok_and(|v| v == "missing");
+        let formatted = !std::env::var("ACCESS_SINK").is_ok_and(|v| v == "none");
         let path = if missing { "/items/7/unknown" } else { "/items/7/edit" };
         let router = crate::App::new(access_url::router()).access_log(enabled).router();
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let write = Box::new(|line: &[u8]| {
-            std::hint::black_box(line);
-        });
-        tracing::subscriber::with_default(Stdout { color: false, write }, || {
+        let run = || {
             runtime.block_on(async {
                 for _ in 0..requests {
                     let req = crate::http::Request::get(path).body(crate::http::Body::empty()).unwrap();
@@ -632,8 +755,53 @@ mod tests {
                         assert_eq!(bytes.as_ref(), b"item 7");
                     }
                 }
+            })
+        };
+        if formatted {
+            let write = Box::new(|line: &[u8]| {
+                std::hint::black_box(line);
             });
-        });
+            tracing::subscriber::with_default(Stdout { color: false, write }, run);
+        } else {
+            tracing::subscriber::with_default(Accepting, run);
+        }
+    }
+
+    /// Takes the events [`Stdout`] takes and writes nothing.
+    struct Accepting;
+
+    impl Subscriber for Accepting {
+        fn register_callsite(&self, meta: &'static Metadata<'static>) -> Interest {
+            if wanted(meta) {
+                Interest::always()
+            } else {
+                Interest::never()
+            }
+        }
+
+        fn enabled(&self, meta: &Metadata<'_>) -> bool {
+            wanted(meta)
+        }
+
+        fn max_level_hint(&self) -> Option<LevelFilter> {
+            Some(LevelFilter::INFO)
+        }
+
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            std::hint::black_box(event);
+        }
+
+        fn enter(&self, _: &Id) {}
+
+        fn exit(&self, _: &Id) {}
     }
 
     /// Refused only by `a_refused_link_is_logged_once_by_this_subscriber`, which needs the first

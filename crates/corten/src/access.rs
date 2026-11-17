@@ -1,7 +1,6 @@
 //! An opt-in event after the router has finished the response, not an app middleware.
 
 use std::{
-    borrow::Cow,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -16,23 +15,25 @@ pub(crate) struct Access {
 
 /// Only apps with tower layers need a shared handoff: a layer can dispatch on another task
 /// and replace the entire response, so neither a task-local nor response extensions suffice.
+/// A layer that sends one request's clones to several routes leaves the last one matched.
 #[derive(Clone, Default)]
-pub(crate) struct Shared(Arc<Mutex<Option<Cow<'static, str>>>>);
+pub(crate) struct Shared(Arc<Mutex<Option<Arc<str>>>>);
 
 impl Shared {
-    pub(crate) fn set(self, route: Option<Cow<'static, str>>) {
+    pub(crate) fn set(self, route: Option<Arc<str>>) {
         *self.0.lock().unwrap() = route;
     }
 
-    fn take(&self) -> Option<Cow<'static, str>> {
+    fn take(&self) -> Option<Arc<str>> {
         self.0.lock().unwrap().take()
     }
 }
 
+/// The route's name is shared with the router's copy, not copied for each request.
 pub(crate) fn answer(
     mut req: Request,
     shared: bool,
-    matched: impl FnOnce(&Request) -> Option<Cow<'static, str>>,
+    matched: impl FnOnce(&Request) -> Option<Arc<str>>,
     next: impl FnOnce(Request) -> crate::router::RouterFuture,
 ) -> crate::router::Answering {
     if !tracing::event_enabled!(target: "corten::access", tracing::Level::INFO) {
@@ -66,7 +67,7 @@ impl Access {
         Self { started: Instant::now(), method: req.method().clone(), path: req.uri().path().to_owned() }
     }
 
-    fn write(self, res: &Response, matched: Option<Cow<'static, str>>) {
+    fn write(self, res: &Response, matched: Option<Arc<str>>) {
         let route = matched.as_deref();
         let duration = self.started.elapsed();
         macro_rules! line {

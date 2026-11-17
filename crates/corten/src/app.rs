@@ -692,7 +692,7 @@ impl App {
 
 impl<M: Middleware> App<M> {
     /// Writes one `INFO` event with target `corten::access` for each response, outside every
-    /// stage and app layer. Off unless set; `corten new` enables it in the app it writes.
+    /// stage and app layer. Off unless set, in the app `corten new` writes too.
     ///
     /// Fields are `method`, `path` (never the query), `route` when matched, `status`, `bytes`
     /// (the final body's known size, or `"stream"`), and `duration` (time to the finished
@@ -1551,11 +1551,13 @@ impl<M: Middleware> App<M> {
         // The routes that say `unstaged`, each through a lane of its own in place of the stages,
         // where under the innermost API whose prefix holds it a failure is the API's JSON. An app
         // with none has none.
+        let mut lanes = Vec::new();
         let unstaged = (!self.unstaged.0.is_empty()).then(|| {
             let mut unstaged = Table::new();
             for crate::route::UnstagedRoute { written, path, methods, .. } in self.unstaged.0 {
                 let json = mounts.iter().find(|mount| mount.contains(path)).map(|mount| (mount.errors.clone(), dev));
                 let lane = Arc::new(crate::route::Lane { hosts: hosts.clone(), json, written });
+                lanes.push(path);
                 unstaged = unstaged.unstaged(path, written, methods, lane);
             }
             unstaged
@@ -1579,20 +1581,27 @@ impl<M: Middleware> App<M> {
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
         let shared = Arc::new(shared);
+        let access = self.access_log.then(|| scopes.clone());
         let mut router = if plain {
             staged(table, Layer { shared, bounds, policy, scopes, steps: Plain(self.middleware) })
         } else {
             staged(table, Layer { shared, bounds, policy, scopes, steps: Scoped(self.middleware) })
         };
-        let access_shared = !self.layers.is_empty();
-        if self.access_log && access_shared {
-            router = router.record_route();
+        // A lane makes no API's check; a route whose scope its path finds may be another API's.
+        let names = access.map(|scopes| {
+            let foreign = |pattern: &str| !lanes.iter().any(|lane| *lane == pattern) && scopes.of_route(pattern).is_none();
+            router.access_names(scopes.clone(), foreign)
+        });
+        // With app layers, the route is named inside them and carried out to the log.
+        let (inside, outside) = if self.layers.is_empty() { (None, names) } else { (names, None) };
+        if let Some(names) = inside {
+            router = router.record_route(names);
         }
         for wrap in self.layers {
             router = wrap(router);
         }
         if self.access_log {
-            router.access_log(access_shared)
+            router.access_log(outside)
         } else {
             router
         }
@@ -2162,6 +2171,13 @@ impl Scopes {
     pub(crate) fn mount(&self, path: &str) -> Option<&Mount> {
         self.at(path).mount.as_ref()
     }
+
+    /// Whether the API whose prefix holds `path` answers it in place of the route at `pattern`
+    /// (as the router holds it), outside that API: the check [`Layer::secure`] makes for a route
+    /// whose scope its path finds. The access log names no route for such a request.
+    pub(crate) fn foreign(&self, pattern: &str, path: &str) -> bool {
+        self.mount(path).is_some_and(|mount| mount.exposed && !mount.contains(pattern))
+    }
 }
 
 /// Paths no page is at, however the app's routes match them: Corten's own and the APIs'.
@@ -2388,7 +2404,8 @@ impl<S: Steps> Layer<S> {
         // outside it (a page's `/{*rest}`, or the API around it's `/api/{id}` for `/api/items`)
         // does not answer it. The request meets everything a route of the API would, and the API's
         // 404 answers in its place.
-        // Only an API such a route can reach pays for the check.
+        // Only an API such a route can reach pays for the check. `Scopes::foreign` repeats it
+        // for the access log.
         let foreign = mount.is_some_and(|mount| {
             mount.exposed
                 && req.extensions().get::<crate::router::MatchedPath>().is_some_and(|matched| !mount.contains(matched.as_str()))

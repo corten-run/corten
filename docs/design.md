@@ -4680,10 +4680,10 @@ rules something out.
     element's `form=` among them, which the field module of `037bb827b` fails in each), and
     `corten dev`'s reports, on `98e7ca184`.
 
-58. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, enabled by the new-app template,
+58. <a id="choice-access-logs"></a>**Access logging is an opt-in `App` switch, off in every app the template's included,
     and an event through the existing tracing subscriber after the response is finished.**
     `App::access_log(true)` emits an `INFO` event with target `corten::access`, with method,
-    path without the query, matched route when present, final status, final body's known size
+    path without the query, the route that answered when one did, final status, final body's known size
     (or `"stream"`) and elapsed time until the response is ready. It sees the host check's
     `421`, cross-site refusals, error-page replacements, conditional `304`s, compression and
     app layers. It never polls a body to count it, so a live stream is logged when its answer
@@ -4691,31 +4691,53 @@ rules something out.
     escaping and routing; no access-log format or dependency is added. With the switch off,
     no clock is read and no request metadata is retained for logging.
     Ordinary enabled requests keep the route beside the answer's future, without a response
-    extension, second wrapper, per-request `Arc` or URI clone. Only an app with tower layers
+    extension, second wrapper or URI clone; the route's name is the router's own `Arc<str>`,
+    counted, not copied. Only an app with tower layers
     needs a shared route handoff: a layer can dispatch
     on another task and replace the whole response, defeating both response extensions and
-    task-local storage. The enabled wrapper repeats the route-name lookup in an index built
-    only when enabled, separate from normal dispatch so its lookup keeps its original caller.
-    Disabled dispatch has no recording branch, additional caller or logging index.
+    task-local storage, so a layer that sends clones of one request to several routes is logged
+    with the last one matched. The enabled wrapper repeats the route-name lookup in an index built
+    only when enabled, separate from normal dispatch so its lookup keeps its original caller,
+    and makes the two decisions after the match that dispatch makes: a segment without the text
+    its route writes after a parameter is the app's `404`, and a path an API's prefix holds that a
+    route outside it matched is the API's (`Scopes::foreign`, the stages' check), so neither names
+    a route. Disabled dispatch has no recording branch, additional caller or logging index.
+
+    Measured with CONTRIBUTING's request-path count (release build, Callgrind, (1,200 requests
+    minus 200) / 1,000, median of three alternating runs, Corten's subscriber writing to a sink;
+    `log::tests::what_an_access_request_costs`): a parameter route costs 17,681 instructions on
+    unchanged `main` and 27,299 with the line (+9,618, 54%); an unknown URL's `404`, 19,135 and
+    27,303 (+8,168, 43%). Of that, preparing the event and handing it to `tracing` is about 1,400
+    (an accepting subscriber that writes nothing: 19,094 and 20,499); the rest is the line the
+    subscriber writes. With the switch off a request costs 17,679 and 19,123, within 12
+    instructions of `main` (code layout, not work: the off path runs nothing of the feature).
 
     Not chosen: an app middleware, which cannot see early refusals or the response after
     the error page, conditional GET and compression; a tower layer each app writes, which
     repeats framework knowledge and dependencies; always-on logging, which changes existing
-    apps and charges apps that already log at their proxy; a separate text format such as
+    apps and charges apps that already log at their proxy; enabling it in the app `corten new`
+    writes, which would charge every new app the measured cost for a line its proxy may already
+    write; carrying dispatch's own match out to the log, which would put a check in the request
+    path of every app, logging or not; a separate text format such as
     Common Log Format, which makes logs a second output channel beside tracing; or wrapping
     every body to count bytes and time to close, which costs streams for a different measure.
 
     Stands on: reasoned (only the outer router boundary sees the final response, and unknown-size
-    bodies cannot be counted without polling them); bet (new apps benefit from a request line,
-    while some deployments need only proxy logs); value (README Values 1, 6 and 7: request
-    logging is explicit, shares the existing subscriber and adds no dependency).
+    bodies cannot be counted without polling them); measured (the instruction counts above);
+    bet (deployments that want a request line from the app set the switch, and the rest already
+    log at their proxy); value (README Values 1, 6 and 7, and the conflict order's performance at
+    the user's end before developer convenience: the line is opt-in, shares the existing
+    subscriber and adds no dependency).
 
     Revisit when: an app needs body-completion timing or actual streamed byte counts rather than
     response-readiness timing and a stream marker, or a tracing event cannot express the fields
-    an operator needs without a separate log format.
+    an operator needs without a separate log format; or an enabled line costs a small share of
+    a request (then the template could turn it on); or the switch off costs more than the
+    measured difference above; or the stages decide after the match in another way the index
+    does not repeat.
 
-    Last checked: 2026-11-16, the request stages, final HTTP handling and subscriber boundaries
-    read at `226b12b35`.
+    Last checked: 2026-11-16, the request stages, final HTTP handling, the API boundary and
+    subscriber read, and the costs measured, at `f5f2132aa`.
 
 ## Rules
 
