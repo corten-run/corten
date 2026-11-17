@@ -9,6 +9,12 @@ on:
   pull_request:
   workflow_call:
 
+# A newer push to a pull request supersedes its older run, so only the head's checks wait for a
+# runner. Pushes to main and the release's call each keep their own run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
