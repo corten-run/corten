@@ -305,7 +305,7 @@ async function parsesAsHtmlMeans(browser) {
   const page = await context.newPage();
   const MATHML = "http://www.w3.org/1998/Math/MathML";
   const XHTML = "http://www.w3.org/1999/xhtml";
-  /** @type {[string, string, (namespaces: { MATHML: string, XHTML: string }) => boolean][]} */
+  /** @type {[string, string, (page: { MATHML: string, XHTML: string, markup: string }) => boolean][]} */
   const shapes = [
     [
       "a <title> in a <mglyph> in an <mi> is MathML's and holds elements",
@@ -603,15 +603,16 @@ async function parsesAsHtmlMeans(browser) {
       `<div><script type="text/x-template"><div><textarea><g></g></textarea></div></script></div>`,
       `<div><script type="text/x-template"><svg><foreignObject><p><div>Detail</div></p></foreignObject></svg></script></div>`,
       `<p><span></span><button><span></span><div>Detail</div></button></p>`,
-    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+    ].map((markup) => /** @type {[string, string, (page: { markup: string }) => boolean]} */ ([
       `a browser keeps markup after unseen output as written: ${markup}`,
       markup,
-      () => document.body.innerHTML === markup,
+      // Run in the page: the markup it was given comes in the argument.
+      ({ markup }) => document.body.innerHTML === markup,
     ])),
   ];
   for (const [name, markup, keeps] of shapes) {
     await page.setContent(`<!DOCTYPE html><html><head><title>Shapes</title></head><body>${markup}</body></html>`);
-    check(`html! markup: ${name}`, await page.evaluate(keeps, { MATHML, XHTML }), markup);
+    check(`html! markup: ${name}`, await page.evaluate(keeps, { MATHML, XHTML, markup }), markup);
   }
   await context.close();
 }
