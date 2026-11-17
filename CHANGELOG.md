@@ -9,9 +9,10 @@ Corten is pre-1.0, so any minor version may change the API.
   `action.patch(view)` or `action.patch_with_status(status, view)`. The unchecked
   `Req::patch` and `Req::patch_with_status` methods are removed. `patch_or_with` passes
   this builder to its part closure: `|action| async move { action.patch(view) }`.
-  `patch_or`, `invalid`
-  and `invalid_with` keep their APIs; the plain-request debug guard still covers
-  explicit mode overrides and raw marked responses.
+  `patch_or`, `invalid` and `invalid_with` keep their APIs; the plain-request debug guard still
+  covers explicit mode overrides and raw marked responses.
+- Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
+  so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
