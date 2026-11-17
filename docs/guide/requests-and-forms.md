@@ -462,7 +462,7 @@ an exponent (`1e-20`), which Chromium and WebKit read exactly, and bounds that h
 (`min` above `max`, or an exclusive `min` at `f64::MAX`) are drawn as `min="1" max="0"`. A browser
 can still refuse a number the handler holds near a refused end (Chromium and WebKit refuse a
 typed `4e-324`, which reads as `5e-324`); what the input says and where the two differ is
-[Choice 61](../design.md#choice-exclusive-ends).
+[Choice 62](../design.md#choice-exclusive-ends).
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
 handler runs, and the user loses the form: a blank field, `two`, a count past the type, or

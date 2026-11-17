@@ -16,7 +16,7 @@ Corten is pre-1.0, so any minor version may change the API.
   step past; the handler refuses the end too, and a number that reads as it in the field's type (`1e-50`
   in an `f32`). A browser may still refuse a number near a refused end that the handler holds
   (Chromium and WebKit refuse a typed `4e-324`), and none was measured taking one it refuses
-  (docs/design.md, Choice 61). A number the input says past 18 digits written out, a drawn end or
+  (docs/design.md, Choice 62). A number the input says past 18 digits written out, a drawn end or
   a value made in code (`Entry::from(1e-20)`), is written with an exponent (`1e-20`), which
   Chromium and WebKit read exactly where they refused `0.00000000000000000001` as below
   `min="5e-324"`, and any-step bounds that hold nothing (an exclusive `min` at `f64::MAX`, whose
@@ -220,6 +220,17 @@ Corten is pre-1.0, so any minor version may change the API.
   a field loads, and reads the form's index of names, a few microseconds a run in a form of 2,000
   controls; every page's runtime is 66 bytes larger with gzip
   ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
+
+- `App::access_log(true)` writes one tracing `INFO` event with target `corten::access` after
+  every stage and app layer, with method, path without the query, the route that answered when
+  one did, final status (a final `100` or `103`, which the HTTP/1 server answers as an empty
+  `500`, as that `500`), body bytes (or `"stream"`; zero for a `2xx` to `CONNECT`) and duration
+  to response readiness; a request dropped before its answer is ready writes none, and a
+  subscriber may filter it on its fields. Off
+  unless set, also in the app `corten new` writes. Uses the existing subscriber and escaping,
+  which now copies text between control characters a run at a time. Measured: +9,619
+  instructions on a parameter route (+54%), +8,173 on a `404`, with the line written to a sink,
+  not stdout; off, within 12 of before.
 
 - Clear only an already stopped, masked firmware unit's failed state during
   fresh benchmark setup, then recheck the mask, inactive state and service PID.
