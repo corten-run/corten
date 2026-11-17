@@ -11,6 +11,7 @@ export { aggregate, phases };
 export const schema = "json-api-results/v1";
 export const timedSchema = "json-api-results/v2";
 export const timedReceiptSchema = "json-api-native-audit/v2";
+export const auditBundleSchemas = Object.freeze(["json-api-native-audits/v1", "json-api-native-audits/v2"]);
 export const receiptSchema = "json-api-native-audit/v1";
 export const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
 export { k6Image } from "../load-tool.mjs";

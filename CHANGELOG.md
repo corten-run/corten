@@ -11,6 +11,8 @@ Corten is pre-1.0, so any minor version may change the API.
   and cleanup gates still apply. Its producer assets must match the measured
   commit, and current campaigns reject schema downgrades; standalone historical v1
   evidence retains its original exact fixed-offer and zero-error verifier.
+  The campaign carries independently reviewed v2 transport receipts from the
+  cloud inbox through timing replay; a version label alone is not an audit.
 
 - The catalog benchmark uses a fixed two-worker upstream within its existing CPU
   and memory budget, retaining per-process headroom and a first-host preflight.
