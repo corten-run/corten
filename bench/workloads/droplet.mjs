@@ -431,7 +431,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(options.collect, "collect options required");
       const observed = read();
       let failedMonitorRecovery = false;
-      if (observed.control?.monitor) {
+      const neverProvisioned = (s) => s.control?.monitor?.phase === "pending" && !s.control.monitor.registrationSha256
+        && s.id && s.ip && s.createIntentAt && !s.control.sealed.length
+        && s.control.ledger.every((row) => row.request.epoch === "collection" && row.localTerminal)
+        && (s.status === "preparing" || s.status === "retired" && s.retirement?.kind === "unused")
+        && !readdirSync(local).some((name) => name.startsWith("monitor-"));
+      // A settled create can leave an identified host before the first SSH operation.
+      // No monitor exists then. The ordinary exclusive lock and fresh unused-host
+      // proof still apply; neither a pending registration nor local state permits deletion.
+      const unusedCandidate = neverProvisioned(observed);
+      if (observed.control?.monitor && !unusedCandidate) {
         const { localStreamStatus, streamRecoveryReady } = await import("./cloud-control-stream.mjs");
         const status = localStreamStatus(local);
         if (["pending", "progress"].includes(status.kind)) {
@@ -443,6 +452,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (failedMonitorRecovery) assert.equal(observed.control.monitor.phase, "invalid", "foreground monitor has not settled");
       }
       return locked(async () => {
+        if (unusedCandidate) assert.ok(neverProvisioned(state), "unused allocation changed; preserve host");
         if (state.status === "retired") {
           verifyRetirement();
           await confirmDeleted();
