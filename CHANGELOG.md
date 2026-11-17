@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Stop an isolated benchmark command cooperatively when its host observer detects
+  an irrecoverable observation/storage failure, broken continuity or a recorded
+  Docker-participant gap. Preserve invalid evidence and uncertain ownership;
+  cancellation does not qualify a run or authorize host deletion.
+
 - Correct the grouped browser documentation to describe the current replayed
   tool/lock identity handoff. Missing historical identities and independent OS
   proof still block qualification; the documentation grants no readiness.

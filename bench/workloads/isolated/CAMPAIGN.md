@@ -69,6 +69,14 @@ lifecycle/collection, interrupted review or an invalid replay exits 2 and preser
 No result file authorizes host deletion. The parent records its own unit terminal state, run.log,
 host.txt and exit-code, and verifies an archive before any owned-resource deletion.
 
+An irrecoverable host-observer fault requests command-local cooperative cancellation
+once, without changing caller-signal ownership. This includes caught interval or
+sticky writer failures and admitted continuity or Docker-participant gaps, including
+initial capture and attachment. The command's owned supervisor must still settle;
+invalid lifetime evidence preserves custody and prevents further commands. See
+[fault shutdown](host-lifetime.md#fault-shutdown). Notification is not terminal,
+empty-scope, archive-completeness or host-deletion proof.
+
 ## Rounds and recipes
 
 Campaign rN maps to catalog cN, JSON prepare j(2N), JSON timing j(2N+1), marketplace rN,
