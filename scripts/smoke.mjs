@@ -5884,7 +5884,11 @@ async function run(browser) {
       await scope.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector("nav a[href='/smoke/scope-elsewhere']")).click());
       const linkWent = await linkSent;
       asked.length = 0;
-      await scope.getByRole("button", { name: "Week", exact: true }).click();
+      // Sent from a script too: Playwright's click waits for the link's navigation to finish first.
+      await scope.evaluate(() => {
+        const week = /** @type {HTMLButtonElement} */ (document.querySelector("#smoke-scope button[value=week]"));
+        week.form?.requestSubmit(week);
+      });
       const formRead = await scope
         .waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-scope output")?.textContent === "week", undefined, { timeout: 5000 })
         .then(() => true, () => false);
