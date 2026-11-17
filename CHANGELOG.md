@@ -12,6 +12,8 @@ Corten is pre-1.0, so any minor version may change the API.
   either. The starter and seven example images build with `--locked` too, instead of resolving a
   different graph during deployment; card-market's waits on its paired benchmark recipe
   ([#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)).
+- Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
+  so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
