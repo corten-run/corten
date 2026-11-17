@@ -20,6 +20,80 @@ use crate::response::{IntoResponse, Response};
 
 use crate::{app::Bound, Error, Signal};
 
+/// A fact learned once for this connection by [`crate::serve_wrapped_with`], such as a verified
+/// client certificate. Every request on the connection receives its own clone. Several facts
+/// belong in one struct; an `Arc` keeps a large value cheap to clone.
+///
+/// A handler takes `ConnectionInfo<T>`; an [`crate::Identify`] borrows it with [`Self::of`].
+/// Reading it makes the answer private, but it does not key a page's layout by an arbitrary
+/// value: identify a [`crate::Caller`] when the layout depends on the caller.
+///
+/// It may identify who is asking, so a [`Public`](crate::Public) handler cannot take it:
+///
+/// ```compile_fail,E0277
+/// use corten::{prelude::*, ConnectionInfo};
+/// use std::time::Duration;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/", get = home)]
+///     pub struct Home;
+/// }
+/// async fn home(ConnectionInfo(cert): ConnectionInfo<String>) -> Public<String> {
+///     Public::new(Duration::from_secs(60), cert)
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// Taking it without a value of that type is a 500; `Option<ConnectionInfo<T>>` is `None`.
+/// A handler of a documented API may take either; it adds nothing to the document.
+/// An app's own connection loop or a test may insert `ConnectionInfo(value)` in the request's
+/// extensions. Read it with the extractor or `of`, not directly from extensions, so a read
+/// makes the answer private there too.
+#[derive(Clone, Debug)]
+pub struct ConnectionInfo<T>(pub T);
+
+impl<T: Send + Sync + 'static> ConnectionInfo<T> {
+    /// This connection's value from an [`crate::Identify`]'s request parts, without another
+    /// clone. Reading it makes the answer private, as taking the extractor does.
+    pub fn of(parts: &Parts) -> Option<&Self> {
+        let info = parts.extensions.get::<Self>()?;
+        match parts.extensions.get::<crate::layout::Asking>() {
+            Some(asking) => asking.mark(),
+            None => {
+                if let Some(signal) = parts.extensions.get::<Signal>() {
+                    signal.mark_personal();
+                }
+            }
+        }
+        Some(info)
+    }
+}
+
+impl<S: Send + Sync, T: Clone + Send + Sync + 'static> FromRequestParts<S> for ConnectionInfo<T> {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Response> {
+        Self::of(parts).cloned().ok_or_else(|| {
+            Error::new(format!(
+                "corten::ConnectionInfo<{}>: the request has no connection value of this type; \
+                 use serve_wrapped_with, or take Option<ConnectionInfo<T>> where none is an answer",
+                std::any::type_name::<T>(),
+            ))
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+            .into_response()
+        })
+    }
+}
+
+impl<S: Send + Sync, T: Clone + Send + Sync + 'static> OptionalFromRequestParts<S> for ConnectionInfo<T> {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Option<Self>, Self::Rejection> {
+        Ok(Self::of(parts).cloned())
+    }
+}
+
 /// The IP address of who is asking: `async fn signup(ClientIp(ip): ClientIp, ..)`.
 ///
 /// Without a trusted proxy it is the connection's peer. With one
