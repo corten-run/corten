@@ -2,12 +2,12 @@
 
 ## Supported versions
 
-Corten is 0.2. Fixes land on `main` and ship in a patch release of the newest minor version;
-there are no maintained release branches yet.
+Corten is pre-1.0. Fixes land on `main` and ship in a patch release of the newest published minor
+version; there are no maintained release branches yet.
 
 | Version | Supported |
 |---|---|
-| the newest 0.2.x release, and `main` | yes |
+| the newest published release of the newest minor version, and `main` | yes |
 | anything older | no |
 
 ## Reporting a vulnerability
