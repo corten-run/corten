@@ -2261,8 +2261,9 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
 async function visit(url, signal, redirected, again, place, source, written, through = writesIn, precommit) {
   // A write's page reading itself again is read whole as well, as a browser without JavaScript
   // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
-  // when the read finds it. It stays whole while the page asks to be read again.
-  const whole = !!written || (!!again && swappedWhole !== "");
+  // when the read finds it. It stays whole while the page asks to be read again, unless a write
+  // since failed where the page says so, which a whole read would draw away.
+  const whole = !!written || (!!again && swappedWhole !== "" && !failedUndrawn());
   const key = pageKey(url);
   // A read again fetches the page on screen, which no prefetch takes.
   const going = again ? null : { key };
@@ -2480,14 +2481,15 @@ const SOURCE = Symbol("corten.source");
 const WRITTEN = Symbol("corten.written");
 /**
  * The writes that may change what the layout draws, numbered in the order their outcome came: one
- * that redirected or answered with its own page whole, one a navigation cut off once it was sent,
- * and one that failed where the page says so (the network failed, a 5xx), each of which the
- * server may have applied.
+ * that redirected, answered with its own page whole or with a patch that took it, one a navigation
+ * cut off once it was sent, and one that failed where the page says so (the network failed, a 5xx,
+ * an answer cut off on its way), each of which the server may have applied.
  */
 let writesIn = 0;
 /**
  * Those whose change no whole page's layout has drawn yet: the user went elsewhere before its page
- * came, its frame differed, its outcome is not known, or a page made before it was drawn after it.
+ * came, its frame differed, its outcome is not known, its patch is not in yet, or a page made before
+ * it was drawn after it (over what its patch drew).
  * While any is, a navigation reads the whole page, so what each write changed in the layout is
  * drawn.
  * @type {Set<number>}
@@ -2508,6 +2510,8 @@ const failedInView = new Set();
  * @param {boolean} itself
  */
 const anyUndrawn = (itself) => (itself ? Array.from(undrawn).some((n) => !failedInView.has(n)) : undrawn.size > 0);
+/** Whether a write that failed in view is undrawn: the page reading itself leaves the layout as it is. */
+const failedUndrawn = () => Array.from(undrawn).some((n) => failedInView.has(n));
 /**
  * A write that failed where the page says so, which the server may have applied: undrawn, for the
  * next navigation to another page.
@@ -2616,17 +2620,15 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   // which a prefetch of the link would fetch again. A read again leaves a dwell over another link.
   if (!again) clearTimeout(hoverTimer);
   const redirected = event.info?.[REDIRECTED];
-  // A write not in the record yet, which this navigation cuts off (waiting for its answer, or a
-  // patch that took it and is not drawn): the server may have applied it, so the page is read
-  // whole, as after a write whose page is not drawn yet. A patch the server has answered is
-  // numbered before `through`: the page is asked for after it, so its layout draws it. One still
-  // on its way is numbered after: the server may still be running it as this page is read, so it
-  // stays undrawn once the page is drawn, for the next navigation to read whole again.
-  const cutOff = again ? [] : Array.from(submits.values()).filter((pending) => pending.write && !pending.drawn);
-  for (const pending of cutOff) if (pending.answered) undrawn.add(++writesIn);
+  // A write this navigation cuts off before its answer came: the server may have applied it, so
+  // the page is read whole, as after a write whose page is not drawn yet. It is numbered after
+  // `through`: the server may still be running it as this page is read, so it stays undrawn once
+  // the page is drawn, for the next navigation to read whole again. One whose answer came is in the
+  // record already (a patch not in yet is undrawn), numbered before the page is asked for.
+  const cutOff = again ? [] : Array.from(submits.values()).filter((pending) => pending.write && !pending.answered);
   // The writes answered before the page is asked for, which its layout draws.
   const through = redirected ? (askedAfter.get(redirected) ?? 0) : writesIn;
-  for (const pending of cutOff) if (pending.went && !pending.answered) undrawn.add(++writesIn);
+  for (const pending of cutOff) if (pending.went) undrawn.add(++writesIn);
   const cut = cutOff.length > 0;
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
@@ -3006,7 +3008,7 @@ addEventListener("pagehide", () => (left += 1));
  * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
  * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, drawn: boolean, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, went: boolean, answered: boolean, n: number, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 
@@ -3102,7 +3104,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
-  const pending = { key, controller, write: method !== "GET", went: false, answered: false, drawn: false, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
+  const pending = { key, controller, write: method !== "GET", went: false, answered: false, n: 0, next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -3188,20 +3190,25 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       // that to the next navigation.
       const patch = res.headers.has("corten-patch");
       const whole = !patch && !res.headers.has("corten-page");
-      const write = method !== "GET" && (whole || (!patch && res.ok)) ? ++writesIn : undefined;
+      // Its page whole, or one that took it (a patch, `<main>`), is numbered as it comes, undrawn
+      // until it is in: a patch that drew a layout element may be drawn over by an older page's
+      // layout, which then puts it back as undrawn ({@link drew}).
+      const write = method !== "GET" && (whole || res.ok) ? ++writesIn : 0;
       if (write) undrawn.add(write);
       // A 5xx says the write failed (a toast), but a proxy's 502 can hide one that was applied.
       else if (method !== "GET" && res.status >= 500) failedWrite();
       // In the record now, or with nothing to record (a refusal): a navigation from here on does
-      // not count it as cut off. A patch that took the write is, until it is drawn (below), but as
-      // one the server has answered: a page asked for from now on is made after it.
-      pending.drawn = !(patch && res.ok);
+      // not count it as cut off, and a page asked for from now on is made after it.
+      pending.n = write;
       pending.answered = true;
       const body = await res.text();
       renew();
       signal.throwIfAborted();
-      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, true, undefined, within);
-      else {
+      if (res.headers.has("corten-patch")) {
+        await apply(body, signal, sent, res.ok, true, undefined, within);
+        // In: what it drew is current until a page made before it is drawn over it.
+        if (!signal.aborted) undrawn.delete(write);
+      } else {
         const notice = noticeOf(res);
         // A page: a `GET` form's is `<main>` alone (`corten-page`), as a navigation's is. A write's
         // own page is whole, as the page a write redirects to is, so what the write changed around
@@ -3212,7 +3219,6 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         } else if (await swapDocument(body, signal, notice, false, false, true, { through, write })) announce(notice);
       }
       signal.throwIfAborted();
-      pending.drawn = true;
       if (res.status === 422) focusInvalid(form);
       // Sent after an answer that took the write (2xx) or refused only its input (422). Not after a
       // refusal of the state it was made against (a 409 or 410, "someone saved first"): the user
@@ -3223,7 +3229,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       // A 5xx it does not draw failed where the page says so (`corten:error`), applied or not.
       if (method !== "GET" && res.status >= 500) failedWrite();
       // Nothing to draw: a navigation from here on does not count it as cut off.
-      pending.drawn = true;
+      pending.answered = true;
       // An answer the runtime does not draw is whole once its body has arrived too.
       await res.arrayBuffer();
       signal.throwIfAborted();
@@ -3246,11 +3252,12 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     }
   } catch (error) {
     // A write a navigation cut off was numbered by that navigation. One that failed on its way where
-    // the page says so (the network failed, or a patch's body was cut off) may have been applied
-    // too: the next navigation reads the whole page, but not the page reading itself again, which
-    // would draw away the failure shown.
+    // the page says so (the network failed, or the body of an answer that took it was cut off, or
+    // did not draw) may have been applied too: the next navigation reads the whole page, but not the
+    // page reading itself again, which would draw away the failure shown.
     if (signal.aborted) return;
-    if (pending.went && !pending.drawn && method !== "GET") failedWrite();
+    if (pending.n) failedInView.add(pending.n);
+    else if (pending.went && !pending.answered && method !== "GET") failedWrite();
     // Offline, the server unreachable, or the browser leaving the page (a full navigation without
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
     // that waited goes with it, since it would fail the same way, and the user sends it again.

@@ -36,9 +36,10 @@ pub mod url {
     #[route("/smoke/written", get = unwritten, post = written)]
     pub struct Written;
 
-    /// The same form on a page that reads itself again each second (`ReadAgain`), so a write that
-    /// failed in view can be seen to stay shown while the page reads itself again (#1370).
-    #[route("/smoke/written/again", get = unwritten_again)]
+    /// The same form on a page that reads itself again each second (`ReadAgain`), whose write's own
+    /// page does too, so a write that failed in view can be seen to stay shown while the page reads
+    /// itself again, after a write whose own page drew as well (#1370).
+    #[route("/smoke/written/again", get = unwritten_again, post = written_again)]
     pub struct WrittenAgain;
 
     /// A page with a dialog drawn empty and closed and a `data-patch` form outside it that asks
@@ -292,21 +293,32 @@ async fn written(req: Req) -> HtmlResult {
     written_page(&req, true, None)
 }
 
+async fn written_again(req: Req) -> HtmlResult {
+    written_page(&req, true, Some(ReadAgain { after: std::time::Duration::from_secs(1) }))
+}
+
 /// The form, and once it is sent the write's own page, in the layout the smoke's other pages draw.
 /// The write's page draws a component with a script the form's page has not loaded, so the test
 /// can hold the page on its way in while the write is done, and leave it by a link to a page in
-/// the same area, which a navigation swaps into this document.
+/// the same area, which a navigation swaps into this document. A page that reads itself again
+/// posts to its own address, whose page reads itself again too.
 fn written_page(req: &Req, written: bool, again: Option<ReadAgain>) -> HtmlResult {
+    let reads_again = again.is_some();
+    let inner = html! {
+        if written {
+            <p>"Written by the form's own page."</p>
+            <Quoted />
+        }
+        <button>"Write"</button>
+    };
     req.page(html! {
         <Layout req={req} title={if written { "Written" } else { "Write" }} viewer={None} head={again}>
             <a href={url::Quoted}>"Quoted arguments"</a>
-            <form method="post" action={url::Written} data-patch>
-                if written {
-                    <p>"Written by the form's own page."</p>
-                    <Quoted />
-                }
-                <button>"Write"</button>
-            </form>
+            if reads_again {
+                <form method="post" action={url::WrittenAgain} data-patch>{inner}</form>
+            } else {
+                <form method="post" action={url::Written} data-patch>{inner}</form>
+            }
         </Layout>
     })
 }

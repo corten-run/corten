@@ -4299,7 +4299,8 @@ async function run(browser) {
    * `hold` gives for its number. While `fail` is set, a write is done but its answer is dropped, as a
    * network that fails after the server applied it. While `draws` is false, a write goes without
    * its `Prefer: corten-draws=whole`, as from a runtime from before it. A write's answer's headers are given to `edit`
-   * too, to change. The page opened is `path`.
+   * too, to change, and while `status` is set it is the write's answer's status. The page opened is `path`; a write
+   * is a post to `/smoke/written` or, from the page that reads itself again, to its own address.
    * @param {(body: string, writes: number, headers?: Record<string, string>) => string} edit @param {(body: string) => string} [before]
    * @param {string} [path]
    */
@@ -4309,6 +4310,7 @@ async function run(browser) {
       written: false,
       fail: false,
       draws: true,
+      status: 0,
       writes: 0,
       answers: 0,
       /** @type {string[]} */ asked: [],
@@ -4321,7 +4323,7 @@ async function run(browser) {
       async (route) => {
         const req = route.request();
         const mode = req.headers().corten;
-        const write = req.method() === "POST" && new URL(req.url()).pathname === "/smoke/written";
+        const write = req.method() === "POST" && ["/smoke/written", "/smoke/written/again"].includes(new URL(req.url()).pathname);
         if (!write && !(req.resourceType() === "document" || mode === "page" || mode === "nav")) return route.fallback();
         seen.asked.push(`${req.method()} ${new URL(req.url()).pathname} ${mode ?? "-"}`);
         // Counted as the write is sent, so the writes are numbered in the order the page sent them.
@@ -4341,7 +4343,7 @@ async function run(browser) {
         seen.written ||= write;
         if (write && seen.fail) return route.abort("failed");
         if (write) await seen.hold(writes);
-        await route.fulfill({ status: res.status(), headers, body }).catch(() => {});
+        await route.fulfill({ status: write && seen.status ? seen.status : res.status(), headers, body }).catch(() => {});
         if (write) seen.answers += 1;
       },
     );
@@ -4614,6 +4616,240 @@ async function run(browser) {
       failedName,
       failed && again === "GET /smoke/written/again nav" && kept && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
       JSON.stringify({ failed, again, kept, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  /** Follows the link to /smoke/quoted, and whether that page came in. @param {import("@playwright/test").Page} own */
+  const toQuoted = async (own) => {
+    await own.click('main a[href="/smoke/quoted"]');
+    return own
+      .waitForFunction(() => location.pathname === "/smoke/quoted" && !document.querySelector("main form") && !document.querySelector("main[aria-busy]"), null, {
+        timeout: 5000,
+      })
+      .then(
+        () => true,
+        () => false,
+      );
+  };
+  /** Whether the brand comes to read `text`. @param {import("@playwright/test").Page} own @param {string} text */
+  const brandBecomes = (own, text) =>
+    own
+      .waitForFunction((text) => document.querySelector("header span")?.textContent === text, text, { timeout: 5000 })
+      .then(
+        () => true,
+        () => false,
+      );
+  // A write that answers a patch for an element of the layout, beside a write whose own page is
+  // whole, from two forms. The stand-in gives the brand an id, so a patch can draw it: the server's
+  // count of writes is drawn by each whole page, and by the second write's patch.
+  /** @param {number} patchOf the write that answers the patch */
+  const patchedAndWhole = (patchOf) => {
+    const withCount = (/** @type {string} */ body, /** @type {string} */ text) =>
+      body.replace(/<span([^>]*)>Watchlist<\/span>/, `<span id="smoke-count"$1>${text}</span>`);
+    return {
+      before: (/** @type {string} */ body) => withCount(body, "Watchlist"),
+      edit: (/** @type {string} */ body, /** @type {number} */ writes, /** @type {Record<string, string> | undefined} */ headers) => {
+        if (!headers || writes !== patchOf) return withCount(body, `Count ${writes}`);
+        delete headers["corten-shell"];
+        headers["corten-patch"] = "";
+        return `<span id="smoke-count">Count ${writes}</span>`;
+      },
+    };
+  };
+  const secondForm = (/** @type {import("@playwright/test").Page} */ own) =>
+    own.evaluate(() =>
+      document.body.insertAdjacentHTML("beforeend", __html('<form id="second-write" method="post" action="/smoke/written" data-patch><button id="second-go">Write</button></form>')),
+    );
+  // The first write's page is held while the second write's patch draws the count the server has
+  // (2); then the first's page comes, made before the second write (its count is 1), and draws its
+  // layout over the patch. The patch is in the record, so the next page is read whole and shows 2.
+  const overName = "a write's own page drawn over a later write's patch to the layout leaves that write's change for the next page to draw";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(overName, "without the Navigation API a link is a full load");
+  else {
+    const { before, edit } = patchedAndWhole(2);
+    const { own, seen } = await writtenPage(edit, before);
+    /** @type {() => void} */
+    let answerFirst = () => {};
+    const first = new Promise((resolve) => (answerFirst = () => resolve(undefined)));
+    seen.hold = (writes) => (writes === 1 ? first : undefined);
+    await secondForm(own);
+    await own.click("main form button");
+    await own.click("#second-go");
+    const patched = await brandBecomes(own, "Count 2");
+    answerFirst();
+    const drewOver = await brandBecomes(own, "Count 1");
+    const arrived = await toQuoted(own);
+    const shown = await shownOf(own);
+    check(
+      overName,
+      patched && drewOver && arrived && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ patched, drewOver, answers: seen.answers, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // The other order: the first write's own page draws (count 1), then the second write's patch,
+  // made after it, draws the count the server has (2). Nothing is older than what is drawn, so the
+  // next page reads <main> alone and the count stays 2.
+  const underName = "a write's patch to the layout drawn after another write's own page is current, and the next page reads <main> alone";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(underName, "without the Navigation API a link is a full load");
+  else {
+    const { before, edit } = patchedAndWhole(2);
+    const { own, seen } = await writtenPage(edit, before);
+    /** @type {() => void} */
+    let answerSecond = () => {};
+    const second = new Promise((resolve) => (answerSecond = () => resolve(undefined)));
+    seen.hold = (writes) => (writes === 2 ? second : undefined);
+    await secondForm(own);
+    await own.click("main form button");
+    await own.click("#second-go");
+    const drewFirst = await brandBecomes(own, "Count 1");
+    answerSecond();
+    const patched = await brandBecomes(own, "Count 2");
+    const arrived = await toQuoted(own);
+    const shown = await shownOf(own);
+    check(
+      underName,
+      drewFirst && patched && arrived && shown.brand === "Count 2" && shown.same && seen.asked.includes("GET /smoke/quoted nav"),
+      JSON.stringify({ drewFirst, patched, answers: seen.answers, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // A write whose own page's headers came, and whose body was then cut off (the page's `text()` of
+  // that answer rejects, as it does when the connection drops mid-body): the server applied it, and
+  // the page shows the failure in its layout. The page reading itself again keeps it shown; the
+  // next navigation reads the whole page, with what the write changed.
+  const cutBodyName = "a write whose own page is cut off after its headers is a failure in view: the page reading itself again keeps it shown, and the next page is read whole";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(cutBodyName, "without the Navigation API a link is a full load");
+  else {
+    const { own, seen } = await writtenPage(brand, undefined, "/smoke/written/again");
+    await own.evaluate(() => {
+      addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", ""));
+      // The write's answer only (the runtime's one POST here): its headers are in, its body fails.
+      const fetch_ = window.fetch;
+      let cut = false;
+      window.fetch = async function (input, init) {
+        const res = await fetch_.call(this, input, init);
+        if (!cut && init?.method === "POST") {
+          cut = true;
+          res.text = () => Promise.reject(new TypeError("network error"));
+        }
+        return res;
+      };
+    });
+    await own.click("main form button");
+    const failed = await own
+      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    const after = seen.asked.length;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && !seen.asked.slice(after).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
+    const again = seen.asked.slice(after).find((a) => a.startsWith("GET /smoke/written/again")) ?? null;
+    await own.waitForTimeout(500);
+    const kept = await own.evaluate(() => !!document.querySelector("header[data-failed]"));
+    const arrived = await toQuoted(own);
+    const shown = await shownOf(own);
+    check(
+      cutBodyName,
+      failed && seen.answers === 1 && again === "GET /smoke/written/again nav" && kept && arrived && shown.brand === "Watchlist, written" && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ failed, answers: seen.answers, again, kept, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // A write whose own page reads itself again (ReadAgain) draws, so the page reads itself whole
+  // from then on; then a second write is applied and its answer lost, and the page shows the
+  // failure in its layout. Reading itself again, the page reads <main> alone, which keeps the
+  // failure shown, where a whole page (whose count the second write changed) would draw it away.
+  const againName = "after a write's own page that reads itself again, a write that failed in view stays shown while the page reads itself again";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(againName, "without the Navigation API a link is a full load");
+  else {
+    const counted = (/** @type {string} */ body, /** @type {number} */ writes) => body.replace(">Watchlist</span>", `>Count ${writes}</span>`);
+    const { own, seen } = await writtenPage(counted, undefined, "/smoke/written/again");
+    await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
+    await own.click("main form button");
+    const drew = (await brandBecomes(own, "Count 1")) && (await writtenIn(own));
+    // Read whole while it reads itself again.
+    const start = seen.asked.length;
+    const until = Date.now() + 5000;
+    while (Date.now() < until && !seen.asked.slice(start).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
+    const wholeBefore = seen.asked.slice(start).find((a) => a.startsWith("GET /smoke/written/again")) ?? null;
+    seen.fail = true;
+    await own.click("main form button");
+    const failed = await own
+      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    const after = seen.asked.length;
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && !seen.asked.slice(after).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
+    const again = seen.asked.slice(after).find((a) => a.startsWith("GET /smoke/written/again")) ?? null;
+    await own.waitForTimeout(500);
+    const kept = await own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Count 1");
+    const arrived = await toQuoted(own);
+    const shown = await shownOf(own);
+    check(
+      againName,
+      drew &&
+        wholeBefore === "GET /smoke/written/again page" &&
+        failed &&
+        again === "GET /smoke/written/again nav" &&
+        kept &&
+        arrived &&
+        shown.brand === "Count 2" &&
+        seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ drew, wholeBefore, failed, again, kept, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // A write's own page that refuses it (422), with a field marked invalid below the fold: drawn in
+  // the same document at the same address, with no history entry added, focus on that field (in
+  // view), and what the user typed into a control of the layout kept as they left it, though the
+  // layout around it is drawn anew (the brand changed).
+  {
+    const find = (/** @type {string} */ body) => body.replace(/(<header\b[^>]*>)/, '$1<input id="smoke-find" name="find" aria-label="Find">');
+    const refusal = (/** @type {string} */ body, /** @type {number} */ _writes, /** @type {Record<string, string> | undefined} */ headers) =>
+      find(brand(headers ? body.replace("<button>Write</button>", `${"<br>".repeat(200)}<input name="price" aria-invalid="true" value="1.2"><button>Write</button>`) : body));
+    const { own, seen } = await writtenPage(refusal, find);
+    seen.status = 422;
+    const entries = await own.evaluate(() => history.length);
+    await own.fill("#smoke-find", "abcdef");
+    await own.evaluate(() => /** @type {HTMLInputElement} */ (document.getElementById("smoke-find")).setSelectionRange(2, 4));
+    await own.click("main form button");
+    const drawn = await own
+      .waitForFunction(() => document.activeElement?.getAttribute("name") === "price", null, { timeout: 5000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    const shown = await shownOf(own);
+    const state = await own.evaluate(() => {
+      const findIn = /** @type {HTMLInputElement | null} */ (document.getElementById("smoke-find"));
+      const field = document.activeElement?.getBoundingClientRect();
+      return {
+        entries: history.length,
+        find: findIn?.value,
+        caret: [findIn?.selectionStart, findIn?.selectionEnd],
+        inView: !!field && field.top >= 0 && field.bottom <= innerHeight,
+        scrolled: scrollY > 0,
+      };
+    });
+    check(
+      "a write's own page that refuses it keeps the document, address and history, focuses the field it marked, in view, and keeps what the user typed in the layout",
+      drawn &&
+        shown.brand === "Watchlist, written" &&
+        shown.same &&
+        shown.path === "/smoke/written" &&
+        state.entries === entries &&
+        state.find === "abcdef" &&
+        state.caret[0] === 2 &&
+        state.caret[1] === 4 &&
+        state.inView &&
+        state.scrolled,
+      JSON.stringify({ drawn, shown, entries, state }),
     );
     await own.context().close();
   }
