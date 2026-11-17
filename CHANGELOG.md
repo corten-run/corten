@@ -50,6 +50,10 @@ Corten is pre-1.0, so any minor version may change the API.
   placed with `raw` writes
   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
 
+- `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
+  Trusted Types enforcement would reject. The scripts guide shows how to read a part again
+  with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
+
 - Apply supported lean settings to catalog-page competitors as well as Corten:
   reduce optional access logging, compression and timer work where supported,
   record the exact profile in container evidence and reports, and retain full
