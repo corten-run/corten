@@ -2,6 +2,7 @@
 // corten/keys: shortcut(), for a page-wide shortcut's handler. A module of its own (built to
 // js/dist/keys.js), served only to apps whose scripts import it and preloaded only with them, so a
 // page without shortcuts does not pay for it.
+const own = Element.prototype;
 
 /** Keys that move within a field or a widget. */
 const MOVE = /^(Arrow|Home$|End$|Page)/;
@@ -63,14 +64,14 @@ export function shortcut(event, scope) {
   const target = path.find((node) => node instanceof Element);
   const page = !target || target === document.body || target === document.documentElement;
   if (scope && !page && !path.includes(scope)) return null;
-  const layer = /** @type {Element | undefined} */ (path.find((node) => node instanceof Element && node.matches(LAYER))) ?? document.querySelector("dialog:modal");
-  if (layer && !(scope && layer.contains(scope))) return null;
+  const layer = /** @type {Element | undefined} */ (path.find((node) => node instanceof Element && own.matches.call(node, LAYER))) ?? document.querySelector("dialog:modal");
+  if (layer && !(scope && Node.prototype.contains.call(layer, scope))) return null;
   if (!page && target) {
-    const field = target instanceof HTMLInputElement ? !NOT_TEXT.test(target.type) : (target instanceof HTMLElement && target.isContentEditable) || target.matches(TEXT);
+    const field = target instanceof HTMLInputElement ? !NOT_TEXT.test(target.type) : (target instanceof HTMLElement && Reflect.get(HTMLElement.prototype, "isContentEditable", target)) || own.matches.call(target, TEXT);
     if (field && (!control || MOVE.test(raw) || EDIT.test(raw))) return null;
-    if ((raw === " " || raw === "Enter") && target.closest(PRESSED)) return null;
-    if (MOVE.test(raw) && target.closest(MOVES)) return null;
-    if (char && !control && target.closest(TYPEAHEAD)) return null;
+    if ((raw === " " || raw === "Enter") && own.closest.call(target, PRESSED)) return null;
+    if (MOVE.test(raw) && own.closest.call(target, MOVES)) return null;
+    if (char && !control && own.closest.call(target, TYPEAHEAD)) return null;
   }
   const letter = char && raw.toLowerCase() !== raw.toUpperCase();
   const key = raw === " " ? "Space" : raw === "+" ? "Plus" : letter ? (event.shiftKey ? raw.toUpperCase() : raw.toLowerCase()) : raw;

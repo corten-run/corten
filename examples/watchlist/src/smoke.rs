@@ -5,8 +5,10 @@
 //! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
 //! `<details>` drawn closed that a form outside each asks for again, a screen whose data a
 //! script reads (`corten/read`), a screen whose scope form's answer is the page at the address
-//! it asks for (`data-address`), with an editor beside a filter of that kind, and a form whose
-//! fields a handler is given as its controls.
+//! it asks for (`data-address`), with an editor beside a filter of that kind, a form whose fields
+//! a handler is given as its controls, and view classes (`corten/views`) whose holes are in a
+//! form, past one and a form's whole text, beside controls named after the members their paths
+//! read.
 use corten::{
     Error, LiveResponse,
     http::{IntoResponse, Request, Response, StatusCode, header},
@@ -104,10 +106,16 @@ pub mod url {
         #[route(query)]
         pub q: super::ScopeQuery,
     }
+
+    /// Views whose holes are in a form, past one and a form's whole text, with controls outside
+    /// each form, joined to it by `form=`, named `firstElementChild`, `nextElementSibling` and
+    /// `textContent` (#1531).
+    #[route("/smoke/views", get = views_page)]
+    pub struct ViewsPage;
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm, Reader];
+pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm, Reader, FormNested, PastForm, FormText];
 
 /// The text the handler is given, as itself and in a JSON array. `data-on` is single-quoted, so it
 /// is written with `&#39;`, `&amp;` and `&lt;` and its JSON's quotes as they are.
@@ -637,6 +645,63 @@ async fn reading(req: Req, Params(at): Params<url::Reading>) -> HtmlResult<corte
         );
     }
     Ok(res)
+}
+
+#[derive(Id)]
+struct NestedFormId;
+
+#[derive(Id)]
+struct PastFormId;
+
+#[derive(Id)]
+struct TextFormId;
+
+/// A hole two elements into a form: its class reads the form's first child.
+#[component(view)]
+fn FormNested<'a>(label: &'a str) -> impl Render {
+    html! {
+        <form id={NestedFormId}>
+            <p><span>{label}</span></p>
+        </form>
+    }
+}
+
+/// A hole after a form: its class steps from the form to the element after it.
+#[component(view)]
+fn PastForm<'a>(note: &'a str) -> impl Render {
+    html! {
+        <div>
+            <form id={PastFormId}></form>
+            <p>{note}</p>
+        </div>
+    }
+}
+
+/// A form whose whole text is the hole, drawn empty.
+#[component(view)]
+fn FormText<'a>(text: &'a str) -> impl Render {
+    html! { <form id={TextFormId}>{text}</form> }
+}
+
+/// The three views, and outside them a control joined to each form for every member a view's
+/// path reads: each is the form's member of that name.
+async fn views_page(req: Req) -> HtmlResult {
+    req.page(html! {
+        <Layout req={&req} title="Views" viewer={None} head="">
+            <FormNested label="Nested" />
+            <PastForm note="Past" />
+            <FormText text="" />
+            <input type="hidden" name="firstElementChild" value="kept" form={NestedFormId}>
+            <input type="hidden" name="nextElementSibling" value="kept" form={NestedFormId}>
+            <input type="hidden" name="textContent" value="kept" form={NestedFormId}>
+            <input type="hidden" name="firstElementChild" value="kept" form={PastFormId}>
+            <input type="hidden" name="nextElementSibling" value="kept" form={PastFormId}>
+            <input type="hidden" name="textContent" value="kept" form={PastFormId}>
+            <input type="hidden" name="firstElementChild" value="kept" form={TextFormId}>
+            <input type="hidden" name="nextElementSibling" value="kept" form={TextFormId}>
+            <input type="hidden" name="textContent" value="kept" form={TextFormId}>
+        </Layout>
+    })
 }
 
 /// One large event and then nothing: the browser must show it without more of the stream coming.

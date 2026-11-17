@@ -308,14 +308,23 @@ impl Kind {
 }
 
 /// Where a parameter is shown: an element's whole text, or one attribute's whole value. `path` is
-/// the element's place under the root, as child-element indexes.
+/// the way to the element from the root, one step to a first child or a next sibling at a time.
 struct Hole {
     param: usize,
-    path: Vec<usize>,
+    path: Vec<Step>,
     attr: Option<String>,
     /// The element's tag: an `<input>`'s `value` and `checked` are what it shows now, which
     /// the user changes, so a view reads and writes them as properties.
     tag: String,
+}
+
+/// One step of a hole's path: to the first child element (`firstElementChild`) or to the next
+/// sibling element (`nextElementSibling`), and whether the element it is taken from is a
+/// `<form>`, whose controls' names shadow its members.
+#[derive(Clone, Copy)]
+struct Step {
+    next: bool,
+    from_form: bool,
 }
 
 impl Hole {
@@ -404,15 +413,29 @@ pub fn view_of(body: &Group, class: &str, params: &[(String, Vec<TokenTree>)], s
         Some(None) => return err(span, "a view's key={..} is one of its parameters, alone (key={id})"),
     };
 
-    let access = |base: &str, path: &[usize]| {
+    // A step from a `<form>` goes through Element's own getter: a control named
+    // `firstElementChild` or `nextElementSibling` (inside the form or joined to it by `form=`) is
+    // the form's member of that name, as in the runtime. No other element has its members
+    // shadowed, so every other step keeps the property, and a view with no form costs nothing.
+    let access = |base: &str, path: &[Step]| {
         let mut s = base.to_string();
-        for &k in path {
-            s.push_str(".firstElementChild");
-            for _ in 0..k {
-                s.push_str(".nextElementSibling");
-            }
+        for step in path {
+            let member = if step.next { "nextElementSibling" } else { "firstElementChild" };
+            s = if step.from_form {
+                format!("Reflect.get(Element.prototype, \"{member}\", {s})")
+            } else {
+                format!("{s}.{member}")
+            };
         }
         s
+    };
+    // A form's whole text is read through Node's own `textContent`, for the same reason.
+    let text_of = |at: &str, tag: &str| {
+        if tag == "form" {
+            format!("Reflect.get(Node.prototype, \"textContent\", {at})")
+        } else {
+            format!("{at}.textContent")
+        }
     };
     // An attribute method on a `<form>` goes through Element's own: a form has its controls'
     // names over its members (`<input name="hasAttribute">`), as in the runtime. No other element
@@ -442,8 +465,8 @@ pub fn view_of(body: &Group, class: &str, params: &[(String, Vec<TokenTree>)], s
         let get = match (first.live(kind), &first.attr, kind) {
             (Some(prop), _, Kind::Number) => format!("Number({at}.{prop})"),
             (Some(prop), ..) => format!("{at}.{prop}"),
-            (None, None, Kind::Number) => format!("Number({at}.textContent)"),
-            (None, None, _) => format!("{at}.textContent"),
+            (None, None, Kind::Number) => format!("Number({})", text_of(&at, &first.tag)),
+            (None, None, _) => text_of(&at, &first.tag),
             (None, Some(attr), Kind::Number) => {
                 format!("Number({})", attr_call(&at, &first.tag, "getAttribute", &format!("{attr:?}")))
             }
@@ -530,7 +553,7 @@ pub struct View {
 
 /// The holes under `node` (an element at `path`): its attributes whose value is a parameter, its
 /// text when that is a parameter alone, and those of its child elements whose place is fixed.
-fn find_holes(node: &Node, path: &mut Vec<usize>, names: &[&str], holes: &mut Vec<Hole>) {
+fn find_holes(node: &Node, path: &mut Vec<Step>, names: &[&str], holes: &mut Vec<Hole>) {
     let Node::Element { name, attrs, children } = node else { return };
     for attr in attrs {
         if let Attr::Expr(attr, expr) = attr {
@@ -546,14 +569,17 @@ fn find_holes(node: &Node, path: &mut Vec<usize>, names: &[&str], holes: &mut Ve
             holes.push(Hole { param, path: path.clone(), attr: None, tag: name.clone() });
         }
     }
-    let mut index = 0;
+    // The tags of the child elements before the one looked at: its path steps past each.
+    let mut before: Vec<&str> = Vec::new();
     for child in children {
         match child {
-            Node::Element { .. } => {
-                path.push(index);
+            Node::Element { name: tag, .. } => {
+                let depth = path.len();
+                path.push(Step { next: false, from_form: name == "form" });
+                path.extend(before.iter().map(|&t| Step { next: true, from_form: t == "form" }));
                 find_holes(child, path, names, holes);
-                path.pop();
-                index += 1;
+                path.truncate(depth);
+                before.push(tag);
             }
             Node::Text(_) | Node::Let(_) => {}
             // Anything else may print elements, so the ones after it have no fixed place.
