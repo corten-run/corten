@@ -483,6 +483,58 @@
 //! # fn main() { let _ = url::router; }
 //! ```
 //!
+//! Nor does a `Level` imported from another module than the generated declarations
+//! (`foreign_feed.js`: `/** @import { Level } from "./local_feed.js" */`):
+//!
+#![cfg_attr(feature = "feed", doc = "```compile_fail")]
+#![cfg_attr(not(feature = "feed"), doc = "```ignore")]
+//! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
+//!
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String, qty: u32 }
+//!
+//! #[corten::routes(state = Feed<Level>)]
+//! pub mod url {
+//!     #[route("/feed/levels", get = levels, rows = Level)]
+//!     pub struct Levels;
+//! }
+//!
+//! async fn levels(State(feed): State<Feed<Level>>) -> FeedResponse<Level> { feed.snapshot() }
+//!
+//! #[component(js)]
+//! pub fn ForeignFeed() -> impl Render {
+//!     let body = refs();
+//!     html! { <table><tbody ref={body} on:connect={js::follow(body, url::Levels, signal)}></tbody></table> }
+//! }
+//! # fn main() { let _ = url::router; }
+//! ```
+//!
+//! Nor does a `Level` the script never declares (`undeclared_feed.js`: `FeedUrl<Level>` with no
+//! typedef or import of `Level`):
+//!
+#![cfg_attr(feature = "feed", doc = "```compile_fail")]
+#![cfg_attr(not(feature = "feed"), doc = "```ignore")]
+//! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
+//!
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String, qty: u32 }
+//!
+//! #[corten::routes(state = Feed<Level>)]
+//! pub mod url {
+//!     #[route("/feed/levels", get = levels, rows = Level)]
+//!     pub struct Levels;
+//! }
+//!
+//! async fn levels(State(feed): State<Feed<Level>>) -> FeedResponse<Level> { feed.snapshot() }
+//!
+//! #[component(js)]
+//! pub fn UndeclaredFeed() -> impl Render {
+//!     let body = refs();
+//!     html! { <table><tbody ref={body} on:connect={js::follow(body, url::Levels, signal)}></tbody></table> }
+//! }
+//! # fn main() { let _ = url::router; }
+//! ```
+//!
 //! A screen's URL carries the screen's data to the script the same way. The route names it
 //! (`data = SetListing`), its `get` handler answers with it (`HtmlResult<Screen<SetListing>>`,
 //! which only `req.screen` makes, given a `SetListing`), and the handler parameter that takes the
