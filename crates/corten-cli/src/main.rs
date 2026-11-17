@@ -52,9 +52,10 @@ Usage:
                    is told which tokens the components read that it lacks; otherwise (or
                    with --kit-theme) it writes the kit's theme tokens (tokens/ui.*.json,
                    light and dark) and the page's colors in static/style.css.
-  corten ui add <name>.. [--force] | corten ui add --all [--force]
+  corten ui add <name>.. [--force | --merge] | corten ui add --all [--force | --merge]
                    Copy kit components into src/ui/, where they are yours to change, and
-                   list them in src/ui.rs. Refuses to replace a file without --force.
+                   list them in src/ui.rs. Refuses to replace a file without --force, which
+                   replaces it, or --merge, which takes the kit's changes and keeps your edits.
   corten ui list   The kit's components.
   corten ui diff [name]..
                    How each copied component differs from this command's kit: whether you
@@ -135,7 +136,7 @@ fn main() -> ExitCode {
 /// Reuse the command's sections of the full help, before any app inspection or work.
 fn command_help(args: &[String]) -> Option<String> {
     let command = args.first()?;
-    if !asks_help(&args[1..]) {
+    if !asks_help(command, &args[1..]) {
         return None;
     }
     let name = match command.as_str() {
@@ -158,14 +159,21 @@ fn command_help(args: &[String]) -> Option<String> {
     )
 }
 
-/// Whether `--help` or `-h` stands in a flag position of a command's arguments: before `--`, and
-/// not as the value of an option that takes one (`--corten-path --help` names a directory).
-fn asks_help(args: &[String]) -> bool {
-    let mut args = args.iter().take_while(|arg| arg.as_str() != "--");
+/// Whether `--help` or `-h` stands in a flag position of `command`'s arguments: before a `--`
+/// that is itself in a flag position, and not as the value of an option of that command that
+/// takes one (`new --corten-path --help` names a directory, `ui add --port --help` asks for help).
+fn asks_help(command: &str, args: &[String]) -> bool {
+    let takes_value: &[&str] = match command {
+        "new" => &["--name", "--corten-path"],
+        "dev" => &["--port"],
+        _ => &[],
+    };
+    let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => return true,
-            "--name" | "--corten-path" | "--port" => {
+            "--" => return false,
+            option if takes_value.contains(&option) => {
                 args.next();
             }
             _ => {}
@@ -266,12 +274,15 @@ mod tests {
     #[test]
     fn help_is_asked_only_in_a_flag_position() {
         let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
-        assert!(asks_help(&args(&["app", "--help"])));
-        assert!(asks_help(&args(&["app", "--name", "shop", "-h"])));
-        assert!(!asks_help(&args(&["app", "--corten-path", "--help"])));
-        assert!(!asks_help(&args(&["app", "--name", "-h"])));
-        assert!(!asks_help(&args(&["--port", "--help"])));
-        assert!(!asks_help(&args(&["app", "--", "--help"])));
+        assert!(asks_help("new", &args(&["app", "--help"])));
+        assert!(asks_help("new", &args(&["app", "--name", "shop", "-h"])));
+        assert!(!asks_help("new", &args(&["app", "--corten-path", "--help"])));
+        assert!(!asks_help("new", &args(&["app", "--name", "-h"])));
+        assert!(!asks_help("dev", &args(&["--port", "--help"])));
+        assert!(!asks_help("new", &args(&["app", "--", "--help"])));
+        // An option names a value only for the command that has it, and a `--` it takes is a value.
+        assert!(asks_help("ui", &args(&["add", "--all", "--port", "--help"])));
+        assert!(asks_help("new", &args(&["shop", "--corten-path", "--", "--help"])));
     }
 
     #[test]
