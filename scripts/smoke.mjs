@@ -6281,6 +6281,9 @@ async function run(browser) {
       const takenAway = (await panelNote()) === null;
       await scope.getByRole("link", { name: "Elsewhere", exact: true }).click();
       await scope.waitForFunction(() => location.pathname === "/smoke/scope-elsewhere" && !document.querySelector("input[name=note]"), undefined, { timeout: 5000 }).catch(() => {});
+      // The pointer off the link it clicked, which Back draws under it again: a link hovered there
+      // as the screen changes is prefetched, a request the step's list would show.
+      await scope.mouse.move(1200, 700);
       const insideWeek = await traverse("back");
       asked.length = 0;
       const inside = { takenAway, week: insideWeek, at: await traverse("back"), note: await note(), panel: await panelNote(), asked: asked.splice(0) };

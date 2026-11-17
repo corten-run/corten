@@ -466,7 +466,9 @@ async fn scope_edit_save(req: Req, Form(form): Form<TitleForm>) -> HtmlResult {
         }
     };
     match req.mode {
-        Mode::Action => req.patch_with_status(status, html! { <ScopeEditor revision={REVISION.load(Ordering::Relaxed)} said={said} /> }),
+        Mode::Action => {
+            req.patch_with_status(status, html! { <ScopeEditor revision={REVISION.load(Ordering::Relaxed)} said={said} /> })
+        }
         _ if status.is_success() => req.redirect(&url::ScopeEdit::default()),
         _ => scope_edit_page(&req, "all", said, status),
     }

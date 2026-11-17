@@ -5340,9 +5340,9 @@ rules something out.
     did, the error the mark is there to end, where a full load costs bytes (README conflict order 1
     over 2).
 
-    What it costs, at this Choice's last build: the runtime every page loads is 308 bytes larger
-    raw (43,620 to 43,928), 155 with gzip (15,407 to 15,562) and 129 with brotli (13,925 to
-    14,054), paid once a release by every user. Each hook's share was measured by replacing its
+    What it costs, at this Choice's last build: the runtime every page loads is 314 bytes larger
+    raw (43,678 to 43,992), 150 with gzip (15,568 to 15,718) and 133 with brotli (14,060 to
+    14,193), paid once a release by every user. Each hook's share was measured by replacing its
     code in the minified build with what that code is without it (the hook's statement removed, or
     the call it wraps called directly) and compressing again: alone, the runtime's functions and
     state the module uses take 32 bytes of gzip, the traversal hook 20, handing the submit over 20,
@@ -5351,10 +5351,12 @@ rules something out.
     name 5. Gzip's shares are not additive: all of them taken out together save 128 bytes, leaving
     27 over main's runtime, which are the parameters the hooks add (`apply`'s check, `send`'s
     answers, where a waiting submit was pressed) and the minifier's names, a character longer where
-    the runtime has more of them. None of the hooks can leave, being where the runtime hands the
+    the runtime has more of them. Handing the module `sendAgain` too, for a GET that waited for
+    another marked form's write, added 8 bytes raw and 4 with gzip to the build it was measured
+    against. None of the hooks can leave, being where the runtime hands the
     module what only it sees (the submit, a submit that waited, the traversal, the answer, a page
-    or patch it inserts) or where the module calls in. The module is 3,439 bytes raw, 1,611 with
-    gzip and 1,423 with brotli, fetched once (its URL is versioned) by a page that draws a marked
+    or patch it inserts) or where the module calls in. The module is 3,923 bytes raw, 1,844 with
+    gzip and 1,631 with brotli, fetched once (its URL is versioned) by a page that draws a marked
     form, whose head carries its `<script type="module">` tag, and by no other page. A submit reads
     one attribute; a marked write listens for its form's error, a marked GET cancels the other
     marked GETs on their way and, behind another's write, waits for its answer, keeps what was typed
