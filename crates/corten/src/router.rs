@@ -684,6 +684,37 @@ impl Router {
         Router { inner: Inner::Routes(Arc::new(dispatch)), edge: true }
     }
 
+    /// A logging app with tower layers carries its matched name out through those layers.
+    pub(crate) fn record_route(self, names: Names) -> Self {
+        let inner = Router { edge: false, ..self };
+        Router { inner: Inner::Layered(Arc::new(Recording { inner, names })), edge: true }
+    }
+
+    /// The names an access line gives the routes: what each is written as, sharing the router's
+    /// copy. `foreign` says which routes an API's prefix may take a request from
+    /// ([`Names::of`]); `scopes` decides it for each request.
+    pub(crate) fn access_names(&self, scopes: Arc<crate::app::Scopes>, foreign: impl Fn(&str) -> bool) -> Names {
+        let Inner::Routes(dispatch) = &self.inner else { unreachable!("called before app layers") };
+        let mut paths = matchit::Router::new();
+        for entry in &dispatch.routes {
+            let named = AccessName {
+                route: entry.written.map_or_else(|| entry.path.clone(), Arc::from),
+                pattern: entry.path.clone(),
+                written: entry.written,
+                foreign: foreign(entry.path.as_ref()),
+            };
+            paths.insert(entry.path.as_ref(), named).expect("router paths were already validated");
+        }
+        Names { paths, scopes }
+    }
+
+    /// Outside the final HTTP fix as well as every app layer. Reuses the optional outer-service
+    /// path, leaving a disabled app's future and its response untouched. `names` is `None` when
+    /// [`Router::record_route`] names the route inside the app's layers.
+    pub(crate) fn access_log(self, names: Option<Names>) -> Self {
+        Router { inner: Inner::Layered(Arc::new(AccessRouter { inner: self, names })), edge: false }
+    }
+
     /// This router inside `layer` ([`crate::App::layer`]).
     pub(crate) fn layer<L>(self, layer: L) -> Router
     where
@@ -857,6 +888,74 @@ impl tower_service::Service<Request> for Router {
     #[inline]
     fn call(&mut self, req: Request) -> RouterFuture {
         self.answer(req)
+    }
+}
+
+/// The route an access line names for a request: the one that answers it as its own. An
+/// enabled-only index of its own keeps the normal matcher and dispatch's call sites as they are.
+pub(crate) struct Names {
+    paths: matchit::Router<AccessName>,
+    scopes: Arc<crate::app::Scopes>,
+}
+
+struct AccessName {
+    /// As its routes write it (`/feeds/{name}.xml`), shared with the router's copy where that is it.
+    route: Arc<str>,
+    /// As the router holds it (`/feeds/{name}`), which an API's prefix is compared with.
+    pattern: Arc<str>,
+    written: Option<&'static str>,
+    /// Whether an API's prefix may take a request it matches ([`crate::app::Scopes::foreign`]).
+    foreign: bool,
+}
+
+impl Names {
+    /// Not the route a segment without its written suffix matched, which dispatch answers with
+    /// the app's `404`, nor one outside an API whose prefix holds the path, which the API answers
+    /// as an unknown URL of its own. Each is the decision [`Dispatch::answer`] and the stages make.
+    fn of(&self, path: &str) -> Option<Arc<str>> {
+        let named = self.paths.at(path).ok()?.value;
+        if named.written.is_some_and(|written| !crate::route::routes_path(written, path)) {
+            return None;
+        }
+        if named.foreign && self.scopes.foreign(&named.pattern, path) {
+            return None;
+        }
+        Some(named.route.clone())
+    }
+}
+
+struct Recording {
+    inner: Router,
+    names: Names,
+}
+
+impl Outer for Recording {
+    fn call(&self, mut req: Request) -> Answering {
+        if let Some(shared) = req.extensions_mut().remove::<crate::access::Shared>() {
+            shared.set(self.names.of(req.uri().path()));
+        }
+        let answering = self.inner.answer(req);
+        Box::pin(async move {
+            let Ok(res) = answering.await;
+            res
+        })
+    }
+}
+
+/// Logging alone, without cloning a service or retaining a URI for each request.
+struct AccessRouter {
+    inner: Router,
+    names: Option<Names>,
+}
+
+impl Outer for AccessRouter {
+    fn call(&self, req: Request) -> Answering {
+        crate::access::answer(
+            req,
+            self.names.is_none(),
+            |req| self.names.as_ref()?.of(req.uri().path()),
+            |req| self.inner.answer(req),
+        )
     }
 }
 

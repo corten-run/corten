@@ -32,6 +32,7 @@ not remove that requirement.
 | Request bodies | `Json`, `Form`, `String` and `Bytes` read at most 2 MiB, and an `Upload` keeps as much unless its handler sets `upload.limit(bytes)`; over it, a 413 | `.body_limit(bytes)`; `Area::body_limit`, `Api::body_limit` (the innermost prefix that sets one decides); a proxy in front sizes its own body limit from it (nginx's `client_max_body_size`, [Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
+| Access logs | off, also in the app `corten new` writes | `.access_log(true)`: one `INFO` event per response, target `corten::access`, after every stage and app layer, at a measured cost ([below](#access-logs)) |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page; `.network_only("/auth/")` for paths whose answers the worker never caches or replaces with the offline page (sign-in, checkout, an OAuth callback), where a GET navigation still reaches the server once: the worker answers it with the request navigation preload already sent, or leaves it to a browser without navigation preload ([design Choice 56](../design.md#choice-network-only-preload)) |
 | A route outside all of the above | none: every route gets every default here | `unstaged` on one route's `#[route(..)]`: no same-origin check, middleware, security headers, cache rule, deadline or error page, for an answer the same for everyone who can reach it; the host check stays ([below](#a-route-outside-the-stages)) |
@@ -171,6 +172,54 @@ caller its handler read (if any), the deploy and the layout that rendered it (wh
 document is written), and when a navigation or a form answer arrives with a different key
 (sign-in, sign-out, a new release, a page in another layout), the runtime loads the whole
 document, so the layout is never stale.
+
+## Access logs
+
+Set `.access_log(true)` on `App` to write one event for each response through the tracing
+subscriber the app already uses. Under `serve`, feature `log` installs Corten's subscriber when
+none is set; `router()` and `test()` do not install one. No new log format or dependency is
+needed, and the subscriber's control-character escaping stays in force. It is off unless the app
+sets it, in the app `corten new` writes too: many deployments already log each request at their
+proxy, and a line costs every request (below).
+
+```rust,ignore
+let app = App::new(url::router()).access_log(true); // one line per response, target corten::access
+```
+
+The event is `INFO` with target `corten::access`. Its fields are `method`, `path` without the
+query, `route` when a route answered (its pattern, such as `/items/{id}`), `status`, `bytes` and
+`duration`. A route that matched and refused the request is named (its `400`, `405` or `500`);
+an unknown URL's `404` names none, including a path an API's prefix holds that a route outside
+the API matched, and a segment without the text its route writes after a parameter
+(`/feeds/news.rss` for `/feeds/{name}.xml`). A tower layer that sends one request's clones to
+several routes is logged with the last one matched. The status and bytes describe the final
+response, after the host and cross-site
+checks, the error page, a conditional `304`, compression, the app's tower layers and the router's
+final HTTP handling (`HEAD` has zero body bytes, as do a `204`, a `304` and a `2xx` to
+`CONNECT`, which opens a tunnel rather than sending content). `duration` is the elapsed time until that
+response is ready, including the error page's waits, not the time to transmit the body.
+`bytes` is the final body's known size, or the string `"stream"` when its size is unknown;
+logging never consumes a stream or waits for it to close. A connection rejected before it
+reaches the router, such as a head too large for the HTTP parser, has no access event.
+A final `100` or `103` from a handler or layer, which the HTTP/1 server cannot send as a final
+answer and replaces with an empty `500` before closing the connection, is logged as that `500`;
+a `101` is logged as itself.
+A response future dropped before its response is ready (a connection that ended, a timeout of
+the app's own around the router) writes no line, and none is made up for it; once a response is
+ready its line is written, and a later disconnect or a stream that fails does not change it.
+
+An app with its own subscriber can filter or route `corten::access` as it does other tracing
+targets, including on the line's fields (`corten::access[{status}]=info`). Filtering the target out
+skips the line's clock reads and copies, but keeps the switch's wrapper; leaving the switch off
+removes it.
+
+What a line costs, measured in instructions per request (release build, Corten's subscriber
+writing to a sink, [design Choice 61](../design.md#choice-access-logs)): a parameter route goes
+from about 17,700 to 27,300 (+54%), and an unknown URL's `404` from about 19,100 to 27,300
+(+43%). About 1,400 of that is preparing the event; the rest is formatting the line. With the
+switch off a request costs what it did before the switch existed, within a dozen instructions.
+Writing the line to stdout is not counted: its system call, and any wait when stdout is slow,
+come on top.
 
 ## Host names
 
@@ -569,7 +618,7 @@ What it sends is what the app's own pages send, typed the same way:
    no `GET`, gets a 500 that says why ([Where a form posts](requests-and-forms.md#where-a-form-posts)).
    `Mode::Action` sends `Prefer: corten-draws=whole` as the runtime does, so a write that answers
    its own page (`req.page(..)`) is answered with the whole document, layout and layout reads
-   included ([Choice 61](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
+   included ([Choice 62](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
    that, which is answered with `<main>`, add
    `.header(HeaderName::from_static("prefer"), "corten-draws=main")` (`corten::http::HeaderName`):
    a preference the test sets is sent first, and the first is the one read.
@@ -912,6 +961,10 @@ before it (a route that says `unstaged` goes through none;
    `304 Not Modified` in place of the body when the client already has it
    ([design Limit 21](../design.md#limit-etag)), then compression. A middleware sees the `200` with the
    whole body, also when the client gets the `304`.
+
+Access logging (`App::access_log`) is outside this order, and outside `App::layer`: it sees the
+finished response, including refusals that never reached a middleware and an error page or
+`304` that replaced what the middleware saw. An `unstaged` route is logged too when enabled.
 
 A step of the app's own is a `Middleware`, given once to `App::middleware`; several are a tuple,
 run in order:

@@ -199,6 +199,17 @@ Corten is pre-1.0, so any minor version may change the API.
   controls; every page's runtime is 66 bytes larger with gzip
   ([#1408 A script cannot be handed a form field as a typed element: it looks the control up by a name string the compiler does not check](https://github.com/corten-run/corten/issues/1408)).
 
+- `App::access_log(true)` writes one tracing `INFO` event with target `corten::access` after
+  every stage and app layer, with method, path without the query, the route that answered when
+  one did, final status (a final `100` or `103`, which the HTTP/1 server answers as an empty
+  `500`, as that `500`), body bytes (or `"stream"`; zero for a `2xx` to `CONNECT`) and duration
+  to response readiness; a request dropped before its answer is ready writes none, and a
+  subscriber may filter it on its fields. Off
+  unless set, also in the app `corten new` writes. Uses the existing subscriber and escaping,
+  which now copies text between control characters a run at a time. Measured: +9,619
+  instructions on a parameter route (+54%), +8,173 on a `404`, with the line written to a sink,
+  not stdout; off, within 12 of before.
+
 - Clear only an already stopped, masked firmware unit's failed state during
   fresh benchmark setup, then recheck the mask, inactive state and service PID.
   Record fixed setup stages, source lines and original failure codes without
@@ -1043,7 +1054,7 @@ Corten is pre-1.0, so any minor version may change the API.
   without; before, only `<main>` was swapped and the count kept its value from before the write. A
   `GET` form's page is still `<main>` alone, and a patch still fills no layout read: a write whose
   answer must change one answers its page
-  ([design Choice 61](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
+  ([design Choice 62](docs/design.md#choice-write-own-page-whole)). The reads start once the handler
   has answered with the page, so they see what the write did, and a write that answers anything
   else starts none. The runtime says it draws the page whole with an HTTP preference (RFC 7240),
   `Prefer: corten-draws=whole`; a runtime without it (a tab open across the deploy) gets `<main>`
