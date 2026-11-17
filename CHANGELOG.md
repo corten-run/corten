@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Correct the grouped browser documentation to describe the current replayed
+  tool/lock identity handoff. Missing historical identities and independent OS
+  proof still block qualification; the documentation grants no readiness.
+
 - The catalog stand-in upstream reuses UTF-8 record bytes and handles canonical
   reads synchronously, retaining exact controls and read counts. Measured apps
   still fetch, parse and render or serialize per request; apparatus capacity

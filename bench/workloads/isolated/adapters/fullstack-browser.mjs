@@ -54,8 +54,8 @@ function hostSubject(binding, summary, native, block) {
     assert.ok(object(p.terminal)); assert.equal(p.terminal.id, p.id); assert.equal(p.terminal.imageId, p.imageId);
     if (p.window !== null) window(p.window, subject.executionWindow);
   }
-  // The caller currently forwards node/browser but not the independently replayed
-  // lock identity. Do not reconstruct that missing handoff from saved summaries.
+  // Require the independently replayed lock handoff. A historical subject missing
+  // it must not borrow the identity from saved source declarations.
   const tools = subject.toolIdentities;
   assert.ok(object(tools));
   keys(tools, Object.hasOwn(tools, "lockSha256") ? ["node", "browser", "lockSha256"] : ["node", "browser"]);
