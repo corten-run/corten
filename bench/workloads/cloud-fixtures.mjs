@@ -49,9 +49,10 @@ export function harness(t, flags = {}) {
   t.after(() => { assert.ok(temp.startsWith(join(tmpdir(), "groups-cloud-test-"))); rmSync(temp, { recursive: true, force: true }); });
   const repo = join(temp, "repo"), base = join(temp, "control"), local = join(base, "groups-r21"), statePath = join(local, "state.json");
   mkdirSync(repo); mkdirSync(base);
-  let s = { ...reservation({ round: "r21", commit, token: "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
-    status: "running", id: "123", ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };
-  const d = () => ({ id: 123, name: s.name, tags: [...tags, s.tag], size_slug: host.size, region: { slug: host.region },
+  const hostId = flags.hostId ?? "123";
+  let s = { ...reservation({ round: "r21", commit, token: flags.token ?? "0123456789abcdef" }), createIntentAt: new Date().toISOString(),
+    status: "running", id: hostId, ip: "192.0.2.10", provider: { accountId, context }, fullGroupQualified: false };
+  const d = () => ({ id: Number(hostId), name: s.name, tags: [...tags, s.tag], size_slug: host.size, region: { slug: host.region },
     networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } });
   const calls = []; let droplets = [], creates = 0, deletes = 0, units = 0, downloads = 0, inspections = 0;
   let bytes = archive([...metadata(), { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]);
@@ -87,7 +88,7 @@ export function harness(t, flags = {}) {
           : good(flags.createStdout ?? JSON.stringify([{ id: flags.createReturnedId ?? 123 }]));
       }
       if (args[2] === "delete") {
-        deletes++; assert.equal(args[3], "123"); const saved = JSON.parse(readFileSync(statePath));
+        deletes++; assert.equal(args[3], hostId); const saved = JSON.parse(readFileSync(statePath));
         assert.ok(saved.deletionIntentAt && (saved.retirement?.kind === "unused" ? saved.retirement.evidenceSha256
           : saved.archiveSha256 && saved.evidenceSha256)); assert.equal(saved.fullGroupQualified, false);
         if (flags.deleteError) throw new Error("fake deletion error");

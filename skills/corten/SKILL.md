@@ -105,7 +105,7 @@ Read only the recipe the task needs. For concepts, read the guides in the Corten
    startup when an app with a stylesheet has none).
 3. Run `corten fmt` (`cargo fmt`, then the markup in `html!`), then `corten check`: `corten fmt
    --check` (both), that each component with a stylesheet, script or view is in a list in its
-   crate or a member that depends on it (it names any that is not), clippy with warnings denied, the tests (which rewrite `types/app.d.ts`; a stale
+   crate or a member that depends on it (it names any that is not), clippy with warnings denied, a build of every target (`cargo build --all-targets`, which checks a route only `main` mounts), the tests (which rewrite `types/app.d.ts`; a stale
    one fails once, then passes), and `tsc` over the scripts in `src/` and `static/`. The compiler checks each `js::` call against the script's JSDoc; `tsc` checks the
    function bodies (install TypeScript 6.0 or later: an app with scripts fails `corten check` without it;
    `--no-script-types` skips them and says so, for a machine that cannot run `tsc`). At a workspace root it checks each member that depends on `corten`. When the app's
