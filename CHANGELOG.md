@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Configure the standalone catalog Corten benchmark for the lean rendering
+  workload: omit optional compression and remove handler/header/send timers using
+  supported settings, while keeping page stages, error logs, full correctness
+  checks and the HTTP-source timeout. Production defaults and richer benchmarks
+  are unchanged; historical results keep their measured configuration.
+
 - The watchlist smoke's check that a submit which waited for a write the network failed is not
   sent holds that write until the newer press is made, and presses both buttons in the page, where
   it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the

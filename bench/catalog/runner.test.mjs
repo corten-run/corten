@@ -9,6 +9,20 @@ import { allApps } from "../fullstack/apps.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
+test("catalog Corten uses supported lean settings, not the production timeout/compression profile", () => {
+  const manifest = readFileSync(join(here, "corten/Cargo.toml"), "utf8");
+  const application = readFileSync(join(here, "corten/src/main.rs"), "utf8");
+  const dependency = manifest.split("\n").find((line) => line.startsWith("corten = "));
+  assert.match(dependency, /features = \["json"\]/);
+  assert.doesNotMatch(dependency, /"compress"/);
+  for (const setting of ["deadline", "header_timeout", "send_timeout"]) {
+    assert.ok(application.includes(`.${setting}(None)`), `catalog keeps no optional ${setting} timer`);
+  }
+  assert.ok(application.includes("corten::serve(app(source))"));
+  assert.ok(application.includes("req.page(views::document"));
+  assert.doesNotMatch(application, /\bunstaged\b/, "catalog remains a working page, not sandboxed data");
+});
+
 test("catalog checks include failure reporting regressions and native umask coverage is Gin-only parity work", () => {
   const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
   const script = "node --test bench/catalog/gin-permissions.test.mjs";

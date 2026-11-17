@@ -60,6 +60,29 @@ benchmark-only fast path in the framework.
 
 ## Results
 
+### Speed Configuration
+
+Catalog is the lean rendering workload, not a production-hardening comparison.
+The standalone Corten app builds without optional response compression (load
+requests use identity encoding), and sets the handler deadline, header timeout
+and send timeout to `None` through the public `App` configuration. Its HTTP
+source still bounds each upstream request to ten seconds. Error logging stays
+enabled. Other Corten apps and the framework's production defaults are unchanged.
+
+Axum/Maud uses its lean router here, not its `PROFILE=matched` middleware stack.
+Corten still uses its normal typed routes, escaped `html!` templates, document
+layout, assets and `req.page`: mandatory page security headers, cache metadata,
+error handling and other built-in stages remain framework costs. This is not
+identical middleware or a claim that all production protections have been matched.
+An `unstaged` data route is not a substitute: its sandbox would disable the
+catalog's working form. No output cache, pre-rendered response or framework
+internal bypass is used. Both sources retain the complete page/JSON correctness
+gate, browser checks, field filtering and fresh request-time rendering.
+
+Results measured before these settings changed retain their original settings.
+The next measurement establishes the lean configuration; do not relabel earlier
+numbers or attribute their gap to these settings without a matched A/B measurement.
+
 No comparative results are published for this workload yet. Its first round establishes a new
 baseline. Marketplace rounds `r1` through `r16` must not be described as before measurements of
 this page, or mixed into a catalog trend. Framework production settings can still differ;

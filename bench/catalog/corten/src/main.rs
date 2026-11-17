@@ -57,6 +57,9 @@ async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>)
 
 fn app(source: Source) -> App {
     App::new(routes::router(source.clone()))
+        .deadline(None)
+        .header_timeout(None)
+        .send_timeout(None)
         .api(|routes| api::api(routes, source))
         .assets(views::Static)
         .components(&[views::SiteHeader])
@@ -96,6 +99,8 @@ mod tests {
         assert!(html.contains("<th scope=\"row\">Access</th>"));
         assert!(html.contains("<th scope=\"row\">access</th>"));
         assert!(html.contains("href=\"/catalog/record_2\""));
+        assert!(answer.headers().contains_key("content-security-policy"));
+        assert_eq!(answer.headers()["x-content-type-options"], "nosniff");
     }
 
     #[tokio::test]
