@@ -606,7 +606,7 @@ fn nested_type(field: &str, ty: &[TokenTree], what: &str) -> Result<String, Stri
     if ty.iter().any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '\'')) {
         return Err(format!("Fields: `{field}` is a {what}, and a {what}'s type cannot borrow (`'a`); give it owned fields"));
     }
-    let text: String = ty.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(" ");
+    let text = ty.iter().cloned().collect::<TokenStream>().to_string();
     if text.is_empty() {
         return Err(format!("Fields: `{field}` has no type"));
     }
@@ -626,10 +626,8 @@ fn no_option(field: &str, ty: &[TokenTree], what: &str) -> Result<(), String> {
 /// Rows of the struct itself, which would let a client choose how deep the form is read, a level
 /// for each `[key]` it sends. `row` is the rows' type as [`nested_type`] writes it: the struct's
 /// own name or `Self`, with any generics, is refused; a path is not, since it may name another type
-/// of that name (a rows type written as a path does not compile today for another reason: the type
-/// is written back with its tokens spaced apart). Rows that reach the struct through another type,
-/// named without a path, are refused when the derive reads that type's `SHAPE`, which is then a
-/// cycle (E0391).
+/// of that name. Rows that reach the struct through a path or another type are refused when the
+/// derive reads that type's `SHAPE`, which is then a cycle (E0391).
 fn rows_of_itself(field: &str, name: &str, row: &str) -> Result<(), String> {
     let own = row.split('<').next().unwrap_or_default().trim();
     if own == name || own == "Self" {

@@ -1634,7 +1634,7 @@ rules something out.
     `crates/corten/tests/derived_deserialize.rs` holds this one to by reading each of its types
     twice, with this derive and with serde's, and comparing values, errors and the names passed to
     the deserializer; and rustc reporting a cycle error (E0391) naming `SHAPE` when a `Fields`
-    type's rows reach that type through another type, which is all that refuses such rows at compile
+    type's rows reach that type through a path or another type, which is all that refuses such rows at compile
     time, so the reader never follows keys deeper than the types go; the `compile_fail,E0391`
     doctests in `crates/corten/src/form.rs` hold it); measured (reading a seven-field form costs
     9,241 instructions before, on `62eb57f7`, and after, on `8cd5934e`: callgrind, release build,
@@ -1667,7 +1667,9 @@ rules something out.
     (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each, all six within 174
     instructions of each other over the 1,000 reads); 2026-11-15, rustc's E0391 for rows that reach
     their own type through another type and through `Rule<u8>`, the `compile_fail,E0391` doctests at
-    `1e0bcd58`.
+    `1e0bcd58`; 2026-11-16, rustc's E0391 naming `SHAPE` for a row written as `self::Step`, after
+    preserving path punctuation, the `compile_fail,E0391` doctest at `4f83d633` (focused form
+    doctests with `--show-output`, 61 passed, one ignored).
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
