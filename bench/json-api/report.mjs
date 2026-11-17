@@ -91,7 +91,7 @@ export function inspectJson(summary, { load, commit } = {}) {
         if (checked.failure !== undefined) {
           assert.equal(checked.functional, undefined, "contradictory positive/negative check");
           const failure = load(checked.failure);
-          verifyFunctionalFailure(failure, raw.events, expected, fixtures[profile.payload]);
+          verifyFunctionalFailure(failure, raw.events, expected, fixtures[profile.payload], { historical: !timed });
           verifyFunctionalLiveness(raw, failure);
           assert.ok(failure.clock.startedAt >= Date.parse(summary.startedAt) && failure.clock.finishedAt <= Date.parse(summary.finishedAt), "checker outside native run");
           assert.ok(Object.values(raw.liveness).every((s) => Date.parse(s.startedAt) >= Date.parse(summary.startedAt)), "participant started before native run");
@@ -200,7 +200,7 @@ export function inspectJson(summary, { load, commit } = {}) {
   const functionalAttemptComplete = preparationGates.every(Boolean);
   const outcomes = summary.group.apps.map((app) => ({ app, outcome: timed && !attemptComplete ? "incomplete"
     : Object.values(apps[app]).some((r) => r.functionalComplete && !r.functional || r.timedOutcome === "failed") ? "failed"
-    : timed && Object.values(apps[app]).some((r) => !r.attemptComplete) ? "incomplete" : "passed" }));
+    : Object.values(apps[app]).some((r) => !r.functionalComplete || timed && !r.attemptComplete) ? "incomplete" : "passed" }));
   // A coherent, supported timed target failure blames only its app. Peers stay comparable
   // only when every report-wide and per-row gate (harness, provenance, source/native audit,
   // headroom, continuity, cleanup) passed, i.e. the attempt has no warning at all.

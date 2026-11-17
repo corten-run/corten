@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
 import { verifyRecordAttempt, verifyCheckerExit, verifyAttemptWindow } from "../catalog/record-attempt.mjs";
 import { aggregate, deriveLoad, loadConfig, payloads, phases, route, sha256, upstreamReadDelta, verifyParticipants, verifyRuntime } from "./contract.mjs";
-import { captureLimits, deriveProductionPhase, verifyLife } from "./production.mjs";
+import { captureLimits, deriveProductionPhase, successfulUpstream, verifyLife } from "./production.mjs";
 
 // Replay retained functional observations, not application code. In particular,
 // byte forwarding can pass this gate; only a separate native audit can qualify it.
@@ -11,7 +11,7 @@ export function verifyFunctional(functional, events, profile, records) {
   return functionalVerifier(profile, records)(functional, events);
 }
 
-export function verifyFunctionalFailure(failure, events, expected, records) {
+export function verifyFunctionalFailure(failure, events, expected, records, { historical = false } = {}) {
   assert.deepEqual(failure.identity, expected, "wrong failed checker identity");
   verifyCheckerExit(failure.exit);
   const p = payloads[expected.payload], attempt = failure.attempt;
@@ -33,7 +33,16 @@ export function verifyFunctionalFailure(failure, events, expected, records) {
   reset(events[0]);
   const counter = events.at(expected.source === "api" ? -2 : -1);
   assert.equal(counter?.kind, "control"); assert.equal(counter.method, "GET"); assert.equal(counter.path, path); assert.equal(counter.status, 200);
-  assert.deepEqual(JSON.parse(counter.body).requests, expected.source === "api" ? Object.fromEntries(attempt.requests.map((r) => [r.id, 1])) : {});
+  const control = JSON.parse(counter.body);
+  assert.deepEqual(control.requests, expected.source === "api" ? Object.fromEntries(attempt.requests.map((r) => [r.id, 1])) : {});
+  if (expected.source === "api") {
+    if (!historical || control.status !== undefined) assert.equal(control.status, 200, "failed API sweep: unhealthy configured upstream status");
+    if (control.answers !== undefined) assert.deepEqual(control.answers, { 200: attempt.requests.length }, "failed API sweep: non-200 upstream answers");
+    if (!historical || counter.sweepEnd !== undefined) {
+      assert.deepEqual(counter.sweepEnd?.upstreamReads, control.requests, "failed API sweep: upstream read boundary differs or is missing");
+      assert.ok(successfulUpstream(counter.sweepEnd.upstreamResponses, control.requests), "failed API sweep: not every upstream read finished with 200");
+    }
+  }
   if (expected.source === "api") reset(events.at(-1));
   assert.ok(events.slice(1, expected.source === "api" ? -2 : -1).every((e) => e.kind === "application"), "unexpected sweep control");
   return true;

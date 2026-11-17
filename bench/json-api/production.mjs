@@ -35,6 +35,12 @@ export function life(info) {
     paused: info.State.Paused, restarting: info.State.Restarting, restartCount: info.RestartCount, exitCode: info.State.ExitCode, error: info.State.Error };
 }
 
+export function successfulUpstream(snapshot, requests) {
+  // No pending read may lend its completion to an unfinished read in the window.
+  const started = upstreamReadDelta({ before: {}, after: requests });
+  return snapshot?.status === 200 && snapshot.aborted === 0 && isDeepStrictEqual(snapshot.completed, started ? { 200: started } : {});
+}
+
 export function deriveProductionPhase(raw, expected, phase, options, tools, context, { stream, native, priorTailUnobserved = false } = {}) {
   same(raw.captureErrors, [], "timed capture recorded apparatus errors");
   assert.equal(raw.priorTailUnobserved, priorTailUnobserved, "prior server-tail observation differs");
@@ -102,12 +108,6 @@ export function deriveProductionPhase(raw, expected, phase, options, tools, cont
   const { pass: _pass, ...auditIdentity } = expected;
   verifyNativeReceipt(native?.receipt, auditIdentity, native?.files, { timed: true });
   const reads = upstreamReadDelta(raw.upstreamReads);
-  const successfulUpstream = (snapshot, requests) => {
-    // Match cumulative counters, not just their deltas: no pending read before
-    // the window may lend its completion to an unfinished read inside it.
-    const started = upstreamReadDelta({ before: {}, after: requests });
-    return snapshot?.status === 200 && snapshot.aborted === 0 && isDeepStrictEqual(snapshot.completed, started ? { 200: started } : {});
-  };
   if (!successfulUpstream(raw.before.upstreamResponses, raw.upstreamReads.before)
     || !successfulUpstream(raw.after.upstreamResponses, raw.upstreamReads.after)
     || !successfulUpstream(raw.settledResponses, raw.upstreamReads.settled))

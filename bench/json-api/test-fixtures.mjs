@@ -130,8 +130,10 @@ export function gateFunctional(f, app, profile) {
     startedAt: s.startedAt, status: "running", running: true, oomKilled: false, dead: false, paused: false,
     restarting: false, restartCount: 0, exitCode: 0, error: "" }]));
   const reset = { kind: "control", method: "POST", path, value: {}, status: 200, body: "{}" };
+  const reads = profile.source === "api" ? Object.fromEntries(ids.map((id) => [id, 1])) : {};
   raw.events = [reset, ...requests.map((r) => ({ kind: "application", method: "GET", path: r.path, ...r.response })),
-    { kind: "control", method: "GET", path, status: 200, body: JSON.stringify({ requests: profile.source === "api" ? Object.fromEntries(ids.map((id) => [id, 1])) : {} }) },
+    { kind: "control", method: "GET", path, status: 200, body: JSON.stringify({ requests: reads, status: 200 }),
+      ...(profile.source === "api" && s.schema !== schema ? { sweepEnd: { upstreamReads: reads, upstreamResponses: { status: 200, completed: { 200: ids.length }, aborted: 0 } } } : {}) },
     ...(profile.source === "api" ? [reset] : [])];
   checked.raw = f.put(raw);
   checked.failure = f.put({ identity: checked.identity, attempt, clock: { startedAt: start, finishedAt: start + 3 }, exit: { code: 1, signal: null, expired: false, interrupted: false } });

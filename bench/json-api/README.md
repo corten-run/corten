@@ -162,6 +162,11 @@ from status/content type/JSON/value, never from the checker's assertion message.
 retains the actual normal child exit one and clock alongside raw responses and existing
 image/source/CPU/upstream context. Missing responses, timeouts, control failures and errors
 outside this bounded sweep remain incomplete attempts, not failed-target qualification.
+For a current API sweep, before the checker resets the upstream, the runner takes
+one more control reading. Its per-record starts must match the sweep counter, and
+the response-finish observer must show one completed 200 for every start and no
+aborts. A missing witness, non-200 answer, or unhealthy upstream setting leaves
+the observed app responses on disk but cannot establish a target failure.
 All 36 cells are attempted and all native source audits remain required, even for a negative
 cell. Any such negative gates timing globally (`timingDisposition: "gated-functional"`),
 with empty runs/aggregates and retained owned-container/network cleanup inventory.

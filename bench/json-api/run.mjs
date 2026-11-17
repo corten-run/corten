@@ -13,11 +13,12 @@ export async function run(args) {
   // These legacy selectors cannot pre-filter the registry or its ESM dependencies.
   const saved = Object.fromEntries(["BENCH_APPS", "BENCH_TIER"].map((k) => [k, process.env[k]]));
   for (const k of Object.keys(saved)) delete process.env[k];
-  let c, artifacts, evidence, matrix, stats, reporting, production, phaseCapture, outcomes;
+  let c, artifacts, evidence, matrix, stats, reporting, production, phaseCapture, outcomes, readUpstreamSnapshot;
   try {
     c = await import("./contract.mjs"); artifacts = await import("./artifacts.mjs"); evidence = await import("./evidence.mjs");
     matrix = await import("./matrix.mjs"); stats = await import("../catalog/stats.mjs"); reporting = await import("./report.mjs");
     production = await import("./production.mjs"); phaseCapture = await import("./phase.mjs"); outcomes = await import("./timed-outcomes.mjs");
+    ({ readUpstreamSnapshot } = await import("./check.mjs"));
   } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
   const options = c.parseArgs(args), group = c.descriptor(), cpus = c.cpuSettings(process.env);
   const folder = join(here, "results", options.round);
@@ -64,12 +65,7 @@ export async function run(args) {
     catch { await docker(["pull", tag], { timeout: 10 * 60 * 1000, file: join(folder, "pull.log") }); image = JSON.parse(await docker(["image", "inspect", tag]))[0]; }
     return { image: tag, imageId: image.Id, execution: c.imageCommandEvidence(image) };
   };
-  const upstreamSnapshot = async (payload) => {
-    const r = await fetch(`${upstreams[payload].url}/__${c.payloads[payload].path}/control`, { redirect: "manual", signal: AbortSignal.timeout(5000) });
-    assert.equal(r.status, 200);
-    const { requests, status } = await r.json();
-    return { upstreamReads: requests, upstreamResponses: { ...JSON.parse(r.headers.get("X-Json-Bench-Responses")), status } };
-  };
+  const upstreamSnapshot = (payload) => readUpstreamSnapshot(`${upstreams[payload].url}/__${c.payloads[payload].path}/control`);
   const apiReads = async (payload) => (await upstreamSnapshot(payload)).upstreamReads;
   const cpuName = `${runId}-cpu`;
   const counters = async (names) => {
@@ -77,7 +73,7 @@ export async function run(args) {
     const usage = JSON.parse(await docker(["exec", cpuName, "node", "/bench/catalog/cgroup.mjs", ...ids]));
     return Object.fromEntries(names.map((n, i) => [n, usage[ids[i]]]));
   };
-  let receipts = [];
+  let receipts = [], verifiedFunctionalFailure = false;
   const qualify = (expected) => {
     const found = receipts.filter((r) => r.identity?.app === expected.app && r.identity?.key === expected.key);
     assert.equal(found.length, 1, "exactly one independently audited native receipt required");
@@ -215,9 +211,10 @@ export async function run(args) {
             // Only the fixed checker's retained record sweep and actual normal
             // exit can identify a target failure. Other errors remain harness failures.
             const negative = { ...JSON.parse(readFileSync(`${spec.resultPath}.failure.json`, "utf8")), exit: checkerFailure.exit, clock: checkerFailure.clock };
+            checked.failure = write(`${path}/functional-failure.json`, negative);
             evidence.verifyFunctionalFailure(negative, loadArtifact(checked.raw).events, expected, c.payloads[profile.payload].records());
             evidence.verifyFunctionalLiveness(loadArtifact(checked.raw), negative);
-            checked.failure = write(`${path}/functional-failure.json`, negative);
+            verifiedFunctionalFailure = true;
           } else {
             checked.functional = JSON.parse(readFileSync(spec.resultPath, "utf8"));
             evidence.verifyFunctional(checked.functional, loadArtifact(checked.raw).events, profile, c.payloads[profile.payload].records());
@@ -230,7 +227,7 @@ export async function run(args) {
         }
       },
       async gate(qualified) {
-        if (!qualified && Object.values(summary.apps).some((entry) => Object.values(entry.checks).some((checked) => checked.failure)))
+        if (!qualified && verifiedFunctionalFailure)
           summary.timingDisposition = "gated-functional";
         summary.checksPassed = qualified; save();
         if (!qualified) log("Full JSON matrix unqualified: no timing runs will start; all selected rows retained.");
