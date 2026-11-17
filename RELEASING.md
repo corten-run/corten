@@ -32,9 +32,11 @@ keeping or changing the cadence. No schedule is in effect until approved.
 
 Do not wait for a checkpoint for a security vulnerability, data loss, broken installation or
 another serious regression in a published version. Keep the candidate focused on the fix; an
-unrelated P1 need not delay it, but review, checks and human approval still apply. If `main`
-contains unshipped API changes, do not label them as a patch. The maintainer must choose a
-compatible candidate on `main` or explicitly approve shipping a ready minor release with the fix.
+unrelated P1 need not delay it, but review, checks and human approval still apply. The fix ships
+as a patch of the newest published minor version, as [SECURITY.md](SECURITY.md#supported-versions)
+promises for security fixes. If `main` has no unshipped API changes, prepare the patch on `main`.
+If it does, do not ship them in a patch: prepare the patch from the newest release's tag with only
+the fix ([Patch from a release tag](#patch-from-a-release-tag)).
 
 For a [privately reported vulnerability](SECURITY.md), develop and review the fix in the
 advisory's temporary private fork and run applicable checks privately before merging. Merge from
@@ -65,9 +67,42 @@ publication. Coordinate disclosure with the fixed release so users know what to 
    the pull request head or a later tip is not a check on this candidate. If the candidate
    changes, repeat validation on the new SHA before tagging it.
 
+### Patch from a release tag
+
+Use this only for an urgent patch when `main` has unshipped API changes. It is a short-lived
+branch for one patch, not a maintained release branch.
+
+1. Merge the fix to `main` first (for a private advisory, from the advisory page as above).
+2. Create a branch for the new patch version `X.Y.Z` from `vX.Y.W`, the tag of the newest
+   published release (the latest patch of the newest minor version), and push it:
+   `git switch -c patch/X.Y.Z vX.Y.W` and `git push origin patch/X.Y.Z`.
+3. Open the release-preparation pull request against that branch. It carries only the fix,
+   cherry-picked from `main` (`git cherry-pick -x <fix-commit>`), plus steps 2 and 3 above. It
+   gets the same review and checks; CI runs on pull requests to any branch.
+4. Record the merged commit's SHA on the patch branch as the candidate. CI does not run on
+   pushes to that branch, so run the [checks](CONTRIBUTING.md#checks) on that commit before
+   tagging it; the Release run also reuses CI on the tagged commit before anything publishes.
+   Then [publish](#publish) that SHA.
+5. After the release, add its versioned `CHANGELOG.md` section to `main` in a pull request, so
+   `main`'s changelog records every published version.
+
 ## Publish
 
-Replace `X.Y.Z` and `CANDIDATE_SHA` below, then tag the validated commit explicitly and push
+Before every tag push, check that the protected `release` environment exists, has at least one
+required reviewer and allows deployments only from tags matching `v*`:
+
+```sh
+gh api repos/corten-run/corten/environments/release --jq '.protection_rules'
+gh api repos/corten-run/corten/environments/release/deployment-branch-policies --jq '.branch_policies'
+```
+
+The first must list a `required_reviewers` rule with a reviewer and a `branch_policy` rule; the
+second must list the `v*` rule with type `tag`. If the environment is missing (the first command
+returns 404) or any rule is absent, stop and do not push the tag. GitHub creates an environment a
+workflow names without protection rules, so `publish` would run with no approval. A repository
+admin restores the protection first.
+
+Then replace `X.Y.Z` and `CANDIDATE_SHA` below, tag the validated commit explicitly and push
 only that tag:
 
 ```sh
@@ -130,9 +165,13 @@ registry indexing delay before concluding an upload did not reach the registry. 
 completion while a registry package or a release asset is missing.
 
 - **Nothing published:** for a transient failure, [rerun the failed jobs](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
-  on the same SHA and tag, with approval when requested. If source or workflow code needs a
-  change, prepare and validate a new candidate at an unused version and tag; do not move the
-  pushed tag.
+  on the same SHA and tag, with approval when requested. If the release adds a crate, its
+  bootstrap exception was closed after the failed run, and a rerun without the secret would use
+  trusted publishing, which cannot publish the new crate. Never rerun such a release that way:
+  first get the maintainer's approval to reopen the exception, repeat bootstrap steps 1 and 2
+  with a new short-lived token, rerun, then close it again (step 4) whatever the outcome. If
+  source or workflow code needs a change, prepare and validate a new candidate at an unused
+  version and tag; do not move the pushed tag.
 - **Only some crates published:** do not rerun `cargo publish --workspace --locked` expecting it
   to skip existing versions, or finish with ad hoc local uploads. Fix the cause, prepare the
   next coordinated version (normally a patch) and release it through the same gates. Record
@@ -198,5 +237,6 @@ still applies. Prepare the candidate before opening the token window.
    to the `corten-run` organization on GitHub.
 4. Restore trusted-publishing-only on all affected crates, including any newly published ones,
    delete the environment secret and revoke the bootstrap token. Close the exception even on a
-   failed run; use the recovery procedure before opening a new exception. Later routine releases
-   use trusted publishing with no stored token. Finish the public verification above.
+   failed run. A retry reopens it only with the maintainer's approval, as
+   [the recovery procedure](#recover-a-failed-release) describes. Later routine releases use
+   trusted publishing with no stored token. Finish the public verification above.

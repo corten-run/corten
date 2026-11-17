@@ -10,8 +10,9 @@ Corten is pre-1.0, so any minor version may change the API.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
-- Give maintainers one [release runbook](RELEASING.md) for deciding readiness, publishing,
-  verifying public packages and binaries, and recovering from failed releases.
+- Give maintainers one [release runbook](RELEASING.md) for deciding readiness, shipping urgent and
+  security patches, publishing, verifying public packages and binaries, and recovering from failed
+  releases.
 
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
