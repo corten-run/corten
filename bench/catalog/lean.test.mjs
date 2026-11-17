@@ -33,10 +33,10 @@ test("Express lean profile uses public no-timer settings and omits ETag work onl
   assert.equal(server.timeout, 0);
 });
 
-test("ASP.NET lean disables supported Kestrel time/rate guards without changing matched limits", () => {
+test("ASP.NET lean disables rate guards but retains working Kestrel timers and matched limits", () => {
   const source = read("../fullstack/apps/aspnet/Program.cs");
   const lean = source.slice(source.indexOf("if (catalogLean)"), source.indexOf("builder.Services.AddRazorPages();"));
-  for (const setting of ["RequestHeadersTimeout", "KeepAliveTimeout"]) assert.ok(lean.includes(`o.Limits.${setting} = Timeout.InfiniteTimeSpan;`));
+  for (const setting of ["RequestHeadersTimeout", "KeepAliveTimeout"]) assert.ok(!lean.includes(`o.Limits.${setting} =`), `${setting}: retain the native default`);
   for (const setting of ["MinRequestBodyDataRate", "MinResponseDataRate"]) assert.ok(lean.includes(`o.Limits.${setting} = null;`));
   assert.ok(source.includes("if (matched)"));
   assert.ok(source.includes("o.Limits.MaxRequestBodySize = 2 * 1024 * 1024;"));

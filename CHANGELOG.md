@@ -9,6 +9,9 @@ Corten is pre-1.0, so any minor version may change the API.
   reduce optional access logging, compression and timer work where supported,
   record the exact profile in container evidence and reports, and retain full
   source/rendering correctness. Richer groups keep their existing configuration.
+  Keep ASP.NET's native Kestrel header/keepalive timers at their defaults: setting
+  them to infinite caused early connection closure in Linux correctness checks
+  ([#1564 Catalog lean ASP.NET fails native JSON correctness with connection errors](https://github.com/corten-run/corten/issues/1564)).
 
 - Configure the standalone catalog Corten benchmark for the lean rendering
   workload: omit optional compression and remove handler/header/send timers using

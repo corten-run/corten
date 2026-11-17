@@ -20,8 +20,8 @@ if (catalogLean)
 {
     builder.WebHost.ConfigureKestrel(o =>
     {
-        o.Limits.RequestHeadersTimeout = Timeout.InfiniteTimeSpan;
-        o.Limits.KeepAliveTimeout = Timeout.InfiniteTimeSpan;
+        // Infinite Kestrel timers close connections early in the native Linux check;
+        // retain its working defaults rather than substituting arbitrary durations.
         o.Limits.MinRequestBodyDataRate = null;
         o.Limits.MinResponseDataRate = null;
     });

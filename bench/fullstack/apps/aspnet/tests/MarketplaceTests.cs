@@ -11,7 +11,7 @@ using Xunit;
 public sealed class MarketplaceTests
 {
     [Fact]
-    public void CatalogLeanDisablesOnlySupportedKestrelTimeAndRateGuards()
+    public void CatalogLeanDisablesRateGuardsAndRetainsNativeKestrelTimers()
     {
         var previous = Environment.GetEnvironmentVariable("PROFILE");
         try
@@ -20,8 +20,9 @@ public sealed class MarketplaceTests
             using var app = new App(new Upstream());
             using var client = app.CreateClient();
             var limits = app.Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>>().Value.Limits;
-            Assert.Equal(TimeSpan.MaxValue, limits.RequestHeadersTimeout);
-            Assert.Equal(TimeSpan.MaxValue, limits.KeepAliveTimeout);
+            var defaults = new Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerLimits();
+            Assert.Equal(defaults.RequestHeadersTimeout, limits.RequestHeadersTimeout);
+            Assert.Equal(defaults.KeepAliveTimeout, limits.KeepAliveTimeout);
             Assert.Null(limits.MinRequestBodyDataRate);
             Assert.Null(limits.MinResponseDataRate);
         }

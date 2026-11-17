@@ -93,7 +93,7 @@ unbounded search across runtimes, compilers or framework internals.
 |---|---|
 | Corten | No optional response compression or handler/header/send timers; normal page stages and error logs remain. |
 | Axum + Maud | Existing lean router without the optional matched production middleware. |
-| ASP.NET Razor | Kestrel header/keepalive timeouts disabled and minimum request/response data rates unset; Razor rendering, source failures and logging remain. |
+| ASP.NET Razor | Minimum request/response data rates unset; native Kestrel header/keepalive timers remain at their defaults after infinite timers caused early connection closure in Linux checks. Razor rendering, source failures and logging remain. |
 | Express | Production EJS view cache; no ETag generation or HTTP header/request/keepalive timers; fresh response rendering remains. |
 | FastAPI | Uvicorn access logging disabled; error logging, worker count, event loop and parser selection unchanged. |
 | Gin | Release mode with `gin.New()` plus panic recovery, without the per-request access logger. |
