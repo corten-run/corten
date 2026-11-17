@@ -213,7 +213,7 @@ skips the line's clock reads and copies, but keeps the switch's wrapper; leaving
 removes it.
 
 What a line costs, measured in instructions per request (release build, Corten's subscriber
-writing to a sink, [design Choice 60](../design.md#choice-access-logs)): a parameter route goes
+writing to a sink, [design Choice 61](../design.md#choice-access-logs)): a parameter route goes
 from about 17,700 to 27,300 (+54%), and an unknown URL's `404` from about 19,100 to 27,300
 (+43%). About 1,400 of that is preparing the event; the rest is formatting the line. With the
 switch off a request costs what it did before the switch existed, within a dozen instructions.
@@ -798,6 +798,11 @@ sends its ClientHello, or never sends a request after the handshake, is closed a
 A step that fails closes the connection, and shutdown ends the steps in progress. A listener of
 the app's own that ran the handshake before `serve_on` saw the connection would have it outside
 both limits.
+
+When the step learns something the request needs, use `serve_wrapped_with`: it returns
+`(io, value)` and each request receives `ConnectionInfo<T>`. The value is cloned for each
+request, never read from a header. [Client certificates](deploy.md#client-certificates)
+shows mTLS and how `Identify` reads a verified certificate.
 
 An app behind a proxy that ends TLS needs none of this: `serve` is plain HTTP for the proxy
 ([Deploying](deploy.md) lists what the proxy must do).

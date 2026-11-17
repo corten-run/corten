@@ -4,6 +4,7 @@ import { Counter } from "k6/metrics";
 import { requestOutcome } from "./load-outcome.js";
 const observed = __ENV.CATALOG_TIMED_EVIDENCE === "1";
 const counters = observed ? Object.fromEntries(["successes", "timeouts", "http_errors", "invalid_responses"].map((name) => [name, new Counter(`catalog_${name}`)])) : null;
+let countersInitialized = false;
 const target = __ENV.TARGET;
 if (!["page", "json"].includes(target)) throw new Error("TARGET must be page or json");
 const mode = __ENV.MODE;
@@ -26,7 +27,10 @@ export default function () {
   check(response, { "catalog status 200": (r) => r.status === 200,
     "catalog content type": (r) => (r.headers["Content-Type"] ?? "").includes(target === "json" ? "application/json" : "text/html") });
   if (counters) {
-    const kind = requestOutcome(response, target);
-    for (const [name, counter] of Object.entries(counters)) counter.add(name === kind ? 1 : 0);
+    if (!countersInitialized) {
+      for (const counter of Object.values(counters)) counter.add(0);
+      countersInitialized = true;
+    }
+    counters[requestOutcome(response, target)].add(1);
   }
 }

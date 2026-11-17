@@ -259,7 +259,9 @@ timeouts (native error code 1050), HTTP 429/5xx responses, and invalid/unclassif
 responses. HTTP errors may use a different representation, such as Problem JSON
 or plain text, but remain failed requests, never successful pages. Unknown transport
 errors, other status codes and incorrect content types on 200 responses are not
-completed target outcomes. Counts,
+completed target outcomes. Each active VU initializes all four counter series with
+zero once, then increments only the request's classified outcome. This retains
+zero-valued categories without four counter updates on every request. Counts,
 root checks, rates, completed iterations and all three threshold results must
 agree exactly. Existing full page/JSON content and browser correctness gates
 remain mandatory; timed requests still discard bodies and check status/type,

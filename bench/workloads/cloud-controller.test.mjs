@@ -188,6 +188,70 @@ test("tampered archive/tree/hardlink evidence or validator mutation cannot permi
   const h = harness(t); h.seed(); await assert.rejects(h.task({ inspect: async ({ folder }) => { writeFileSync(join(folder, "fake.json"), "mutated"); return h.report(); } }).collect(), /mutated/);
   assert.equal(h.deletes, 0);
 });
+test("accepted deletion tolerates delayed exact-ID absence without another DELETE", async (t) => {
+  const h = harness(t, { deleteUnconfirmed: true }); h.seed(); let observations = 0;
+  h.flags.hook = (binary, args) => {
+    if (binary === "doctl" && args[2] === "get" && h.deletes && ++observations === 3) h.hosts([]);
+  };
+  assert.equal(await h.task().collect(), 1);
+  assert.equal(observations, 3); assert.equal(h.deletes, 1);
+  assert.ok(h.saved().destroyedAt); assert.equal(h.saved().fullGroupQualified, false);
+});
+test("lost deletion acknowledgement resumes with bounded exact-ID reads only", async (t) => {
+  const h = harness(t, { deleteUnconfirmed: true, deleteLost: true }); h.seed();
+  await assert.rejects(h.task().collect(), /acknowledgement/);
+  let observations = 0;
+  h.flags.hook = (binary, args) => {
+    if (binary === "doctl" && args[2] === "get" && ++observations === 3) h.hosts([]);
+  };
+  assert.equal(await h.task().collect(), 1);
+  assert.equal(h.deletes, 1); assert.equal(observations, 3); assert.ok(h.saved().destroyedAt);
+});
+test("deletion confirmation shares its deadline across account/GET/account", async (t) => {
+  const h = harness(t, { deleteUnconfirmed: true }); h.seed(); let clock = 0; const limits = [];
+  const run = (...args) => {
+    if (h.deletes && args[0] === "doctl") { limits.push(args[2]); clock += 40000; }
+    return h.run(...args);
+  };
+  // The post-DELETE account check is outside the confirmation window.
+  let afterDeleteAccounts = 0;
+  const scoped = (...args) => {
+    if (h.deletes && args[0] === "doctl" && args[1][0] === "account" && ++afterDeleteAccounts === 1) return h.run(...args);
+    return run(...args);
+  };
+  await assert.rejects(h.task({ run: scoped, now: () => clock }).collect(), /outcome uncertain/);
+  assert.deepEqual(limits, [60000, 60000, 40000]);
+  assert.equal(h.deletes, 1); assert.ok(!h.saved().destroyedAt);
+});
+test("confirmation refuses reversed, exhausted or non-finite clocks and cancellation between looks", async (t) => {
+  for (const mode of ["reversed", "exhausted", "invalid", "cancelled"]) {
+    const h = harness(t, { deleteUnconfirmed: true }); h.seed(); let clock = 1000, sleeps = 0;
+    await assert.rejects(h.task({ now: () => clock, sleep: async (ms) => {
+      sleeps++; clock = mode === "reversed" ? 0 : mode === "invalid" ? NaN : clock + (mode === "exhausted" ? 120000 : ms);
+      if (mode === "cancelled") h.flags.cancelled = true;
+    } }).collect(), mode === "cancelled" ? /cancelled/ : /outcome uncertain/);
+    assert.equal(sleeps, 1); assert.equal(h.deletes, 1);
+    assert.ok(h.saved().deletionIntentAt); assert.ok(!h.saved().destroyedAt);
+  }
+});
+test("confirmation never treats provider errors, malformed responses or changed account as absence", async (t) => {
+  for (const mode of ["unauthorized", "server-error", "transport", "malformed", "wrong-id", "account"]) {
+    const h = harness(t, { deleteUnconfirmed: true }); h.seed(); let observations = 0;
+    const run = (...args) => {
+      if (h.deletes && args[0] === "doctl" && args[1][2] === "get") {
+        observations++;
+        if (mode === "transport") throw new Error("synthetic transport uncertainty");
+        if (mode === "malformed") return { status: 0, stdout: "{" };
+        if (mode === "wrong-id") return { status: 0, stdout: JSON.stringify([{ id: 124 }]) };
+        if (mode === "account") { h.flags.accountId = "other-account"; h.hosts([]); return h.run(...args); }
+        return { status: 1, stdout: "", providerDiagnostic: { code: "get-http", httpStatus: mode === "unauthorized" ? 401 : 503 } };
+      }
+      return h.run(...args);
+    };
+    await assert.rejects(h.task({ run }).collect());
+    assert.equal(observations, 1); assert.equal(h.deletes, 1); assert.ok(!h.saved().destroyedAt);
+  }
+});
 test("delete cancellation/errors/lost acknowledgement never issue a second deletion", async (t) => {
   const cancel = harness(t); cancel.seed(); let checks = 0;
   await assert.rejects(cancel.task({ interrupted: () => ++checks > 1 }).collect()); assert.equal(cancel.deletes, 0);
