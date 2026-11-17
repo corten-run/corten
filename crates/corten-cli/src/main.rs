@@ -67,6 +67,23 @@ Usage:
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // corten help <command> is corten <command> --help, and an unknown command is refused.
+    if let [first, target @ ..] = args.as_slice()
+        && first == "help"
+        && !target.is_empty()
+    {
+        let asked: Vec<String> = target.iter().cloned().chain(["--help".to_string()]).collect();
+        return match command_help(&asked) {
+            Some(help) => {
+                print!("Usage:\n{help}");
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!("corten: no command {:?}; run corten help", target.join(" "));
+                ExitCode::FAILURE
+            }
+        };
+    }
     if let Some(help) = command_help(&args) {
         print!("Usage:\n{help}");
         return ExitCode::SUCCESS;

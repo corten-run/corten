@@ -39,7 +39,8 @@ test and a Dockerfile.
 
 Every command accepts `--help` or `-h`, including kit subcommands such as `corten ui add --help`:
 it prints that command's usage and exits successfully without inspecting or changing the app.
-`corten --help` prints all commands.
+`corten help <command>` does the same, and refuses a command it does not know. `corten --help`,
+or `corten help` alone, prints all commands.
 
 `corten check` names each step on stderr before running it, then reports its elapsed time and
 whether it finished or failed, even when output is redirected. Cargo's own output still goes
