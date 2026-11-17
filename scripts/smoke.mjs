@@ -5483,6 +5483,40 @@ async function run(browser) {
     await page.unroute("**/smoke/chain-*");
   }
 
+  // A part waiting in what a part's answer appends (`data-append`), whose content joins the page,
+  // is that answer's too: marked failed, not read (#1400).
+  {
+    /** @type {string[]} */
+    const asked = [];
+    const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
+    await page.route("**/smoke/chain-append-*", (route) => {
+      const path = new URL(route.request().url()).pathname;
+      asked.push(path);
+      if (path.endsWith("-a"))
+        return route.fulfill(
+          patchOf('<p id="chain-append-a">A drawn</p><template id="chain-append-list" data-append><li id="chain-append-b">B waiting<template data-corten-read-now data-from="/smoke/chain-append-b"></template></li></template>'),
+        );
+      return route.fulfill(patchOf('<li id="chain-append-b">B drawn</li>'));
+    });
+    await page.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="chain-append-1"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html('<div id="chain-append-1"><p id="chain-append-a">A waiting<template data-corten-read-now data-from="/smoke/chain-append-a"></template></p><ul id="chain-append-list"></ul></div>'),
+      );
+    });
+    await page.waitForSelector("#chain-append-b[data-corten-read-failed]", { state: "attached", timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const appended = await page.evaluate(() => [document.getElementById("chain-append-a")?.textContent, document.getElementById("chain-append-b")?.textContent, document.getElementById("chain-append-b")?.getAttribute("data-corten-read-failed") ?? null]);
+    check(
+      "a part waiting in what a part's answer appends is marked failed, not read",
+      JSON.stringify(appended) === JSON.stringify(["A drawn", "B waiting", ""]) && JSON.stringify(asked) === JSON.stringify(["/smoke/chain-append-a"]),
+      `${JSON.stringify(appended)}, asked ${asked.join(" ")}`,
+    );
+    await page.evaluate(() => document.getElementById("chain-append-1")?.remove());
+    await page.unroute("**/smoke/chain-append-*");
+  }
+
   // A part whose read the server answers with an error page, or redirects (`corten-location`, a
   // sign-in), is marked failed and the page stays: its link follows the redirect as any
   // navigation does. A tag in an element with no id, which no patch could replace, is an error in
