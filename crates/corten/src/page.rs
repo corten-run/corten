@@ -2384,6 +2384,7 @@ impl Req {
     /// The builder for an HTML patch, only when the effective mode is [`Mode::Action`].
     /// Otherwise answer with a page or redirect, or use [`Req::patch_or`] to select both.
     /// This reads `mode`, including an application override; it is not a check for POST.
+    #[inline]
     pub fn action(&self) -> Option<Action<'_>> {
         (self.mode == Mode::Action).then_some(Action(self))
     }
