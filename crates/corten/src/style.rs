@@ -1006,9 +1006,17 @@ pub(crate) fn custom_properties(css: &str) -> (Vec<&str>, Vec<&str>) {
         }
         i.min(b.len())
     };
-    let space = |mut i: usize| {
-        while b.get(i).is_some_and(u8::is_ascii_whitespace) {
-            i += 1;
+    let comment_end = |i: usize| css[i + 2..].find("*/").map_or(b.len(), |end| i + end + 4);
+    // Called only between tokens; inside an ident an escape may consume whitespace.
+    let trivia = |mut i: usize| {
+        while let Some(&c) = b.get(i) {
+            if c.is_ascii_whitespace() {
+                i += 1;
+            } else if c == b'/' && b.get(i + 1) == Some(&b'*') {
+                i = comment_end(i);
+            } else {
+                break;
+            }
         }
         i
     };
@@ -1023,15 +1031,8 @@ pub(crate) fn custom_properties(css: &str) -> (Vec<&str>, Vec<&str>) {
     // The last byte that is not whitespace or in a comment: a declaration follows `{` or `;`.
     let mut last = b'{';
     while i < b.len() {
-        let c = b[i];
-        if c == b'/' && b.get(i + 1) == Some(&b'*') {
-            i = css[i + 2..].find("*/").map_or(b.len(), |end| i + 2 + end + 2);
-            continue;
-        }
-        if c.is_ascii_whitespace() {
-            i += 1;
-            continue;
-        }
+        i = trivia(i);
+        let Some(&c) = b.get(i) else { break };
         if c == b'"' || c == b'\'' {
             i = string_end(i, c);
             last = c;
@@ -1039,14 +1040,14 @@ pub(crate) fn custom_properties(css: &str) -> (Vec<&str>, Vec<&str>) {
         }
         if c == b'-' && b.get(i + 1) == Some(&b'-') && matches!(last, b'{' | b';') {
             let end = name_end(i + 2);
-            if end > i + 2 && b.get(space(end)) == Some(&b':') {
+            if end > i + 2 && b.get(trivia(end)) == Some(&b':') {
                 declared.push(&css[i..end]);
             }
             (i, last) = (end, b'-');
             continue;
         }
-        if c == b'@' && css.get(i..i + 9).is_some_and(|at| at.eq_ignore_ascii_case("@property")) {
-            let start = space(i + "@property".len());
+        if c == b'@' && css.get(i..i + 9).is_some_and(|at| at.eq_ignore_ascii_case("@property")) && name_end(i + 9) == i + 9 {
+            let start = trivia(i + 9);
             if css[start..].starts_with("--") {
                 let end = name_end(start + 2);
                 declared.push(&css[start..end]);
@@ -1056,14 +1057,15 @@ pub(crate) fn custom_properties(css: &str) -> (Vec<&str>, Vec<&str>) {
         }
         if (c | 0x20) == b'v' && css.get(i..i + 4).is_some_and(|s| s.eq_ignore_ascii_case("var(")) && (i == 0 || !ident(b[i - 1]))
         {
-            let start = space(i + 4);
+            let start = trivia(i + 4);
             if css[start..].starts_with("--") {
                 let end = name_end(start + 2);
-                match b.get(space(end)) {
+                let after = trivia(end);
+                match b.get(after) {
                     Some(b')') => needed.push(&css[start..end]),
                     Some(b',') => {
                         // To the `)` that closes this `var(`.
-                        let (mut j, mut depth) = (space(end) + 1, 1);
+                        let (mut j, mut depth) = (after + 1, 1);
                         while j < b.len() && depth > 0 {
                             match b[j] {
                                 b'(' => depth += 1,
@@ -1072,6 +1074,11 @@ pub(crate) fn custom_properties(css: &str) -> (Vec<&str>, Vec<&str>) {
                                     j = string_end(j, q);
                                     continue;
                                 }
+                                b'/' if b.get(j + 1) == Some(&b'*') => {
+                                    j = comment_end(j);
+                                    continue;
+                                }
+                                b'\\' if j + 1 < b.len() => j += 1,
                                 _ => {}
                             }
                             j += 1;
@@ -1146,6 +1153,34 @@ mod tests {
         let (declared, needed) = custom_properties(css);
         assert_eq!(declared, ["--ink", "--space-1", "--angle", "--é-ä"]);
         assert_eq!(needed, ["--ink", "--space-1", "--bg", "--w"]);
+    }
+
+    #[component(css)]
+    fn CommentedProperties() -> impl ClassList {
+        Example
+    }
+
+    #[test]
+    fn a_commented_property_rule_declares_its_scoped_name_at_startup() {
+        let css = CommentedProperties.style.unwrap().css;
+        let (declared, needed) = custom_properties(css);
+        assert!(css.contains("@property/**/--commented-properties__w"), "{css}");
+        assert!(needed.contains(&"--commented-properties__w"), "{needed:?}");
+        assert!(declared.contains(&"--commented-properties__w"), "{declared:?}");
+    }
+
+    #[test]
+    fn a_commented_var_name_is_required_at_startup() {
+        let css = CommentedProperties.style.unwrap().css;
+        assert!(css.contains("var(/**/--missing)"), "{css}");
+        assert!(custom_properties(css).1.contains(&"--missing"));
+    }
+
+    #[test]
+    fn a_commented_var_fallback_is_not_required_at_startup() {
+        let css = CommentedProperties.style.unwrap().css;
+        assert!(css.contains("var(--opt/**/,var(--needed))"), "{css}");
+        assert!(!custom_properties(css).1.contains(&"--needed"));
     }
 
     #[test]

@@ -5829,7 +5829,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `--abov\65/**/flip-block`) and a space would add a descendant combinator (`#\62/**/.c`). The
    space that ends a hex escape is the escape's, not whitespace beside a comment. `/*` inside an
    unquoted `url(..)` is part of the URL, and only an identifier `url(` starts one, not a hash or
-   at-keyword (`#\75rl(`). Preludes, `@scope`'s `to` and declaration names read past comments.
+   at-keyword (`#\75rl(`). Preludes and declaration names read past comments, as do a class
+   selector's dot, a scope selector's pseudo-element colon, and a declaration's `!important`.
+   The startup check reads past comments between `@property` and its name and around a
+   `var()` name. Trivia is not read inside a token, and trimming a declaration value never
+   removes an escaped byte.
    [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
    gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
    components share the document tree, so prefixing prevents collisions. This does not make

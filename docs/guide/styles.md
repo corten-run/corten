@@ -47,7 +47,9 @@ A misspelled token (`var(--color-primary-contrast)` where the file has
 `--color-primary-foreground`) would make the declaration invalid and the property inherit, which
 shows only as a wrong color. So when the app starts (`App::router`, which every test of the app
 builds), each `var(--x)` without a fallback in a listed stylesheet must name a property declared
-by a stylesheet on the same pages, or it fails with the file and the property. It is a startup
+by a stylesheet on the same pages, or it fails with the file and the property. Comments between
+tokens do not change this check: `var(/**/--x)` still needs `--x`, and `var(--x/**/, 0)` has a
+fallback. It is a startup
 check, not a compile error, because a component's stylesheet compiles without seeing the theme,
 which may be another crate's. A property a script sets (`el.style.setProperty`) takes a fallback,
 `var(--progress, 0)`.
@@ -106,7 +108,9 @@ Component CSS accepts exactly these block at-rules. At-rule names are ASCII case
 Raw bodies still lose comments and extra whitespace, and registered custom properties are
 renamed there too. A comment with whitespace beside it becomes that one space, and one with none
 is written `/**/`, so removing comments never changes the tokens the browser reads: `.a/**/.b`
-stays the compound `.a.b` and `--abov\65/**/flip-block` two names. `/*` inside an unquoted
+stays the compound `.a.b`, `./**/a` still names the component's class, and
+`--abov\65/**/flip-block` stays two names. An escaped space is part of a token, not
+whitespace to trim. `/*` inside an unquoted
 `url(..)` stays part of the URL. Nested block at-rules inside raw bodies are copied
 raw (font feature `@styleset`, page margin `@top-left`, and others), not independently
 selector-checked. The only statement

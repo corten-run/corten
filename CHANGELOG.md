@@ -9,7 +9,8 @@ Corten is pre-1.0, so any minor version may change the API.
   reading `position-try` values as CSS tokens so custom-function calls, `if()` conditions and
   whitespace after an escape keep their meaning; write a comment with no whitespace beside it as
   `/**/` so removing comments never joins tokens or adds a combinator (a selector's `.a/**/.b`
-  stays compound), keep `/*` in an unquoted `url()`, and read `@scope`'s `to` past a comment;
+  stays compound), keep escaped declaration values and `/*` in an unquoted `url()` intact,
+  and recognize selectors, `!important` and custom-property reads across comment trivia;
   match statement at-rule names case-insensitively and document the complete component CSS
   at-rule inventory, including raw bodies and global names.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
