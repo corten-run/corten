@@ -5121,10 +5121,12 @@ async function run(browser) {
   }
   // An open dialog the server drew, which an answer draws closed, is closed as the browser closes
   // one (#1455): its delegated on:toggle and on:close handlers (smoke.rs's Closing) hear one of
-  // each on the dialog in the page, and focus goes back to the button that opened it. Nested
+  // each on the dialog in the page, with the returnValue the closed one had, and focus goes back to
+  // the button that opened it, even when the same answer drew that button again first. Nested
   // modals close innermost first, so each gives focus back in turn, and an on:beforetoggle
   // handler that takes the dialog's field and <details> out as it starts to close does not stop
-  // the patch. Pressed with the keyboard, so the opener has focus in every engine.
+  // the patch. A dialog drawn again before its close event runs passes it on to the one on the
+  // page. Pressed with the keyboard, so the opener has focus in every engine.
   {
     const closing = await browser.newPage();
     closing.on("pageerror", (e) => errors.push(`closing: ${e.message}`));
@@ -5145,21 +5147,28 @@ async function run(browser) {
             return {
               log: (document.querySelector("#smoke-closing output")?.textContent ?? "").split("\n").filter(Boolean),
               focused: document.activeElement?.textContent?.trim() || document.activeElement?.localName,
+              opener: !!document.activeElement?.closest("#smoke-openers"),
               open: ["smoke-one", "smoke-outer", "smoke-inner"].filter((id) => $(id).open),
               text: $("smoke-one").querySelector("p")?.textContent,
               field: !!$("smoke-one").querySelector("input"),
             };
           }),
         );
-    const opened = await press("One", () => !!document.querySelector("#smoke-one:modal"));
-    const shut = await press("Done", () => !document.querySelector("#smoke-one[open]") && document.querySelector("#smoke-one p")?.textContent === "Closed");
-    const one = await after(2);
+    const modalOne = () => !!document.querySelector("#smoke-one:modal");
+    const closedOne = () => !document.querySelector("#smoke-one[open]") && document.querySelector("#smoke-one p")?.textContent === "Closed";
     // `close()` queues `toggle` and `close` on different task sources, so their order is the
-    // engine's (Chromium has sent each first); one of each is what counts.
+    // engine's (Chromium has sent each first): the sorted lines are compared, one of each.
+    const heardOne = (/** @type {string} */ result) => `smoke-one close${result} on One|smoke-one toggle:closed on One`;
+    const opened = await press("One", modalOne);
+    // The result a script gave it, which `close()` without one keeps.
+    await closing.evaluate(() => {
+      /** @type {HTMLDialogElement} */ (document.getElementById("smoke-one")).returnValue = "saved";
+    });
+    const shut = await press("Done", closedOne);
+    const one = await after(2);
     check(
-      "a patch that draws closed an open modal dialog the server drew closes it: its delegated handlers hear one toggle and one close, and focus goes back to its opener",
-      opened && shut && one.focused === "One" && one.open.length === 0 && one.text === "Closed" && one.field &&
-        [...one.log].sort().join("|") === "smoke-one close on One|smoke-one toggle:closed on One",
+      "a patch that draws closed an open modal dialog the server drew closes it: its delegated handlers hear one toggle and one close, with its returnValue, and focus goes back to its opener",
+      opened && shut && one.focused === "One" && one.open.length === 0 && one.text === "Closed" && one.field && [...one.log].sort().join("|") === heardOne(":saved"),
       JSON.stringify({ opened, shut, ...one }),
     );
     const nestedOpen = await press("Nested", () => !!document.querySelector("#smoke-inner:modal") && !!document.querySelector("#smoke-outer:modal"));
@@ -5168,12 +5177,109 @@ async function run(browser) {
     const closes = nested.log.filter((line) => line.includes(" close "));
     check(
       "a patch that draws closed nested modal dialogs closes the inner one first, each heard by its delegated handlers, and focus goes back to the outer one's opener",
-      nestedOpen && nestedShut && nested.focused === "Nested" && nested.open.length === 0 && nested.log.length === 4 &&
-        nested.log.every((line) => line.endsWith(" on Nested")) && closes.length === 2 && closes[0]?.startsWith("smoke-inner ") && !!closes[1]?.startsWith("smoke-outer "),
+      nestedOpen && nestedShut && nested.focused === "Nested" && nested.open.length === 0 &&
+        [...nested.log].sort().join("|") ===
+          "smoke-inner close on Nested|smoke-inner toggle:closed on Nested|smoke-outer close on Nested|smoke-outer toggle:closed on Nested" &&
+        !!closes[0]?.startsWith("smoke-inner ") && !!closes[1]?.startsWith("smoke-outer "),
       JSON.stringify({ nestedOpen, nestedShut, ...nested }),
+    );
+    // The answer draws the form that opened the dialog again before it draws the dialog closed:
+    // focus goes back to that form's button as the dialog closes, then to the button drawn for it.
+    const bothOpen = await press("One", modalOne);
+    const bothShut = await press("Done, both", closedOne);
+    const both = await after(2);
+    check(
+      "a patch that draws the form that opened a dialog again, then the dialog closed, gives focus back to the button drawn in the opener's place",
+      bothOpen && bothShut && both.focused === "One" && both.opener && both.open.length === 0 && [...both.log].sort().join("|") === heardOne(""),
+      JSON.stringify({ bothOpen, bothShut, ...both }),
+    );
+    // Two patches in one task: the first closes the dialog, the second draws it again, both before
+    // its toggle and close run. The dialog on the page then hears them.
+    const twiceOpen = await press("One", modalOne);
+    const twice = await closing.evaluate(async () => {
+      const { patch } = await import("corten");
+      const res = await fetch("/smoke/closing/done", { headers: { corten: "action" } });
+      const html = await res.text();
+      const log = () => document.querySelector("#smoke-closing output")?.textContent ?? "";
+      await patch(__html(html));
+      const first = document.getElementById("smoke-one");
+      const heard = log();
+      await patch(__html(html));
+      return { patched: res.headers.has("corten-patch"), redrawn: !first?.isConnected && !!document.getElementById("smoke-one"), heard };
+    });
+    const again = await after(2);
+    check(
+      "a dialog a patch closes and the next patch draws again before its close runs: the delegated handlers of the dialog on the page hear its toggle and close",
+      twiceOpen && twice.patched && twice.redrawn && twice.heard === "" && again.focused === "One" && [...again.log].sort().join("|") === heardOne(""),
+      JSON.stringify({ twiceOpen, twice, ...again }),
     );
     await closing.close();
   }
+  // A write's page that draws closed the dialogs the server drew open in a layout element it draws
+  // in place (one holding a live region) closes them as a patch does (#1455): the inner of two
+  // nested ones first, and one whose content changes shape, and is replaced, is still heard by the
+  // listeners of the page, on the dialog that took its place.
+  if (swaps) {
+    const morph = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const morphErrors = [];
+    morph.on("pageerror", (e) => morphErrors.push(e.message));
+    let morphs = 0;
+    await morph.route(
+      (url) => url.pathname === "/news",
+      async (route) => {
+        if (route.request().method() !== "GET" || swapped(route.request())) return route.fallback();
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        const open = morphs++ ? "" : " open";
+        const more = open ? "" : "<p>Two</p>";
+        const drawn =
+          `<div role="status"></div><dialog id="smoke-morph-outer"${open}><button>Outer</button>` +
+          `<dialog id="smoke-morph-inner"${open}><button>Inner</button></dialog></dialog>` +
+          `<dialog id="smoke-morph-one"${open}><p>One</p>${more}</dialog>`;
+        await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(/(<header\b[^>]*>)/, `$1${drawn}`) });
+      },
+    );
+    await morph.goto(`${base}/news#briefing`);
+    await morph.evaluate(() => {
+      /** @type {string[]} */
+      const heard = [];
+      /** @type {any} */ (window).__heard = heard;
+      for (const type of ["toggle", "close"]) {
+        document.addEventListener(
+          type,
+          (event) => {
+            const el = /** @type {Element} */ (event.target);
+            const state = event instanceof ToggleEvent ? `:${event.newState}` : "";
+            if (el.id.startsWith("smoke-morph-")) heard.push(`${el.id} ${type}${state} ${el.isConnected ? "on" : "off"}`);
+          },
+          true,
+        );
+      }
+      /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+      /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+    });
+    const morphDrawn = await morph
+      .waitForFunction(() => document.querySelectorAll("#smoke-morph-one p").length === 2 && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+      .then(() => true, () => false);
+    await morph.waitForFunction(() => (/** @type {any} */ (window).__heard?.length ?? 0) >= 6, null, { timeout: 3000 }).catch(() => {});
+    const morphed = await morph.evaluate(() => ({
+      heard: /** @type {string[]} */ (/** @type {any} */ (window).__heard),
+      open: Array.from(document.querySelectorAll("dialog[open]"), (el) => el.id),
+    }));
+    const morphCloses = morphed.heard.filter((line) => line.includes(" close"));
+    check(
+      "a write's page that draws closed open dialogs in a layout element it draws in place closes the inner one first, and one replaced is heard on the dialog that took its place",
+      morphDrawn && !morphErrors.length && morphed.open.length === 0 &&
+        [...morphed.heard].sort().join("|") ===
+          "smoke-morph-inner close on|smoke-morph-inner toggle:closed on|smoke-morph-one close on|smoke-morph-one toggle:closed on|smoke-morph-outer close on|smoke-morph-outer toggle:closed on" &&
+        morphCloses.indexOf("smoke-morph-inner close on") < morphCloses.indexOf("smoke-morph-outer close on"),
+      JSON.stringify({ morphDrawn, morphErrors, ...morphed }),
+    );
+    await morph.context().close();
+  } else skip("a write's page that draws closed open dialogs in a layout element it draws in place closes the inner one first, and one replaced is heard on the dialog that took its place", noSwaps);
   await page.focus("#kept button");
   const buttonFocus = await page.evaluate(async (html) => {
     const { patch } = await import("corten");

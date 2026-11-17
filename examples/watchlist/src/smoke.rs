@@ -59,6 +59,10 @@ pub mod url {
     #[route("/smoke/closing/done", get = done_closing)]
     pub struct DoneClosing;
 
+    /// The forms that open the dialogs drawn again, then every dialog drawn closed.
+    #[route("/smoke/closing/both", get = done_both)]
+    pub struct DoneBoth;
+
     /// A form whose fields a component without a script draws, and a handler given them as its
     /// controls; two calls name a field their form does not have as they take it.
     #[route("/smoke/fields", get = fields_page)]
@@ -273,6 +277,9 @@ async fn fields_page(req: Req) -> HtmlResult {
 struct SmokeClosingId;
 
 #[derive(Id)]
+struct SmokeOpenersId;
+
+#[derive(Id)]
 struct SmokeOneId;
 
 #[derive(Id)]
@@ -285,17 +292,28 @@ struct SmokeInnerId;
 async fn closing_page(req: Req) -> HtmlResult {
     req.page(html! {
         <Layout req={&req} title="Closing" viewer={None} head="">
-            <form method="get" action={url::OpenOne} data-patch><button>"One"</button></form>
-            <form method="get" action={url::OpenNested} data-patch><button>"Nested"</button></form>
+            <Openers />
             <Closing one={false} nested={false} />
         </Layout>
     })
 }
 
+/// The forms that open the dialogs, in a part of their own that an answer may draw again.
+#[component]
+fn Openers() -> impl Patch {
+    html! {
+        <div id={SmokeOpenersId}>
+            <form method="get" action={url::OpenOne} data-patch><button>"One"</button></form>
+            <form method="get" action={url::OpenNested} data-patch><button>"Nested"</button></form>
+        </div>
+    }
+}
+
 /// Dialogs drawn open (`one`, or `nested`: one inside another) or closed, made modal as they join
 /// the page. Their delegated `on:toggle` and `on:close` handlers write what they heard into the
 /// part's `<output>`, and the one dialog's `on:beforetoggle` takes its field and `<details>` out
-/// as it starts to close. A form inside each draws them all closed.
+/// as it starts to close. A form inside each draws them all closed; another in the one dialog
+/// draws the forms that open them first, in the same answer.
 #[component(js)]
 fn Closing(one: bool, nested: bool) -> impl Patch {
     let log = refs();
@@ -314,6 +332,7 @@ fn Closing(one: bool, nested: bool) -> impl Patch {
                 <input name="note" aria-label="Note">
                 <details><summary>"More"</summary></details>
                 <form method="get" action={url::DoneClosing} data-patch><button>"Done"</button></form>
+                <form method="get" action={url::DoneBoth} data-patch><button>"Done, both"</button></form>
             </dialog>
             <dialog
                 id={SmokeOuterId}
@@ -350,6 +369,15 @@ async fn open_nested(req: Req) -> HtmlResult {
 /// Answers with every dialog drawn closed.
 async fn done_closing(req: Req) -> HtmlResult {
     req.patch(Closing { one: false, nested: false })
+}
+
+/// Answers with the forms that open the dialogs, then every dialog drawn closed: the form that
+/// opened one is replaced before the dialog is.
+async fn done_both(req: Req) -> HtmlResult {
+    req.patch(html! {
+        <Openers />
+        <Closing one={false} nested={false} />
+    })
 }
 
 #[derive(Id)]

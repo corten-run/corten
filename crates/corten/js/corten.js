@@ -1027,6 +1027,7 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
   if (signal?.aborted) return;
+  closeDrawn(Array.from(content.children, (el) => /** @type {[Element | null, Element]} */ ([document.getElementById(idOf(el) ?? ""), el])));
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
@@ -1317,9 +1318,8 @@ function serve(root) {
  * What the user opened or closed in `root` (a `<dialog>`, modal or not, a `<details>`, a shown
  * popover), applied to its counterpart in `fresh` once that is in the page. One the user left as
  * the server sent it takes the fresh markup's state, so a server that sends a dialog closed after
- * sending it open closes it: such a dialog still open goes in `shut`, with its counterpart, to be
- * closed as the browser closes one ({@link closeAll}). `root` itself, closed by the user and
- * drawn open in answer to a press outside it (a form's trigger beside a dialog), opens: the press is newer than their
+ * sending it open closes it. `root` itself, closed by the user and drawn open in answer to a
+ * press outside it (a form's trigger beside a dialog), opens: the press is newer than their
  * close, so a dialog they closed and ask for again opens. One they opened stays open whatever the
  * answer draws. Outside is where the control was when it was pressed (`within`), so one removed,
  * or a dialog redrawn, while the answer was on its way does not turn a press inside into one
@@ -1327,10 +1327,9 @@ function serve(root) {
  * @param {Element} root @param {Element} fresh @param {(id: string) => Element | null} ids
  * @param {Set<string>} [within] the ids of the dialogs and details the control that asked for the
  *   patch was in when it was pressed ({@link asking})
- * @param {[HTMLDialogElement, Element][]} [shut] where the open dialogs `fresh` closes go
  * @returns {() => void}
  */
-function opened(root, fresh, ids, within, shut = []) {
+function opened(root, fresh, ids, within) {
   /** @type {(() => void)[]} */
   const later = [];
   for (const el of [root, ...Array.from(queryAll(root, "details, dialog, [popover]"))]) {
@@ -1340,13 +1339,8 @@ function opened(root, fresh, ids, within, shut = []) {
     const shown = popover && matchesOf(el, ":popover-open");
     const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
     // Left as the server sent it, and not a shown popover: the fresh markup says, so its
-    // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing),
-    // unless it is a dialog open, which the fresh markup may close.
-    if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) {
-      const to = dialog && now && counterpart(root, fresh, el, true, ids);
-      if (to && to.localName === "dialog" && !hasAttr(to, "open")) shut.push([/** @type {HTMLDialogElement} */ (el), to]);
-      continue;
-    }
+    // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing).
+    if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) continue;
     // A dialog or popover only by id: by place, another row's could open over the page.
     const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || to.localName !== el.localName) continue;
@@ -1383,7 +1377,7 @@ function opened(root, fresh, ids, within, shut = []) {
  * Replaces `root` with `fresh`, carrying over the fields the user edited (since `sent`, for a
  * field the form sent; else since the markup set them), what the user opened, the focus and the
  * caret. Markup cannot give back a file input's files, so it keeps them unless the answer `took`
- * the ones it sent.
+ * the ones it sent. Its caller has closed the dialogs `fresh` draws closed ({@link closeDrawn}).
  * @param {Element} root @param {Element} fresh @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {boolean} [focus] whether focus in `root`, and its caret, is carried into `fresh`: a
  *   page's part a link replaces leaves it to the navigation, which moves it as a link does
@@ -1395,11 +1389,7 @@ function replaceKeeping(root, fresh, sent, took, focus = true, within) {
   serve(fresh);
   // Every lookup until `fresh` is in the page, where a script may change it.
   const ids = idsIn(fresh);
-  /** @type {[HTMLDialogElement, Element][]} */
-  const shut = [];
-  const reopen = opened(root, fresh, ids, within, shut);
-  // Before anything below reads `root`, which their handlers may change as they close.
-  closeAll(shut);
+  const reopen = opened(root, fresh, ids, within);
   const focused = document.activeElement;
   const inside = focus && focused && focused !== document.body && holds(root, focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
@@ -1445,30 +1435,47 @@ function replaceKeeping(root, fresh, sent, took, focus = true, within) {
 }
 
 /**
- * Closes each dialog of `shut` (an open one a patch draws closed, with the element replacing it)
- * as the browser closes one, before the patch replaces it: `close()`, so focus goes back to what
- * had it before the dialog opened. The one holding focus goes first, the innermost of them, so
- * nested modals each give focus back in turn; then the rest, the last in the page first. Its
- * `toggle` and `close` come after the patch has taken it off the page, where the document's
- * listener cannot hear them, so each is dispatched again on the element that took its place, and
- * that element's handlers (`on:close`) hear them as the browser's. A handler of its
+ * Closes as the browser closes one each dialog the server drew open, still open, that the markup
+ * drawn for its part of the page draws closed: in `pairs`, each element about to be replaced or
+ * drawn again with the server's new markup for it, where the dialog is the element itself or one
+ * with its id. One the user opened stays open ({@link opened}). A patch's, a swap's and a layout's
+ * close together, before any of their elements is replaced, so each gives focus back to what had
+ * it when it opened (`close()`) while that is still on the page: replacing it then carries focus
+ * to its counterpart, as for any focus. The one holding focus goes first, the innermost of them,
+ * so nested modals each give focus back in turn; then the rest, the last found first. Its
+ * `toggle` and `close` come later, as tasks. If it has left the page by then, where the document's
+ * listener cannot hear them, each is dispatched again, with its `returnValue`, on the dialog with
+ * its id on the page then (the one that took its place, or what took that one's), whose handlers
+ * (`on:close`) hear them as the browser's; one removed hears nothing. A handler of its
  * `beforetoggle`, which runs at once, may change the page: the dialogs were found before.
- * @param {[HTMLDialogElement, Element][]} shut
+ * @param {[Element | null, Element, ...unknown[]][]} pairs
  */
-function closeAll(shut) {
-  while (shut.length) {
-    let at = shut.length - 1;
-    for (let i = at; i >= 0; i -= 1) {
-      if (holds(/** @type {[HTMLDialogElement, Element]} */ (shut[i])[0], document.activeElement)) {
-        at = i;
-        break;
-      }
+function closeDrawn(pairs) {
+  /** @type {[HTMLDialogElement, Element][]} */
+  const shut = [];
+  for (const [root, fresh] of pairs) {
+    // A patch's template that removes or adds (or reads again) is no dialog and has none by id.
+    if (!root) continue;
+    for (const el of [root, ...Array.from(queryAll(root, "dialog[open]"))]) {
+      const to = el instanceof HTMLDialogElement && el.open && served.get(el) && counterpart(root, fresh, el, true);
+      if (to instanceof HTMLDialogElement && !to.open) shut.push([/** @type {HTMLDialogElement} */ (el), to]);
     }
+  }
+  while (shut.length) {
+    // The last holding focus, or else the last (-1).
+    const at = shut.map(([dialog]) => holds(dialog, document.activeElement)).lastIndexOf(true);
     const [[dialog, to]] = /** @type {[[HTMLDialogElement, Element]]} */ (shut.splice(at, 1));
     if (!dialog.open) continue;
+    const id = idOf(dialog);
     for (const type of ["toggle", "close"]) {
-      // The same kind of event, with the same states for a toggle.
-      const again = (/** @type {Event} */ event) => !inPage(dialog) && inPage(to) && to.dispatchEvent(new /** @type {typeof Event} */ (event.constructor)(type, event));
+      const again = (/** @type {Event} */ event) => {
+        // The one with its id on the page now, or `to` when it has none.
+        const now = (id && document.getElementById(id)) || to;
+        if (inPage(dialog) || !(now instanceof HTMLDialogElement) || !inPage(now)) return;
+        now.returnValue = dialog.returnValue;
+        // The same kind of event, with the same states for a toggle.
+        now.dispatchEvent(new /** @type {typeof Event} */ (event.constructor)(type, event));
+      };
       dialog.addEventListener(type, again, { once: true });
     }
     dialog.close();
@@ -1518,7 +1525,7 @@ function focusNear(el, root, fresh) {
  * @param {boolean} [stay] keep the user's place: the scroll position (Chromium can reset it when
  *   <main> empties), what scrolls inside the page and the `<details>` open on screen
  * @param {Notice} [notice] the answer's, kept if the page has to load in full instead
- * @param {{ apply: () => void } | null} [layout] what changes around `<main>`, drawn in the same
+ * @param {{ drawn: () => [Element, Element, ...unknown[]][], apply: () => void } | null} [layout] what changes around `<main>`, drawn in the same
  *   frame as the page ({@link swapDocument})
  * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
  * @returns {Promise<boolean>} false when it loaded the page in full instead
@@ -1582,6 +1589,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const typed = traverse ? typedIn.get(key ?? "") : undefined;
   if (typed) putTyped(content, typed);
   serve(content);
+  closeDrawn([...parts, ...(layout?.drawn() ?? [])]);
   const [x, y] = [scrollX, scrollY];
   for (const [old, part] of parts) {
     // One inside an element the layout drew changes what a write's page is compared with, as a
@@ -1746,7 +1754,7 @@ let frame = { parts: new Set(frameOf(document)), sent: null };
  * around `<main>`, more or fewer elements beside one, or another frame ({@link frameOf}). One that
  * shows the notice the page drew is replaced even when its markup is the same, since the last one
  * a script hid (a toast) is drawn again by the same text.
- * @param {Document} doc @param {Notice} notice @returns {{ fresh: Element[], apply: () => void } | null}
+ * @param {Document} doc @param {Notice} notice @returns {{ fresh: Element[], drawn: () => [Element, Element, ...unknown[]][], apply: () => void } | null}
  */
 function layoutChanges(doc, notice) {
   const said = notice?.has("d") ? notice.get("m") || null : null;
@@ -1776,17 +1784,19 @@ function layoutChanges(doc, notice) {
     there = upThere;
   }
   if (here !== document.body || there !== doc.body) return null;
+  // One a patch replaced, or changed inside, while the page was on its way is newer than the
+  // page: it stays.
+  const current = () => changed.filter(([old, , was]) => inPage(old) && drawn.get(old) === was);
   return {
     fresh: changed.map(([, el]) => el),
+    // What `apply` draws, whose dialogs it draws closed close first ({@link closeDrawn}).
+    drawn: current,
     apply() {
       // An entry the load had and this page lacks stays: the runtime cannot tell the server's (a
       // theme it stopped writing) from a script's or an extension's (a theme set before first paint).
       frame = { parts: frame.parts, sent };
       stale = false;
-      for (const [old, el, was] of changed) {
-        // One a patch replaced, or changed inside, while the page was on its way is newer than the
-        // page: it stays.
-        if (!inPage(old) || drawn.get(old) !== was) continue;
+      for (const [old, el, was] of current()) {
         const markup = markupOf(el);
         // The server's markup of each page's part in it, before drawing adds what the user had
         // (a <details> they opened) or a focus move's tabindex.
@@ -1840,12 +1850,12 @@ function drawLayout(old, fresh, before, said, inside = false) {
   for (const a of Array.from(attributesOf(fresh))) if (attrOf(old, a.name) !== a.value && !(toggles && a.name === "open")) elementOwn.setAttribute.call(old, a.name, a.value);
   if (toggles) {
     const [now, want] = [old.open, hasAttr(fresh, "open")];
-    // Left as the server sent it: the server's state now. A modal one closes by `close()`, which
-    // also ends the rest of the page being inert; taking away its `open` would not.
+    // Left as the server sent it: the server's state now. A dialog drawn closed was closed before
+    // the layout was drawn ({@link closeDrawn}), unless it is found only by its place, as here.
     if ((!served.has(old) || served.get(old) === now) && now !== want) {
       if (!(old instanceof HTMLDialogElement)) old.open = want;
       else if (want) old.show();
-      else old.close();
+      else closeDrawn([[old, fresh]]);
     }
     served.set(old, want);
   }

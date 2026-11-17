@@ -1,7 +1,8 @@
 // @ts-check
 // Closing (smoke.rs): dialogs the server draws open and then closed, for the browser test to see
 // that a patch closes them as the browser does: each one's delegated handlers hear its `toggle`
-// and `close`, the innermost first, and a handler may change the dialog as it starts to close.
+// and `close`, with its `returnValue`, the innermost first, and a handler may change the dialog as
+// it starts to close.
 
 /**
  * Makes a dialog drawn open modal, as `corten_ui::dialog::modal` does.
@@ -25,14 +26,14 @@ export function touch(event, dialog) {
 }
 
 /**
- * Writes what the dialog heard into the log: its id, the event, whether the dialog was on the page,
- * and where focus was.
+ * Writes what the dialog heard into the log: its id, the event (with a toggle's new state, or the
+ * dialog's `returnValue` when it has one), whether the dialog was on the page, and where focus was.
  * @param {Event} event
  * @param {HTMLDialogElement} dialog
  * @param {HTMLOutputElement} log
  */
 export function heard(event, dialog, log) {
-  const state = event instanceof ToggleEvent ? `:${event.newState}` : "";
+  const state = event instanceof ToggleEvent ? `:${event.newState}` : dialog.returnValue ? `:${dialog.returnValue}` : "";
   const focused = document.activeElement?.textContent?.trim() || document.activeElement?.localName;
   log.value += `${dialog.id} ${event.type}${state} ${dialog.isConnected ? "on" : "off"} ${focused}\n`;
 }
