@@ -8,6 +8,8 @@
 //                   which only pages with a form that has an on:corten:progress handler load
 //   dist/address.js a data-address form's address in history, and Back and Forward between the
 //                   entries it made: a module of its own, which only pages with such a form load
+//   dist/part.js    the reads of the parts a page waits for (ReadAgain::now): a module of its own,
+//                   served beside the runtime, which only pages that draw such a part load
 //   dist/keys.js    shortcut() for a page-wide shortcut (`corten/keys`): a module of its own, which
 //                   only apps whose scripts import it serve, preloaded with those scripts
 //   dist/read.js    read() of a screen's typed data (`corten/read`): a module of its own, served
@@ -59,6 +61,11 @@ const outputs = [
     name: "address.js",
     entryPoints: [join(js, "address.js")],
     banner: { js: "// Corten address (MIT). Built from crates/corten/js/address.js by scripts/build-js.mjs; do not edit." },
+  },
+  {
+    name: "part.js",
+    entryPoints: [join(js, "part.js")],
+    banner: { js: "// Corten part reads (MIT). Built from crates/corten/js/part.js by scripts/build-js.mjs; do not edit." },
   },
   {
     name: "keys.js",

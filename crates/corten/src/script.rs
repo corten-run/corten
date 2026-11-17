@@ -2991,6 +2991,11 @@ pub(crate) const ADDRESS_MODULE: &str = "corten-address";
 /// [`ADDRESS_MODULE`]'s source.
 pub(crate) const ADDRESS_JS: &str = include_str!("../js/dist/address.js");
 
+/// The reads of the parts a page waits for (`ReadAgain::now`, [`crate::PART_JS`]): noted by the
+/// tag that draws one, so the page's head preloads it with the runtime (served beside it, at
+/// [`crate::part_path`], not with the app's scripts). Not a name a component's script can have.
+pub(crate) const PART_MODULE: &str = "corten-part";
+
 /// Notes that the page rendering uses script module `name`, so its head loads it.
 pub(crate) fn uses(name: &'static str) {
     MODULES.with(|m| {

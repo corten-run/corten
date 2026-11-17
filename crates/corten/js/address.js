@@ -103,7 +103,7 @@ function check(content) {
  * @param {(content: DocumentFragment) => void} before
  */
 const drawWhole = ([apply], html, signal, sent, took, within, before) =>
-  apply(html, signal, sent, took, true, undefined, within, (content) => (check(content), before(content))).then(
+  apply(html, signal, sent, took, undefined, undefined, within, (content) => (check(content), before(content))).then(
     () => true,
     (error) => {
       if (signal.aborted) throw error;
