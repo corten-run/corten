@@ -153,8 +153,8 @@ Corten is pre-1.0, so any minor version may change the API.
   to response readiness; a request dropped before its answer is ready writes none, and a
   subscriber may filter it on its fields. Off
   unless set, also in the app `corten new` writes. Uses the existing subscriber and escaping,
-  which now copies text between control characters a run at a time. Measured: +9,610
-  instructions on a parameter route (+54%), +8,172 on a `404`, with the line written to a sink,
+  which now copies text between control characters a run at a time. Measured: +9,619
+  instructions on a parameter route (+54%), +8,173 on a `404`, with the line written to a sink,
   not stdout; off, within 12 of before.
 
 - Clear only an already stopped, masked firmware unit's failed state during

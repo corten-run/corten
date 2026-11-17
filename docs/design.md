@@ -5247,15 +5247,15 @@ rules something out.
     requests minus 200) / 1,000, three runs in alternating order;
     `log::tests::what_an_access_request_costs`, an unlayered app answering through `oneshot` with
     the body collected). "Before" is `38587c414` with only that test added (its framework and
-    lockfile are those of `main` then); the others are `67d888836`. Instructions per request,
-    median [min, max]:
+    lockfile are those of `main` then); the others are `65ac1dc47`, this change merged with `main`
+    at `e006be831`. Instructions per request, median [min, max]:
 
     | Request | Before | Off | On | Accepting subscriber |
     | --- | --- | --- | --- | --- |
-    | Parameter route | 17,681.1 [17,681.0, 17,681.1] | 17,679.0 [17,679.0, 17,679.0] | 27,291.5 [27,291.3, 27,299.9] | 19,097.0 [19,097.0, 19,097.0] |
-    | Unknown URL `404` | 19,135.0 [19,135.0, 19,135.0] | 19,123.0 [19,123.0, 19,123.0] | 27,306.6 [27,298.6, 27,307.8] | 20,503.0 [20,503.0, 20,503.1] |
+    | Parameter route | 17,681.0 [17,680.9, 17,681.1] | 17,679.0 [17,678.9, 17,679.1] | 27,299.7 [27,258.1, 27,300.7] | 19,101.1 [19,101.0, 19,102.6] |
+    | Unknown URL `404` | 19,135.0 [19,135.0, 19,135.0] | 19,123.0 [19,122.9, 19,123.1] | 27,307.7 [27,307.5, 27,314.4] | 20,505.0 [20,505.0, 20,505.0] |
 
-    The line adds 9,610 (54%) and 8,172 (43%). Preparing the event and handing it to `tracing`
+    The line adds 9,619 (54%) and 8,173 (43%). Preparing the event and handing it to `tracing`
     is about 1,400 of that (the accepting subscriber takes the event and writes nothing); the rest
     is Corten's subscriber formatting the line (timestamp, fields, escaping) into its buffer and
     handing the bytes to a sink that discards them. Writing them to stdout is not counted: its
@@ -5291,8 +5291,9 @@ rules something out.
 
     Last checked: 2026-11-16, the request stages, final HTTP handling, the API boundary and
     subscriber read, at `f5f2132aa`; 2026-11-17, hyper 1.12's HTTP/1 server answering a final
-    `100` and `103` with an empty `500` over a socket, and the costs measured, at `67d888836`
-    against `38587c414`.
+    `100` and `103` with an empty `500` over a socket, at `67d888836`; a subscriber filtering on
+    the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs above, at
+    `65ac1dc47` against `38587c414`.
 
 ## Rules
 
