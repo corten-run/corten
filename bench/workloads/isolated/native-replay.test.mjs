@@ -71,6 +71,12 @@ test("catalog worker source receipts must match the bound commit even after full
     const changed = structuredClone(proof); change(changed); save(changed);
     assert.equal((await inspectNative(f.binding, f.folder)).status, "invalid");
   }
+  save(proof);
+  f.summary.savedEvidence.apparatusSourceSha256 = "b".repeat(64);
+  writeFileSync(join(f.folder, "summary.json"), JSON.stringify(f.summary));
+  assert.equal((await inspectNative(f.binding, f.folder)).status, "invalid");
+  save(proof); rmSync(join(f.folder, "apparatus-source.json"));
+  assert.equal((await inspectNative(f.binding, f.folder)).status, "blocked");
 });
 
 test("client registered replay uses the same saved verifier for exact historical v2 and candidate v3, never unknown schemas", async (t) => {
