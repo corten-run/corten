@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, renameSync, writeSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
-import { durable, digest, physical, regular, syncDirectory } from "./cloud-local.mjs";
+import { durable, digest, fileHash, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { streamLimits, verifyApparatus } from "./isolated/control-stream.mjs";
 import { auditDelivery } from "./cloud-audit.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
@@ -220,6 +220,9 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
         fsyncSync(file.fd); physical(dirname(file.path));
         const identity = auditStat(fstatSync(file.fd)); assert.deepEqual(auditStat(lstatSync(file.path)), identity);
         assert.equal(identity[4], file.bytes);
+        // Verify the bytes on disk at each file boundary, not the entire packet at audit-end.
+        assert.equal(fileHash(file.path, file.bytes), file.sha256, "staged audit digest differs");
+        assert.deepEqual(auditStat(lstatSync(file.path)), identity, "staged audit file changed");
         audit.files.set(relative(audit.stage, file.path).replaceAll("\\", "/"), { bytes: file.bytes, sha256: file.sha256, identity });
         closeSync(file.fd); file = undefined;
       } else if (kind === "audit-end") {

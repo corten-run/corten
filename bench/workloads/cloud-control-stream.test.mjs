@@ -108,7 +108,7 @@ test("paused audit material and approved delivery use the same existing stream, 
   writeFileSync(join(f.local, "audit-delivery.lock"), "test approved publisher custody");
   const delivery = { schema: protocol.schema, subjectSha256,
     review: { subjectSha256, decision: "approved", findings: [], reviewer: "test reviewer", reviewedAt: "2026-11-17T12:00:00.000Z" },
-    bundle: { schema: protocol.bundleSchema, receipts: protocol.members.map((identity) => ({ identity })) } };
+    bundle: { schema: "json-api-native-audits/v2", receipts: protocol.members.map((identity) => ({ identity })) } };
   const path = join(f.local, "approval.json"); writeFileSync(path, JSON.stringify(delivery));
   const state = { round: binding.round, commit: binding.commit, token: binding.token,
     control: { helperSha256: binding.helperSha256, monitor: { id: registration.id, registrationSha256: digest(JSON.stringify(registration)), phase: "live" } } };
@@ -160,6 +160,17 @@ test("audit inventory rejects aggregate and file-count bounds without allocating
     const files = new Map(rows.map((row) => ["mixed-audit-sources/" + row.path, row])); files.set("mixed-audit-subject.json", {});
     assert.throws(() => verifyAuditInventory(subject, "mixed-production", files));
   }
+});
+
+test("audit ready requires the staged file digest, not just the incoming frames", async (t) => {
+  const f = fixture(t), { monitor } = await f.ready, value = Buffer.from("source"), p = packet(f, value);
+  p.begin(); f.frame("audit-file", p.header); f.frame("audit-data", { offset: 0, data: value.toString("base64") });
+  writeFileSync(join(f.local, "monitor-audit-mixed-production.partial", p.header.path), "broken");
+  f.frame("audit-file-end", {}); p.finish();
+  try { assert.equal(existsSync(join(f.local, "monitor-audit-mixed-production-ready.json")), false); }
+  finally { f.close(255); }
+  assert.equal((await monitor.done).terminal, false);
+  assert.equal(existsSync(join(f.local, "monitor-audit-mixed-production")), false);
 });
 
 for (const mode of ["disconnect", "terminal", "truncated", "hash", "missing", "extra", "oversize", "chunk", "duplicate", "replaced", "hardlink", "alias", "partial"]) {
