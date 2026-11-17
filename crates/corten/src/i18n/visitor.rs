@@ -77,12 +77,33 @@ mod zones {
         pub fn is_known(&self) -> bool {
             self.0.is_some()
         }
+
+        /// The database's name for it (`America/Chicago`), `None` for the UTC it falls back to.
+        pub(crate) fn name(&self) -> Option<&str> {
+            self.0.as_ref().and_then(jiff::tz::TimeZone::iana_name)
+        }
     }
 
+    /// Its offset at an instant; UTC's (0) for a zone not known, and, for written dates, past the
+    /// database's range (`jiff::Timestamp`'s, which ends late on 9999-12-30 UTC), where
+    /// [`known_offset`](Zone::known_offset) is `None`.
     impl Zone for Visitor {
         fn offset(&self, at: SystemTime) -> i32 {
-            let (Some(zone), Ok(at)) = (&self.0, jiff::Timestamp::try_from(at)) else { return 0 };
-            zone.to_offset(at).seconds()
+            self.known_offset(at).unwrap_or(0)
+        }
+
+        fn known_offset(&self, at: SystemTime) -> Option<i32> {
+            let Some(zone) = &self.0 else { return Some(0) };
+            let at = jiff::Timestamp::try_from(at).ok()?;
+            // The database changes offsets on whole seconds, and jiff looks an instant up by its
+            // second toward zero, which before 1970 is the next one: a millisecond before a change
+            // would get the offset after it. So such an instant is asked at the second it is in;
+            // any other (every date since 1970) is asked as it is, with no second timestamp made.
+            let at = match at.subsec_nanosecond() < 0 {
+                true => jiff::Timestamp::from_second(at.as_second() - 1).ok()?,
+                false => at,
+            };
+            Some(zone.to_offset(at).seconds())
         }
     }
 

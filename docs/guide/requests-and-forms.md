@@ -388,6 +388,8 @@ type of its own that implements `Deserialize`.
 |---|---|---|
 | `String`, a number, a unit-variant enum | the key's one value; sent twice is a 422 that names the field | `<input>`, `<select>`, a radio group drawn with one option checked |
 | `Entry<T>` of a number type | the text as sent and the number it reads as, `None` when blank or not a number | an `<input type="number">` the user types in |
+| `Entry<Day>`, `Entry<LocalDateTime>` | the text as sent and the day, or the date and time on the visitor's clock, it reads as, `None` when blank or not one | an `<input type="date">` or `<input type="datetime-local">` the user fills in |
+| `FormZone` | the zone the form was drawn in, the only zone its date and time fields are read in; not one, or not sent, is a 422 that names the field | the hidden input a `DrawZone` draws, `zone.field(f.zone)` |
 | `bool`, with `#[serde(default)]` | `true` for `on` or `true`, `false` when missing | a checkbox: `on` when checked, nothing when not |
 | `Option<T>` | `None` when missing or blank | an empty `<input type="number">` sends `max=`; a radio group with none checked sends nothing |
 | `Vec<T>`, with `#[serde(default)]` | every value, in order; empty when missing | checkboxes sharing a name, `<select multiple>` |
@@ -460,6 +462,91 @@ A value the app stores itself and draws back (a delay its rate limiter writes) m
 bounds hold, or the browser will not send the form until the user changes it: under `corten dev`
 the browser's console names such a control in a form when the page, a navigation or a patch draws
 it, whether its attributes come from `Bounds` or are written by hand.
+
+A date and time the user picks (`<input type="datetime-local">`) is what their clock read
+(`2026-11-13T14:05`), with no zone: an `Entry<corten::i18n::LocalDateTime>`. It is drawn in a zone
+and read in the same one, which the form carries. The page draws in a `corten::form::DrawZone`:
+`zone.field(f.zone)` writes the zone as a hidden input, `zone.name()` is its name for the visitor,
+and `zone.local(at)` writes an instant as the input's `value` (`zone.min(at)` and `zone.max(at)`
+its bounds, below). The post reads the hidden input as a `corten::form::FormZone` field, and
+`input.when.at(&input.zone)` is the instant, `None` for the field's message. The page takes its zone from the request
+(`DrawZone::from(req.zone())`, with the `zones` feature and `App::client_zone()`; else `Utc` or an
+`Offset`), and a form drawn again after a refused post from the zone the post sent
+(`DrawZone::from(&input.zone)`), so a time typed under `UTC` is not shown again as Chicago's. The
+post never reads in `req.zone()`: that is UTC on a browser's first page and in a `Public` page, and
+the visitor's own zone on the post after it, so a form read in it would store a time moved by the
+visitor's offset.
+
+The compiler checks part of this: `Entry::at`, `Entry::at_keeping` and `LocalDateTime::at` take
+only a `FormZone`, which is made only by deserializing what a client sent (a form, a query), never
+from a zone (no `FormZone::from(req.zone())`, no `at(req.zone())`, no `at(&draw_zone)`);
+`zone.field` takes only a `FormZone` field's name; and an instant becomes an
+input's time only through a `DrawZone`. It does not check that the form draws the hidden input (a
+form without it compiles, and its post is a 422), that the input and the times come from the same
+`DrawZone`, or that a form drawn again uses the posted zone. Nor is a `FormZone` proof that this
+form drew it: a client can send another zone a `DrawZone` writes, and the handler's own bounds on
+the instant are what keep it within what the app allows.
+
+```rust,ignore
+#[derive(Fields)]
+struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
+
+// The post: unchanged, the field keeps the stored instant; changed, it is read in the form's zone.
+let Some(live_at) = input.live_at.at_keeping(&input.zone, stored).filter(|at| *at >= listed && *at <= now) else {
+    errors.add(f.live_at, t.live_at_between(..));
+    return req.invalid(&errors, ..).await; // the form drawn again with DrawZone::from(&input.zone)
+};
+
+// The form, drawn with `let zone = DrawZone::from(req.zone())` (`DrawZone::from(Utc)` on a
+// Public page), or `DrawZone::from(&input.zone)` when drawn again:
+// {zone.field(f.zone)}
+// <label>{t.goes_live(zone.name())}
+//   <input type="datetime-local" name={f.live_at}
+//       value={zone.local(stored).map(LocalDateTime::floor_minute)}  (&input.live_at when drawn again)
+//       min={zone.min(listed)}
+//       max={zone.max(now)}>
+// </label>
+```
+
+Show the zone's name (`zone.name()`: `UTC`, `-06:00`, `America/Chicago`) with the field. Without
+JavaScript the browser never reports its zone, so the form is drawn and read in UTC, and the
+visitor types a time in UTC only if the page says so: the guarantee holds when the page draws the
+name, which Corten cannot check. A browser's first page is the same until the next page. A
+`Public` page is the same for everyone, so it draws in `DrawZone::from(Utc)`; `req.zone()` there is
+UTC too, and a debug build logs a warning each time a `Public` answer reads it.
+
+Where the clocks change, a time on the clock names no instant (`02:30` on the morning they go from
+2 to 3) or two (`01:30` on the night they go back), and `at` has one answer, Temporal's default and
+iCalendar's: a skipped time moves forward by the gap (`03:30`), and a repeated one is the earlier
+instant, before the clocks go back. So an instant in the repeated hour, drawn and sent back
+unchanged, reads as the earlier one. An input counts its steps (a minute) from its `min`, else its
+`value`, so a `min` or `value` with seconds or a fraction of one is off a step and the form is not
+sent until the visitor picks a time on one (`corten dev` names such a control drawn with a value):
+draw every instant rounded down to the minute, the `value` with `floor_minute`, the `min` and the
+`max` with `zone.min(at)` and `zone.max(at)`. Rounding all of them down keeps their order, so a
+stored time in the same minute as the `min` (stored a few seconds after the listing) is not drawn
+before it, which would stop the form being sent even when the visitor changes another field.
+Where the clocks go back a later instant reads earlier on the clock (`01:45` before the change,
+`01:30` after it), so a `min` drawn at its own reading could be after the value of a later
+instant; `zone.min` draws it at the offset the clocks go back to when they do so within the day
+after it, and `zone.max` at the offset before when they did within the day before it, so the
+bounds hold every value between them, an hour wider near the change. An edit form reads the field with
+`at_keeping(&input.zone, stored)`, which is the stored instant, seconds and the second `01:30`
+included, when the field comes back as it was drawn. The input then allows the part of a minute
+before a `min` with seconds, up to an hour beside a bound near a change of the clocks, and a time
+the clocks skip or repeat near a bound reads outside it, so the handler's own comparison is the
+check, and refuses those with the field's message. A tz database zone's rules end late on
+9999-12-30 UTC (jiff's range): past that a time is neither drawn (`None`, no attribute) nor read
+(`None`, the field's message), rather than taken as UTC.
+
+A `LocalDateTime` is not an instant, so `t.date` and a field typed as one do not take it. A day
+(`<input type="date">`) is an `Entry<Day>` in no zone, and `day.start(&input.zone)` is the instant
+it begins where the visitor is, in the zone the form carries, a `GET` form's query included: the
+first instant the clock there reads the day, as Temporal's `startOfDay` gives, so where the clocks
+skip midnight it is the change, not `00:00` moved forward by the gap as a typed time would be
+(`day.start(req.zone())` only for a day that comes with no form, such as a link's parameter). A
+time of day alone (`<input type="time">`) names no day, so it has no reader; a date
+and a time the user picks together are one `datetime-local`.
 
 `#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser
 sends nothing when no box is checked and the form would fail exactly then. A required list is a
