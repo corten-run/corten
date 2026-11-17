@@ -193,12 +193,40 @@ fn Within(open: &'static str, close: &'static str, children: impl Render) -> imp
 #[test]
 fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
     let p = "<p><button><div>Detail</div></button></p>";
-    assert_eq!(html! { <p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p> }.to_html(), p);
-    assert_eq!(html! { <p><Writes markup="<button>" /><div>"Detail"</div><Writes markup="</button>" /></p> }.to_html(), p);
+    assert_eq!(html! {
+        <p>
+            {raw("<button>")}
+            <div>"Detail"</div>
+            {raw("</button>")}
+        </p>
+    }.to_html(), p);
+    assert_eq!(html! {
+        <p>
+            <Writes markup="<button>" />
+            <div>"Detail"</div>
+            <Writes markup="</button>" />
+        </p>
+    }.to_html(), p);
     assert_eq!(html! { <p><Within open="<button>" close="</button>"><div>"Detail"</div></Within></p> }.to_html(), p);
     for (markup, expected) in [
-        (html! { <ul><li>{raw("<ul>")}<li>"x"</li>{raw("</ul>")}</li></ul> }.to_html(), "<ul><li><ul><li>x</li></ul></li></ul>"),
-        (html! { <dl><dt>{raw("<dl>")}<dd>"x"</dd>{raw("</dl>")}</dt></dl> }.to_html(), "<dl><dt><dl><dd>x</dd></dl></dt></dl>"),
+        (html! {
+            <ul>
+                <li>
+                    {raw("<ul>")}
+                    <li>"x"</li>
+                    {raw("</ul>")}
+                </li>
+            </ul>
+        }.to_html(), "<ul><li><ul><li>x</li></ul></li></ul>"),
+        (html! {
+            <dl>
+                <dt>
+                    {raw("<dl>")}
+                    <dd>"x"</dd>
+                    {raw("</dl>")}
+                </dt>
+            </dl>
+        }.to_html(), "<dl><dt><dl><dd>x</dd></dl></dt></dl>"),
         (
             html! { <div><a href="#one">{raw("<object>")}<a href="#two">"x"</a>{raw("</object>")}</a></div> }.to_html(),
             r##"<div><a href="#one"><object><a href="#two">x</a></object></a></div>"##,
@@ -208,47 +236,118 @@ fn no_nesting_refusal_reaches_across_what_the_markup_does_not_show() {
             "<div><button><object><button>x</button></object></button></div>",
         ),
         (
-            html! { <div><nobr>{raw("<object>")}<nobr>"x"</nobr>{raw("</object>")}</nobr></div> }.to_html(),
+            html! {
+                <div>
+                    <nobr>
+                        {raw("<object>")}
+                        <nobr>"x"</nobr>
+                        {raw("</object>")}
+                    </nobr>
+                </div>
+            }.to_html(),
             "<div><nobr><object><nobr>x</nobr></object></nobr></div>",
         ),
-        (html! { <h1>{raw("<span>")}<h2>"x"</h2>{raw("</span>")}</h1> }.to_html(), "<h1><span><h2>x</h2></span></h1>"),
+        (html! {
+            <h1>
+                {raw("<span>")}
+                <h2>"x"</h2>
+                {raw("</span>")}
+            </h1>
+        }.to_html(), "<h1><span><h2>x</h2></span></h1>"),
         (
             html! { <div><select aria-label="Choice">{raw("<object>")}<input>{raw("</object>")}</select></div> }.to_html(),
             r#"<div><select aria-label="Choice"><object><input></object></select></div>"#,
         ),
         (
-            html! { <div><select aria-label="Choice">{raw("<object>")}<select aria-label="Nested"></select>{raw("</object>")}</select></div> }
+            html! {
+                <div>
+                    <select aria-label="Choice">{raw("<object>")}<select aria-label="Nested"></select>{raw("</object>")}</select>
+                </div>
+            }
                 .to_html(),
             r#"<div><select aria-label="Choice"><object><select aria-label="Nested"></select></object></select></div>"#,
         ),
         (
-            html! { <div><select aria-label="Choice"><option>{raw("<span>")}<option>"x"</option>{raw("</span>")}</option></select></div> }
+            html! {
+                <div>
+                    <select aria-label="Choice">
+                        <option>
+                            {raw("<span>")}
+                            <option>"x"</option>
+                            {raw("</span>")}
+                        </option>
+                    </select>
+                </div>
+            }
                 .to_html(),
             r#"<div><select aria-label="Choice"><option><span><option>x</option></span></option></select></div>"#,
         ),
         (
             html! {
-                <div><select aria-label="Choice"><optgroup label="g">{raw("<span>")}<optgroup label="h"></optgroup>{raw("</span>")}</optgroup></select></div>
+                <div>
+                    <select aria-label="Choice">
+                        <optgroup label="g">
+                            {raw("<span>")}
+                            <optgroup label="h"></optgroup>
+                            {raw("</span>")}
+                        </optgroup>
+                    </select>
+                </div>
             }
             .to_html(),
             r#"<div><select aria-label="Choice"><optgroup label="g"><span><optgroup label="h"></optgroup></span></optgroup></select></div>"#,
         ),
         (
-            html! { <div><select aria-label="Choice"><option>"Choice"{raw("<span>")}<hr>{raw("</span>")}</option></select></div> }.to_html(),
+            html! {
+                <div>
+                    <select aria-label="Choice">
+                        <option>
+                            "Choice"{raw("<span>")}
+                            <hr>
+                            {raw("</span>")}
+                        </option>
+                    </select>
+                </div>
+            }.to_html(),
             r#"<div><select aria-label="Choice"><option>Choice<span><hr></span></option></select></div>"#,
         ),
         (
-            html! { <div><ruby>"Base"<rt>{raw("<ruby>")}<rt>"x"</rt>{raw("</ruby>")}</rt></ruby></div> }.to_html(),
+            html! {
+                <div>
+                    <ruby>
+                        "Base"
+                        <rt>
+                            {raw("<ruby>")}
+                            <rt>"x"</rt>
+                            {raw("</ruby>")}
+                        </rt>
+                    </ruby>
+                </div>
+            }.to_html(),
             "<div><ruby>Base<rt><ruby><rt>x</rt></ruby></rt></ruby></div>",
         ),
         (
-            html! { <div><ruby><rtc>{raw("<ruby>")}<rb>"x"</rb>{raw("</ruby>")}</rtc></ruby></div> }.to_html(),
+            html! {
+                <div>
+                    <ruby>
+                        <rtc>
+                            {raw("<ruby>")}
+                            <rb>"x"</rb>
+                            {raw("</ruby>")}
+                        </rtc>
+                    </ruby>
+                </div>
+            }.to_html(),
             "<div><ruby><rtc><ruby><rb>x</rb></ruby></rtc></ruby></div>",
         ),
         // Opened by what an expression writes, an integration point or a template's content
         // starts with nothing open.
         (
-            html! { <div><a href="#one">{raw("<svg><foreignObject>")}<a href="#two">"Link"</a>{raw("</foreignObject></svg>")}</a></div> }
+            html! {
+                <div>
+                    <a href="#one">{raw("<svg><foreignObject>")}<a href="#two">"Link"</a>{raw("</foreignObject></svg>")}</a>
+                </div>
+            }
                 .to_html(),
             r##"<div><a href="#one"><svg><foreignObject><a href="#two">Link</a></foreignObject></svg></a></div>"##,
         ),
@@ -271,7 +370,13 @@ fn TemplateForms() -> impl Document {
                 <title>"Forms"</title>
                 <Corten />
             </head>
-            <body><main>{raw("<template>")}<form><form><input></form></form>{raw("</template>")}</main></body>
+            <body>
+                <main>
+                    {raw("<template>")}
+                    <form><form><input></form></form>
+                    {raw("</template>")}
+                </main>
+            </body>
         </html>
     }
 }
@@ -284,7 +389,13 @@ fn TemplateFormsByComponent() -> impl Document {
                 <title>"Forms"</title>
                 <Corten />
             </head>
-            <body><main><Writes markup="<template>" /><form><form><input></form></form><Writes markup="</template>" /></main></body>
+            <body>
+                <main>
+                    <Writes markup="<template>" />
+                    <form><form><input></form></form>
+                    <Writes markup="</template>" />
+                </main>
+            </body>
         </html>
     }
 }
