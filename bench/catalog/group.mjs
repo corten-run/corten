@@ -2,6 +2,8 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
+// Keep this version check local: the observation reader imports this contract.
+const timedSchema = "catalog-saved-evidence/v3";
 
 export const groupResultSchema = "catalog-group-results/v1";
 export function groupDescriptor(name) {
@@ -37,6 +39,14 @@ function successfulLoad(phase, measured) {
     && (!measured || (["perCpuSecond", "memMaxMiB", "cpuUsec"].every((key) => nonnegative(phase[key]) && phase[key] > 0)
       && nonnegative(phase.cpuAvgPct)));
 }
+function completedTimedLoad(phase, measured) {
+  return phase && ["passed", "failed"].includes(phase.outcome)
+    && ["failed", "dropped", "timeouts", "httpErrors", "successfulRequests"].every((k) => Number.isSafeInteger(phase[k]) && phase[k] >= 0)
+    && phase.failed === phase.timeouts + phase.httpErrors && phase.requests === phase.successfulRequests + phase.failed
+    && phase.outcome === (phase.failed || phase.dropped ? "failed" : "passed")
+    && nonnegative(phase.successfulRps) && phase.successfulRps === phase.rps * phase.successfulRequests / phase.requests
+    && successfulLoad({ ...phase, failed: 0, dropped: 0 }, measured);
+}
 
 // Missing evidence remains reportable, but can never be a complete comparison.
 // Contradictory/extra evidence is malformed, rather than silently ignored.
@@ -47,6 +57,8 @@ export function inspectGroupEvidence(summary, phases, aggregate) {
   assert.deepEqual(summary.group, group, "catalog group descriptor/contract differs");
   assert.deepEqual(summary.options.apps, group.apps, "group requires the exact registry apps");
   const warnings = [];
+  const timed = summary.savedEvidence?.schema === timedSchema;
+  let targetFailed = false;
   const missing = (message) => warnings.push(message);
   if (!/^[0-9a-f]{40}$/.test(summary.commitAfter ?? "") || summary.commitAfter !== summary.commit
     || summary.dirtyAfter !== false) missing("After-run commit/tree provenance is missing, dirty or differs from the measured HEAD.");
@@ -77,12 +89,19 @@ export function inspectGroupEvidence(summary, phases, aggregate) {
         if (!isDeepStrictEqual(saved[phase], derived)) missing(`${app} ${key} ${phase}: aggregate missing or differs from individual runs/requested passes.`);
       }
       if (!runs.length) { missing(`${app} ${key}: missing group timing evidence.`); continue; }
+      if (timed && runs.length !== summary.options.passes) missing(`${app} ${key}: requested timed passes are incomplete.`);
       for (const run of runs) {
         if (!run.evidence) missing(`${app} ${key} pass ${run.pass}: missing timing identity.`);
         else assert.deepEqual(run.evidence, { app, ...profile, imageId: entry.imageId }, `${app} ${key}: wrong timing identity`);
         const measured = Object.keys(run.phases ?? {});
         assert.ok(measured.every((phase) => phases.includes(phase)), `${app} ${key}: unexpected timing phase`);
-        if (!phases.every((phase) => successfulLoad(run.phases?.[phase], true)) || !successfulLoad(run.warmup, false)) missing(`${app} ${key} pass ${run.pass}: missing or unsuccessful warmup/load phases.`);
+        const warm = timed ? completedTimedLoad(run.warmup, false) && run.warmup.outcome === "passed" : successfulLoad(run.warmup, false);
+        if (!phases.every((phase) => (timed ? completedTimedLoad : successfulLoad)(run.phases?.[phase], true)) || !warm) missing(`${app} ${key} pass ${run.pass}: missing or unsuccessful warmup/load phases.`);
+        if (timed) {
+          const failed = phases.some((phase) => run.phases?.[phase]?.outcome === "failed");
+          targetFailed ||= failed;
+          if (run.complete !== true || run.failed !== undefined || run.outcome !== (failed ? "failed" : "passed")) missing(`${app} ${key} pass ${run.pass}: timed attempt disposition differs.`);
+        }
         const cold = run.cold;
         if (cold) assert.equal(cold.path, "/catalog/record_1", `${app} ${key}: wrong cold timing target`);
         const elapsed = Date.parse(cold?.first200At) - Date.parse(cold?.containerStartedAt);
@@ -93,5 +112,6 @@ export function inspectGroupEvidence(summary, phases, aggregate) {
       }
     }
   }
-  return { descriptor: group, keys: group.cases.map((c) => `${c.source}-${c.target}`), complete: warnings.length === 0, warnings };
+  return { descriptor: group, keys: group.cases.map((c) => `${c.source}-${c.target}`), complete: warnings.length === 0 && !targetFailed,
+    ...(timed ? { attemptComplete: warnings.length === 0 } : {}), warnings };
 }
