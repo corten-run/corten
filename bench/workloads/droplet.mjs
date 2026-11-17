@@ -39,7 +39,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
-  let state, preserveOperationLock = false, controlEpoch = "collection", sealing;
+  let state, preserveOperationLock = false, controlEpoch = "collection", sealing, monitor;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
@@ -169,17 +169,33 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (state.group !== undefined && state.group === state.fleet.jobs[0].group) {
           state.bootstrapReady = { sha256: digest(result.stdout), observedAt: new Date().toISOString() }; save();
         }
+        if (state.control?.monitor) {
+          assert.equal(state.control.monitor.phase, "pending");
+          const expected = { id: state.control.monitor.id, binding: { round: state.round, commit: state.commit,
+            token: state.token, helperSha256: state.control.helperSha256 } };
+          const result = await execute("ssh", [...sshOptions, 'root@' + state.ip], 30000, false, undefined, undefined,
+            { stream: true, expected, local, interrupted });
+          assert.ok(result.monitor && result.monitor.registration.id === expected.id);
+          monitor = result.monitor;
+          state.control.monitor.registrationSha256 = digest(JSON.stringify(monitor.registration));
+          state.control.monitor.phase = "live"; save();
+        }
         await sealControl("bootstrap"); return;
       }
       assert.equal(result.status, 3, "common bootstrap marker observation failed");
       await sleep(Math.min(30000, remaining()));
     }
   }
-  async function locked(fn) {
-    boundary(); const lock = join(local, "operation.lock");
+  async function locked(fn, recovery = false) {
+    boundary(); const lock = join(local, recovery ? "stream-recovery.lock" : "operation.lock");
+    if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
     preserveOperationLock = false;
-    try { state = read(); check(); return await fn(); }
+    try {
+      state = read(); check();
+      if (recovery) assert.equal(state.control?.monitor?.phase, "invalid", "only irrevocably failed monitoring can recover");
+      return await fn();
+    }
     finally {
       try { await settle(); }
       catch (error) {
@@ -210,6 +226,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         inspect, interrupted, preserveLock: () => { preserveOperationLock = true; },
       });
       check();
+      assert.ok(state.control?.monitor?.phase !== "invalid" || report.status !== "verified", "lost monitor cannot qualify");
       outcome = campaignOutcome(report, state, exitCode);
     } catch { throw new Error("native campaign validation unavailable or invalid; evidence/host preserved"); }
     // Never retain/print native assertion messages: they may contain private raw values.
@@ -335,7 +352,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           token: fleet ? fleet.jobs.find((row) => row.group === options.group).token : randomBytes(8).toString("hex"),
           ...(fleet ? { group: options.group, fleet } : {}) }),
           provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false,
-          control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [] } };
+          control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
+            monitor: { schema: "benchmark-supervised-control/v1", id: randomBytes(16).toString("hex"), phase: "pending" } } };
         controlEpoch = "bootstrap";
         durable(statePath, `${JSON.stringify(state, null, 2)}\n`);
         return await locked(async () => {
@@ -387,13 +405,43 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (state.group !== undefined && state.group !== state.fleet.jobs[0].group)
             assert.equal(ended, false, "group ended before running admission; collect its evidence");
           state.status = "running"; save();
-          await commonBootstrap();
+          try { await commonBootstrap(); }
+          catch (error) {
+            if (!monitor) throw error;
+            preserveOperationLock = true; monitor.cancel();
+            try { await monitor.done; } catch { /* Unsettled transport retains custody. */ }
+            state.control.monitor.phase = "invalid"; save();
+            throw Object.assign(new Error("bootstrap seal failed after monitor registration; preserve host and custody"), { controlTreeUncertain: true });
+          }
+          if (monitor) {
+            let result;
+            try { result = await monitor.done; }
+            catch (error) { preserveOperationLock = true; throw error; }
+            state.control.monitor.phase = result.terminal ? "closed" : "invalid"; save();
+            if (!result.terminal) {
+              preserveOperationLock = true;
+              throw Object.assign(new Error("supervised monitor lost before terminal proof; retain host and custody"), { controlTreeUncertain: true });
+            }
+          }
           return structuredClone(state);
         });
       } finally { if (!preserveOperationLock) { unlinkSync(launchLock); syncDirectory(base); } }
     },
     async collect() {
       assert.ok(options.collect, "collect options required");
+      const observed = read();
+      let failedMonitorRecovery = false;
+      if (observed.control?.monitor) {
+        const { localStreamStatus, streamRecoveryReady } = await import("./cloud-control-stream.mjs");
+        const status = localStreamStatus(local);
+        if (["pending", "progress"].includes(status.kind)) {
+          if (status.kind === "pending") assert.equal(observed.status, "running", "monitor not registered; preserve pending reservation");
+          assert.ok(existsSync(join(local, "operation.lock")), "monitor absent or orphaned; preserve host"); return 3;
+        }
+        if (!streamRecoveryReady(local, observed.control.monitor)) return 3;
+        failedMonitorRecovery = status.kind === "invalid";
+        if (failedMonitorRecovery) assert.equal(observed.control.monitor.phase, "invalid", "foreground monitor has not settled");
+      }
       return locked(async () => {
         if (state.status === "retired") {
           verifyRetirement();
@@ -405,7 +453,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           await confirmDeleted();
           state.destroyedAt ??= new Date().toISOString(); save(); return deletedCode();
         }
-        assert.ok(!state.control?.sealed.includes("bootstrap"),
+        assert.ok(state.control?.monitor || !state.control?.sealed.includes("bootstrap"),
           "terminal status unavailable without SSH intrusion; preserve host; registered native collection needs an approved observation protocol");
         assert.ok(state.createIntentAt, "no create intent; reservation requires operator inspection");
         bind(await own());
@@ -437,6 +485,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           try { setupExit(); } catch { throw error; }
           return retireFailedSetup();
         }
+        if (failedMonitorRecovery) {
+          save(); return 1; // Failed evidence custody only; keep original lock and require the existing explicit retirement gates.
+        }
         state.collectedAt ??= new Date().toISOString(); state.status = "collected"; save();
         verifyArchive(); await validateEvidence();
         assert.ok(await unit(), "unit became active; preserve host"); await own(); check();
@@ -444,7 +495,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
         await confirmDeleted();
         verifyArchive(); await validateEvidence(); state.destroyedAt = new Date().toISOString(); save(); return deletedCode();
-      });
+      }, failedMonitorRecovery);
     },
     async retireFailedNative() {
       assert.equal(options.retireFailedNative, true, "explicit failed-native action required");
@@ -554,6 +605,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     },
     async deliverAudit() {
       assert.ok(options.deliverAudit, "audit delivery options required");
+      const observed = read();
+      if (observed.control?.monitor) {
+        assert.fail("supervised audit publication requires the locked approval checkpoint; preserve host and review wait");
+      }
       return locked(async () => {
         assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");
         const { group, prefix } = auditProtocol(options.auditGroup);

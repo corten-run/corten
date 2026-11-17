@@ -72,7 +72,7 @@ function kernelAddress(value, byteOrder) {
     return [...bytes.subarray(-4)].join(".");
   return ip([...Array(8)].map((_, i) => bytes.readUInt16BE(i * 2).toString(16)).join(":"));
 }
-function socketProof(socket, chain) {
+export function socketProof(socket, chain) {
   const fields = socket.connection.split(" ");
   assert.ok(["little", "big"].includes(socket.byteOrder), "socket byte order missing");
   assert.equal(fields.length, 4, "raw SSH connection tuple required");

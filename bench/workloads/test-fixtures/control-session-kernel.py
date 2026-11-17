@@ -138,8 +138,8 @@ class Path:
 root = Path("/run/corten-bench-control-" + token)
 
 
-def write(path, value):
-    assert str(path) not in data and len(value) <= scope["LIMIT"]
+def write(path, value, limit=8 * 1024 * 1024):
+    assert str(path) not in data and len(value) <= limit <= 64 * 1024 * 1024
     data[str(path)] = bytes(value)
 
 

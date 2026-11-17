@@ -87,9 +87,9 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
-export async function productionMain(args, { spawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log } = {}) {
+export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
-  const processRun = shellTransport({ repo, spawn });
+  const processRun = shellTransport({ repo, spawn, streamSpawn });
   const providerRun = providerFactory({ repo, interrupted });
   let stage = "source-plan";
   const mark = (error, value) => {
@@ -114,7 +114,7 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   const run = async (...args) => {
     await controlCheckpoint(interrupted);
     let result, failure;
-    try { result = args[0] === "doctl" ? await providerRun(...args.slice(1)) : processRun(...args); } catch (error) { failure = error; }
+    try { result = args[0] === "doctl" ? await providerRun(...args.slice(1)) : await processRun(...args); } catch (error) { failure = error; }
     try { await controlCheckpoint(interrupted); }
     catch (error) { if (!failure?.controlTreeUncertain && !failure?.controlUncertain) throw error; }
     if (failure) throw failure;
@@ -146,7 +146,7 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
   let entered = false;
-  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs) => {
+  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration) => {
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
@@ -154,7 +154,7 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
       assert.equal((await productionPlan(options, { repo, run })).approvalSha256, approval, "locked action changed after approval");
       entered = true;
     }
-    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs);
+    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration);
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,

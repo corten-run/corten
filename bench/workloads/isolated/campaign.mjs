@@ -16,6 +16,7 @@ import { inspectNative } from "./native-replay.mjs";
 import { beginLifetime, composeHostProof, inspectLifetime } from "./host-lifetime.mjs";
 import { composePhase } from "./composition.mjs";
 import { prepareMixedAudit, replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
+import { verifyStreamAudit } from "./control-stream.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url)).replace(/[\\/]$/, "");
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
@@ -60,7 +61,7 @@ export function createCampaign({ authorize }) {
     own(c.handle);
     return freeze({ schema: "benchmark-isolated-campaign-status/v1", campaign: c.handle.id, round: c.plan.round,
       campaignSha256: c.plan.campaignSha256, state: c.state, nextGroup: c.plan.order[c.index] ?? null,
-      executionVersion: c.control ? 4 : 3,
+      executionVersion: c.stream ? 5 : c.control ? 4 : 3,
       outcomes: structuredClone(c.outcomes), auditSubjectSha256: c.audit?.subject.subjectSha256 ?? null,
       uncollectedNativeRoots: structuredClone(c.pendingNative),
       mixedAuditSubjectSha256: c.mixedAudit?.subject.subjectSha256 ?? null,
@@ -88,6 +89,7 @@ export function createCampaign({ authorize }) {
     } finally { c.busy = false; }
   }
   async function command(c, binding, invocation, directory, signal) {
+    c.stream?.check();
     own(c.handle); verifyWorkingSources(c.plan.bindings[0]);
     const observerStop = new AbortController();
     const commandSignal = signal ? AbortSignal.any([signal, observerStop.signal]) : observerStop.signal;
@@ -141,8 +143,10 @@ export function createCampaign({ authorize }) {
     c.attempted.add(binding.request.group);
     const pending = { group: binding.request.group, phase: phaseName, artifactRoot: binding.validation.artifactRoot };
     c.pendingNative.push(pending); event(c, "native-output-reserved", pending);
+    c.stream?.open(Object.fromEntries(Object.entries(binding.resources.expectedCpus ?? binding.resources.measurement?.cpu ?? {}).map(([role, value]) => [role, value.cpuset])));
     const closeControlWindow = c.control ? beginControlWindow(c.control) : null;
-    const before = observeHost(); save(c, `${relative}/host-before.json`, before);
+    const before = observeHost(c.stream?.registration); save(c, `${relative}/host-before.json`, before);
+    if (c.stream) verifyHostBoundary(before, before);
     const commands = [];
     for (const invocation of [...binding.preparation.fixtures, binding.execution.invocation]) {
       if (signal?.aborted) throw new Error("campaign cancelled");
@@ -152,7 +156,7 @@ export function createCampaign({ authorize }) {
     }
     let after, boundaryError;
     try {
-      verifyWorkingSources(c.plan.bindings[0]); after = observeHost(); save(c, `${relative}/host-after.json`, after);
+      verifyWorkingSources(c.plan.bindings[0]); after = observeHost(c.stream?.registration); save(c, `${relative}/host-after.json`, after);
     } catch (error) { boundaryError = error; }
     const native = join(directory, "native"), present = !!lstatSync(original, { throwIfNoEntry: false });
     let manifest;
@@ -165,6 +169,7 @@ export function createCampaign({ authorize }) {
       phaseManifestSha256: phaseSnapshot(directory, binding.request.group === "json-api" && phaseName === "prepare").sha256 });
     if (boundaryError) throw boundaryError;
     closeControlWindow?.();
+    c.stream?.close();
     p.cleanup = verifyHostBoundary(before, after);
     return p;
   }
@@ -196,7 +201,7 @@ export function createCampaign({ authorize }) {
       const directory = join(root, id); mkdirSync(directory, { mode: 0o700 }); syncDirectory(root);
       const info = lstatSync(directory), handle = Object.freeze({ id, directory });
       const c = { handle, root, directory, inode: info.ino, device: info.dev, lockHash: digest(lock), plan,
-        control: control ? freeze(structuredClone(control.binding)) : null, controlEpochs: new Set(),
+        control: control ? freeze(structuredClone(control.binding)) : null, controlEpochs: new Set(), stream: control?.stream ?? null,
         files: [], sequence: 0, commandIndex: 0, busy: false, index: 0, phases: [], outcomes: [], attempted: new Set(), pendingNative: [], state: "active", audit: null, mixedAudit: null };
       owned.set(handle, c); save(c, "plan.json", plan); event(c, "authorized", { subject, trustBoundary: "explicit trusted parent policy, not review data" });
       try {
@@ -208,7 +213,8 @@ export function createCampaign({ authorize }) {
           event(c, "control-admitted", { epoch: "bootstrap", path: "control-bootstrap.json", sha256: digest(json(control.admission)), binding: c.control });
           c.controlEpochs.add("bootstrap");
         }
-        const observed = observeHost(); save(c, "host-initial.json", observed);
+        if (control?.admission.apparatus) assert.ok(c.stream, "presealed apparatus requires independent lease enforcement");
+        const observed = observeHost(c.stream?.registration); save(c, "host-initial.json", observed);
         if (control) for (const field of ["hostname", "bootId"]) assert.equal(observed[field], control.admission.host[field]);
         assert.deepEqual(observed.containers, [], "fresh campaign host has preexisting containers");
         event(c, "started"); return handle;
@@ -223,8 +229,17 @@ export function createCampaign({ authorize }) {
       save(c, path, admission); event(c, "control-admitted", { epoch, path, sha256: digest(json(admission)), binding: c.control });
       c.controlEpochs.add(epoch);
     },
+    recordStreamAudit(handle, proof) {
+      const c = own(handle); assert.ok(c.stream && !c.busy && c.state === "blocked-review-needed"); c.stream.check();
+      const group = c.plan.order[c.index], epoch = `audit-${group}`;
+      const subject = group === "mixed-production" ? c.mixedAudit.subject.subjectSha256 : c.audit.subject.subjectSha256;
+      verifyStreamAudit(c.control, c.stream.registration, proof, group, subject);
+      const path = `control-${epoch}.json`; save(c, path, proof);
+      event(c, "control-admitted", { epoch, path, channel: "stream", sha256: digest(json(proof)), binding: c.control }); c.controlEpochs.add(epoch);
+    },
     async advance(handle, { signal } = {}) {
       return exclusive(handle, async (c) => {
+        c.stream?.check();
         assert.equal(c.state, "active", "campaign is not eligible to advance");
         assert.ok(!signal?.aborted, "campaign cancelled");
         const binding = c.plan.bindings[c.index]; assert.ok(binding, "campaign already exhausted");
@@ -290,6 +305,10 @@ export function createCampaign({ authorize }) {
         }
         c.index++; event(c, "group-finished", c.outcomes.at(-1));
         if (c.index === c.plan.order.length) {
+          if (c.stream) {
+            const proof = await c.stream.seal(); save(c, "control-stream-seal.json", proof);
+            event(c, "stream-sealed", { path: "control-stream-seal.json", sha256: digest(json(proof)), binding: c.control });
+          }
           c.state = "finished"; event(c, "finished", { controllerReady: false });
           save(c, "campaign-result.json", { status: status(c), wholeHostTerminal: "parent-must-observe", deletionAuthorized: false });
         }

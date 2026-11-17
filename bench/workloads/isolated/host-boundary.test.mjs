@@ -13,6 +13,7 @@ mock.module("node:child_process", { namedExports: { execFileSync(command, args) 
 } } });
 mock.module("node:os", { defaultExport: { ...os, platform: () => "linux" } });
 mock.module("node:fs", { namedExports: {
+  readlinkSync: fs.readlinkSync, statSync: fs.statSync,
   readFileSync(path, encoding) {
     if (!procFiles) return fs.readFileSync(path, encoding);
     if (procFiles.has(path)) return procFiles.get(path);
@@ -21,6 +22,7 @@ mock.module("node:fs", { namedExports: {
   readdirSync(path) { return procFiles && path === "/proc" ? ["37329", "37463", "37422"] : fs.readdirSync(path); },
 } });
 const { observeHost, verifyHostBoundary } = await import("./host-observation.mjs");
+const { registration } = await import("../test-fixtures/control-stream-fixture.mjs");
 
 const before = { bootId: "boot", hostname: "host", containers: [], networks: [], processes: [] };
 // PID/start/flags from the retained read-only r21 diagnostic, not repaired historical evidence.
@@ -68,6 +70,25 @@ test("PID reuse and mixed new OS-daemon/application leaks remain fail-closed", (
 test("kernel exemptions do not relax boot, host, container or network boundaries", () => {
   for (const change of [{ bootId: "other" }, { hostname: "other" }, { containers: ["leak"] }, { networks: ["leak"] }])
     assert.throws(() => verifyHostBoundary(before, { ...after(kernel()), ...change }));
+});
+
+test("predeclared CPU0 apparatus remains in the raw host boundary; unknown login participants never become baseline", () => {
+  const sample = { host: structuredClone(registration.host), monoNs: registration.createdMonoNs,
+    members: structuredClone(registration.members), listener: structuredClone(registration.listener) };
+  const observation = { ...registration.host, containers: [], networks: [],
+    processes: [...registration.members, registration.listener].map((p) => ({ pid: p.pid, startTicks: p.startTicks, cgroup: p.cgroup,
+      stat: stat(p.pid, p.startTicks, "4194304", "ordinary", String(p.parentPid)) })),
+    controlApparatus: { registration, sample } };
+  assert.doesNotThrow(() => verifyHostBoundary(observation, structuredClone(observation)));
+  for (const change of [
+    (o) => { o.controlApparatus.sample.listener.cpus = "1"; },
+    (o) => { o.controlApparatus.sample.members[0].namespaces.net = "999"; },
+    (o) => { o.processes.push({ pid: 999, startTicks: "999", cgroup: "0::/user.slice/user-0.slice/user@0.service\n", stat: stat(999, "999", "4194304", "anything", "1") }); },
+    (o) => { o.processes.push({ pid: 999, startTicks: "999", cgroup: "0::/system.slice/other.service\n", stat: stat(999, "999", "4194304", "anything", "20") }); },
+  ]) {
+    const changed = structuredClone(observation); change(changed);
+    assert.throws(() => verifyHostBoundary(changed, structuredClone(changed)), "late baseline cannot absorb altered or unknown apparatus");
+  }
 });
 
 test("large process leaks produce a bounded diagnostic, not an assertion inventory dump", () => {

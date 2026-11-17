@@ -29,7 +29,7 @@ const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
 let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, pendingStarted, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
 let lifetimeStartup;
 let lifetimeRun;
-let admittedHost, controlWindows;
+let admittedHost, admittedApparatus, controlWindows;
 mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
   beginControlWindow(binding) {
     assert.equal(binding.round, "r21"); controlWindows.push("open");
@@ -80,7 +80,9 @@ mock.module("./mixed-staging.mjs", { exports: {
   },
   validateMixedRun() { return mode === "complete"; },
 } });
-const host = () => ({ hostname: admittedHost?.hostname ?? "test-host", bootId: admittedHost?.bootId ?? "boot", containers: [], networks: ["bridge"], processes: [] });
+const host = () => ({ hostname: admittedHost?.hostname ?? "test-host", bootId: admittedHost?.bootId ?? "boot", containers: [], networks: ["bridge"], processes: [],
+  ...(admittedApparatus ? { controlApparatus: { registration: structuredClone(admittedApparatus), sample: { host: admittedApparatus.host,
+    monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener } } } : {}) });
 mock.module("./host-observation.mjs", { namedExports: {
   processStat,
   observeHost() { observations++; const value = host(); if (mode === "leak" && observations > 2) value.containers = ["leak"]; return value; },
@@ -194,7 +196,7 @@ const { createCampaign } = await import("./campaign.mjs");
 const { validateCampaign: validateSavedCampaign } = await import("./campaign-verify.mjs");
 let round = 100;
 function setup(policy = () => true) {
-  admittedHost = null; controlWindows = [];
+  admittedHost = null; admittedApparatus = null; controlWindows = [];
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -253,6 +255,45 @@ test("v4 live campaign retains actual bootstrap proof before baseline and bracke
   writeFileSync(collectionPath, JSON.stringify(collection));
   assert.equal((await validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit })).status, "invalid",
     "rehashed journal/collection cannot substitute for watcher termination");
+});
+
+test("v5 campaign carries presealed registration through native bookends, final seal and saved drain replay", async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
+    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
+  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
+  const proof = JSON.parse(result.stdout), s = setupGroup("client-heavy"); s.plan.round = "r21"; admittedHost = proof.admission.host;
+  const { registration: fixture } = await import("../test-fixtures/control-stream-fixture.mjs");
+  const { streamHash } = await import("./control-stream.mjs");
+  const { deploymentSha256 } = await import("../deployments.mjs");
+  admittedApparatus = { ...structuredClone(fixture), binding: proof.binding, host: proof.admission.host };
+  proof.admission.apparatus = admittedApparatus;
+  proof.admission.apparatusSample = { host: admittedHost, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
+  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2-3" }, load: { cpuset: "4-7" } };
+  const calls = [], stream = { registration: admittedApparatus, check() { calls.push("check"); },
+    open(cpus) { assert.deepEqual(cpus, { app: "1", api: "2-3", load: "4-7" }); calls.push("open"); },
+    close() { calls.push("close"); }, async seal() {
+      calls.push("seal"); return { schema: "benchmark-control-stream-seal/v1", registration: admittedApparatus,
+        observations: [{ sequence: 1, monoNs: "2000000", registrationSha256: streamHash(admittedApparatus) }], sealedMonoNs: "3000000",
+        lease: { id: admittedApparatus.id, host: admittedHost, expiresMonoNs: "15000000000" } };
+    } };
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission, stream } });
+  controlWindows.directory = handle.directory; assert.equal(s.campaign.status(handle).executionVersion, 5);
+  assert.equal((await s.campaign.advance(handle)).state, "finished"); assert.ok(calls.indexOf("open") < calls.indexOf("close") && calls.indexOf("close") < calls.indexOf("seal"));
+  assert.deepEqual(JSON.parse(readFileSync(join(handle.directory, "00-client-heavy-timing", "host-after.json"))), host());
+  const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
+    host: admittedHost, monoNs: "4000000", identitiesAbsent: true, listener: admittedApparatus.listener,
+    scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] };
+  writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+  writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
+  const request = { folder: root, round: "r21", commit: s.plan.commit };
+  assert.notEqual((await validateSavedCampaign(request)).status, "invalid");
+  drain.identitiesAbsent = false; writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+  const collectionPath = join(handle.directory, "collection-manifest.json"), collection = JSON.parse(readFileSync(collectionPath));
+  const entries = evidence.tree(handle.directory).entries.filter((e) => e.path !== "collection-manifest.json");
+  collection.manifest = { entries, sha256: deploymentSha256(entries) }; writeFileSync(collectionPath, JSON.stringify(collection));
+  assert.equal((await validateSavedCampaign(request)).status, "invalid", "rehashing cannot replace actual apparatus disappearance");
 });
 
 for (const [fault, shutdown = "drained"] of [

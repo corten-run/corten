@@ -10,6 +10,7 @@ import { digest } from "./cloud-local.mjs";
 import { descriptor } from "../json-api/contract.mjs";
 import { bootstrapMarker, bootstrapReadScript } from "./cloud-remote.mjs";
 import { selectedApps } from "./registry.mjs";
+import { registration as streamRegistration } from "./test-fixtures/control-stream-fixture.mjs";
 
 export const commit = "a".repeat(40), campaign = "r21-0123456789abcdef", subject = "d".repeat(64);
 export const userId = "synthetic-user-0001", accountId = `user:${userId}`, context = "synthetic-cloud-control";
@@ -58,7 +59,7 @@ export function harness(t, flags = {}) {
   let bytes = archive([...metadata(), { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]);
   const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
   const report = () => syntheticInspection(flags.reportStatus);
-  const run = (binary, args, timeout, allowFail) => {
+  const run = (binary, args, timeout, allowFail, expiry, registration) => {
     calls.push([binary, ...args]); assert.ok(timeout > 0 && timeout <= 15 * 60000);
     if (flags.cancelAt?.(binary, args, calls)) flags.cancelled = true;
     if (flags.hook) flags.hook(binary, args);
@@ -97,6 +98,24 @@ export function harness(t, flags = {}) {
       }
     }
     if (binary === "ssh") {
+      if (registration?.stream) {
+        const apparatus = { ...structuredClone(streamRegistration), binding: registration.expected.binding, id: registration.expected.id };
+        writeFileSync(join(local, "monitor-registration.json"), JSON.stringify(apparatus));
+        writeFileSync(join(local, "monitor-journal.jsonl"), JSON.stringify({ kind: "progress", id: apparatus.id, payload: { state: "active" } }) + "\n");
+        const done = new Promise((resolve) => {
+          flags.completeMonitor = (terminal = true) => {
+            const value = { id: apparatus.id, binding: apparatus.binding, nativeTerminal: terminal, localClosed: true, remoteDrained: false,
+              ...(terminal ? {} : { publicationRevoked: true }) };
+            writeFileSync(join(local, "monitor-" + (terminal ? "terminal" : "invalid") + ".json"), JSON.stringify(value));
+            const closedAtMs = Date.now();
+            writeFileSync(join(local, "monitor-local-closed.json"), JSON.stringify({ id: apparatus.id, binding: apparatus.binding,
+              code: terminal ? 0 : 255, signal: null, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 30000 }));
+            resolve({ ...value, terminal });
+          };
+          if (!flags.monitorHold) flags.completeMonitor();
+        });
+        return { ...good(), monitor: { registration: apparatus, done, cancel: () => flags.completeMonitor(false) }, remoteDrained: false };
+      }
       const script = args.at(-1);
       assert.ok(args.includes(`root@${JSON.parse(readFileSync(statePath)).ip}`));
       if (script === bootstrapReadScript) {

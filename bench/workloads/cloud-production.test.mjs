@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { PassThrough, Writable } from "node:stream";
 import { existsSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +12,8 @@ import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
+import { registration as streamRegistration } from "./test-fixtures/control-stream-fixture.mjs";
+import { controlRegistration } from "./cloud-control-runtime.mjs";
 
 function productionHarness(t, flags = {}) {
   const h = harness(t, flags), calls = [], stdout = [];
@@ -30,18 +34,113 @@ function productionHarness(t, flags = {}) {
     }
     const args = [...argv];
     if (binary === "doctl") args.splice(args.indexOf("--http-retry-max"));
-    if (binary === "ssh") args[args.length - 1] = options.input.replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
+    const request = existsSync(h.statePath) ? h.saved().control?.ledger.at(-1)?.request : undefined;
+    if (binary === "ssh") {
+      const control = request && controlRegistration(request);
+      if (control) assert.equal(argv.at(-1), control.command);
+      const input = control ? options.input.slice(control.inputPrefix.length) : options.input;
+      args[args.length - 1] = input.replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
+    }
+    if (binary === "sftp") {
+      assert.equal(argv.at(-2), controlRegistration(request).command);
+      const batch = /^(get|put) "((?:\\.|[^"\\])*)" "((?:\\.|[^"\\])*)"\n$/.exec(options.input);
+      assert.ok(batch); const a = batch[2].replace(/\\(.)/g, "$1"), b = batch[3].replace(/\\(.)/g, "$1");
+      const pair = batch[1] === "get" ? [argv.at(-1) + ":" + a, b] : [a, argv.at(-1) + ":" + b];
+      const result = h.run("scp", pair, options.timeout);
+      return { ...result, stderr: "CORTEN_CONTROL " + request.invocation.id + " " + "d".repeat(64) + "\nCORTEN_RESULT " + request.invocation.id + " " + result.status + "\n" };
+    }
     if (flags.uploadHashError && binary === "ssh" && args.at(-1).includes("sha256sum --check")) return { status: 1, stderr: "private" };
-    return h.run(binary, args, options.timeout);
+    const result = flags.sealFail && binary === "ssh" && args.at(-1) === ":"
+      ? { status: 1, stdout: "", stderr: "" } : h.run(binary, args, options.timeout);
+    return request && binary === "ssh" ? { ...result, stderr: "CORTEN_CONTROL " + request.invocation.id + " " + "d".repeat(64) + "\nCORTEN_RESULT " + request.invocation.id + " " + result.status + "\n" } : result;
   };
   const deps = { spawn, providerRequest: syntheticProviderRequest(h, (binary, argv, timeout) => {
     calls.push([binary, argv, { timeout }]); return h.run(binary, argv, timeout, true);
   }), repo: h.repo, inspect: async () => h.report(), sleep: async () => {}, interrupted: () => flags.cancelled, write: (v) => stdout.push(JSON.parse(v)) };
+  deps.streamSpawn = (binary, argv) => {
+    assert.equal(binary, "ssh"); const child = new EventEmitter(), expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex"));
+    let sequence = 0, ended = false;
+    const frame = (kind, payload) => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1", id: expected.id, sequence: ++sequence, kind, payload }) + "\n");
+    const close = (code) => { if (!ended) { ended = true; child.emit("close", code, null); } };
+    child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.stdin = new Writable({ write(bytes, encoding, next) { if (JSON.parse(bytes).kind === "close") setImmediate(() => close(0)); next(); } });
+    child.stdin.on("close", () => setImmediate(() => close(255)));
+    setImmediate(() => { frame("registered", { ...structuredClone(streamRegistration), binding: expected.binding, id: expected.id }); frame("progress", { state: "active" }); });
+    const deadline = Date.now() + 2000, timer = setInterval(() => {
+      if (h.saved().control.sealed.includes("bootstrap")) { clearInterval(timer); frame("terminal", { id: expected.id,
+        nativeTerminal: true, campaign: "r21-0123456789abcdef", sealSha256: "f".repeat(64) }); }
+      else if (Date.now() > deadline) { clearInterval(timer); close(255); }
+    }, 5);
+    t.after(() => { clearInterval(timer); close(255); }); return child;
+  };
   deps.providerFactory = ({ repo, interrupted }) => Object.assign(createProviderEngine({ repo, interrupted, spawn, request: deps.providerRequest, sleep: deps.sleep }), { close: async () => {} });
   const args = (mode = "--collect") => ["r21", "--state-dir", h.base, mode, ...(mode === "--detach" ? ["--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context] : [])];
   async function approve(mode) { const values = args(mode); await productionMain([...values, "--print-approval"], deps); return [...values, "--approve-reviewed-merged-ready", stdout.at(-1).approvalSha256]; }
   return { h, calls, stdout, deps, args, approve };
 }
+
+test("production entry forwards source-bound stream registration and settles asynchronous stream failure without dropping custody", async (t) => {
+  const p = productionHarness(t, { active: true }); let started = 0, closed = 0;
+  const originalFactory = p.deps.providerFactory;
+  p.deps.providerFactory = (options) => { const run = originalFactory(options); run.close = async () => { closed++; }; return run; };
+  p.deps.streamSpawn = (binary, argv, options) => {
+    started++; assert.equal(binary, "ssh"); assert.equal(options.shell, false); assert.equal(options.cwd, p.h.repo);
+    const expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex"));
+    assert.equal(expected.id, p.h.saved().control.monitor.id); assert.equal(expected.binding.helperSha256, p.h.saved().control.helperSha256);
+    const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.stdin = new Writable({ write(bytes, encoding, next) { next(); } });
+    child.stdin.on("close", () => setImmediate(() => child.emit("close", 255, null)));
+    setImmediate(() => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1", id: expected.id, sequence: 2,
+      kind: "registered", payload: { ...structuredClone(streamRegistration), binding: expected.binding, id: expected.id } }) + "\n"));
+    return child;
+  };
+  const approval = await p.approve("--detach"); closed = 0;
+  await assert.rejects(productionMain(approval, p.deps), (error) => error.controlTreeUncertain === true && error.controllerStage === "controller-launch");
+  assert.equal(started, 1); assert.equal(closed, 2);
+  assert.ok(existsSync(join(p.h.local, "operation.lock"))); assert.ok(existsSync(join(p.h.base, ".groups-launch.lock")));
+  assert.ok(existsSync(join(p.h.local, "monitor-invalid.json"))); assert.equal(p.h.deletes, 0);
+});
+
+test("production entry keeps the single stream alive through bootstrap seal and awaits local close before teardown", async (t) => {
+  const p = productionHarness(t, { active: true }); let started = 0, streamClosed = false, providerClosed = 0;
+  p.deps.streamSpawn = (binary, argv) => {
+    started++; assert.equal(binary, "ssh");
+    const expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex")), child = new EventEmitter(); let sequence = 0;
+    const frame = (kind, payload) => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1", id: expected.id, sequence: ++sequence, kind, payload }) + "\n");
+    child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.stdin = new Writable({ write(bytes, encoding, next) {
+      if (JSON.parse(bytes).kind === "close") setImmediate(() => { streamClosed = true; child.emit("close", 0, null); }); next();
+    } });
+    setImmediate(() => { frame("registered", { ...structuredClone(streamRegistration), binding: expected.binding, id: expected.id }); frame("progress", { state: "active" }); });
+    const deadline = Date.now() + 1500, timer = setInterval(() => {
+      if (p.h.saved().control.sealed.includes("bootstrap")) {
+        clearInterval(timer); frame("terminal", { id: expected.id, nativeTerminal: true, campaign: "r21-0123456789abcdef", sealSha256: "f".repeat(64) });
+      } else if (Date.now() > deadline) { clearInterval(timer); child.emit("close", 255, null); }
+    }, 5);
+    t.after(() => clearInterval(timer)); return child;
+  };
+  const approval = await p.approve("--detach"), factory = p.deps.providerFactory;
+  p.deps.providerFactory = (options) => { const run = factory(options); run.close = async () => { assert.equal(streamClosed, true); providerClosed++; }; return run; };
+  assert.equal(await productionMain(approval, p.deps), 3); assert.equal(started, 1); assert.equal(providerClosed, 2);
+  assert.equal(p.h.saved().control.monitor.phase, "closed"); assert.deepEqual(p.h.saved().control.sealed, ["bootstrap"]);
+  assert.ok(p.h.saved().control.ledger.every((row) => row.localTerminal)); assert.ok(!existsSync(join(p.h.local, "operation.lock")));
+  const terminal = JSON.parse(readFileSync(join(p.h.local, "monitor-terminal.json"))); assert.equal(terminal.remoteDrained, false);
+  assert.equal(p.h.deletes, 0);
+});
+
+test("production failed bootstrap seal settles its already-ready stream and retains custody", async (t) => {
+  const p = productionHarness(t, { active: true, sealFail: true }), start = p.deps.streamSpawn;
+  let child, closed = false;
+  p.deps.streamSpawn = (...args) => { child = start(...args); child.once("close", () => { closed = true; }); return child; };
+  try {
+    await assert.rejects(productionMain(await p.approve("--detach"), p.deps), (error) => error.controlTreeUncertain === true);
+    assert.equal(closed, true); assert.ok(existsSync(join(p.h.local, "monitor-invalid.json")));
+    assert.ok(existsSync(join(p.h.local, "operation.lock"))); assert.ok(existsSync(join(p.h.base, ".groups-launch.lock")));
+    assert.equal(p.h.deletes, 0);
+  } finally {
+    if (child && !closed) { const done = new Promise((resolve) => child.once("close", resolve)); child.stdin.destroy(); await done; }
+  }
+});
 
 test("preview is local/read-only, missing isolated integration is explicit and cannot allocate", async (t) => {
   const p = productionHarness(t, { missingNative: true });
@@ -344,7 +443,7 @@ test("changing the fleet between preview and merged-source gate refuses allocati
 });
 
 test("fresh remote proof fetches only advertised objects without a shared reference or FETCH_HEAD write", async (t) => {
-  const remoteHead = "b".repeat(40), p = productionHarness(t, { remoteHead });
+  const remoteHead = "b".repeat(40), p = productionHarness(t, { remoteHead, active: true });
   assert.equal(await productionMain(await p.approve("--detach"), p.deps), 3);
   const git = p.calls.filter(([binary]) => binary === "git").map(([, argv]) => argv);
   assert.deepEqual(git.filter((argv) => argv[0] === "ls-remote"),
@@ -366,7 +465,7 @@ test("missing, malformed or ambiguous remote main advertisements refuse before c
 });
 
 test("locked launch rechecks the observed remote SHA rather than stale shared tracking refs", async (t) => {
-  const remoteHead = "b".repeat(40), p = productionHarness(t, { remoteHead, staleTracking: true });
+  const remoteHead = "b".repeat(40), p = productionHarness(t, { remoteHead, staleTracking: true, active: true });
   assert.equal(await productionMain(await p.approve("--detach"), p.deps), 3);
   const ancestry = p.calls.filter(([binary, argv]) => binary === "git" && argv[0] === "merge-base");
   assert.equal(ancestry.length, 2);

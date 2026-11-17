@@ -112,7 +112,15 @@ export function validateState(s, round) {
   for (const key of ["archiveSha256", "evidenceSha256"]) if (s[key] !== undefined) full(s[key], /[a-f0-9]{64}/, key);
   for (const key of ["createIntentAt", "collectedAt", "deletionIntentAt", "destroyedAt"]) if (s[key] !== undefined) date(s[key]);
   if (s.control !== undefined) {
-    exact(s.control, ["schema", "helperSha256", "ledger", "sealed"]);
+    exact(s.control, ["schema", "helperSha256", "ledger", "sealed", ...(s.control.monitor === undefined ? [] : ["monitor"])]);
+    if (s.control.monitor !== undefined) {
+      const m = s.control.monitor;
+      exact(m, ["schema", "id", "phase", ...(m.registrationSha256 === undefined ? [] : ["registrationSha256"])]);
+      assert.equal(m.schema, "benchmark-supervised-control/v1"); full(m.id, /[a-f0-9]{32}/, "monitor identity");
+      assert.ok(["pending", "live", "closed", "invalid"].includes(m.phase));
+      if (m.phase === "live" || m.phase === "closed") assert.ok(m.registrationSha256);
+      if (m.registrationSha256 !== undefined) full(m.registrationSha256, /[a-f0-9]{64}/, "monitor registration digest");
+    }
     assert.equal(s.control.schema, "benchmark-control-ledger/v1");
     full(s.control.helperSha256, /[a-f0-9]{64}/, "control source");
     assert.ok(Array.isArray(s.control.ledger) && s.control.ledger.length <= 4096);

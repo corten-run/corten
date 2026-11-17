@@ -1,7 +1,7 @@
 # Owned SSH/SFTP Control Drainage
 
-Status: production source and portable controls; **not source-ready: routine monitoring
-needs a parent architecture decision, and first-host native proof remains pending**.
+Status: supervised catalog controller source and portable controls frozen for independent
+review. First-host native qualification remains pending; no launch clearance is implied.
 Neither portable tests nor local SSH/SFTP exit certify Ubuntu/PAM cleanup. The deleted
 historical host's thirteen unexplained userspace identities remain unexplained.
 
@@ -51,65 +51,90 @@ final seal are not exempt. Both SSH and SFTP must be represented.
 Userspace anywhere under `user.slice` also blocks, including a lingering user manager;
 the first blocked raw inventory is retained rather than adopted into the baseline.
 
-Audit delivery is a separate epoch. Remote publication produces only a private pending
-delivery. The detached campaign waits for the audit seal, records admission, then
+Legacy v4 audit delivery remains a separate epoch. Remote publication produces only a
+private pending delivery. The campaign waits for the audit seal, records admission, then
 exclusively publishes the consumable inbox. Upload and publishing connections must
 settle before timing. Bootstrap proof cannot substitute for audit proof.
 
+## Supervised Catalog Path
+
+New reservations establish exactly one fixed SSH guardian stream before the bootstrap
+seal. Its raw socket-owned listener and connection ancestry are source-, host-, boot-,
+PID/start-, executable-, cgroup-, namespace-, thread- and affinity-bound. The source
+pins every declared listener/member thread to CPU0 before registration. Native app,
+API and load masks must exclude CPU0; their existing budgets do not change. The exact
+declared apparatus remains visible in every original raw host observation. New children,
+changed identities/affinity or unknown SSH/login participants invalidate, even if they
+were present at the first bookend. No process name grants ownership.
+
+The Python guardian emits typed progress, bounded audit material and a terminal notice
+on that same stream. Local source validates frames and fsyncs a bounded append-only
+journal. Routine `--collect` while the monitor is live reads that local journal only:
+no SSH/SFTP command, channel, provider status query or remote child is created. The
+foreground launch retains the existing operation/launch custody until the stream ends.
+An unresolved reservation prevents another launch; the legacy `--detach` spelling
+now stays foreground for this supervised path. It is not connection-independent.
+
+A challenged 15-second local-monitor lease is checked by both the guardian and an
+independent campaign watchdog. Lease loss or apparatus change permanently invalidates
+publication and triggers existing bounded native cancellation. It cannot resume a
+qualified attempt after reconnect. The 48-hour absolute service/stream bound remains.
+No new status server, provider credential, authentication or PAM configuration is used.
+
+At normal native completion the guardian freezes and seals its observation log, then
+sends the typed terminal notice. Local closure is not remote terminal proof. The
+independent campaign process uses the fixed, bounded post-native probe to prove all
+registered connection identities disappeared and every declared session scope is empty,
+with the listener still bound and no unknown login survivors. Earlier bootstrap/SFTP
+watchers likewise require actual unit/PID/cgroup termination before entry. Only after
+this final actual drainage may the entry write the collection manifest.
+
+The collector waits for actual local closure plus a two-lease (30-second) embargo,
+then may attempt guarded collection. The embargo is not proof that remote work stopped.
+Remote guard admission additionally requires actual stream-drain evidence, or permanent
+lease invalidation plus observed remote lease expiry for failed-only recovery. Existing
+unit-terminal, exact provider ownership, archive/evidence and pre-delete unit checks
+still run. Active work is never deleted; normal terminal cleanup issues one DELETE and
+retains uncertainty rather than repeating it. Failed monitor recovery retains original
+launch/operation locks, uses a separate exclusive recovery lock, cannot publish success
+or automatically delete, and still needs existing actual-quiescence retirement gates.
+
+If startup acknowledgement is lost before monitor registration, or a controller crash
+leaves no actual local-close record, automated collection refuses and preserves the
+reservation/host for inspection. A timeout or stale journal is not invented closure.
+Failed-only collection can retain evidence but does not grant retirement of a new
+failed native attempt; existing retirement ownership/quiescence gates still apply.
+
 ## Native Boundary And Custody
 
-The detached benchmark service remains independent of SSH. A fixed private mutex gates
-control registration against native windows; window opening rechecks the sealed epochs.
-Control attempted during a window creates retained intrusion evidence and prevents
-advancement even if it later disappears. Collection traffic while the campaign owner
-is alive also blocks. This is not a new worker engine.
-Collection is not a harmless native-window status poll. The controller refuses a new
-reservation's `--collect` before any SSH/SFTP once bootstrap is sealed, with an explicit
-terminal-status-unavailable error. It does not return a made-up running status, sleep
-indefinitely or let a routine operator poll invalidate a campaign. Legacy collection
-keeps its existing single observation. Direct control that bypasses this refusal still
-creates retained intrusion evidence in the remote guardian.
+A fixed private mutex still gates new control registration against native windows.
+Unregistered control traffic during native work retains intrusion evidence and prevents
+advancement even after disappearing. The only permitted live stream is the presealed,
+continuously checked apparatus, not an exemption for any SSH process. Legacy sealed-v4
+collection still refuses intrusive status polling; older legacy collection is unchanged.
 
-The original raw native end observation is preserved. Production still uses the unchanged
-strict `verifyHostBoundary`; no later clean sample rewrites that observation or excuses
-unknown processes, native workers, containers or networks. No process-name exception,
-arbitrary kill, retry, restart or baseline adoption is introduced.
+The first raw native end observation is preserved, including on apparatus-read failure.
+The existing process/container/network boundary checks remain; narrow apparatus checks
+are additional. No later clean snapshot hides a native worker or container. No arbitrary
+kill, retry, restart, process-name exception or late baseline adoption is introduced.
 
-Execution version 4 requires bootstrap admission before `started`, separate audit
-admission before staging, matching reservation/source/host/boot and replayable proof
-files. Older execution versions remain explicitly legacy and cannot claim these events.
-The terminal packer copies bounded private control records to the explicit archive root
-`control/`, including pre-entry failures before Node or the campaign is usable. Existing
-archives are not overwritten. Files have exact allowed names, private ownership, physical
-paths and stable inode/content checks. Early failure does not qualify native execution.
+Execution v5 explicitly adds the presealed apparatus, stream audit-admission and final
+stream seal/drain records. V4 keeps sealed epoch admission; older versions remain
+explicitly legacy and cannot claim either newer proof. The packer copies bounded private
+control custody to `control/`, including pre-entry failures. Archives are not replaced.
+Transport uncertainty retains locks/state/evidence/host and remains distinct from normal
+remote nonzero completion. Local result records continue to say `remoteDrained: false`.
 
-The saved-state allowlist admits only the new `control` field; its strict ledger
-validation remains in the existing contract. This does not resolve monitoring.
-Collection-time local success still returns `remoteDrained: false`; it neither proves
-remote emptiness nor retrospectively qualifies a native boundary. Timeout, disconnect,
-cancellation or missing result framing retains the existing locks/state/evidence/host.
-Normal remote nonzero results remain distinct from transport uncertainty.
+## Audit Gate
 
-## Monitoring Blocker
-
-The current operator learns unit state and audit readiness by opening SSH. Authentication
-and PAM/session creation occur before the fixed remote guardian can inspect a native
-window. Therefore an SSH status request that arrives during a window is already control
-traffic, even if the guardian waits, refuses payload or the session later disappears.
-Treating that traffic as harmless would weaken the original raw bookend/timing contract.
-
-These three requirements cannot all be met by the existing protocol: no live/control
-SSH across native windows; fresh bounded knowledge of terminal/audit state; and SSH as
-the only remote evidence channel. Local clocks, the service's maximum runtime, stale
-receipts or a delayed clean inventory are not actual terminal/disappearance observations.
-The new pre-network refusal is a safe failure, not an operational monitoring solution.
-After seal, even a possibly finished campaign stays preserved until this is resolved.
-
-Parent must choose an approved non-SSH terminal/review observation channel or explicitly
-review a different experiment boundary permitting an owned persistent control channel.
-Neither is implemented or implicitly authorized here. No new status server, credentials,
-auth/PAM scope, polling exception or assumed terminal deadline is introduced. In
-particular, this source must not be called ready for a routine official-host launch.
+The stream producer/consumer has typed audit-ready, same-stream material, private pending
+delivery, sealed admission and exclusive inbox publication controls. However the public
+supervised `--deliver-audit` action deliberately refuses before queueing: its local-only
+queue does not yet execute production's existing locked approval recheck. Integrating
+that authorization checkpoint is outside this catalog freeze. This blocks supervised
+JSON/mixed/all-group completion at their mandatory review waits, not catalog-page,
+which has no independent audit wait. Legacy audit delivery is unchanged. No approval
+or review requirement is bypassed to make another group complete.
 
 ## Pre-Entry Retirement
 
@@ -132,7 +157,7 @@ retains locks/state/host.
 
 This proof deliberately returns `remoteDrained: false`: the current query/watcher have
 not yet disappeared. It extends neither native qualification nor the existing pre-entry
-deletion policy to a native attempt. It is not a solution to post-seal collection.
+deletion policy to a native attempt. It does not authorize post-native retirement.
 New v2 proof/retirement records are capped at 8 MiB; the 25-second remote query,
 30-second local observation and existing retirement freshness bounds are unchanged.
 
@@ -140,8 +165,9 @@ New v2 proof/retirement records are capped at 8 MiB; the 25-second remote query,
 
 Invocations retain their existing deadlines, capped at fifteen minutes. Live receipts
 permit at most 32 ancestors, 8192 tracked identities, 4096 samples and 65536 aggregate
-process rows; individual records are at most 8 MiB and packaged control custody at most
-64 MiB. Bounds fail closed, not by retrying, truncating proof or raising deadlines.
+process rows; legacy/session records are at most 8 MiB and packaged control custody at
+most 64 MiB. The supervised stream has 64 KiB frames and a 64 MiB observation/journal
+cap, with 2-second maximum observation gaps. Bounds fail closed, not by retrying, truncating proof or raising deadlines.
 
 `cloud-control-runtime.test.mjs` executes the actual fixed Python source against an
 in-memory kernel/systemd/SSH/SFTP fixture, never real host services. Separate negatives
@@ -174,3 +200,12 @@ or an import of saved validation. `test-fixtures/control-session-kernel.py` is t
 `cloud-retirement.mjs` additionally imports the runtime, session replay and admission
 helpers for pre-entry v2 proof only; it is not reached by saved campaign validation.
 No dependency, source-inventory allowlist or validation resource cap is changed here.
+
+The supervised path additionally imports `isolated/control-stream.mjs` from saved
+campaign/admission/host verification. Its pure verifiers execute during replay.
+`isolated/control-stream-source.mjs` is imported by the fixed guardian source and must
+be captured: its Python bytes are hashed during saved replay, not executed there.
+Producer-only modules are `cloud-control-stream.mjs` (also a literal dynamic import of
+`cloud-transport.mjs`) and `isolated/control-stream-remote.mjs` (campaign entry).
+The new stream fixture/kernel and stream test modules are test-only. Parent integration
+must recompute exact immutable closure; no inventory allowlist or resource cap is edited.

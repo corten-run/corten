@@ -34,3 +34,19 @@ test("audit staging requires its own post-review sealed admission and the same e
   ]) { const changed = structuredClone(audit); mutate(changed); assert.throws(() => replayJournal(plan, id, [...before, changed, stage, halted], status(4))); }
   assert.throws(() => replayJournal(plan, id, [authorized, admitted("bootstrap"), started, audit, halted], status(4)), "no admission before review wait");
 });
+
+test("v5 replay requires same-stream audit admission and a final stream seal without changing v4", () => {
+  const before = [authorized, admitted("bootstrap"), started, { kind: "mixed-review-needed", subjectSha256: "d".repeat(64) }];
+  const audit = { ...admitted("audit-mixed-production"), channel: "stream" }, stage = { kind: "mixed-audit-staged" };
+  assert.doesNotThrow(() => replayJournal(plan, id, [...before, audit, stage, halted], status(5)));
+  assert.throws(() => replayJournal(plan, id, [...before, admitted("audit-mixed-production"), stage, halted], status(5)));
+  assert.throws(() => replayJournal(plan, id, [...before, audit, stage, halted], status(4)));
+  const empty = { ...plan, order: [] }, finished = { executionVersion: 5, state: "finished", outcomes: [], uncollectedNativeRoots: [] };
+  const seal = { kind: "stream-sealed", path: "control-stream-seal.json", sha256: "e".repeat(64), binding };
+  const prefix = [authorized, admitted("bootstrap"), started];
+  assert.throws(() => replayJournal(empty, id, [...prefix, { kind: "finished" }], finished), /stream seal/);
+  assert.equal(replayJournal(empty, id, [...prefix, seal, { kind: "finished" }], finished).streamSeal.sha256, seal.sha256);
+  for (const change of [(s) => { s.binding.token = "f".repeat(16); }, (s) => { s.path = "late-clean.json"; }]) {
+    const wrong = structuredClone(seal); change(wrong); assert.throws(() => replayJournal(empty, id, [...prefix, wrong, { kind: "finished" }], finished));
+  }
+});

@@ -12,11 +12,16 @@ The [owned SSH/SFTP drain contract](owned-ssh-drain.md) adds production registra
 input hold, sealed bootstrap/audit admission and watcher-terminal proof. Actual first-host
 native qualification remains pending. Local transport exit still does not clear a remote
 session, relax a host bookend, or release an uncertain lock.
-Routine SSH `--collect` monitoring after bootstrap seal is not yet compatible with
-this strict boundary. The controller now refuses before opening SSH instead of
-invalidating an active window. An approved terminal/review observation protocol is a
-remaining architecture prerequisite, not an instruction to wait without a bound or
-guess that the remote unit has ended. Do not treat this checkpoint as source-ready.
+New grouped catalog launches use one presealed CPU0-bound SSH control stream and an
+explicit foreground local-monitor lease. Routine `--collect` reads its durable local
+journal without opening remote commands/channels. Lost lease irrevocably invalidates
+and cancels native work; qualification is no longer detached from the local connection.
+Terminal stream notice/local exit is not remote-empty evidence: actual source-bound
+identity/scope disappearance and existing unit/evidence gates precede normal cleanup.
+Supervised audit delivery currently fails closed at its missing locked approval
+checkpoint, so JSON/mixed/all-group review waits remain blocked. Catalog has no audit
+wait. Legacy schemas/collection remain explicit. See the drain contract for custody,
+failed-only recovery and first-official-host qualification limits.
 
 ## Parent interface
 

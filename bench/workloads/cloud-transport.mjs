@@ -19,7 +19,7 @@ export const controlEnvironment = (binary) => {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   return { ...env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" };
 };
-export function shellTransport({ repo, spawn = spawnSync } = {}) {
+export function shellTransport({ repo, spawn = spawnSync, streamSpawn } = {}) {
   assert.ok(isAbsolute(repo));
   // Capture inherited credentials/config locations once, never re-read mutable
   // process.env between account proof and a mutation. Nothing is logged or saved.
@@ -28,6 +28,23 @@ export function shellTransport({ repo, spawn = spawnSync } = {}) {
     assert.ok(["git", "doctl", "ssh", "scp"].includes(binary), "unsupported control executable");
     assert.ok(Array.isArray(args) && args.every((v) => typeof v === "string" && !v.includes("\0")));
     assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 15 * 60000, "bounded control timeout required");
+    if (control?.stream) {
+      assert.equal(binary, "ssh");
+      assert.match(control.expected.id, /^[a-f0-9]{32}$/); assert.match(control.expected.binding.token, /^[a-f0-9]{16}$/);
+      assert.match(args.at(-1), /^root@(?:\d{1,3}\.){3}\d{1,3}$/);
+      const token = control.expected.binding.token;
+      const command = `/usr/bin/python3 -I /run/corten-bench-control-${token}/helper.py monitor ${token} ${Buffer.from(JSON.stringify(control.expected)).toString("hex")}`;
+      const fixedArgs = args.map((value) => {
+        if (!value.startsWith("UserKnownHostsFile=")) return value;
+        const path = value.slice("UserKnownHostsFile=".length);
+        assert.ok(!/["$%\r\n\0]/.test(path), "SSH config expansion in state path refused");
+        return 'UserKnownHostsFile="' + path + '"';
+      });
+      const argv = ["-F", "none", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "ControlMaster=no", "-o", "ControlPath=none", ...fixedArgs, command];
+      return import("./cloud-control-stream.mjs").then(({ openControlStream }) => openControlStream({ repo, argv,
+        env: { ...environments.get("ssh") }, expected: control.expected, local: control.local, interrupted: control.interrupted,
+        ...(streamSpawn ? { launch: streamSpawn } : {}) }));
+    }
     let argv = [...args], input, executable = binary;
     if (binary === "doctl") {
       // doctl otherwise retries 429/5xx requests, including ambiguous mutations.

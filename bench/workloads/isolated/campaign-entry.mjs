@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { campaignRounds } from "./campaign-contract.mjs";
 import { groupNames } from "../registry.mjs";
 import { digest, durable, physical, readRegular } from "./evidence.mjs";
+import { superviseControlStream } from "./control-stream-remote.mjs";
 
 export const auditWaitMs = 24 * 60 * 60 * 1000;
 export function parseCampaignArgs(args) {
@@ -43,7 +44,7 @@ export async function runCampaignEntry(args) {
     await Promise.all([import("./campaign-contract.mjs"), import("./campaign.mjs"), import("./control-admission.mjs")]);
   const abort = new AbortController(), cancel = () => abort.abort();
   process.on("SIGINT", cancel); process.on("SIGTERM", cancel);
-  let handle, transport = null;
+  let handle, transport = null, stream;
   const campaign = createCampaign({ authorize(subject) {
     // Calling this fixed entry is the trusted parent's operator-authorized launch.
     if (subject.action === "begin-campaign") return subject.commit === input.commit && subject.round === input.round
@@ -56,12 +57,16 @@ export async function runCampaignEntry(args) {
   try {
     const control = bootstrapControl(input);
     const admission = await waitControlAdmission(control, "bootstrap", { signal: abort.signal, deadline: Date.now() + 45 * 60000 });
+    if (admission.apparatus) {
+      stream = superviseControlStream(control, admission, abort);
+    }
     controlOperation(control, "activate");
     const request = { round: input.round, commit: input.commit };
     const plan = input.group === undefined ? bindCampaign(request) : bindGroupCampaign({ ...request, group: input.group });
-    handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal, control: { binding: control, admission } });
+    handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal, control: { binding: control, admission, stream } });
     let status = campaign.status(handle), deadline = null;
     while (status.state === "active" || status.state === "blocked-review-needed") {
+      stream?.progress(status);
       if (abort.signal.aborted) { status = campaign.stop(handle); break; }
       if (status.state === "active") { deadline = null; status = await campaign.advance(handle, { signal: abort.signal }); }
       else {
@@ -70,8 +75,11 @@ export async function runCampaignEntry(args) {
         const group = status.auditGroup ?? "json-api", prefix = group === "mixed-production" ? "mixed" : "json";
         const pending = join(handle.directory, `${prefix}-audit-delivery-pending.json`);
         if (lstatSync(pending, { throwIfNoEntry: false })) {
-          const proof = await waitControlAdmission(control, `audit-${group}`, { signal: abort.signal, deadline });
-          campaign.recordControlAdmission(handle, proof);
+          if (stream) campaign.recordStreamAudit(handle, stream.audit(group, readRegular(pending)));
+          else {
+            const proof = await waitControlAdmission(control, `audit-${group}`, { signal: abort.signal, deadline });
+            campaign.recordControlAdmission(handle, proof);
+          }
           // Exclusive hard-link publication; no overwrite, symlink traversal or shell.
           const info = lstatSync(pending);
           assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size <= 16 * 1024 * 1024);
@@ -92,6 +100,12 @@ export async function runCampaignEntry(args) {
       }
     }
     if (status.state === "finished") {
+      stream?.check();
+      if (stream) {
+        const proof = await stream.finish({ id: stream.registration.id, nativeTerminal: true, campaign: handle.id,
+          sealSha256: digest(readRegular(join(handle.directory, "control-stream-seal.json"))) });
+        durable(join(handle.directory, "control-stream-drain.json"), JSON.stringify(proof));
+      }
       const collection = campaign.collect(handle);
       durable(join(handle.directory, "collection-manifest.json"), `${JSON.stringify(collection, null, 2)}\n`);
       const { validateCampaign } = await import("./campaign-verify.mjs");
@@ -105,6 +119,7 @@ export async function runCampaignEntry(args) {
     if (handle) campaign.stop(handle, error.message);
     throw error;
   } finally {
+    stream?.dispose();
     process.off("SIGINT", cancel); process.off("SIGTERM", cancel);
   }
 }

@@ -1,3 +1,5 @@
+import streamSource from "./control-stream-source.mjs";
+
 export default String.raw`"""Fixed SSH/SFTP guardian and outside-session observer. No provider or kill API."""
 import contextlib
 import hashlib
@@ -39,8 +41,8 @@ def read(path, limit=LIMIT):
         os.close(fd)
 
 
-def write(path, data):
-    assert len(data) <= LIMIT
+def write(path, data, limit=LIMIT):
+    assert len(data) <= limit and limit in (LIMIT, 16 * 1024 * 1024, 64 * 1024 * 1024)
     stage = path.parent / (".stage-" + secrets.token_hex(16))
     fd = os.open(stage, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
@@ -92,6 +94,7 @@ def window_operation(root, mode):
     owner = proc(os.getppid())
     assert owner["cgroup"] == "0::/system.slice/corten-bench-groups-" + binding["round"] + "-" + binding["token"] + ".service/supervisor\n"
     with mutex(root):
+        stream_apparatus(root)
         requests = sorted(p.name for p in root.glob("request-*.json"))
         assert not list(root.glob("intrusion-*.json")), "retained control intrusion"
         if mode in ("activate", "window-open"):
@@ -340,7 +343,8 @@ def guard(request, source):
         for name in ("window.json", "campaign-active.json"):
             if (root / name).exists():
                 owner = load(root, name)["owner"]
-                if alive(owner) and (name == "window.json" or request["epoch"] == "collection"):
+                recovery = (root / 'stream-drain.json').exists() or ((root / 'stream-invalid.json').exists() and (root / 'stream-lease.json').exists() and time.monotonic_ns() >= int(stream_load(root, 'stream-lease.json')['expiresMonoNs']))
+                if alive(owner) and (name == "window.json" or request["epoch"] == "collection") and not recovery:
                     write(root / ("intrusion-" + identifier + ".json"), encoded({"invocation": invocation, "owner": owner}))
                     raise AssertionError("control during native campaign/window")
         if request["epoch"] != "collection":
@@ -455,14 +459,15 @@ def inspect_epoch(root, epoch):
         receipts.append(receipt)
         watchers.append(terminal)
     rows = inventory()
+    apparatus = stream_apparatus(root)
     blocked = False
     for receipt in receipts:
         listener = receipt["listener"]
         blocked |= any(key(p) != key(listener) and (p["cgroup"] == listener["cgroup"]
                        or p["cgroup"].startswith(listener["cgroup"].rstrip("\n") + "/") or parent(p) == listener["pid"])
-                       for p in rows.values())
+                       for p in rows.values() if p['pid'] not in apparatus)
     blocked |= any(p["cgroup"].startswith("0::/user.slice/") or re.search(r"/session-[^/\n]+\.scope(?:/|\n)", p["cgroup"])
-                   for p in rows.values())
+                   for p in rows.values() if p['pid'] not in apparatus)
     if blocked:
         target = root / ("admission-blocked-" + epoch + ".json")
         if not target.exists():
@@ -470,7 +475,8 @@ def inspect_epoch(root, epoch):
         raise AssertionError("unregistered SSH/login userspace remains")
     assert not list(root.glob("intrusion-*.json")), "control intrusion retained"
     return {"schema": "benchmark-control-admission/v1", "seal": seal, "invocations": ledger, "receipts": receipts, "watchers": watchers,
-            "host": host(), "closedMonoNs": str(time.monotonic_ns()), "qualification": "pending-first-host-native-proof"}
+            "host": host(), "closedMonoNs": str(time.monotonic_ns()), "qualification": "pending-first-host-native-proof",
+            **({'apparatus': load(root, 'stream-registration.json'), 'apparatusSample': stream_sample(load(root, 'stream-registration.json'))} if apparatus else {})}
 
 
 def setup_query(root, expected):
@@ -599,15 +605,18 @@ def custody(root):
         destination.mkdir(mode=0o700)
     total = 0
     for path in sorted(root.iterdir()):
-        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|window\.json|campaign-active\.json|(?:request|start|launcher|registration|result|receipt|intrusion)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
-        data = read(path)
+        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|window\.json|campaign-active\.json|stream-(?:registration|lease|state|invalid|terminal|sealed|drain|audit-json-api|audit-mixed-production)\.json|stream-observations\.jsonl|(?:request|start|launcher|registration|result|receipt|intrusion)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
+        data = read(path, 64 * 1024 * 1024 if path.name == 'stream-observations.jsonl' else LIMIT)
         total += len(data)
         assert total <= 64 * 1024 * 1024
         target = destination / path.name
         if target.exists():
             assert read(target) == data
         else:
-            write(target, data)
+            write(target, data, limit=64 * 1024 * 1024 if path.name == 'stream-observations.jsonl' else LIMIT)
+
+
+${streamSource}
 
 
 def main(args):
@@ -627,7 +636,14 @@ def main(args):
     root = root_for(token)
     private(root)
     assert sha(read(root / "helper.py")) == load(root, "binding.json")["helperSha256"]
-    if mode == "watch":
+    if mode == "monitor":
+        return stream_monitor(root, json.loads(bytes.fromhex(args[2])))
+    elif mode == "stream-drain":
+        proof = stream_drain(root)
+        if proof is None:
+            return 3
+        sys.stdout.buffer.write(encoded(proof))
+    elif mode == "watch":
         assert re.fullmatch(r"[a-f0-9]{32}", args[2])
         watch(root, args[2])
     elif mode == "inspect":

@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { guardianSource, guardianSha256 } from "../cloud-control-runtime.mjs";
 import { verifyControlSession } from "../cloud-control-session.mjs";
 import { regular } from "../cloud-local.mjs";
+import { verifyApparatus } from "./control-stream.mjs";
 
 const hash = (v) => createHash("sha256").update(JSON.stringify(v)).digest("hex");
 const equal = (a, b) => assert.equal(JSON.stringify(a), JSON.stringify(b), "control binding differs");
@@ -26,6 +27,7 @@ export function verifyControlWatcher(invocation, receipt, terminal) {
 export function verifyControlAdmission(binding, epoch, admission) {
   assert.equal(admission.schema, "benchmark-control-admission/v1");
   const seal = admission.seal;
+  if (admission.apparatus) verifyApparatus(binding, admission.apparatus, admission.apparatusSample);
   equal(seal.binding, binding); assert.equal(seal.epoch, epoch);
   assert.ok(["bootstrap", "audit-json-api", "audit-mixed-production"].includes(epoch));
   assert.ok(Array.isArray(admission.invocations) && admission.invocations.length > 0 && admission.invocations.length <= 4096);
@@ -69,7 +71,12 @@ export async function waitControlAdmission(binding, epoch, { signal, deadline } 
         maxBuffer: 8 * 1024 * 1024, env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" }, windowsHide: true });
     assert.ok(!result.error && !result.signal && [0, 3].includes(result.status), "control observer failed; preserve custody");
     if (result.status === 0) {
-      const admission = JSON.parse(result.stdout); verifyControlAdmission(binding, epoch, admission); return admission;
+      const admission = JSON.parse(result.stdout); verifyControlAdmission(binding, epoch, admission);
+      if (epoch === "bootstrap") {
+        const marker = JSON.parse(regular("/bench/bootstrap-ready.json", 1024));
+        assert.equal(admission.apparatus?.id, marker.monitorId, "controller monitor identity differs");
+      }
+      return admission;
     }
     await delay(Math.min(250, Math.max(1, deadline - Date.now())), undefined, { signal });
   }
