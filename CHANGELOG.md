@@ -5,6 +5,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- CI builds the Git-capable Playwright test-tools image only in the browser group that runs
+  the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
   page is on the screen (a GET with `corten: action` to the page's own route, which says
