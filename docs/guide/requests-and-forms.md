@@ -436,9 +436,9 @@ A date and time the user picks (`<input type="datetime-local">`) is what their c
 (`2026-11-13T14:05`), with no zone: an `Entry<corten::i18n::LocalDateTime>`. It is drawn in a zone
 and read in the same one, which the form carries. The page draws in a `corten::form::DrawZone`:
 `zone.field(f.zone)` writes the zone as a hidden input, `zone.name()` is its name for the visitor,
-and `zone.local(at)` writes an instant as the input's `value`, `min` or `max`. The post reads the
-hidden input as a `corten::form::FormZone` field, and `input.when.at(&input.zone)` is the instant,
-`None` for the field's message. The page takes its zone from the request
+and `zone.local(at)` writes an instant as the input's `value` (`zone.min(at)` and `zone.max(at)`
+its bounds, below). The post reads the hidden input as a `corten::form::FormZone` field, and
+`input.when.at(&input.zone)` is the instant, `None` for the field's message. The page takes its zone from the request
 (`DrawZone::from(req.zone())`, with the `zones` feature and `App::client_zone()`; else `Utc` or an
 `Offset`), and a form drawn again after a refused post from the zone the post sent
 (`DrawZone::from(&input.zone)`), so a time typed under `UTC` is not shown again as Chicago's. The
@@ -452,7 +452,9 @@ from a zone (no `FormZone::from(req.zone())`, no `at(req.zone())`, no `at(&draw_
 `zone.field` takes only a `FormZone` field's name; and an instant becomes an
 input's time only through a `DrawZone`. It does not check that the form draws the hidden input (a
 form without it compiles, and its post is a 422), that the input and the times come from the same
-`DrawZone`, or that a form drawn again uses the posted zone.
+`DrawZone`, or that a form drawn again uses the posted zone. Nor is a `FormZone` proof that this
+form drew it: a client can send another zone a `DrawZone` writes, and the handler's own bounds on
+the instant are what keep it within what the app allows.
 
 ```rust,ignore
 #[derive(Fields)]

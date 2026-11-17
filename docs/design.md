@@ -4680,7 +4680,7 @@ rules something out.
     element's `form=` among them, which the field module of `037bb827b` fails in each), and
     `corten dev`'s reports, on `98e7ca184`.
 
-59. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
+58. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
     what the post reads); a time the clocks skip or repeat is read as Temporal's default
     (`compatible`) reads it.** `<input type="datetime-local">` sends what the visitor's clock read
@@ -4854,7 +4854,10 @@ rules something out.
     passing on `5f2b8cb8a`; 2026-11-16, the `FormZone` reader refusing `+00:00` and `-00:00`,
     `Entry::at_keeping`, the drawn `min` and `value` in one minute, a day's start on the platform's
     first and last days, and the all-zones test with its `FormZone` round trip, passing on
-    `12794f3ff`.
+    `12794f3ff`; 2026-11-16, jiff 0.2.38's `Timestamp::MAX` (its documentation read that day), a
+    time past it refused in a tz database zone, `zone.min` and `zone.max` holding an unchanged value
+    where the clocks go back, `LocalDateTime::at`'s `compile_fail` doctests, and the all-zones
+    test with its `min` and `max` check, passing on `e9c2ce45e`.
 
 ## Rules
 

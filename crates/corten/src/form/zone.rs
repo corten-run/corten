@@ -124,6 +124,10 @@ pub struct DrawZone(Named);
 /// It is made only by deserializing what a client sent (a form's post, a query, JSON), never from
 /// a zone, so the zone of the request that posts it cannot stand in for it.
 ///
+/// It checks what was sent, not that this form drew it: a client can send another zone a
+/// `DrawZone` writes, and the time is then read in that zone. The handler's own bounds on the
+/// instant are what keep it within what the app allows.
+///
 /// A zone that is none a [`DrawZone`] writes is a 422 naming the field, as any typed field a page
 /// writes itself: it came from no page of the app's. So is a post without it, and UTC written as
 /// an offset (`+00:00`), which a `DrawZone` writes as `UTC`: one zone is sent one way.
