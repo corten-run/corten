@@ -14,6 +14,11 @@ Corten is pre-1.0, so any minor version may change the API.
   The campaign carries independently reviewed v2 transport receipts from the
   cloud inbox through timing replay; a version label alone is not an audit.
 
+- CI builds the Git-capable Playwright test-tools image only in the browser group that runs
+  the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
+- Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
+  so `data-keep-place` restores them after the page swap, without another runtime behavior.
+
 - The catalog benchmark uses a fixed two-worker upstream within its existing CPU
   and memory budget, retaining per-process headroom and a first-host preflight.
   Saved worker evidence joins every preflight to the timed upstream and the
