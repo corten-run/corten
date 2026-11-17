@@ -67,6 +67,35 @@ def stream_sample(registration):
     return {'host': host(), 'monoNs': str(time.monotonic_ns()), 'members': members, 'listener': listener}
 
 
+def stream_watchdog(root, expected_hash):
+    import select
+    registration = load(root, 'stream-registration.json')
+    assert sha(encoded(registration)[:-1]) == expected_hash
+    previous, renewal = None, 0
+    while True:
+        # taskset execs this single-threaded consumer, never the campaign or its native children.
+        assert os.sched_getaffinity(0) == {0}
+        assert not (root / 'stream-invalid.json').exists()
+        stream_sample(registration)
+        lease = stream_load(root, 'stream-lease.json')
+        now = time.monotonic_ns()
+        assert int(registration['createdMonoNs']) <= now < int(registration['deadlineMonoNs'])
+        assert lease['id'] == registration['id'] and lease['host'] == registration['host']
+        assert 0 < int(lease['expiresMonoNs']) - now <= 15000000000
+        assert 0 <= now - int(lease['observedMonoNs']) <= 2000000000
+        assert type(lease['renewal']) == int and lease['renewal'] >= renewal
+        renewal = lease['renewal']
+        if previous is None:
+            assert os.write(1, b'R') == 1
+        else:
+            assert 0 <= now - previous <= 2000000000
+        previous = now
+        if select.select([0], [], [], 0.25)[0]:
+            assert time.monotonic_ns() - previous <= 2000000000
+            assert os.read(0, 2) == b'S', 'unexpected campaign disappearance'
+            return 0
+
+
 def stream_apparatus(root):
     path = root / 'stream-registration.json'
     if not path.exists():

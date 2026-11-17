@@ -16,6 +16,23 @@ async function liveMonitor(h) {
   assert.equal(h.saved().control.monitor.phase, "live"); return { pending };
 }
 
+test("foreground timeout permanently marks the monitor invalid without releasing custody", async (t) => {
+  const h = harness(t, { active: true, monitorHold: true });
+  const pending = h.launch({ run(...args) {
+    const result = h.run(...args);
+    if (result.monitor) result.monitor.done = result.monitor.done.then(() => {
+      throw Object.assign(new Error("uncertain foreground completion"), { controlTreeUncertain: true });
+    });
+    return result;
+  } }).launch();
+  for (let i = 0; i < 100 && !h.flags.completeMonitor; i++) await new Promise(setImmediate);
+  assert.equal(typeof h.flags.completeMonitor, "function");
+  h.flags.completeMonitor(false); await assert.rejects(pending, (error) => error.controlTreeUncertain === true);
+  assert.equal(h.saved().control.monitor.phase, "invalid");
+  assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+  assert.equal(h.deletes, 0); assert.equal(await h.task().collect(), 3);
+});
+
 test("routine live collection reads the existing monitor journal without provider calls, SSH or new channels", async (t) => {
   const h = harness(t, { active: true, monitorHold: true }), { pending } = await liveMonitor(h);
   const calls = h.calls.length;
