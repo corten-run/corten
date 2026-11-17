@@ -183,7 +183,81 @@ native baseline. It makes no independent-review, serialization-audit, deployment
 build-cost, instruction-count or browser-experience claim. The catalog upstream's functional
 gate cannot inject redirects; the marketplace gate does exercise refusal of redirects.
 
-## Fixed Output Prototype
+## Production V2
+
+New `run.mjs` captures use `json-api-results/v2`. The reader explicitly dispatches
+that schema; historical v1 stays readable and zero-error strict with its conservative,
+non-guaranteed nominal accounting policy. Thresholds, rates, VUs, durations, budgets,
+the full nine-app/four-profile roster and pass rotation are unchanged.
+
+Production fixed phases use the instrumented fixed script below and retain **all**
+original stock JSON stdout, not a selected-event replacement. Closed phases use
+`timed-load.js`. The producer receipt binds the verifier-known load source hashes,
+exact inspected native commands/environments, unchanged pinned tools and added generator
+I/O. Every fixed stream has an independently replayed path/hash/length/event/point/metric/
+timestamp receipt; summaries, custom clocks, starts/iterations/requests/classifications,
+named checks, thresholds and actual normal exit 0/99 must agree. Stderr UTF-8 byte length
+must equal the retained command count before log parsing. Raw fixed latency quantiles
+are independently sorted/interpolated using pinned k6 TrendSink semantics.
+
+Normal 99 with coherent classified timeout/429/5xx evidence is saved, not automatically
+thrown away as a missing load phase. Later phases and matrix cells continue. Warmup
+failure, abnormal/signal/expired/interrupted exits, I/O/output/marshal faults, bad parity,
+source evidence, runtime or cleanup remain apparatus/incomplete failures, never app blame.
+Every saved metric, aggregate and pass-cell projection is recomputed. Reports retain
+failed and missing passes, response counts and min/median/max ranges; incomplete or
+failed attempts have no comparison eligibility. A complete negative attempt is distinct
+from a successful baseline, and `--require-complete` still fails it.
+
+App/upstream/load runtime budgets, executable/mount/ownership/identity and lifetimes are
+captured before and after every phase. All three roles need window-covering CPU/memory
+samples below their memory budgets. Counted app CPU and, for API mode, upstream CPU stay
+mandatory. Observed generator peak CPU must be below 80% of its unchanged four-core quota.
+The existing upstream is **one Node process**, not a worker pool: API attribution requires
+both sampled peak and counted average below 80% of one core. These observations include
+the instrumented load's added I/O; synthetic fixtures do not establish native headroom.
+Counter windows conservatively include observation overhead; these limits do not prove
+CPU saturation or a machine-admission/peak-memory guarantee.
+
+Success keeps exact zero fixture / one API upstream read per request. Failed API read
+bounds (`successful requests <= reads <= total requests`) require a new independent
+`json-api-native-audit/v2` receipt: the existing source guarantees plus
+`atMostOneUpstreamFetch`, `noTransportRetries`, `noBackgroundUpstream` and
+`responseAfterUpstreamCompletion`, all true. `transportSourceFiles` names a nonempty,
+duplicate-free subset of hash-bound `sourceFiles` inspected for the actual transport,
+including retry behavior. The bundle may use `json-api-native-audits/v2`. No positive
+audit is generated here. V1 audits still admit successful phases but cannot establish
+failed-API bounds. Audit truth/independence remains the operator's source-review boundary.
+
+Read counters must join cold → warmup → all phases → teardown, across the actual ordered
+matrix, and to a final upstream observation. Fresh app containers, unchanged participating
+identities and no overlapping timing cells are replayed, not inferred from the saved plan.
+Counter movement between phases/cases or during/after teardown invalidates the attempt.
+Client timeouts do not observe app-handler completion: their classification is retained,
+but attribution remains incomplete, as do later phases with an unresolved server tail.
+No quiet interval or favorable counter count is taken as a server-drain proof.
+
+Fixed nominal arrivals, all observed starts/offers and observed endpoint variation remain
+separate. A late ordinary start is not rejected at zero nanoseconds or nominal-plus-N.
+The conditional last-start count check is an evidence-consistency check, not a wall-to-
+monotonic conversion or scheduler-stop proof. Fixed drops lack stock monotonic last-offer/
+stop observations and remain incomplete/unattributed even with plausible load pressure.
+Completion grace is never an offered-arrival budget. Neither the standalone prototype nor
+the parent-operated tiny native capture alone enables production eligibility.
+
+Capture hard-caps stdout at 512 MiB (fixed) / 2 MiB (closed), stderr at 4 MiB; any cap/write
+fault invalidates the retained prefix. Summary/clock admission caps are 2 MiB each after
+timing. At least 528 MiB free disk is checked before each phase; this is not a filesystem
+reservation. Fixed replay uses 64 KiB chunks/lines, at most 2,000,000 events / 128 metrics,
+and a growing typed latency vector capped at 16 MiB final size (under 32 MiB across growth
+allocations). Original bytes are never decompressed: no gzip is accepted on this path.
+At defaults, 108 fixed captures can retain at most **54 GiB of admitted raw streams**;
+stderr/auxiliary/raw-JSON/stat/app logs are additional. This is an evidence cap, not an
+estimate of native output or generator/internal-k6 memory. Actual native output, added
+CPU, collector/disk behavior and headroom still need measurement with pinned k6 before
+any execution/readiness claim. Disk exhaustion or incomplete samples cannot qualify.
+
+## Standalone Experiment
 
 `fixed-probe.mjs ABSOLUTE_PINNED_K6_BINARY NEW_OUTPUT_DIRECTORY` is an operator-run,
 local-only stock-k6 clock experiment, **not** the production matrix runner. It verifies
@@ -233,10 +307,9 @@ Every replay returns `json-api-fixed-prototype/v1`, `status: "unqualified"`,
 `attemptComplete: false`, `targetOutcome: null`, `comparisonEligible: null` and
 `scheduling.endpointEligible: null`. A coherent load exit99 preserves classified counts,
 not app-failure attribution. The production v1 reader stays zero-error strict; this
-prototype cannot opt into it or establish a baseline. Full v2 matrix/report integration,
-all-resource/lifetime/cleanup/source joins, failed-API read bounds and native headroom
-qualification remain separate unfinished work. No timing-eligibility policy is finalized
-before reviewing the ordinary pinned-k6 observation.
+prototype cannot opt into it or establish a baseline. Production v2 uses the separate
+joins above. Native headroom qualification and independent exact-source audits are not
+established by this experiment or its synthetic tests.
 
 Replay requires the recorded executable's absolute path, SHA-256 and pinned version,
 the exact experiment source inventory/hashes and argv matching its fixed configuration,
@@ -254,7 +327,6 @@ target failure. Fixed dropped work remains incomplete without an observed monoto
 offer/stop; wall timestamps and completion grace do not fill that gap. Ordinary coherent
 late starts are retained without a zero-nanosecond endpoint gate. The closed-only
 `timed-load.js` retains success/timeout/429/5xx counters without changing imported load
-options or thresholds. These modules are not yet wired into the production runner/report:
-they cannot grant app/source/apparatus qualification or comparisons, and the existing
-production v1 gates remain strict. The full v2 matrix/resource/source/cleanup join is
-unfinished; declaring its schema name does not enable it in saved replay.
+options or thresholds. Production v2 wires these observations through the separate
+runtime/resource/source/cleanup joins described above; this observation module alone
+cannot grant app attribution or comparisons. Historical v1 gates remain strict.

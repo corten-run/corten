@@ -86,6 +86,7 @@ export function deriveTimedObservation(raw, phase, options, { stream } = {}) {
   const loadOutcome = metrics.failed || metrics.dropped ? "failed" : "passed";
   assert.equal(command.exit.code, loadOutcome === "failed" ? 99 : 0, "native timed exit/threshold mismatch");
   assert.equal(typeof raw.logs, "string", "complete timed native logs required");
+  assert.ok(count(command.stderrBytes) && command.stderrBytes === Buffer.byteLength(raw.logs, "utf8"), "timed stderr UTF8 bytes differ");
   verifyPrototypeLogs(raw.logs, command.exit.code, { timeouts: metrics.counts.timeout, dropped: metrics.dropped });
   let scheduling = null;
   if (fixed) {

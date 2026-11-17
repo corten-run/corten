@@ -48,5 +48,5 @@ export function fixedFixture({ responses = ["ok", "ok", "ok"], drops = 0 } = {})
   return { entries, bytes: () => Buffer.from(entries.map((v) => JSON.stringify(v) + "\n").join("")), summary: { metrics, root_group: { checks: root } },
     clock: { schema: "json-api-fixed-clock/v1", k6DurationMs: durationMs, metrics: Object.fromEntries(Object.entries(metrics).filter(([name]) => name.startsWith("json_")).map(([name, values]) => [name, { values }])) },
     config: { phase: "fixed", seconds: 1, rate: 3 }, command: { exit: { code, signal: null, expired: false, interrupted: false },
-      clock: { startedAt: epoch, finishedAt: epoch + durationMs + 15 }, ioErrors: [] }, logs: "" };
+      clock: { startedAt: epoch, finishedAt: epoch + durationMs + 15 }, ioErrors: [], stderrBytes: 0 }, logs: "" };
 }

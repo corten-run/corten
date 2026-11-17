@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { commands } from "./process.mjs";
 import { k6Version } from "../load-tool.mjs";
-import { prototypeSchema, readFixedStream, streamLimits } from "./fixed-stream.mjs";
+import { prototypeSchema, readFixedStream, streamLimits, verifyStreamReceipt } from "./fixed-stream.mjs";
 import { fixedPrototypeArgv, verifyExperimentIdentity } from "./fixed-identity.mjs";
 
 export const prototypeLimits = Object.freeze({ ...streamLimits, logBytes: 4 * 2 ** 20, summaryBytes: 2 * 2 ** 20, clockBytes: 2 * 2 ** 20 });
@@ -106,6 +106,8 @@ export function joinFixedPrototype({ summary, clock, command, config, logs }, st
   const latency = raw("http_req_duration", "trend"), trend = metric(summary, "http_req_duration");
   assert.equal(latency.points, requests); assert.ok(latency.min >= 0); assert.equal(trend?.max, latency.max, "latency raw max differs");
   close(trend?.avg, latency.sum / latency.points, "latency average differs from raw sample mean");
+  for (const [key, name] of [["p(50)", "p50"], ["p(95)", "p95"], ["p(99)", "p99"]])
+    close(trend?.[key], stream.latency?.[name], "latency percentile differs from raw samples");
   assert.ok(["avg", "p(50)", "p(95)", "p(99)", "max"].every((key) => Number.isFinite(trend[key]) && trend[key] >= 0), "invalid latency summary");
   assert.ok(trend.avg <= trend.max && trend["p(50)"] <= trend["p(95)"] && trend["p(95)"] <= trend["p(99)"] && trend["p(99)"] <= trend.max, "latency order differs");
   const capped = counter("json_start_capped"); assert.ok(capped <= requests);
@@ -171,6 +173,7 @@ export async function verifyFixedPrototype(folder, expectedIdentity) {
     assert.ok(statSync(join(folder, name)).size <= cap, "artifact over cap");
     same(capture.files?.[name], { bytes: statSync(join(folder, name)).size, sha256: await digest(join(folder, name), cap) }, "artifact length/hash differs");
   }
+  verifyStreamReceipt(capture.raw);
   const stream = await readFixedStream(join(folder, "events.jsonl"), capture.raw);
   assert.equal(capture.command?.stdoutBytes, stream.receipt.bytes, "stdout/retained raw byte counts differ");
   assert.equal(capture.command?.stderrBytes, capture.files["stderr.jsonl"].bytes, "stderr/retained log byte counts differ");

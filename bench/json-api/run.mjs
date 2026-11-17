@@ -13,10 +13,11 @@ export async function run(args) {
   // These legacy selectors cannot pre-filter the registry or its ESM dependencies.
   const saved = Object.fromEntries(["BENCH_APPS", "BENCH_TIER"].map((k) => [k, process.env[k]]));
   for (const k of Object.keys(saved)) delete process.env[k];
-  let c, artifacts, evidence, matrix, stats, reporting;
+  let c, artifacts, evidence, matrix, stats, reporting, production, phaseCapture, outcomes;
   try {
     c = await import("./contract.mjs"); artifacts = await import("./artifacts.mjs"); evidence = await import("./evidence.mjs");
     matrix = await import("./matrix.mjs"); stats = await import("../catalog/stats.mjs"); reporting = await import("./report.mjs");
+    production = await import("./production.mjs"); phaseCapture = await import("./phase.mjs"); outcomes = await import("./timed-outcomes.mjs");
   } finally { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
   const options = c.parseArgs(args), group = c.descriptor(), cpus = c.cpuSettings(process.env);
   const folder = join(here, "results", options.round);
@@ -24,12 +25,12 @@ export async function run(args) {
   const runId = `json-api-${options.round}-${randomBytes(5).toString("hex")}`, network = `${runId}-net`, label = "run.corten.json-api";
   const processIO = commands(repo), command = processIO.command;
   const docker = (args, opts) => command("docker", args, opts);
-  const summary = { schema: c.schema, group, options, timingPlan: c.timingPlan(options), round: options.round, runId, startedAt: new Date().toISOString(), complete: false, checksPassed: false,
+  const summary = { schema: c.timedSchema, producer: production.producerProvenance(), group, options, timingPlan: c.timingPlan(options), round: options.round, runId, startedAt: new Date().toISOString(), complete: false, attemptComplete: false, checksPassed: false,
     failures: [], cleanupFailures: [], fixtures: {}, tools: {}, host: { hostname: hostname(), platform: platform(), release: release(), node: process.version, checkout: repo.replaceAll("\\", "/") },
     measurement: { cpus, encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
       loadMemoryBytes: 2 ** 31, nativeProfile: group.nativeProfile, phases: ["warmup", ...c.phases] },
     apps: Object.fromEntries(options.apps.map((app) => [app, { images: {}, checks: {}, runs: Object.fromEntries(group.cases.map((p) => [p.key, []])),
-      aggregates: Object.fromEntries(group.cases.map((p) => [p.key, {}])) }])) };
+      aggregates: Object.fromEntries(group.cases.map((p) => [p.key, {}])), projections: Object.fromEntries(group.cases.map((p) => [p.key, outcomes.timedCaseProjection([], options.passes)])) }])) };
   const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
   const log = (line) => { const text = `${new Date().toISOString()} ${line}`; console.log(text); appendFileSync(join(folder, "run.log"), `${text}\n`); };
   const fail = (app, key, stage, error) => { summary.failures.push({ app, key, stage, error: error.stack ?? String(error) }); log(`${app ?? "suite"} ${key ?? ""}: ${stage}: ${error.message}`); save(); };
@@ -82,7 +83,7 @@ export async function run(args) {
       assert.ok(/^(bench|crates)\//.test(f.path), "audit source must stay in bench/crates");
       files[f.path] = artifacts.readContained(repo, f.path).toString("utf8");
     }
-    c.verifyNativeReceipt(receipt, expected, files);
+    c.verifyNativeReceipt(receipt, expected, files, { timed: true });
     return { receipt, files };
   };
   const argsFor = (name, profile, imageId) => c.appArgs({ name, profile, imageId, network, upstream: `http://${upstreams[profile.payload].name}:8080`, fixtures: fixtureDirs[profile.payload], cpus });
@@ -113,32 +114,33 @@ export async function run(args) {
       return { result, raw: write(`${path}/cold.json`, raw) };
     } finally { await remove(probe); }
   }
-  async function phase(name, profile, expected, stage, path) {
+  async function phase(name, profile, expected, stage, path, priorTailUnobserved = false) {
     const config = c.loadConfig(options, stage), k6 = `${runId}-k6`, up = upstreams[profile.payload].name;
     const names = [name, ...(profile.source === "api" ? [up] : [])], roles = ["app", ...(profile.source === "api" ? ["upstream"] : [])];
-    let sampler, sampled, before, after, upstreamBefore, upstreamAfter, failure, startedAt, finishedAt;
-    const output = join(folder, path, `${stage}-k6.json`), statsPath = join(folder, path, `${stage}-stats.log`);
+    const statsPath = join(folder, path, `${stage}-stats.log`), context = c.runtimeContext(summary, profile);
     try {
       await own(["create", "--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount,
         "-e", `BASE=http://${name}:8080`, "-e", `PAYLOAD=${profile.payload}`, "-e", `DURATION=${config.seconds}s`, "-e", `MODE=${config.mode}`,
-        "-e", `RATE=${config.rate}`, "-e", `VUS=${config.vus}`, summary.tools.k6.imageId, "run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"], k6);
-      upstreamBefore = await apiReads(profile.payload);
-      before = await counters(names); startedAt = new Date().toISOString(); sampler = stats.sampleStats(names, statsPath, config.seconds + 35);
-      try { await docker(["start", "-a", k6], { timeout: (config.seconds + 25) * 1000, file: join(folder, path, `${stage}.log`) }); } catch (e) { failure = e; }
-      finally { try { await sampler.stop(); sampled = JSON.parse(readFileSync(`${statsPath}.json`, "utf8")).samples; } catch (e) { failure ??= e; } finishedAt = new Date().toISOString(); }
-      after = await counters(names); upstreamAfter = await apiReads(profile.payload);
-      await docker(["cp", `${k6}:/tmp/json-summary.json`, output]);
-      const clockOutput = join(folder, path, `${stage}-clock.json`); await docker(["cp", `${k6}:/tmp/json-clock.json`, clockOutput]);
-      const context = c.runtimeContext(summary, profile);
-      const raw = { identity: expected, runtime: c.runtimeReceipt(await inspect(name), expected, context),
-        participants: await participants(expected, profile, { upstream: up, load: k6 }, config), clock: { startedAt, finishedAt, ...JSON.parse(readFileSync(clockOutput, "utf8")) },
-        tools: { nodeImageId: summary.tools.node.imageId, k6ImageId: summary.tools.k6.imageId }, phase: stage, config, k6: JSON.parse(readFileSync(output, "utf8")),
-        counters: Object.fromEntries(roles.map((role, i) => [role, { before: before[names[i]], after: after[names[i]] }])),
-        samples: Object.fromEntries(roles.map((role, i) => [role, sampled?.[names[i]] ?? []])),
-        upstreamReads: { before: upstreamBefore, after: upstreamAfter } };
-      const reference = write(`${path}/${stage}.json`, raw);
-      if (failure) throw failure;
-      return { raw: reference, metrics: c.deriveLoad(raw, expected, stage, options, summary.tools, context) };
+        "-e", `RATE=${config.rate}`, "-e", `VUS=${config.vus}`, ...(config.mode === "fixed" ? ["-e", "JSON_PROTOTYPE_OUTPUT=/tmp"] : []),
+        summary.tools.k6.imageId, ...c.timedLoadCommand(config)], k6);
+      return await phaseCapture.capturePhase({ folder, path, stage, config, expected, options, tools: summary.tools, context, priorTailUnobserved,
+        native: loadArtifact(summary.apps[expected.app].checks[profile.key].native), io: {
+          write, reads: () => apiReads(profile.payload),
+          execute: (opts) => docker(["start", "-a", k6], opts),
+          copy: (source, target) => docker(["cp", `${k6}:${source}`, target]),
+          async counters() { const values = await counters(names); return Object.fromEntries(roles.map((r, i) => [r, values[names[i]]])); },
+          async observe() {
+            const app = await inspect(name), upstream = await inspect(up), load = await inspect(k6), ctx = { ...context, load: config };
+            return { at: Date.now(), runtime: c.runtimeReceipt(app, expected, ctx),
+              participants: { upstream: c.participantReceipt(upstream, expected, ctx, "upstream"), load: c.participantReceipt(load, expected, ctx, "load") },
+              liveness: { app: production.life(app), upstream: production.life(upstream), load: production.life(load) }, upstreamReads: await apiReads(profile.payload) };
+          },
+          sample() {
+            const all = { app: name, upstream: up, load: k6 }, sampler = stats.sampleStats(Object.values(all), statsPath, config.seconds + 35);
+            return { async stop() { await sampler.stop(); const samples = JSON.parse(readFileSync(`${statsPath}.json`, "utf8")).samples;
+              return Object.fromEntries(Object.entries(all).map(([role, id]) => [role, samples[id]])); } };
+          },
+        } });
     } finally { await remove(k6); }
   }
   try {
@@ -146,7 +148,7 @@ export async function run(args) {
     assert.ok(options.checkOnly || !summary.dirty, "JSON timing requires a clean committed checkout");
     if (options.receipts) {
       const bundle = JSON.parse(readFileSync(resolve(repo, options.receipts), "utf8"));
-      assert.equal(bundle.schema, "json-api-native-audits/v1"); assert.ok(Array.isArray(bundle.receipts)); receipts = bundle.receipts;
+      assert.ok(["json-api-native-audits/v1", "json-api-native-audits/v2"].includes(bundle.schema)); assert.ok(Array.isArray(bundle.receipts)); receipts = bundle.receipts;
       assert.equal(new Set(receipts.map((r) => `${r.identity?.app}:${r.identity?.key}`)).size, receipts.length, "duplicate native audit receipts");
       assert.ok(receipts.every((r) => group.apps.includes(r.identity?.app) && group.cases.some((p) => p.key === r.identity?.key)), "unexpected native receipt member/case");
     }
@@ -239,22 +241,39 @@ export async function run(args) {
         const result = { pass, identity: expected, complete: false, phases: {} }; entry.runs[profile.key].push(result);
         try {
           result.cold = await cold(name, profile, expected.imageId, expected, path);
-          result.warmup = await phase(name, profile, expected, "warmup", path);
-          for (const stage of c.phases) { result.phases[stage] = await phase(name, profile, expected, stage, path); save(); }
+          try { result.warmup = await phase(name, profile, expected, "warmup", path); }
+          catch (error) { if (error.phase) result.warmup = error.phase; throw error; }
+          let priorTailUnobserved = false;
+          for (const stage of c.phases) {
+            try { result.phases[stage] = await phase(name, profile, expected, stage, path, priorTailUnobserved); }
+            catch (error) { if (error.phase) result.phases[stage] = error.phase; throw error; }
+            priorTailUnobserved ||= result.phases[stage].metrics.counts.timeout > 0;
+            save();
+          }
           result.complete = true;
         } catch (error) { result.failed = error.message; throw error; }
         finally {
           try { writeFileSync(join(folder, path, "app.log"), await docker(["logs", name])); } catch {}
+          const readsBeforeStop = await apiReads(profile.payload), beforeStopAt = Date.now();
           await remove(name);
+          result.tail = write(`${path}/tail.json`, { beforeStopAt, before: readsBeforeStop, after: await apiReads(profile.payload), afterStopAt: Date.now() });
           for (const stage of c.phases) entry.aggregates[profile.key][stage] = { ...c.aggregate(entry.runs[profile.key].filter((r) => r.phases[stage]?.metrics).map((r) => r.phases[stage].metrics)), asked: options.passes };
+          entry.projections[profile.key] = outcomes.timedCaseProjection(entry.runs[profile.key].map((r) => ({ pass: r.pass,
+            phases: Object.fromEntries(c.phases.filter((p) => r.phases[p]?.metrics).map((p) => [p, r.phases[p].metrics])) })), options.passes);
           save();
         }
       },
       failure: fail,
     }, summary.timingPlan);
-    summary.complete = summary.checksPassed && summary.failures.length === 0 && !options.checkOnly;
+    summary.attemptComplete = summary.failures.length === 0 && !options.checkOnly && (summary.timingDisposition === "gated-functional"
+      || Object.values(summary.apps).every((a) => group.cases.every((p) => a.runs[p.key].length === options.passes
+        && a.runs[p.key].every((r) => r.complete && c.phases.every((s) => r.phases[s]?.metrics?.observationComplete)))));
+    summary.complete = summary.attemptComplete && summary.checksPassed && Object.values(summary.apps).every((a) => group.cases.every((p) => a.runs[p.key].every((r) => c.phases.every((s) => r.phases[s]?.metrics?.targetOutcome === "passed"))));
   } catch (error) { fail(null, null, "suite", error); }
   finally {
+    if (Object.keys(upstreams).length === group.payloads.length) try {
+      summary.readTail = write("read-tail.json", { at: Date.now(), reads: Object.fromEntries(await Promise.all(group.payloads.map(async (p) => [p, await apiReads(p)]))) });
+    } catch (error) { summary.attemptComplete = false; fail(null, null, "terminal upstream observation", error); }
     for (const name of [...active].reverse()) try { await remove(name); } catch (error) { summary.cleanupFailures.push({ resource: name, error: error.message }); }
     try {
       if (await docker(["network", "ls", "--filter", `name=^${network}$`, "--format", "{{.ID}}"], { cleanup: true })) {
@@ -273,7 +292,8 @@ export async function run(args) {
       summary.dirtyAfter = Boolean(await command("git", ["status", "--porcelain"], { cleanup: true }));
       assert.equal(summary.commitAfter, summary.commit, "HEAD changed during JSON run"); assert.equal(summary.dirtyAfter, false, "tree dirty after JSON run");
     } catch (error) { summary.complete = false; fail(null, null, "tree provenance", error); }
-    summary.finishedAt = new Date().toISOString(); summary.complete &&= !processIO.interrupted && summary.cleanupFailures.length === 0;
+    summary.finishedAt = new Date().toISOString(); summary.attemptComplete &&= !processIO.interrupted && summary.cleanupFailures.length === 0;
+    summary.complete &&= summary.attemptComplete;
     save(); processIO.dispose();
   }
   const report = reporting.inspectJson(summary, { load: loadArtifact });

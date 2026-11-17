@@ -1,5 +1,5 @@
 // Synthetic test evidence only. Never imported by the runner or report.
-import { aggregate, cpuSettings, descriptor, deriveLoad, identity, imageLabels, k6Image, loadConfig, nodeImage, parseArgs, participantReceipt, payloads, phases, receiptSchema, route, runtimeContext, runtimeReceipt, schema, sha256, timingPlan } from "./contract.mjs";
+import { aggregate, cpuSettings, descriptor, deriveLoad, identity, imageLabels, k6Image, loadConfig, nodeImage, parseArgs, participantReceipt, payloads, phases, receiptSchema, route, runtimeContext, runtimeReceipt, schema, sha256, timingPlan, timedLoadCommand } from "./contract.mjs";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
 import { k6Provenance } from "../load-tool.mjs";
 import { recordAttemptSchema } from "../catalog/record-attempt.mjs";
@@ -39,7 +39,7 @@ export function k6Summary(count, seconds) {
 export function runtimeInfo(expected, context, role = "app") {
   const p = payloads[expected.payload], budget = expected.cpus[role === "app" ? "app" : role === "upstream" ? "api" : "load"];
   const execution = role === "app" ? context.appExecutions[expected.app] : context.toolExecutions[role === "load" ? "k6" : "node"];
-  const command = role === "upstream" ? ["node", `/bench/${p.path}/upstream.mjs`] : role === "load" ? ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"]
+  const command = role === "upstream" ? ["node", `/bench/${p.path}/upstream.mjs`] : role === "load" ? context.timed ? timedLoadCommand(context.load) : ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"]
     : role === "probe" ? ["node", "/bench/json-api/cold.mjs", `http://${context.runId}-app:8080`, route(expected), String(context.startupTimeout)] : execution.Cmd;
   const argv = [...(execution.Entrypoint ?? []), ...(command ?? [])];
   const mount = (Source, Destination) => ({ Type: "bind", Source, Destination, RW: false });
@@ -49,7 +49,8 @@ export function runtimeInfo(expected, context, role = "app") {
     Config: { Labels: { "run.corten.json-api": context.runId }, Env: role === "app" ? [`${p.path.toUpperCase()}_SOURCE=${expected.source}`,
       `${p.path.toUpperCase()}_FIXTURE_PATH=/fixtures/${p.path}.json`, `API_BASE=${context.apiBase}`, "PROFILE="]
       : role === "load" ? [`BASE=http://${context.runId}-app:8080`, `PAYLOAD=${expected.payload}`, `DURATION=${context.load.seconds}s`,
-        `MODE=${context.load.mode}`, `RATE=${context.load.rate}`, `VUS=${context.load.vus}`] : [],
+        `MODE=${context.load.mode}`, `RATE=${context.load.rate}`, `VUS=${context.load.vus}`,
+        ...(context.timed && context.load.mode === "fixed" ? ["JSON_PROTOTYPE_OUTPUT=/tmp"] : [])] : [],
       Entrypoint: execution.Entrypoint, Cmd: command }, Path: argv[0], Args: argv.slice(1),
     NetworkSettings: { Networks: { [context.network]: {} } },
     HostConfig: { Memory: role === "app" ? 2 ** 30 : role === "upstream" ? 512 * 2 ** 20 : role === "probe" ? 256 * 2 ** 20 : 2 ** 31,
@@ -58,8 +59,8 @@ export function runtimeInfo(expected, context, role = "app") {
 }
 export const runtime = (expected, context) => runtimeReceipt(runtimeInfo(expected, context), expected, context);
 const participants = (expected, context, roles) => Object.fromEntries(roles.map((role) => [role, participantReceipt(runtimeInfo(expected, context, role), expected, context, role)]));
-export function result(args = []) {
-  const group = descriptor(), options = parseArgs(["j1", "--group", "json-api", "--passes", "1", ...args]), artifacts = new Map();
+export function result(args = [], { artifacts = new Map() } = {}) {
+  const group = descriptor(), options = parseArgs(["j1", "--group", "json-api", "--passes", "1", ...args]);
   let serial = 0;
   const put = (value) => { const path = `test-${serial++}.json`, bytes = JSON.stringify(value); artifacts.set(path, bytes); return { path, sha256: sha256(bytes) }; };
   const load = (ref) => { if (!ref || !artifacts.has(ref.path)) throw new Error("raw artifact missing"); const bytes = artifacts.get(ref.path); if (sha256(bytes) !== ref.sha256) throw new Error("raw digest differs"); return JSON.parse(bytes); };

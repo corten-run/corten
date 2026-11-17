@@ -7,8 +7,10 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { fixedFixture } from "./fixed-test-fixtures.mjs";
-import { readFixedStream } from "./fixed-stream.mjs";
+import { readFixedStream, readFixedStreamSync } from "./fixed-stream.mjs";
 import { joinFixedPrototype, prototypeLimits, verifyFixedPrototype } from "./fixed-prototype.mjs";
+import { deriveTimedObservation, timedPhaseSchema } from "./timed-outcomes.mjs";
+import { loadConfig } from "./contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url)), hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function directory(t) {
@@ -33,6 +35,43 @@ async function portable(t) {
   const save = (value) => writeFileSync(join(folder, "capture.json"), JSON.stringify(value)); save(capture);
   return { folder, f, capture, save };
 }
+
+test("successor review F3: portable replay requires the complete original raw receipt", async (t) => {
+  const { folder, capture, save } = await portable(t);
+  delete capture.raw; save(capture);
+  await assert.rejects(verifyFixedPrototype(folder), /raw.*receipt/);
+  const bytes = readFileSync(join(folder, "events.jsonl"), "utf8").replace(".020Z", ".021Z");
+  writeFileSync(join(folder, "events.jsonl"), bytes);
+  await assert.rejects(verifyFixedPrototype(folder), /raw.*receipt/);
+});
+
+test("successor review F2: timed replay binds complete stderr bytes", async (t) => {
+  const { folder, f, capture } = await portable(t), stream = await readFixedStream(join(folder, "events.jsonl"));
+  const raw = { schema: timedPhaseSchema, phase: "fixed", config: loadConfig({ duration: 1, rate: 3 }, "fixed"),
+    k6: f.summary, clock: f.clock, command: { ...capture.command, stderrBytes: 67 }, logs: "", events: stream.receipt };
+  assert.throws(() => deriveTimedObservation(raw, "fixed", { duration: 1, warmup: 1, rate: 3 }, { stream }), /stderr.*bytes/);
+});
+
+test("successor review F1: fixed percentiles independently match all raw samples", async (t) => {
+  const { folder, f } = await portable(t), stream = await readFixedStream(join(folder, "events.jsonl"));
+  for (const name of ["p(50)", "p(95)", "p(99)"]) f.summary.metrics.http_req_duration[name] = 0;
+  assert.throws(() => joinFixedPrototype(f, stream), /percentile/);
+});
+
+test("fixed raw quantiles replay k6 interpolation and bounded typed-vector growth in both readers", async (t) => {
+  const folder = directory(t), file = join(folder, "latencies.jsonl"), f = fixedFixture();
+  let index = 0;
+  for (const entry of f.entries) if (entry.type === "Point" && entry.metric === "http_req_duration") entry.data.value = [1, 4, 19][index++];
+  f.summary.metrics.http_req_duration = { avg: 8, max: 19, "p(50)": 4, "p(95)": 17.5, "p(99)": 18.7 };
+  writeFileSync(file, f.bytes());
+  assert.equal(joinFixedPrototype(f, await readFixedStream(file)).requests, 3);
+  assert.equal(joinFixedPrototype(f, readFixedStreamSync(file)).requests, 3);
+  const metric = f.entries.find(e => e.metric === "http_req_duration" && e.type === "Metric");
+  const point = f.entries.find(e => e.metric === "http_req_duration" && e.type === "Point");
+  const lines = [metric, ...Array.from({ length: 1100 }, (_, value) => ({ ...point, data: { ...point.data, value } }))];
+  writeFileSync(file, lines.map(e => JSON.stringify(e) + "\n").join(""));
+  assert.equal(readFixedStreamSync(file).latency.p95, 1099 * 0.95);
+});
 
 test("review: every custom clock counter count and rate joins raw evidence independently", async (t) => {
   const folder = directory(t);

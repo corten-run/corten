@@ -8,16 +8,21 @@ import { reader } from "./artifacts.mjs";
 import { functionalVerifier, verifyFunctionalFailure, verifyFunctionalLiveness, verifyAggregates, verifyRun } from "./evidence.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
+import { isDeepStrictEqual } from "node:util";
+import { timedSummarySchema, timedCaseProjection } from "./timed-outcomes.mjs";
+import { verifyProducer } from "./production.mjs";
+import { replayTimedRun } from "./evidence.mjs";
 
 export function inspectJson(summary, { load, commit } = {}) {
-  assert.equal(summary.schema, schema, "not a json-api result schema");
+  const timed = summary.schema === timedSummarySchema;
+  assert.ok(summary.schema === schema || timed, "not a json-api result schema");
   assert.deepEqual(summary.group, descriptor(), "JSON group contract/selection differs");
   assert.deepEqual(summary.options?.apps, summary.group.apps, "exact JSON registry selection required");
   assert.equal(summary.options.group, "json-api");
   assert.match(summary.round ?? "", /^j[1-9]\d*$/); assert.equal(summary.options.round, summary.round);
   assert.ok([1, 3, 5].includes(summary.options.passes), "invalid pass count");
   assert.ok(typeof load === "function", "raw evidence reader required");
-  const warnings = [], apps = {}, cases = summary.group.cases, preparationGates = [];
+  const warnings = [], apps = {}, cases = summary.group.cases, preparationGates = [], execution = new Map();
   const gated = summary.timingDisposition === "gated-functional";
   const problem = (label, error) => warnings.push(`${label}: ${error.message ?? error}`);
   const check = (label, fn, preparation = true) => {
@@ -35,6 +40,7 @@ export function inspectJson(summary, { load, commit } = {}) {
       && Date.parse(summary.finishedAt) >= Date.parse(summary.startedAt), "missing/invalid terminal clock");
   });
   check("configuration", () => {
+    if (timed) verifyProducer(summary.producer);
     assert.deepEqual(summary.timingPlan, timingPlan(summary.options), "missing/wrong effective timing plan");
     for (const [key, max] of [["duration", 300], ["warmup", 120], ["rate", 10000], ["startupTimeout", 300]]) {
       assert.ok(Number.isSafeInteger(summary.options[key]) && summary.options[key] >= 1 && summary.options[key] <= max, `invalid ${key}`);
@@ -72,7 +78,9 @@ export function inspectJson(summary, { load, commit } = {}) {
     });
     for (const profile of cases) {
       const key = profile.key, row = rows[key] = { functional: false, nativeQualified: false, complete: false, passes: 0, rps: null };
-      const expected = entry ? identity(summary, app, profile) : null;
+      const expected = entry && summary.measurement ? identity(summary, app, profile) : null;
+      if (timed) row.projection = timedCaseProjection([], summary.options.passes);
+      let native, derivedRuns = [];
       const checked = entry?.checks?.[key];
       row.functionalComplete = check(`${app} ${key} functional`, () => {
         assert.deepEqual(checked?.identity, expected, "missing/wrong functional identity");
@@ -89,60 +97,104 @@ export function inspectJson(summary, { load, commit } = {}) {
         } else { functionalVerifiers[key](checked.functional, raw.events); row.functional = true; }
       });
       row.nativeQualified = check(`${app} ${key} native audit`, () => {
-        const native = load(checked?.native);
-        verifyNativeReceipt(native.receipt, expected, native.files);
+        native = load(checked?.native);
+        verifyNativeReceipt(native.receipt, expected, native.files, { timed });
         assert.equal(checked.nativeSerializationVerified, true, "native audit not qualified");
         assert.equal(checked.nativeSourceVerified, true, "native source audit not qualified");
       }, false);
       const runs = entry?.runs?.[key] ?? [];
+      let observationComplete = true, targetFailed = false;
       const timing = check(`${app} ${key} timing`, () => {
         if (gated) {
           assert.deepEqual(runs, [], "timing started despite global parity gate");
           assert.deepEqual(entry.aggregates[key], {}, "aggregates present despite global parity gate");
+          if (timed) assert.ok(isDeepStrictEqual(entry.projections?.[key], timedCaseProjection([], summary.options.passes)), "timing projection present despite global parity gate");
           return;
         }
-        assert.ok(Array.isArray(runs) && runs.length === summary.options.passes, "missing requested JSON passes");
+        assert.ok(Array.isArray(runs), "timing passes must be an array");
         const used = new Set();
         for (const run of runs) {
           assert.ok(Number.isInteger(run.pass) && run.pass >= 1 && run.pass <= summary.options.passes && !used.has(run.pass), "duplicate/wrong pass");
-          used.add(run.pass); verifyRun(run, { ...expected, pass: run.pass }, summary.options, load, summary.tools, runtimeContext(summary, profile));
+          used.add(run.pass);
+          if (timed) {
+            const replay = replayTimedRun(run, { ...expected, pass: run.pass }, summary.options, load, summary.tools, runtimeContext(summary, profile), native);
+            derivedRuns.push(replay);
+            execution.set(`${app}/${key}/${run.pass}`, replay.window);
+            observationComplete &&= Object.values(replay.phases).every((o) => o.observationComplete);
+            targetFailed ||= Object.values(replay.phases).some((o) => o.targetOutcome === "failed");
+          } else verifyRun(run, { ...expected, pass: run.pass }, summary.options, load, summary.tools, runtimeContext(summary, profile));
           row.passes++;
         }
+        assert.equal(runs.length, summary.options.passes, "missing requested JSON passes");
         verifyAggregates(entry.aggregates[key], runs, summary.options.passes);
+        if (timed) {
+          row.projection = timedCaseProjection(derivedRuns, summary.options.passes);
+          assert.ok(isDeepStrictEqual(row.projection, entry.projections?.[key]), "saved timed pass projection differs from raw replay");
+        }
       }, false);
+      if (timed) {
+        // Preserve only independently replayed cells when another pass is missing
+        // or invalid. A saved projection never supplies trusted fallback numbers.
+        row.projection = timedCaseProjection(derivedRuns, summary.options.passes);
+        observationComplete &&= timing && row.projection.loadOutcome !== "incomplete";
+        row.timedOutcome = gated ? "not-run-functional-gate" : !observationComplete ? "incomplete" : targetFailed ? "failed" : "passed";
+        row.comparisonEligible = observationComplete && !targetFailed ? true : null;
+        if (!observationComplete && timing && !gated) problem(`${app} ${key} attribution`, Object.values(derivedRuns).flatMap((r) => Object.values(r.phases).flatMap((p) => p.incompleteReasons)).join("; "));
+      }
       // Partial values are retained and labeled, never zero-filled or a complete comparison.
-      const available = Array.isArray(runs) ? runs.filter((r) => r.phases?.sat64?.metrics?.rps > 0) : [];
+      const available = timed ? derivedRuns.map((r) => ({ phases: Object.fromEntries(Object.entries(r.phases).map(([p, metrics]) => [p, { metrics }])) }))
+        : Array.isArray(runs) ? runs.filter((r) => r.phases?.sat64?.metrics?.rps > 0) : [];
       if (available.length) {
         const values = available.map((r) => r.phases.sat64.metrics.rps).sort((a, b) => a - b);
         row.rps = { median: values[Math.floor((values.length - 1) / 2)], min: values[0], max: values.at(-1), unverifiedPartial: !timing };
         row.efficiency = Object.fromEntries(["perCpuSecond", "memMaxMiB", "p95", "cpuAvgPct"].map((metric) => [metric, spread(available.map((r) => r.phases.sat64.metrics[metric]))]));
         row.efficiency.upstreamCpuAvgPct = spread(available.map((r) => r.phases.sat64.metrics.upstream?.cpuAvgPct));
       }
-      row.complete = row.functional && row.nativeQualified && timing && !gated;
-      row.attemptComplete = row.functionalComplete && row.nativeQualified && timing;
+      row.complete = row.functional && row.nativeQualified && timing && !gated && (!timed || observationComplete && !targetFailed);
+      row.attemptComplete = row.functionalComplete && row.nativeQualified && timing && (!timed || gated || observationComplete);
       if (row.rps && !row.complete) row.rps.unverifiedPartial = true;
     }
   }
   const negative = Object.values(apps).some((rows) => Object.values(rows).some((r) => r.functionalComplete && !r.functional));
-  if (negative) check("functional cleanup", () => assert.deepEqual(load(summary.cleanup), { runId: summary.runId, containers: [], networks: [] }, "owned resource cleanup is not proven"));
+  if (timed && !gated) check("executed matrix continuity", () => {
+    const seen = new Set(), tails = {}, upstreamIds = {}; let previousEnd = Date.parse(summary.startedAt);
+    for (const item of timingPlan(summary.options)) {
+      const window = execution.get(`${item.app}/${item.profile.key}/${item.pass}`), payload = item.profile.payload;
+      assert.ok(window && window.startedAt >= previousEnd && window.finishedAt >= window.startedAt, "missing/overlapping/reordered native timing cell");
+      assert.ok(!seen.has(window.appId), "native app reused across timing passes/cases"); seen.add(window.appId);
+      assert.ok(isDeepStrictEqual(window.readsBefore, tails[payload] ?? {}), "cross-case upstream reads/contamination");
+      if (upstreamIds[payload]) assert.equal(window.upstreamId, upstreamIds[payload], "upstream replaced between timing cases");
+      upstreamIds[payload] = window.upstreamId; tails[payload] = window.readsAfter; previousEnd = window.finishedAt;
+    }
+    const terminal = load(summary.readTail);
+    assert.ok(Number.isSafeInteger(terminal.at) && terminal.at >= previousEnd && terminal.at <= Date.parse(summary.finishedAt), "final upstream read observation clock missing");
+    assert.ok(isDeepStrictEqual(terminal.reads, tails), "upstream reads after final app teardown");
+  }, false);
+  const timedNegative = timed && Object.values(apps).some((rows) => Object.values(rows).some((r) => r.timedOutcome === "failed"));
+  if (negative || timed) check("owned cleanup", () => assert.deepEqual(load(summary.cleanup), { runId: summary.runId, containers: [], networks: [] }, "owned resource cleanup is not proven"));
   check("suite outcome", () => {
     assert.equal(gated, negative, "global timing disposition differs from replayed functional outcomes");
-    assert.equal(summary.complete, !gated, "runner outcome differs from the functional gate"); assert.equal(summary.checksPassed, !gated);
+    assert.equal(summary.complete, timed ? !gated && !timedNegative && Object.values(apps).every((rows) => Object.values(rows).every((r) => r.complete)) : !gated, "runner outcome differs from replayed gates"); assert.equal(summary.checksPassed, !gated);
+    if (timed) assert.equal(summary.attemptComplete, Object.values(apps).every((rows) => Object.values(rows).every((r) => r.attemptComplete)), "runner attempt outcome differs from replay");
     if (gated) {
       assert.ok(negative, "no replayed target violation for global gate");
     }
     assert.deepEqual(summary.failures, [], "recorded runner failures"); assert.deepEqual(summary.cleanupFailures, [], "recorded cleanup failures");
     assert.notEqual(summary.options.checkOnly, true, "check-only evidence is not a timed baseline");
   }, false);
-  const baseline = warnings.length === 0 && !gated && !negative;
+  const baseline = warnings.length === 0 && !gated && !negative && !timedNegative;
   const attemptComplete = warnings.length === 0;
   const functionalAttemptComplete = preparationGates.every(Boolean);
-  if (!baseline) for (const rows of Object.values(apps)) for (const row of Object.values(rows)) if (row.rps) row.rps.unverifiedPartial = true;
+  if (!baseline) for (const rows of Object.values(apps)) for (const row of Object.values(rows)) {
+    if (row.rps) row.rps.unverifiedPartial = true;
+    if (timed) row.comparisonEligible = null;
+  }
   return { group: summary.group, round: summary.round, commit: summary.commit, baseline, attemptComplete, functionalAttemptComplete,
-    outcomes: summary.group.apps.map((app) => ({ app, outcome: Object.values(apps[app]).some((r) => r.functionalComplete && !r.functional) ? "failed" : "passed" })),
+    outcomes: summary.group.apps.map((app) => ({ app, outcome: Object.values(apps[app]).some((r) => r.functionalComplete && !r.functional || r.timedOutcome === "failed") ? "failed"
+      : timed && Object.values(apps[app]).some((r) => !r.attemptComplete) ? "incomplete" : "passed" })),
     comparisonEligibleApps: baseline ? [...summary.group.apps] : [], apps, warnings,
     config: { options: summary.options, measurement: summary.measurement, timingPlan: summary.timingPlan, commitAfter: summary.commitAfter, dirty: summary.dirty, dirtyAfter: summary.dirtyAfter },
-    status: baseline ? "COMPLETE" : attemptComplete ? "COMPLETE ATTEMPT: functional failure; not a baseline" : "INCOMPLETE: not a baseline",
+    status: baseline ? "COMPLETE" : attemptComplete ? `COMPLETE ATTEMPT: ${timedNegative ? "timed target" : "functional"} failure; not a baseline` : "INCOMPLETE: not a baseline",
     fixtureHashes: Object.fromEntries(Object.entries(fixtures).map(([p, f]) => [p, sha256(JSON.stringify(f))])) };
 }
 
@@ -161,6 +213,15 @@ export function renderJson(report) {
     const r = rows[profile.key], rate = r.rps ? `${r.rps.median} [${r.rps.min}, ${r.rps.max}]${r.rps.unverifiedPartial ? " (unverified partial)" : ""}` : "pending";
     const metric = (key) => r.efficiency?.[key]?.median ?? "pending";
     lines.push(`| ${app} | ${profile.payload} / ${profile.source} | ${r.functional} | ${r.nativeQualified} | ${r.passes} | ${rate} | ${metric("perCpuSecond")} | ${metric("memMaxMiB")} | ${metric("p95")} | ${metric("cpuAvgPct")} | ${metric("upstreamCpuAvgPct")} |`);
+  }
+  if (Object.values(report.apps).some((rows) => Object.values(rows).some((r) => r.projection))) {
+    lines.push("", "## Timed Outcomes", "", "Observed request/offer extent is separate from nominal configuration. Null comparisons are not zero baselines.",
+      "", "| App | Case | Phase | Failed passes | Missing/incomplete passes | Requests min/median/max | Failed requests min/median/max | Successful req/s min/median/max |", "|---|---|---|---|---|---|---|---|");
+    const range = (r) => r ? `${r.min}/${r.median}/${r.max}` : "missing";
+    for (const [app, rows] of Object.entries(report.apps)) for (const [key, row] of Object.entries(rows)) for (const phase of phases) {
+      const cell = row.projection.byPhase[phase];
+      lines.push(`| ${app} | ${key} | ${phase} | ${cell.failedPasses.join(",") || "none"} | ${cell.incompletePasses.join(",") || "none"} | ${range(cell.ranges.requests)} | ${range(cell.ranges.failed)} | ${range(cell.ranges.successfulRps)} |`);
+    }
   }
   lines.push("", "| CPU role | Quota, cores | Logical CPU pinning |", "|---|---:|---|");
   for (const role of ["app", "load", "api"]) {

@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
 import { verifyRecordAttempt, verifyCheckerExit, verifyAttemptWindow } from "../catalog/record-attempt.mjs";
 import { aggregate, deriveLoad, loadConfig, payloads, phases, route, sha256, upstreamReadDelta, verifyParticipants, verifyRuntime } from "./contract.mjs";
+import { captureLimits, deriveProductionPhase } from "./production.mjs";
 
 // Replay retained functional observations, not application code. In particular,
 // byte forwarding can pass this gate; only a separate native audit can qualify it.
@@ -163,4 +164,50 @@ export function verifyAggregates(saved, runs, asked) {
     const derived = { ...aggregate(runs.filter((r) => r.phases?.[phase]?.metrics).map((r) => r.phases[phase].metrics)), asked };
     assert.ok(isDeepStrictEqual(saved[phase], derived), `${phase} aggregate differs from individual runs/requested passes`);
   }
+}
+
+export function replayTimedRun(run, expected, options, load, tools, context, native) {
+  const same = (a, b, message) => assert.ok(isDeepStrictEqual(a, b), message);
+  same(run.identity, expected, "wrong v2 timing identity");
+  assert.equal(run.complete, true, "v2 timing run incomplete"); assert.equal(run.failed, undefined, "v2 runner failure");
+  same(Object.keys(run.phases ?? {}).sort(), [...phases].sort(), "missing/extra v2 timing phases");
+  const cold = load(run.cold.raw);
+  same(verifyCold(cold, expected, options, context), run.cold.result, "v2 cold differs from raw");
+  const observations = {}, loadIds = new Set(), previousCounters = {}; let priorTailUnobserved = false;
+  let previousReads = cold.upstreamReads.after, previousEnd = Date.parse(cold.result.first200At), appId = cold.runtime.containerId;
+  for (const phase of ["warmup", ...phases]) {
+    const saved = phase === "warmup" ? run.warmup : run.phases[phase];
+    assert.ok(saved, "missing v2 phase"); const raw = load(saved.raw);
+    assert.equal(raw.before?.runtime?.containerId, appId, "app replaced between cold/load phases");
+    assert.equal(raw.before?.liveness?.app?.startedAt, cold.result.containerStartedAt, "app restarted after cold probe");
+    assert.ok(!loadIds.has(raw.before?.participants?.load?.containerId), "load container reused across phases");
+    loadIds.add(raw.before?.participants?.load?.containerId);
+    same(raw.upstreamReads?.before, previousReads, "cross-phase upstream reads/contamination");
+    assert.ok(raw.before.at >= previousEnd, "overlapping/out-of-order phases");
+    same(Object.keys(raw.files ?? {}).sort(), ["clock", "stderr", ...(phase === "fixed" ? [] : ["stdout"]), "summary"], "raw auxiliary byte references missing");
+    for (const [name, field] of [["stderr", "logs"], ["summary", "k6"], ["clock", "clock"]]) {
+      assert.equal(typeof load.bytes, "function", "bounded native byte replay required");
+      const bytes = load.bytes(raw.files[name], name === "stderr" ? captureLimits.stderrBytes : captureLimits.auxiliaryBytes);
+      const text = new TextDecoder("utf8", { fatal: true, ignoreBOM: true }).decode(bytes);
+      same(raw[field], name === "stderr" ? text : JSON.parse(text), "embedded native artifact differs from retained raw bytes");
+    }
+    if (phase !== "fixed") assert.equal(load.bytes(raw.files.stdout, captureLimits.auxiliaryBytes).length, 0, "closed native stdout not empty");
+    const stream = phase === "fixed" ? load.stream?.(raw.eventStream) : undefined;
+    const derived = deriveProductionPhase(raw, expected, phase, options, tools, context, { stream, native, priorTailUnobserved });
+    same(saved.metrics, derived, `${phase} saved metrics differ from independent raw replay`);
+    for (const [role, counter] of Object.entries(raw.counters)) {
+      if (previousCounters[role] !== undefined) assert.ok(counter.before >= previousCounters[role], "CPU counters reset between phases");
+      previousCounters[role] = counter.after;
+    }
+    if (phase !== "warmup") observations[phase] = derived;
+    previousReads = raw.upstreamReads.after; previousEnd = raw.settledAt;
+    priorTailUnobserved ||= derived.counts.timeout > 0;
+  }
+  const tail = load(run.tail);
+  same(tail.before, previousReads, "post-phase upstream tail reads"); same(tail.after, tail.before, "upstream reads during app teardown");
+  assert.ok(Number.isSafeInteger(tail.beforeStopAt) && tail.beforeStopAt >= previousEnd
+    && Number.isSafeInteger(tail.afterStopAt) && tail.afterStopAt >= tail.beforeStopAt, "missing/invalid app cleanup read window");
+  assert.ok(tail.afterStopAt <= Date.parse(context.runFinishedAt), "teardown outside terminal run clock");
+  return { pass: run.pass, phases: observations, window: { appId, startedAt: Date.parse(cold.result.containerStartedAt), finishedAt: tail.afterStopAt,
+    upstreamId: cold.participants.upstream.containerId, readsBefore: cold.upstreamReads.before, readsAfter: tail.after } };
 }
