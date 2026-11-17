@@ -11,6 +11,7 @@ import { sampleStats } from "./stats.mjs";
 import { commandOutput } from "./output.mjs";
 import { readFailedCheck } from "./check-result.mjs";
 import { describeK6, k6Image } from "../load-tool.mjs";
+import { collectTimedPhase, timedRawSchema } from "./timed.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -29,7 +30,7 @@ try {
   observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
-const { aggregate, cpuSettings, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
+const { aggregate, cpuSettings, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
 const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
@@ -47,7 +48,8 @@ const summary = { workload, round: options.round, runId, options, startedAt: new
   scope: "catalog rendering/JSON load only; fullstack bytes, build-cost, instructions and browser-timing measurements are not ported",
   measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", fixedRate: options.rate,
     upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
-    cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec" } };
+    cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec",
+    leanProfile: { name: leanProfile, apps: leanApps } } };
 summary.host.checkout = repo.replaceAll("\\", "/").replace(/\/$/, "");
 if (group) Object.assign(summary, { schema: groupResultSchema, group,
   scope: "catalog-page group: page-only cold/warmup/load timing in both sources; native page AND JSON correctness gates retained; no browser timing, build-cost, bytes or instruction measurements" });
@@ -139,9 +141,11 @@ const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;
 const apiBase = `http://${upstreamName}:8080`;
 function appArgs(name, source, image) {
+  const app = name.slice(`${runId}-`.length);
   return ["--network", network, ...cpus.app.args, "--memory", "1g", "-p", "127.0.0.1::8080",
     "-v", `${fixtureDir}:/fixtures:ro`, "-e", `CATALOG_SOURCE=${source}`, "-e", "CATALOG_FIXTURE_PATH=/fixtures/catalog.json",
-    "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`, image];
+    "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`,
+    ...(leanApps.includes(app) ? ["-e", `PROFILE=${leanProfile}`] : []), image];
 }
 async function ready(base) {
   const deadline = Date.now() + options.startupTimeout * 1000;
@@ -189,6 +193,10 @@ async function cpu(containers) {
   return { ids: Object.fromEntries(ids), values: Object.fromEntries(ids.map(([name, id]) => { assert.ok(Number.isSafeInteger(usage[id]), "missing CPU counter"); return [name, usage[id]]; })) };
 }
 async function load(name, target, phase, seconds, raw) {
+  if (group) return collectTimedPhase({ summary, raw, docker, owned, inspect, remove, cpu, sampleStats, cpus, mount, k6Image }, {
+    app: name.slice(`${runId}-`.length), source: summary.currentSource, target, phase, seconds,
+    instance: JSON.parse(readFileSync(join(raw, "container.json"), "utf8")),
+  });
   const container = `${runId}-k6`;
   const output = join(raw, `${phase}.json`);
   const env = ["-e", `BASE=http://${name}:8080`, "-e", `TARGET=${target}`, "-e", `DURATION=${seconds}s`, "-e", `MODE=${phase === "fixed" ? "fixed" : "closed"}`,
@@ -247,7 +255,8 @@ try {
   const generated = (await import("./fixtures.mjs")).records();
   assert.deepEqual(catalog, generated, "generated fixture is stale: run node bench/catalog/fixtures.mjs");
   summary.fixtureSha256 = createHash("sha256").update(fixture).digest("hex");
-  summary.savedEvidence = { schema: rawSchema, fixtureSha256: summary.fixtureSha256 };
+  summary.savedEvidence = { schema: group ? timedRawSchema : rawSchema, fixtureSha256: summary.fixtureSha256 };
+  if (group) summary.targetFailures = [];
   writeFileSync(join(folder, "fixture.json"), fixture);
   for (const app of options.apps) {
     const entry = summary.apps[app] = { label: inventory[app].label, image: `cb-catalog-${app}`, checks: {}, runs: {}, phases: {} };
@@ -256,7 +265,7 @@ try {
         log(`building ${app}`);
         const context = app === "corten" ? repo : join(repo, "bench/fullstack/apps", app);
         const dockerfile = app === "corten" ? join(here, "corten/Dockerfile") : join(context, "Dockerfile");
-        await docker(["build", "-t", entry.image, "-f", dockerfile, context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
+        await docker(["build", "-t", entry.image, "-f", dockerfile, ...(app === "corten" ? ["--build-arg", "CATALOG_LEAN=1"] : []), context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
       }
       const image = JSON.parse(await docker(["image", "inspect", entry.image]))[0];
       entry.imageId = image.Id;
@@ -352,6 +361,7 @@ try {
   if (summary.failures.length) throw new Error("parity failed; no app will be load-tested");
   if (summary.checksPassed && !options.checkOnly) {
     summary.tools.k6 = await describeK6(docker, ["--label", `${label}=${runId}`], { pullLog: join(folder, "pull-k6.log") });
+    if (group) summary.tools.k6Execution = imageCommandEvidence(JSON.parse(await docker(["image", "inspect", summary.tools.k6.imageId]))[0]);
     writeFileSync(join(folder, "tools.json"), JSON.stringify(summary.tools, null, 2));
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
@@ -374,9 +384,12 @@ try {
         for (const phase of phases) {
           log(`${app} ${source} ${target} ${phase} pass ${pass}`);
           run.phases[phase] = await load(name, target, phase, options.duration, raw);
+          if (group && run.phases[phase].outcome === "failed") summary.targetFailures.push({ app, source, target, pass, phase,
+            failed: run.phases[phase].failed, timeouts: run.phases[phase].timeouts, httpErrors: run.phases[phase].httpErrors, dropped: run.phases[phase].dropped });
           save();
         }
         run.complete = true;
+        if (group) run.outcome = phases.some((phase) => run.phases[phase].outcome === "failed") ? "failed" : "passed";
       } catch (e) { run.failed = e.message; fail(app, source, `load ${target} pass ${pass}`, e); }
       finally {
         try { await docker(["logs", name], { file: join(raw, "app.log"), capture: false }); } catch (e) { fail(app, source, "app logs", e); }
@@ -389,7 +402,9 @@ try {
       save();
     }
   }
-  summary.complete = summary.checksPassed && summary.failures.length === 0;
+  summary.complete = summary.checksPassed && summary.failures.length === 0 && !(summary.targetFailures?.length);
+  if (group && summary.checksPassed && !options.checkOnly) summary.attemptComplete = summary.failures.length === 0
+    && Object.values(summary.apps).every((entry) => Object.values(entry.runs).every((runs) => runs.length === options.passes && runs.every((r) => r.complete)));
 } catch (e) { fail(null, null, "suite", e); }
 finally {
   for (const name of [...active].reverse()) {
@@ -422,6 +437,7 @@ finally {
   delete summary.currentSource;
   summary.finishedAt = new Date().toISOString();
   summary.complete &&= !interrupted && summary.cleanupFailures.length === 0;
+  if (summary.attemptComplete !== undefined) summary.attemptComplete &&= !interrupted && summary.cleanupFailures.length === 0 && summary.failures.length === 0;
   save();
 }
 log(`${workload} ${options.round}: ${summary.complete ? "PASS" : "FAIL"}; ${join(folder, "summary.json")}`);

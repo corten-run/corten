@@ -45,6 +45,35 @@ Corten is pre-1.0, so any minor version may change the API.
   pages whole; `scripts/dsd-probe.mjs` checks both again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
+
+- Apply supported lean settings to catalog-page competitors as well as Corten:
+  reduce optional access logging, compression and timer work where supported,
+  record the exact profile in container evidence and reports, and retain full
+  source/rendering correctness. Richer groups keep their existing configuration.
+  Keep ASP.NET's native Kestrel header/keepalive timers at their defaults: setting
+  them to infinite caused early connection closure in Linux correctness checks
+  ([#1564 Catalog lean ASP.NET fails native JSON correctness with connection errors](https://github.com/corten-run/corten/issues/1564)).
+
+- Configure the standalone catalog Corten benchmark for the lean rendering
+  workload: omit optional compression and remove handler/header/send timers using
+  supported settings, while keeping page stages, error logs, full correctness
+  checks and the HTTP-source timeout. Production defaults and richer benchmarks
+  are unchanged; historical results keep their measured configuration. Keep the
+  shared JSON API consumer's default compression build and timers by selecting
+  lean build/runtime settings only in the catalog runner.
+
+- Preserve completed catalog load/request failures as versioned, replayable failed
+  app outcomes, separate from successful baselines and apparatus failures. Retain
+  all passes, raw counters, participant lifetimes and side errors; require successful
+  checker boundaries before any cold timing and attempt-wide upstream lifetime/CPU
+  continuity. Reject unknown prior termination in v3 functional participants and
+  require full lifetime-state consistency across observations. Summary-only reports
+  reconcile failure ledgers and baseline disposition with retained phases before
+  labeling an attempt complete. Keep HTTP error responses failed regardless of
+  their media type, retaining their content-check failures; report successful
+  throughput, failed requests and drops separately without excluding healthy peers
+  ([#1556 Catalog benchmark discards failed-load metrics and cannot replay completed target outcomes](https://github.com/corten-run/corten/issues/1556)).
+
 - The watchlist smoke's check that a submit which waited for a write the network failed is not
   sent holds that write until the newer press is made, and presses both buttons in the page, where
   it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the
@@ -887,6 +916,31 @@ Corten is pre-1.0, so any minor version may change the API.
   ([#838 corten.run shows a Squarespace Coming Soon page: build the landing page as a Corten app, host it and point the domain at it](https://github.com/corten-run/corten/issues/838)).
 
 ### Changed
+
+- A debug build answers a browser's plain request (no `data-patch`, asking for HTML) that a
+  handler answered with `req.patch` or `req.patch_with_status` with a 500 that names the method
+  and the route and says to answer with `req.patch_or` or check `req.mode == Mode::Action`
+  first: the browser would show the fragment as the whole page, with no layout, stylesheets or
+  navigation. The handler's cookies and `Clear-Site-Data` go out with the error. The runtime's
+  `data-patch` fetch and a client that does not ask for HTML still get the patch, and a release
+  build compiles none of the check. **Breaking (debug builds only):** the test `Client` asks for
+  HTML unless `.mode(..)` is set, so an app's router test that sends a plain request (no
+  `.mode(Mode::Action)`) to a handler answering only `req.patch` or `req.patch_with_status` now
+  gets a 500, as does `corten dev` when a browser loads that route itself. To move: answer with
+  `req.patch_or(view, || async { .. })`, which draws the page or a redirect for a plain request,
+  or return the patch only when `req.mode == Mode::Action`; a test that means the runtime's
+  request sends `.mode(Mode::Action)`. A request whose fetch metadata says it is not a top-level
+  navigation (`Sec-Fetch-Mode` other than `navigate`, as a page's own `fetch` sends, or
+  `Sec-Fetch-Dest` other than `document`, as an `<iframe>` sends), a relayed upstream answer
+  and an `unstaged` route are not checked, by this check or by the one for a page at a path with
+  no `GET`. Neither is a navigation a service worker passes on with `fetch(event.request)`,
+  which arrives as `navigate` to `empty`, the tab's and a frame's alike; one answered from
+  navigation preload, as Corten's worker does, is checked. Browsers send fetch metadata only
+  over HTTPS or to `localhost`, so a debug build opened over plain HTTP at a LAN address takes a
+  page's own `fetch` that asks for HTML for a navigation, a false 500.
+  The watchlist's smoke-only styled-note route redirects without JavaScript, and its dialog and
+  `<details>` routes draw the sheet page with them open
+  ([#1423 A patch answering a browser's plain post is shown as the whole page, and the #1340 debug check only catches a page](https://github.com/corten-run/corten/issues/1423)).
 
 - **Breaking:** a handler parameter typed `Map<string, El>` takes only a ref whose every element
   has a `key={..}`: a ref without keys no longer compiles there, and the error says to add `key={..}`,

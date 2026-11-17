@@ -78,7 +78,7 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    answers both:
    `req.patch_or_with(|| async { req.patch(Part { .. }) }, || async { req.page(..) }).await`,
    each side a closure that reads only what it draws; never a `<corten-live>` stream for it, and
-   never `req.patch` on the page side (it compiles, and a full load gets a fragment).
+   never `req.patch` on the page side (it compiles, and a full load gets a fragment; a debug build answers it with a 500).
    Tags naming one address share one read, so each waits for the slowest: give independent slow
    parts a query field each (each its own address on the same route). A page in a `Public` has its
    part answered to everyone, so a part read for one visitor there gets a route of its own that
