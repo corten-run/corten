@@ -4697,8 +4697,8 @@ rules something out.
     type). `Entry` now holds a sealed `EntryValue` (a number, a `Day` or a `LocalDateTime`, a
     `compile_fail` example for an app's own) rather than numbers alone, so `<input type="date">`
     became `Entry<Day>` at no further cost, and `day.start(zone)` is where a picked day begins
-    (its midnight, or the instant the clocks skip to; `day.start(&input.zone)` in a form that
-    carries its zone); `day.midnight_utc()`, the same as `day.start(Utc)`, is deprecated for it.
+    (the first instant its clock reads the day: its midnight, or, where the clocks skip midnight,
+    the change; `day.start(&input.zone)` in a form that carries its zone); `day.midnight_utc()`, the same as `day.start(Utc)`, is deprecated for it.
 
     The zone a form is read in is the one it was drawn in, and the form carries it. `req.zone()`
     is not the same across the two requests: it is UTC on a browser's first page, which loads the
@@ -4740,9 +4740,15 @@ rules something out.
     and a repeated one (`01:30` on the night they go back) is the earlier instant. That is
     Temporal's default disambiguation, `compatible`, which its documentation says is what legacy
     `Date` does, and RFC 5545 (iCalendar) section 3.3.5 prescribes the same: the first
-    occurrence of a repeated time, and a skipped time read at the UTC offset before the gap. It
-    is also what `day.start(zone)` needs, since it gives the first instant of a day whose midnight
-    is skipped or repeated. So an instant in the second of two repeated hours, drawn and sent back
+    occurrence of a repeated time, and a skipped time read at the UTC offset before the gap. A
+    day's start is not a typed time: `day.start(zone)` is the first instant whose clock reads the
+    day, as Temporal's `startOfDay` (its spec's `GetStartOfDay`) gives it: the earlier midnight
+    where midnight repeats, and where the clocks skip midnight, the change itself. Reading `00:00`
+    as a typed time gives the same where a gap begins at midnight, but where one starts the day
+    before and crosses midnight (Toronto's clocks went from `23:30` to `00:30` at
+    1919-03-31T04:30Z) it moves `00:00` forward to `01:00`, and a query from it would leave out
+    the day's first half hour; so where the clock shows a later time than midnight at the instant
+    `00:00` reads as, `day.start` searches back across the gap for the change. So an instant in the second of two repeated hours, drawn and sent back
     unchanged, reads as the first: the form carries the zone, not the instant. Every instant a form
     draws, the stored `value`, the `min` and the `max`, is rounded down to the minute
     (`floor_minute`): an input counts its steps from its `min`, so one with seconds is off every
@@ -4774,9 +4780,13 @@ rules something out.
     `compatible()`, which finds the candidates in the database itself, fails if any zone
     changes its offset twice within two days, checks that a `min` and a `max` drawn around each
     change hold every value drawn between them, and checks that each zone is sent by a name a
-    `FormZone` reads back.
+    `FormZone` reads back. Another reads every zone from its first change (its local mean time,
+    before 1900 for most) to 2040, where some zones do change twice within two days, and checks
+    the start of the day before, of and after each change against Temporal's start of day, the
+    earlier midnight or, where midnight is skipped, the change jiff finds in the database.
 
-    Not chosen: reading in the request's zone (`req.zone()`) with no zone in the form, which this
+    Not chosen: reading a day's `00:00` as a typed time for `day.start`, which this Choice did
+    before: it dropped the start of a day whose gap crosses midnight (Toronto, 1919-03-31). Reading in the request's zone (`req.zone()`) with no zone in the form, which this
     Choice first did: it is right only when the draw and the post have the same zone, which a
     first page and its post do not. One type for the zone drawn and the zone posted, which this
     Choice did next: it had to be made from `req.zone()` to draw, so a post could make one from
@@ -4814,7 +4824,8 @@ rules something out.
     gives and its picker sets, and its step base, `min` before `value`, with a step of 60 seconds
     by default and a step scale factor of 1000 milliseconds; Temporal's
     `disambiguation: "compatible"`, `earlier` for a repeated time and `later` for a skipped one
-    (its spec's `DisambiguatePossibleEpochNanoseconds`), and its time zone identifiers, a tz
+    (its spec's `DisambiguatePossibleEpochNanoseconds`), its start of a day (`startOfDay`,
+    `GetStartOfDay`: the first valid wall-clock time of the date), and its time zone identifiers, a tz
     database name (`America/Chicago`, `UTC`) or an offset to the minute written `±HH:MM`
     (RFC 3339's `time-numoffset`), which a browser's reported zone is one of and a `FormZone` is
     sent as;

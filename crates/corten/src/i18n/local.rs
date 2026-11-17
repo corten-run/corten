@@ -1,7 +1,7 @@
 //! A date and time on a clock, with no zone ([`LocalDateTime`]): what
 //! `<input type="datetime-local">` sends, read as the instant it names in a zone and written back.
 
-use std::fmt::{self, Display, Write};
+use std::fmt::{self, Display};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::{Day, Zone};
@@ -13,9 +13,11 @@ const DAY: i64 = 86_400_000;
 
 /// A date and a time of day on a clock, with no zone: what `<input type="datetime-local">`
 /// sends (`2026-11-13T14:05`), the time a person reads off the clock where they are. It names an
-/// instant only in a zone, so it is not one. A form draws an instant as the input's `value`, `min`
-/// or `max` in a [`DrawZone`](crate::form::DrawZone) (`zone.local(at)`), which also writes that
-/// zone into the form, and its post reads the field in the zone the form sends back, a
+/// instant only in a zone, so it is not one. A form draws an instant as the input's `value` in a
+/// [`DrawZone`](crate::form::DrawZone) (`zone.local(at)`, rounded down with
+/// [`floor_minute`](LocalDateTime::floor_minute)) and its `min` and `max` with `zone.min(at)` and
+/// `zone.max(at)`; the zone also writes itself into the form, and its post reads the field in
+/// the zone the form sends back, a
 /// [`FormZone`](crate::form::FormZone): [`at`](LocalDateTime::at) takes only that. A field the
 /// user fills in is an [`Entry<LocalDateTime>`](crate::form::Entry), which keeps the text when it
 /// does not read.
@@ -264,6 +266,36 @@ impl LocalDateTime {
         offset(read)?;
         instant(read)
     }
+
+    /// The first instant whose clock in `zone` reads this time or later: where the clock reads
+    /// it, [`read_in`](LocalDateTime::read_in)'s (the earlier of a repeated time), and where the
+    /// clocks skip it, the change itself rather than the instant the gap moves it to, as Temporal's
+    /// `startOfDay` (`GetStartOfDay`) gives a day whose midnight is skipped. Toronto's clocks
+    /// went from `23:30` to `00:30` at 1919-03-31T04:30Z: `00:00` reads as 05:00Z, and the day
+    /// began at 04:30Z.
+    pub(super) fn first_reading(self, zone: impl Zone) -> Option<SystemTime> {
+        let read = unix_millis(self.read_in(&zone)?)?;
+        let local = self.day.days() * DAY + i64::from(self.millis);
+        // What the clock reads at `utc`, in milliseconds as if it were UTC's.
+        let shown = |utc: i64| Some(utc + i64::from(zone.known_offset(instant(utc)?)?) * 1000);
+        let gap = shown(read)? - local;
+        if gap <= 0 {
+            return instant(read);
+        }
+        // Skipped: `read` is `gap` after the instant the offset before gives, which the clock
+        // shows before `local`; from the change on it shows `local` or later. The change is the
+        // first millisecond that does.
+        let (mut earlier, mut later) = (read - gap, read);
+        while later - earlier > 1 {
+            let mid = earlier + (later - earlier) / 2;
+            if shown(mid)? >= local {
+                later = mid;
+            } else {
+                earlier = mid;
+            }
+        }
+        instant(later)
+    }
 }
 
 /// Milliseconds since 1970-01-01, rounded down; `None` past an `i64`.
@@ -333,19 +365,49 @@ impl std::str::FromStr for LocalDateTime {
 
 /// HTML's normalized form, as a browser sends it: `2026-11-13T14:05`, with `:09` and `.5` only
 /// when they are not zero.
-impl Display for LocalDateTime {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}T{:02}:{:02}", self.day, self.hour(), self.minute())?;
+impl LocalDateTime {
+    /// HTML's normalized form, written digit by digit: an input draws up to three (`value`,
+    /// `min`, `max`), and through `write!` each took about 1,700 instructions (callgrind).
+    fn write_into(self, out: &mut String) {
+        let (year, month, day) = super::format::civil_from_days(self.day.days());
+        // `year` is 1 to 9999, as a `Day`'s is.
+        digits(out, year as u32, 4);
+        out.push('-');
+        digits(out, month, 2);
+        out.push('-');
+        digits(out, day, 2);
+        out.push('T');
+        digits(out, self.hour(), 2);
+        out.push(':');
+        digits(out, self.minute(), 2);
         let (second, ms) = (self.second(), self.millisecond());
         if second != 0 || ms != 0 {
-            write!(f, ":{second:02}")?;
+            out.push(':');
+            digits(out, second, 2);
         }
-        match ms {
-            0 => Ok(()),
-            _ if ms.is_multiple_of(100) => write!(f, ".{}", ms / 100),
-            _ if ms.is_multiple_of(10) => write!(f, ".{:02}", ms / 10),
-            _ => write!(f, ".{ms:03}"),
+        if ms != 0 {
+            out.push('.');
+            match ms {
+                _ if ms.is_multiple_of(100) => digits(out, ms / 100, 1),
+                _ if ms.is_multiple_of(10) => digits(out, ms / 10, 2),
+                _ => digits(out, ms, 3),
+            }
         }
+    }
+}
+
+/// `n` in `width` digits, with leading zeros.
+fn digits(out: &mut String, n: u32, width: u32) {
+    for place in (0..width).rev() {
+        out.push(char::from(b'0' + (n / 10u32.pow(place) % 10) as u8));
+    }
+}
+
+impl Display for LocalDateTime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut text = String::with_capacity(23);
+        self.write_into(&mut text);
+        f.write_str(&text)
     }
 }
 
@@ -357,7 +419,7 @@ impl fmt::Debug for LocalDateTime {
 
 impl Render for LocalDateTime {
     fn render(&self, out: &mut String) {
-        let _ = write!(out, "{self}");
+        self.write_into(out);
     }
 }
 
@@ -591,6 +653,24 @@ mod tests {
         assert_eq!(Day::new(2019, 2, 16).unwrap().start(&zone), Some(ts("2019-02-16T02:00:00Z")));
         assert_eq!(Day::new(2019, 2, 17).unwrap().start(&zone), Some(ts("2019-02-17T03:00:00Z")));
         assert_eq!(Day::new(2026, 9, 2).unwrap().start(Utc), parse_timestamp("2026-09-02T00:00:00Z"));
+        // A gap that starts the day before: 23:30 to 00:30 at 04:30Z, as Toronto's clocks went on
+        // 1919-03-31. The day begins at the change, though `00:00` typed into a form moves forward
+        // by the gap to 01:00; and a repeat that starts after midnight, 00:30 back to 23:30 at
+        // 04:30Z, begins the day at its first midnight.
+        let zone = Changes(vec![
+            (secs("1900-01-01T00:00:00Z"), -5 * 3600),
+            (secs("1919-03-31T04:30:00Z"), -4 * 3600),
+            (secs("1919-10-27T04:30:00Z"), -5 * 3600),
+        ]);
+        assert_eq!(Day::new(1919, 3, 31).unwrap().start(&zone), Some(ts("1919-03-31T04:30:00Z")));
+        assert_eq!(read("1919-03-31T00:00").read_in(&zone), Some(ts("1919-03-31T05:00:00Z")));
+        assert_eq!(read("1919-03-31T00:00").first_reading(&zone), Some(ts("1919-03-31T04:30:00Z")));
+        assert_eq!(read("1919-03-31T00:15").first_reading(&zone), Some(ts("1919-03-31T04:30:00Z")));
+        assert_eq!(read("1919-03-31T00:45").first_reading(&zone), Some(ts("1919-03-31T04:45:00Z")));
+        assert_eq!(Day::new(1919, 3, 30).unwrap().start(&zone), Some(ts("1919-03-30T05:00:00Z")));
+        assert_eq!(Day::new(1919, 4, 1).unwrap().start(&zone), Some(ts("1919-04-01T04:00:00Z")));
+        assert_eq!(Day::new(1919, 10, 27).unwrap().start(&zone), Some(ts("1919-10-27T04:00:00Z")));
+        assert_eq!(Day::new(1919, 10, 28).unwrap().start(&zone), Some(ts("1919-10-28T05:00:00Z")));
     }
 
     /// `day.start(Utc)` is the day's midnight UTC wherever the platform has that instant, as
@@ -632,7 +712,62 @@ mod tests {
         let sao_paulo = Visitor::named("America/Sao_Paulo");
         assert_eq!(Day::new(2018, 11, 4).unwrap().start(&sao_paulo), Some(ts("2018-11-04T01:00:00-02:00")));
         assert_eq!(Day::new(2019, 2, 17).unwrap().start(&sao_paulo), Some(ts("2019-02-17T00:00:00-03:00")));
+        // Toronto's clocks went from 23:30 to 00:30 at 04:30Z (tz database, northamerica): the day
+        // began at the change, half an hour before `00:00` read as a typed time (01:00, 05:00Z).
+        let toronto = Visitor::named("America/Toronto");
+        assert_eq!(Day::new(1919, 3, 31).unwrap().start(&toronto), Some(ts("1919-03-31T04:30:00Z")));
+        assert_eq!(read("1919-03-31T00:00").read_in(&toronto), Some(ts("1919-03-31T05:00:00Z")));
         assert_eq!(LocalDateTime::clock(ts("2026-11-15T09:00:00Z"), &sao_paulo).unwrap().to_string(), "2026-11-15T06:00");
+    }
+
+    /// In every zone in the bundled tz database, the day before each change of offset from the
+    /// zone's first (its local mean time) to 2040, the days it changes and the day after start
+    /// where Temporal's `startOfDay` starts them: the earlier midnight, or, where the clocks skip
+    /// midnight, the change, found in the database by jiff. Unlike the comparison below, it does
+    /// not need a zone's changes to be two days apart, and reaches back before 1970, where gaps
+    /// that start the day before and cross midnight are (Toronto's in 1919).
+    #[cfg(feature = "zones")]
+    #[test]
+    fn every_day_around_every_change_starts_where_temporal_starts_it() {
+        use crate::i18n::Visitor;
+        use jiff::tz::{AmbiguousOffset, TimeZone};
+        use jiff::Timestamp;
+        let until = Timestamp::from_second(2_208_988_800).unwrap(); // 2040
+        let ms = |ms: i64| Timestamp::from_millisecond(ms).unwrap();
+        let (mut days, mut skipped, mut crossing) = (0, 0, 0);
+        for name in jiff::tz::db().available() {
+            let name = name.as_str();
+            let (tz, zone) = (TimeZone::get(name).unwrap(), Visitor::named(name));
+            for change in tz.following(Timestamp::MIN).take_while(|c| c.timestamp() < until) {
+                let at = change.timestamp().as_millisecond();
+                let before = i64::from(tz.to_offset(ms(at - 1)).seconds()) * 1000;
+                let after = i64::from(change.offset().seconds()) * 1000;
+                let (first, last) = ((at + before.min(after)).div_euclid(DAY) - 1, (at + before.max(after)).div_euclid(DAY) + 1);
+                for d in first..=last {
+                    let Some(day) = Day::from_days(d) else { continue };
+                    let midnight = ms(d * DAY).to_zoned(TimeZone::UTC).datetime();
+                    let ambiguous = tz.to_ambiguous_timestamp(midnight);
+                    let theirs = match ambiguous.offset() {
+                        AmbiguousOffset::Gap { before, after } => {
+                            // The change to the offset after, the first after midnight read at it.
+                            let from = d * DAY - i64::from(after.seconds()) * 1000;
+                            let change = tz.following(ms(from)).find(|c| c.offset() == after).unwrap();
+                            let change = change.timestamp().as_millisecond();
+                            skipped += 1;
+                            crossing += usize::from(change + i64::from(before.seconds()) * 1000 < d * DAY);
+                            change
+                        }
+                        _ => ambiguous.earlier().unwrap().as_millisecond(),
+                    };
+                    assert_eq!(day.start(&zone).and_then(unix_millis), Some(theirs), "{day} in {name}");
+                    days += 1;
+                }
+            }
+        }
+        assert!(
+            days > 30_000 && skipped > 100 && crossing > 0,
+            "{days} days, {skipped} skipped midnights, {crossing} from the day before"
+        );
     }
 
     /// In every zone in the bundled tz database, around every change of offset from 1970 to 2040,

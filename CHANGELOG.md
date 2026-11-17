@@ -83,7 +83,9 @@ Corten is pre-1.0, so any minor version may change the API.
   A skipped time moves forward by the gap and a repeated one is the earlier (Temporal's default,
   RFC 5545). `Entry` holds any sealed `corten::form::EntryValue` (a number, a `Day` for
   `<input type="date">`, or a `LocalDateTime`), and `day.start(zone)` is where a day begins in a
-  zone ([design Choice 58](docs/design.md#choice-local-date-time)).
+  zone: the first instant its clock reads the day, as Temporal's `startOfDay` gives, which where
+  the clocks skip midnight is the change, even one that starts the day before (Toronto's day of
+  1919-03-31 began at `00:30`) ([design Choice 58](docs/design.md#choice-local-date-time)).
 
 - **Breaking (for `#![deny(warnings)]` builds):** `Day::midnight_utc` is deprecated for
   `day.start(Utc)`, the same instant, so a crate that denies warnings and calls it no longer

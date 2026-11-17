@@ -510,7 +510,9 @@ check, and refuses those with the field's message. A tz database zone's rules en
 
 A `LocalDateTime` is not an instant, so `t.date` and a field typed as one do not take it. A day
 (`<input type="date">`) is an `Entry<Day>` in no zone, and `day.start(&input.zone)` is the instant
-it begins where the visitor is, in the zone the form carries, a `GET` form's query included
+it begins where the visitor is, in the zone the form carries, a `GET` form's query included: the
+first instant the clock there reads the day, as Temporal's `startOfDay` gives, so where the clocks
+skip midnight it is the change, not `00:00` moved forward by the gap as a typed time would be
 (`day.start(req.zone())` only for a day that comes with no form, such as a link's parameter). A
 time of day alone (`<input type="time">`) names no day, so it has no reader; a date
 and a time the user picks together are one `datetime-local`.

@@ -1624,12 +1624,15 @@ impl Day {
     /// visitor picked (`<input type="date">`) begins where they are: in a form, the zone it sends
     /// back (`day.start(&input.zone)`, a [`FormZone`](crate::form::FormZone), a `GET` form's query
     /// included), and for a day that comes with no form (a link's parameter), the request's
-    /// (`day.start(req.zone())`). Its
-    /// midnight, or, where the clocks skip midnight, the instant they skip to, as
-    /// [`LocalDateTime::at`](super::LocalDateTime::at) reads `00:00`. `None` before the earliest
+    /// (`day.start(req.zone())`). It is the first instant whose clock reads the day, as Temporal's
+    /// `startOfDay` gives: its midnight (the earlier, where midnight repeats), or, where the
+    /// clocks skip midnight, the instant they change. That is not always how
+    /// [`LocalDateTime::at`](super::LocalDateTime::at) reads `00:00`, which moves a skipped time
+    /// forward by the gap: Toronto's clocks went from `23:30` to `00:30` at 1919-03-31T04:30Z, so
+    /// `00:00` reads as `01:00` (05:00Z), and the day began at 04:30Z. `None` before the earliest
     /// `SystemTime` the platform has.
     pub fn start(self, zone: impl Zone) -> Option<SystemTime> {
-        super::LocalDateTime::midnight(self).read_in(zone)
+        super::LocalDateTime::midnight(self).first_reading(zone)
     }
 
     /// Days since 1970-01-01.

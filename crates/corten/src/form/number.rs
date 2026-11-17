@@ -155,8 +155,9 @@ pub(crate) fn whole_magnitude(w: &Written<'_>) -> Option<u128> {
 /// typed field: one that does not read came from no page of the app's. A number made in code
 /// (`Entry::from(1)`) is drawn as the number.
 ///
-/// A date and time is drawn in a [`DrawZone`](crate::form::DrawZone) (`zone.local(at)`), which writes the zone into the
-/// form, and read in the [`FormZone`] the form sends back ([`Entry::at`]), so the form shows what
+/// A date and time is drawn in a [`DrawZone`](crate::form::DrawZone) (`zone.local(at)` for the
+/// value, `zone.min(at)` and `zone.max(at)` for the bounds), which writes the zone into the form, and
+/// read in the [`FormZone`] the form sends back ([`Entry::at`]), so the form shows what
 /// the visitor's clock read, and a time their clocks skip or repeat has one answer
 /// ([`LocalDateTime`]):
 ///

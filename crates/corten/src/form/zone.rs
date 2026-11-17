@@ -10,8 +10,10 @@ use crate::view::{escape_into, Render};
 
 /// The zone a form's dates and times are drawn in: it writes the hidden input that sends the
 /// zone back with the form ([`field`](DrawZone::field)), the zone's name for the visitor to read
-/// ([`name`](DrawZone::name)), and an instant as the `value`, `min` or `max` of an
-/// `<input type="datetime-local">` ([`local`](DrawZone::local)), so the three are in one zone.
+/// ([`name`](DrawZone::name)), and an instant as the `value` of an
+/// `<input type="datetime-local">` ([`local`](DrawZone::local), rounded down with
+/// [`floor_minute`](LocalDateTime::floor_minute)) or as its `min` and `max`
+/// ([`min`](DrawZone::min), [`max`](DrawZone::max)), so they are all in one zone.
 /// The post reads the form's times in the [`FormZone`] it sends back, never in the zone of the
 /// request that posts it: `req.zone()` is UTC on a browser's first page and in a `Public` page, and
 /// the visitor's own zone on the post after it, so a form drawn in one and read in the other would
@@ -273,9 +275,12 @@ impl DrawZone {
         &self.0.name
     }
 
-    /// What the clock in this zone reads at `at`, to the millisecond (rounded down): the `value`,
-    /// `min` or `max` of an `<input type="datetime-local">`. Round each down to the minute the
-    /// input steps by ([`LocalDateTime::floor_minute`]). `None` outside the years a
+    /// What the clock in this zone reads at `at`, to the millisecond (rounded down): the `value`
+    /// of an `<input type="datetime-local">`, rounded down to the minute the input steps by
+    /// ([`LocalDateTime::floor_minute`]). Not its `min` or `max`: where the clocks go back, a
+    /// later instant reads earlier on the clock, so bounds drawn at their own readings can leave a
+    /// value between their instants outside them, and the browser would not send the form; draw
+    /// those with [`min`](DrawZone::min) and [`max`](DrawZone::max). `None` outside the years a
     /// [`Day`](crate::i18n::Day) has (1 to 9999).
     pub fn local(&self, at: impl Into<SystemTime>) -> Option<LocalDateTime> {
         LocalDateTime::clock(at.into(), &self.0)

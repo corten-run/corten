@@ -9985,6 +9985,111 @@ async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
     assert!(page.contains(r#"value="2026-11-12T15:30""#) && page.contains("Goes live, UTC"), "{page}");
 }
 
+/// What a date and time field costs a request, for callgrind: `DATE_FORM_REQUESTS` (200)
+/// requests through the router with `oneshot`, from a browser that reported America/Chicago.
+/// `DATE_FORM_PATH=get` draws the form (the zone's hidden input and name, and the input's
+/// `value`, `min` and `max` from instants), `post` reads it (`Entry<LocalDateTime>` and
+/// `FormZone`, `at_keeping`, the bounds compared). `DATE_FORM=text` is the same markup and post
+/// with the field and the zone as text an app does not read, the cost before this field had a
+/// reader. Build the lib's test binary with `cargo test --release -p corten-run --all-features
+/// --lib --no-run`, run `DATE_FORM_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored
+/// --exact tests::what_a_date_and_time_field_costs --test-threads=1` and again at 200: the
+/// difference over 1,000 is a request's.
+#[cfg(feature = "zones")]
+#[tokio::test]
+#[ignore]
+async fn what_a_date_and_time_field_costs() {
+    use crate::form::{DrawZone, Entry, FormZone};
+    use crate::i18n::{parse_timestamp, LocalDateTime};
+    #[derive(crate::Fields)]
+    struct Repair {
+        live_at: Entry<LocalDateTime>,
+        zone: FormZone,
+    }
+    #[derive(crate::Fields)]
+    struct Text {
+        live_at: String,
+        zone: String,
+    }
+    let requests: usize = std::env::var("DATE_FORM_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let post = std::env::var("DATE_FORM_PATH").is_ok_and(|p| p == "post");
+    let text = std::env::var("DATE_FORM").is_ok_and(|f| f == "text");
+    let stored = parse_timestamp("2026-11-13T20:05:09.250Z").unwrap();
+    let listed = parse_timestamp("2026-11-12T15:30:09Z").unwrap();
+    let until = parse_timestamp("2026-12-31T00:00:00Z").unwrap();
+    let typed = get(move |req: Req| async move {
+        let (zone, f) = (DrawZone::from(req.zone()), Repair::FIELDS);
+        req.test_page(
+            "Edit",
+            html! {
+                <form method="post">
+                    {zone.field(f.zone)}
+                    <label>
+                        "Goes live, " {zone.name()}
+                        <input
+                            type="datetime-local"
+                            name={f.live_at}
+                            min={zone.min(listed)}
+                            max={zone.max(until)}
+                            value={zone.local(stored).map(LocalDateTime::floor_minute)}
+                        >
+                    </label>
+                </form>
+            },
+        )
+    })
+    .post(move |Form(input): Form<Repair>| async move {
+        let at = input.live_at.at_keeping(&input.zone, stored).filter(|at| *at >= listed && *at <= until);
+        if at.is_some() {
+            "saved"
+        } else {
+            "refused"
+        }
+    });
+    let plain = get(move |req: Req| async move {
+        let f = Text::FIELDS;
+        req.test_page(
+            "Edit",
+            html! {
+                <form method="post">
+                    <input type="hidden" name={f.zone} value="America/Chicago">
+                    <label>
+                        "Goes live, " {"America/Chicago"}
+                        <input
+                            type="datetime-local"
+                            name={f.live_at}
+                            min="2026-11-12T09:30"
+                            max="2026-12-30T18:00"
+                            value="2026-11-13T14:05"
+                        >
+                    </label>
+                </form>
+            },
+        )
+    })
+    .post(move |Form(input): Form<Text>| async move {
+        if input.live_at.is_empty() || input.zone.is_empty() {
+            "refused"
+        } else {
+            "saved"
+        }
+    });
+    let router = App::new(Routes::from(Table::new().route("/typed", typed).route("/text", plain))).client_zone().router();
+    let (uri, body) = (if text { "/text" } else { "/typed" }, "live_at=2026-11-13T14%3A05&zone=America%2FChicago");
+    for _ in 0..requests {
+        let req = Request::builder()
+            .method(if post { "POST" } else { "GET" })
+            .uri(uri)
+            .header("sec-fetch-site", "same-origin")
+            .header("cookie", "corten-zone=America/Chicago")
+            .header("content-type", "application/x-www-form-urlencoded");
+        let res = router.clone().oneshot(req.body(Body::from(if post { body } else { "" })).unwrap()).await.unwrap();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        assert!(!post || &bytes[..] == b"saved", "{bytes:?}");
+        std::hint::black_box(bytes);
+    }
+}
+
 #[tokio::test]
 async fn only_a_swap_says_it_is_a_page_swap() {
     let (_, headers, _) = call(app(routes(), None), "GET", None).await;

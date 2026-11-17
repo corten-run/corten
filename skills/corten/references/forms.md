@@ -209,7 +209,8 @@ let through, and a refused post draws again in `DrawZone::from(&input.zone)` wit
 `String` parsed by hand or an offset worked out with `Zone::offset`. A time the clocks skip moves
 forward by the gap and a repeated one is the earlier (Temporal's default), so an edit form reads
 `input.when.at_keeping(&input.zone, stored)`, the stored instant when the field comes back as it
-was drawn. A picked day is `Entry<Day>`, `day.start(&input.zone)` where it begins (a `GET` form
+was drawn. A picked day is `Entry<Day>`, `day.start(&input.zone)` where it begins (its first
+instant there, the change where the clocks skip midnight, not `00:00` read as a typed time; a `GET` form
 carries its zone too; `day.start(req.zone())` only for a day with no form, a link's parameter). A value the app stores and
 draws back into a number field must be one its `Bounds` hold (a ported screen's `min`/`step`
 never ran under `fetcher.submit`), or the browser will not send the form; `corten dev` names
