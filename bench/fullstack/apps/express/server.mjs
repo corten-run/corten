@@ -15,8 +15,10 @@ import { requestLifetime, readForm } from "./lib/request-lifetime.mjs";
 import { hostFilter } from "./lib/hosts.mjs";
 
 const profile = process.env.PROFILE === "matched";
+const catalogLean = process.env.PROFILE === "catalog-lean";
 const app = express();
 app.disable("x-powered-by");
+if (catalogLean) app.disable("etag");
 app.set("view engine", "ejs");
 app.set("views", fileURLToPath(new URL("./views", import.meta.url)));
 if (profile) {
@@ -182,7 +184,9 @@ app.use(recordError);
 
 const port = Number(process.env.PORT ?? 8080);
 const listening = () => console.log(`express item page listening on ${port}`);
-if (profile) {
+if (catalogLean) {
+  createServer({ headersTimeout: 0, requestTimeout: 0, keepAliveTimeout: 0 }, app).listen(port, "0.0.0.0", listening);
+} else if (profile) {
   // Node's server as app.listen makes it, given the profile's header timeout (30 s, as Corten's,
   // checked every second where Node's default checks every 30) and connection cap (MAX_CONNECTIONS;
   // Node closes a connection past it).

@@ -6,9 +6,45 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { parse } from "yaml";
 import { allApps } from "../fullstack/apps.mjs";
+import { buildPlan as jsonBuildPlan, descriptor as jsonDescriptor, appArgs as jsonAppArgs, cpuSettings as jsonCpuSettings } from "../json-api/contract.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
+test("catalog Corten uses supported lean settings, not the production timeout/compression profile", () => {
+  const manifest = readFileSync(join(here, "corten/Cargo.toml"), "utf8");
+  const application = readFileSync(join(here, "corten/src/main.rs"), "utf8");
+  const dependency = manifest.split("\n").find((line) => line.startsWith("corten = "));
+  assert.match(dependency, /features = \["json"\]/);
+  assert.doesNotMatch(dependency, /"compress"/);
+  for (const setting of ["deadline", "header_timeout", "send_timeout"]) {
+    assert.ok(application.includes(`.${setting}(None)`), `catalog keeps no optional ${setting} timer`);
+  }
+  assert.ok(application.includes('let lean = std::env::var("PROFILE").as_deref() == Ok("catalog-lean");'));
+  assert.ok(application.includes("if lean {"));
+  assert.ok(application.includes("} else {\n        app\n    }"));
+  assert.ok(application.includes("corten::serve(app(source, lean))"));
+  assert.ok(application.includes("req.page(views::document"));
+  assert.doesNotMatch(application, /\bunstaged\b/, "catalog remains a working page, not sandboxed data");
+});
+
+test("the shared Corten catalog build preserves framework-default JSON settings", () => {
+  const plan = jsonBuildPlan("corten", "catalog-v1");
+  assert.equal(plan.dockerfile, "bench/catalog/corten/Dockerfile");
+  assert.equal(jsonDescriptor().nativeProfile, "framework-default");
+  const args = jsonAppArgs({ name: "offline-app", profile: { payload: "catalog-v1", source: "fixture" }, imageId: "offline-image",
+    network: "offline-net", upstream: "http://offline-upstream:8080", fixtures: "/fixtures", cpus: jsonCpuSettings({}) });
+  assert.ok(args.includes("PROFILE="));
+  const manifest = readFileSync(join(here, "corten/Cargo.toml"), "utf8");
+  assert.match(manifest, /default = \["compression"\]/);
+  assert.match(manifest, /compression = \["corten\/compress"\]/);
+  const dockerfile = readFileSync(join(repo, plan.dockerfile), "utf8");
+  assert.match(dockerfile, /ARG CATALOG_LEAN=0/);
+  assert.ok(dockerfile.includes('1) set -- --no-default-features ;; 0) set -- ;; *) exit 1'));
+  const runner = readFileSync(join(here, "run.mjs"), "utf8");
+  assert.ok(runner.includes('app === "corten" ? ["--build-arg", "CATALOG_LEAN=1"] : []'));
+  assert.ok(!readFileSync(join(repo, "bench/json-api/run.mjs"), "utf8").includes("CATALOG_LEAN=1"));
+});
+
 test("catalog checks include failure reporting regressions and native umask coverage is Gin-only parity work", () => {
   const workflow = parse(readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8"));
   const script = "node --test bench/catalog/gin-permissions.test.mjs";
