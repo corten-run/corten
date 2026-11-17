@@ -5291,9 +5291,9 @@ rules something out.
 
     Last checked: 2026-11-16, the request stages, final HTTP handling, the API boundary and
     subscriber read, at `f5f2132aa`; 2026-11-17, hyper 1.12's HTTP/1 server answering a final
-    `100` and `103` with an empty `500` over a socket, at `67d888836`; a subscriber filtering on
-    the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs above, at
-    `65ac1dc47` against `38587c414`.
+    `100` and `103` with an empty `500` over a socket, at `67d888836`; 2026-11-17, a subscriber
+    filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
+    above, at `65ac1dc47` against `38587c414`.
 
 ## Rules
 
