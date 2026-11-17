@@ -5823,10 +5823,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
    functions' arguments and unrelated declarations are not position references. A hex escape's
    terminating whitespace is kept apart from the whitespace after it, which still separates
    tokens, and only CSS whitespace counts. A name carried in a custom property's value is not
-   rewritten. Throughout the stylesheet a removed comment keeps the tokens it separated without
-   becoming whitespace: it is dropped where nothing would join (`#\62/**/.c` stays the compound
-   `#b.c`), written `/**/` where two tokens would (`--abov\65/**/flip-block`), a space after an
-   at-keyword, whose prelude ignores it, and `/*` inside an unquoted `url(..)` is part of the URL.
+   rewritten. Throughout the stylesheet, comments are removed without changing the tokens the
+   browser reads: a comment with whitespace beside it becomes that one space, and one with none
+   is written `/**/`, since dropping it could join tokens (`<!/**/--`, `U+/**/A`,
+   `--abov\65/**/flip-block`) and a space would add a descendant combinator (`#\62/**/.c`). The
+   space that ends a hex escape is the escape's, not whitespace beside a comment. `/*` inside an
+   unquoted `url(..)` is part of the URL, and only an identifier `url(` starts one, not a hash or
+   at-keyword (`#\75rl(`). Preludes, `@scope`'s `to` and declaration names read past comments.
    [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
    gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
    components share the document tree, so prefixing prevents collisions. This does not make

@@ -104,10 +104,10 @@ Component CSS accepts exactly these block at-rules. At-rule names are ASCII case
 | `@page` | A global name starting with the component's name and `-`, written by the author, with the body copied without selector scoping ([printing](#printing)). An unnamed page or an unqualified name does not compile. |
 
 Raw bodies still lose comments and extra whitespace, and registered custom properties are
-renamed there too. Throughout the file a removed comment keeps the tokens around it apart
-without adding whitespace that means something: `.a/**/.b` stays the compound `.a.b`,
-`--abov\65/**/flip-block` keeps `/**/` where its two names would join, and `/*` inside an
-unquoted `url(..)` stays part of the URL. Nested block at-rules inside raw bodies are copied
+renamed there too. A comment with whitespace beside it becomes that one space, and one with none
+is written `/**/`, so removing comments never changes the tokens the browser reads: `.a/**/.b`
+stays the compound `.a.b` and `--abov\65/**/flip-block` two names. `/*` inside an unquoted
+`url(..)` stays part of the URL. Nested block at-rules inside raw bodies are copied
 raw (font feature `@styleset`, page margin `@top-left`, and others), not independently
 selector-checked. The only statement
 at-rules accepted are `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded, since
