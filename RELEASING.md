@@ -57,7 +57,8 @@ publication. Coordinate disclosure with the fixed release so users know what to 
    and `bench/marketplace/corten` (built with `--locked`), `bench/live/apps/corten` and
    `bench/nodelay/app`. `cargo metadata --manifest-path <app>/Cargo.toml` rewrites an app's
    lockfile. Update `crates/corten/tests/openapi.json` (the test that checks it rewrites it) and
-   the README's Status where the version shown there changes.
+   the README's Status where the version shown there changes. For a new minor version, update
+   the supported version in `SECURITY.md` too.
 3. Rename `## Unreleased` in `CHANGELOG.md` to `## X.Y.Z (YYYY-MM-DD)` and start a new empty
    `## Unreleased` above it. Check the versioned section is nonempty and contains any upgrade
    instructions. Get the preparation pull request independently reviewed and merge after its
@@ -76,8 +77,12 @@ branch for one patch, not a maintained release branch.
 2. Create a branch for the new patch version `X.Y.Z` from `vX.Y.W`, the tag of the newest
    published release (the latest patch of the newest minor version), and push it:
    `git switch -c patch/X.Y.Z vX.Y.W` and `git push origin patch/X.Y.Z`.
-3. Open the release-preparation pull request against that branch. It carries only the fix,
-   cherry-picked from `main` (`git cherry-pick -x <fix-commit>`), plus steps 2 and 3 above. It
+3. Open the release-preparation pull request against that branch. It carries the fix,
+   cherry-picked from `main` (`git cherry-pick -x <fix-commit>`), plus steps 2 and 3 above, and
+   `main`'s current `.github/workflows/release.yml` and the scripts it runs, unchanged. GitHub runs
+   the workflow as the tagged commit has it, so an older tag's workflow would publish without the
+   attestation and checksum gates the [verification](#verify-what-users-received) below expects.
+   Confirm with `git diff origin/main -- .github/workflows/release.yml` that nothing differs. It
    gets the same review and checks; CI runs on pull requests to any branch.
 4. Record the merged commit's SHA on the patch branch as the candidate. CI does not run on
    pushes to that branch, so run the [checks](CONTRIBUTING.md#checks) on that commit before
@@ -97,8 +102,10 @@ gh api repos/corten-run/corten/environments/release/deployment-branch-policies -
 ```
 
 The first must list a `required_reviewers` rule with a reviewer and a `branch_policy` rule; the
-second must list the `v*` rule with type `tag`. If the environment is missing (the first command
-returns 404) or any rule is absent, stop and do not push the tag. GitHub creates an environment a
+second must list exactly one policy, `v*` with type `tag`, and nothing else (a branch policy or a
+broader pattern would let something other than a release tag deploy). If either command fails
+(a 404 means the environment is missing), any rule is absent, or there is another policy, stop
+and do not push the tag. GitHub creates an environment a
 workflow names without protection rules, so `publish` would run with no approval. A repository
 admin restores the protection first.
 
