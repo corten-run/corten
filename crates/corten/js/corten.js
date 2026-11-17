@@ -81,7 +81,7 @@ const readParts = () => import(PART).then((/** @type {typeof import("./part.js")
  * markup with a part waiting has the part module read it. The tag's name is searched for in any
  * case and after any separator, as HTML reads it: a script's markup need not be written as the
  * server writes it, and a name in the text that is no tag only fetches the module.
- * @param {string | TrustedHTML} text @param {boolean} [own]
+ * @param {string | TrustedHTML} text @param {boolean | Function} [own]
  */
 const trustedHTML = (text, own = true) => {
   if (/data-corten-read-now/i.test(/** @type {string} */ (text))) readParts();
@@ -958,14 +958,16 @@ export function subscribe(url, handlers, { signal } = {}) {
  * `<noscript>`'s content would come out as live elements (a `<meta http-equiv="refresh">`
  * reloads the page once it is in the document); with scripting on a browser never shows it, so
  * it is dropped. Markup the runtime fetched (`own`) goes through its Trusted Types policy; a
- * script's ({@link patch}) does not.
- * @param {string | TrustedHTML} text @param {boolean} [own]
+ * script's ({@link patch}, `own` false) does not. A function `own` is shown the fragment before
+ * anything else can run: a part's read, whose answer it is ({@link apply}).
+ * @param {string | TrustedHTML} text @param {false | ((content: DocumentFragment) => void)} [own]
  */
-function parse(text, own = true) {
+function parse(text, own = () => {}) {
   const template = document.createElement("template");
   // lib.dom types this sink as string only; own requests carry text, patch() carries TrustedHTML.
   template.innerHTML = trustedHTML(text, own);
   for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
+  own && own(template.content);
   return template.content;
 }
 
@@ -1041,18 +1043,18 @@ export function patch(html, signal) {
  * {@link patch}, for a form's response: `sent` holds the values the form sent, so a field counts
  * as edited only when it changed after the request left; `took`, that the answer accepted them.
  * @param {string | TrustedHTML} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
- * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
+ * @param {false | ((content: DocumentFragment) => void)} [own] false for a script's markup, which the
+ *   runtime did not fetch ({@link parse}); a part's read (part.js) passes a function, shown what
+ *   this call parsed before anything can run: an argument only the runtime and its part module
+ *   pass, never the signal, which may be a script's
  * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
  * the patch's own tag takes its place, so the part's next read is the one on the page
  * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
  *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
  *   it replaces takes ({@link opened})
  */
-async function apply(html, signal, sent, took, own = true, asked, within) {
+async function apply(html, signal, sent, took, own, asked, within) {
   const content = parse(html, own);
-  // A part's read (part.js) is shown what this call parsed, before anything can run: the waiting
-  // parts in it are its answer's own. Kept by nothing else.
-  /** @type {{ o?: (content: DocumentFragment) => void } | undefined} */ (signal)?.o?.(content);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
@@ -1142,7 +1144,7 @@ function readPatchAgain(tag, put) {
       if (!here()) return;
       // Changed while the read was on its way: its answer is drawn for what was, so read again.
       if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
-      await apply(html, undefined, null, undefined, true, tag);
+      await apply(html, undefined, null, undefined, undefined, tag);
       return;
     }
   });
@@ -3113,7 +3115,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       const body = await res.text();
       renew();
       signal.throwIfAborted();
-      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, true, undefined, within);
+      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, undefined, undefined, within);
       else {
         const notice = noticeOf(res);
         await swapPage(body, signal, false, notice);

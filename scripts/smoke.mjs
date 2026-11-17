@@ -5390,6 +5390,41 @@ async function run(browser) {
     } else skip(name, "no customized built-in elements");
   }
 
+  // A script's signal is only a signal: an `o` on it, a number or a function, is not taken for the
+  // part module's (which apply is given as an argument), whether or not it has aborted (#1400).
+  {
+    const state = await page.evaluate(async () => {
+      const corten = /** @type {{ patch: (html: unknown, signal?: AbortSignal) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="signal-o">Before</div>'));
+      const text = () => document.getElementById("signal-o")?.textContent ?? null;
+      let called = 0;
+      const shown = (/** @type {DocumentFragment} */ content) => {
+        called++;
+        if (content.firstElementChild) content.firstElementChild.textContent = "Unexpected";
+      };
+      /** @type {Record<string, unknown>} */
+      const seen = {};
+      try {
+        await corten.patch(__html('<div id="signal-o">Numeric</div>'), Object.assign(new AbortController().signal, { o: 17 }));
+        seen.numeric = text();
+      } catch (e) {
+        seen.numeric = String(e);
+      }
+      await corten.patch(__html('<div id="signal-o">Callable</div>'), Object.assign(new AbortController().signal, { o: shown }));
+      seen.callable = text();
+      await corten.patch(__html('<div id="signal-o">Aborted</div>'), Object.assign(AbortSignal.abort(), { o: shown }));
+      seen.aborted = text();
+      seen.called = called;
+      document.getElementById("signal-o")?.remove();
+      return seen;
+    });
+    check(
+      "a script's signal with an o property is only a signal to patch(): a number does not refuse the patch, a function is not shown its markup",
+      JSON.stringify(state) === JSON.stringify({ numeric: "Numeric", callable: "Callable", aborted: "Callable", called: 0 }),
+      JSON.stringify(state),
+    );
+  }
+
   // What a patch parsed is kept by nothing once it settles: not when the part it answers left
   // before its stylesheet loaded, not when its signal had aborted, not when its element's target
   // is not on the page. Counted with Chromium's heap, after a collection (#1400).
