@@ -476,10 +476,12 @@ mod bounds;
 pub(crate) mod de;
 mod number;
 pub(crate) mod upload;
+mod zone;
 pub use bounds::{Bounds, Numeric};
 pub use de::{from_bytes, FormError};
-pub use number::{read_number, Entry};
+pub use number::{read_number, Entry, EntryValue};
 pub use upload::{File, Files, Upload, UploadError};
+pub use zone::{DrawZone, FormZone, ZoneField};
 
 /// Implemented by `#[derive(Fields)]` for a form with [`Files`], whose fields nothing else reads.
 #[doc(hidden)]
