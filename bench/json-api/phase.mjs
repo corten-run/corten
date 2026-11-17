@@ -60,8 +60,14 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     const metrics = deriveProductionPhase(raw, expected, stage, options, tools, context, { stream, native, priorTailUnobserved });
     return { raw: io.write(`${prefix}.json`, raw), metrics };
   } catch (error) {
-    raw.captureErrors.push(error.message);
-    error.phase = { raw: io.write(`${prefix}.json`, raw), metrics: null };
-    throw error;
+    // A native command fault is the cause; a capture check it provoked (no closed
+    // stdout count, an empty fixed stream) is kept after it, never in its place.
+    // Only the command's first line is kept: its stderr is a bounded artifact.
+    const cause = failure && `native command: ${String(failure?.message ?? failure).split("\n", 1)[0].slice(0, 512)}`;
+    if (cause) raw.captureErrors.push(cause);
+    if (error !== failure) raw.captureErrors.push(error.message);
+    const thrown = cause ? new Error(cause) : error;
+    thrown.phase = { raw: io.write(`${prefix}.json`, raw), metrics: null };
+    throw thrown;
   } finally { if (sampler) await sampler.stop(); }
 }

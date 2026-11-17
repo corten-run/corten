@@ -112,37 +112,48 @@ export function inspectJson(summary, { load, commit } = {}) {
           return;
         }
         assert.ok(Array.isArray(runs), "timing passes must be an array");
-        const used = new Set();
-        for (const run of runs) {
-          assert.ok(Number.isInteger(run.pass) && run.pass >= 1 && run.pass <= summary.options.passes && !used.has(run.pass), "duplicate/wrong pass");
+        const used = new Set(); let replayed = true;
+        // Each saved pass replays on its own, so an invalid or unfinished pass cannot
+        // hide later valid passes; its own failure stays a warning and the row incomplete.
+        for (const run of runs) replayed = check(`${app} ${key} timing pass ${run?.pass}`, () => {
+          assert.ok(Number.isInteger(run?.pass) && run.pass >= 1 && run.pass <= summary.options.passes && !used.has(run.pass), "duplicate/wrong pass");
           used.add(run.pass);
+          const passExpected = { ...expected, pass: run.pass }, context = runtimeContext(summary, profile);
           if (timed) {
-            const replay = replayTimedRun(run, { ...expected, pass: run.pass }, summary.options, load, summary.tools, runtimeContext(summary, profile), native);
+            let replay;
+            try { replay = replayTimedRun(run, passExpected, summary.options, load, summary.tools, context, native); }
+            catch (error) {
+              // Keep the independently joined phases before an apparatus fault, never as a complete pass.
+              try { derivedRuns.push(replayTimedRun(run, passExpected, summary.options, load, summary.tools, context, native, { prefix: true })); } catch {}
+              throw error;
+            }
             derivedRuns.push(replay);
             execution.set(`${app}/${key}/${run.pass}`, replay.window);
-            observationComplete &&= Object.values(replay.phases).every((o) => o.observationComplete);
-            targetFailed ||= Object.values(replay.phases).some((o) => o.targetOutcome === "failed");
-          } else verifyRun(run, { ...expected, pass: run.pass }, summary.options, load, summary.tools, runtimeContext(summary, profile));
+          } else verifyRun(run, passExpected, summary.options, load, summary.tools, context);
           row.passes++;
-        }
-        assert.equal(runs.length, summary.options.passes, "missing requested JSON passes");
-        verifyAggregates(entry.aggregates[key], runs, summary.options.passes);
+        }, false) && replayed;
         if (timed) {
           row.projection = timedCaseProjection(derivedRuns, summary.options.passes);
           assert.ok(isDeepStrictEqual(row.projection, entry.projections?.[key]), "saved timed pass projection differs from raw replay");
         }
+        assert.ok(replayed, "one or more JSON timing passes failed replay");
+        assert.equal(runs.length, summary.options.passes, "missing requested JSON passes");
+        verifyAggregates(entry.aggregates[key], runs, summary.options.passes);
       }, false);
       if (timed) {
         // Preserve only independently replayed cells when another pass is missing
         // or invalid. A saved projection never supplies trusted fallback numbers.
         row.projection = timedCaseProjection(derivedRuns, summary.options.passes);
+        for (const replay of derivedRuns) for (const o of Object.values(replay.phases)) {
+          observationComplete &&= o.observationComplete; targetFailed ||= o.targetOutcome === "failed";
+        }
         observationComplete &&= timing && row.projection.loadOutcome !== "incomplete";
         row.timedOutcome = gated ? "not-run-functional-gate" : !observationComplete ? "incomplete" : targetFailed ? "failed" : "passed";
         row.comparisonEligible = observationComplete && !targetFailed ? true : null;
         if (!observationComplete && timing && !gated) problem(`${app} ${key} attribution`, Object.values(derivedRuns).flatMap((r) => Object.values(r.phases).flatMap((p) => p.incompleteReasons)).join("; "));
       }
       // Partial values are retained and labeled, never zero-filled or a complete comparison.
-      const available = timed ? derivedRuns.map((r) => ({ phases: Object.fromEntries(Object.entries(r.phases).map(([p, metrics]) => [p, { metrics }])) }))
+      const available = timed ? derivedRuns.filter((r) => r.phases.sat64).map((r) => ({ phases: Object.fromEntries(Object.entries(r.phases).map(([p, metrics]) => [p, { metrics }])) }))
         : Array.isArray(runs) ? runs.filter((r) => r.phases?.sat64?.metrics?.rps > 0) : [];
       if (available.length) {
         const values = available.map((r) => r.phases.sat64.metrics.rps).sort((a, b) => a - b);
@@ -185,16 +196,26 @@ export function inspectJson(summary, { load, commit } = {}) {
   const baseline = warnings.length === 0 && !gated && !negative && !timedNegative;
   const attemptComplete = warnings.length === 0;
   const functionalAttemptComplete = preparationGates.every(Boolean);
-  if (!baseline) for (const rows of Object.values(apps)) for (const row of Object.values(rows)) {
-    if (row.rps) row.rps.unverifiedPartial = true;
-    if (timed) row.comparisonEligible = null;
+  const outcomes = summary.group.apps.map((app) => ({ app, outcome: Object.values(apps[app]).some((r) => r.functionalComplete && !r.functional || r.timedOutcome === "failed") ? "failed"
+    : timed && Object.values(apps[app]).some((r) => !r.attemptComplete) ? "incomplete" : "passed" }));
+  // A coherent, supported timed target failure blames only its app. Peers stay comparable
+  // only when every report-wide and per-row gate (harness, provenance, source/native audit,
+  // headroom, continuity, cleanup) passed, i.e. the attempt has no warning at all.
+  const peers = timed && attemptComplete && !gated && !negative && timedNegative;
+  const comparisonEligibleApps = baseline ? [...summary.group.apps]
+    : peers ? summary.group.apps.filter((app) => Object.values(apps[app]).every((r) => r.complete)) : [];
+  for (const [app, rows] of Object.entries(apps)) for (const row of Object.values(rows)) {
+    const eligible = comparisonEligibleApps.includes(app);
+    if (row.rps) row.rps.unverifiedPartial = !eligible;
+    if (timed) row.comparisonEligible = eligible ? true : null;
   }
+  const failedApps = outcomes.filter((o) => o.outcome === "failed").map((o) => o.app);
   return { group: summary.group, round: summary.round, commit: summary.commit, baseline, attemptComplete, functionalAttemptComplete,
-    outcomes: summary.group.apps.map((app) => ({ app, outcome: Object.values(apps[app]).some((r) => r.functionalComplete && !r.functional || r.timedOutcome === "failed") ? "failed"
-      : timed && Object.values(apps[app]).some((r) => !r.attemptComplete) ? "incomplete" : "passed" })),
-    comparisonEligibleApps: baseline ? [...summary.group.apps] : [], apps, warnings,
+    outcomes, comparisonEligibleApps, apps, warnings,
     config: { options: summary.options, measurement: summary.measurement, timingPlan: summary.timingPlan, commitAfter: summary.commitAfter, dirty: summary.dirty, dirtyAfter: summary.dirtyAfter },
-    status: baseline ? "COMPLETE" : attemptComplete ? `COMPLETE ATTEMPT: ${timedNegative ? "timed target" : "functional"} failure; not a baseline` : "INCOMPLETE: not a baseline",
+    status: baseline ? "COMPLETE" : !attemptComplete ? "INCOMPLETE: not a baseline"
+      : peers ? `COMPLETE ATTEMPT: timed target failure (${failedApps.join(", ")}); not a baseline; comparison eligible only for independently complete apps (${comparisonEligibleApps.join(", ") || "none"})`
+      : `COMPLETE ATTEMPT: ${timedNegative ? "timed target" : "functional"} failure; not a baseline`,
     fixtureHashes: Object.fromEntries(Object.entries(fixtures).map(([p, f]) => [p, sha256(JSON.stringify(f))])) };
 }
 
@@ -207,7 +228,8 @@ export function renderJson(report) {
     "Timing order: pass, registry profile, then rotated app order; rotation offset is floor((pass - 1) * apps / passes). The exact effective schedule is retained in summary.timingPlan, not proof it executed.",
     "Native JSON only: catalog-v1 and marketplace-v2 stay distinct, with fixture/API sources. No HTML, forms or browser qualification.",
     "Functional checks do not prove native serialization. A separate audited native source receipt is required for every app/case.",
-    "Throughput is the median [min, max] of sat64 passes, not a claim of CPU saturation. Unverified partial numbers are not comparisons.", "",
+    "Throughput is the median [min, max] of sat64 passes, not a claim of CPU saturation. Unverified partial numbers are not comparisons.",
+    `Outcomes: ${report.outcomes.map((o) => `${o.app} ${o.outcome}`).join(", ")}. Comparison-eligible apps: ${report.comparisonEligibleApps.join(", ") || "none"}.`, "",
     "| App | Payload / source | Functional | Native audit | Verified passes | req/s | req/CPU-s | Peak MiB | p95 ms | App CPU % | Upstream CPU % |", "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|"];
   for (const [app, rows] of Object.entries(report.apps)) for (const profile of report.group.cases) {
     const r = rows[profile.key], rate = r.rps ? `${r.rps.median} [${r.rps.min}, ${r.rps.max}]${r.rps.unverifiedPartial ? " (unverified partial)" : ""}` : "pending";

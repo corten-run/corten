@@ -174,7 +174,7 @@ All 36 cells are attempted and all native source audits remain required, even fo
 cell. Any such negative gates timing globally (`timingDisposition: "gated-functional"`),
 with empty runs/aggregates and retained owned-container/network cleanup inventory.
 `inspectJson` returns `attemptComplete`, per-app `outcomes` and `comparisonEligibleApps`
-separately from `baseline`. A complete negative attempt has `baseline: false`, no eligible
+separately from `baseline`. A complete functional negative attempt has `baseline: false`, no eligible
 comparisons and process exit one. Check-only preparation remains unqualified pending the
 independent exact-image audit, whether its observed functional outcome passed or failed.
 
@@ -205,9 +205,19 @@ thrown away as a missing load phase. Later phases and matrix cells continue. War
 failure, abnormal/signal/expired/interrupted exits, I/O/output/marshal faults, bad parity,
 source evidence, runtime or cleanup remain apparatus/incomplete failures, never app blame.
 Every saved metric, aggregate and pass-cell projection is recomputed. Reports retain
-failed and missing passes, response counts and min/median/max ranges; incomplete or
-failed attempts have no comparison eligibility. A complete negative attempt is distinct
-from a successful baseline, and `--require-complete` still fails it.
+failed and missing passes, response counts and min/median/max ranges. Each saved pass
+replays on its own, so an invalid pass cannot hide later ones. A pass ended by an
+apparatus fault keeps the phases before it that independently replay (including a
+coherent normal 99), but its row, app and attempt stay incomplete, never failed or
+comparable. An incomplete attempt has no comparison eligibility. In a complete timed
+attempt, a supported coherent target failure blames only its app: that app's rows stay
+`comparisonEligible: null`, and `comparisonEligibleApps` lists only apps whose every row
+independently completed. Any warning (harness, provenance, source/native audit, headroom,
+continuity or cleanup) leaves no app comparable. Such an attempt is not a baseline,
+and `--require-complete` still fails it, as it does a functional negative.
+When the native load command itself faults (timeout, signal, I/O), the raw phase keeps
+its first message line, at most 512 characters, before any capture check it provoked;
+the phase stays an apparatus fault with null metrics.
 
 App/upstream/load runtime budgets, executable/mount/ownership/identity and lifetimes are
 captured before and after every phase. All three roles need window-covering CPU/memory

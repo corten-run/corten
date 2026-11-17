@@ -42,7 +42,9 @@ export function phaseFixture(phase, responses = ["ok", "ok", "ok"], offset = 0, 
   return f;
 }
 
-export async function productionFixture(folder, { failure, passes = 1 } = {}) {
+// `fault` makes one phase's native command time out as process.mjs reports it, saved as
+// run.mjs saves it. `cells` limits timing to "app/key" cells so multi-pass controls stay small.
+export async function productionFixture(folder, { failure, fault, passes = 1, cells } = {}) {
   const f = result(["--duration", "1", "--warmup", "1", "--rate", "3"], { artifacts: new ByteStore() }), s = f.summary;
   s.schema = timedSchema; s.producer = producerProvenance(); s.options.passes = passes;
   s.finishedAt = "2026-11-18T00:00:00Z";
@@ -65,6 +67,7 @@ export async function productionFixture(folder, { failure, passes = 1 } = {}) {
   await executeMatrix(s.options, {
     async prepare() {}, async check() { return true; }, async gate() {}, async failure(_app, _key, _stage, error) { throw error; },
     async measure({ app, profile, pass }) {
+      if (cells && !cells.includes(`${app}/${profile.key}`)) return;
       const entry = s.apps[app], expected = { ...identity(s, app, profile), pass }, context = runtimeContext(s, profile);
       const baseOffset = sequence++ * 20000, epoch = Date.parse("2026-11-17T00:00:00Z"), appId = sha256(`app/${app}/${profile.key}/${pass}`), upId = sha256(`upstream/${profile.payload}`);
       const cold = structuredClone(originals.get(`${app}/${profile.key}`));
@@ -77,7 +80,8 @@ export async function productionFixture(folder, { failure, passes = 1 } = {}) {
       const run = { pass, identity: expected, complete: false, phases: {}, cold };
       entry.runs[profile.key].push(run);
       let reads = structuredClone(coldRaw.upstreamReads.after), counter = 1000000, offset = baseOffset, priorTailUnobserved = false;
-      for (const stage of ["warmup", ...phases]) {
+      try { for (const stage of ["warmup", ...phases]) {
+        const faulted = fault?.app === app && fault?.key === profile.key && fault?.pass === pass && fault?.phase === stage;
         const negative = failure?.app === app && failure?.key === profile.key && failure?.pass === pass && failure?.phase === stage;
         const synthetic = phaseFixture(stage, negative ? failure.responses : undefined, offset), config = loadConfig(s.options, stage);
         const path = `${app}/${profile.key}/p${pass}`; mkdirSync(join(folder, path), { recursive: true });
@@ -86,13 +90,18 @@ export async function productionFixture(folder, { failure, passes = 1 } = {}) {
         const infos = Object.fromEntries(["app", "upstream", "load"].map((role) => [role, runtimeInfo(expected, ctx, role)]));
         infos.app.Id = appId; infos.upstream.Id = upId;
         infos.load.Id = sha256(`${app}/${profile.key}/${pass}/${stage}`);
-        let observed = 0, counted = 0;
-        const saved = await capturePhase({ folder, path, stage, config, expected, options: s.options, tools: s.tools, context,
+        let observed = 0, counted = 0, saved;
+        try { saved = await capturePhase({ folder, path, stage, config, expected, options: s.options, tools: s.tools, context,
           native: f.load(entry.checks[profile.key].native), priorTailUnobserved, io: {
             write: (_path, value) => f.put(value), reads: async () => afterReads, now: () => synthetic.command.clock.finishedAt + 20,
             async execute(opts) {
               // Assert the production command capture asks for the actual 99 path.
               if (!opts.observeExit) throw new Error("normal99 capture not enabled");
+              if (faulted) {
+                const error = new Error("docker start -a json-api-k6: timeout\nsecret-free stderr tail");
+                error.exit = { code: 137, signal: null, expired: true, interrupted: false }; error.clock = synthetic.command.clock; error.ioErrors = [];
+                throw error;
+              }
               writeFileSync(opts.stdoutFile, stage === "fixed" ? synthetic.bytes() : ""); writeFileSync(opts.stderrFile, synthetic.logs);
               return { ...synthetic.command, stdoutBytes: stage === "fixed" ? synthetic.bytes().length : 0, stderrBytes: Buffer.byteLength(synthetic.logs) };
             },
@@ -111,21 +120,30 @@ export async function productionFixture(folder, { failure, passes = 1 } = {}) {
                 participants: Object.fromEntries(["upstream", "load"].map((r) => [r, participantReceipt(infos[r], expected, ctx, r)])),
                 liveness, upstreamReads: before ? beforeReads : afterReads };
             },
-          } });
+          } }); } catch (error) {
+          if (error.phase) { if (stage === "warmup") run.warmup = error.phase; else run.phases[stage] = error.phase; }
+          throw error;
+        }
         if (stage === "warmup") run.warmup = saved; else run.phases[stage] = saved;
         captured.push({ app, key: profile.key, pass, stage, code: synthetic.command.exit.code });
         reads = afterReads; counter += 200000; offset += 3000; priorTailUnobserved ||= saved.metrics.counts.timeout > 0;
       }
-      run.tail = f.put({ before: reads, after: reads, beforeStopAt: epoch + baseOffset + 15000, afterStopAt: epoch + baseOffset + 15010 });
-      upstreamCounters[profile.payload] = reads;
       run.complete = true;
-      for (const stage of phases) entry.aggregates[profile.key][stage] = { ...aggregate(entry.runs[profile.key].map((r) => r.phases[stage].metrics)), asked: passes };
-      entry.projections[profile.key] = timedCaseProjection(entry.runs[profile.key].map((r) => ({ pass: r.pass, phases: Object.fromEntries(phases.map((p) => [p, r.phases[p].metrics])) })), passes);
+      } catch (error) { run.failed = error.message; s.failures.push({ app, key: profile.key, stage: `timing pass ${pass}`, error: error.message }); }
+      finally {
+        run.tail = f.put({ before: reads, after: reads, beforeStopAt: epoch + baseOffset + 15000, afterStopAt: epoch + baseOffset + 15010 });
+        upstreamCounters[profile.payload] = reads;
+        // The same saved-metrics reductions run.mjs writes, including a faulted run's earlier phases.
+        for (const stage of phases) entry.aggregates[profile.key][stage] = { ...aggregate(entry.runs[profile.key].filter((r) => r.phases[stage]?.metrics).map((r) => r.phases[stage].metrics)), asked: passes };
+        entry.projections[profile.key] = timedCaseProjection(entry.runs[profile.key].map((r) => ({ pass: r.pass,
+          phases: Object.fromEntries(phases.filter((p) => r.phases[p]?.metrics).map((p) => [p, r.phases[p].metrics])) })), passes);
+      }
     },
   }, s.timingPlan);
   s.cleanup = f.put({ runId: s.runId, containers: [], networks: [] });
   s.readTail = f.put({ at: Date.parse("2026-11-17T00:00:00Z") + sequence * 20000, reads: upstreamCounters });
-  s.attemptComplete = Object.values(s.apps).every((a) => s.group.cases.every((p) => a.runs[p.key].every((r) => phases.every((stage) => r.phases[stage].metrics.observationComplete))));
+  s.attemptComplete = s.failures.length === 0 && Object.values(s.apps).every((a) => s.group.cases.every((p) => a.runs[p.key].length === passes
+    && a.runs[p.key].every((r) => r.complete && phases.every((stage) => r.phases[stage]?.metrics?.observationComplete))));
   s.complete = s.attemptComplete && !failure;
   return { ...f, captured };
 }
