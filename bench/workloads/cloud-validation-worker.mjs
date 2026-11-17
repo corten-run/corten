@@ -15,7 +15,7 @@ try {
   const approved = new Map(); let total = 0;
   for (const row of sources) {
     assert.deepEqual(Object.keys(row).sort(), ["path", "sha256", "source"]);
-    assert.ok(/^(?:(?:bench|scripts)\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.mjs|node_modules\/typescript\/lib\/typescript\.js)$/.test(row.path));
+    assert.ok(/^(?:(?:bench|scripts)\/(?:[a-z0-9-]+\/)*[a-z0-9-]+\.mjs|node_modules\/typescript\/lib\/typescript\.js|node_modules\/semver\/(?:[a-z-]+\/)*[a-z-]+\.js)$/.test(row.path));
     assert.equal(typeof row.source, "string");
     total += Buffer.byteLength(row.source); assert.ok(total <= 24 * 1024 * 1024);
     assert.equal(createHash("sha256").update(row.source).digest("hex"), row.sha256);
@@ -25,15 +25,22 @@ try {
   const self = approved.get(new URL("bench/workloads/cloud-validation-worker.mjs", base).href);
   assert.equal(import.meta.url, "data:text/javascript;base64," + Buffer.from(self).toString("base64"));
   const typescript = new URL("node_modules/typescript/lib/typescript.js", base).href;
+  const semver = new URL("node_modules/semver/", base).href;
   registerHooks({ resolve(specifier, context, nextResolve) {
     if (isBuiltin(specifier)) return nextResolve(specifier, context);
-    const url = specifier === "typescript" ? typescript : new URL(specifier, context.parentURL).href;
+    let url = specifier === "typescript" ? typescript : specifier === "semver" ? semver + "index.js" : new URL(specifier, context.parentURL).href;
+    // Node-semver uses extensionless CommonJS requires. Resolve only to a
+    // captured library member; never consult disk, package.json or NODE_PATH.
+    if (!approved.has(url) && context.parentURL?.startsWith(semver) && /^\.\.?\//.test(specifier)) {
+      if (approved.has(url + ".js")) url += ".js";
+      else if (approved.has(url + "/index.js")) url += "/index.js";
+    }
     assert.ok(approved.has(url), "validation-unapproved-import");
     return { url, shortCircuit: true };
   }, load(url, context, nextLoad) {
     if (isBuiltin(url)) return nextLoad(url, context);
     assert.ok(approved.has(url), "validation-unapproved-import");
-    return { format: url === typescript ? "commonjs" : "module", source: approved.get(url), shortCircuit: true };
+    return { format: url === typescript || url.startsWith(semver) ? "commonjs" : "module", source: approved.get(url), shortCircuit: true };
   } });
   const native = await import(new URL("bench/workloads/isolated/campaign-verify.mjs", base).href);
   if (typeof native.validateCampaign !== "function") throw new Error("validator unavailable");

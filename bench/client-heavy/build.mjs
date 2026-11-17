@@ -9,11 +9,18 @@ import { collectCompiler } from "./compiler.mjs";
 import { buildOptions as fixedBuildOptions, documentMarkup } from "./contract.mjs";
 export { vendorConfiguration } from "./build-replay.mjs";
 import { vendorConfiguration } from "./build-replay.mjs";
+import { evaluateLatestStable, latestStableSources, unsupportedSolidReason } from "../workloads/latest-stable.mjs";
 
 export const here = dirname(fileURLToPath(import.meta.url));
 export const root = resolve(here, "../..");
 const require = createRequire(join(root, "bench/browser/package.json"));
 export { sha256 };
+export function readLatestStable() {
+  const input = Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) => [key, readFileSync(join(root, path))]));
+  const policy = evaluateLatestStable({ group: "client-heavy", ...input });
+  if (!policy.valid || !Array.isArray(policy.candidates)) throw new Error("invalid-client-candidate-policy");
+  return policy;
+}
 // Cargo resolves config-file paths from two levels above that file. This file
 // lives at <out>/evidence/cargo-vendor.toml, so its base is <out>.
 
@@ -23,8 +30,14 @@ export async function buildApps(workload, directory, cargo = "cargo", evidence =
   mkdirSync(out, { recursive: true });
   writeFileSync(join(out, "workload.json"), json(workload));
   writeFileSync(join(out, "build.json"), json(apps));
+  const policy = readLatestStable();
   const { build } = require("esbuild");
   for (const app of selectedApps("client-heavy")) {
+    if (policy.candidates.find((row) => row.app === app)?.status === "unsupported") {
+      apps[app] = { outcome: "not-run", reason: unsupportedSolidReason };
+      writeFileSync(join(out, "build.json"), json(apps));
+      continue;
+    }
     const dir = join(out, app);
     mkdirSync(dir, { recursive: true });
     const startedAt = clock();

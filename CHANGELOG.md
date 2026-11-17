@@ -8,8 +8,37 @@ Corten is pre-1.0, so any minor version may change the API.
 - The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
   `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 
+- CI builds the Git-capable Playwright test-tools image only in the browser group that runs
+  the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
+
+- The catalog benchmark uses a fixed two-worker upstream within its existing CPU
+  and memory budget, retaining per-process headroom and a first-host preflight.
+  Saved worker evidence joins every preflight to the timed upstream and the
+  apparatus source hashes to the bound measured commit; failed capacity checks
+  remain unqualified rather than attributed to the measured framework.
+
+- Preserve every client benchmark candidate's not-run record when policy input
+  is invalid or missing. Such attempts still fail before any native build.
+
+- Capture the benchmark validator's pinned semver library and committed tooling
+  declaration before replay. Resolve its CommonJS imports only from those
+  verified bytes, without reopening installed files or enabling package fallback.
+
+- Stop an isolated benchmark command cooperatively when its host observer detects
+  an irrecoverable observation/storage failure, broken continuity or a recorded
+  Docker-participant gap. Preserve invalid evidence and uncertain ownership;
+  cancellation does not qualify a run or authorize host deletion.
+
+- Correct the grouped browser documentation to describe the current replayed
+  tool/lock identity handoff. Missing historical identities and independent OS
+  proof still block qualification; the documentation grants no readiness.
+
+- The catalog stand-in upstream reuses UTF-8 record bytes and handles canonical
+  reads synchronously, retaining exact controls and read counts. Measured apps
+  still fetch, parse and render or serialize per request; apparatus capacity
+  checks, resource budgets and failure interpretation are unchanged.
 
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
