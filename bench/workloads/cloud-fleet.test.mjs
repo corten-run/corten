@@ -284,7 +284,23 @@ test("failed or wrong common bootstrap leaves the first host observable without 
       }
     };
     await assert.rejects(h.task({ now: () => clock }, options).launch());
-    assert.equal(h.saved().status, "running"); assert.equal(h.saved().bootstrapReady, undefined);
+    const saved = h.saved(), witness = saved.preBootstrapTerminal;
+    if (mode === "ended") {
+      assert.equal(saved.status, "starting");
+      const row = saved.control.ledger.at(-1), query = h.calls.filter(([binary]) => binary === "ssh").at(-1).at(-1);
+      assert.ok(query.startsWith(`systemctl show ${saved.unit} `));
+      assert.equal(row.request.epoch, "bootstrap"); assert.equal(row.request.invocation.channel, "ssh");
+      assert.equal(row.request.invocation.requestSha256, digest(`set -euo pipefail\n${query}\n`));
+      assert.equal(row.localTerminal, true); assert.equal(row.code, 0);
+      assert.equal(witness.invocation, row.request.invocation.id); assert.equal(witness.monitorId, saved.control.monitor.id);
+      assert.equal(witness.hostId, saved.id); assert.equal(witness.ip, saved.ip);
+      assert.equal(contract.terminalUnit(witness.stdout, saved), true);
+    } else {
+      assert.equal(saved.status, "running", mode); assert.equal(witness, undefined, mode);
+    }
+    assert.equal(saved.control.monitor.phase, "pending"); assert.equal(saved.bootstrapReady, undefined);
+    assert.equal(saved.fullGroupQualified, false); assert.equal(saved.validation, undefined);
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.destroyedAt, undefined);
     assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
   }
 });
