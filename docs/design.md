@@ -3171,11 +3171,18 @@ rules something out.
     Reads do not chain: a part waiting in the answer to a part's read is marked failed rather than
     read, so two parts whose answers draw each other waiting cannot read each other without end
     with no delay; a part's own slow part is read in by the link's page. The module knows which
-    markup an answer drew as it draws it: what the page changed before is taken from its observer
-    first, at the moment the answer is let draw, so the next changes it hears of are that answer's.
-    A form's answer drawn in the same task right after it (both waiting for one stylesheet) would
-    be taken with it, and a part that answer draws waiting would show its link rather than be
-    read. A part a periodic read's answer (`ReadAgain::from`), a `<corten-live>` fragment or a
+    tags an answer drew from the answer: it lists the address of each tag its text writes (as the
+    server writes the tag; only the runtime's Trusted Types policy may parse markup), takes from
+    its observer what the page changed before at the moment the answer is let draw, and counts the
+    first tag the page gains at each listed address as the answer's. A form's answer drawn in the
+    same task right after it (both waiting for one stylesheet) is told apart: a part it draws
+    waiting is read, unless the part's answer listed a tag at the same address that it could not
+    draw (no element with its id), when that part is marked failed and shows its link, the side
+    that cannot chain. Not chosen: every change in the observer's next batch counted as the
+    answer's, which marked such a form's part failed without reading it (the review of
+    [#1483 One handler answers a page and its slow part: ReadAgain::now and Req::patch_or_with](https://github.com/corten-run/corten/pull/1483),
+    round 13); and the runtime handing the module the elements an answer put, 4 bytes gzipped more
+    on every page (and 2 fewer brotli), measured at `af710785c` as below. A part a periodic read's answer (`ReadAgain::from`), a `<corten-live>` fragment or a
     script's `patch` draws waiting is read, as one a form's answer draws is: what draws it is not
     a part's read, so it sets the pace (its interval, a stream's fragments, a user's submits), and
     one that draws the part again ends the read the one before started, so one read at most is on
@@ -3207,7 +3214,9 @@ rules something out.
     extension or the CSP, a 503 for `part.js`) and once the read has failed, with no code of the
     runtime's for any of them, and in every browser, as no media query decides it. The cost is the
     link drawn from the first paint until the module marks the part busy, a moment on a load, as
-    the module runs once the page is parsed. Corten draws no link: the server would draw it from a
+    the module runs once the page is parsed; in the line's place (one grid cell of the part in the
+    watchlist's CSS, both there, the hidden one with `visibility: hidden`), the swap moves nothing
+    around it. Corten draws no link: the server would draw it from a
     label only the app has, which is the link the app writes; and a query parameter Corten reads
     on every page would be a second way for an address to say what a page reads. The cost is one
     field plus one handler branch per page with a slow part (other links name the page through its
@@ -3250,9 +3259,11 @@ rules something out.
     the discovery in it at `73279ab7a`, and 16,685 and 15,059 with the reads in it at
     `cd6861c76`, so a page without a slow part loads 55 bytes gzipped more than on main, where it
     loaded 224 and 1,278 more); platform (`aria-busy` means the element is being updated, WAI-ARIA
-    1.2; a `MutationObserver` is told of the page's changes in a microtask after them, so its
-    `takeRecords` at the moment a patch is let draw leaves it the patch's own changes, DOM
-    standard); reasoned (the runtime's read sends `corten: action`, which is `Mode::Action`, so a handler that picks its
+    1.2; a `MutationObserver`'s records come in the order of the changes and its `takeRecords`
+    leaves it the ones from then on, so taken at the moment a patch is let draw, which draws in one
+    go, the next records start with the patch's own, DOM standard; continuations waiting for one
+    promise run in one microtask checkpoint, so another answer waiting for the same stylesheet
+    draws right after it, before the observer is told, ECMAScript jobs); reasoned (the runtime's read sends `corten: action`, which is `Mode::Action`, so a handler that picks its
     side by mode answers the read with the part and every other request with the page; the page's
     handler can call the read the part's side calls, so reading the part in is a branch on the
     field; the link is in the markup with JavaScript too, and shown unless the module marks its
@@ -3274,7 +3285,9 @@ rules something out.
     marked at once), a part replaced while its answer's stylesheet loads, a part a patch appends,
     only the part busy with a cell and a live row beside it patched during its read and a form
     whose controls shadow what the runtime reads drawn as a part, a part waiting in a part's answer
-    marked failed and not read and one in a part read again read, a tag in an element with no id
+    marked failed and not read and one in a part read again read, a part a form's answer draws
+    waiting in the task a part's answer is drawn (one stylesheet held for both) read and the one
+    the part's answer draws not, a tag in an element with no id
     logged and its element marked, a page read again on its interval while its part's read never
     ends, its part drawn waiting again and read again, a read cut by a hidden page read again when shown
     and not over a part a form replaced meanwhile (`pagehide` and `pageshow` dispatched by the

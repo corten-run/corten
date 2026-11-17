@@ -4941,6 +4941,99 @@ async function run(browser) {
     await page.unroute("**/smoke/shared-sheet.css");
   }
 
+  // A part's answer and a form's, unrelated to it, both waiting for one stylesheet: once it loads,
+  // both are drawn in one task, the part's first. A part the part's answer draws waiting is marked
+  // failed and not read, as reads do not chain; the one the form's answer draws is read (#1400).
+  {
+    /** @type {(value?: unknown) => void} */
+    let releaseSheet = () => {};
+    const sheetHeld = new Promise((resolve) => (releaseSheet = resolve));
+    /** @type {(value?: unknown) => void} */
+    let sheetAsked = () => {};
+    const sheetSent = new Promise((resolve) => (sheetAsked = resolve));
+    /** @type {(value?: unknown) => void} */
+    let releasePart = () => {};
+    const partHeld = new Promise((resolve) => (releasePart = resolve));
+    /** @type {(value?: unknown) => void} */
+    let partAsked = () => {};
+    const partSent = new Promise((resolve) => (partAsked = resolve));
+    /** @type {string[]} */
+    const reads = [];
+    const sheet = '<link rel="stylesheet" data-corten-style href="/smoke/together-sheet.css">';
+    const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
+    await page.route("**/smoke/together-sheet.css", async (route) => {
+      sheetAsked();
+      await sheetHeld;
+      await route.fulfill({ status: 200, contentType: "text/css", body: "" }).catch(() => {});
+    });
+    await page.route("**/smoke/together-*", async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith(".css")) return route.fallback();
+      reads.push(path);
+      if (path === "/smoke/together-a") {
+        partAsked();
+        await partHeld;
+        return route
+          .fulfill(patchOf(`${sheet}<p id="together-a">A drawn<span id="together-c">C waiting<template data-corten-read-now data-from="/smoke/together-c"></template></span></p>`))
+          .catch(() => {});
+      }
+      if (path === "/smoke/together-form")
+        return route.fulfill(patchOf(`${sheet}<p id="together-out">Saved<span id="together-b">B waiting<template data-corten-read-now data-from="/smoke/together-b"></template></span></p>`));
+      return route.fulfill(patchOf(`<span id="${path.slice("/smoke/".length)}">${path.slice(-1).toUpperCase()} drawn</span>`));
+    });
+    await page.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="together-1"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(
+        __html(
+          '<div id="together-1"><p id="together-a">A waiting<template data-corten-read-now data-from="/smoke/together-a"></template></p>' +
+            '<form id="together-form" method="post" action="/smoke/together-form" data-patch><button>Save</button></form><p id="together-out"></p></div>',
+        ),
+      );
+    });
+    await Promise.race([partSent, page.waitForTimeout(5000)]);
+    // The part's answer first, waiting for the stylesheet; then the form's, waiting for it too.
+    const partAnswered = page.waitForResponse((r) => r.url().endsWith("/smoke/together-a"), { timeout: 5000 }).catch(() => null);
+    releasePart();
+    await partAnswered;
+    await Promise.race([sheetSent, page.waitForTimeout(5000)]);
+    const formAnswered = page.waitForResponse((r) => r.url().endsWith("/smoke/together-form"), { timeout: 5000 }).catch(() => null);
+    await page.dispatchEvent("#together-form button", "click");
+    await formAnswered;
+    await page.waitForTimeout(300);
+    const before = await page.evaluate(() => [document.getElementById("together-a")?.textContent, document.getElementById("together-out")?.textContent]);
+    releaseSheet();
+    await page.waitForFunction(() => document.getElementById("together-b")?.textContent === "B drawn", null, { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const together = {
+      before,
+      reads,
+      ...(await page.evaluate(() =>
+        Object.fromEntries(
+          ["together-a", "together-b", "together-c"].map((id) => {
+            const el = document.getElementById(id);
+            return [id, [el?.textContent, el?.getAttribute("aria-busy") ?? null, el?.getAttribute("data-corten-read-failed") ?? null]];
+          }),
+        ),
+      )),
+    };
+    check(
+      "a part a form's answer draws waiting, drawn in the task a part's answer is (one stylesheet held for both), is read; the one the part's answer draws is not",
+      JSON.stringify(together.before) === JSON.stringify(["A waiting", ""]) &&
+        JSON.stringify(together["together-a"]) === JSON.stringify(["A drawnC waiting", null, null]) &&
+        JSON.stringify(together["together-b"]) === JSON.stringify(["B drawn", null, null]) &&
+        JSON.stringify(together["together-c"]) === JSON.stringify(["C waiting", null, ""]) &&
+        JSON.stringify(reads) === JSON.stringify(["/smoke/together-a", "/smoke/together-form", "/smoke/together-b"]),
+      JSON.stringify(together),
+    );
+    await page.evaluate(() => {
+      document.getElementById("together-1")?.remove();
+      document.head.querySelector('link[href="/smoke/together-sheet.css"]')?.remove();
+    });
+    await page.unroute("**/smoke/together-*");
+    await page.unroute("**/smoke/together-sheet.css");
+  }
+
   // A waiting part a patch appends (`data-append`): read as one the patch replaces is (#1400).
   let appendedReads = 0;
   await page.route("**/smoke/appended", (route) => {

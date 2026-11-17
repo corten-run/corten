@@ -12,6 +12,11 @@
 
 /** A part the page waits for: its tag, in the element its read's patch replaces. */
 const PART_NOW = "template[data-corten-read-now][data-from]";
+/**
+ * The tag as the server writes it (`ReadNow`), and its address: what an answer draws waiting is
+ * read from its text, as only the runtime's Trusted Types policy may parse markup.
+ */
+const WRITTEN = /<template data-corten-read-now data-from="([^"]*)"/g;
 /** The mark of a part no read will bring, where the app's CSS may say so. */
 const FAILED = "data-corten-read-failed";
 // Read through Element's and Node's own, as a form's controls may shadow them.
@@ -56,10 +61,12 @@ const live = new Set();
  */
 const failed = new WeakMap();
 /**
- * The read whose answer is being drawn: the tags the drawing puts on the page are marked failed
- * rather than read, so one read's answer cannot start another, and two parts whose answers each
- * draw the other waiting do not read each other without end.
- * @type {Read | null}
+ * The addresses of the tags the answer being drawn writes, one for each: the first tag at each that
+ * the page gains next is that answer's, marked failed rather than read, so one read's answer cannot
+ * start another, and two parts whose answers each draw the other waiting do not read each other
+ * without end. Any other tag the page gains with them is read: a form's answer that waited for the
+ * same stylesheet is drawn in the same task, right after it.
+ * @type {string[] | null}
  */
 let drawing = null;
 
@@ -93,7 +100,7 @@ export function start(apply, busy) {
   busyBy = busy;
   observer = new MutationObserver(changed);
   observer.observe(document.documentElement, { childList: true, subtree: true, attributeFilter: ["data-from", "aria-busy", FAILED] });
-  take(Array.from(own.querySelectorAll.call(document.documentElement, PART_NOW)), false);
+  take(Array.from(own.querySelectorAll.call(document.documentElement, PART_NOW)), null);
 }
 
 /**
@@ -103,7 +110,7 @@ export function start(apply, busy) {
  * @param {MutationRecord[]} records
  */
 function changed(records) {
-  const chained = !!drawing;
+  const drawn = drawing;
   drawing = null;
   /** @type {Set<Element>} */
   const tags = new Set();
@@ -126,16 +133,17 @@ function changed(records) {
   // Its answer is for what is no longer there (a form's answer replaced its part, a page was
   // swapped in, a layout element kept in place took new children).
   if (removed) for (const read of live) if (!read.tags.every(inPage)) read.stop.abort();
-  take(Array.from(tags), chained);
+  take(Array.from(tags), drawn);
 }
 
 /**
  * Reads the parts of `tags`, or marks them as they were: a tag whose read is on its way for its
  * address keeps it, and its part its busy mark; one whose read did not bring it keeps its part's
- * failed mark. `chained`: they are what a read's answer drew, marked failed rather than read.
- * @param {Element[]} tags @param {boolean} chained
+ * failed mark. `drawn`: the addresses a part's answer drew waiting ({@link drawing}), whose tags
+ * are marked failed rather than read.
+ * @param {Element[]} tags @param {string[] | null} drawn
  */
-function take(tags, chained) {
+function take(tags, drawn) {
   /** @type {Map<string, [Element[], Element[]]>} */
   const reads = new Map();
   for (const tag of tags) {
@@ -163,8 +171,11 @@ function take(tags, chained) {
       continue;
     }
     if (ended !== undefined) failed.delete(tag), own.removeAttribute.call(part, FAILED);
-    if (chained || !own.hasAttribute.call(part, "id")) {
-      if (!chained) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
+    // A tag the part's answer drew, which is taken off its list: the page gains its tags first.
+    const at = drawn?.indexOf(from) ?? -1;
+    if (at >= 0) drawn?.splice(at, 1);
+    if (at >= 0 || !own.hasAttribute.call(part, "id")) {
+      if (at < 0) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
       fail(tag, from);
       continue;
     }
@@ -210,16 +221,18 @@ async function readPart(from, tags, parts) {
   }
   const at = hidden;
   let again = false;
+  /** The addresses of the tags its answer writes ({@link drawing}). @type {string[]} */
+  let drew = [];
   const here = () => tags.every((tag) => inPage(tag) && reading.get(tag) === read && fromOf(tag) === from);
   // Read by `apply` once, right before it draws: what the page changed before is taken first, so
-  // only what this answer draws counts as drawn by a read.
+  // the first tags the page gains at its tags' addresses are this answer's.
   const now = /** @type {AbortSignal} */ (
     /** @type {unknown} */ ({
       get aborted() {
         if (signal.aborted || !here()) return true;
         const pending = observer?.takeRecords() ?? [];
         if (pending.length) changed(pending);
-        drawing = read;
+        drawing = drew.length ? drew : null;
         return false;
       },
     })
@@ -230,6 +243,8 @@ async function readPart(from, tags, parts) {
     const res = await fetch(from, { headers: { corten: "action" }, signal });
     if (res.headers.has("corten-patch") && res.url !== "" && new URL(res.url).origin === location.origin) {
       const html = await res.text();
+      // The browser reads the `&amp;` between a query's fields as `&`.
+      drew = Array.from(html.matchAll(WRITTEN), (found) => String(found[1]).replace(/&amp;/g, "&"));
       if (here()) await Promise.race([draw(html, now, null, undefined, true, /** @type {Element} */ (tags[0])).catch(reportError), left]);
     } else if (res.ok && !res.headers.has("corten-location")) {
       // A success that is not a patch is the app's mistake (the route answered its page).
@@ -240,7 +255,7 @@ async function readPart(from, tags, parts) {
     again = !signal.aborted && hidden !== at;
   }
   // An answer that drew nothing leaves no drawing to hear of.
-  if (drawing === read) drawing = null;
+  if (drawing === drew) drawing = null;
   stop.abort();
   live.delete(read);
   // Made again only for the same tags, while it is still theirs: kept busy meanwhile.

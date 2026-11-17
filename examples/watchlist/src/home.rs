@@ -258,12 +258,12 @@ struct PicksId;
 /// page with the picks read in, and shows unless a read is bringing them (`aria-busy`,
 /// `picks_loading.css`): without JavaScript, which reads nothing, when the runtime's part module
 /// does not load, and once the read has failed (`data-corten-read-failed`); the line saying they
-/// are on their way shows only while one is. `nofollow`, as the page it opens waits for the slow
+/// are on their way shows only while one is, in the same place. `nofollow`, as the page it opens waits for the slow
 /// read.
 #[component(css)]
 pub(crate) fn PicksLoading() -> impl Render {
     html! {
-        <p id={PicksId}>
+        <p id={PicksId} class={Waiting}>
             <span class={Finding}>"Finding picks for you..."</span>
             <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
             {ReadAgain::now(url::Home::default())}
@@ -579,7 +579,7 @@ mod tests {
         let page = page.text();
         assert!(
             page.contains(concat!(
-                r#"<p id="picks"><span class="picks-loading__finding">Finding picks for you...</span>"#,
+                r#"<p id="picks" class="picks-loading__waiting"><span class="picks-loading__finding">Finding picks for you...</span>"#,
                 r#"<a class="picks-loading__show" href="/?picks=true" rel="nofollow">Show picks for you</a>"#,
                 r#"<template data-corten-read-now data-from="/"></template></p>"#
             )),

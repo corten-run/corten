@@ -234,9 +234,11 @@ slow part sent once is not a stream: the page's own handler answers it (`ReadAga
 route with a query field its handler reads the part in for (the route derives `Default`, so other
 links are `url::Home::default()`). The component's CSS swaps it for the loading line only while
 the part is busy, which the runtime's part module alone marks:
-`.finding { display: none }`, `[aria-busy] > .finding { display: inline }` and
-`[aria-busy] > .show { display: none }`, so the link shows wherever no read is bringing the part
-(no JavaScript, the module not loaded, a failed read), with no `scripting` media query. See the
+`.finding { visibility: hidden }`, `[aria-busy] > .finding { visibility: visible }` and
+`[aria-busy] > .show { visibility: hidden }`, both in one grid cell of the part
+(`display: grid`, `grid-area: 1 / 1`) so the swap moves nothing, and the link shows wherever no
+read is bringing the part (no JavaScript, the module not loaded, a failed read), with no
+`scripting` media query. See the
 live-data guide.
 
 A job's progress is a `<progress value max>` a `corten::live` stream draws again as the job

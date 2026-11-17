@@ -252,7 +252,7 @@ fn Picks<'a>(picks: &'a [Pick]) -> impl Patch {
 #[component(css)] // picks_loading.css, below
 fn PicksLoading() -> impl Render {
     html! {
-        <p id={PicksId}>
+        <p id={PicksId} class={Waiting}>
             <span class={Finding}>"Finding picks for you..."</span>
             <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
             // read at once from the page's own route, as a patch that replaces #picks, the
@@ -267,10 +267,13 @@ App::new(url::router()).components(&[.., PicksLoading])
 ```
 
 ```css
-/* picks_loading.css: the line shows while a read is bringing the picks, the link otherwise */
-.finding { display: none; }
-[aria-busy] > .finding { display: inline; }
-[aria-busy] > .show { display: none; }
+/* picks_loading.css: the line shows while a read is bringing the picks, the link otherwise, in
+   one cell, so the swap moves nothing around them */
+.waiting { display: grid; justify-items: start; }
+.finding, .show { grid-area: 1 / 1; }
+.finding { visibility: hidden; }
+[aria-busy] > .finding { visibility: visible; }
+[aria-busy] > .show { visibility: hidden; }
 ```
 
 The runtime fetches the route with `corten: action` as soon as the page is on the screen (a full
@@ -287,7 +290,9 @@ read again later carries `ReadAgain::from` in its answer ([read again](requests-
 part a page, a form's patch, a script's `patch` or a `<corten-live>` fragment draws waiting is
 read, at the pace those come (a fragment that draws the part again ends the read the one before
 started), and so is one the answer to a part read again (`ReadAgain::from`) draws, at its
-interval; one a part's answer draws waiting is marked failed instead, so reads do not chain. A
+interval; one a part's answer draws waiting is marked failed instead, so reads do not chain (a
+form's answer drawn in the same moment, both having waited for one stylesheet, still has its
+part read: the module counts as the part's answer's only the tags its text writes). A
 read the browser cut short by keeping the page in its back-forward cache is made again when the
 page is shown, if its part is still there; a page the browser prerenders reads its parts once it
 is shown. A page whose head asks to be read again (`ReadAgain`) is read on its interval whatever
