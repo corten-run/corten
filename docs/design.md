@@ -4419,7 +4419,10 @@ rules something out.
     `<foreignObject>`, which closes the outer one, and a `<template>` in an `<mi>` after a
     `<tbody>`, past which Firefox alone reads the rest as a body's, and of the 3,000 patches of
     `scripts/patch-generated.json` (now with forms holding a tag the patch ends in), with the same
-    result; 2026-11-16, a one-off probe, not a repository check, in Chromium
+    result; 2026-11-17, the same check of the 824 shapes there on `7f9cb8ad8`, among them a loss
+    found before a start tag the patch ends in, kept, and a `<select>` in a `<foreignObject>` or
+    `<mi>` after a `<tr>`, past which every engine, Firefox 157 included, keeps a later row, and of
+    the 3,000 generated patches, with the same result; 2026-11-16, a one-off probe, not a repository check, in Chromium
     156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): each kind of the third shape (a `<table>` at the top level, in a `<div>` and in a
     `<label>`'s `<span>`; a `<form>` holding a `<div>` or a `<p>`, one in a `<div>`, and one
     holding a `<label>`'s `<span>`), after each of the eight first table parts but `<col>`, parsed
