@@ -71,6 +71,8 @@ not itself key a layout by the certificate. A required value missing from a requ
 facts, such as the certificate, SNI name and ALPN protocol, belong in one app-defined struct.
 SNI and ALPN describe the connection, not an authenticated caller. The typed wrapper avoids
 replacing a framework extension when the app's value happens to have the same type.
+A handler of a documented API ([OpenAPI](app.md#an-openapi-document)) may take either form; it
+adds nothing to the document.
 
 `App::header_timeout` includes the handshake, `max_connections` counts it, and `send_timeout`
 and shutdown drain still apply to the resulting connection. The existing `serve_on` and

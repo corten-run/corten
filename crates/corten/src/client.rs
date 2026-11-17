@@ -46,6 +46,7 @@ use crate::{app::Bound, Error, Signal};
 /// ```
 ///
 /// Taking it without a value of that type is a 500; `Option<ConnectionInfo<T>>` is `None`.
+/// A handler of a documented API may take either; it adds nothing to the document.
 /// An app's own connection loop or a test may insert `ConnectionInfo(value)` in the request's
 /// extensions. Read it with the extractor or `of`, not directly from extensions, so a read
 /// makes the answer private there too.
