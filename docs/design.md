@@ -4449,7 +4449,14 @@ rules something out.
     expression could be taken to leave the open elements as they were; or `<Corten />` writes
     anything but closed head tags.
 
-    Last checked: 2026-11-17, each refusal's facts read again against `html/nesting.rs` and
+    Last checked: 2026-11-17, the patch shapes read again against the same rule when
+    [#1538 Refuse the patch shapes a browser loses wherever they are written, and check the rest in debug builds](https://github.com/corten-run/corten/pull/1538)
+    and this change met, and the shapes
+    with `raw` between their two elements (a row after `raw("<table>")`, a row in a `<table>`
+    holding `raw("<template>")`, a `<p>` after a `<col>` and `raw("<template>")`, a `<table>` after
+    a first row and `raw("<template>")`, at the top level and in a `<div>`) parsed as a
+    `<template>`'s content in Chromium 156, Firefox 157 and WebKit 27.2, each of which kept every
+    one; 2026-11-17, each refusal's facts read again against `html/nesting.rs` and
     the parser after a third review found refusals of kept markup across a component, an
     expression and a foreign root's unseen namespace, and the kept shapes
     (`parsesAsHtmlMeans` in `scripts/smoke.mjs`: one per nesting kind across a boundary written
