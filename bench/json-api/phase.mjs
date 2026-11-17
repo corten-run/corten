@@ -36,7 +36,9 @@ export async function capturePhase({ folder, path, stage, config, expected, opti
     const countersAfter = await io.counters(); raw.after = await io.observe();
     raw.samples = samples;
     raw.counters = Object.fromEntries(Object.keys(countersBefore).map((role) => [role, { before: countersBefore[role], after: countersAfter[role] }]));
-    raw.upstreamReads = { before: raw.before.upstreamReads, after: raw.after.upstreamReads, settled: await io.reads() };
+    const settled = await io.reads();
+    raw.upstreamReads = { before: raw.before.upstreamReads, after: raw.after.upstreamReads, settled: settled.upstreamReads };
+    raw.settledResponses = settled.upstreamResponses;
     raw.settledAt = io.now ? io.now() : Date.now();
     const logBytes = bounded(log, captureLimits.stderrBytes), decode = (bytes) => new TextDecoder("utf8", { fatal: true, ignoreBOM: true }).decode(bytes);
     raw.logs = decode(logBytes);

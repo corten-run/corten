@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
 import { verifyRecordAttempt, verifyCheckerExit, verifyAttemptWindow } from "../catalog/record-attempt.mjs";
 import { aggregate, deriveLoad, loadConfig, payloads, phases, route, sha256, upstreamReadDelta, verifyParticipants, verifyRuntime } from "./contract.mjs";
-import { captureLimits, deriveProductionPhase } from "./production.mjs";
+import { captureLimits, deriveProductionPhase, verifyLife } from "./production.mjs";
 
 // Replay retained functional observations, not application code. In particular,
 // byte forwarding can pass this gate; only a separate native audit can qualify it.
@@ -128,8 +128,12 @@ export function functionalVerifier(profile, records) {
 export function verifyCold(raw, expected, options, context) {
   assert.deepEqual(raw.identity, expected, "wrong cold identity");
   verifyRuntime(raw.runtime, expected, context);
-  verifyParticipants(raw, expected, context, ["upstream", "probe"]);
+  verifyParticipants(raw, expected, { ...context, cold: true }, ["upstream", "probe"]);
   const c = raw.result;
+  if (context.timed) {
+    verifyLife(raw.upstreamLife, raw.participants.upstream, { at: Date.parse(c.containerStartedAt) });
+    assert.ok(Date.parse(raw.upstreamLife.startedAt) >= Date.parse(context.runStartedAt), "cold upstream predates suite");
+  }
   assert.equal(c.status, 200); assert.equal(c.type, "application/json", "cold response must be JSON");
   assert.equal(c.path, route(expected), "cold probe must target the native JSON payload");
   const elapsed = Date.parse(c.first200At) - Date.parse(c.containerStartedAt);
@@ -187,6 +191,7 @@ export function replayTimedRun(run, expected, options, load, tools, context, nat
       assert.ok(saved, "missing v2 phase"); const raw = load(saved.raw);
       assert.equal(raw.before?.runtime?.containerId, appId, "app replaced between cold/load phases");
       assert.equal(raw.before?.liveness?.app?.startedAt, cold.result.containerStartedAt, "app restarted after cold probe");
+      same(raw.before?.liveness?.upstream, cold.upstreamLife, "upstream replaced/restarted between cold/load phases");
       assert.ok(!loadIds.has(raw.before?.participants?.load?.containerId), "load container reused across phases");
       loadIds.add(raw.before?.participants?.load?.containerId);
       same(raw.upstreamReads?.before, previousReads, "cross-phase upstream reads/contamination");
@@ -218,5 +223,5 @@ export function replayTimedRun(run, expected, options, load, tools, context, nat
     && Number.isSafeInteger(tail.afterStopAt) && tail.afterStopAt >= tail.beforeStopAt, "missing/invalid app cleanup read window");
   assert.ok(tail.afterStopAt <= Date.parse(context.runFinishedAt), "teardown outside terminal run clock");
   return { pass: run.pass, phases: observations, window: { appId, startedAt: Date.parse(cold.result.containerStartedAt), finishedAt: tail.afterStopAt,
-    upstreamId: cold.participants.upstream.containerId, readsBefore: cold.upstreamReads.before, readsAfter: tail.after } };
+    upstreamLife: cold.upstreamLife, readsBefore: cold.upstreamReads.before, readsAfter: tail.after } };
 }

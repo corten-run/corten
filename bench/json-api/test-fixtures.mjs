@@ -50,7 +50,8 @@ export function runtimeInfo(expected, context, role = "app") {
       `${p.path.toUpperCase()}_FIXTURE_PATH=/fixtures/${p.path}.json`, `API_BASE=${context.apiBase}`, "PROFILE="]
       : role === "load" ? [`BASE=http://${context.runId}-app:8080`, `PAYLOAD=${expected.payload}`, `DURATION=${context.load.seconds}s`,
         `MODE=${context.load.mode}`, `RATE=${context.load.rate}`, `VUS=${context.load.vus}`,
-        ...(context.timed && context.load.mode === "fixed" ? ["JSON_PROTOTYPE_OUTPUT=/tmp"] : [])] : [],
+        ...(context.timed && context.load.mode === "fixed" ? ["JSON_PROTOTYPE_OUTPUT=/tmp"] : [])]
+      : role === "upstream" && context.timed ? ["NODE_OPTIONS=--import=/bench/json-api/upstream-observer.mjs"] : [],
       Entrypoint: execution.Entrypoint, Cmd: command }, Path: argv[0], Args: argv.slice(1),
     NetworkSettings: { Networks: { [context.network]: {} } },
     HostConfig: { Memory: role === "app" ? 2 ** 30 : role === "upstream" ? 512 * 2 ** 20 : role === "probe" ? 256 * 2 ** 20 : 2 ** 31,
@@ -115,12 +116,15 @@ export function result(args = [], { artifacts = new Map() } = {}) {
 
 // Deliberately synthetic negative raw capture for verifier mutation tests.
 // It is not a native measurement or an independent source audit.
-export function failedResult(app = descriptor().apps[0], profile = descriptor().cases[0]) {
-  const f = result(), s = f.summary, checked = s.apps[app].checks[profile.key];
+export function failedResult(app = descriptor().apps[0], profile = descriptor().cases[0], { artifacts } = {}) {
+  return gateFunctional(result([], { artifacts }), app, profile);
+}
+export function gateFunctional(f, app, profile) {
+  const s = f.summary, checked = s.apps[app].checks[profile.key];
   const records = payloads[profile.payload].records(), ids = Object.keys(records).slice(0, 8), start = Date.parse(s.startedAt);
   const requests = ids.map((id, index) => ({ id, index, path: route(profile, id), startedOrder: index, finishedOrder: index + ids.length,
-    startedAt: start, finishedAt: start + 1, response: { status: 500, type: "application/json", body: "{}" } }));
-  const attempt = { schema: recordAttemptSchema, recordsSha256: sha256(JSON.stringify(records)), requests };
+    startedAt: start + 1, finishedAt: start + 2, response: { status: 500, type: "application/json", body: "{}" } }));
+  const attempt = { schema: recordAttemptSchema, recordsSha256: checked.functional.recordsSha256, requests };
   const raw = f.load(checked.raw), path = `/__${payloads[profile.payload].path}/control`;
   raw.liveness = Object.fromEntries(["app", "upstream"].map((role) => [role, { containerId: role === "app" ? raw.runtime.containerId : raw.participants.upstream.containerId,
     startedAt: s.startedAt, status: "running", running: true, oomKilled: false, dead: false, paused: false,
@@ -130,7 +134,7 @@ export function failedResult(app = descriptor().apps[0], profile = descriptor().
     { kind: "control", method: "GET", path, status: 200, body: JSON.stringify({ requests: profile.source === "api" ? Object.fromEntries(ids.map((id) => [id, 1])) : {} }) },
     ...(profile.source === "api" ? [reset] : [])];
   checked.raw = f.put(raw);
-  checked.failure = f.put({ identity: checked.identity, attempt, clock: { startedAt: start, finishedAt: start + 2 }, exit: { code: 1, signal: null, expired: false, interrupted: false } });
+  checked.failure = f.put({ identity: checked.identity, attempt, clock: { startedAt: start, finishedAt: start + 3 }, exit: { code: 1, signal: null, expired: false, interrupted: false } });
   delete checked.functional;
   for (const entry of Object.values(s.apps)) for (const p of s.group.cases) { entry.runs[p.key] = []; entry.aggregates[p.key] = {}; }
   s.complete = false; s.checksPassed = false; s.timingDisposition = "gated-functional";

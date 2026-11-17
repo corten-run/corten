@@ -199,7 +199,7 @@ test("no runtime role can hide unexpected executable, root, source or volume ove
 });
 
 test("all payload/source/phase cells require clocks, sustained samples, correct participating budgets and source read deltas", () => {
-  const e = result(), s = e.summary;
+  const e = result([], { artifacts: new ByteStore() }), s = e.summary;
   for (const profile of descriptor().cases) {
     const checked = s.apps.corten.checks[profile.key], run = s.apps.corten.runs[profile.key][0], context = runtimeContext(s, profile);
     const checkedRaw = e.load(checked.raw); assert.equal(verifyFunctional(checked.functional, checkedRaw.events, profile, payloads[profile.payload].records()), true);
@@ -228,7 +228,7 @@ test("all payload/source/phase cells require clocks, sustained samples, correct 
       ]) { const bad = structuredClone(raw); mutate(bad); assert.throws(() => derive(bad), `${profile.key} ${phase}`); }
       if (phase === "fixed") {
         const short = structuredClone(raw); short.k6.metrics.http_reqs.values = { count: 1, rate: 1000 / short.clock.k6DurationMs };
-        assert.throws(() => derive(short), /complete all offered requests/);
+        assert.throws(() => derive(short), /historical v1 fixed phase must complete exactly the configured offer/);
       }
     }
   }

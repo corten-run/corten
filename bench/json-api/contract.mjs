@@ -123,6 +123,7 @@ function observedConfiguration(info, expected, context, role) {
   for (const item of info.Config?.Env ?? []) {
     const at = item.indexOf("="), key = item.slice(0, at);
     const keys = role === "load" ? ["BASE", "PAYLOAD", "DURATION", "MODE", "RATE", "VUS", ...(context.timed ? ["JSON_PROTOTYPE_OUTPUT"] : [])]
+      : role === "upstream" ? ["NODE_OPTIONS"]
       : [`${payloads[expected.payload].path.toUpperCase()}_SOURCE`, `${payloads[expected.payload].path.toUpperCase()}_FIXTURE_PATH`, "API_BASE", "PROFILE"];
     if (keys.includes(key)) {
       assert.ok(!Object.hasOwn(env, key), "duplicate runtime environment key"); env[key] = item.slice(at + 1);
@@ -131,7 +132,7 @@ function observedConfiguration(info, expected, context, role) {
   const mounts = (info.Mounts ?? []).map((m) => ({ type: m.Type, source: m.Source?.replaceAll("\\", "/"), destination: m.Destination, writable: m.RW }))
     .sort((a, b) => a.destination.localeCompare(b.destination));
   return { name: info.Name, network: Object.keys(info.NetworkSettings?.Networks ?? {}).sort(),
-    owner: info.Config?.Labels?.["run.corten.json-api"], mounts, ...(["app", "load"].includes(role) ? { env } : {}),
+    owner: info.Config?.Labels?.["run.corten.json-api"], mounts, ...(["app", "load"].includes(role) || role === "upstream" && context.timed && (context.cold || context.load) ? { env } : {}),
     entrypoint: info.Config?.Entrypoint ?? null, command: info.Config?.Cmd ?? null, path: info.Path, args: info.Args };
 }
 function expectedConfiguration(expected, context, role) {
@@ -151,7 +152,8 @@ function expectedConfiguration(expected, context, role) {
     ...(role === "app" ? { env: { [`${prefix}_SOURCE`]: expected.source, [`${prefix}_FIXTURE_PATH`]: `/fixtures/${p.path}.json`, API_BASE: context.apiBase, PROFILE: "" } }
       : role === "load" ? { env: { BASE: `http://${context.runId}-app:8080`, PAYLOAD: expected.payload, DURATION: `${context.load.seconds}s`,
         MODE: context.load.mode, RATE: String(context.load.rate), VUS: String(context.load.vus),
-        ...(context.timed && context.load.mode === "fixed" ? { JSON_PROTOTYPE_OUTPUT: "/tmp" } : {}) } } : {}),
+        ...(context.timed && context.load.mode === "fixed" ? { JSON_PROTOTYPE_OUTPUT: "/tmp" } : {}) } }
+      : role === "upstream" && context.timed && (context.cold || context.load) ? { env: { NODE_OPTIONS: "--import=/bench/json-api/upstream-observer.mjs" } } : {}),
     entrypoint: image.Entrypoint, command, path: argv[0], args: argv.slice(1) };
 }
 export function runtimeReceipt(info, expected, context) {

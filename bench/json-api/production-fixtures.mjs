@@ -2,7 +2,7 @@
 import { gzipSync, gunzipSync } from "node:zlib";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { result, runtimeInfo } from "./test-fixtures.mjs";
+import { gateFunctional, result, runtimeInfo } from "./test-fixtures.mjs";
 import { fixedFixture } from "./fixed-test-fixtures.mjs";
 import { capturePhase } from "./phase.mjs";
 import { producerProvenance } from "./production.mjs";
@@ -17,6 +17,13 @@ import { reader } from "./artifacts.mjs";
 export class ByteStore extends Map {
   set(path, bytes) { return super.set(path, gzipSync(bytes)); }
   get(path) { const bytes = super.get(path); return bytes === undefined ? undefined : gunzipSync(bytes).toString(); }
+}
+export function gateFunctionalFixture(f, app = f.summary.group.apps[0], profile = f.summary.group.cases[0]) {
+  gateFunctional(f, app, profile);
+  for (const entry of Object.values(f.summary.apps)) for (const p of f.summary.group.cases)
+    entry.projections[p.key] = timedCaseProjection([], f.summary.options.passes);
+  f.summary.attemptComplete = !f.summary.options.checkOnly && !f.summary.failures.length;
+  return f;
 }
 export function phaseFixture(phase, responses = ["ok", "ok", "ok"], offset = 0, drops = 0) {
   const f = fixedFixture({ responses, drops });
@@ -53,7 +60,7 @@ export async function productionFixture(folder, { failure, fault, passes = 1, ce
   f.load.bytes = reader(folder).bytes;
   const captured = [], upstreamCounters = Object.fromEntries(s.group.payloads.map(p => [p, {}])); let sequence = 0;
   for (const entry of Object.values(s.apps)) {
-    entry.projections = {};
+    entry.projections = Object.fromEntries(s.group.cases.map((p) => [p.key, timedCaseProjection([], passes)]));
     for (const p of s.group.cases) {
       const native = f.load(entry.checks[p.key].native);
       native.receipt.schema = timedReceiptSchema;
@@ -73,7 +80,11 @@ export async function productionFixture(folder, { failure, fault, passes = 1, ce
       const cold = structuredClone(originals.get(`${app}/${profile.key}`));
       cold.result.containerStartedAt = new Date(epoch + baseOffset - 2200).toISOString(); cold.result.first200At = new Date(epoch + baseOffset - 2000).toISOString();
       const coldRaw = f.load(cold.raw); coldRaw.identity = expected; coldRaw.result = cold.result;
-      coldRaw.runtime.containerId = appId; coldRaw.participants.upstream.containerId = upId;
+      coldRaw.runtime.containerId = appId;
+      const coldCtx = { ...context, cold: true }, coldUpstream = runtimeInfo(expected, coldCtx, "upstream");
+      coldUpstream.Id = upId; coldRaw.participants.upstream = participantReceipt(coldUpstream, expected, coldCtx, "upstream");
+      coldRaw.upstreamLife = { containerId: upId, startedAt: s.startedAt, finishedAt: "0001-01-01T00:00:00Z",
+        status: "running", running: true, oomKilled: false, dead: false, paused: false, restarting: false, restartCount: 0, exitCode: 0, error: "" };
       const before = structuredClone(upstreamCounters[profile.payload]), after = structuredClone(before), first = payloads[profile.payload].first;
       if (profile.source === "api") after[first] = (after[first] ?? 0) + 1;
       coldRaw.upstreamReads = { before, after }; cold.raw = f.put(coldRaw);
@@ -87,13 +98,17 @@ export async function productionFixture(folder, { failure, fault, passes = 1, ce
         const path = `${app}/${profile.key}/p${pass}`; mkdirSync(join(folder, path), { recursive: true });
         const ctx = { ...context, load: config }, beforeReads = structuredClone(reads);
         const afterReads = profile.source === "api" ? { ...reads, synthetic: (reads.synthetic ?? 0) + synthetic.summary.metrics.http_reqs.count } : reads;
+        const upstream = (reads) => {
+          const n = Object.values(reads).reduce((a, b) => a + b, 0);
+          return { upstreamReads: reads, upstreamResponses: { status: 200, completed: n ? { 200: n } : {}, aborted: 0 } };
+        };
         const infos = Object.fromEntries(["app", "upstream", "load"].map((role) => [role, runtimeInfo(expected, ctx, role)]));
         infos.app.Id = appId; infos.upstream.Id = upId;
         infos.load.Id = sha256(`${app}/${profile.key}/${pass}/${stage}`);
         let observed = 0, counted = 0, saved;
         try { saved = await capturePhase({ folder, path, stage, config, expected, options: s.options, tools: s.tools, context,
           native: f.load(entry.checks[profile.key].native), priorTailUnobserved, io: {
-            write: (_path, value) => f.put(value), reads: async () => afterReads, now: () => synthetic.command.clock.finishedAt + 20,
+            write: (_path, value) => f.put(value), reads: async () => upstream(afterReads), now: () => synthetic.command.clock.finishedAt + 20,
             async execute(opts) {
               // Assert the production command capture asks for the actual 99 path.
               if (!opts.observeExit) throw new Error("normal99 capture not enabled");
@@ -118,7 +133,7 @@ export async function productionFixture(folder, { failure, fault, passes = 1, ce
                 restarting: false, restartCount: 0, exitCode: role === "load" && !before ? synthetic.command.exit.code : 0, error: "" }]));
               return { at, runtime: runtimeReceipt(infos.app, expected, ctx),
                 participants: Object.fromEntries(["upstream", "load"].map((r) => [r, participantReceipt(infos[r], expected, ctx, r)])),
-                liveness, upstreamReads: before ? beforeReads : afterReads };
+                liveness, ...upstream(before ? beforeReads : afterReads) };
             },
           } }); } catch (error) {
           if (error.phase) { if (stage === "warmup") run.warmup = error.phase; else run.phases[stage] = error.phase; }

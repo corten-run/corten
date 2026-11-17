@@ -5,7 +5,7 @@ import { descriptor, runtimeContext, loadConfig, deriveLoad, timingPlan } from '
 import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { productionFixture, phaseFixture } from './production-fixtures.mjs';
+import { gateFunctionalFixture, productionFixture, phaseFixture } from './production-fixtures.mjs';
 import { deriveProductionPhase } from './production.mjs';
 import { capturePhase } from './phase.mjs';
 import { readFixedStreamSync } from './fixed-stream.mjs';
@@ -13,8 +13,6 @@ import { writer, reader } from './artifacts.mjs';
 import { timedCaseProjection } from './timed-outcomes.mjs';
 import { replayTimedRun, verifyAggregates } from './evidence.mjs';
 import { isDeepStrictEqual } from 'node:util';
-import { recordAttemptSchema } from '../catalog/record-attempt.mjs';
-import { payloads, route } from './contract.mjs';
 
 test('production v2 dispatch retains missing matrix cells instead of rejecting the schema', () => {
   const group = descriptor();
@@ -145,23 +143,7 @@ test('production healthy full roster and explicit missing passes use saved-repla
     assert.ok(row.projection.cells[0].phases.fixed.requests > 0);
   }
   // Existing functional-negative policy still gates ALL v2 timings globally.
-  const profile = f.summary.group.cases[0], checked = f.summary.apps.corten.checks[profile.key], raw = f.load(checked.raw), recordsSha256 = checked.functional.recordsSha256;
-  const ids = Object.keys(payloads[profile.payload].records()).slice(0, 8), start = Date.parse(f.summary.startedAt);
-  const requests = ids.map((id, index) => ({ id, index, path: route(profile, id), startedOrder: index, finishedOrder: index + ids.length,
-    startedAt: start + 1, finishedAt: start + 2, response: { status: 500, type: 'application/json', body: '{}' } }));
-  const control = `/__${payloads[profile.payload].path}/control`;
-  raw.events = [{ kind: 'control', method: 'POST', path: control, value: {}, status: 200, body: '{}' },
-    ...requests.map(r => ({ kind: 'application', method: 'GET', path: r.path, ...r.response })),
-    { kind: 'control', method: 'GET', path: control, status: 200, body: '{"requests":{}}' }];
-  raw.liveness = Object.fromEntries(['app', 'upstream'].map(role => [role, { containerId: role === 'app' ? raw.runtime.containerId : raw.participants.upstream.containerId,
-    startedAt: f.summary.startedAt, status: 'running', running: true, oomKilled: false, dead: false, paused: false, restarting: false, restartCount: 0, exitCode: 0, error: '' }]));
-  checked.raw = f.put(raw); delete checked.functional;
-  checked.failure = f.put({ identity: checked.identity, attempt: { schema: recordAttemptSchema, recordsSha256, requests },
-    clock: { startedAt: start, finishedAt: start + 3 }, exit: { code: 1, signal: null, expired: false, interrupted: false } });
-  for (const entry of Object.values(f.summary.apps)) for (const p of f.summary.group.cases) {
-    entry.runs[p.key] = []; entry.aggregates[p.key] = {}; entry.projections[p.key] = timedCaseProjection([], 3);
-  }
-  f.summary.complete = false; f.summary.attemptComplete = true; f.summary.checksPassed = false; f.summary.timingDisposition = 'gated-functional';
+  gateFunctionalFixture(f, "corten", f.summary.group.cases[0]);
   const gated = inspectJson(f.summary, { load: f.load });
   assert.equal(gated.attemptComplete, true, gated.warnings.slice(0, 3).join('\n')); assert.equal(gated.baseline, false);
 });

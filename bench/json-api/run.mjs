@@ -64,10 +64,13 @@ export async function run(args) {
     catch { await docker(["pull", tag], { timeout: 10 * 60 * 1000, file: join(folder, "pull.log") }); image = JSON.parse(await docker(["image", "inspect", tag]))[0]; }
     return { image: tag, imageId: image.Id, execution: c.imageCommandEvidence(image) };
   };
-  const apiReads = async (payload) => {
+  const upstreamSnapshot = async (payload) => {
     const r = await fetch(`${upstreams[payload].url}/__${c.payloads[payload].path}/control`, { redirect: "manual", signal: AbortSignal.timeout(5000) });
-    assert.equal(r.status, 200); return (await r.json()).requests;
+    assert.equal(r.status, 200);
+    const { requests, status } = await r.json();
+    return { upstreamReads: requests, upstreamResponses: { ...JSON.parse(r.headers.get("X-Json-Bench-Responses")), status } };
   };
+  const apiReads = async (payload) => (await upstreamSnapshot(payload)).upstreamReads;
   const cpuName = `${runId}-cpu`;
   const counters = async (names) => {
     const ids = await Promise.all(names.map(async (n) => (await inspect(n)).Id));
@@ -87,8 +90,6 @@ export async function run(args) {
     return { receipt, files };
   };
   const argsFor = (name, profile, imageId) => c.appArgs({ name, profile, imageId, network, upstream: `http://${upstreams[profile.payload].name}:8080`, fixtures: fixtureDirs[profile.payload], cpus });
-  const participants = async (expected, profile, roles, load) => Object.fromEntries(await Promise.all(Object.entries(roles).map(async ([role, name]) =>
-    [role, c.participantReceipt(await inspect(name), expected, { ...c.runtimeContext(summary, profile), ...(load ? { load } : {}) }, role)])));
 
   async function cold(name, profile, image, expected, path) {
     const probe = `${name}-probe`;
@@ -106,10 +107,12 @@ export async function run(args) {
       const result = JSON.parse(output.split("\n").findLast((line) => line.startsWith("{")));
       const info = await inspect(name); result.containerStartedAt = info.State.StartedAt;
       result.first200MsFromContainerStart = Date.parse(result.first200At) - Date.parse(result.containerStartedAt); result.measuredBeforeReadinessOrWarmup = true;
-      const context = c.runtimeContext(summary, profile);
-      const raw = { identity: expected, result, runtime: c.runtimeReceipt(info, expected, context),
+      const context = { ...c.runtimeContext(summary, profile), cold: true };
+      const upstream = await inspect(upstreams[profile.payload].name);
+      const raw = { identity: expected, result, runtime: c.runtimeReceipt(info, expected, context), upstreamLife: production.life(upstream),
         upstreamReads: { before: upstreamBefore, after: await apiReads(profile.payload) },
-        participants: await participants(expected, profile, { upstream: upstreams[profile.payload].name, probe }) };
+        participants: { upstream: c.participantReceipt(upstream, expected, context, "upstream"),
+          probe: c.participantReceipt(await inspect(probe), expected, context, "probe") } };
       evidence.verifyCold(raw, expected, options, context);
       return { result, raw: write(`${path}/cold.json`, raw) };
     } finally { await remove(probe); }
@@ -125,7 +128,7 @@ export async function run(args) {
         summary.tools.k6.imageId, ...c.timedLoadCommand(config)], k6);
       return await phaseCapture.capturePhase({ folder, path, stage, config, expected, options, tools: summary.tools, context, priorTailUnobserved,
         native: loadArtifact(summary.apps[expected.app].checks[profile.key].native), io: {
-          write, reads: () => apiReads(profile.payload),
+          write, reads: () => upstreamSnapshot(profile.payload),
           execute: (opts) => docker(["start", "-a", k6], opts),
           copy: (source, target) => docker(["cp", `${k6}:${source}`, target]),
           async counters() { const values = await counters(names); return Object.fromEntries(roles.map((r, i) => [r, values[names[i]]])); },
@@ -133,7 +136,7 @@ export async function run(args) {
             const app = await inspect(name), upstream = await inspect(up), load = await inspect(k6), ctx = { ...context, load: config };
             return { at: Date.now(), runtime: c.runtimeReceipt(app, expected, ctx),
               participants: { upstream: c.participantReceipt(upstream, expected, ctx, "upstream"), load: c.participantReceipt(load, expected, ctx, "load") },
-              liveness: { app: production.life(app), upstream: production.life(upstream), load: production.life(load) }, upstreamReads: await apiReads(profile.payload) };
+              liveness: { app: production.life(app), upstream: production.life(upstream), load: production.life(load) }, ...await upstreamSnapshot(profile.payload) };
           },
           sample() {
             const all = { app: name, upstream: up, load: k6 }, sampler = stats.sampleStats(Object.values(all), statsPath, config.seconds + 35);
@@ -148,7 +151,7 @@ export async function run(args) {
     assert.ok(options.checkOnly || !summary.dirty, "JSON timing requires a clean committed checkout");
     if (options.receipts) {
       const bundle = JSON.parse(readFileSync(resolve(repo, options.receipts), "utf8"));
-      assert.ok(["json-api-native-audits/v1", "json-api-native-audits/v2"].includes(bundle.schema)); assert.ok(Array.isArray(bundle.receipts)); receipts = bundle.receipts;
+      assert.ok(c.auditBundleSchemas.includes(bundle.schema)); assert.ok(Array.isArray(bundle.receipts)); receipts = bundle.receipts;
       assert.equal(new Set(receipts.map((r) => `${r.identity?.app}:${r.identity?.key}`)).size, receipts.length, "duplicate native audit receipts");
       assert.ok(receipts.every((r) => group.apps.includes(r.identity?.app) && group.cases.some((p) => p.key === r.identity?.key)), "unexpected native receipt member/case");
     }
@@ -168,7 +171,8 @@ export async function run(args) {
     for (const [payload, p] of Object.entries(c.payloads)) {
       const name = `${runId}-${p.path}-api`;
       await own(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
-        "-v", `${fixtureDirs[payload]}:/fixtures:ro`, summary.tools.node.imageId, "node", `/bench/${p.path}/upstream.mjs`], name);
+        "-v", `${fixtureDirs[payload]}:/fixtures:ro`, "-e", "NODE_OPTIONS=--import=/bench/json-api/upstream-observer.mjs",
+        summary.tools.node.imageId, "node", `/bench/${p.path}/upstream.mjs`], name);
       upstreams[payload] = { name, url: await port(name) }; await ready(upstreams[payload].url, "/health");
     }
     await matrix.executeMatrix(options, {

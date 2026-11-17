@@ -207,14 +207,19 @@ comparable. An incomplete attempt has no comparison eligibility. In a complete t
 attempt, a supported coherent target failure blames only its app: that app's rows stay
 `comparisonEligible: null`, and `comparisonEligibleApps` lists only apps whose every row
 independently completed. Any warning (harness, provenance, source/native audit, headroom,
-continuity or cleanup) leaves no app comparable. Such an attempt is not a baseline,
+continuity or cleanup) leaves all public v2 app verdicts incomplete and no app comparable;
+independently replayed per-phase counts remain visible. Such an attempt is not a baseline,
 and `--require-complete` still fails it, as it does a functional negative.
 When the native load command itself faults (timeout, signal, I/O), the raw phase keeps
 its first message line, at most 512 characters, before any capture check it provoked;
 the phase stays an apparatus fault with null metrics.
 
 App/upstream/load runtime budgets, executable/mount/ownership/identity and lifetimes are
-captured before and after every phase. All three roles need window-covering CPU/memory
+captured before and after every phase. The upstream's cold identity and start lifetime
+must continue through every phase and adjacent timing cell for the same payload. The load
+container's nanosecond lifetime must contain the measured k6 duration and all fixed-stream
+event timestamps; nonzero generator samples outside it contradict the observation.
+All three roles need window-covering CPU/memory
 samples below their memory budgets. Counted app CPU and, for API mode, upstream CPU stay
 mandatory. Observed generator peak CPU must be below 80% of its unchanged four-core quota.
 The existing upstream is **one Node process**, not a worker pool: API attribution requires
@@ -233,10 +238,24 @@ including retry behavior. The bundle may use `json-api-native-audits/v2`. No pos
 audit is generated here. V1 audits still admit successful phases but cannot establish
 failed-API bounds. Audit truth/independence remains the operator's source-review boundary.
 
+For v2 the runner preloads a JSON-only observer in the two upstream Node processes.
+The original control body reports request starts and configured status. On the same
+control GET the observer returns actual record responses finished by HTTP status, plus
+aborted responses; control and health requests are not counted. A successful control
+reset begins a new counter epoch. Before, after and settled phase observations must
+show only completed 200s, one per cumulative read, with no abort or pending read.
+A v2 transport audit permits checking zero-or-one fetch bounds, not blaming the app
+when an individual failed request may never have reached the upstream. Without a
+completed 200 for every API request, the failed load remains observed but unattributed.
+Server-side finish is not a claim that the client received every byte.
+
 Read counters must join cold → warmup → all phases → teardown, across the actual ordered
 matrix, and to a final upstream observation. Fresh app containers, unchanged participating
 identities and no overlapping timing cells are replayed, not inferred from the saved plan.
 Counter movement between phases/cases or during/after teardown invalidates the attempt.
+Check-only preparation replays the actual functional attempts and cleanup and requires
+empty runs, aggregates and projections with no observed phases. It does not assert that
+a timing schedule executed or admit a baseline.
 Client timeouts do not observe app-handler completion: their classification is retained,
 but attribution remains incomplete, as do later phases with an unresolved server tail.
 No quiet interval or favorable counter count is taken as a server-drain proof.
@@ -324,7 +343,7 @@ or causes the recorded executable to run. A self-recorded digest is not an indep
 executable attestation. Every custom-clock counter count/rate must join the full raw stream,
 and latency average must match its raw sum/point count, not just its extrema.
 
-The isolated controller also joins all four production v2 load-asset hashes to
+The isolated controller also joins all four production v2 load-asset hashes and the upstream observer hash to
 its measured-commit source binding. Matching a mutable local producer alone is
 not sufficient. Its captured verifier includes the complete fixed-stream and
 timed-outcome import closure; neither evidence nor a recorded producer path can

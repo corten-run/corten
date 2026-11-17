@@ -4,13 +4,13 @@ import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { loadConfig, sha256, timedReceiptSchema, upstreamReadDelta, verifyNativeReceipt, verifyParticipants, verifyRuntime } from "./contract.mjs";
 import { deriveTimedObservation } from "./timed-outcomes.mjs";
-import { streamLimits } from "./fixed-stream.mjs";
+import { streamLimits, timestampNs } from "./fixed-stream.mjs";
 import { summarizeSamples } from "../catalog/stats.mjs";
 
 const same = (a, b, message) => assert.ok(isDeepStrictEqual(a, b), message);
 const count = (n) => Number.isSafeInteger(n) && n >= 0;
 export const captureLimits = Object.freeze({ ...streamLimits, stderrBytes: 4 * 2 ** 20, auxiliaryBytes: 2 * 2 ** 20 });
-export const producerSources = Object.freeze(["load.js", "load-outcome.js", "timed-load.js", "fixed-prototype-load.js"]);
+export const producerSources = Object.freeze(["load.js", "load-outcome.js", "timed-load.js", "fixed-prototype-load.js", "upstream-observer.mjs"]);
 export function producerProvenance() {
   return { schema: "json-api-producer/v2", fixedOutput: "full-stock-json-stdout", changedGeneratorIO: true, gzip: false,
     limits: captureLimits, sources: Object.fromEntries(producerSources.map((name) => [name, sha256(readFileSync(new URL(name, import.meta.url)))])) };
@@ -60,6 +60,10 @@ export function deriveProductionPhase(raw, expected, phase, options, tools, cont
   for (const role of ["app", "upstream"]) same(raw.before.liveness[role], raw.after.liveness[role], "participant lifetime changed during phase");
   const loadLife = raw.after.liveness.load;
   assert.ok(Date.parse(loadLife.startedAt) >= start && Date.parse(loadLife.finishedAt) <= end, "native load outside command clock");
+  const born = timestampNs(loadLife.startedAt), exited = timestampNs(loadLife.finishedAt);
+  assert.ok(exited - born >= BigInt(Math.round(raw.clock.k6DurationMs * 1e6)), "native load lifetime shorter than measured k6 duration");
+  if (stream) assert.ok(born <= BigInt(stream.receipt.firstNs) && BigInt(stream.receipt.lastNs) <= exited,
+    "fixed event outside native load lifetime");
   same(raw.upstreamReads?.before, raw.before.upstreamReads, "before read boundary differs");
   same(raw.upstreamReads?.after, raw.after.upstreamReads, "after read boundary differs");
   same(raw.upstreamReads?.settled, raw.upstreamReads?.after, "upstream reads continued after phase boundary");
@@ -81,6 +85,8 @@ export function deriveProductionPhase(raw, expected, phase, options, tools, cont
     }
     const begin = role === "load" ? Date.parse(loadLife.startedAt) : start, finish = role === "load" ? Date.parse(loadLife.finishedAt) : end;
     const samples = all.filter((s) => s.t >= begin && s.t <= finish);
+    if (role === "load") assert.ok(all.every((s) => s.t >= begin && s.t <= finish || s.cpu === 0 && s.mem === 0),
+      "active load resource sample outside native load lifetime");
     assert.ok(samples.length && samples[0].t - begin <= 5000 && finish - samples.at(-1).t <= 5000, "resource samples do not cover timed window");
     const budget = role === "app" ? raw.before.runtime : raw.before.participants[role];
     assert.ok(samples.every((s) => s.mem > 0 && s.mem * 2 ** 20 < budget.memoryBytes), "participant memory missing/at budget");
@@ -96,10 +102,23 @@ export function deriveProductionPhase(raw, expected, phase, options, tools, cont
   const { pass: _pass, ...auditIdentity } = expected;
   verifyNativeReceipt(native?.receipt, auditIdentity, native?.files, { timed: true });
   const reads = upstreamReadDelta(raw.upstreamReads);
+  const successfulUpstream = (snapshot, requests) => {
+    // Match cumulative counters, not just their deltas: no pending read before
+    // the window may lend its completion to an unfinished read inside it.
+    const started = upstreamReadDelta({ before: {}, after: requests });
+    return snapshot?.status === 200 && snapshot.aborted === 0 && isDeepStrictEqual(snapshot.completed, started ? { 200: started } : {});
+  };
+  if (!successfulUpstream(raw.before.upstreamResponses, raw.upstreamReads.before)
+    || !successfulUpstream(raw.after.upstreamResponses, raw.upstreamReads.after)
+    || !successfulUpstream(raw.settledResponses, raw.upstreamReads.settled))
+    reasons.push("upstream-not-observed-completing-every-read-with-200");
   if (expected.source === "fixture") assert.equal(reads, 0, "fixture timing upstream reads must be zero");
   else if (!observed.failed) assert.equal(reads, observed.requests, "successful API requests require exactly one upstream read");
   else if (native.receipt.schema !== timedReceiptSchema) reasons.push("API-failure-needs-independent-transport-single-fetch-no-retry-source-audit");
-  else assert.ok(reads >= observed.counts.ok && reads <= observed.requests, "failed API reads outside audited zero-or-one fetch bounds");
+  else {
+    assert.ok(reads >= observed.counts.ok && reads <= observed.requests, "failed API reads outside audited zero-or-one fetch bounds");
+    if (reads !== observed.requests) reasons.push("failed-API-request-without-observed-upstream-completion");
+  }
   // A client timeout does not observe server handler completion. Subsequent phases
   // cannot borrow a silent interval as proof that server work has drained.
   if (observed.counts.timeout) reasons.push("client-timeout-lacks-application-request-completion-tail-observation");

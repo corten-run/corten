@@ -24,6 +24,7 @@ export function inspectJson(summary, { load, commit } = {}) {
   assert.ok(typeof load === "function", "raw evidence reader required");
   const warnings = [], apps = {}, cases = summary.group.cases, preparationGates = [], execution = new Map();
   const gated = summary.timingDisposition === "gated-functional";
+  const preparation = timed && summary.options.checkOnly === true;
   const problem = (label, error) => warnings.push(`${label}: ${error.message ?? error}`);
   const check = (label, fn, preparation = true) => {
     let valid = false;
@@ -73,7 +74,7 @@ export function inspectJson(summary, { load, commit } = {}) {
       assert.deepEqual(Object.keys(entry?.images ?? {}).sort(), Object.keys(payloads).sort(), "missing/extra native image payload");
       for (const payload of Object.keys(payloads)) verifyImage(entry.images[payload], summary.commit, app, payload);
     });
-    for (const section of ["checks", "runs", "aggregates"]) check(`${app} ${section} matrix`, () => {
+    for (const section of ["checks", "runs", "aggregates", ...(timed ? ["projections"] : [])]) check(`${app} ${section} matrix`, () => {
       assert.deepEqual(Object.keys(entry?.[section] ?? {}).sort(), cases.map((c) => c.key).sort(), "missing/extra payload/source/target evidence");
     });
     for (const profile of cases) {
@@ -105,8 +106,8 @@ export function inspectJson(summary, { load, commit } = {}) {
       const runs = entry?.runs?.[key] ?? [];
       let observationComplete = true, targetFailed = false;
       const timing = check(`${app} ${key} timing`, () => {
-        if (gated) {
-          assert.deepEqual(runs, [], "timing started despite global parity gate");
+        if (gated || preparation) {
+          assert.deepEqual(entry.runs[key], [], "timing started despite global parity gate or check-only mode");
           assert.deepEqual(entry.aggregates[key], {}, "aggregates present despite global parity gate");
           if (timed) assert.ok(isDeepStrictEqual(entry.projections?.[key], timedCaseProjection([], summary.options.passes)), "timing projection present despite global parity gate");
           return;
@@ -139,7 +140,7 @@ export function inspectJson(summary, { load, commit } = {}) {
         assert.ok(replayed, "one or more JSON timing passes failed replay");
         assert.equal(runs.length, summary.options.passes, "missing requested JSON passes");
         verifyAggregates(entry.aggregates[key], runs, summary.options.passes);
-      }, false);
+      }, preparation);
       if (timed) {
         // Preserve only independently replayed cells when another pass is missing
         // or invalid. A saved projection never supplies trusted fallback numbers.
@@ -148,9 +149,9 @@ export function inspectJson(summary, { load, commit } = {}) {
           observationComplete &&= o.observationComplete; targetFailed ||= o.targetOutcome === "failed";
         }
         observationComplete &&= timing && row.projection.loadOutcome !== "incomplete";
-        row.timedOutcome = gated ? "not-run-functional-gate" : !observationComplete ? "incomplete" : targetFailed ? "failed" : "passed";
+        row.timedOutcome = gated ? "not-run-functional-gate" : preparation ? "not-run-check-only" : !observationComplete ? "incomplete" : targetFailed ? "failed" : "passed";
         row.comparisonEligible = observationComplete && !targetFailed ? true : null;
-        if (!observationComplete && timing && !gated) problem(`${app} ${key} attribution`, Object.values(derivedRuns).flatMap((r) => Object.values(r.phases).flatMap((p) => p.incompleteReasons)).join("; "));
+        if (!observationComplete && timing && !gated && !preparation) problem(`${app} ${key} attribution`, Object.values(derivedRuns).flatMap((r) => Object.values(r.phases).flatMap((p) => p.incompleteReasons)).join("; "));
       }
       // Partial values are retained and labeled, never zero-filled or a complete comparison.
       const available = timed ? derivedRuns.filter((r) => r.phases.sat64).map((r) => ({ phases: Object.fromEntries(Object.entries(r.phases).map(([p, metrics]) => [p, { metrics }])) }))
@@ -167,15 +168,15 @@ export function inspectJson(summary, { load, commit } = {}) {
     }
   }
   const negative = Object.values(apps).some((rows) => Object.values(rows).some((r) => r.functionalComplete && !r.functional));
-  if (timed && !gated) check("executed matrix continuity", () => {
-    const seen = new Set(), tails = {}, upstreamIds = {}; let previousEnd = Date.parse(summary.startedAt);
+  if (timed && !gated && !preparation) check("executed matrix continuity", () => {
+    const seen = new Set(), tails = {}, upstreamLives = {}; let previousEnd = Date.parse(summary.startedAt);
     for (const item of timingPlan(summary.options)) {
       const window = execution.get(`${item.app}/${item.profile.key}/${item.pass}`), payload = item.profile.payload;
       assert.ok(window && window.startedAt >= previousEnd && window.finishedAt >= window.startedAt, "missing/overlapping/reordered native timing cell");
       assert.ok(!seen.has(window.appId), "native app reused across timing passes/cases"); seen.add(window.appId);
       assert.ok(isDeepStrictEqual(window.readsBefore, tails[payload] ?? {}), "cross-case upstream reads/contamination");
-      if (upstreamIds[payload]) assert.equal(window.upstreamId, upstreamIds[payload], "upstream replaced between timing cases");
-      upstreamIds[payload] = window.upstreamId; tails[payload] = window.readsAfter; previousEnd = window.finishedAt;
+      if (upstreamLives[payload]) assert.ok(isDeepStrictEqual(window.upstreamLife, upstreamLives[payload]), "upstream replaced/restarted between timing cases");
+      upstreamLives[payload] = window.upstreamLife; tails[payload] = window.readsAfter; previousEnd = window.finishedAt;
     }
     const terminal = load(summary.readTail);
     assert.ok(Number.isSafeInteger(terminal.at) && terminal.at >= previousEnd && terminal.at <= Date.parse(summary.finishedAt), "final upstream read observation clock missing");
@@ -185,8 +186,9 @@ export function inspectJson(summary, { load, commit } = {}) {
   if (negative || timed) check("owned cleanup", () => assert.deepEqual(load(summary.cleanup), { runId: summary.runId, containers: [], networks: [] }, "owned resource cleanup is not proven"));
   check("suite outcome", () => {
     assert.equal(gated, negative, "global timing disposition differs from replayed functional outcomes");
-    assert.equal(summary.complete, timed ? !gated && !timedNegative && Object.values(apps).every((rows) => Object.values(rows).every((r) => r.complete)) : !gated, "runner outcome differs from replayed gates"); assert.equal(summary.checksPassed, !gated);
-    if (timed) assert.equal(summary.attemptComplete, Object.values(apps).every((rows) => Object.values(rows).every((r) => r.attemptComplete)), "runner attempt outcome differs from replay");
+    assert.equal(summary.complete, timed ? !preparation && !gated && !timedNegative && Object.values(apps).every((rows) => Object.values(rows).every((r) => r.complete)) : !gated, "runner outcome differs from replayed gates");
+    assert.equal(summary.checksPassed, preparation ? Object.values(apps).every((rows) => Object.values(rows).every((r) => r.functional && r.nativeQualified)) : !gated);
+    if (timed) assert.equal(summary.attemptComplete, !preparation && Object.values(apps).every((rows) => Object.values(rows).every((r) => r.attemptComplete)), "runner attempt outcome differs from replay");
     if (gated) {
       assert.ok(negative, "no replayed target violation for global gate");
     }
@@ -196,7 +198,8 @@ export function inspectJson(summary, { load, commit } = {}) {
   const baseline = warnings.length === 0 && !gated && !negative && !timedNegative;
   const attemptComplete = warnings.length === 0;
   const functionalAttemptComplete = preparationGates.every(Boolean);
-  const outcomes = summary.group.apps.map((app) => ({ app, outcome: Object.values(apps[app]).some((r) => r.functionalComplete && !r.functional || r.timedOutcome === "failed") ? "failed"
+  const outcomes = summary.group.apps.map((app) => ({ app, outcome: timed && !attemptComplete ? "incomplete"
+    : Object.values(apps[app]).some((r) => r.functionalComplete && !r.functional || r.timedOutcome === "failed") ? "failed"
     : timed && Object.values(apps[app]).some((r) => !r.attemptComplete) ? "incomplete" : "passed" }));
   // A coherent, supported timed target failure blames only its app. Peers stay comparable
   // only when every report-wide and per-row gate (harness, provenance, source/native audit,
@@ -208,6 +211,7 @@ export function inspectJson(summary, { load, commit } = {}) {
     const eligible = comparisonEligibleApps.includes(app);
     if (row.rps) row.rps.unverifiedPartial = !eligible;
     if (timed) row.comparisonEligible = eligible ? true : null;
+    if (timed && !attemptComplete && ["passed", "failed"].includes(row.timedOutcome)) row.timedOutcome = "incomplete";
   }
   const failedApps = outcomes.filter((o) => o.outcome === "failed").map((o) => o.app);
   return { group: summary.group, round: summary.round, commit: summary.commit, baseline, attemptComplete, functionalAttemptComplete,
