@@ -117,6 +117,11 @@ Corten is pre-1.0, so any minor version may change the API.
   in direct CLI errors, without reflecting raw exceptions or changing recovery,
   cleanup or benchmark acceptance rules.
 
+- `FeedUrl<Row>` now requires `Row` to resolve to the declarations `corten::types` generates
+  (`import("../types/app").Row`), as `ScreenUrl<Data>` does. A local typedef, an import from
+  another module, or an undeclared row name does not compile; generated imports and their
+  aliases keep the feed's row type tied to the server's.
+
 - A handler is given a form's control by its `#[derive(Fields)]` field,
   `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:
   `HTMLInputElement`, `HTMLSelectElement`, `HTMLTextAreaElement`, or `HTMLInputElement[]` for
