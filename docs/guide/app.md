@@ -205,7 +205,7 @@ targets. Filtering the target out skips the line's clock reads and copies, but k
 wrapper; leaving the switch off removes it.
 
 What a line costs, measured in instructions per request (release build, Corten's subscriber
-writing to a sink, [design Choice 58](../design.md#choice-access-logs)): a parameter route goes
+writing to a sink, [design Choice 59](../design.md#choice-access-logs)): a parameter route goes
 from about 17,700 to 27,300 (+54%), and an unknown URL's `404` from about 19,100 to 27,300
 (+43%). About 1,400 of that is preparing the event; the rest is formatting the line. With the
 switch off a request costs what it did before the switch existed, within a dozen instructions.
@@ -602,7 +602,9 @@ What it sends is what the app's own pages send, typed the same way:
    GET form's checkbox (`?mine=on`, where a link writes `true`) is a `Local`.
 3. A request asks for HTML as a browser's page load does. `.mode(Mode::Action)` asks as the
    runtime's `data-patch` submit does, `Mode::Navigation` as its link, `Mode::Data` as a client
-   that wants JSON.
+   that wants JSON. So the same form posted without `.mode(..)` is the browser without JavaScript:
+   in a test (a debug build) a handler that answers it with a patch, or with a page at a path with
+   no `GET`, gets a 500 that says why ([Where a form posts](requests-and-forms.md#where-a-form-posts)).
 4. `.cookie(name, value)` sends a cookie (`answer.cookie(name)` reads one an answer set),
    `.header(name, value)` any other header, `.peer(ip)` the connection's address
    ([`ClientIp`](#the-clients-address)), and `Client::call(method, &route).body(type, bytes)` a body that
@@ -2840,7 +2842,8 @@ read (a JSON error names the value it could not parse, so part of an upstream an
 message above it could already (an HTTP client's names the URL); none of it reaches the client.
 A debug build's error about the app's own code (a component it
 does not serve, a `Refresh` header, a write redirected outside `form-action`, a page answering
-a post to a path with no `GET` ([Where a form posts](requests-and-forms.md#where-a-form-posts)))
+a post to a path with no `GET`, a patch answering a browser's plain request
+([Where a form posts](requests-and-forms.md#where-a-form-posts)))
 is the exception:
 it is set in every debug build, so a router test's error page names it.
 The error page `corten new` writes names every case without `_`, so when Corten adds one the
