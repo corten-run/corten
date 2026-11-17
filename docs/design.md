@@ -3126,7 +3126,7 @@ rules something out.
     From then on the module finds every tag itself, with a `MutationObserver` of the page: a
     navigation's page, a form's answer, a `<corten-live>` fragment, a layout element a write's page
     draws again in place. Served beside the runtime, not with the app's scripts, so an app with no
-    static files or components has it too. The runtime is 15,466 bytes gzipped and 13,976 brotli
+    static files or components has it too. The runtime is 15,464 bytes gzipped and 13,988 brotli
     at `2d697e24d` (15,407 and 13,925 on main at `b0c2abd4d`, so 57 and 63 more), and the module 1,534 and 1,359; those 57 bytes are the import, the hand-over, the search
     of a markup's text (the server's or a script's patch), the query of the head on load and the
     call that shows a part's read what its `apply` parsed (`own`, below), which every page
