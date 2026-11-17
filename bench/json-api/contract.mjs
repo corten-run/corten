@@ -212,8 +212,8 @@ export function deriveLoad(raw, expected, phase, options, tools, context) {
   const rate = metrics.requests * 1000 / duration;
   assert.ok(Math.abs(metrics.rps - rate) <= Math.max(1e-9, rate * 1e-9), "request count/rate/phase duration differ");
   if (phase === "fixed") {
-    // k6 v2.4.0 schedules index 0 immediately, then integer-nanosecond periods.
-    // The final timer races the duration deadline; grace drains work, not arrivals.
+    // Historical v1 conservative eligibility policy, not a physical k6 ceiling.
+    // Missing scheduler-stop observations cannot certify delayed endpoint dispatch.
     const periodNs = Math.floor(1e9 / raw.config.rate);
     const lastArrival = Math.floor(raw.config.seconds * 1e9 / periodNs);
     assert.ok(metrics.requests >= raw.config.rate * raw.config.seconds && metrics.requests <= lastArrival + 1,

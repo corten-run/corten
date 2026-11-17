@@ -127,14 +127,18 @@ The k6 duration must cover the configured interval without exceeding its existin
 graceful stop; the host bracket must contain that duration with at most 10 seconds of control
 overhead. Request count/rate must agree with that measured k6 clock. Fixed phases must complete
 at least the configured `rate * duration` arrivals, with no failures or dropped iterations,
-not merely report zero failures. The upper count follows the pinned
+not merely report zero failures. Historical v1 uses a conservative nominal-count
+eligibility policy based on the pinned
 [k6 v2.4.0 scheduler](https://github.com/grafana/k6/blob/v2.4.0/lib/executor/constant_arrival_rate.go):
 index zero is immediate, subsequent arrivals use an integer-nanosecond period
 `floor(1e9 / rate)` ([period conversion](https://github.com/grafana/k6/blob/v2.4.0/lib/executor/helpers.go)),
-and the last timer races the duration deadline. Thus completed requests cannot exceed
+and the last timer races the duration deadline. The v1 eligibility ceiling is
 `floor(duration * 1e9 / floor(1e9 / rate)) + 1`: 9000 or 9001 at the defaults.
-This is a schedule bound, not a percentage tolerance or permission to extend arrivals into
-grace. Counts below the configured offer or above that bound fail, even if checks and upstream
+This is not a guaranteed physical scheduler maximum: Go's select can repeatedly dispatch
+an overdue arrival while cancellation is also ready. V1 lacks observations that could
+certify such an overrun, so it conservatively rejects counts outside this nominal policy.
+This is not a percentage tolerance or permission to extend arrivals into grace.
+Counts below the configured offer or above that policy fail, even if checks and upstream
 reads are rewritten consistently. Every request still needs both passing named checks and,
 in API mode, exactly one upstream read. Retained `iterations` must match the request count
 and its rate (if supplied) must match the measured clock; retained dropped counters must be
@@ -178,3 +182,58 @@ This implementation has unit/fake-operation and HTTP test coverage, not a measur
 native baseline. It makes no independent-review, serialization-audit, deployment-parity,
 build-cost, instruction-count or browser-experience claim. The catalog upstream's functional
 gate cannot inject redirects; the marketplace gate does exercise refusal of redirects.
+
+## Fixed Output Prototype
+
+`fixed-probe.mjs ABSOLUTE_PINNED_K6_BINARY NEW_OUTPUT_DIRECTORY` is an operator-run,
+local-only stock-k6 clock experiment, **not** the production matrix runner. It verifies
+the binary's 2.4.0 version, retains its executable/source hashes, and performs one ordinary
+all-200 JSON fixed phase at 150/s for two seconds against an owned loopback fixture. The
+fixture is not a native framework or source audit. Production defaults, matrix selection,
+CPU allocations, thresholds, VUs and timeout/grace settings are unchanged. No binary is
+downloaded and no Docker/cloud/provider is started by the prototype.
+
+The instrumented script imports the original load options and request/check behavior.
+It adds exhaustive wire-outcome/start counters, Gauge clock extrema and stock
+`--out json=-` output. **This adds generator CPU, allocation, serialization and pipe/disk
+I/O.** Its headroom has not been measured under pinned native k6. New Gauges retain only
+extrema; they do not add a per-request Trend. Stock k6 still has its existing trends and
+output buffers, whose peak memory cannot be established by synthetic Node fixtures.
+
+`events.jsonl` retains the full, unfiltered original output bytes. `capture.json` binds
+its SHA-256, byte/event/point/metric counts and exact first/last timestamps, plus normal
+exit/host clocks and separate summary, custom-clock and stderr hashes/lengths. There is
+no gzip/decompression path. Replay is `node bench/json-api/fixed-prototype.mjs verify
+OUTPUT_DIRECTORY`. It streams at 64KiB, with a 64KiB line limit, 512MiB raw limit,
+2,000,000 event limit and 128-metric limit. Oversize/partial/malformed output, missing
+final newline, I/O errors, output/marshal/write log errors, abnormal exits and inconsistent
+count/rate/check/iteration/drop/clock joins invalidate the observation. Limits are evidence
+admission safeguards, not workload settings. Capture stops on stdout/stderr cap errors;
+any retained prefix is explicitly incomplete, never accepted as the full stream.
+
+The stdout writer cannot write beyond 512MiB; stderr cannot exceed 4MiB. Summary and
+clock admission limits are 2MiB each, checked after timing, not hard filesystem quotas.
+The collector reserves at least 528MiB free disk before launching. Exact native output
+volume/peak heap/CPU at the production defaults is **not measured**; 9000 nominal arrivals
+is not a physical scheduler maximum. The fixed caps bound admitted evidence independently
+of that unknown cost. The parent-operated tiny probe must retain measured volume and
+resource observations before any extrapolation or qualification.
+
+Instance duration is wall-clock based and has a different origin from scenario progress.
+Uncapped scenario progress brackets an origin interval; capped progress is not an exact
+elapsed time. Conversion uses explicit outward nanosecond enclosures, retaining the
+separate millisecond uncertainty of the scenario wall epoch. Built-in drop point times
+remain wall observations, **not** a monotonic scheduler-stop proof. Completion grace never
+becomes an offered-arrival budget. Nominal count, actual offers and last-start variation
+are reported separately; no nominal-plus-one or zero-nanosecond endpoint gate is imposed
+by this experiment. Ordinary endpoint variation is retained for native review, not labeled
+an application failure. A conditional last-start count check is only a consistency check.
+
+Every replay returns `json-api-fixed-prototype/v1`, `status: "unqualified"`,
+`attemptComplete: false`, `targetOutcome: null`, `comparisonEligible: null` and
+`scheduling.endpointEligible: null`. A coherent load exit99 preserves classified counts,
+not app-failure attribution. The production v1 reader stays zero-error strict; this
+prototype cannot opt into it or establish a baseline. Full v2 matrix/report integration,
+all-resource/lifetime/cleanup/source joins, failed-API read bounds and native headroom
+qualification remain separate unfinished work. No timing-eligibility policy is finalized
+before reviewing the ordinary pinned-k6 observation.
