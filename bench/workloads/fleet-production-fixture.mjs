@@ -59,10 +59,14 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
       if (JSON.parse(data).kind === "close") setImmediate(() => close(0)); next();
     } });
     child.stdin.on("close", () => setImmediate(() => close(255)));
-    setImmediate(() => { frame("registered", { ...registration, ...expected }); frame("progress", { state: "active" }); });
+    setImmediate(() => {
+      record({ boundary: "monitor-registered" });
+      frame("registered", { ...registration, ...expected }); frame("progress", { state: "active" });
+    });
     const deadline = Date.now() + 5000, timer = setInterval(() => {
-      if (state().control.sealed.includes("bootstrap")) {
-        clearInterval(timer); frame("terminal", { id: expected.id, nativeTerminal: true,
+      const peer = !config.holdUntilGroup || fs.existsSync(path.join(path.dirname(config.stateDir), config.holdUntilGroup, "groups-r21/monitor-registration.json"));
+      if (peer && state().control.sealed.includes("bootstrap")) {
+        clearInterval(timer); record({ boundary: "monitor-terminal" }); frame("terminal", { id: expected.id, nativeTerminal: true,
           campaign: `${expected.binding.round}-${expected.binding.token}`, sealSha256: "f".repeat(64) });
       } else if (Date.now() > deadline) close(255);
     }, 10);
@@ -76,7 +80,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
         if (binary !== fs.realpathSync(process.execPath) || argv[0] !== "--input-type=module" || argv[1] !== "-"
           || argv[2] !== path.join(config.repo, "bench/workloads/cloud-provider-worker.mjs")) throw new Error("fixed provider launch required");
         const child = fork(path.join(config.repo, "bench/workloads/fleet-provider-test-worker.mjs"),
-          [config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
+          [config.mode === "overlap" ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
           { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
         record({ boundary: "provider-child-start", pid: child.pid });
         const observe = (direction, message) => record({ boundary: "provider-ipc", direction,
