@@ -89,7 +89,7 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    JavaScript, when the module does not load and once the read failed (no patch, an error, a
    redirect: the link follows it; the part is then `[data-corten-read-failed]`); never hide it
    under `@media (scripting: enabled)`. A part waiting in a part's answer is marked failed, not
-   read: reads do not chain (a part a form's answer or a part read again draws in the same moment is still read, even at the same address). A page that reads itself again (`ReadAgain`) needs an interval
+   read: reads do not chain (a part a form's answer, a part read again or a script draws in the same moment is still read, even at the same address). A page that reads itself again (`ReadAgain`) needs an interval
    longer than its slow part takes.
    Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
    `raw` or an expression inside `<script>` (that does not compile).

@@ -291,10 +291,12 @@ part a page, a form's patch, a script's `patch` or a `<corten-live>` fragment dr
 read, at the pace those come (a fragment that draws the part again ends the read the one before
 started), and so is one the answer to a part read again (`ReadAgain::from`) draws, at its
 interval; one a part's answer draws waiting is marked failed instead, so reads do not chain. The
-module counts as the part's answer's only the tags that answer put in the page, taken as it draws
-them: a part a form's answer or a part read again draws in the same moment (both having waited
+module counts as the part's answer's only the tags in that answer's markup, taken before it is
+drawn: a part a form's answer or a part read again draws in the same moment (both having waited
 for one stylesheet) is read, even in place of one the part's answer drew or at its address, and
-so is one at an address only a `<template>`'s content in the part's answer names. A
+so are one at an address only a `<template>`'s content in the part's answer names and one your
+script draws while the answer is drawn (from the `focusin` of the focus it moves, or a custom
+element's `connectedCallback`). A
 read the browser cut short by keeping the page in its back-forward cache is made again when the
 page is shown, if its part is still there; a page the browser prerenders reads its parts once it
 is shown. A page whose head asks to be read again (`ReadAgain`) is read on its interval whatever
