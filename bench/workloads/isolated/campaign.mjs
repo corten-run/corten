@@ -88,19 +88,22 @@ export function createCampaign({ authorize }) {
   }
   async function command(c, binding, invocation, directory, signal) {
     own(c.handle); verifyWorkingSources(c.plan.bindings[0]);
+    const observerStop = new AbortController();
+    const commandSignal = signal ? AbortSignal.any([signal, observerStop.signal]) : observerStop.signal;
     const number = c.commandIndex++, path = `${directory}/command-${number}.log`, fd = openSync(join(c.directory, path), "wx", 0o600);
     let result, observer, hostManifestSha256, pid;
     try {
       event(c, "command-intent", { group: binding.request.group, invocation });
       result = await supervise({ ...invocation, shell: false }, { cwd: repo,
         env: { PATH: "/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", HOME: os.homedir(), LANG: "C.UTF-8", TZ: "UTC",
-          GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv }, signal,
+          GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", ...binding.resources.requestedCpuEnv }, signal: commandSignal,
         log(bytes) { let offset = 0; while (offset < bytes.length) { const n = writeSync(fd, bytes, offset, bytes.length - offset); assert.ok(n > 0); offset += n; } },
         async onStart(value, startupSignal) {
           pid = value; event(c, "command-started", { pid });
           try {
             observer = await beginLifetime({ campaign: c.handle.id, binding, invocation,
-              directory: join(c.directory, directory, `command-${number}-host`), command: number, pid, signal, startupSignal });
+              directory: join(c.directory, directory, `command-${number}-host`), command: number, pid, signal: commandSignal, startupSignal,
+              onFault() { observerStop.abort(); } });
             startupSignal.throwIfAborted();
             await observer.attach(pid);
             startupSignal.throwIfAborted();

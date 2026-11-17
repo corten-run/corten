@@ -2,11 +2,15 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { evaluateLatestStable, latestStableSchema, latestStableSources } from "./latest-stable.mjs";
+import { evaluateLatestStable, latestStableSchema, latestStableSources, candidateLatestStableSchema, unsupportedSolidReason } from "./latest-stable.mjs";
+import { readLatestStable } from "../client-heavy/build.mjs";
+import { candidateDependencies } from "../client-heavy/contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 
-const original = Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) =>
+const original = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => ["policy", "manifest", "lockfile"].includes(key)).map(([key, path]) =>
   [key, readFileSync(new URL(`../../${path}`, import.meta.url))]));
+// The historical v1 record is intentionally preserved, not relabeled v2.
+original.policy = Buffer.from(JSON.stringify(JSON.parse(original.policy).legacy));
 const inputs = () => ({ group: "client-heavy", ...structuredClone(original) });
 const changed = (key, edit) => {
   const input = inputs(), value = JSON.parse(Buffer.from(input[key]).toString("utf8"));
@@ -133,4 +137,132 @@ test("all nine groups and every contender stay visible, with no global launch de
   invalid(undefined, "policy:missing-source");
   invalid(null, "policy:missing-source");
   invalid("not source input", "policy:missing-source");
+});
+
+const candidateInputs = () => ({ group: "client-heavy", ...Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) =>
+  [key, readFileSync(new URL(`../../${path}`, import.meta.url))])) });
+const mutateCandidate = (key, edit) => {
+  const input = candidateInputs(), value = JSON.parse(input[key]); edit(value); input[key] = JSON.stringify(value); return input;
+};
+
+for (const key of Object.keys(latestStableSources)) for (const value of [undefined, null, {}, 7, "{", new Uint8Array([0xff])])
+  test(`candidate input ${key} rejects missing or malformed source ${String(value)}`, () => {
+    const result = evaluateLatestStable({ ...candidateInputs(), [key]: value });
+    assert.equal(result.valid, false); assert.equal(result.status, "invalid"); assert.ok(result.errors.length > 0);
+    assert.deepEqual(result.candidates ?? [], []);
+  });
+
+test("production builder recomputes candidate-specific latest targets without inventing latest-all-transitives or native qualification", () => {
+  const input = candidateInputs(), result = evaluateLatestStable(input);
+  assert.equal(result.schema, candidateLatestStableSchema); assert.equal(result.valid, true, JSON.stringify(result.errors));
+  assert.deepEqual(result, readLatestStable());
+  assert.deepEqual(result.candidates.map((r) => r.app), selectedApps("client-heavy"));
+  for (const row of result.candidates) {
+    assert.deepEqual(row.roots, candidateDependencies[row.app]);
+    assert.equal(row.measurements, null); assert.equal(row.latestStableEligible, !["solid", "remix"].includes(row.app));
+    assert.equal(row.blockers.length > 0, ["solid", "remix"].includes(row.app));
+    assert.equal(row.dependencies.some((d) => d.package === "@babel/core"), row.app === "solid");
+    assert.equal(row.status, row.app === "solid" ? "unsupported" : row.app === "remix" ? "blocked" : "satisfied");
+  }
+  assert.equal(result.candidates.find((r) => r.app === "solid").reason, unsupportedSolidReason);
+  assert.deepEqual(result.candidates.find((r) => r.app === "remix").incompatible, [{ from: "node_modules/@remix-run/test", kind: "dependency",
+    package: "esbuild", range: "^0.27.1", resolved: "node_modules/esbuild", version: "0.28.2" }]);
+  const vue = result.candidates.find((r) => r.app === "vue");
+  assert.ok(vue.dependencies.some((d) => d.package === "@babel/parser" && d.version.startsWith("7.")));
+  assert.equal(vue.targets.includes("@babel/parser"), false);
+  for (const [key, bytes] of Object.entries(input).filter(([key]) => key !== "group")) assert.equal(result.sources[key].sha256, createHash("sha256").update(bytes).digest("hex"));
+  for (const group of groupNames) {
+    const evaluated = evaluateLatestStable({ ...input, group }); assert.equal(evaluated.valid, true);
+    assert.equal(evaluated.status, group === "client-heavy" ? "blocked" : "not-applicable");
+  }
+});
+
+for (const [name, key, edit] of [
+  ["invented latest", "policy", (p) => { const r = p.observations.packages["solid-js"]; const body = JSON.parse(r.raw); body.version = "3.0.0"; r.raw = JSON.stringify(body); }],
+  ["missing raw primary bytes", "policy", (p) => { delete p.observations.packages.react.raw; }],
+  ["missing primary package", "policy", (p) => { delete p.observations.packages.react; }],
+  ["forged registry URL", "policy", (p) => { p.observations.packages.react.url = "https://example.test/latest"; }],
+  ["stale observation relabeled current", "policy", (p) => { p.checkedOn = "2026-11-18"; }],
+  ["candidate missing", "policy", (p) => { delete p.candidates.solid; }],
+  ["candidate membership changed", "policy", (p) => { p.candidates.react.push("@babel/core"); }],
+  ["invented unsupported peer", "policy", (p) => { p.unsupported.app = "react"; }],
+  ["unsupported reason missing", "policy", (p) => { delete p.unsupported.reason; }],
+  ["unknown schema", "policy", (p) => { p.schema = "benchmark-latest-stable-policy/v3"; }],
+  ["manifest alternate version", "manifest", (p) => { p.devDependencies.react = "19.0.0"; }],
+  ["manifest alternate resolution", "manifest", (p) => { p.dependencies = { react: "19.3.1" }; }],
+  ["forced peer override", "manifest", (p) => { p.overrides["@babel/core"] = "8.1.2"; }],
+  ["lock alternate version", "lockfile", (p) => { p.packages["node_modules/react"].version = "19.0.0"; }],
+  ["lock missing dependency", "lockfile", (p) => { delete p.packages["node_modules/react-dom"]; }],
+  ["lock duplicate compiler", "lockfile", (p) => { p.packages["node_modules/babel-preset-solid/node_modules/@babel/core"] = structuredClone(p.packages["node_modules/@babel/core"]); }],
+  ["lock duplicate framework", "lockfile", (p) => { p.packages["node_modules/somewhere/node_modules/react"] = { version: "19.3.1" }; }],
+  ["forced compiler peer", "lockfile", (p) => { p.packages["node_modules/babel-preset-solid"].peerDependencies["@babel/core"] = "^8.0.0"; }],
+  ["tooling parser declaration", "toolingManifest", (p) => { p.devDependencies.semver = "7.8.5"; }],
+  ["tooling parser alias", "toolingManifest", (p) => { p.dependencies = { semver: "npm:semver@7.8.6" }; }],
+  ["tooling parser forced override", "toolingManifest", (p) => { p.overrides = { semver: "7.8.5" }; }],
+  ["tooling parser alternate lock", "toolingLockfile", (p) => { p.packages["node_modules/semver"].version = "7.8.5"; }],
+  ["tooling parser alternate integrity", "toolingLockfile", (p) => { p.packages["node_modules/semver"].integrity = "sha512-invented"; }],
+  ["tooling parser shadow", "toolingLockfile", (p) => { p.packages["node_modules/unit/node_modules/semver"] = { version: "7.8.6" }; }],
+]) test(`candidate policy fails closed on ${name}`, () => {
+  const r = evaluateLatestStable(mutateCandidate(key, edit)); assert.equal(r.valid, false); assert.equal(r.status, "invalid");
+  assert.equal(r.groupComparisonEligible, false); assert.ok(!r.candidates?.length); assert.ok(r.errors.length > 0);
+});
+
+test("an actual shared compiler consumer remains blocked instead of borrowing another candidate's disposition", () => {
+  const r = evaluateLatestStable(mutateCandidate("lockfile", (p) => { p.packages["node_modules/scheduler"].dependencies = { "@babel/core": "^7.0.0" }; }));
+  assert.equal(r.valid, true, JSON.stringify(r.errors));
+  const react = r.candidates.find((row) => row.app === "react");
+  assert.ok(react.dependencies.some((d) => d.package === "@babel/core"));
+  assert.ok(react.blockers.includes("not-latest-stable:@babel/core"));
+  assert.equal(react.status, "blocked"); assert.equal(react.latestStableEligible, false);
+});
+
+for (const [range, version, satisfied] of [
+  ["^0.28.0", "0.28.2", true], ["^0.28.0", "0.29.0", false],
+  ["~1.2.0", "1.2.9", true], ["~1.2.0", "1.3.0", false],
+  ["1.2.x", "1.2.3", true], ["1.2 - 2.3", "2.3.99", true],
+  [">=1 <2 || ^3.0.0", "3.2.0", true], [">=1 <2 || ^3.0.0", "2.5.0", false],
+  ["*", "1.2.3-beta.1", false], ["^1.2.3-beta.1", "1.2.3-beta.2", true],
+  ["1.2.3", "1.2.3+build.9", true],
+]) test(`resolved dependency uses npm range semantics: ${range} / ${version}`, () => {
+  const result = evaluateLatestStable(mutateCandidate("lockfile", (lock) => {
+    lock.packages["node_modules/scheduler"].dependencies = { "range-control": range };
+    lock.packages["node_modules/range-control"] = { version };
+  }));
+  assert.equal(result.valid, true, JSON.stringify(result.errors));
+  const react = result.candidates.find((row) => row.app === "react");
+  assert.equal(react.latestStableEligible, satisfied); assert.equal(react.status, satisfied ? "satisfied" : "blocked");
+  assert.equal(react.incompatible.some((edge) => edge.package === "range-control"), !satisfied);
+});
+
+for (const kind of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+  for (const optionalPeer of kind === "peerDependencies" ? [false, true] : [false]) {
+    test(`resolved ${kind} edge${optionalPeer ? " (optional peer)" : ""} is never excused by optionality or shadow resolution`, () => {
+      const result = evaluateLatestStable(mutateCandidate("lockfile", (lock) => {
+        const scheduler = lock.packages["node_modules/scheduler"];
+        scheduler[kind] = { "range-control": "^1.0.0" };
+        if (optionalPeer) scheduler.peerDependenciesMeta = { "range-control": { optional: true } };
+        lock.packages["node_modules/range-control"] = { version: "1.5.0" };
+        lock.packages["node_modules/scheduler/node_modules/range-control"] = { version: "2.0.0" };
+      }));
+      assert.equal(result.valid, true, JSON.stringify(result.errors));
+      const react = result.candidates.find((row) => row.app === "react");
+      assert.equal(react.status, "blocked"); assert.equal(react.latestStableEligible, false);
+      assert.equal(react.incompatible[0].resolved, "node_modules/scheduler/node_modules/range-control");
+      assert.equal(react.incompatible[0].range, "^1.0.0");
+    });
+  }
+}
+
+test("absent optional edges are permitted, but invalid ranges never become a compatible dependency", () => {
+  const missing = evaluateLatestStable(mutateCandidate("lockfile", (lock) => {
+    Object.assign(lock.packages["node_modules/scheduler"], { optionalDependencies: { "absent-optional": "^1.0.0" },
+      peerDependencies: { "absent-peer": "^1.0.0" }, peerDependenciesMeta: { "absent-peer": { optional: true } } });
+  }));
+  assert.equal(missing.valid, true); assert.equal(missing.candidates.find((row) => row.app === "react").status, "satisfied");
+  for (const range of ["npm:range-control@1.0.0", "file:../other", "workspace:*", "not-a-range"]) {
+    const invalid = evaluateLatestStable(mutateCandidate("lockfile", (lock) => {
+      lock.packages["node_modules/scheduler"].optionalDependencies = { "range-control": range };
+    }));
+    assert.equal(invalid.valid, false); assert.equal(invalid.candidates.length, 0);
+  }
 });
