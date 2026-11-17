@@ -49,6 +49,8 @@ These are what the framework is built around. Code that breaks them fights the f
    without. Direct patches require `Some(action)` from `req.action()`, then
    `action.patch(view)` or `action.patch_with_status(status, view)`; otherwise return a page
    or redirect. Prefer `req.patch_or(view, page)` when no custom branch is needed. Never
+   build a slow part before selecting its mode: `patch_or_with` passes `Action` to its part
+   closure, `|action| async move { action.patch(view) }`, and runs only the requested side. Never
    unwrap `req.action()` to avoid writing a fallback; a feature only a browser can provide
    (drag and drop, a canvas) needs JavaScript.
 6. **Cleanup is `signal`.** A handler that takes `signal` gets an `AbortSignal` that aborts
@@ -74,6 +76,7 @@ These are what the framework is built around. Code that breaks them fights the f
 | a date and time or a day the user picks | `when: Entry<LocalDateTime>` plus `zone: FormZone`: drawn in `DrawZone::from(req.zone())` with `zone.field(f.zone)`, `zone.name()`, `zone.local(at)` for the value and `zone.min(at)`/`zone.max(at)` for the bounds, read with `input.when.at(&input.zone)` (`at_keeping(&input.zone, stored)` in an edit form, the value drawn with `floor_minute`), never in `req.zone()`, and drawn again in `DrawZone::from(&input.zone)`; `Entry<Day>` and `day.start(&input.zone)`; never a `String` parsed by hand with `Zone::offset` | [forms.md](references/forms.md) |
 | behavior in the browser | `#[component(js)]`, exported functions in a script next to it | [scripts.md](references/scripts.md) |
 | a child that reports to its parent | a `Handler` prop, or an `#[event]` | [scripts.md](references/scripts.md) |
+| a slow part the page should not wait for | `{ReadAgain::now(route)}` inside the element drawn waiting (its id is the part's), and `req.patch_or_with(part, page)` in the page's own handler | [pages-and-routes.md](references/pages-and-routes.md) |
 | a fragment the server keeps current | `<corten-live src={Route}>` plus `corten::live` | [scripts.md](references/scripts.md) |
 | live rows a script updates | a `Feed` plus `subscribe` in an `on:connect` handler (feature `feed`) | [scripts.md](references/scripts.md) |
 | many rows a script reads or changes (a grid) | `#[component(view)]` rows, `rows(body, Row)` in the handler | [scripts.md](references/scripts.md) |

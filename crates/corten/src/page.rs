@@ -1862,7 +1862,9 @@ impl Req {
     #[cold]
     #[inline(never)]
     fn check_modules(&self, modules: &[&'static str]) -> Result<()> {
-        match modules.iter().find(|name| !self.shared.assets.as_ref().is_some_and(|a| a.module_tag(name).is_some())) {
+        match modules.iter().find(|name| {
+            **name != crate::script::PART_MODULE && !self.shared.assets.as_ref().is_some_and(|a| a.module_tag(name).is_some())
+        }) {
             Some(name) => Err(self.unserved(unserved_module(name))),
             None => Ok(()),
         }
@@ -2022,6 +2024,7 @@ impl Req {
     /// load's head does, rather than once each module arrives. The modules themselves the runtime
     /// imports. Nothing for a page whose modules import nothing.
     fn swap_preloads(&self, modules: &[&'static str], out: &mut String) {
+        part_preload(modules, out);
         let Some(assets) = &self.shared.assets else { return };
         let (mut events, mut views) = (false, false);
         for name in modules {
@@ -2127,6 +2130,7 @@ impl Req {
         out.push_str(r#"</script><script type="module" src=""#);
         out.push_str(crate::runtime_path());
         out.push_str(r#""></script>"#);
+        part_preload(modules, out);
         // The modules the page's handlers call, fetched with the runtime rather than on first use.
         // A component's module hands its exports to the runtime as it runs, so it is a module script
         // of the page: its handlers are in before DOMContentLoaded, with no import() to wait on.
@@ -2134,7 +2138,7 @@ impl Req {
         if let Some(assets) = &self.shared.assets {
             let mut events = false;
             let mut views = false;
-            for name in modules {
+            for name in modules.iter().filter(|name| **name != crate::script::PART_MODULE) {
                 let Some((tag, imports_events, imports_views)) = assets.module(name) else {
                     tracing::error!("corten: {}", unserved_module(name));
                     continue;
@@ -2396,8 +2400,8 @@ impl Req {
     /// the form works without JavaScript too. `page` only runs then, so an action never loads
     /// data for a page it does not send. A data client ([`Mode::Data`]) gets `page()` as well. A
     /// submit refused for its input is [`Req::invalid`] (or [`Req::invalid_with`] when the form needs
-    /// a read); a patch that needs data, a status or headers of its own checks
-    /// `req.action()` itself.
+    /// a read); a patch that needs a read, a status or headers of its own is
+    /// [`Req::patch_or_with`], whose part side builds it only for the runtime's request.
     ///
     /// Its answer is a patch whenever the runtime asked, so it is the `HtmlResult<Patches>` of a
     /// route that says `patches` ([`crate::Patches`]) as well as any `HtmlResult`; `page()` is a
@@ -2443,6 +2447,128 @@ impl Req {
                 Some(patch) => patch,
                 None => page().await.map(HtmlResponse::of),
             }
+        }
+    }
+
+    /// [`Req::patch_or`] for a part that needs a read of its own: both sides are lazy, so the
+    /// runtime's read of the part ([`Mode::Action`]) runs `part(action)` alone, and every other request
+    /// (a full load, a navigation, a data client, a browser without JavaScript) runs `page()`
+    /// alone. Neither reads what the other draws. `part(action)` receives the checked
+    /// [`Action`] and answers `HtmlResult<Patches>`, which only [`Action::patch`] and the
+    /// other methods that answer a patch make, so a page or a redirect there
+    /// does not compile; `page()` is a plain `HtmlResult`.
+    ///
+    /// It is how one handler answers a page and its slow part: the page draws the part waiting,
+    /// with [`ReadAgain::now`] inside it, and the runtime reads the part from the page's own route
+    /// as soon as the page is on the screen. The route says `patches`
+    /// ([`crate::Patches`]). Without JavaScript nothing reads the part, so the waiting part links
+    /// to the page with it read in, a field of the page's route that `page()` reads it for
+    /// (`docs/design.md#choice-slow-part-link`). Both sides are one route's answers, for the
+    /// same people: a page in a [`crate::Public`], which shared caches give to anyone, cannot
+    /// read a part for one visitor here, so such a part is read from a route of its own (one that
+    /// says `patches`, named by [`ReadAgain::now`]). The page side receives no builder:
+    /// it answers the full page or a redirect, not an unchecked patch.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     /// `picks` reads them in, for the link a browser without JavaScript follows.
+    ///     #[route("/", get = home, patches)]
+    ///     #[derive(Default)]
+    ///     pub struct Home {
+    ///         pub picks: Option<bool>,
+    ///     }
+    /// }
+    ///
+    /// #[derive(Id)]
+    /// struct PicksId;
+    ///
+    /// #[component]
+    /// fn Picks<'a>(picks: &'a [String]) -> impl Patch {
+    ///     html! { <ul id={PicksId}> for pick in picks { <li>{pick}</li> } </ul> }
+    /// }
+    ///
+    /// /// The slow read.
+    /// async fn picks_for_you() -> Vec<String> {
+    ///     vec!["Acme".to_string()]
+    /// }
+    ///
+    /// async fn home(req: Req, Params(at): Params<url::Home>) -> HtmlResult<Patches> {
+    ///     req.patch_or_with(
+    ///         |action| async move { action.patch(Picks { picks: &picks_for_you().await }) },
+    ///         || async {
+    ///             let picks = if at.picks == Some(true) { Some(picks_for_you().await) } else { None };
+    ///             req.page(html! {
+    ///                 <html><head><title>"Home"</title><Corten /></head><body><main>
+    ///                     if let Some(picks) = &picks {
+    ///                         <Picks picks={picks} />
+    ///                     } else {
+    ///                         <p id={PicksId}>
+    ///                             "Finding picks..."
+    ///                             <a href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks"</a>
+    ///                             {ReadAgain::now(url::Home::default())}
+    ///                         </p>
+    ///                     }
+    ///                 </main></body></html>
+    ///             })
+    ///         },
+    ///     )
+    ///     .await
+    /// }
+    /// # let _ = App::new(url::router()).router();
+    /// ```
+    ///
+    /// The part side answers the runtime's read, so a page there does not compile:
+    ///
+    /// ```compile_fail,E0271
+    /// use corten::prelude::*;
+    ///
+    /// async fn home(req: Req) -> HtmlResult<Patches> {
+    ///     let doc = || html! { <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html> };
+    ///     req.patch_or_with(|_action| async { req.page(doc()) }, || async { req.page(doc()) }).await
+    /// }
+    /// ```
+    /// As with `patch_or`, only patch-answer kinds are possible, not a data screen:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    /// async fn wrong(req: Req) -> HtmlResult<corten::Screen<()>> {
+    ///     req.patch_or_with(
+    ///         |action| async move { action.patch(html! {}) },
+    ///         || async { req.page(html! {
+    ///             <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html>
+    ///         }) },
+    ///     ).await
+    /// }
+    /// ```
+    ///
+    /// The part closure takes the checked builder, even if it answers another patch-making method:
+    ///
+    /// ```compile_fail,E0593
+    /// use corten::prelude::*;
+    /// async fn wrong(req: Req) -> HtmlResult<Patches> {
+    ///     req.patch_or_with(|| async { Err(corten::Error::not_found()) }, || async {
+    ///         req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html> })
+    ///     }).await
+    /// }
+    /// ```
+    pub async fn patch_or_with<'r, For, Kind: crate::answer::PatchingKind, P, PartFut, G, PageFut>(
+        &'r self,
+        part: P,
+        page: G,
+    ) -> crate::Result<HtmlResponse<For, Kind>>
+    where
+        P: FnOnce(Action<'r>) -> PartFut,
+        PartFut: Future<Output = crate::Result<HtmlResponse<For, crate::Patches>>>,
+        G: FnOnce() -> PageFut,
+        PageFut: Future<Output = crate::Result<HtmlResponse<For>>>,
+    {
+        if let Some(action) = self.action() {
+            part(action).await.map(HtmlResponse::of)
+        } else {
+            page().await.map(HtmlResponse::of)
         }
     }
 
@@ -3058,6 +3184,20 @@ fn on_site(to: &HeaderValue) -> bool {
         && to.iter().all(|&b| b.is_ascii_graphic() && b != b'\\')
 }
 
+/// The part module (`ReadAgain::now`, [`crate::script::PART_MODULE`]) for a page that draws a
+/// part waiting: preloaded with the runtime, which imports it from beside itself, so the part's
+/// read waits for no round trip of its own. `data-corten-part` is what the runtime looks for when
+/// the page loads, in the head alone, so a page without one runs none of the module. A
+/// navigation's answer brings it too, which the runtime moves into the head; the runtime imports
+/// the module then from the part's tag in the markup.
+fn part_preload(modules: &[&'static str], out: &mut String) {
+    if modules.contains(&crate::script::PART_MODULE) {
+        out.push_str(r#"<link rel="modulepreload" href=""#);
+        out.push_str(crate::part_path());
+        out.push_str(r#"" data-corten-part>"#);
+    }
+}
+
 /// What a page whose handlers call an unserved script module is told.
 #[cold]
 fn unserved_module(name: &str) -> String {
@@ -3616,6 +3756,85 @@ impl ReadAgain {
         ReadAgainFrom { again: self, route }
     }
 
+    /// A part the page draws waiting for a read of its own (a slow one), read at once from `route`,
+    /// the page's own route, once the page is on the screen. The tag goes in the element drawn
+    /// waiting, whose id the patch replaces, so the tag and its part leave and arrive together:
+    /// `<p id={PicksId}>"Finding picks..." {ReadAgain::now(url::Home::default())}</p>`. The
+    /// runtime fetches `route` as [`ReadAgain::from`] does (`corten: action`), whether the tab
+    /// is shown or not, and applies the patch it answers. The route says `patches`, and its
+    /// handler answers with [`Req::patch_or_with`]: the part side reads only the part, and the
+    /// page side draws the part waiting with this, so one handler answers the page and its part.
+    ///
+    /// The part (the element the tag is in) is `aria-busy="true"` while the read is on its way,
+    /// and the read depends on it alone: a patch of any other element meanwhile (a cell beside it,
+    /// a live row) changes nothing. A part the read does not replace (offline, the server
+    /// unreachable, an error page, a page, a redirect, a patch without it, or the part replaced
+    /// or removed meanwhile) is marked `data-corten-read-failed`, where the part's CSS shows its
+    /// link to the page with the part read in, as it does without JavaScript, which reads
+    /// nothing; the link follows a redirect (a sign-in) as any navigation does
+    /// (`docs/design.md#choice-slow-part-link`). Tags that name the same address share one read,
+    /// so two parts one read draws (a tag in each) are answered by one patch, and each waits for
+    /// the slowest of what that answer reads: independent slow parts on one route take a query
+    /// field each, so each has its own address. A part is read once: its answer is read again
+    /// only if it asks, with [`ReadAgain::from`]. A part a form's answer draws waiting is read
+    /// too; one an answer to a part's read draws waiting is marked failed, so one read cannot
+    /// start another. The reads are a script module of their own, which only a page that draws
+    /// this loads, preloaded with the runtime.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/", get = home, patches)]
+    ///     pub struct Home;
+    /// }
+    /// # async fn home(req: Req) -> HtmlResult<Patches> { req.action().ok_or_else(corten::Error::not_found)?.patch(html! {}) }
+    ///
+    /// #[derive(Id)]
+    /// struct PicksId;
+    ///
+    /// assert_eq!(
+    ///     html! { <p id={PicksId}>"Finding picks..." {ReadAgain::now(url::Home)}</p> }.to_html(),
+    ///     r#"<p id="picks">Finding picks...<template data-corten-read-now data-from="/"></template></p>"#
+    /// );
+    /// ```
+    ///
+    /// A route whose handler may answer its page does not compile, as for [`ReadAgain::from`]:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/", get = home)]
+    ///     pub struct Home;
+    /// }
+    /// # async fn home(req: Req) -> HtmlResult { req.redirect(&url::Home) }
+    ///
+    /// let _ = ReadAgain::now(url::Home);
+    /// ```
+    ///
+    /// Nor is it an element a patch replaces by id: in a patch it goes inside one, as in a page.
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::{prelude::*, view::Patch};
+    ///
+    /// #[corten::routes]
+    /// mod url {
+    ///     #[route("/", get = home, patches)]
+    ///     pub struct Home;
+    /// }
+    /// # async fn home(req: Req) -> HtmlResult<Patches> { req.action().ok_or_else(corten::Error::not_found)?.patch(html! {}) }
+    ///
+    /// fn waiting() -> impl Patch {
+    ///     ReadAgain::now(url::Home)
+    /// }
+    /// ```
+    pub fn now<R: crate::route::PatchRoute>(route: R) -> ReadNow<R> {
+        ReadNow { route }
+    }
+
     /// Asks only a browser without JavaScript to read the page again: for a page that keeps
     /// itself fresh with a script, such as one whose changing part a `<corten-live>` relays
     /// while the job it follows runs. With JavaScript the page is not read whole (which would
@@ -3676,6 +3895,22 @@ impl<R: crate::route::Route> Render for ReadAgainFrom<R> {
 
 impl<R: crate::route::Route> crate::view::__private::PatchSealed for ReadAgainFrom<R> {}
 impl<R: crate::route::Route> crate::view::Patch for ReadAgainFrom<R> {}
+
+/// A part's read from the page's own route, at once, made by [`ReadAgain::now`]:
+/// `<template data-corten-read-now data-from="/">`, in the element it waits for. Not a
+/// [`crate::view::Patch`]. Rendering it notes the part module, so the page's head preloads it.
+pub struct ReadNow<R> {
+    route: R,
+}
+
+impl<R: crate::route::Route> Render for ReadNow<R> {
+    fn render(&self, out: &mut String) {
+        crate::script::uses(crate::script::PART_MODULE);
+        out.push_str(r#"<template data-corten-read-now data-from=""#);
+        self.route.write_href(out, true);
+        out.push_str(r#""></template>"#);
+    }
+}
 
 /// Structured data for search engines (a product, its breadcrumbs), as
 /// `<script type="application/ld+json">`, among a page's head tags:
