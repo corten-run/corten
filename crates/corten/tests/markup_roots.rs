@@ -444,3 +444,108 @@ fn a_document_refuses_no_nested_form_after_what_it_does_not_show() {
         assert!(html.contains(main), "{html}");
     }
 }
+
+/// A `<script>` or `<style>` writes its literal text as is, so `</script>` in it ends the element
+/// where the text says, and the text may open a template, as `raw` may.
+#[component]
+fn ScriptTemplateForms() -> impl Document {
+    html! {
+        <html>
+            <head>
+                <title>"Forms"</title>
+                <Corten />
+            </head>
+            <body>
+                <main>
+                    <script>"</script><template><script>"</script>
+                    <form><form><input></form></form>
+                    {raw("</template>")}
+                </main>
+            </body>
+        </html>
+    }
+}
+
+/// What a `<script>` or `<style>` whose text holds a `<` writes is not shown by the markup, as
+/// what `raw` writes is not: no refusal reaches across it, and browsers keep each of these as
+/// written (`parsesAsHtmlMeans` in `scripts/smoke.mjs`).
+#[test]
+fn no_refusal_reaches_across_a_script_whose_text_may_write_tags() {
+    let p = "<p><script></script><button><script></script><div>Detail</div></button></p>";
+    for (markup, expected) in [
+        (
+            html! {
+                <p>
+                    <script>"</script><button><script>"</script>
+                    <div>"Detail"</div>
+                    {raw("</button>")}
+                </p>
+            }
+            .to_html(),
+            p,
+        ),
+        (
+            html! {
+                <p>
+                    <style>"</style><button><style>"</style>
+                    <div>"Detail"</div>
+                    {raw("</button>")}
+                </p>
+            }
+            .to_html(),
+            "<p><style></style><button><style></style><div>Detail</div></button></p>",
+        ),
+        // The end tag split across two literals.
+        (
+            html! {
+                <p>
+                    <script>"<" "/script><button><script>"</script>
+                    <div>"Detail"</div>
+                    {raw("</button>")}
+                </p>
+            }
+            .to_html(),
+            p,
+        ),
+        // An <svg> the text opens makes the <textarea> after it SVG's, which holds elements.
+        (
+            html! {
+                <div>
+                    <script>"</script><svg><script>"</script>
+                    <textarea><g></g></textarea>{raw("</svg>")}
+                </div>
+            }
+            .to_html(),
+            "<div><script></script><svg><script></script><textarea><g></g></textarea></svg></div>",
+        ),
+    ] {
+        assert_eq!(markup, expected);
+    }
+    let html = ScriptTemplateForms {}.to_html();
+    assert!(
+        html.contains("<main><script></script><template><script></script><form><form><input></form></form></template></main>"),
+        "{html}"
+    );
+}
+
+/// `<Corten />` is Corten's head marker by any path that names it; a component of the same name
+/// does not compile (the `compile_fail` examples in `view`).
+#[component]
+fn QualifiedMarker() -> impl Document {
+    html! {
+        <html>
+            <head>
+                <title>"Marker"</title>
+                <corten::Corten />
+            </head>
+            <body><main><p>"Body"</p></main></body>
+        </html>
+    }
+}
+
+#[test]
+fn corten_s_own_head_marker_compiles_by_any_path() {
+    let html = QualifiedMarker {}.to_html();
+    assert!(html.contains("<title>Marker</title>"), "{html}");
+    assert!(html.contains("<main><p>Body</p></main>"), "{html}");
+}

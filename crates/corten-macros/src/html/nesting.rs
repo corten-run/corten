@@ -5,9 +5,11 @@
 //! nothing open before it is known to be open, how the markup is parsed is not known until an
 //! element shows it again, and nothing is known to be outside a `<template>`. The content of a
 //! `<template>` and of a foreign element (an `<svg>`, a `<math>`, their integration points, or
-//! one whose namespace the markup does not show) starts with no element open too.
+//! one whose namespace the markup does not show) starts with no element open too. A `<script>`
+//! or `<style>` whose literal text holds a `<` is unseen as well: `html!` writes that text as is,
+//! and `</script>` in it ends the element where the text says, not where the markup does.
 
-use super::{as_html, breaks_out, is_corten, parsing_within, Attr, Error, Node, Parsing};
+use super::{as_html, breaks_out, is_corten, parsing_within, writes_tags, Attr, Error, Node, Parsing};
 use crate::tokens::err;
 use proc_macro::Span;
 
@@ -171,7 +173,8 @@ struct Walk<'a> {
     /// element whose content is being walked.
     floor: usize,
     /// How many nodes the markup does not show have been passed (expressions, components and
-    /// their children, but `<Corten />`, whose head tags open nothing).
+    /// their children, but `<Corten />`, whose head tags open nothing, and a `<script>` or
+    /// `<style>` whose text may write tags).
     opaque: usize,
 }
 
@@ -184,12 +187,13 @@ impl Walk<'_> {
     }
 }
 
-/// Whether `nodes` hold something the markup does not show, at any depth.
+/// Whether `nodes` hold something the markup does not show, at any depth: an expression, a
+/// component, or a `<script>` or `<style>` whose text may write tags (`writes_tags`).
 pub(super) fn holds_unseen(nodes: &[Node]) -> bool {
     nodes.iter().any(|node| match node {
         Node::Expr(_) => true,
         Node::Component { path, .. } => !is_corten(path),
-        Node::Element { children, .. } => holds_unseen(children),
+        Node::Element { name, children, .. } => writes_tags(name, children) || holds_unseen(children),
         Node::Block { bodies, .. } => bodies.iter().any(|body| holds_unseen(body)),
         Node::Text(_) | Node::Markup(_) | Node::Let(_) => false,
     })
@@ -321,6 +325,12 @@ fn walk<'a>(nodes: &'a [Node], mut parsing: Parsing, template: Template, w: &mut
                     }
                 }
                 w.open.push(Open { name, html });
+                // Text a `<script>` or `<style>` writes as is may end it and open anything: from
+                // there, nothing open is known, nor how what it holds and what follows is parsed.
+                let escapes = writes_tags(name, children);
+                if escapes {
+                    w.unseen();
+                }
                 // Text holders are already checked by the parser; noscript is text with
                 // scripting enabled and markup without it, so do not assume either here. What
                 // they hold is not walked, but an expression there may still close them.
@@ -329,7 +339,7 @@ fn walk<'a>(nodes: &'a [Node], mut parsing: Parsing, template: Template, w: &mut
                         w.unseen();
                     }
                 } else {
-                    let within = parsing_within(parsing, name, attrs);
+                    let within = if escapes { Parsing::Unknown } else { parsing_within(parsing, name, attrs) };
                     // A template's content, and a foreign element's, start with no element open.
                     let template_content = name.eq_ignore_ascii_case("template");
                     let fresh = template_content || !html;
@@ -478,10 +488,16 @@ mod tests {
         Node::Component { path: proc_macro::TokenStream::new(), props: Vec::new(), children }
     }
 
+    /// A `<script>` or `<style>` whose text `html!` writes as is: `</script>` there ends it.
+    fn writes(name: &str, text: &str) -> Node {
+        el(name, vec![Node::Text(text.into())])
+    }
+
     /// Each refusal needs every element between the two to be literal: an expression, or a
     /// component, may write a boundary (`raw("<button>")`), close the outer element, open an
     /// `<svg>` or a `<template>`, and browsers keep what follows. One of each kind, the
-    /// expression between the two elements, inside them both or before the outer, compiles.
+    /// expression between the two elements, inside them both or before the outer, compiles, and
+    /// so does a `<script>` or `<style>` whose text may write tags in the same places.
     #[test]
     fn nothing_the_markup_does_not_show_is_assumed_between_two_elements() {
         // [around, outer, inner]: the inner one is refused when written straight in the outer.
@@ -515,6 +531,16 @@ mod tests {
                         el(inner, Vec::new()),
                     ],
                 )],
+                // A script or style that ends itself and may open a boundary, its `<` split
+                // across two literals or keeping the script open (`<!--<script>`).
+                vec![el(outer, vec![writes("script", "</script><button><script>"), el(inner, Vec::new())])],
+                vec![el(outer, vec![writes("style", "</style><object><style>"), el(inner, Vec::new())])],
+                vec![el(
+                    outer,
+                    vec![el("script", vec![Node::Text("<".into()), Node::Text("/script><span>".into())]), el(inner, Vec::new())],
+                )],
+                vec![el(outer, vec![writes("script", "<!--<script>"), el(inner, Vec::new())])],
+                vec![el(outer, vec![el("span", vec![writes("script", "</script></span><object>")]), el(inner, Vec::new())])],
             ];
             for nodes in between {
                 let node = wrap(around, nodes.into_iter().next().unwrap());
@@ -542,9 +568,30 @@ mod tests {
             let forms = el("form", vec![el("form", vec![el("input", Vec::new())])]);
             el("html", vec![el("head", vec![before]), el("body", vec![el("main", vec![forms])])])
         };
-        for before in [expr(), component(None), el("header", vec![expr()]), el("title", vec![expr()])] {
+        for before in [
+            expr(),
+            component(None),
+            el("header", vec![expr()]),
+            el("title", vec![expr()]),
+            writes("script", "</script><template><script>"),
+            el("header", vec![writes("style", "</style><template><style>")]),
+        ] {
             assert!(check(&[document(before)], true).is_ok());
         }
+    }
+
+    /// A script's text that may write tags leaves what follows it unseen: `</script><svg><script>`
+    /// makes the `<a>`s after it SVG's, which browsers keep nested.
+    #[test]
+    fn a_script_whose_text_may_write_tags_shows_neither_namespace_nor_open_elements() {
+        for holder in [writes("script", "</script><svg><script>"), writes("style", "</style><svg><style>")] {
+            assert!(check(&[el("div", vec![holder, el("a", vec![el("a", Vec::new())])])], false).is_ok());
+        }
+        assert!(holds_unseen(&[writes("style", "</style>")]));
+        assert!(holds_unseen(&[el("div", vec![writes("script", "a <b")])]));
+        assert!(!holds_unseen(&[writes("script", "track();")]));
+        // Only a script's or a style's text is written as is; a <title>'s is escaped.
+        assert!(!holds_unseen(&[writes("title", "</title>")]));
     }
 
     /// A literal `<svg>` or `<math>` where how the browser parses is not known does not show its

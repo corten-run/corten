@@ -4319,10 +4319,16 @@ rules something out.
     unknown fact never refuses. Unseen are the caller's context at the top of the markup, a
     component's output (with or without children) and where it writes its children, an
     expression's output, `raw` among them (trusted text with no promise to be balanced, so it may
-    open or close any element), and the namespace of a literal `<svg>` or `<math>` written
+    open or close any element), what a `<script>` or `<style>` whose literal text holds a `<`
+    writes (`html!` writes that text as is, so `</script>` in it ends the element where the text
+    says and the rest is markup, `<!--<script>` keeps a script open past its end tag, and in an
+    `<svg>` or `<math>` any `<` may start an element; a `<` split across adjacent literals is in
+    one of them), and the namespace of a literal `<svg>` or `<math>` written
     where the markup does not show HTML. `<Corten />` is the one component taken as seen: Corten
     writes only its own head tags there (`<meta>`, `<link>`, `<script>`, `<style>`), each
-    closed, none of which changes what follows. Kind by kind:
+    closed, none of which changes what follows, and `html!` asserts when it compiles that the
+    path names `corten::Corten` (`view::__private::head_marker`), so a component of the same
+    name, by its path or a `use`, does not compile rather than be taken as seen. Kind by kind:
     an element read as text needs its holder to be parsed as HTML (an element that is HTML's
     wherever it lands, or an integration point of an `<svg>` or `<math>` such an element holds,
     with nothing unseen between it and the holder) and the holder's content up to the element to
@@ -4350,11 +4356,15 @@ rules something out.
     compiles. A duplicate attribute and a hand-written `data-key` are refused by the one start tag
     that writes them, which needs no context. A patch's top-level shape needs its first element
     and the later one to be literal top-level elements of a view that could be a patch, with
-    nothing unseen in the first, between them, or anywhere in the later element that holds the
-    lost one: an expression there may leave an element open (`raw("<table>")` keeps a later row in
-    its table, `raw("<template>")` in the first `<table>` keeps one in its content, as Chromium,
-    Firefox and WebKit parse it), so after an expression, a component, or a block or an element
-    that holds one, nothing is refused and the debug check finds the shape when it is sent. That
+    nothing unseen before the lost element's start tag: in the first element, between the two,
+    or in a later element that holds the lost one, before it. Unseen output there may leave an
+    element open (`raw("<table>")` keeps a later row in its table, `raw("<template>")` in the
+    first `<table>` keeps one in its content, as Chromium, Firefox and WebKit parse it), so after
+    an expression, a component, such a script or style, or a block or an element that holds one,
+    nothing is refused and the debug check finds the shape when it is sent. What a lost
+    top-level element holds does not save it, since the parse loses it at its start tag:
+    `<table id={..}>{text}</table>` after a first row is still refused, as is a row holding an
+    expression after a first `<table>`. That
     gives up a `<form>` after a first table part with an expression in it, which the parse empties
     at its start tag whatever the expression writes, as a miss. Where the patch lands is not
     needed: the shapes are the ones lost wherever they are written.
@@ -4367,9 +4377,11 @@ rules something out.
     gives up the shapes a browser would change anyway whose proof crosses an unseen node:
     `<p>{text}<div>` compiles though no text can keep the `<div>` in the `<p>`, and so does
     `<svg><foreignObject><textarea><b>` at the top of a component, which a browser changes in
-    either namespace; misses, rather than refusals that would also stop the shapes browsers keep.
-    It adds no render code:
-    `Gen` and what `html!` writes are unchanged, so a view renders as before. Its compile-time
+    either namespace, and so does whatever follows a script or style whose text holds a `<`
+    without closing it (`if (a < b)`), which proves nothing about the elements after it;
+    misses, rather than refusals that would also stop the shapes browsers keep.
+    It adds no render code: what `html!` writes renders as before, and the one addition to
+    `Gen`, the `<Corten />` assertion, is a `const _` item that compiles to nothing. Its compile-time
     cost, measured at `960b2d5a0` by the ignored `nesting_check_cost` test in a release build
     (one Linux container, 4 CPUs): a 3,001-element list four elements deep, walked 1,000 times
     a sample, took 308.2, 304.1 and 280.5 µs a walk (median 304.1 µs, about 0.1 µs an element).
@@ -4417,6 +4429,10 @@ rules something out.
     template" insertion mode's head tags and table start tags, and what the table insertion
     modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy, held equal to
     the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there;
+    the tokenizer's script data, RAWTEXT and data states, in which an appropriate end tag ends a
+    `<script>` or `<style>` whatever the markup around it says, `<!--` and `<script` carry a
+    script past one, and in foreign content any `<` may start a tag, which is why `writes_tags`
+    takes any `<` in their text as unseen output;
     the tree construction dispatcher, which reads an `<svg>`'s or a `<math>`'s `<form>` as foreign
     content's whatever HTML element is around the drawing, so the third shape is not read into one;
     the browsers
@@ -4426,8 +4442,9 @@ rules something out.
     anchors of a `<math>` in an `<svg>` and of an `<svg>` in a `<math>`); reasoned (an `html!`
     sees its own markup and nothing around it, so what its top and a component's children land
     in is not known, nor what a component or an expression writes, since `raw` prints trusted
-    text as is with no promise that it is balanced; `<Corten />` writes only Corten's own closed
-    head tags; `html!` writes an element's attributes in the order they are written, spreads in their
+    text as is with no promise that it is balanced, nor what a `<script>` or `<style>` writes,
+    whose text `Gen` writes as is; `<Corten />` writes only Corten's own closed head tags, and
+    the `head_marker` assertion holds the path to it; `html!` writes an element's attributes in the order they are written, spreads in their
     place (`open_tag` in `crates/corten-macros/src/html.rs`), so the first `encoding` in the
     markup is the first the browser reads; the refusals add no code to what `html!`
     writes, so a view that compiles renders as before); value (correct output above the rest, the
@@ -4447,9 +4464,18 @@ rules something out.
     following the context across components ([Limit 30](#limit-markup-context)) would have to be
     weighed against its cost to every render; or `raw` is made to promise balanced markup, when an
     expression could be taken to leave the open elements as they were; or `<Corten />` writes
-    anything but closed head tags.
+    anything but closed head tags, or a type other than `corten::Corten` can satisfy
+    `head_marker`; or `html!` escapes a script's or a style's text (or refuses a `<` in it),
+    when such an element stops being unseen output.
 
-    Last checked: 2026-11-17, the patch shapes read again against the same rule when
+    Last checked: 2026-11-17, after a fourth review found refusals of kept markup across a
+    `<script>` whose text `html!` writes as is and across an app component named `Corten`, the
+    outputs of the new passing cases (a `<div>` in a `<p>` after `</script><button><script>` in a
+    script and after the same in a style, a nested form in a template a script's text opens in a
+    document's `<main>`, a `<g>` in a `<textarea>` in an `<svg>` a script's text opens, and what
+    a same-named `Corten` writing `raw("<button>")` makes of a `<div>` in a `<p>`) serialized
+    back unchanged in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2, and the first four
+    added to `parsesAsHtmlMeans`; 2026-11-17, the patch shapes read again against the same rule when
     [#1538 Refuse the patch shapes a browser loses wherever they are written, and check the rest in debug builds](https://github.com/corten-run/corten/pull/1538)
     and this change met, and the shapes
     with `raw` between their two elements (a row after `raw("<table>")`, a row in a `<table>`
@@ -5812,12 +5838,16 @@ by design; where it is known, a limit says what would lift it or why it is so.
     show its namespace either (a `<math>` an `<svg>` holds is SVG's), so only an element taken out
     of foreign content is refused straight in it, and nothing in its integration points. Nor does
     the markup show what an expression or a component writes (`raw` may open or close any
-    element): after one, nothing written before it is taken to be open, the parsing context is not
+    element), nor what a `<script>` or `<style>` whose literal text holds a `<` writes: `html!`
+    writes that text as is, so `</script>` in it ends the element and what follows is markup.
+    After one, nothing written before it is taken to be open, the parsing context is not
     known until an element shows it again, and no `<template>` is taken to be absent, so none of
     the refusals reaches across one; `<p>{text}<div>` compiles, though a browser closes the
-    paragraph. A nested `<form>` is refused only in a document's markup, the one place the markup
-    shows no `<template>` holds it, and only before its first expression or component but
-    `<Corten />`. Following the parsing context across components would lift the first of these: each
+    paragraph, and so does `<p><script>"if (a < b) go();"</script><div>`. A nested `<form>` is
+    refused only in a document's markup, the one place the markup shows no `<template>` holds
+    it, and only before its first expression, component or such script or style, but
+    `<Corten />`, which `html!` checks names `corten::Corten` (a component of the same name does
+    not compile). Following the parsing context across components would lift the first of these: each
     component's render would tell the next what it is written into, at a cost to every render,
     for markup few apps write. What an expression writes is the app's: `raw` is trusted text.
 

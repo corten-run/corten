@@ -567,6 +567,8 @@ async function parsesAsHtmlMeans(browser) {
     ...[
       `<div><a href="#one"><template id="content"><a id="inner" href="#two">Link</a></template></a></div>`,
       `<main><template id="content"><form id="outer"><form id="inner"><input></form></form></template></main>`,
+      // A <script> whose literal text holds `</script><template><script>`, as html! writes it.
+      `<main><script></script><template id="content"><script></script><form id="outer"><form id="inner"><input></form></form></template></main>`,
     ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
       `an element stays in a template written where html! does not see it: ${markup}`,
       markup,
@@ -575,6 +577,17 @@ async function parsesAsHtmlMeans(browser) {
         const inner = content?.querySelector("#inner");
         return !!inner && (!content?.querySelector("#outer") || !!content.querySelector("#outer > #inner"));
       },
+    ])),
+    // html! writes a <script>'s or <style>'s literal text as is, so `</script>` in it ends the
+    // element and what follows is markup html! does not see (crates/corten/tests/markup_roots.rs).
+    ...[
+      `<p id="outer"><script></script><button><script></script><div id="inner">Detail</div></button></p>`,
+      `<p id="outer"><style></style><button><style></style><div id="inner">Detail</div></button></p>`,
+      `<div><script></script><svg><script></script><textarea id="outer"><g id="inner"></g></textarea></svg></div>`,
+    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+      `an element stays in its outer one after a script whose text html! writes as is: ${markup}`,
+      markup,
+      () => !!document.getElementById("outer")?.contains(document.getElementById("inner")),
     ])),
   ];
   for (const [name, markup, keeps] of shapes) {

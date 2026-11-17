@@ -334,7 +334,8 @@ use std::{
 ///
 /// A nested `<form>` is refused only in a document's markup, the page itself, before anything the
 /// markup does not show (but `<Corten />`, whose head tags open nothing): any other view may be
-/// written into a `<template>` by its caller, and an expression or a component may open one,
+/// written into a `<template>` by its caller, and an expression, a component, or a `<script>` or
+/// `<style>` whose text holds a `<` (written as is, so `</script>` there ends it) may open one,
 /// where a browser keeps a form in a form.
 ///
 /// ```compile_fail
@@ -350,6 +351,61 @@ use std::{
 /// ```compile_fail
 /// use corten::prelude::*;
 /// let _ = html! { <div><button><span><button>"Again"</button></span></button></div> };
+/// ```
+///
+/// `<Corten />` is taken as seen because it is Corten's head marker, `corten::Corten`, and
+/// `html!` checks that the path names it: a component of the same name, by its path or a `use`,
+/// does not compile, since what it writes would be taken as seen. Rename it.
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// mod custom {
+///     use corten::prelude::*;
+///     #[component]
+///     pub fn Corten() -> impl Render {
+///         raw("<button>")
+///     }
+/// }
+/// #[component]
+/// fn Summary() -> impl Render {
+///     html! { <p><custom::Corten /><div>"Detail"</div>{raw("</button>")}</p> }
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+/// mod custom {
+///     use corten::prelude::*;
+///     #[component]
+///     pub fn Corten() -> impl Render {
+///         raw("<button>")
+///     }
+/// }
+/// use custom::Corten;
+/// #[component]
+/// fn Summary(open: bool) -> impl Render {
+///     html! { <div>if open { <Corten /> }</div> }
+/// }
+/// # fn main() {}
+/// ```
+///
+/// One with type parameters (children) fails too, its path naming a type without them:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// mod custom {
+///     use corten::prelude::*;
+///     #[component]
+///     pub fn Corten(children: impl Render) -> impl Render {
+///         html! { {raw("<button>")}{children} }
+///     }
+/// }
+/// #[component]
+/// fn Summary() -> impl Render {
+///     html! { <p><custom::Corten><div>"Detail"</div></custom::Corten></p> }
+/// }
+/// # fn main() {}
 /// ```
 ///
 /// ```compile_fail
@@ -1564,9 +1620,11 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// ```
 ///
 /// Like every refusal of `html!`, these rest only on the markup between the two elements: what an
-/// expression or a component writes may leave an element open, as `raw("<table>")` keeps the row
-/// after it in its table, so with one in the first element, between the two, or in the later
-/// element, the shape compiles and the debug check reads what is sent:
+/// expression, a component, or a `<script>` or `<style>` whose text holds a `<` writes may leave
+/// an element open, as `raw("<table>")` keeps the row after it in its table, so with such output
+/// before the lost element's start tag (in the first element, between the two, or in a later
+/// element that holds the lost one, before it) the shape compiles and the debug check reads what
+/// is sent:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -1577,6 +1635,29 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// let opened = corten::raw("<table>");
 /// let patch = html! { <table id={TotalsId}></table> {opened} <tr id={RowId(7)}><td>"7"</td></tr> };
 /// assert_eq!(patch.to_html(), r#"<table id="totals"></table><table><tr id="row-7"><td>7</td></tr>"#);
+/// ```
+///
+/// ```
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct SummaryId;
+/// let opened = corten::raw("<template>");
+/// let patch = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={SummaryId}>{opened}<table></table></div> };
+/// assert_eq!(patch.to_html(), r#"<tr id="row-7"><td>7</td></tr><div id="summary"><template><table></table></div>"#);
+/// ```
+///
+/// What a lost top-level element holds does not save it, since the parse loses it at its start tag:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct SummaryId;
+/// let text = "Totals";
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <table id={SummaryId}>{text}</table> };
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a patch",
@@ -2411,6 +2492,18 @@ pub mod __private {
         super::mark_head_tags(&scratch, out);
         HEAD_SCRATCH.set(scratch);
     }
+
+    /// Corten's head marker, the one component `html!` takes as writing only closed head tags.
+    #[diagnostic::on_unimplemented(
+        message = "`{Self}` is not Corten's head marker, which `<Corten />` in `html!` names",
+        label = "html! takes a component named `Corten` for `corten::Corten`, whose tags open nothing",
+        note = "rename this component, so html! treats what it writes as unseen markup, or write `<corten::Corten />`"
+    )]
+    pub trait HeadMarker {}
+    impl HeadMarker for crate::Corten {}
+
+    /// `<Corten />` names `corten::Corten`: checked when it compiles, by `html!`.
+    pub const fn head_marker<T: HeadMarker>() {}
 
     /// The id of an element of the layout that is the page's (`page`), which the runtime finds on
     /// screen by it: a `#[derive(Id)]` type without a key, not text, so it is the same on every

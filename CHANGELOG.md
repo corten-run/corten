@@ -27,9 +27,24 @@ Corten is pre-1.0, so any minor version may change the API.
   text or taken out of foreign content after an expression or a component, which may close the
   holder or write an integration point. Wrap such an `<svg>` in an HTML element to have it checked.
 
-- The patch shapes `html!` refuses (below) compile where an expression or a component is written
-  in the first element, between the two, or in the later element, since what it writes may leave
-  an element open (`raw("<table>")` keeps the row after it); the debug check reads them when sent.
+- `html!` no longer refuses markup after a `<script>` or `<style>` whose literal text holds a
+  `<`: it writes that text as is, so `</script>` there ends the element and what follows is
+  markup it does not see, as after `raw`. The nesting, text-holder, foreign-content and patch
+  checks treat such an element as unseen output, so `<p><script>"</script><button><script>"</script><div>..`
+  compiles, as browsers keep it, and a `<div>` after `<script>"if (a < b) go();"</script>` in a
+  `<p>` is no longer refused either (a miss).
+
+- **Breaking:** a component named `Corten` other than `corten::Corten` (`<custom::Corten />`, or
+  one brought in by `use`) no longer compiles in `html!`, which takes `<Corten />` for Corten's
+  head marker and so treats what it writes as seen: rename it.
+
+- The patch shapes `html!` refuses (below) compile where output the markup does not show (an
+  expression, a component, or a `<script>` or `<style>` whose text holds a `<`) comes before the
+  lost element's start tag: in the first element, between the two, or in a later element that
+  holds the lost one, before it, since what it writes may leave an element open
+  (`raw("<table>")` keeps the row after it); the debug check reads them when sent. One inside
+  the lost top-level element itself does not save it (`<table id={..}>{text}</table>` after a
+  first row, or a row holding an expression after a first `<table>`, is still refused).
 
 - Permit custody-only terminal retirement of the exact r21 lean catalog attempt
   if ordinary native collection refuses its failed evidence. Keep original raw

@@ -16,6 +16,15 @@ use crate::tokens::{
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
 /// Elements whose text is not HTML (written as is, never escaped).
 const RAW_TEXT: &[&str] = &["script", "style"];
+
+/// Whether `name` is a `<script>` or `<style>` (`RAW_TEXT`, as `Gen` writes it) holding literal
+/// text with a `<` in it. `Gen` writes that text as is, so it may end its holder (`</script>`),
+/// keep a script open past its end tag (`<!--<script>`) or, in an `<svg>` or a `<math>`, open
+/// an element, and what follows it is not shown by the markup, as after `raw`. A `<` split
+/// across adjacent literals is in one of them.
+fn writes_tags(name: &str, children: &[Node]) -> bool {
+    RAW_TEXT.contains(&name) && children.iter().any(|child| matches!(child, Node::Text(text) if text.contains('<')))
+}
 /// The other elements whose content a browser parsing HTML reads as text (the HTML standard's
 /// RCDATA and RAWTEXT elements, `<noscript>` aside, which `<template>`'s handling covers): an
 /// element written in one is text to the browser, so `html!` refuses it there where the markup
@@ -1188,6 +1197,8 @@ struct Cursor {
     text_only: Option<String>,
     /// How a browser parses the content here, as far as this markup shows.
     parsing: Parsing,
+    /// Inside a `<script>` or a `<style>`, whose text `Gen` writes as is (`writes_tags`).
+    raw_text: bool,
     /// How many nodes the markup does not show this cursor has passed (`nesting::holds_unseen`).
     opaque: usize,
 }
@@ -1201,6 +1212,7 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
+            raw_text: false,
             opaque: 0,
         }
     }
@@ -1213,6 +1225,7 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
+            raw_text: false,
             opaque: 0,
         }
     }
@@ -1229,7 +1242,13 @@ impl Cursor {
     /// The body of a `for`, `if` or `match` here, inside an `<svg>` or an element read as text
     /// when this is.
     fn inner(&self, group: &Group) -> Self {
-        Cursor { aria_svg: self.aria_svg, text_only: self.text_only.clone(), parsing: self.parsing, ..Cursor::of(group) }
+        Cursor {
+            aria_svg: self.aria_svg,
+            text_only: self.text_only.clone(),
+            parsing: self.parsing,
+            raw_text: self.raw_text,
+            ..Cursor::of(group)
+        }
     }
 
     fn peek(&self) -> Option<&TokenTree> {
@@ -1276,6 +1295,10 @@ impl Cursor {
             let node = self.node()?;
             // An element's own content is followed as it is read (`tag`).
             if !matches!(node, Node::Element { .. }) && nesting::holds_unseen(std::slice::from_ref(&node)) {
+                self.unseen();
+            }
+            // Text a `<script>` or `<style>` writes as is may end it or open an element.
+            if self.raw_text && matches!(&node, Node::Text(text) if text.contains('<')) {
                 self.unseen();
             }
             nodes.push(node);
@@ -1631,11 +1654,13 @@ impl Cursor {
             let outer_text = std::mem::replace(&mut self.text_only, holder);
             let inner = if component { Parsing::Unknown } else { parsing_within(self.parsing, &name, &attrs) };
             let outer_parsing = std::mem::replace(&mut self.parsing, inner);
+            let outer_raw = std::mem::replace(&mut self.raw_text, !component && RAW_TEXT.contains(&name.as_str()));
             let seen = self.opaque;
             let children = self.nodes(Some(&name));
             self.aria_svg = outer;
             self.text_only = outer_text;
             self.parsing = outer_parsing;
+            self.raw_text = outer_raw;
             if self.opaque != seen {
                 self.unseen();
             }
@@ -1940,10 +1965,12 @@ const PARSE_REFUSALS: &str = "https://github.com/corten-run/corten/blob/main/doc
 /// (after a first `<tr>`, a `<p>` and a `<tr>` after it are both kept, and an `<svg>` keeps a
 /// `<form>` of fields after a `<tr>`), so it is left to the debug check in `req.patch` and
 /// `corten::live`, which finds it when it is sent. Like every refusal of `html!`, each rests only
-/// on the markup between the two elements: an expression or a component at or between them (in
-/// the first element, between the two, or in the later element that holds the lost one) may write
-/// unbalanced markup (`raw("<table>")` keeps a later row in its table), so after one nothing is
-/// refused and the debug check is left to find it.
+/// on the markup between the two elements: an expression, a component, or a `<script>` or
+/// `<style>` whose text holds a `<` (`writes_tags`) before the lost element's start tag (in the
+/// first element, between the two, or in a later element that holds the lost one, before it) may
+/// write unbalanced markup (`raw("<table>")` keeps a later row in its table), so after one nothing
+/// is refused and the debug check is left to find it. What a lost top-level element holds does
+/// not save it: the parse has lost it at its start tag.
 fn check_patch_top(nodes: &[Node]) -> Result<(), Error> {
     match patch_top(nodes, TopRead::Open) {
         Ok(_) => Ok(()),
@@ -1972,7 +1999,8 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
             }
             Node::Element { name, attrs, children } => {
                 let is = |list: &[&str]| list.iter().any(|t| name.eq_ignore_ascii_case(t));
-                let unseen = nesting::holds_unseen(children);
+                // A `<script>` or `<style>` whose text may write tags is as unseen as what it holds.
+                let unseen = nesting::holds_unseen(std::slice::from_ref(node));
                 match read {
                     TopRead::Open if is(TEMPLATE_HEAD) => {}
                     TopRead::Open if is(&["table"]) => read = TopRead::Table,
@@ -2294,7 +2322,12 @@ impl Gen {
         let literal = stream([TokenTree::Group(Group::new(Delimiter::Brace, fields))]);
         let mut out = path.clone();
         out.extend(literal);
-        out
+        if !is_corten(path) {
+            return out;
+        }
+        // The checks take `<Corten />` for Corten's head marker, which writes only closed head
+        // tags; a compile-time assertion, with no code at render, that the path names it.
+        q("{ const _: () = ::corten::view::__private::head_marker::<__A0>(); __A1 }", &[path.clone(), out])
     }
 
     fn finish(mut self) -> TokenStream {
@@ -3291,8 +3324,8 @@ mod tests {
             // what an expression, a component or a block writes first
             &[expr(), el("table", vec![]), el("tr", vec![])],
             &[Node::Block { head: Vec::new(), bodies: vec![vec![]], arms: false }, el("col", vec![]), el("p", vec![])],
-            // an expression or a component between the two, in the first or in the later element
-            // that holds the lost one, which may leave an element open (`raw("<table>")`)
+            // an expression or a component between the two, in the first, or in a later element
+            // that holds the lost one, before it, which may leave an element open (`raw("<table>")`)
             &[el("table", vec![]), expr(), el("tr", vec![])],
             &[el("table", vec![expr()]), el("tr", vec![])],
             &[
@@ -3303,10 +3336,36 @@ mod tests {
             &[el("tr", vec![]), Node::Block { head: Vec::new(), bodies: vec![vec![expr()]], arms: false }, el("table", vec![])],
             &[el("tr", vec![]), el("div", vec![expr(), el("table", vec![])])],
             &[el("td", vec![]), el("form", vec![el("div", vec![expr(), el("input", vec![])])])],
+            // a <script> or <style> whose text `html!` writes as is, which may open a <table> or
+            // a <template> (`</script><template>`), there too
+            &[el("tr", vec![]), el("script", vec![Node::Text("</script><template>".into())]), el("table", vec![])],
+            &[el("table", vec![]), el("style", vec![Node::Text("</style><template>".into())]), el("tr", vec![])],
+            &[
+                el("tr", vec![]),
+                el(
+                    "div",
+                    vec![
+                        el("script", vec![Node::Text("<".into()), Node::Text("/script><template>".into())]),
+                        el("table", vec![]),
+                    ],
+                ),
+            ],
         ];
         for nodes in kept {
             assert_eq!(lost(nodes), None);
         }
+        // Unseen output stops a refusal only before the lost element's start tag: after a first
+        // row, an expression in a later <div> before its <table> may open a template around it,
+        // but one inside the <table> comes after the tag the parse has already dropped, as one
+        // in a row after a first <table> comes after the row's.
+        assert_eq!(lost(&[el("tr", vec![]), el("div", vec![expr(), el("table", vec![])])]), None);
+        let why = lost(&[el("tr", vec![]), el("table", vec![expr()])]).expect("refused");
+        assert!(why.starts_with("send the <table> in a patch of its own: a patch that begins with a <tr>"), "{why}");
+        let why = lost(&[el("table", vec![]), el("tr", vec![expr()])]).expect("refused");
+        assert!(why.starts_with("send the <tr> inside the <table>"), "{why}");
+        let script = || el("script", vec![Node::Text("</script>".into())]);
+        let why = lost(&[el("tr", vec![]), el("table", vec![script()])]).expect("refused");
+        assert!(why.starts_with("send the <table> in a patch of its own"), "{why}");
     }
 
     #[test]
