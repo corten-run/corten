@@ -5,9 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- Accept component-local `@position-try` definitions and rewrite their fallback references;
-  match statement at-rule names case-insensitively and document the complete component CSS
-  at-rule inventory, including raw bodies and global names.
+- Accept component-local `@position-try` definitions and rewrite their fallback references,
+  reading `position-try` values as CSS tokens so custom-function calls, `if()` conditions and
+  whitespace after an escape keep their meaning; match statement at-rule names
+  case-insensitively and document the complete component CSS at-rule inventory, including raw
+  bodies and global names.
 
 - Permit custody-only terminal retirement of the exact r21 lean catalog attempt
   if ordinary native collection refuses its failed evidence. Keep original raw

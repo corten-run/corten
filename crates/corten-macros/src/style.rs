@@ -79,7 +79,7 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
     // Work backwards so expanding a reference does not move the remaining ranges. Definitions
     // may follow their references, including inside conditional rules.
     for (start, end) in s.position_refs.into_iter().rev() {
-        let value = rename_names(&s.out[start..end], &positions, prefix, false)?;
+        let value = rename_positions(&s.out[start..end], &positions, prefix);
         s.out.replace_range(start..end, &value);
     }
     let css = rename_properties(&s.out, &names, prefix)?;
@@ -385,10 +385,6 @@ const LENGTHS: &[&str] = &[
 /// load, and an `!important` rule of the component's with more specificity than that rule would
 /// win on a full load and lose after a patch.
 fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, String> {
-    rename_names(css, names, prefix, true)
-}
-
-fn rename_names(css: &str, names: &[&str], prefix: &str, properties: bool) -> Result<String, String> {
     if names.is_empty() {
         return Ok(css.to_string());
     }
@@ -421,35 +417,6 @@ fn rename_names(css: &str, names: &[&str], prefix: &str, properties: bool) -> Re
                     i += if b[i] == b'\\' { 2 } else { 1 };
                 }
             }
-            // Function names can be escaped too. A var/env/attr lookup is not a position
-            // option, but its fallback can name one; a URL is never an option.
-            c if !properties && ident(c) => {
-                let end = css_name_end(css, i);
-                if end == i {
-                    i += 1;
-                    continue;
-                }
-                let function = unescape(&css[i..end]);
-                if let Some(name) = function.strip_prefix("--").filter(|name| names.contains(name)) {
-                    out.push_str(&css[copied..i]);
-                    out.push_str("--");
-                    out.push_str(prefix);
-                    out.push_str("__");
-                    out.push_str(name);
-                    copied = end;
-                }
-                i = end;
-                if b.get(i) == Some(&b'(') && function.eq_ignore_ascii_case("url") {
-                    while i < b.len() && b[i] != b')' {
-                        i += if b[i] == b'\\' { 2 } else { 1 };
-                    }
-                } else if b.get(i) == Some(&b'(') && ["var", "env", "attr"].iter().any(|name| function.eq_ignore_ascii_case(name))
-                {
-                    while i < b.len() && !matches!(b[i], b',' | b')') {
-                        i += if b[i] == b'\\' { 2 } else { 1 };
-                    }
-                }
-            }
             b'-' if b.get(i + 1) == Some(&b'-') && (i == 0 || !ident(b[i - 1])) => {
                 // The whole name, escapes included: `--f\69 ll` is `--fill` to the browser.
                 let end = css_name_end(css, i + 2);
@@ -459,7 +426,7 @@ fn rename_names(css: &str, names: &[&str], prefix: &str, properties: bool) -> Re
                     let declared =
                         b[..i].iter().rev().find(|c| !c.is_ascii_whitespace()).is_none_or(|c| matches!(c, b'{' | b';'))
                             && b[end..].iter().find(|c| !c.is_ascii_whitespace()) == Some(&b':');
-                    if properties && declared && important(&css[end..]) {
+                    if declared && important(&css[end..]) {
                         return Err(format!(
                             "--{name}: !important on a property markup sets would beat markup's value on a full load and lose to it after a patch; set it from markup (style={{..}}) or without !important"
                         ));
@@ -479,6 +446,8 @@ fn rename_names(css: &str, names: &[&str], prefix: &str, properties: bool) -> Re
     Ok(out)
 }
 
+/// Where the identifier from `end` ends, escapes included (CSS Syntax Level 3, consume an ident
+/// sequence): a hex escape takes one whitespace after it, a CRLF counting as one.
 fn css_name_end(css: &str, mut end: usize) -> usize {
     let b = css.as_bytes();
     while end < b.len() {
@@ -503,6 +472,241 @@ fn css_name_end(css: &str, mut end: usize) -> usize {
         }
     }
     end
+}
+
+/// What the position pass tells apart in a declaration's value (CSS Syntax Level 3, tokenization).
+#[derive(Clone, Copy, PartialEq)]
+enum Tok {
+    /// An identifier: `--above`, `flip-block`.
+    Ident,
+    /// A function's name with its `(`: `var(`, `--above(`.
+    Function,
+    /// `(`, `[` or `{`.
+    Open,
+    /// `)`, `]` or `}`.
+    Close,
+    Comma,
+    Colon,
+    Semicolon,
+    /// Whitespace, a comment, a string, a URL, a number, a hash, an at-keyword or a delimiter.
+    Other,
+}
+
+/// The tokens of `css`, each with where it starts and ends.
+fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
+    let b = css.as_bytes();
+    let escape = |at: usize| b.get(at) == Some(&b'\\') && !matches!(b.get(at + 1), None | Some(b'\n' | b'\r' | b'\x0c'));
+    let name_start = |c: u8| c.is_ascii_alphabetic() || c == b'_' || c >= 0x80;
+    let ident_start = |at: usize| match b.get(at) {
+        Some(b'-') => b.get(at + 1).is_some_and(|&c| name_start(c) || c == b'-') || escape(at + 1),
+        Some(b'\\') => escape(at),
+        Some(&c) => name_start(c),
+        None => false,
+    };
+    let digits = |mut at: usize| {
+        while b.get(at).is_some_and(u8::is_ascii_digit) {
+            at += 1;
+        }
+        at
+    };
+    let number_start = |at: usize| {
+        let at = at + usize::from(matches!(b.get(at), Some(b'+' | b'-')));
+        b.get(at).is_some_and(u8::is_ascii_digit) || (b.get(at) == Some(&b'.') && b.get(at + 1).is_some_and(u8::is_ascii_digit))
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let start = i;
+        let kind = match b[i] {
+            c if c.is_ascii_whitespace() => {
+                while b.get(i).is_some_and(u8::is_ascii_whitespace) {
+                    i += 1;
+                }
+                Tok::Other
+            }
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i = (i + 1).min(b.len());
+                Tok::Other
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i = css[i + 2..].find("*/").map_or(b.len(), |end| i + end + 4);
+                Tok::Other
+            }
+            // A number and its unit: `1px` is not the identifier `px`.
+            _ if number_start(i) => {
+                i = digits(i + usize::from(matches!(b[i], b'+' | b'-')));
+                if b.get(i) == Some(&b'.') && b.get(i + 1).is_some_and(u8::is_ascii_digit) {
+                    i = digits(i + 1);
+                }
+                if matches!(b.get(i), Some(b'e' | b'E')) {
+                    let sign = usize::from(matches!(b.get(i + 1), Some(b'+' | b'-')));
+                    if b.get(i + 1 + sign).is_some_and(u8::is_ascii_digit) {
+                        i = digits(i + 1 + sign);
+                    }
+                }
+                if ident_start(i) {
+                    i = css_name_end(css, i);
+                } else if b.get(i) == Some(&b'%') {
+                    i += 1;
+                }
+                Tok::Other
+            }
+            _ if ident_start(i) => {
+                i = css_name_end(css, i);
+                if b.get(i) != Some(&b'(') {
+                    Tok::Ident
+                } else {
+                    let url = unescape(&css[start..i]).eq_ignore_ascii_case("url");
+                    i += 1;
+                    let mut at = i;
+                    while b.get(at).is_some_and(u8::is_ascii_whitespace) {
+                        at += 1;
+                    }
+                    if url && !matches!(b.get(at), Some(b'"' | b'\'')) {
+                        // An unquoted URL is one token to its `)`: `url(--above.svg)`.
+                        while i < b.len() && b[i] != b')' {
+                            i += if escape(i) { 2 } else { 1 };
+                        }
+                        i = (i + 1).min(b.len());
+                        Tok::Other
+                    } else {
+                        Tok::Function
+                    }
+                }
+            }
+            b'#' | b'@' if css_name_end(css, i + 1) > i + 1 => {
+                i = css_name_end(css, i + 1);
+                Tok::Other
+            }
+            c => {
+                i += css[i..].chars().next().map_or(1, char::len_utf8);
+                match c {
+                    b'(' | b'[' | b'{' => Tok::Open,
+                    b')' | b']' | b'}' => Tok::Close,
+                    b',' => Tok::Comma,
+                    b':' => Tok::Colon,
+                    b';' => Tok::Semicolon,
+                    _ => Tok::Other,
+                }
+            }
+        };
+        while i < b.len() && !css.is_char_boundary(i) {
+            i += 1;
+        }
+        out.push((kind, start, i.min(b.len())));
+    }
+    out
+}
+
+/// `value`, a `position-try` or `position-try-fallbacks` value or an `@position-try` rule's name,
+/// with each identifier token that is `--` and one of `names` (the options this file defines)
+/// written `--{prefix}__{name}`, where the value takes an option: at its top, in the fallback
+/// of a `var()`, `env()`, `attr()` or `inherit()`, and in the value of an `if()` branch. A
+/// function's name (`--above()` calls a custom function), a lookup's name, an `if()` condition
+/// (`style(--above: 1)` queries a custom property), strings, URLs and whatever is inside any
+/// other function keep their names.
+fn rename_positions(value: &str, names: &[&str], prefix: &str) -> String {
+    let toks = tokens(value);
+    let mut renamed = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        // Past a `)` with no `(`, which the browser would reject, to the rest of the value.
+        i = options(value, &toks, i, false, names, &mut renamed) + 1;
+    }
+    let mut out = String::with_capacity(value.len() + renamed.len() * (prefix.len() + 2));
+    let mut copied = 0;
+    for (start, end, name) in renamed {
+        out.push_str(&value[copied..start]);
+        out.push_str("--");
+        out.push_str(prefix);
+        out.push_str("__");
+        out.push_str(&name);
+        copied = end;
+    }
+    out.push_str(&value[copied..]);
+    out
+}
+
+/// Records the options among the tokens from `i` to the end of the block they are in (or, for
+/// an `if()` branch, to its `;`), and returns where that is.
+fn options(
+    css: &str,
+    toks: &[(Tok, usize, usize)],
+    mut i: usize,
+    branch: bool,
+    names: &[&str],
+    renamed: &mut Vec<(usize, usize, String)>,
+) -> usize {
+    while let Some(&(kind, start, end)) = toks.get(i) {
+        match kind {
+            Tok::Close => return i,
+            Tok::Semicolon if branch => return i,
+            Tok::Ident => {
+                if let Some(name) = unescape(&css[start..end]).strip_prefix("--").filter(|name| names.contains(name)) {
+                    renamed.push((start, end, name.to_string()));
+                }
+                i += 1;
+            }
+            Tok::Function => {
+                let function = unescape(&css[start..end - 1]).to_ascii_lowercase();
+                i = match function.as_str() {
+                    // A lookup's name, then a fallback that can be an option.
+                    "var" | "env" | "attr" | "inherit" => {
+                        let comma = skip(toks, i + 1, &[Tok::Comma]);
+                        match toks.get(comma) {
+                            Some((Tok::Comma, ..)) => options(css, toks, comma + 1, false, names, renamed),
+                            _ => comma,
+                        }
+                    }
+                    // `if(<condition>: <value>; else: <value>)`: only the values are options.
+                    "if" => {
+                        let mut at = i + 1;
+                        loop {
+                            let colon = skip(toks, at, &[Tok::Colon, Tok::Semicolon]);
+                            match toks.get(colon) {
+                                Some((Tok::Colon, ..)) => {}
+                                Some((Tok::Semicolon, ..)) => {
+                                    at = colon + 1;
+                                    continue;
+                                }
+                                _ => break colon,
+                            }
+                            let ends = options(css, toks, colon + 1, true, names, renamed);
+                            match toks.get(ends) {
+                                Some((Tok::Semicolon, ..)) => at = ends + 1,
+                                _ => break ends,
+                            }
+                        }
+                    }
+                    _ => skip(toks, i + 1, &[]),
+                } + 1;
+            }
+            Tok::Open => i = skip(toks, i + 1, &[]) + 1,
+            _ => i += 1,
+        }
+    }
+    i
+}
+
+/// Where the block the tokens from `i` are in ends, or the first of `stop` before that outside
+/// any block nested in it.
+fn skip(toks: &[(Tok, usize, usize)], mut i: usize, stop: &[Tok]) -> usize {
+    let mut depth = 0usize;
+    while let Some(&(kind, ..)) = toks.get(i) {
+        match kind {
+            Tok::Open | Tok::Function => depth += 1,
+            Tok::Close if depth == 0 => return i,
+            Tok::Close => depth -= 1,
+            kind if depth == 0 && stop.contains(&kind) => return i,
+            _ => {}
+        }
+        i += 1;
+    }
+    i
 }
 
 /// Whether the declaration value at the start of `rest` (up to its `;` or `}`, outside strings
@@ -615,7 +819,7 @@ impl Scoper<'_> {
                             return Err(self.error(start, format!("@{name} defines a name for the whole page: put it at the top of the stylesheet, outside any rule")))
                         }
                         (_, "position-try") => {
-                            let written = rule["position-try".len()..].trim();
+                            let written = rule["position-try".len()..].trim_matches(|c: char| c.is_ascii_whitespace());
                             let Some(name) = written.strip_prefix("--").filter(|name| !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))) else {
                                 return Err(self.error(start, "@position-try: a name starts with -- and has letters, digits, - and _"));
                             };
@@ -1164,7 +1368,11 @@ fn pseudo_element(selector: &str) -> bool {
     false
 }
 
-/// Comments removed and whitespace collapsed, outside strings.
+/// Comments removed and whitespace collapsed, outside strings and escapes. Whitespace is CSS's
+/// (space, tab and line breaks), so a no-break space stays part of an identifier. An escape is
+/// kept whole, the one whitespace that ends a hex escape written as a space, so whitespace after
+/// it still separates tokens: `--abov\65  flip-block` is two (CSS Syntax Level 3, consume an
+/// escaped code point).
 fn squash(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
@@ -1199,7 +1407,27 @@ fn squash(text: &str) -> String {
                     }
                 }
             }
-            c if c.is_whitespace() => space = true,
+            c if c.is_ascii_whitespace() => space = true,
+            '\\' if chars.peek().is_some_and(|next| !matches!(next, '\n' | '\r' | '\u{c}')) => {
+                if space && !out.is_empty() {
+                    out.push(' ');
+                }
+                space = false;
+                out.push(c);
+                let mut hex = 0;
+                while hex < 6 && chars.peek().is_some_and(char::is_ascii_hexdigit) {
+                    out.extend(chars.next());
+                    hex += 1;
+                }
+                if hex == 0 {
+                    out.extend(chars.next());
+                } else if chars.peek().is_some_and(char::is_ascii_whitespace) {
+                    if chars.next() == Some('\r') && chars.peek() == Some(&'\n') {
+                        chars.next();
+                    }
+                    out.push(' ');
+                }
+            }
             c => {
                 if space && !out.is_empty() {
                     out.push(' ');
@@ -1214,8 +1442,11 @@ fn squash(text: &str) -> String {
 
 fn split_declaration(text: &str) -> Option<(&str, &str)> {
     let (name, value) = text.split_once(':')?;
-    let name = name.trim();
-    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| (name, value.trim()))
+    let space = |c: char| c.is_ascii_whitespace();
+    let name = name.trim_matches(space);
+    // `squash` leaves no whitespace at the end but the one that ends a hex escape, which stays.
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .then(|| (name, value.trim_start_matches(space)))
 }
 
 /// The constant for a class: `alert-message` is `AlertMessage`.
@@ -1617,6 +1848,39 @@ mod tests {
         ] {
             assert!(scope(css, "x").unwrap_err().contains(why), "{css}");
         }
+    }
+
+    #[test]
+    fn position_references_are_whole_css_tokens() {
+        // A hex escape takes one whitespace; the next one still separates the tactic.
+        for space in ["  ", "\r\n ", "\t\t", "\n\n", " /* a */ "] {
+            let css = format!("@position-try --above {{ top: 0 }} .a {{ position-try-fallbacks: --abov\\65{space}flip-block; position-try: most-width --abov\\65{space}flip-inline }}");
+            assert_eq!(
+                scope(&css, "x").unwrap().css,
+                "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above flip-block;position-try:most-width --x__above flip-inline}",
+                "{space:?}"
+            );
+        }
+        assert_eq!(
+            scope(".a { position-try-fallbacks: --abov\\65\r\n\tflip-block }", "x").unwrap().css,
+            ".x__a{position-try-fallbacks:--abov\\65  flip-block}"
+        );
+        // A no-break space is not CSS whitespace: `--above\u{a0}flip-block` is one name.
+        assert_eq!(
+            scope("@position-try --above { top: 0 } .a { position-try-fallbacks: --above\u{a0}flip-block, --abov\\65\u{a0}, --above }", "x").unwrap().css,
+            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--above\u{a0}flip-block, --abov\\65\u{a0}, --x__above}"
+        );
+        // `--above()` calls a custom function, whose name is not a position option's.
+        assert_eq!(
+            scope("@position-try --above { top: 0 } .a { position-try: --above(); position-try-fallbacks: --abov\\65(), \\2d \\2d above(1), --above }", "x").unwrap().css,
+            "@position-try --x__above{top:0}.x__a{position-try:--above();position-try-fallbacks:--abov\\65(), \\2d \\2d above(1), --x__above}"
+        );
+        // An `if()` condition queries a custom property; only its branches' values are options.
+        let conditional = scope("@position-try --above { top: 0 } .a { position-try: if(style(--above: 1): --above; else: flip-block); position-try-fallbacks: i\\66(st\\79le(--above: 1): --above; else: flip-block), var(--choice, if(style(--above: 2): if(style(--above: 3): --above; else: flip-inline); else: --above)), inherit(--above, --above), anchor(--above top), --above }", "x").unwrap();
+        assert_eq!(
+            conditional.css,
+            "@position-try --x__above{top:0}.x__a{position-try:if(style(--above: 1): --x__above; else: flip-block);position-try-fallbacks:i\\66(st\\79le(--above: 1): --x__above; else: flip-block), var(--choice, if(style(--above: 2): if(style(--above: 3): --x__above; else: flip-inline); else: --x__above)), inherit(--above, --x__above), anchor(--above top), --x__above}"
+        );
     }
 
     #[test]

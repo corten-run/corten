@@ -135,11 +135,18 @@ or `ComboBox` styled by this component:
 tree-wide namespace, not one per component ([design Limit 9](../design.md#limit-stylesheet-support));
 prefixing prevents two components' options from colliding. Names defined here use `--` followed
 by ASCII letters, digits, `-` and `_`, without `__`, as `@property` does; references can use CSS
-escapes. An option not defined in this file stays global. Anchor names, custom-property names,
-strings and URLs are not position references: `position-try: var(--choice, --above)` keeps the
-lookup `--choice` and scopes the fallback. Other raw named rules remain global for compatibility
-with references from global CSS and font files; a private name should include the component's
-name. This does not isolate anchors or change the browser's supported position descriptors.
+escapes. An option not defined in this file stays global. The macro reads the two declarations'
+values as CSS tokens and renames an identifier only where the value takes an option: at its top
+level, in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an `if()` branch's value.
+`position-try: var(--choice, --above)` keeps the lookup `--choice` and scopes the fallback;
+`if(style(--above: 1): --above; else: flip-block)` keeps the custom property its condition
+queries and scopes the branch. A function call (`--above()`), anchor names, strings, URLs and
+anything inside another function keep their names. A name that reaches `position-try` through a
+custom property's value (`--choice: --above`) is not rewritten, since the macro cannot know where
+that value goes; name the option in the declaration itself. Other raw named rules remain global
+for compatibility with references from global CSS and font files; a private name should include
+the component's name. This does not isolate anchors or change the browser's supported position
+descriptors.
 
 ## Motion
 
