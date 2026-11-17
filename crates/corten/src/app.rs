@@ -1703,17 +1703,16 @@ where
     let router = app.router();
     let running = Running::start(tasks, finishing.signal().clone());
     let stopped = std::sync::OnceLock::new();
-    let served = serve_router(listeners, wrap, router, connections, async {
+    serve_router(listeners, wrap, router, connections, async {
         stop.await;
         let _ = stopped.set(tokio::time::Instant::now());
         running.stop();
     })
     .await;
-    // A listener that failed ends the tasks too, with the same grace.
-    let began = stopped.get().copied().unwrap_or_else(tokio::time::Instant::now);
+    let began = *stopped.get().expect("serving ends only after shutdown begins");
     running.finish(began + grace, grace).await;
     finishing.wait(began + grace, grace).await;
-    served
+    Ok(())
 }
 
 /// The listeners for `host`:`port`; without a host, the IPv4 and IPv6 loopback addresses on one
@@ -1780,23 +1779,21 @@ fn listen(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener
 }
 
 /// Serves `router` on every listener, each connection after its step `wrap`, until `stop`
-/// resolves, then lets each finish its requests for as long as `connections.drain` gives it; a
-/// listener that fails ends it with the error.
+/// resolves, then lets each finish its requests for as long as `connections.drain` gives it.
 pub(crate) async fn serve_router<L, W, F, Io, E>(
     listeners: Vec<L>,
     wrap: W,
     router: Router,
     connections: Connections,
     stop: impl Future<Output = ()>,
-) -> std::io::Result<()>
-where
+) where
     L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
     F: Future<Output = Result<Io, E>> + Send + 'static,
     Io: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    use futures_util::future::{select, try_join_all, Either};
+    use futures_util::future::{join, join_all};
     // When shutdown begins: when it began, and how long connections may go on from then.
     let (stopped, watch) = tokio::sync::watch::channel(None);
     let held = Held {
@@ -1814,22 +1811,19 @@ where
         let (wrap, http, router, held) = (wrap.clone(), http.clone(), router.clone(), held.clone());
         serve_listener(listener, wrap, http, router, held, watch.clone())
     });
-    let servers = std::pin::pin!(try_join_all(servers));
-    match select(std::pin::pin!(stop), servers).await {
-        Either::Left(((), servers)) => {
-            let drain = connections.drain;
-            let _ = stopped.send(Some(Closing { began: tokio::time::Instant::now(), drain }));
-            let cut: usize = servers.await?.into_iter().sum();
-            if cut > 0 && drain.each {
-                let (grace, most) = (drain.grace, drain.most);
-                tracing::warn!("corten: closed {cut} connection(s) still answering after shutdown began, each once the longer of the grace ({grace:?}) and its request's deadline had passed (at most {most:?})");
-            } else if cut > 0 {
-                let most = drain.most;
-                tracing::warn!("corten: closed {cut} connection(s) still answering {most:?} after shutdown began");
-            }
-            Ok(())
-        }
-        Either::Right((served, _)) => served.map(drop),
+    let drain = connections.drain;
+    let stopping = async {
+        stop.await;
+        let _ = stopped.send(Some(Closing { began: tokio::time::Instant::now(), drain }));
+    };
+    let ((), counts) = join(stopping, join_all(servers)).await;
+    let cut: usize = counts.into_iter().sum();
+    if cut > 0 && drain.each {
+        let (grace, most) = (drain.grace, drain.most);
+        tracing::warn!("corten: closed {cut} connection(s) still answering after shutdown began, each once the longer of the grace ({grace:?}) and its request's deadline had passed (at most {most:?})");
+    } else if cut > 0 {
+        let most = drain.most;
+        tracing::warn!("corten: closed {cut} connection(s) still answering {most:?} after shutdown began");
     }
 }
 
@@ -1875,7 +1869,7 @@ async fn serve_listener<L, W, F, Io, E>(
     router: Router,
     held: Held,
     mut stop: tokio::sync::watch::Receiver<Option<Closing>>,
-) -> std::io::Result<usize>
+) -> usize
 where
     L: Listener,
     L::Addr: 'static,
@@ -1961,7 +1955,7 @@ where
     while closed.recv().await.is_some() {
         cut += 1;
     }
-    Ok(cut)
+    cut
 }
 
 /// One connection's service: the router, each of whose requests runs with the connection's
