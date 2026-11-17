@@ -160,6 +160,67 @@
 //! assert!(errors.has(f.lines.at(&9).qty) && !errors.has(f.lines.at(&7).qty));
 //! ```
 //!
+//! Row, group and key types can be written as paths, without importing a bare name:
+//!
+//! ```
+//! use std::collections::BTreeMap;
+//! mod items {
+//!     #[derive(corten::Fields)]
+//!     pub struct Line { pub qty: u32 }
+//! }
+//! #[derive(corten::Fields)]
+//! struct Order { #[fields(rows)] #[serde(default)] lines: BTreeMap<u32, items::Line> }
+//! assert_eq!(Order::FIELDS.lines.at(&7).qty.to_string(), "lines[7].qty");
+//! let order: Order = corten::form::from_bytes(b"lines%5B7%5D.qty=2").unwrap();
+//! assert_eq!(order.lines[&7].qty, 2);
+//! ```
+//!
+//! ```
+//! mod other {
+//!     #[derive(corten::Fields)]
+//!     pub struct Address { pub street: String }
+//! }
+//! #[derive(corten::Fields)]
+//! struct Order { #[fields(group)] ship_to: other::Address }
+//! assert_eq!(Order::FIELDS.ship_to.street.to_string(), "ship_to.street");
+//! let order: Order = corten::form::from_bytes(b"ship_to.street=Elm").unwrap();
+//! assert_eq!(order.ship_to.street, "Elm");
+//! ```
+//!
+//! ```
+//! use std::collections::BTreeMap;
+//! mod keys {
+//!     #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, corten::UrlValue)]
+//!     pub enum Sku { First }
+//! }
+//! #[derive(corten::Fields)]
+//! struct Line { qty: u32 }
+//! #[derive(corten::Fields)]
+//! struct Order {
+//!     #[fields(rows)] #[serde(default)] lines: BTreeMap<keys::Sku, Line>,
+//!     #[fields(map)] #[serde(default)] counts: BTreeMap<keys::Sku, u32>,
+//! }
+//! let key = keys::Sku::First;
+//! assert_eq!(Order::FIELDS.lines.at(&key).qty.to_string(), "lines[First].qty");
+//! assert_eq!(Order::FIELDS.counts.at(&key).to_string(), "counts[First]");
+//! let order: Order = corten::form::from_bytes(b"lines%5BFirst%5D.qty=2&counts%5BFirst%5D=3").unwrap();
+//! assert_eq!(order.lines[&key].qty, 2);
+//! assert_eq!(order.counts[&key], 3);
+//! ```
+//!
+//! A path may name a different row type with the same name as the form:
+//!
+//! ```
+//! use std::collections::BTreeMap;
+//! mod other {
+//!     #[derive(corten::Fields)]
+//!     pub struct Step { pub name: String }
+//! }
+//! #[derive(corten::Fields)]
+//! struct Step { #[fields(rows)] #[serde(default)] then: BTreeMap<u32, other::Step> }
+//! assert_eq!(Step::FIELDS.then.at(&1).name.to_string(), "then[1].name");
+//! ```
+//!
 //! A row is named by the map's key type only:
 //!
 //! ```compile_fail,E0308
@@ -296,6 +357,20 @@
 //! let mut errors = Errors::new();
 //! errors.add(f.lines.at(&7).parts.at(&2).qty, "Only 2 left.");
 //! assert!(errors.has(f.lines.at(&7).parts.at(&2).qty) && !errors.has(f.lines.at(&8).parts.at(&2).qty));
+//! ```
+//!
+//! A path back to the same row type is still recursive and does not compile:
+//!
+//! ```compile_fail,E0391
+//! mod tree {
+//!     use std::collections::BTreeMap;
+//!     #[derive(corten::Fields)]
+//!     pub struct Step {
+//!         pub name: String,
+//!         #[fields(rows)] #[serde(default)] then: BTreeMap<u32, self::Step>,
+//!     }
+//! }
+//! let _ = tree::Step::FIELDS;
 //! ```
 //!
 //! Rows go as deep as the types do, and the reader goes only as deep as the type it reads, however
@@ -2112,8 +2187,7 @@ pub(crate) fn keyless_submit_field(html: &str) -> Option<&str> {
 
 /// How deep a scan of markup is in `<template>`s, read on from where it last stopped, so the
 /// markup is read once however many fields it holds. It reads the markup `html!` writes, where a
-/// `<` in text or a value is `&lt;` and an attribute is `name="value"` with no space around the `=`
-/// (hand-written `raw(..)` markup such as `shadowrootmode = "open"` can mislead it); it does not parse literal `<script>` or `<style>` text,
+/// `<` in text or a value is `&lt;`; it does not parse literal `<script>` or `<style>` text,
 /// comments or `raw(..)`, so a `<template` in them can mislead this debug check.
 #[cfg(debug_assertions)]
 #[derive(Default)]

@@ -757,6 +757,12 @@ html! {
 errors.add(f.domains.at(&Domain::SellerPortal).max_concurrent, "At least 1.");
 ```
 
+Group, row and key types may be paths: `#[fields(group)] ship_to: addresses::Address`,
+`#[fields(rows)] #[serde(default)] lines: BTreeMap<keys::Sku, items::Line>` and
+`#[fields(map)] #[serde(default)] counts: BTreeMap<keys::Sku, u32>` need no imports of the
+types' bare names. A path back to the form's own type is still recursive and does not compile;
+a path to a different type with the same name is allowed.
+
 A key is a `RowKey`: text, an integer, or a `#[derive(UrlValue)]` enum, whose key is the word
 serde reads (`seller-portal`), so it reads back as the same variant. Its characters other than letters, digits, `-` and `_` are %-encoded in the name, so any text is
 a key, and a key sent any other way (`%61` for `a`) is refused, so one key cannot reach a row two
@@ -1088,6 +1094,100 @@ the error names the kind of part that is not a patch (`ComponentOrExpressionNotA
 the view's top-level parts. A `corten::live`
 fragment is already text, so debug builds check it when it is sent instead (it panics, naming the
 element).
+
+The runtime parses a patch as a `<template>`'s content, as the HTML standard's "in template"
+insertion mode reads it: the first top-level element other than a `<template>`, `<script>`,
+`<style>`, `<link>`, `<meta>`, `<title>` or another tag a document's head holds decides how
+the rest is read. After any other
+element, table parts (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`,
+`<col>`, `<colgroup>`) are dropped. After a table part, a table part of another kind is dropped
+or put in a `<tbody>`, `<tr>` or `<colgroup>` the browser adds, a `<table>` is dropped, a
+table part inside a later top-level element that is not a table part (a `<div>` after the rows)
+is moved out of it, a `<table>` there is taken apart, its parts moved out, and a `<form>` there or
+at the top level loses what it holds (its fields, or text, are moved out of it; a form of only
+whitespace or comments is not reported); a table or form inside a row's cell is kept. After a `<col>`, everything but a `<col>` or
+`<template>` is dropped. A `<template>`'s content (`Append`'s rows, or a `<template>` inside an
+element) is read the same way on its own, except that Firefox drops a `<form>` there whole after
+a table part. So a patch that sends a table's header row beside a summary loses the row.
+Send the `<table>` whole with an id, or put the table parts first, of one kind, with no
+`<table>` or `<form>` in what follows. Some shapes are lost wherever they are written, and
+`html!` refuses them when it compiles, where its markup writes the first element: a table part
+after a first `<table>` (dropped, or, where the patch began with a table part, the table taken
+apart); an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first
+`<col>`; and after a first other table part, a `<table>` at the top level or in a later element
+(taken apart), and a `<form>` there that holds an element, where an element HTML's wherever it
+lands is in or around it (a form holding a `<div>`, or one in a `<div>`, but not one in an `<svg>`
+or `<math>`, which is theirs and kept as written), whose content is moved
+out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Every other shape
+depends on what the patch began with or where the view is written, which a component's markup
+does not show: a `<p>` and then a `<tr>` lose the row on their own, but after a first `<tr>`
+both are kept, and an `<svg>` keeps a `<form>` of fields after a `<tr>` as written, so a
+component that writes them compiles. Debug builds check each patch as it is sent (`req.patch`,
+`req.patch_or`, `req.invalid`, `form.draw` and `corten::live`, with the area's stylesheet
+links Corten adds after its elements): the request fails with a 500, or the stream panics, naming
+the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`,
+`<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide, as a page's body would, so a patch
+with one is read both ways. A debug-build test of the app that draws such a patch fails with the
+500 too. A release build sends the patch as drawn, so a mix only some data
+draws (a row in one branch of an `if`) is found only by a debug render that draws it. The check
+covers what a table's reading does to a patch as `html!` writes it, each element closed by its own
+end tag, not every way a browser's parse can differ from the markup. It reads what an `<svg>` or
+`<math>` holds by their own rules (a `<title>` or `<style>` there holds elements, a CDATA section is
+text) only to find where it ends, so a row holding an icon with a `<title>` is checked like any
+other, but it reports no loss inside one. It reads a `<script>`'s text as the browser does, and a
+`<textarea>`'s, `<title>`'s, `<style>`'s, `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and
+`<noframes>`'s as text, and it ignores the end tag `html!` writes for a `<param>` or a
+`<basefont>`, as the browser does. Where text decides (in a `<form>` a table's reading would
+put in empty, in a table, row group, row or column group, after a first `<col>`, and at the top
+level) it reads the text with its character references decoded: a numeric one, `&Tab;` and
+`&NewLine;` (whitespace), and `html!`'s own escapes and `&nbsp;` (which show), so a form that
+holds only `&#32;` is kept and one that holds `&nbsp;` loses it; a NUL, which the parser ignores
+there, shows nothing. It reports a loss only from the tokens it reads as the browser does, and
+stops at any other, whether `html!` writes it (a `<div>` in a `<p>`, a `<form>` in a `<form>`, a
+`<noscript>`) or markup placed with `raw` does:
+
+1. an end tag left out, one written otherwise than `</name>` (`</div ignored>`), or one that
+   closes no element open (a `</p>` or `</br>`, which adds an element or, in an `<svg>` or
+   `<math>`, closes it);
+2. an HTML element's start tag ending `/>`, and a start tag the patch ends in before its `>`
+   (`<col data-note='` at the end, which the browser drops with what follows its `<`);
+3. a comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, `--!>` in it), a
+   CDATA section outside an `<svg>` or `<math>` or not ended by `]]>`, and a doctype other than
+   `<!DOCTYPE html>` (a quoted `>` in one ends it early);
+4. where text decides, a named character reference it does not decode (`&bogus;`), and in a
+   table, row group, row or column group, or after a first `<col>`, any text that shows (a `<`
+   that starts no tag among it), which the browser moves out or drops;
+5. a script whose text a `<!--` and a `<script` carry past its first `</script>` and over an
+   element, which may be text written for it or the patch's elements lost in it;
+6. in a `<form>` a table's reading would put in empty, any token before what it holds but a
+   comment, a bogus comment (`<!note>`, `</ x>`), a `<!DOCTYPE html>` and a void element's end
+   tag (`</input>`);
+7. an element HTML's wherever it lands written straight in an `<svg>` or `<math>`, which `html!`
+   refuses;
+8. an HTML `<image>`, which the browser reads as an `<img>`; a `<plaintext>`; a `<noscript>`,
+   whose content Firefox reads as text and Chromium and WebKit as elements; and an `<html>`,
+   `<body>`, `<head>`, `<frame>` or `<frameset>`;
+9. an element the browser does not put where it is written: a table part outside a table;
+   anything in a `<table>`, row group or row but its own parts and a `<script>`, `<style>` or
+   `<template>`, and in a column group (a `<colgroup>`) anything but a `<col>` or `<template>`;
+   an element that closes one open around it (a `<div>` in a `<p>`, an `<li>` in an `<li>`, a
+   heading in a heading, an `<option>` in an `<option>`, an `<a>` in an `<a>`, an `<svg>` or
+   `<math>` between them too); a `<form>` in a `<form>`; what a `<select>` holds but its
+   options; and, after a first table part, a `<form>`, `<table>` or table part in an SVG or
+   MathML integration point (`<foreignObject>`, `<desc>`, `<title>`, `<mi>` ..) that is not in a
+   top-level table part, and a `<template>` in one anywhere, past which Firefox reads the rest of
+   the patch as a body's (a later row is dropped there, and kept in Chromium and WebKit).
+
+A row or cell written straight in a `<table>` is read as kept, since the browser only adds the
+`<tbody>` or `<tr>` around it. At a stop the check still reports a loss found before, and
+otherwise logs a warning naming where it stopped, since what follows was not checked: markup
+written through `raw` is checked only as far as these rules reach. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
+a page's table takes apart too). A patch that
+begins with a `<col>` from an area's handler is refused even on a page that already has the area's
+stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know
+what the page linked, so send the `<col>`s in a `<colgroup>` with an id. Neither the check nor
+`html!` reads how deep markup nests: Chromium attaches an element nested deeper than 512 elements
+at depth 512, in a page as in a patch.
 
 ## Work that must not run twice at once
 
