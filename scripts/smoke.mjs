@@ -4193,6 +4193,11 @@ async function run(browser) {
     "a page whose handlers take no form field does not load the field module",
     !(await page.evaluate(() => performance.getEntriesByType("resource").some((e) => e.name.includes("/corten-field.js")))),
   );
+  // Nor the address module: it draws no form marked data-address.
+  check(
+    "a page with no data-address form does not load the address module",
+    !(await page.evaluate(() => performance.getEntriesByType("resource").some((e) => e.name.includes("/corten-address.js")))),
+  );
   // A visitor's header has no account link (the sign-in button is in its place), so the page gets one.
   await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-account" href="/account">Account</a>')));
   const entriesBefore = await page.evaluate(entriesWhileRecordingAddresses);
@@ -5214,6 +5219,16 @@ async function run(browser) {
           pushed.at === "/smoke/scope?scope=week" && pushed.added === 1 && pushed.shown === "week",
         JSON.stringify(pushed),
       );
+      // A form the patch draws that keeps the address's query (`keep_query`) sends the scope on
+      // screen, not the one the page was drawn with: a link or form outside the patch keeps the
+      // address it was drawn with, so one that carries the scope is drawn by the patch.
+      const carried = await scope.evaluate(() => {
+        const form = /** @type {HTMLFormElement} */ (Array.from(document.querySelectorAll("#smoke-scope form")).find((f) => !f.hasAttribute("data-patch")));
+        const sent = new URL(form.action);
+        sent.search = new URLSearchParams(/** @type {any} */ (new FormData(form))).toString();
+        return sent.pathname + sent.search;
+      });
+      check("a form a data-address form's patch draws, which keeps the address's query, sends the scope on screen", carried === "/smoke/scope?scope=week", carried);
       // Back and Forward: the patch again, the rest of the screen kept, and focus on a control in
       // it too.
       await scope.evaluate(() => Object.assign(window, { __rest: document.querySelector("main ol") }));
@@ -5408,13 +5423,12 @@ async function run(browser) {
         moved.at === "/smoke/scope?scope=day" && moved.shown === "day" && moved.asked.join() === "action ?scope=day,nav ?scope=day" && moved.focus === "body" && moved.tab === firstTab,
         JSON.stringify({ moved, firstTab }),
       );
-      // A handler that answers the form with its page, not a patch: the page is drawn and the
-      // address follows too, and Back from it reads a page, the screen being another one now. The
-      // page scrolls elsewhere as it is drawn (as a page's own script may): Back puts the entry
-      // left where it was scrolled when the form was sent (its address was put in history before
-      // the page was drawn), not where the new page went. (Firefox restores an entry's scroll as
-      // the traversal commits, before its page is drawn, so the page answered is as long as the
-      // one left.)
+      // A handler that answers the form with its page, not a patch: the page at the address is
+      // read, as the browser reads it for the form without JavaScript, by a navigation there (a
+      // second request, its answer's body not read), in an entry of its own that starts at the
+      // top, and Back from it reads a page at the scroll it left. (Firefox restores an entry's
+      // scroll as the traversal commits, before its page is drawn, so the page answered is as long
+      // as the one left.)
       const paged = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=week";
       await scope.route(paged, async (route) => {
         const headers = route.request().headers();
@@ -5425,24 +5439,19 @@ async function run(browser) {
       const from = await index();
       // Clicked by script: Playwright's click scrolls the button into view first.
       const scrolled = await scope.evaluate(() => {
-        const main = /** @type {Element} */ (document.querySelector("main"));
-        const seen = new MutationObserver(() => {
-          seen.disconnect();
-          scrollTo(0, 300);
-        });
-        seen.observe(main, { childList: true });
         scrollTo(0, 1500);
         return scrollY;
       });
+      asked.length = 0;
       await answered(() => scope.evaluate(() => /** @type {HTMLElement} */ (document.querySelector("#smoke-scope button[value=week]")).click()));
       await scope.unroute(paged);
-      const page = { at: await at(), added: (await index()) - from, shown: await shown(), scrolled, y: await scope.evaluate(() => scrollY) };
-      asked.length = 0;
+      const page = { at: await at(), added: (await index()) - from, shown: await shown(), scrolled, y: await scope.evaluate(() => scrollY), asked: asked.splice(0) };
       const pageBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0), y: 0 };
       pageBack.y = await scope.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(scrollY))));
       check(
-        "a data-address form answered with a page puts its address in history before drawing it, and Back from it reads a page at the scroll it left",
-        page.at === "/smoke/scope?scope=week" && page.added === 1 && page.shown === "week" && page.scrolled === 1500 && page.y === 300 &&
+        "a data-address form answered with a page reads the page at its address in an entry of its own, and Back from it reads a page at the scroll it left",
+        page.at === "/smoke/scope?scope=week" && page.added === 1 && page.shown === "week" && page.scrolled === 1500 && page.y === 0 &&
+          page.asked.join() === "action ?scope=week,nav ?scope=week" &&
           pageBack.at === "/smoke/scope?scope=day" && pageBack.shown === "day" && pageBack.asked.join() === "nav ?scope=day" && Math.abs(pageBack.y - 1500) <= 2,
         JSON.stringify({ page, pageBack }),
       );
@@ -5842,8 +5851,133 @@ async function run(browser) {
           farBack.asked.join() === "nav /smoke/scope-elsewhere?scope=far",
         JSON.stringify(farBack),
       );
+      // A marked form sent while a link's page is on its way: the browser drops that navigation for
+      // the form's, as without JavaScript, and the runtime reads the page at the form's address in
+      // its place. The link's request is held, and seen to its end once let go.
+      await scope.goto(`${base}/smoke/scope`);
+      const linkAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope-elsewhere";
+      /** @type {() => void} */
+      let letLinkGo = () => {};
+      const linkHeld = new Promise((resolve) => (letLinkGo = () => resolve(undefined)));
+      /** @type {() => void} */
+      let linkEnded = () => {};
+      const linkDone = new Promise((resolve) => (linkEnded = () => resolve(undefined)));
+      await scope.route(linkAsked, async (route) => {
+        try {
+          await linkHeld;
+          await route.continue();
+        } catch {
+          // Dropped by the browser before it was let go.
+        } finally {
+          linkEnded();
+        }
+      });
+      const linkSent = scope.waitForRequest((r) => linkAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
+      await scope.getByRole("link", { name: "Elsewhere", exact: true }).click();
+      const linkWent = await linkSent;
+      asked.length = 0;
+      await scope.getByRole("button", { name: "Week", exact: true }).click();
+      const formRead = await scope
+        .waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-scope output")?.textContent === "week", undefined, { timeout: 5000 })
+        .then(() => true, () => false);
+      letLinkGo();
+      const linkEndedInTime = await Promise.race([linkDone.then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+      await scope.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
+      await scope.unroute(linkAsked);
+      const overtaken = { linkWent, formRead, linkEndedInTime, at: await at(), shown: await shown(), asked: asked.splice(0) };
+      check(
+        "a data-address form sent while a link's page is on its way reads the page at its address in that navigation's place",
+        overtaken.linkWent && overtaken.formRead && overtaken.linkEndedInTime && overtaken.at === "/smoke/scope?scope=week" && overtaken.shown === "week" &&
+          overtaken.asked.join() === "nav ?scope=week",
+        JSON.stringify(overtaken),
+      );      // What the user typed outside the part and did not send stays with the entry the form was
+      // sent from, as the browser keeps it for the form without JavaScript: typed, the form sent,
+      // a link followed, then Back twice; and typed, the form sent, then Back while a write is on
+      // its way, which reads the page.
+      const note = () => scope.evaluate(() => /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=note]"))?.value ?? null);
+      await scope.goto(`${base}/smoke/scope`);
+      await scope.fill("input[name=note]", "draft");
+      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      await scope.getByRole("link", { name: "Elsewhere", exact: true }).click();
+      await scope.waitForFunction(() => location.pathname === "/smoke/scope-elsewhere" && !document.querySelector("input[name=note]"), undefined, { timeout: 5000 }).catch(() => {});
+      const linkedWeek = { at: await traverse("back"), note: await note() };
+      const linked = { week: linkedWeek, at: await traverse("back"), note: await note() };
+      await scope.goto(`${base}/smoke/scope`);
+      await scope.fill("input[name=note]", "draft");
+      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      /** @type {() => void} */
+      let letNoteWriteGo = () => {};
+      const noteWriteHeld = new Promise((resolve) => (letNoteWriteGo = () => resolve(undefined)));
+      await scope.route(writeAsked, async (route) => {
+        await noteWriteHeld;
+        await route.continue().catch(() => {});
+      });
+      await writeForm();
+      const noteWriteSent = scope.waitForRequest((r) => writeAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
+      await scope.click("#scope-write button");
+      asked.length = 0;
+      const written = { writing: await noteWriteSent, at: await traverse("back"), note: await note(), asked: asked.splice(0) };
+      letNoteWriteGo();
+      await scope.unroute(writeAsked);
+      check(
+        "what the user typed and did not send is put back for the entry a data-address form was sent from",
+        linked.week.at === "/smoke/scope?scope=week" && linked.week.note === "draft" && linked.at === "/smoke/scope" && linked.note === "draft" &&
+          written.writing && written.at === "/smoke/scope" && written.note === "draft" && written.asked.join() === "nav ",
+        JSON.stringify({ linked, written }),
+      );
     }
     await scope.close();
+  }
+  // The address module comes with a page the runtime swaps in that draws a marked form, and the
+  // form is the module's from its first submit. Where the module does not load, the form is sent
+  // as any GET form is: the page at its address is read.
+  {
+    const swapped = await browser.newPage();
+    swapped.on("pageerror", (e) => errors.push(`swapped scope: ${e.message}`));
+    await swapped.goto(`${base}/news`);
+    if (!(await swapped.evaluate(() => "navigation" in window))) skip("a page swapped in with a data-address form loads the address module", "no Navigation API");
+    else {
+      /** @type {string[]} */
+      const asked = [];
+      swapped.on("request", (r) => {
+        const url = new URL(r.url());
+        if (url.pathname === "/smoke/scope") asked.push(`${r.headers()["corten"] ?? "document"} ${url.search}`);
+      });
+      const loads = () => swapped.evaluate(() => performance.getEntriesByType("resource").filter((e) => e.name.includes("/corten-address.js")).length);
+      const before = await loads();
+      await swapped.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/scope").finished);
+      const after = await loads();
+      asked.length = 0;
+      await swapped.getByRole("button", { name: "Week", exact: true }).click();
+      await swapped.waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-scope output")?.textContent === "week", undefined, { timeout: 5000 }).catch(() => {});
+      const sent = { before, after, at: await swapped.evaluate(() => location.pathname + location.search), asked: asked.splice(0) };
+      check(
+        "a page swapped in with a data-address form loads the address module, and its first submit is the module's",
+        sent.before === 0 && sent.after === 1 && sent.at === "/smoke/scope?scope=week" && sent.asked.join() === "action ?scope=week",
+        JSON.stringify(sent),
+      );
+    }
+    await swapped.close();
+    const unloaded = await browser.newPage();
+    unloaded.on("pageerror", (e) => errors.push(`unloaded scope: ${e.message}`));
+    await unloaded.route((url) => url.pathname.endsWith("/corten-address.js"), (route) => route.abort("connectionrefused"));
+    /** @type {string[]} */
+    const asked = [];
+    unloaded.on("request", (r) => {
+      const url = new URL(r.url());
+      if (url.pathname === "/smoke/scope") asked.push(`${r.headers()["corten"] ?? "document"} ${url.search}`);
+    });
+    await unloaded.goto(`${base}/smoke/scope`);
+    asked.length = 0;
+    await unloaded.getByRole("button", { name: "Week", exact: true }).click();
+    await unloaded.waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-scope output")?.textContent === "week", undefined, { timeout: 5000 }).catch(() => {});
+    const read = { at: await unloaded.evaluate(() => location.pathname + location.search), shown: await unloaded.evaluate(() => document.querySelector("#smoke-scope output")?.textContent), asked: asked.splice(0) };
+    check(
+      "a data-address form whose module did not load is sent as any GET form is, reading the page at its address",
+      read.at === "/smoke/scope?scope=week" && read.shown === "week" && read.asked.length === 1 && !read.asked[0].startsWith("action"),
+      JSON.stringify(read),
+    );
+    await unloaded.close();
   }
   // Without the Navigation API, which Back to its address needs, the browser sends a data-address
   // form itself: a full load of the page at that address, as without JavaScript

@@ -2870,6 +2870,17 @@ pub(crate) const UPLOAD_MODULE: &str = "corten-upload";
 /// [`UPLOAD_MODULE`]'s source.
 pub(crate) const UPLOAD_JS: &str = include_str!("../js/dist/upload.js");
 
+/// The module that puts the address a GET `data-patch` form marked `data-address` asked for in
+/// history once its patch is drawn, and draws that patch again for Back and Forward between the
+/// entries it made (`js/address.js`, minified into `js/dist/address.js`): served with any app's
+/// assets, a component script of its own or not, and loaded by the pages that draw such a form,
+/// not by every page with the runtime. The runtime loads it too with a page or patch it inserts
+/// that has one.
+pub(crate) const ADDRESS_MODULE: &str = "corten-address";
+
+/// [`ADDRESS_MODULE`]'s source.
+pub(crate) const ADDRESS_JS: &str = include_str!("../js/dist/address.js");
+
 /// Notes that the page rendering uses script module `name`, so its head loads it.
 pub(crate) fn uses(name: &'static str) {
     MODULES.with(|m| {
@@ -2896,6 +2907,12 @@ pub mod __private {
     #[inline]
     pub fn uses_upload() {
         uses(UPLOAD_MODULE);
+    }
+
+    /// A form on the page is marked `data-address`, so the page loads the address module.
+    #[inline]
+    pub fn uses_address() {
+        uses(ADDRESS_MODULE);
     }
 
     /// Where an argument is written: the component rendering and the one that made the handler.

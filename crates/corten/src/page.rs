@@ -1728,7 +1728,13 @@ impl Req {
     #[cold]
     #[inline(never)]
     fn check_modules(&self, modules: &[&'static str]) -> Result<()> {
-        match modules.iter().find(|name| !self.shared.assets.as_ref().is_some_and(|a| a.module_tag(name).is_some())) {
+        // An app with no static files and no components serves no assets, the address module's
+        // either: its `data-address` forms are sent by the browser, as without JavaScript.
+        let served = |name: &&str| match &self.shared.assets {
+            Some(assets) => assets.module_tag(name).is_some(),
+            None => *name == crate::script::ADDRESS_MODULE,
+        };
+        match modules.iter().find(|name| !served(name)) {
             Some(name) => Err(self.unserved(unserved_module(name))),
             None => Ok(()),
         }

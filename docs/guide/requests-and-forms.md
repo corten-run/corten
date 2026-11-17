@@ -1789,8 +1789,9 @@ is the address already), as the browser leaves it after the same form without Ja
 `#fragment` of its `action` or `formaction` included. A reload, a bookmark and a shared link then
 reach what the screen shows, and a form that posts without an `action` sends to it. A patch the
 runtime cannot draw whole (an empty one, one with an element that has no place on the page, or
-one that adds to an element) is followed by a read of the page at that address, as the browser
-loads it. Back and Forward between the entries such forms made on the screen at the screen's
+one that adds to an element) draws nothing and is followed by a read of the page at that address,
+as the browser loads it, and so is an answer that is a page (a second request). Back and Forward
+between the entries such forms made on the screen at the screen's
 path, and the one the first was sent from, read the entry's address as the form did
 (`corten: action`, which the browser's HTTP cache can
 answer) and draw its patch, leaving the rest of the screen as it is. An answer that is not a 2xx
@@ -1798,15 +1799,23 @@ patch (a page, a redirect, an error, none) or a patch the runtime cannot draw wh
 page, as any other entry is; so is an entry of a form whose `action` is another route's (its
 patch drawn into this screen is not that route's page), every entry while a write the screen sent
 is on its way or after one redirected before its page came (the write may have changed more than
-the part), and every entry once another page has been swapped in or the page reloaded. Sending a
-marked form cancels any other marked form's request still on its way, so the screen and the
-address are always the last one sent, whichever answer comes first.
+the part), and every entry once the page is loaded again (a reload; a page of the same route read
+since, by a link or Back, is the same screen, and keeps them). What the user typed outside the
+part and did not send stays with the entry the form was sent from, as for a link followed.
+Sending a marked form cancels any other marked form's request still on its way, so the screen and
+the address are always the last one sent, whichever answer comes first.
+
+The runtime's part of the mark is a module of its own, `corten-address` (2,658 bytes, 1,311 gzipped),
+which only a page that draws a marked form loads: with its head, `html!` having noted the form as
+it rendered it, or with the page or patch the runtime inserts that has one. Until it has loaded,
+or if it fails to, a marked form is sent as any GET form is, and the page at its address is read.
 
 Which mark a filter takes depends on what its change redraws. One that changes most of what the
 page shows (a list's results) is a navigation, `data-keep-place`: each change and each Back read
 the page, which is what changes. One that redraws one part of a screen whose rest costs more to
 read (a panel's period beside a long report) is `data-patch data-address`: a change and Back
-between its entries read only the part.
+between its entries read only the part. `data-keep-place` falls short there: it reads the whole
+page for each change and each Back, where the part is all that changes.
 
 ```rust,ignore
 #[component]
@@ -1832,8 +1841,10 @@ what they typed as in any patch ([Limit 2](../design.md#limit-whole-element-patc
 whose patch adds to the page (`view::Append`, Load more's) is not one to mark: the runtime does
 not draw such a patch for a marked form and reads the page at the address instead, so a marked
 Load more would load a page each time. The page's other links and forms keep the address they
-were drawn with; one that should carry the scope is drawn by the same patch, or keeps the
-address's query (`keep_query`).
+were drawn with, a form that keeps the address's query (`keep_query`) included: its hidden inputs
+are the query of the route it was drawn with, and do not follow the address. A link or form that
+should carry the scope is drawn by the same patch, `keep_query` too, so it sends the scope on
+screen.
 The mark needs the Navigation API
 ([Limit 1](../design.md#limit-navigation-api)); without it the browser sends the form itself and
 loads the page at its address, as without JavaScript. `html!` refuses `data-address` on anything

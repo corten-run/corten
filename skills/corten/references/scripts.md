@@ -169,9 +169,12 @@ division: end statements with `;` and keep a division on the line it continues.
    redirected). Pick `data-keep-place` when the change redraws most of the page (a list's
    results), `data-address` when it redraws one part of a screen whose rest is costly to read.
    The patch draws everything the address changes, the form
-   included; never mark a form whose patch appends (Load more), and never call
-   `history.pushState` for it yourself (Back to such an entry reads the whole page). Without the
-   Navigation API the browser sends the form itself, a full load at its address.
+   included, and any link or form that carries the scope (a `keep_query` form's hidden inputs keep
+   the query it was drawn with); never mark a form whose patch appends (Load more), and never call
+   `history.pushState` for it yourself (Back to such an entry reads the whole page). Only a page
+   with a marked form loads the module that does this (`corten-address`); until it has, the form
+   is sent as any GET form is. Without the Navigation API the browser sends the form itself, a
+   full load at its address.
 
 ## Text a script computes
 

@@ -496,6 +496,15 @@ impl Assets {
             sources.push((url, crate::script::served(name, crate::script::UPLOAD_JS).into_bytes().into()));
             registered.insert(name.to_string());
         }
+        // The address module, for the pages with a form marked `data-address`, which need no
+        // component script of the app's: served with any app's assets.
+        let name = crate::script::ADDRESS_MODULE;
+        let url = format!("scripts/{name}.js");
+        if sources.iter().any(|(u, _)| *u == url) {
+            return Err(clash(format!("the static directory has a {url}, the name of Corten's address module")));
+        }
+        sources.push((url, crate::script::served(name, crate::script::ADDRESS_JS).into_bytes().into()));
+        registered.insert(name.to_string());
         // `corten/keys` and `corten/read`, each for the apps with a script that imports it:
         // preloaded with that script (it is one of its imports), so no page without one fetches
         // it. Only a listed script brings it, since only those are read when the crate compiles: a
@@ -1649,6 +1658,20 @@ mod tests {
         let clash = dir("clash", &[("scripts/x_y.js", "export default 1")]);
         let error = Assets::build(Some(&clash), &[SCRIPT], "/assets").err().expect("one name, two scripts");
         assert!(error.to_string().contains("two scripts named x_y"), "{error}");
+    }
+
+    /// The address module is served with any app's assets, one with no component script too, as
+    /// a module script of the pages that note it; a static file of its name is an error.
+    #[test]
+    fn the_address_module_is_served_without_a_component_script() {
+        let assets = Assets::build(None, &[], "/assets").unwrap();
+        let dir = &assets.scripts_dir;
+        let (tag, ..) = assets.module(crate::script::ADDRESS_MODULE).expect("the address module is served");
+        assert_eq!(tag, format!(r#"<script type="module" src="{dir}corten-address.js"></script>"#));
+        assert!(assets.module(crate::script::FIELD_MODULE).is_none(), "the field module needs a component script");
+        let taken = vec![("scripts/corten-address.js".to_string(), Bytes::from_static(b"export {};"))];
+        let error = Assets::build_with(taken, &[], &[], "/assets").err().expect("the name is Corten's");
+        assert!(error.to_string().contains("address module"), "{error}");
     }
 
     /// `corten/keys` is served when a listed script imports it, mapped and preloaded with that

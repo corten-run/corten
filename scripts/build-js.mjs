@@ -6,6 +6,8 @@
 //                   a module of its own, which only pages whose handlers take a field load
 //   dist/upload.js  a multipart submit by XMLHttpRequest, for its progress: a module of its own,
 //                   which only pages with a form that has an on:corten:progress handler load
+//   dist/address.js a data-address form's address in history, and Back and Forward between the
+//                   entries it made: a module of its own, which only pages with such a form load
 //   dist/keys.js    shortcut() for a page-wide shortcut (`corten/keys`): a module of its own, which
 //                   only apps whose scripts import it serve, preloaded with those scripts
 //   dist/read.js    read() of a screen's typed data (`corten/read`): a module of its own, served
@@ -52,6 +54,11 @@ const outputs = [
     name: "upload.js",
     entryPoints: [join(js, "upload.js")],
     banner: { js: "// Corten upload (MIT). Built from crates/corten/js/upload.js by scripts/build-js.mjs; do not edit." },
+  },
+  {
+    name: "address.js",
+    entryPoints: [join(js, "address.js")],
+    banner: { js: "// Corten address (MIT). Built from crates/corten/js/address.js by scripts/build-js.mjs; do not edit." },
   },
   {
     name: "keys.js",

@@ -2137,6 +2137,10 @@ impl Gen {
 
     /// `<name attrs>`: the start tag of an element, whose children only matter for a ref's rows.
     fn open_tag(&mut self, name: &str, attrs: &[Attr], children: &[Node]) {
+        // A form marked `data-address` has the page that draws it load the address module.
+        if name.eq_ignore_ascii_case("form") && attr_named(attrs, "data-address").is_some() {
+            self.code(q("::corten::script::__private::uses_address();", &[]));
+        }
         self.text.push('<');
         self.text.push_str(name);
         let mut actions_printed = false;

@@ -202,11 +202,13 @@ struct SmokeScopeId;
 /// The form is marked `data-address`: once its answer is drawn, the address is the one it asked
 /// for, and Back and Forward read this patch again. A button's `formaction`, and another marked
 /// form's `action`, name a place on the page, which the address keeps; another button's is
-/// another route's.
+/// another route's. A form that carries the scope (`keep_query`) is drawn by the patch too, so it
+/// sends the scope on screen, not the one the page was drawn with.
 #[component]
 fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
     let f = ScopeQuery::FIELDS;
     let here = url::Scope::default();
+    let at = url::Scope { q: ScopeQuery { scope: (scope != "all").then(|| scope.to_string()) } };
     html! {
         <section id={SmokeScopeId}>
             <form method="get" action={&here} data-patch data-address>
@@ -219,13 +221,17 @@ fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
             <form method="get" action={here.at(SmokeScopeId)} data-patch data-address>
                 <button name={f.scope} value="quarter">"Quarter"</button>
             </form>
+            <form method="get" action={&here}>
+                {corten::form::keep_query(&at, &html! { <button>"Read this scope again"</button> })}
+            </form>
             <p>"Scope: "<output>{scope}</output></p>
         </section>
     }
 }
 
 /// The screen: the panel, a form without the mark that draws the panel for another scope and
-/// leaves the address, and the rest of the screen, which a change of scope does not draw again.
+/// leaves the address, a note the user may type in and not send, and the rest of the screen, which
+/// a change of scope does not draw again.
 async fn scope_page(req: Req, Params(at): Params<url::Scope>) -> HtmlResult {
     let scope = at.q.scope.as_deref().unwrap_or("all");
     let (here, elsewhere) = (url::Scope::default(), url::ScopeElsewhere::default());
@@ -237,6 +243,7 @@ async fn scope_page(req: Req, Params(at): Params<url::Scope>) -> HtmlResult {
                 <form method="get" action={url::Scope::default()} data-patch>
                     <button name={ScopeQuery::FIELDS.scope} value="year">"Year, in place"</button>
                 </form>
+                <label>"Note "<input name="note"></label>
                 <nav>
                     <a {..here_link}>"Scope"</a>
                     <a {..elsewhere_link}>"Elsewhere"</a>

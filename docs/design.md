@@ -4694,42 +4694,57 @@ rules something out.
     An app that pushed the address from its own script made Back to that entry read the whole
     screen, which the patch was there to avoid (22.6 KB and 0.5 to 1 s in the issue's port, its
     numbers, not measured here). The mark says what the form already is: its answer is the page at
-    the address it asked for. Once the patch (or a page, when the handler answers one) is drawn,
-    the runtime pushes the request's URL, the redirect's when there was one, with the `#fragment`
-    of the form's `action` or `formaction`, as the browser does for the form without JavaScript
-    (a fragment a redirect's `Location` names itself is not seen, as `fetch` does not show it, the
-    same as for a link the runtime follows); the same address again adds no entry. A patch it
-    cannot draw whole (it throws, is empty, has an element with no place on the page, or adds to
-    one, `data-append`, which no address's page is) is followed by a read of the page at the
-    address, as the browser loads it; a page answer that has to load in full (its layout changed,
-    or its stylesheet failed) loads at the address too. An error status's patch (a 422's, a 5xx's)
-    is drawn and its address pushed, as the browser shows an error page at the form's address. A
-    nav link to the new address is marked current, as for a navigation. A page answer's address is
-    pushed before the page is swapped in, so the entry left keeps its scroll and what was typed
-    there, as for a link followed. Sending a marked form cancels every other marked form's request
-    still on its way, as a navigation cancels a pending submit: the browser loads only the last
-    form sent, so the last one's answer is the screen and its address the one entry, whichever
-    answer comes first. The runtime keeps, in memory, the entries of the screen such forms made at
-    the path of the page on screen (the document's, then each page's swapped in), and the one each
-    was sent from when it is at that path too, and a traversal between two of them reads the
-    destination as the form did (`corten: action`, which the HTTP cache can answer) and applies
-    its patch, the rest of the screen and the focus staying. A form sent to another route's
-    address makes no patch entry, nor do two entries at that address, since that route's patch
-    drawn into this screen is not what that route's page draws. Nor does a traversal while a write
-    the screen sent is on its way (it may land) or after one redirected before its page was read
-    (`stale`): the patch would leave what the write changed outside the part as it was, so the
-    page is read. Any other answer (a page, Corten's redirect, an error status
-    even with a patch, no answer, a body cut off) or a patch not drawn whole (as above) is read as
-    a page, as every other entry is, focus going to the
-    document's start unless the page gives it to a control, and so is every entry once another
-    page is swapped in or the page reloads. So the route at each of those addresses
-    answers its part with `req.patch_or`, drawing all the address changes; a route whose patch
-    appends (Load more) is not one to mark. Entries live in memory: a page restored from the
-    back/forward cache keeps them with the rest of its script state, and one loaded again has none,
-    so its entries are read as pages (the smoke does not check a restore, since the browsers
-    Playwright drives do not keep its pages in that cache). Without the Navigation API
-    ([Limit 1](#limit-navigation-api)) the runtime leaves a marked GET form to the browser, which
-    loads the page at its address, as without JavaScript.
+    the address it asked for. Once the patch is drawn, the runtime pushes the request's URL, the
+    redirect's when there was one, with the `#fragment` of the form's `action` or `formaction`,
+    as the browser does for the form without JavaScript (a fragment a redirect's `Location` names
+    itself is not seen, as `fetch` does not show it, the same as for a link the runtime follows);
+    the same address again adds no entry. What the user typed outside the part and did not send
+    is kept for Back to the entry left, as for a link followed. A patch it cannot draw whole (it
+    throws, is empty, has an element with no place on the page, or adds to one, `data-append`,
+    which no address's page is) draws nothing and is followed by a read of the page at the
+    address, by a navigation there, as the browser loads it, and so is an answer that is a page
+    (its body is not read). An error status's patch (a 422's, a 5xx's) is drawn and its address
+    pushed, as the browser shows an error page at the form's address. A nav link to the new
+    address is marked current, as for a navigation. Sending a marked form cancels every other
+    marked form's request still on its way, as a navigation cancels a pending submit: the browser
+    loads only the last form sent, so the last one's answer is the screen and its address the one
+    entry, whichever answer comes first; one sent while a navigation is on its way (a link's page,
+    a traversal) is left to the browser, which drops that navigation for the form's, and the
+    runtime reads the page at its address. The runtime keeps, in memory, the entries such forms
+    made at the path of the page on screen (the document's, then that of each page a navigation
+    draws), and the one each was sent from when it is at that path too, and a traversal between
+    two of them reads the destination as the form did (`corten: action`, which the HTTP cache can
+    answer) and applies its patch, the rest of the screen and the focus staying. A page of that
+    route read since (a link to it, Back to an entry read as a page) is the same screen, its part
+    drawn for its entry's address, so the entries stay. A form sent to another route's address
+    makes no patch entry, nor do two entries at that address, since that route's patch drawn into
+    this screen is not what that route's page draws. Nor does a traversal while a write the screen
+    sent is on its way (it may land) or after one redirected before its page was read (`stale`):
+    the patch would leave what the write changed outside the part as it was, so the page is read.
+    Any other answer (a page, Corten's redirect, an error status even with a patch, no answer, a
+    body cut off) or a patch not drawn whole (as above) is read as a page, as every other entry
+    is, focus going to the document's start unless the page gives it to a control. So the route
+    at each of those addresses answers its part with `req.patch_or`, drawing all the address
+    changes, a link or form that carries the address included (a `keep_query` form's hidden
+    inputs are the query it was drawn with); a route whose patch appends (Load more) is not one
+    to mark. Entries live in memory: a page restored from the back/forward cache keeps them with
+    the rest of its script state, and one loaded again has none, so its entries are read as pages
+    (the smoke does not check a restore, since the browsers Playwright drives do not keep its
+    pages in that cache).
+
+    The runtime's part is a module of its own, `corten-address`, as file uploads' and form
+    fields' are: `html!` notes a marked form as it renders it, so the page's head loads the module
+    as a module script, and the runtime loads it with a page or patch it inserts that has one, so
+    a marked form is the module's from its first submit. Corten serves it with any app's assets,
+    a component script of the app's or not. The runtime every page loads keeps only the hooks the
+    module needs: a marked form's submit handed to it, a traversal asked of it before the page is
+    read, a patch answer drawn by it and a page answer given to it, a check `apply` runs before it
+    draws, and the runtime's functions the module calls. Until the module has loaded, or if it
+    fails to, a marked form is sent as any GET form is and the page at its address is read, as
+    without JavaScript; so is every marked form of an app with no static files and no components,
+    which has no assets to serve it from. Without the Navigation API
+    ([Limit 1](#limit-navigation-api)) the module leaves a marked GET form to the browser, which
+    loads the page at its address.
 
     Not chosen: `data-keep-place` on the filter's form, Corten's way to apply a filter as it
     changes: it sends the form as a navigation, so the address follows and the user's place stays,
@@ -4737,80 +4752,86 @@ rules something out.
     323 on the smoke's screen, the cost that made the issue's app push the address itself. The
     two marks are not two ways to do one thing (README Value 5): `data-keep-place` is for a filter
     that changes most of what the page shows (a list's results), which a page read is the right
-    size for, and `data-address` for one that redraws one part of a screen whose rest costs more
-    to read; the guide says which to pick. Loading `address` and the traversal's patch read as a
-    module of their own on the first marked submit, as file uploads load theirs: built and
-    measured, it took 722 bytes raw, 98 with gzip and 82 with brotli out of the runtime every page
-    loads, and the module was 1,217 raw, 613 gzip and 524 brotli, fetched on the first marked
-    submit (a request, though alongside the form's own) and served by a route of its own for apps
-    that serve no component scripts, where Corten serves its other modules only to apps that do;
-    the core keeps the entries, the traversal's check and the fallbacks either way, so the saving
-    is under 100 bytes compressed. A header on the patch's answer that names its address (`corten-location` with
-    replace semantics, as the issue suggested), since the same `patch_or` answers Load more and a
-    filter and only the form knows which it is, and a header of Corten's own where the form's
-    markup can say it needs a reason of its own ([Rule 10](#rule-standard-formats)); changing the
-    address for every GET `data-patch` form, which would give Load more an entry per page and an
-    address that reloads to fewer rows than the screen shows; an option to replace the entry
-    rather than push one, which no app has asked for and the browser's own form does not do; a
-    hook for a script to push the address and answer the traversal, a second way to do what the
-    mark does, with URLs written in scripts (README Value 5); and keeping each patch in memory to
-    draw on Back, which the HTTP cache does already and would show a stale part. Without the
-    Navigation API, patching and leaving the address as an unmarked form does (this Choice's first
-    draft) was not chosen either: a reload would show another scope than the screen did, the error
-    the mark is there to end, where a full load costs bytes (README conflict order 1 over 2).
+    size for, and falls short for one that redraws one part of a screen whose rest costs more to
+    read, which is `data-address`'s; the guide says which to pick. Keeping the mark's code in the
+    runtime every page loads, this Choice's first build: 1,927 bytes raw, 578 with gzip and 485
+    with brotli more for every page of every app (`1f75679d3` against `42991433f`), for a mark few
+    pages carry. Loading the module on a marked form's first submit, as an earlier split did: a
+    page the runtime swaps in would send its first marked submit to the browser, or wait for the
+    module, and the module would need a route of its own. Drawing a page answer in place with its
+    address pushed before the swap, which spares the second request: it puts the address into the
+    swap's and the full load's paths in the runtime every page loads, for an answer the guide asks
+    a marked form's route not to give. A header on the patch's answer that names its address
+    (`corten-location` with replace semantics, as the issue suggested), since the same `patch_or`
+    answers Load more and a filter and only the form knows which it is, and a header of Corten's
+    own where the form's markup can say it needs a reason of its own
+    ([Rule 10](#rule-standard-formats)); changing the address for every GET `data-patch` form,
+    which would give Load more an entry per page and an address that reloads to fewer rows than
+    the screen shows; an option to replace the entry rather than push one, which no app has asked
+    for and the browser's own form does not do; a hook for a script to push the address and answer
+    the traversal, a second way to do what the mark does, with URLs written in scripts (README
+    Value 5); and keeping each patch in memory to draw on Back, which the HTTP cache does already
+    and would show a stale part. Without the Navigation API, patching and leaving the address as
+    an unmarked form does was not chosen either: a reload would show another scope than the screen
+    did, the error the mark is there to end, where a full load costs bytes (README conflict order 1
+    over 2).
 
-    What it costs: the runtime is 1,927 bytes larger raw (43,395 to 45,322), 578 with gzip
-    (15,341 to 15,919) and 502 with brotli (13,846 to 14,348), paid once a release by every user;
-    of that, refusing a patch that appends is 123 raw, 23 gzip and 31 brotli, and cancelling
-    another marked submit, the screen's path and the write and `stale` guards 240 raw, 72 gzip
-    and 75 brotli. A GET `data-patch`
-    submit reads one attribute, a marked one cancels the other marked submits on their way, its
-    answer pushes an entry, forgets the entries it dropped and marks the current nav link, and a
-    traversal looks the pending submits over and two keys up in a set. A
-    traversal whose patch read is answered by anything but a patch (a page, a redirect, an error)
-    or cannot be drawn whole costs a second round trip, the page read after it, as does a first
-    submit whose patch cannot be drawn whole; both are a route that does not draw its part as the
-    guide asks, or a failure. Nothing changes on the server: `html!`'s
-    output and the request path are as they were, and the check that refuses a misplaced mark runs
-    when the markup compiles. The request a marked form and its Back send, a `corten: action` GET
-    answered by `req.patch_or`
+    What it costs, at this Choice's last build: the runtime every page loads is 261 bytes larger
+    raw (43,620 to 43,881), 133 with gzip (15,407 to 15,540) and 112 with brotli (13,925 to
+    14,037), paid once a release by every user. Of the gzip bytes, measured by taking each out of
+    the minified build: the runtime's functions the module calls 27, the traversal hook 19,
+    handing the submit over 16, loading the module with inserted markup 13, the two answer hooks
+    in `send` 20, the module's name 5 and `apply`'s check 6; none can leave, being where the
+    runtime hands the module what only it sees (the submit, the traversal, the answer) or where
+    the module calls in. The module is 2,658 bytes raw, 1,311 with gzip and 1,145 with brotli,
+    fetched once (its URL is versioned) by a page that draws a marked form, whose head carries its
+    `<script type="module">` tag, and by no other page. A submit reads one attribute; a marked one
+    cancels the other marked submits on their way, its answer pushes an entry, forgets the entries
+    it dropped and marks the current nav link, and a traversal looks the pending submits over and
+    two keys up in a set. A traversal whose patch read is answered by anything but a patch (a
+    page, a redirect, an error) or cannot be drawn whole costs a second round trip, the page read
+    after it, as does a submit answered by a page or by a patch that cannot be drawn whole; each
+    is a route that does not draw its part as the guide asks, or a failure. On the server,
+    `html!`'s markup is as it was; a marked form's render notes the module once, and the check
+    that refuses a misplaced mark runs when the markup compiles. The request a marked form and its
+    Back send, a `corten: action` GET answered by `req.patch_or`
     (`what_a_patch_or_request_costs`, release, jemalloc, 1,200 requests less 200), took 17,969.73,
     17,969.70 and 17,969.63 instructions on `c9ed56785` and 17,969.64, 17,969.70 and 17,969.65 on
     `307d00bca`, and 17,973.88, 17,973.80 and 17,973.85 on `a3ee0c05f` and 17,973.81, 17,973.84
-    and 17,973.80 on `2d619cbb5`, alternated: the same. On the
-    smoke's scope screen (a panel and 120 rows besides), Back and Forward between the form's
-    entries asked 323 bytes of body, 1,196 on the wire with headers, against 11,077 and 1,586 for
-    the page an app's own `pushState` made Back read; their times on a local server were the same
-    (7.3 against 7.6 ms medians), the read being small either way.
+    and 17,973.80 on `2d619cbb5`, alternated: the same; the code that request runs is unchanged
+    since. On the smoke's scope screen (a panel and 120 rows besides), Back and Forward between
+    the form's entries asked 323 bytes of body, 1,196 on the wire with headers, against 11,077 and
+    1,586 for the page an app's own `pushState` made Back read; their times on a local server
+    were the same (7.3 against 7.6 ms medians), the read being small either way (`307d00bca`'s
+    runtime, which read the same request).
 
-    Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
-    defaults, once each build; the traversals' bytes and times in Chromium, 40 each, alternated;
-    the request path's instructions under callgrind, three alternated runs of each build); platform
-    (`history.pushState` adds an entry the Navigation API reports and does not ask the runtime to
-    load, and a same-document traversal can be intercepted, in Chromium, Firefox and WebKit; the
-    smoke's checks in all three); reasoned (the form's mark says which answers are the page at
-    their address, which neither the handler nor the runtime can tell; an entry of the screen
-    read as a patch shows what a page read would, provided the route's patch draws all its address
-    changes, which the guide asks of a marked form's route); value (an address that names what
-    the screen shows is correct output that survives a reload, the README's conflict order 1,
-    above the bytes it costs, its 2; the form works the same with and without JavaScript, README
-    Value 3; one mark, no script, README Value 5).
+    Stands on: measured (the runtime's and the module's minified size by Node's `zlib` gzip and
+    brotli at their defaults, once each build; the traversals' bytes and times in Chromium, 40
+    each, alternated; the request path's instructions under callgrind, three alternated runs of
+    each build); platform (`history.pushState` adds an entry the Navigation API reports and does
+    not ask the runtime to load, `navigatesuccess` follows each navigation the runtime draws, and
+    a same-document traversal can be intercepted, in Chromium, Firefox and WebKit; the smoke's
+    checks in all three); reasoned (the form's mark says which answers are the page at their
+    address, which neither the handler nor the runtime can tell; an entry of the screen read as a
+    patch shows what a page read would, provided the route's patch draws all its address changes,
+    which the guide asks of a marked form's route); value (an address that names what the screen
+    shows is correct output that survives a reload, the README's conflict order 1, above the
+    bytes it costs, its 2, which the module keeps off every page without the mark; the form works
+    the same with and without JavaScript, README Value 3; one mark, no script, README Value 5).
 
     Revisit when: an app needs the entry replaced rather than pushed (a slider that applies as it
     moves); a route's type can say that its patch draws the part for its address, when `html!`
     could refuse marking a form whose route appends, which the guide only asks today; an app needs
-    Back between such entries across a page swap or a reload; or the browsers the runtime falls
-    back for gain the Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the
-    mark goes; or Corten serves its per-use modules to every app, when moving `address` into one
-    costs no route of its own.
+    Back between such entries across a reload; the browsers the runtime falls back for gain the
+    Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the mark goes; or the
+    runtime gains a general way to hand a module its events, when the hooks here become that.
 
-    Last checked: 2026-11-16, the runtime's size on `fd45ee99d` against `412a3b4c9`, and the
-    module split built from `fd45ee99d`'s runtime; 2026-11-16, the smoke on `520dc014c`, its
-    twenty-eight checks of the mark passing in each of Chromium 156.0.8078.4, Firefox 157.0 and
-    WebKit 27.2 (Playwright 1.64.1), 1,116 checks in all; 2026-11-15, the traversals'
-    bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and the request
-    path's count on `307d00bca` against `c9ed56785`; 2026-11-15, the request path's count on
-    `2d619cbb5` against `a3ee0c05f`.
+    Last checked: 2026-11-16, the runtime's and the module's sizes on `HEAD_SHA` against
+    `f5f2132aa`, and each hook's share taken out of that build; 2026-11-16, the smoke on
+    `SMOKE_SHA`, SMOKE_COUNTS; 2026-11-15, the traversals' bytes and times measured with
+    `307d00bca`'s runtime in Chromium 156.0.8078.4, and the request path's count on `307d00bca`
+    against `c9ed56785`; 2026-11-15, the request path's count on `2d619cbb5` against
+    `a3ee0c05f`.
 
 ## Rules
 

@@ -11,6 +11,7 @@ export const MODULES = {
   "corten-format": "format.js",
   "corten-field": "field.js",
   "corten-upload": "upload.js",
+  "corten-address": "address.js",
   "corten/keys": "keys.js",
   "corten/read": "read.js",
 };
