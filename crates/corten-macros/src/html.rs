@@ -1649,13 +1649,15 @@ impl Cursor {
                     let emitted = match &attr {
                         Attr::Ref(..) => Some("data-ref".into()),
                         Attr::Page(_) => Some("data-corten-page".into()),
+                        // `style={FILL.pct(42.0)}` is written as data-vars, so a literal style beside it is another attribute.
+                        Attr::Expr(name, _) if name == "style" => Some("data-vars".into()),
                         Attr::Bare(name) | Attr::Static(name, _) | Attr::Expr(name, _) => Some(name.to_ascii_lowercase()),
                         // Handler calls share one generated data-on attribute, including repeated events.
                         Attr::On(..) => None,
                         Attr::Spread(_) => unreachable!(),
                     };
-                    if emitted.is_some_and(|name| !names.insert(name)) {
-                        let instead = if lower == "style" {
+                    if let Some(emitted) = emitted.filter(|emitted| !names.insert(emitted.clone())) {
+                        let instead = if emitted == "data-vars" {
                             "give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}"
                         } else {
                             "write the attribute once, combining its values in one expression if needed"
