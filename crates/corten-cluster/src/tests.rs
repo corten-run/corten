@@ -96,6 +96,76 @@ async fn take(conn: &mut PgConnection, who: &str, lease: Duration) -> bool {
     store::lease(conn, who, lease).await.unwrap()
 }
 
+#[tokio::test]
+async fn invalid_feed_keys_are_refused_before_the_insert() {
+    let Some((db, _)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let mut tx = pool.begin().await.unwrap();
+    for key in ["my feed", "", ".x", "x.", "a..b", "a\tb", "a\rb", "a\nb", "*", ">", "a*b", "a>b"] {
+        assert!(create_feed(&mut tx, key).await.is_err(), "accepted {key:?}");
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM corten_feeds WHERE key = $1)")
+            .bind(key).fetch_one(&mut *tx).await.unwrap();
+        assert!(!exists, "inserted {key:?}");
+    }
+    let valid = key("valid.part-_");
+    assert!(create_feed(&mut tx, &valid).await.unwrap(), "the transaction is still usable");
+    assert!(!create_feed(&mut tx, &valid).await.unwrap());
+    tx.rollback().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn legacy_bad_keys_do_not_stop_other_feeds() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let feed = key("afterbad");
+    new_feed(&pool, &feed).await;
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), Items, Options::default()).await.unwrap();
+    let followed = cluster.feed(&feed).await.unwrap().unwrap();
+    // More than a relay batch, including both client-rejected framing and server-rejected
+    // empty tokens. Insert as an older release (or an external writer) could have done.
+    let mut tx = pool.begin().await.unwrap();
+    for n in 0..260 {
+        let bad = format!("{feed}-{n}{}", [" my feed", ".x.", ".", "..b"][n % 4]);
+        sqlx::query("INSERT INTO corten_outbox (feed, generation, seq, body) VALUES ($1, 'legacy', 1, '{\"seq\":1,\"changes\":[]}')")
+            .bind(bad).execute(&mut *tx).await.unwrap();
+    }
+    tx.commit().await.unwrap();
+    set(&pool, &feed, 1, None).await;
+    eventually("a valid feed after legacy bad rows", || followed.seq() == 1).await;
+    assert_eq!(followed.read(|rows| rows["a"].n), 1);
+    set(&pool, &feed, 2, None).await;
+    eventually("a later patch too", || followed.seq() == 2).await;
+}
+
+/// Commit-to-follower latency over real Postgres and JetStream. Run in release mode, alone,
+/// with the integration URLs set; alternate the base and fixed builds on the same services.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn relay_latency() {
+    let (db, nats) = urls().expect("set the cluster integration URLs");
+    let pool = pool(&db).await;
+    let feed = key("latency");
+    new_feed(&pool, &feed).await;
+    let cluster = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), Items, Options::default()).await.unwrap();
+    let followed = cluster.feed(&feed).await.unwrap().unwrap();
+    let mut samples = Vec::new();
+    for n in 1..=110 {
+        let started = Instant::now();
+        set(&pool, &feed, n, None).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while followed.seq() < n as u64 {
+                tokio::task::yield_now().await;
+            }
+        }).await.unwrap();
+        if n > 10 {
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    println!("110 serial writes, 10 warmup: commit+relay+follower ms median={:.3}, p95={:.3}, range={:.3}..{:.3}",
+        samples[50], samples[94], samples[0], samples[99]);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_idempotency_key_commits_once_even_when_retries_race() {
     let Some((db, _)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };

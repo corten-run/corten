@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `corten-cluster` refuses invalid NATS feed keys at `create_feed`, `begin` and `Cluster::feed`
+  with `InvalidFeedKey`, and refuses invalid subject prefixes at startup. The relay retains
+  legacy invalid outbox rows with `rejected_at` (not `published_at`), logs them and continues
+  other feeds instead of retrying one impossible subject forever. Rejected rows are not pruned;
+  repair their feed keys consistently before clearing the rejection to retry delivery.
+
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
   page is on the screen (a GET with `corten: action` to the page's own route, which says

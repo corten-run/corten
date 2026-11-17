@@ -471,7 +471,30 @@ once. Against a feed that answers every stream with `sync`, one page made 544 sn
 in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
 221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream), on
-async-nats 0.52 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why). In the failover
+async-nats 0.52 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
+
+Cluster feed keys are literal [NATS subjects](https://docs.nats.io/nats-concepts/subjects):
+nonempty dot-separated tokens, without spaces, tabs, CR, LF, `*` or `>`. UTF-8 keys and keys
+with several tokens (`seller.42`) work; `""`, `.seller`, `seller.`, `seller..42` and `my feed`
+do not. `create_feed` refuses an invalid key before inserting anything, with the typed
+`corten_cluster::InvalidFeedKey` error inside `corten_cluster::Error` (inspect it with
+`error.is::<corten_cluster::InvalidFeedKey>()`). The caller's transaction remains usable.
+`begin` and `Cluster::feed` refuse the same keys, including feeds an older version created.
+`Options::subject_prefix` must follow those same literal-subject rules; `Cluster::start`
+refuses an invalid prefix before changing the database or starting background tasks.
+
+On upgrade, the relay isolates any existing invalid outbox rows: it sets their `rejected_at`,
+logs each newly rejected row on `corten::feed` with its id and key, and continues publishing
+other feeds. It leaves `published_at` unset, keeps the committed data and patch body, and does
+not retry or prune rejected rows. Inspect them with
+`SELECT id, feed, rejected_at FROM corten_outbox WHERE rejected_at IS NOT NULL`.
+Repair the feed key consistently in the app's rows, `corten_feeds`, `corten_outbox` and
+`corten_idempotency` before clearing `rejected_at` on its unpublished rows to retry them;
+restart instances holding the old key. Do not clear the rejection without fixing the key.
+Transport and other JetStream failures still retry, rather than being treated as bad data
+([Choice 63](../design.md#choice-cluster-feed-subjects)).
+
+In the failover
 benchmark (200 clients, 50 writes a second, each instance killed and restarted under load),
 every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000 with
 clients back on the other instance after 1.1 s at the median (measured on async-nats 0.50,

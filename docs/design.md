@@ -5589,6 +5589,46 @@ rules something out.
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
     above, at `65ac1dc47` against `38587c414`.
 
+63. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys are literal NATS subjects, not encoded names; an invalid
+    legacy outbox row is retained but excluded from the relay.** `create_feed` takes a string,
+    not a typed key the compiler can check. It returns `InvalidFeedKey` through the crate's
+    existing boxed error before issuing SQL, as do `begin` and `Cluster::feed`. The existing
+    async-nats `Subject::is_valid` checks framing and nonempty dot-separated tokens; Corten
+    additionally refuses `*` and `>`, which NATS reserves for subscriptions. The subject prefix
+    follows the same rules and is checked at cluster startup, before migration or background
+    tasks. Valid keys keep exactly their existing subject and message id.
+
+    An old release or external SQL can already have stored an invalid key. The relay sets that
+    outbox row's `rejected_at`, logs its id and key, and continues, including past a full batch
+    of rejected rows. It does not claim a JetStream acknowledgement by setting `published_at`,
+    delete the row, or roll back the app's committed data. Rejected rows remain available for
+    operator inspection and repair; `prune` does not remove them. A new pending index excludes
+    them, so they are not scanned again on every drain. Network, permission, capacity and other
+    publish failures remain retryable: only locally proven invalid subjects are rejected.
+
+    Not chosen: encoding arbitrary keys (a new wire mapping and migration of existing subjects),
+    restricting every key to an ASCII slug (NATS accepts UTF-8 and multiple tokens), retrying
+    an impossible subject forever (one feed would stop every feed), or marking rejected rows
+    published (which would misreport delivery). Rejecting at creation alone leaves pre-upgrade
+    rows able to stop the relay. No schema constraint repeats the client's subject grammar;
+    external writers remain responsible for their data, and the relay isolates their mistakes.
+
+    Stands on: platform (the [NATS subject rules](https://docs.nats.io/nats-concepts/subjects)
+    reserve wildcards for subscriptions, and
+    [async-nats 0.52.0](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/src/lib.rs)
+    distinguishes protocol-safe publishing from structurally valid subjects); reasoned (a
+    deterministic invalid subject cannot recover by retrying, while a transport failure can;
+    keeping rejected rows separately preserves the distinction between committed and delivered);
+    value (correctness and reliability first, early failure and a small surface: README Values
+    4, 6 and 9).
+
+    Revisit when: an app needs arbitrary text as its cluster feed key, NATS changes its literal
+    subject rules, or operators need automatic retention or replay of rejected rows instead of
+    explicit repair. A typed cluster key would move literal validation to compile time.
+
+    Last checked: 2026-11-17, NATS subject documentation and async-nats 0.52.0 source read;
+    2026-11-17, the store and relay on `39ac3e960` read before the fix.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
