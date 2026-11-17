@@ -12,11 +12,6 @@
 
 /** A part the page waits for: its tag, in the element its read's patch replaces. */
 const PART_NOW = "template[data-corten-read-now][data-from]";
-/**
- * The tag as the server writes it (`ReadNow`), and its address: what an answer draws waiting is
- * read from its text, as only the runtime's Trusted Types policy may parse markup.
- */
-const WRITTEN = /<template data-corten-read-now data-from="([^"]*)"/g;
 /** The mark of a part no read will bring, where the app's CSS may say so. */
 const FAILED = "data-corten-read-failed";
 // Read through Element's and Node's own, as a form's controls may shadow them.
@@ -27,9 +22,10 @@ const inPage = (el) => !!Reflect.get(Node.prototype, "isConnected", el);
 const fromOf = (tag) => /** @type {string} */ (own.getAttribute.call(tag, "data-from"));
 
 /**
- * The runtime's `apply`: draws the patch `html` unless `signal.aborted`, which it reads once,
- * right before it draws (after the patch's modules and stylesheets have loaded); `asked` is the
- * tag of the read it answers.
+ * The runtime's `apply`: draws the patch `html` unless `signal.aborted`, which it reads right
+ * before it draws (after the patch's modules and stylesheets have loaded) and again right after,
+ * in the same task, once the patch's elements are in the page; `asked` is the tag of the read it
+ * answers.
  * @typedef {(html: string, signal: AbortSignal, sent: null, took: undefined, own: boolean, asked: Element) => Promise<void>} Apply
  */
 /**
@@ -61,14 +57,15 @@ const live = new Set();
  */
 const failed = new WeakMap();
 /**
- * The addresses of the tags the answer being drawn writes, one for each: the first tag at each that
- * the page gains next is that answer's, marked failed rather than read, so one read's answer cannot
- * start another, and two parts whose answers each draw the other waiting do not read each other
- * without end. Any other tag the page gains with them is read: a form's answer that waited for the
- * same stylesheet is drawn in the same task, right after it.
- * @type {string[] | null}
+ * The tags a part's answer drew, taken from the page's changes as `apply` finishes drawing it,
+ * before anything else can change the page: these elements alone are marked failed rather than
+ * read, so one read's answer cannot start another, and two parts whose answers each draw the
+ * other waiting do not read each other without end. Any other tag is read, whatever its address:
+ * one a form's answer drew (in the same task, when it waited for the same stylesheet), one that
+ * replaced a tag the part's answer drew, or one at the address of a tag in a template's content.
+ * @type {WeakSet<Element>}
  */
-let drawing = null;
+const chained = new WeakSet();
 
 /** How many times the browser has hidden the page (the back-forward cache), and whether it is now. */
 let hidden = 0;
@@ -98,20 +95,18 @@ export function start(apply, busy) {
   }
   draw = apply;
   busyBy = busy;
-  observer = new MutationObserver(changed);
+  observer = new MutationObserver((records) => changed(records));
   observer.observe(document.documentElement, { childList: true, subtree: true, attributeFilter: ["data-from", "aria-busy", FAILED] });
-  take(Array.from(own.querySelectorAll.call(document.documentElement, PART_NOW)), null);
+  take(Array.from(own.querySelectorAll.call(document.documentElement, PART_NOW)));
 }
 
 /**
  * What changed in the page: tags that joined it, a tag whose address changed, and a part whose
  * marks a layout element drawn again in place took away, are taken ({@link take}); a read one of
- * whose tags left stops.
- * @param {MutationRecord[]} records
+ * whose tags left stops. `chain`: the changes are a part's answer's, whose tags are {@link chained}.
+ * @param {MutationRecord[]} records @param {boolean} [chain]
  */
-function changed(records) {
-  const drawn = drawing;
-  drawing = null;
+function changed(records, chain = false) {
   /** @type {Set<Element>} */
   const tags = new Set();
   let removed = false;
@@ -126,24 +121,29 @@ function changed(records) {
     if (record.removedNodes.length) removed = true;
     for (const node of Array.from(record.addedNodes)) {
       if (!(node instanceof Element)) continue;
-      if (own.matches.call(node, PART_NOW)) tags.add(node);
-      for (const tag of Array.from(own.querySelectorAll.call(node, PART_NOW))) tags.add(tag);
+      // Not a template's content: a tag there is not in the page.
+      const added = Array.from(own.querySelectorAll.call(node, PART_NOW));
+      if (own.matches.call(node, PART_NOW)) added.push(node);
+      for (const tag of added) {
+        tags.add(tag);
+        if (chain) chained.add(tag);
+      }
     }
   }
   // Its answer is for what is no longer there (a form's answer replaced its part, a page was
   // swapped in, a layout element kept in place took new children).
   if (removed) for (const read of live) if (!read.tags.every(inPage)) read.stop.abort();
-  take(Array.from(tags), drawn);
+  take(Array.from(tags));
 }
 
 /**
  * Reads the parts of `tags`, or marks them as they were: a tag whose read is on its way for its
  * address keeps it, and its part its busy mark; one whose read did not bring it keeps its part's
- * failed mark. `drawn`: the addresses a part's answer drew waiting ({@link drawing}), whose tags
- * are marked failed rather than read.
- * @param {Element[]} tags @param {string[] | null} drawn
+ * failed mark. A tag a part's answer drew ({@link chained}) is marked failed rather than read, once:
+ * if a page later gives it another address, that one is read.
+ * @param {Element[]} tags
  */
-function take(tags, drawn) {
+function take(tags) {
   /** @type {Map<string, [Element[], Element[]]>} */
   const reads = new Map();
   for (const tag of tags) {
@@ -171,11 +171,9 @@ function take(tags, drawn) {
       continue;
     }
     if (ended !== undefined) failed.delete(tag), own.removeAttribute.call(part, FAILED);
-    // A tag the part's answer drew, which is taken off its list: the page gains its tags first.
-    const at = drawn?.indexOf(from) ?? -1;
-    if (at >= 0) drawn?.splice(at, 1);
-    if (at >= 0 || !own.hasAttribute.call(part, "id")) {
-      if (at < 0) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
+    const chain = chained.delete(tag);
+    if (chain || !own.hasAttribute.call(part, "id")) {
+      if (!chain) console.error("corten: ReadAgain::now goes in the element its patch replaces, which needs an id", part);
       fail(tag, from);
       continue;
     }
@@ -221,18 +219,18 @@ async function readPart(from, tags, parts) {
   }
   const at = hidden;
   let again = false;
-  /** The addresses of the tags its answer writes ({@link drawing}). @type {string[]} */
-  let drew = [];
+  let looked = false;
   const here = () => tags.every((tag) => inPage(tag) && reading.get(tag) === read && fromOf(tag) === from);
-  // Read by `apply` once, right before it draws: what the page changed before is taken first, so
-  // the first tags the page gains at its tags' addresses are this answer's.
+  // Read by `apply` right before it draws, where what the page changed before is taken first, and
+  // right after, where the changes left are its answer's alone: their tags are {@link chained}.
   const now = /** @type {AbortSignal} */ (
     /** @type {unknown} */ ({
       get aborted() {
+        if (looked) return changed(observer?.takeRecords() ?? [], true), false;
+        looked = true;
         if (signal.aborted || !here()) return true;
         const pending = observer?.takeRecords() ?? [];
         if (pending.length) changed(pending);
-        drawing = drew.length ? drew : null;
         return false;
       },
     })
@@ -243,8 +241,6 @@ async function readPart(from, tags, parts) {
     const res = await fetch(from, { headers: { corten: "action" }, signal });
     if (res.headers.has("corten-patch") && res.url !== "" && new URL(res.url).origin === location.origin) {
       const html = await res.text();
-      // The browser reads the `&amp;` between a query's fields as `&`.
-      drew = Array.from(html.matchAll(WRITTEN), (found) => String(found[1]).replace(/&amp;/g, "&"));
       if (here()) await Promise.race([draw(html, now, null, undefined, true, /** @type {Element} */ (tags[0])).catch(reportError), left]);
     } else if (res.ok && !res.headers.has("corten-location")) {
       // A success that is not a patch is the app's mistake (the route answered its page).
@@ -254,8 +250,6 @@ async function readPart(from, tags, parts) {
     // Offline, the server unreachable, or the body cut short: hidden meanwhile, read again.
     again = !signal.aborted && hidden !== at;
   }
-  // An answer that drew nothing leaves no drawing to hear of.
-  if (drawing === drew) drawing = null;
   stop.abort();
   live.delete(read);
   // Made again only for the same tags, while it is still theirs: kept busy meanwhile.

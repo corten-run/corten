@@ -68,17 +68,21 @@ const fromHere = (url) => url !== "" && new URL(url).origin === location.origin;
 const PART = "./part.js";
 /**
  * Has the part module (`js/part.js`) read the parts the page waits for (`ReadAgain::now`): imported
- * once the page loaded with one (its head preloads the module) or markup the server sent draws one,
- * and handed what draws its answers; from then on it finds the parts itself, so later calls (the
+ * once the page loaded with one (its head preloads the module) or markup the server sent, or a
+ * script's {@link patch}, draws one, and handed what draws its answers; from then on it finds the parts itself, so later calls (the
  * browser's own module, imported once) do nothing. A page that never draws one fetches and runs
  * none of it, and one whose module does not load shows each part's link, as without JavaScript
  * (docs/design.md#choice-slow-part-link).
  */
 const readParts = () => import(PART).then((/** @type {typeof import("./part.js")} */ part) => part.start(apply, busyBy));
-/** The server's markup, through the policy; markup with a part waiting has the part module read it. @param {string} text */
-const trustedHTML = (text) => {
-  if (text.includes(" data-corten-read-now")) readParts();
-  return /** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createHTML(text) : text));
+/**
+ * The server's markup, through the policy, or a script's (`own` false, {@link patch}) as it is;
+ * markup with a part waiting has the part module read it.
+ * @param {string | TrustedHTML} text @param {boolean} [own]
+ */
+const trustedHTML = (text, own = true) => {
+  if (`${text}`.includes(" data-corten-read-now")) readParts();
+  return /** @type {string} */ (/** @type {unknown} */ (trusted && own ? trusted.createHTML(/** @type {string} */ (text)) : text));
 };
 
 const scriptsMeta = document.querySelector('meta[name="corten-scripts"]');
@@ -957,7 +961,7 @@ export function subscribe(url, handlers, { signal } = {}) {
 function parse(text, own = true) {
   const template = document.createElement("template");
   // lib.dom types this sink as string only; own requests carry text, patch() carries TrustedHTML.
-  template.innerHTML = /** @type {string} */ (own ? trustedHTML(/** @type {string} */ (text)) : text);
+  template.innerHTML = trustedHTML(text, own);
   for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
   return template.content;
 }
@@ -1080,7 +1084,8 @@ async function apply(html, signal, sent, took, own = true, asked, within) {
   // The server marked a nav link in the patch against the request that made it (a form's action),
   // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
   // only looks through what it put.
-  if (navs || put.some(holdsNav)) markCurrent();
+  // Read again once drawn: a part's read (part.js) takes the waiting parts this patch drew as its own.
+  if (!signal?.aborted && (navs || put.some(holdsNav))) markCurrent();
   for (const el of put) setVars(el);
   if (again) {
     const beside = asked?.isConnected ? asked : partTagBeside(put);

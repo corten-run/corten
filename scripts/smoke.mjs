@@ -5035,6 +5035,145 @@ async function run(browser) {
     await page.unroute("**/smoke/together-sheet.css");
   }
 
+  // Which parts a part's answer drew is decided by the elements it put in the page, not by the
+  // addresses its text names. With one stylesheet held for the part's answer and a newer answer,
+  // both drawn in one task once it loads: a part the newer answer draws at an address the part's
+  // answer also drew waiting (in its place, or beside it once it removed it), or one at an address
+  // only a template's content in the part's answer names, is read; so is one a part read again
+  // (`ReadAgain::from`) draws in its place (#1400).
+  for (const [name, newer] of [
+    ["replace", "form"],
+    ["remove", "form"],
+    ["poll", "poll"],
+    ["inert", "form"],
+  ]) {
+    const at = `/smoke/own-${name}`;
+    const id = `own-${name}`;
+    const wait = `<template data-corten-read-now data-from="${at}-shared"></template>`;
+    /** @type {(value?: unknown) => void} */
+    let releaseSheet = () => {};
+    const sheetHeld = new Promise((resolve) => (releaseSheet = resolve));
+    /** @type {(value?: unknown) => void} */
+    let sheetAsked = () => {};
+    const sheetSent = new Promise((resolve) => (sheetAsked = resolve));
+    /** @type {(value?: unknown) => void} */
+    let releasePart = () => {};
+    const partHeld = new Promise((resolve) => (releasePart = resolve));
+    /** @type {(value?: unknown) => void} */
+    let partAsked = () => {};
+    const partSent = new Promise((resolve) => (partAsked = resolve));
+    /** @type {string[]} */
+    const reads = [];
+    const sheet = `<link rel="stylesheet" data-corten-style href="${at}.css">`;
+    const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
+    // Where the read of the shared address draws: the part the newer answer drew.
+    const drawnIn = name === "replace" || name === "poll" ? `${id}-c` : `${id}-b`;
+    await page.route(`**${at}.css`, async (route) => {
+      sheetAsked();
+      await sheetHeld;
+      await route.fulfill({ status: 200, contentType: "text/css", body: "" }).catch(() => {});
+    });
+    await page.route(`**${at}-*`, async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      reads.push(path.slice(at.length + 1));
+      if (path === `${at}-a`) {
+        partAsked();
+        await partHeld;
+        const drew = name === "inert" ? `<template><div>Inert${wait}</div></template>` : `<div id="${id}-c">C old waiting${wait}</div>`;
+        return route.fulfill(patchOf(`${sheet}<section id="${id}-a">A done${drew}</section>`)).catch(() => {});
+      }
+      if (path === `${at}-${newer}`)
+        return route.fulfill(
+          patchOf(
+            sheet +
+              {
+                replace: `<div id="${id}-c">C new waiting${wait}</div>`,
+                remove: `<template id="${id}-c" data-remove></template><p id="${id}-out">Saved<span id="${id}-b">B waiting${wait}</span></p>`,
+                poll: `<div id="${id}-c">C new waiting${wait}</div>`,
+                inert: `<p id="${id}-out">Saved<span id="${id}-b">B waiting${wait}</span></p>`,
+              }[name],
+          ),
+        );
+      return route.fulfill(patchOf(`<${drawnIn.endsWith("-c") ? "div" : "span"} id="${drawnIn}">Shared drawn</${drawnIn.endsWith("-c") ? "div" : "span"}>`));
+    });
+    await page.evaluate(
+      async ({ at, id, poll }) => {
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="${id}-1"></div>`));
+        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch(
+          __html(
+            `<div id="${id}-1"><section id="${id}-a">A waiting<template data-corten-read-now data-from="${at}-a"></template></section>` +
+              `<form id="${id}-form" method="post" action="${at}-form" data-patch><button>Save</button></form><p id="${id}-out"></p></div>` +
+              (poll ? `<template data-corten-read-again="1" data-from="${at}-poll"></template>` : ""),
+          ),
+        );
+      },
+      { at, id, poll: newer === "poll" },
+    );
+    await Promise.race([partSent, page.waitForTimeout(5000)]);
+    const partAnswered = page.waitForResponse((r) => r.url().endsWith(`${at}-a`), { timeout: 5000 }).catch(() => null);
+    releasePart();
+    await partAnswered;
+    await Promise.race([sheetSent, page.waitForTimeout(5000)]);
+    const newerAnswered = page.waitForResponse((r) => r.url().endsWith(`${at}-${newer}`), { timeout: 5000 }).catch(() => null);
+    if (newer === "form") await page.dispatchEvent(`#${id}-form button`, "click");
+    await newerAnswered;
+    await page.waitForTimeout(300);
+    releaseSheet();
+    await page.waitForFunction((drawnIn) => document.getElementById(drawnIn)?.textContent === "Shared drawn", drawnIn, { timeout: 5000 }).catch(() => {});
+    await page.waitForTimeout(300);
+    const state = await page.evaluate(
+      ({ id, drawnIn }) => ({
+        drawn: document.getElementById(drawnIn)?.textContent,
+        marked: Array.from(document.querySelectorAll(`#${id}-1 [aria-busy], #${id}-1 [data-corten-read-failed]`), (el) => el.id),
+      }),
+      { id, drawnIn },
+    );
+    check(
+      {
+        replace: "a part a form's answer draws in place of one a part's answer drew waiting at the same address, in the same task, is read",
+        remove: "a part a form's answer draws at the address of one a part's answer drew waiting, which it removed, in the same task, is read",
+        poll: "a part a part read again draws in place of one a part's answer drew waiting at the same address, in the same task, is read",
+        inert: "a part a form's answer draws at an address only a template's content in a part's answer names, in the same task, is read",
+      }[name],
+      state.drawn === "Shared drawn" && state.marked.length === 0 && reads.filter((read) => read === "shared").length === 1,
+      `${JSON.stringify(state)}, reads ${reads.join(" ")}`,
+    );
+    await page.evaluate(({ at, id }) => {
+      document.getElementById(`${id}-1`)?.remove();
+      document.head.querySelector(`link[href="${at}.css"]`)?.remove();
+    }, { at, id });
+    await page.unroute(`**${at}-*`);
+    await page.unroute(`**${at}.css`);
+  }
+
+  // A script's patch that draws a page's first waiting part has the part module, which the page's
+  // head did not preload, read it (#1400).
+  {
+    const cold = await (await browser.newContext()).newPage();
+    let moduleAsked = 0;
+    cold.on("request", (r) => new URL(r.url()).pathname.endsWith("/part.js") && moduleAsked++);
+    await cold.route("**/smoke/cold-part", (route) =>
+      route.fulfill({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body: '<p id="cold-a">Cold drawn</p>' }),
+    );
+    await cold.goto(`${base}/news`);
+    const preloaded = await cold.evaluate(() => !!document.querySelector("[data-corten-part]"));
+    const askedBefore = moduleAsked;
+    await cold.evaluate(async () => {
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="cold-1"></div>'));
+      const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+      await corten.patch(__html('<div id="cold-1"><p id="cold-a">Waiting<template data-corten-read-now data-from="/smoke/cold-part"></template></p></div>'));
+    });
+    await cold.waitForFunction(() => document.getElementById("cold-a")?.textContent === "Cold drawn", null, { timeout: 5000 }).catch(() => {});
+    const coldText = await cold.textContent("#cold-a");
+    check(
+      "a script's patch that draws a page's first waiting part loads the part module, which reads it",
+      !preloaded && askedBefore === 0 && moduleAsked === 1 && coldText === "Cold drawn",
+      `preloaded ${preloaded}, module asked ${askedBefore} then ${moduleAsked}, ${coldText}`,
+    );
+    await cold.context().close();
+  }
+
   // A waiting part a patch appends (`data-append`): read as one the patch replaces is (#1400).
   let appendedReads = 0;
   await page.route("**/smoke/appended", (route) => {
