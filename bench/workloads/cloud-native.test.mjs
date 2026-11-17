@@ -79,9 +79,11 @@ for (const group of ["client-heavy", "mixed-production"]) test(`collector retain
   const latestStable = evaluateLatestStable({ group, ...sourceInputs });
   assert.equal(latestStable.valid, true);
   assert.equal(latestStable.status, failed ? "not-applicable" : "blocked");
+  const unsupported = new Set((latestStable.candidates ?? []).filter((r) => r.status === "unsupported").map((r) => r.app));
+  assert.deepEqual([...unsupported], group === "client-heavy" ? ["solid"] : []);
   const native = { status: failed ? "failed" : "verified", attemptComplete: true, cleanupComplete: true,
     resources: "verified", comparisonEligibleApps: [],
-    outcomes: apps.map((app, i) => ({ app, outcome: failed && i === 0 ? "failed" : "passed" })) };
+    outcomes: apps.map((app, i) => ({ app, outcome: unsupported.has(app) ? "unsupported" : failed && i === 0 ? "failed" : "passed" })) };
   const code = failed ? 1 : 2;
   const composed = composePhase({ request: { group }, latestStable, preparation: { fixtures: [] }, selection: { apps } },
     native, { cleanupComplete: true, resources: "verified" },
@@ -89,6 +91,13 @@ for (const group of ["client-heavy", "mixed-production"]) test(`collector retain
   assert.equal(composed.outcome, "native-validated");
   assert.ok(composed.appOutcomes.some((r) => r.outcome === "passed"));
   assert.ok(composed.appOutcomes.every((r) => r.comparisonEligible === false));
+  for (const app of unsupported) {
+    assert.equal(composed.appOutcomes.find((r) => r.app === app).outcome, "unsupported");
+    const forged = structuredClone(native); forged.outcomes.find((r) => r.app === app).outcome = "passed";
+    assert.throws(() => composePhase({ request: { group }, latestStable, preparation: { fixtures: [] }, selection: { apps } },
+      forged, { cleanupComplete: true, resources: "verified" },
+      [{ terminal: true, code, error: null, cancelled: false, forced: false, success: code === 0 }]), /unsupported client cannot carry measured success/);
+  }
   row.appOutcomes = composed.appOutcomes;
   assert.deepEqual(campaignOutcome(report, { round: "r21", commit, selection: selection() }, 0),
     { fullGroupQualified: false, evidenceOutcome: "validated" });

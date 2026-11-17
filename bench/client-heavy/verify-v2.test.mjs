@@ -13,12 +13,15 @@ import { fixturePass, workload, settings } from "./replay-fixture.mjs";
 import { vendorConfiguration } from "./build-replay.mjs";
 import { admitSaved } from "./admission.mjs";
 import { hostFixture } from "./host-fixture.mjs";
+import { evaluateLatestStable, latestStableSources } from "../workloads/latest-stable.mjs";
+import { replayCandidatePolicy, replayCandidateDisposition, replayProducerSchema } from "./verify-v2.mjs";
 
-const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), apps = selectedApps("client-heavy");
+const currentCommit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), apps = selectedApps("client-heavy");
 const producerRoot = "/producer", outputPath = "bench/client-heavy/work/unit";
 // Completely synthetic source/build/browser receipts. Their successful intrinsic
 // replay MUST NOT authenticate them or create a real review receipt.
-async function fixture(t) {
+async function fixture(t, version = 2) {
+  const commit = version === 3 ? currentCommit : "e006be831cd69e423bfd3e159362b54746597b96";
   const folder = await mkdtemp(join(tmpdir(), "client-v2-unit-")), e = new Evidence(process.cwd(), folder);
   t.after(async () => { const r = relative(tmpdir(), folder); assert.ok(r && !isAbsolute(r) && !r.startsWith("..")); await rm(folder, { recursive: true, force: true }); });
   const write = async (p, b) => { await mkdir(dirname(join(folder, p)), { recursive: true }); await writeFile(join(folder, p), b); };
@@ -35,7 +38,7 @@ async function fixture(t) {
   const plan = { schema: "client-heavy-plan/v1", round: "unit", commit, invocation: config.invocation, workload, settings, timeoutMs: 30000,
     selectedApps: [...apps], definition: definition("client-heavy"), sourceBefore: "evidence/source-before.json", root: producerRoot, platform: "linux",
     nodeClock: { clock: "node-performance", timeOrigin: 1000 }, inheritedConfigurationNames: ["PATH"] };
-  const output = { schema: "client-heavy-native/v2", group: "client-heavy", round: "unit", effectiveWorkload: workload, settings, timeoutMs: 30000,
+  const output = { schema: `client-heavy-native/v${version}`, group: "client-heavy", round: "unit", effectiveWorkload: workload, settings, timeoutMs: 30000,
     selectedApps: [...apps], definition: definition("client-heavy"), builds: {}, cells: {}, passed: true, readyForLoad: false, cleanupFailures: [],
     collection: { accounting: "complete", proof: "blocked", blockers: ["external-trusted-execution-source-build-and-host-admission-required"], isolation: "unknown", rankingEligible: false, reviewSubject: "review-subject.json" },
     provenance: { commit, sourceBefore: "evidence/source-before.json", sourceAfter: "evidence/source-after.json", node: "unit", platform: "linux", release: "unit", cpu: "unit", logicalCpus: 1,
@@ -108,6 +111,16 @@ async function fixture(t) {
         method: "GET", resourceType: name.endsWith("html") ? "document" : "script", startedAt: start + 2 + id, endedAt: start + 3 + id, status: 200, body: { bytes: b.length, sha256: sha256(b) }, failure: null }));
     }
   }
+  if (version === 3) {
+    const inputs = Object.fromEntries(await Promise.all(Object.entries(latestStableSources).map(async ([key, path]) =>
+      [key, await readFile(join(folder, source.get(path).blob))])));
+    output.latestStable = evaluateLatestStable({ group: "client-heavy", ...inputs });
+    const row = output.latestStable.candidates.find((r) => r.app === "solid");
+    await remove("native/solid");
+    output.builds.solid = { outcome: "not-run", reason: row.reason };
+    output.cells.solid = { outcome: "unsupported", reason: row.reason, qualification: null, measurement: null, readyForMeasurement: false };
+    output.passed = false;
+  }
   const seal = async () => {
     await saveJson("plan.json", plan); await saveJson("result.json", output); await saveJson("native/workload.json", workload); await saveJson("native/build.json", output.builds);
     for (const app of apps) await saveJson(`${app}.json`, output.cells[app]);
@@ -124,6 +137,77 @@ test("complete intrinsic six-app replay is verified, not externally admitted", a
   assert.equal(r.readyForLoad, false); assert.equal(r.rankingEligible, false); assert.equal(r.isolation, "unknown");
   assert.equal(r.cells.react.measurement.timings.actions.length, 19);
   assert.equal((await admitSaved(f.request)).admitted, false);
+});
+
+test("v3 public replay preserves unsupported Solid and qualified diagnostic peers separately", async (t) => {
+  const f = await fixture(t, 3), r = await f.validate();
+  assert.equal(r.schema, "client-heavy-saved-verification/v3");
+  assert.equal(r.status, "failed", JSON.stringify(r.errors)); assert.equal(r.intrinsic.complete, true);
+  assert.deepEqual(r.errors, []); assert.equal(r.rankingEligible, false); assert.equal(r.readyForLoad, false);
+  assert.equal(Object.keys(r.cells).length, 6);
+  assert.equal(r.cells.solid.outcome, "unsupported"); assert.equal(r.cells.solid.qualification, null); assert.equal(r.cells.solid.measurement, null);
+  assert.equal(r.cells.solid.build.bytes, null);
+  assert.equal(r.cells.react.replayPassed, true); assert.ok(r.cells.react.measurement.timings);
+  assert.ok(r.latestStable.candidates.every((row) => row.latestStableEligible === !["solid", "remix"].includes(row.app)));
+});
+
+for (const [name, mutate] of [
+  ["missing policy", (f) => { delete f.output.latestStable; }],
+  ["downgraded producer schema", (f) => { f.output.schema = "client-heavy-native/v2"; }],
+  ["legacy policy mixed into v3", (f) => { f.output.latestStable.schema = "benchmark-latest-stable-evaluation/v1"; }],
+  ["invented latest eligibility", (f) => { f.output.latestStable.candidates[3].latestStableEligible = true; }],
+  ["hidden Solid policy row", (f) => { f.output.latestStable.candidates.splice(3, 1); }],
+  ["unknown unsupported reason", (f) => { f.cells.solid.reason = "compiler-failed"; }],
+  ["measured Solid", (f) => { f.cells.solid = structuredClone(f.cells.react); }],
+  ["attempted Solid build", (f) => { f.paths.push("native/solid/failure.log"); }],
+  ["unsupported peer without observation", (f) => { f.cells.react = structuredClone(f.cells.solid); }],
+]) test(`v3 production replay gates refuse ${name}`, async () => {
+  const source = new Map(await Promise.all(Object.values(latestStableSources).map(async (path) => [path, await readFile(new URL(`../../${path}`, import.meta.url))])));
+  const latestStable = evaluateLatestStable({ group: "client-heavy", ...Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) => [key, source.get(path)])) });
+  assert.equal(latestStable.valid, true);
+  const reason = latestStable.candidates.find((r) => r.app === "solid").reason;
+  const f = { output: { schema: "client-heavy-native/v3", latestStable }, paths: [], cells: { solid: { outcome: "unsupported", reason, qualification: null, measurement: null, readyForMeasurement: false },
+    react: { outcome: "passed", qualification: {}, measurement: {}, readyForMeasurement: true } } };
+  const validate = () => { const policy = replayCandidatePolicy(f.output, (path) => source.get(path));
+    for (const app of ["solid", "react"]) replayCandidateDisposition(policy, app, f.cells[app], { outcome: app === "solid" ? "not-run" : "built", reason }, f.paths); };
+  assert.doesNotThrow(validate); mutate(f); assert.throws(validate);
+});
+
+test("v3 source-bound schema gate retains historical v2 and refuses policy stripping or unknown producers", () => {
+  for (const version of [2, 3]) {
+    const source = Buffer.from(`export const schema = "client-heavy-native/v${version}";\n`);
+    replayProducerSchema(source, `client-heavy-native/v${version}`);
+    assert.throws(() => replayProducerSchema(source, `client-heavy-native/v${version === 2 ? 3 : 2}`));
+  }
+  for (const source of ["", 'export const schema = "client-heavy-native/v4";\n',
+    'export const schema = "client-heavy-native/v2";\nexport const schema = "client-heavy-native/v3";\n'])
+    assert.throws(() => replayProducerSchema(Buffer.from(source), "client-heavy-native/v2"));
+});
+
+for (const [name, packageName, version, app, changeRoot] of [
+  ["Vue exact compiler dependency", "@vue/compiler-core", "0.0.0-rc.1", "vue"],
+  ["React scheduler caret dependency", "scheduler", "0.0.0-rc.1", "react"],
+  ["installed esbuild optional binary", "@esbuild/linux-x64", "0.0.0-rc.1", "corten"],
+  ["React DOM peer dependency", "react", "19.3.0", "react", true],
+]) test(`review repair rejects incompatible ${name} through production policy replay`, async () => {
+  const inputs = Object.fromEntries(await Promise.all(Object.entries(latestStableSources).map(async ([key, path]) =>
+    [key, await readFile(new URL(`../../${path}`, import.meta.url))])));
+  const lock = JSON.parse(inputs.lockfile); lock.packages[`node_modules/${packageName}`].version = version;
+  if (changeRoot) {
+    const manifest = JSON.parse(inputs.manifest); manifest.devDependencies[packageName] = version;
+    lock.packages[""].devDependencies[packageName] = version; inputs.manifest = Buffer.from(JSON.stringify(manifest));
+  }
+  inputs.lockfile = Buffer.from(JSON.stringify(lock));
+  const policy = evaluateLatestStable({ group: "client-heavy", ...inputs });
+  const replay = (latestStable) => replayCandidatePolicy({ schema: "client-heavy-native/v3", latestStable },
+    (path) => inputs[Object.entries(latestStableSources).find(([, sourcePath]) => sourcePath === path)[0]]);
+  const row = replay(policy).candidates.find((row) => row.app === app);
+  assert.equal(row.status, "blocked"); assert.equal(row.latestStableEligible, false);
+  assert.ok(Array.isArray(row.incompatible));
+  assert.ok(row.incompatible.some((edge) => edge.package === packageName));
+  const forged = structuredClone(policy), claimed = forged.candidates.find((row) => row.app === app);
+  claimed.status = "satisfied"; claimed.latestStableEligible = true; claimed.blockers = []; claimed.incompatible = [];
+  assert.throws(() => replay(forged));
 });
 
 test("native verifier import completes without running the CLI", () => {
@@ -270,11 +354,11 @@ test("external admission requires independently supplied matching observation an
   const host = hostFixture(replay);
   // Synthetic trusted-channel contract fixture only. Never persisted as review evidence.
   const context = { schema: "client-heavy-trusted-context/v1", attemptId: "unit", unitId: "unit", hostId: "unit", observerId: "observer", producerId: "producer",
-    commit, round: "unit", invocationSha256: hash(replay.invocation), sourceFilesSha256: hash(replay.sources.files), cpuSet: "0", memoryMaxBytes: 1024,
+    commit: f.request.commit, round: "unit", invocationSha256: hash(replay.invocation), sourceFilesSha256: hash(replay.sources.files), cpuSet: "0", memoryMaxBytes: 1024,
     exclusive: true, bootId: host.context.bootId, unitPath: host.context.unitPath, cpuMax: host.context.cpuMax,
     networkPolicySha256: d, toolchainSha256: d, configurationSha256: d };
   const observation = { schema: "client-heavy-trusted-observation/v1", attemptId: "unit", unitId: "unit", hostId: "unit", observerId: "observer", subjectSha256: replay.subjectSha256,
-    commit, round: "unit", startedAt: replay.executionWindow.startedAt - 1, endedAt: replay.executionWindow.endedAt + 1, exitCode: 2, filesSha256: hash(replay.files), configurationNamesSha256: hash(replay.configurationNames),
+    commit: f.request.commit, round: "unit", startedAt: replay.executionWindow.startedAt - 1, endedAt: replay.executionWindow.endedAt + 1, exitCode: 2, filesSha256: hash(replay.files), configurationNamesSha256: hash(replay.configurationNames),
     toolchainSha256: d, configurationSha256: d, networkPolicySha256: d, cpuSet: "0", memoryMaxBytes: 1024, exclusive: true };
   const buildReview = { schema: "client-heavy-independent-build-review/v1", reviewerId: "reviewer", subjectSha256: replay.subjectSha256,
     sourceFilesSha256: context.sourceFilesSha256, toolchainSha256: d, configurationSha256: d, receiptSha256: d, verdict: "pass" };
