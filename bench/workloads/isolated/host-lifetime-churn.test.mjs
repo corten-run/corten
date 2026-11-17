@@ -10,7 +10,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { test } from "node:test";
-import { beginLifetime, captureBrowserParticipant, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
+import { beginLifetime, captureBrowserParticipant, inspectBrowserParticipants, inspectLifetime, processIdentity } from "./host-lifetime.mjs";
 import { participantExecutables } from "./participant-executables.mjs";
 
 const parent = "/system.slice/corten-bench-groups-r21-0123456789abcdef.service";
@@ -171,7 +171,7 @@ for (const failure of ["helper-error", "invalid-json"]) test(`failed executable 
   f.pending.close(); assert.equal(f.held.size, 0);
 });
 
-async function fixture(t, nativePids = [], browser = false, onFault) {
+async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs = 0) {
   const original = Object.fromEntries(["readFileSync", "writeFileSync", "mkdirSync", "rmdirSync", "lstatSync", "statSync", "readlinkSync", "readdirSync", "fsyncSync", "openSync", "closeSync", "writeSync"]
     .map((key) => [key, fs[key]]));
   const exec = childProcess.execFileSync;
@@ -308,7 +308,8 @@ async function fixture(t, nativePids = [], browser = false, onFault) {
       "cpuset.cpus.effective": "0-7\n", "memory.current": "10\n", "memory.peak": "20\n", "memory.max": "max\n", "memory.events": "oom_kill 0\n" }[key];
   });
   syncBuiltinESMExports();
-  observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid, onFault }); await observer.attach(pid);
+  observer = await beginLifetime({ campaign, binding, invocation, directory, command: 0, pid, onFault });
+  f.clock += attachGapMs; await observer.attach(pid);
   f.capture = f.tick; f.drain = () => observer.drain();
   f.tick = async () => { f.capture(); await f.drain(); };
   f.samples = () => original.readFileSync(join(directory, "samples.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
@@ -502,6 +503,40 @@ test("healthy observation never notifies and retains verified lifetime proof", a
   const f = await fixture(t, [], false, () => { faults++; });
   f.clock += 100; await f.tick();
   assert.equal((await f.finish()).status, "verified"); assert.equal(faults, 0);
+});
+
+test("recorded browser participant gaps notify once without clearing failed validation", async (t) => {
+  let faults = 0;
+  const f = await fixture(t, [], true, () => { faults++; });
+  const id = "c".repeat(64), exec = childProcess.execFileSync;
+  t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
+    if (file !== "docker") return exec(file, argv, options);
+    if (argv.includes("ls")) return id;
+    assert.ok(argv.includes("inspect")); throw missing("EIO");
+  });
+  syncBuiltinESMExports();
+  await f.tick(); const afterGap = faults;
+  await f.tick(); const sample = f.samples().at(-1);
+  const proof = await f.finish();
+  assert.equal(afterGap, 1); assert.equal(faults, 1);
+  assert.equal(sample.docker.gaps.length, 1); assert.equal(sample.docker.gaps[0], id);
+  assert.equal(sample.docker.participants.length, 0);
+  assert.equal(inspectBrowserParticipants({ schema: "native-browser-host-subject/v2", participants: [{ id }] }, proof), false);
+  assert.equal(f.terminal.observerError, null); assert.equal(f.terminal.observerFailures.count, 0);
+  assert.equal(f.held.size, 0);
+});
+
+test("initial-to-attachment continuity loss notifies before startup release and remains accounting-invalid", async (t) => {
+  let faults = 0;
+  const f = await fixture(t, [], false, () => { faults++; }, 1909);
+  const afterAttachment = faults;
+  f.clock += 100; await f.tick();
+  const proof = await f.finish();
+  assert.equal(afterAttachment, 1); assert.equal(faults, 1);
+  assert.equal(proof.samples[0].at, 10000); assert.equal(proof.samples[1].at, 11909);
+  assert.equal(proof.status, "blocked"); assert.equal(proof.checks.accounting, false);
+  for (const key of ["terminal", "empty", "observer", "unforced", "leader"]) assert.equal(proof.checks[key], true);
+  assert.equal(f.terminal.observerError, null); assert.equal(f.terminal.observerFailures.count, 0);
 });
 
 test("a retry that runs past the one-second budget cannot publish a sample", async (t) => {

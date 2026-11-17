@@ -269,7 +269,12 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
   function sample() {
-    return pending ? pending.transaction(collectSample) : collectSample();
+    const previous = lastSampleAt;
+    const observed = pending ? pending.transaction(collectSample) : collectSample();
+    // Admission and capture commit precede notification: startup cancellation
+    // may dispose the observer, but must not close an active transaction.
+    if ((previous !== null && (observed.at < previous || observed.at - previous > maximumSampleGapMs))
+      || observed.docker?.gaps.length) notifyFault();
   }
   function collectSample() {
     sampleOperation = "snapshot";
@@ -289,11 +294,12 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     sampleOperation = "sample-write";
     writer.enqueue(initial, serial(observed));
     samples++; lastSampleAt = observed.at;
+    return observed;
   }
   // The fresh bootstrap still waits for IPC outside this empty command scope.
   // Hash its actual executable before sampling starts, not across the empty-to-
   // attached boundary. Attach independently rechecks the executable cache key.
-  try { executableHash(`/proc/${pid}`, executables); sample(); }
+  try { executableHash(`/proc/${pid}`, executables); sample(); checkStartup(); assert.equal(closed, false); }
   catch (error) {
     dispose();
     if (!writer.state().pendingOwnership) rmdirSync(join(root, path));
@@ -308,13 +314,10 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         if (browser) assert.deepEqual(processIdentity(readFileSync(`/proc/${pid}/stat`, "utf8")), context.leaderIdentity);
         // Only the just-spawned bootstrap PID from the live supervisor, before its start message.
         writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
+        checkStartup(); assert.equal(closed, false);
         timer = setInterval(() => {
-          const previous = lastSampleAt;
           try {
             sample();
-            // A coherent but late capture still irreversibly breaks accounting.
-            // Notify without inventing a caught observation error.
-            if (lastSampleAt < previous || lastSampleAt - previous > maximumSampleGapMs) notifyFault();
           } catch (error) {
             observerError = "host-observation-gap"; failure("interval", error);
             if (writer.error) clearInterval(timer);

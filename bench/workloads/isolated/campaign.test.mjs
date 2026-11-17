@@ -77,7 +77,13 @@ mock.module("./host-observation.mjs", { namedExports: {
 } });
 mock.module("./host-lifetime.mjs", { exports: {
   beginLifetime(args) {
-    if (lifetimeRun) return actualLifetime.beginLifetime(args);
+    if (lifetimeRun) {
+      const run = lifetimeRun;
+      return actualLifetime.beginLifetime(args).then((observer) => {
+        run.observer = observer;
+        return run.beforeAttach ? Object.freeze({ ...observer, attach(pid) { run.beforeAttach(); return observer.attach(pid); } }) : observer;
+      });
+    }
     const { directory, command, startupSignal } = args;
     const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
@@ -159,7 +165,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     const run = lifetimeRun, send = child.send.bind(child);
     child.pid = 4242; run.child = child;
     child.send = (message, callback) => {
-      if (message.type === "cancel") { run.cancels++; callback?.(null); return; }
+      if (message.type === "cancel") { run.cancels++; run.cancel?.(); callback?.(null); return; }
       return send(message, callback);
     };
   }
@@ -326,6 +332,41 @@ for (const [fault, shutdown = "drained"] of [
     failing = false; f.before = () => {}; pause?.release(); f.members = [];
     if (!settled) run.child?.close(0);
     await advancing; lifetimeRun = null;
+  }
+});
+
+test("actual campaign attachment gap cancels before native start or interval creation", { timeout: 15000 }, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  const s = setupGroup("client-heavy"); s.plan.round = "r21";
+  const h = await begin(s), parent = new AbortController();
+  const f = await samplingControl(t); f.before = (step) => step === "sync" ? null : undefined;
+  await f.finish(); f.removed = false;
+  let clock = 10000, intervals = 0, settled = false;
+  t.mock.method(Date, "now", () => clock);
+  t.mock.method(globalThis, "setInterval", () => { intervals++; return null; });
+  const run = lifetimeRun = { started: false, cancels: 0, beforeAttach() { clock += 1909; } };
+  const started = new Promise((resolve) => { run.start = resolve; });
+  const cancelled = new Promise((resolve) => { run.cancel = resolve; });
+  const advancing = s.campaign.advance(h, { signal: parent.signal }).then(
+    (value) => { settled = true; return { value }; }, (error) => { settled = true; return { error }; });
+  try {
+    await Promise.race([cancelled, started.then(() => { throw new Error("invalid attachment released native startup"); }),
+      advancing.then(() => { throw new Error("startup completed without owned cancellation"); })]);
+    assert.equal(run.started, false); assert.equal(run.cancels, 1); assert.equal(intervals, 0);
+    assert.equal(parent.signal.aborted, false); assert.equal(settled, false);
+    assert.throws(() => s.campaign.stop(h), /wait for owned command shutdown/);
+    f.members = []; run.child.close(0);
+    assert.ok((await advancing).error); await run.observer.pendingStorage;
+    const state = s.campaign.status(h);
+    assert.equal(state.state, "preserved-uncertain"); assert.equal(state.uncollectedNativeRoots.length, 1);
+    const directory = join(h.directory, "00-client-heavy-timing/command-0-host");
+    assert.equal(existsSync(join(directory, "terminal.json")), false); assert.equal(f.removed, false);
+    assert.equal(f.live.size, 0); assert.equal(existsSync(join(root, ".host-attempt.json")), true);
+    await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
+  } finally {
+    f.members = [];
+    if (!settled) run.child?.close(0);
+    await advancing; await run.observer?.pendingStorage; lifetimeRun = null;
   }
 });
 
