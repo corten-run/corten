@@ -8,6 +8,7 @@ import { allApps } from "../fullstack/apps.mjs";
 import { aggregate, cpuSettings, expectedPageChecks, phases, leanApps, leanProfile } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { inspectGroupEvidence } from "./group.mjs";
+import { dirname } from "node:path";
 
 const inventory = Object.keys(allApps).filter((name) => allApps[name].pages !== false);
 const keys = ["fixture-page", "fixture-json", "api-page", "api-json"];
@@ -52,7 +53,8 @@ export function inspectCatalog(summary, expectedCommit) {
     assert.deepEqual(summary.measurement.leanProfile, { name: leanProfile, apps: leanApps }, "catalog lean configuration differs");
   }
   const group = inspectGroupEvidence(summary, phases, aggregate);
-  const timed = summary.savedEvidence?.schema === "catalog-saved-evidence/v3";
+  const workers = summary.savedEvidence?.schema === "catalog-saved-evidence/v4";
+  const timed = workers || summary.savedEvidence?.schema === "catalog-saved-evidence/v3";
   assert.ok(!timed || group?.descriptor.group === "catalog-page", "timed catalog reporting requires --group catalog-page");
   const expectedApps = group?.descriptor.apps ?? inventory;
   const reportKeys = group?.keys ?? keys;
@@ -70,6 +72,7 @@ export function inspectCatalog(summary, expectedCommit) {
   const config = { duration: summary.options.duration, warmup: summary.options.warmup, rate: summary.options.rate,
     cpus: summary.measurement?.cpus, encoding: summary.measurement?.encoding, fixtureSha256: summary.fixtureSha256,
     ...(summary.measurement?.leanProfile ? { leanProfile: summary.measurement.leanProfile } : {}),
+    ...(workers ? { apparatus: summary.measurement.apparatus, qualification: "first-host preflight required; summary-only report is not raw replay" } : {}),
     startedAt: summary.startedAt, finishedAt: summary.finishedAt,
     ...(group ? { commitAfter: summary.commitAfter, dirtyAfter: summary.dirtyAfter } : {}) };
   const configurationComplete = [config.duration, config.warmup, config.rate].every((n) => Number.isSafeInteger(n) && n > 0)
@@ -108,7 +111,7 @@ export function inspectCatalog(summary, expectedCommit) {
         else if (phase.cpuAvgPct < quota * 95) warnings.push(`${app} ${key} pass ${run.pass}: app CPU ${phase.cpuAvgPct.toFixed(1)}% of ${quota * 100}%; observed throughput is not proven capacity.`);
         if (key.startsWith("api-")) {
           if (!finite(phase.upstream?.cpuAvgPct)) warnings.push(`${app} ${key} pass ${run.pass}: upstream CPU missing; upstream limit cannot be assessed.`);
-          else if (phase.upstream.highCpu || phase.upstream.cpuAvgPct >= 80) warnings.push(`${app} ${key} pass ${run.pass}: busy single-process upstream (${phase.upstream.cpuAvgPct.toFixed(1)}% CPU) may limit throughput.`);
+          else if (phase.upstream.highCpu || !workers && phase.upstream.cpuAvgPct >= 80) warnings.push(`${app} ${key} pass ${run.pass}: busy ${workers ? "fixed two-worker" : "single-process"} upstream (${phase.upstream.cpuAvgPct.toFixed(1)}% CPU) may limit throughput.`);
         }
         values.push(phase);
       }
@@ -167,6 +170,7 @@ export function renderCatalog(report) {
     "| CPU role | Quota, cores | Logical CPU pinning |", "|---|---:|---|"];
   for (const role of ["app", "load", "api"]) lines.push(`| ${role} | ${number(c.cpus?.[role]?.quota, 1)} | ${c.cpus?.[role]?.cpuset === null ? "unpinned" : c.cpus?.[role]?.cpuset ?? "unknown"} |`);
   if (c.leanProfile) lines.push("", `Speed configuration: \`${c.leanProfile.name}\`; configured contenders: ${c.leanProfile.apps.map((app) => `\`${app}\``).join(", ")}.`);
+  if (c.apparatus) lines.push("", `Upstream: \`${c.apparatus.schema}\`, exactly two request workers plus coordinator; unchanged 2-CPU/512-MiB budget. Raw replay: ${report.rawVerified === true ? "verified" : "not verified"}; first-host admission: ${report.apparatusPreflight ?? "not verified"}. Legacy evidence is not retroqualified.`);
   if (report.group) lines.push("", `Group: \`${report.group.group}\`; registry: \`${report.group.registrySchema}\`; contract SHA-256: \`${report.group.contractSha256}\`.`,
     `After-run commit: \`${c.commitAfter ?? "not recorded"}\`; tree dirty after run: ${c.dirtyAfter ?? "not recorded"}.`,
     `Exact apps: ${report.group.apps.map((app) => `\`${app}\``).join(", ")}.`,
@@ -196,7 +200,7 @@ export function renderCatalog(report) {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
+  void (async () => { try {
     const [file, ...args] = process.argv.slice(2);
     let expectedCommit;
     let strict = false;
@@ -206,8 +210,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       else throw new Error(`invalid or duplicate argument ${args[i]}`);
     }
     assert.ok(file, "usage: node bench/catalog/report.mjs <summary.json> [--commit <full SHA>] [--require-complete]");
-    const report = inspectCatalog(JSON.parse(readFileSync(file, "utf8")), expectedCommit);
+    const summary = JSON.parse(readFileSync(file, "utf8"));
+    let report = inspectCatalog(summary, expectedCommit);
+    if (summary.savedEvidence?.schema === "catalog-saved-evidence/v4") {
+      const { validateSaved } = await import("./verify.mjs");
+      const result = validateSaved({ folder: dirname(file), round: summary.round, commit: expectedCommit ?? summary.commit });
+      if (result.status === "verified") report = result.report;
+      else {
+        report.baseline = false; report.attemptComplete = false; report.status = "FAILED OR INCOMPLETE: worker-aware raw replay required";
+        report.warnings.push(...result.errors);
+      }
+    }
     console.log(renderCatalog(report));
     if (strict && !report.baseline) process.exitCode = 1;
-  } catch (error) { console.error(error.message); process.exitCode = 1; }
+  } catch (error) { console.error(error.message); process.exitCode = 1; } })();
 }

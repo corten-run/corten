@@ -3,6 +3,8 @@
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import childProcess from "node:child_process";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { appendFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join, relative, resolve } from "node:path";
@@ -15,11 +17,15 @@ import { fakeChild } from "./test-fixtures/process.mjs";
 import * as audit from "./test-fixtures/campaign-audit.mjs";
 import * as nativeReplay from "./native-replay.mjs";
 import { composePhase } from "./composition.mjs";
+import * as actualLifetime from "./host-lifetime.mjs";
+import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
+import { ioError } from "./test-fixtures/host-durable-writer-control.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
 let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, pendingStarted, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
 let lifetimeStartup;
+let lifetimeRun;
 const cpu = { app: { cpuset: "1", quota: 1 } };
 mock.module("./evidence.mjs", { namedExports: { ...evidence,
   physical: (path, ...rest) => evidence.physical(path === "/bench/campaign" ? root : path, ...rest),
@@ -70,7 +76,15 @@ mock.module("./host-observation.mjs", { namedExports: {
   verifyHostBoundary(before, after) { assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" }; },
 } });
 mock.module("./host-lifetime.mjs", { exports: {
-  beginLifetime({ directory, command, startupSignal }) {
+  beginLifetime(args) {
+    if (lifetimeRun) {
+      const run = lifetimeRun;
+      return actualLifetime.beginLifetime(args).then((observer) => {
+        run.observer = observer;
+        return run.beforeAttach ? Object.freeze({ ...observer, attach(pid) { run.beforeAttach(); return observer.attach(pid); } }) : observer;
+      });
+    }
+    const { directory, command, startupSignal } = args;
     const startup = lifetimeStartup;
     mkdirSync(directory); writeFileSync(join(directory, "raw.json"), "{}");
     const observer = { attach() { if (startup) startup.attached++; }, dispose() { if (startup) startup.disposed++; }, finish(result) {
@@ -85,6 +99,7 @@ mock.module("./host-lifetime.mjs", { exports: {
     return startup.gate.then(() => { if (startup.failure) throw new Error("PRIVATE_SETUP_FAILURE"); return observer; });
   },
   inspectLifetime(binding, invocation, directory, expected) {
+    if (lifetimeRun) return actualLifetime.inspectLifetime(binding, invocation, directory, expected);
     const checks = JSON.parse(readFileSync(join(directory, "terminal.json")));
     if (replayLifetimeFailure === expected.command) checks.accounting = false;
     const complete = Object.values(checks).every(Boolean);
@@ -127,6 +142,7 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
   const invocation = args.slice(1); calls.push(invocation); currentInvocation = invocation;
   assert.ok(!invocation[0].endsWith("report.mjs"), "never run a report against producer tree");
   const child = fakeChild((child) => {
+    if (lifetimeRun) { lifetimeRun.started = true; lifetimeRun.start(); return; }
     const native = !invocation[0].endsWith("fixtures.mjs");
     const finish = () => {
       if (native) {
@@ -145,6 +161,14 @@ mock.method(childProcess, "spawn", (binary, args, options) => {
     };
     if (mode === "pending") { release = finish; pendingStarted(); } else finish();
   });
+  if (lifetimeRun) {
+    const run = lifetimeRun, send = child.send.bind(child);
+    child.pid = 4242; run.child = child;
+    child.send = (message, callback) => {
+      if (message.type === "cancel") { run.cancels++; run.cancel?.(); callback?.(null); return; }
+      return send(message, callback);
+    };
+  }
   if (lifetimeStartup) {
     lifetimeStartup.child = child;
     const send = child.send.bind(child);
@@ -159,7 +183,7 @@ const { createCampaign } = await import("./campaign.mjs");
 const { validateCampaign: validateSavedCampaign } = await import("./campaign-verify.mjs");
 let round = 100;
 function setup(policy = () => true) {
-  round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null;
+  round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
     bindings: groupNames.map((group) => ({ request: { group, round: `test${round}`, commit: "a".repeat(40) }, selection: { apps: ["corten", "selected-failure"] },
@@ -185,6 +209,171 @@ const mixedDelivery = (subjectSha256) => ({ schema: "benchmark-mixed-audit-deliv
   bundle: { schema: "mixed-native-source-audits/v1", receipts: [] } });
 const submitPending = (campaign, handle, status) => status.auditGroup === "mixed-production"
   ? campaign.submitMixedAudit(handle, mixedDelivery(status.mixedAuditSubjectSha256)) : campaign.submitJsonAudit(handle, delivery(handle));
+
+for (const [fault, shutdown = "drained"] of [
+  ["observation"], ["write"], ["pending-storage"], ["continuity"], ["observation", "forced"], ["observation", "undrained"],
+]) test(`actual campaign observer ${fault} fault stops once and awaits ${shutdown} owned shutdown`, { timeout: 15000 }, async (t) => {
+  // Cancellation composition, not crash durability: avoid host flush latency in
+  // the journal/log writes. Real flush ordering has separate durability controls.
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  const s = setupGroup("client-heavy");
+  s.plan.round = "r21";
+  const h = await begin(s), parent = new AbortController();
+  let clock = Date.now(), tick;
+  // Manual sampling must include the seed observer: otherwise its attachment
+  // queues real interval samples while storage drains, before this control starts.
+  t.mock.method(Date, "now", () => clock);
+  t.mock.method(globalThis, "setInterval", (callback) => { tick = callback; return null; });
+  const f = await samplingControl(t);
+  const flushed = (step) => step === "sync" ? null : undefined;
+  f.before = flushed; await f.finish(); f.removed = false;
+  assert.equal(f.samples().length, 3, "seed observer must not accumulate interval samples");
+  const run = lifetimeRun = { started: false, cancels: 0 };
+  const nativeStarted = new Promise((resolve) => { run.start = resolve; });
+  let kills = 0;
+  if (shutdown !== "drained") {
+    const timeout = globalThis.setTimeout;
+    // Only shorten the supervisor's stop/kill deadlines in this fake-process
+    // control; leave startup, run, storage and the notification bound unchanged.
+    t.mock.method(globalThis, "setTimeout", (callback, ms, ...args) => timeout(callback, [120000, 5000].includes(ms) ? 40 : ms, ...args));
+    t.mock.method(process, "kill", (pid, signal) => {
+      assert.equal(shutdown, "forced"); assert.equal(pid, -4242); assert.equal(signal, "SIGKILL");
+      kills++; f.members = []; run.child.close(null, "SIGKILL");
+    });
+  }
+  let settled = false, pause, failing = false;
+  const advancing = s.campaign.advance(h, { signal: parent.signal }).then(
+    (value) => { settled = true; return { value }; },
+    (error) => { settled = true; return { error }; });
+  async function until(predicate) {
+    const deadline = performance.now() + 1000;
+    while (!predicate() && performance.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 2));
+    assert.ok(predicate(), "bounded fixture condition not reached");
+  }
+  try {
+    // Setup uses the test's enclosing deadline, not the fault notification bound.
+    await Promise.race([nativeStarted, advancing.then((outcome) => { throw outcome.error ?? new Error("command did not start"); })]);
+    assert.equal(run.cancels, 0, "healthy attachment must not cancel");
+    if (fault === "write") {
+      f.before = (step, path) => { if (step === "write" && path.endsWith("samples.jsonl")) { failing = true; throw ioError(); } return flushed(step); };
+      tick(); await until(() => failing && f.live.size === 0);
+    } else if (fault === "continuity") {
+      clock += 1909;
+    } else {
+      if (fault === "pending-storage") {
+        pause = f.pause("write", (path) => path.endsWith("samples.jsonl"));
+        const before = f.before;
+        f.before = async (...args) => { await before(...args); return flushed(args[0]); };
+        tick(); await pause.entered;
+        assert.equal(run.cancels, 0, "held write must not cancel before observation fault injection");
+      }
+      const read = fs.readFileSync;
+      t.mock.method(fs, "readFileSync", (path, ...args) => {
+        if (failing && String(path) === "/proc/4242/stat") throw ioError();
+        return read(path, ...args);
+      });
+      syncBuiltinESMExports(); failing = true;
+    }
+    const started = performance.now(); tick();
+    assert.equal(run.cancels, 1, "irrecoverable observer fault must synchronously request cancellation");
+    const notificationMs = performance.now() - started;
+    assert.ok(notificationMs < 1000, "stop must not wait for the native run deadline or pending disk I/O");
+    t.diagnostic(`controlled ${fault} fault: stop request in ${notificationMs.toFixed(3)} ms`);
+    tick();
+    // A later command-side fault remains separate from the observer diagnostics.
+    run.child.stderr.emit("error", new Error("synthetic command output failure"));
+    assert.equal(run.cancels, 1); assert.equal(parent.signal.aborted, false);
+    assert.equal(settled, false, "cancellation request is not terminal scope proof");
+    assert.equal(calls.length, 1);
+    assert.throws(() => s.campaign.stop(h), /wait for owned command shutdown/);
+    if (pause) {
+      assert.ok(f.live.size > 0, "pending write remains owned during cooperative stop");
+      assert.equal(existsSync(join(h.directory, "00-client-heavy-timing/command-0-host/terminal.json")), false);
+    }
+    failing = false; f.before = flushed;
+    if (shutdown === "drained") { f.members = []; run.child.close(0); }
+    if (shutdown === "undrained") run.child.emit("exit", 0, null);
+    if (pause) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.equal(settled, false, "owned terminal storage must join the pending write");
+      assert.ok(f.live.size > 0); pause.release();
+    }
+    const outcome = await advancing;
+    assert.ok(outcome.error, "observer failure must not qualify a drained command");
+    const state = s.campaign.status(h);
+    assert.equal(state.state, "preserved-uncertain"); assert.equal(state.uncollectedNativeRoots.length, 1);
+    assert.equal(state.outcomes[0].outcome, "preserved-uncertain");
+    assert.equal(existsSync(join(root, ".host-attempt.json")), true);
+    const directory = join(h.directory, "00-client-heavy-timing/command-0-host");
+    if (fault === "write") {
+      assert.match(outcome.error.message, /storage incomplete/);
+      assert.equal(outcome.error.code, "EIO");
+      assert.equal(existsSync(join(directory, "terminal.json")), false); assert.equal(f.removed, false);
+    } else {
+      const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
+      if (fault === "continuity") {
+        assert.equal(terminal.observerError, null); assert.equal(terminal.observerFailures.count, 0);
+      } else {
+        assert.equal(terminal.observerError, "host-observation-gap");
+        assert.equal(terminal.observerFailures.first.code, "EIO"); assert.equal(terminal.observerFailures.last.code, "EIO");
+        assert.equal(terminal.observerFailures.first.operation, "process-stat");
+        assert.ok(terminal.observerFailures.count >= 2);
+      }
+      assert.equal(terminal.command.cancelled, true); assert.equal(terminal.command.success, false);
+      assert.equal(terminal.command.error, "synthetic command output failure");
+      assert.equal(terminal.command.forced, shutdown === "forced");
+      assert.equal(terminal.command.terminal, shutdown !== "undrained");
+      assert.equal(terminal.empty, shutdown !== "undrained", "faults/leader exit never substitute for an empty final census");
+      assert.equal(f.removed, shutdown !== "undrained");
+      assert.equal(kills, shutdown === "forced" ? 1 : 0);
+      assert.ok(!JSON.stringify(terminal).includes("PRIVATE_STORAGE_DETAIL"));
+    }
+    await until(() => f.live.size === 0);
+    await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1); assert.equal(run.cancels, 1);
+    assert.throws(() => s.campaign.collect(h), /not finished/);
+  } finally {
+    failing = false; f.before = () => {}; pause?.release(); f.members = [];
+    if (!settled) run.child?.close(0);
+    await advancing; lifetimeRun = null;
+  }
+});
+
+test("actual campaign attachment gap cancels before native start or interval creation", { timeout: 15000 }, async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  const s = setupGroup("client-heavy"); s.plan.round = "r21";
+  const h = await begin(s), parent = new AbortController();
+  let clock = 10000, intervals = 0, settled = false;
+  t.mock.method(Date, "now", () => clock);
+  t.mock.method(globalThis, "setInterval", () => null);
+  const f = await samplingControl(t); f.before = (step) => step === "sync" ? null : undefined;
+  await f.finish(); f.removed = false;
+  assert.equal(f.samples().length, 3, "seed observer must not accumulate interval samples");
+  t.mock.method(globalThis, "setInterval", () => { intervals++; return null; });
+  const run = lifetimeRun = { started: false, cancels: 0, beforeAttach() { clock += 1909; } };
+  const started = new Promise((resolve) => { run.start = resolve; });
+  const cancelled = new Promise((resolve) => { run.cancel = resolve; });
+  const advancing = s.campaign.advance(h, { signal: parent.signal }).then(
+    (value) => { settled = true; return { value }; }, (error) => { settled = true; return { error }; });
+  try {
+    await Promise.race([cancelled, started.then(() => { throw new Error("invalid attachment released native startup"); }),
+      advancing.then(() => { throw new Error("startup completed without owned cancellation"); })]);
+    assert.equal(run.started, false); assert.equal(run.cancels, 1); assert.equal(intervals, 0);
+    assert.equal(parent.signal.aborted, false); assert.equal(settled, false);
+    assert.throws(() => s.campaign.stop(h), /wait for owned command shutdown/);
+    f.members = []; run.child.close(0);
+    assert.ok((await advancing).error); await run.observer.pendingStorage;
+    const state = s.campaign.status(h);
+    assert.equal(state.state, "preserved-uncertain"); assert.equal(state.uncollectedNativeRoots.length, 1);
+    const directory = join(h.directory, "00-client-heavy-timing/command-0-host");
+    assert.equal(existsSync(join(directory, "terminal.json")), false); assert.equal(f.removed, false);
+    assert.equal(f.live.size, 0); assert.equal(existsSync(join(root, ".host-attempt.json")), true);
+    await assert.rejects(s.campaign.advance(h), /not eligible/); assert.equal(calls.length, 1);
+  } finally {
+    f.members = [];
+    if (!settled) run.child?.close(0);
+    await advancing; await run.observer?.pendingStorage; lifetimeRun = null;
+  }
+});
 
 for (const stop of ["cancel", "close"]) for (const failure of [false, true]) test(`campaign startup ${stop} disposes late ${failure ? "failed" : "returned"} setup and retains pending native root`, async () => {
   const s = setupGroup("client-heavy"), h = await begin(s), controller = new AbortController();
