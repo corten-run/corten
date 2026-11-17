@@ -2951,10 +2951,10 @@ const submits = new Map();
  * What of the runtime the address module (address.js) calls, in this order: an array, whose
  * minified build names nothing, since every page carries it. `drawn` says which entry's page
  * `<main>` shows now.
- * @typedef {[apply: typeof apply, remember: typeof remember, drawn: (key: string) => void, submits: typeof submits, go: typeof go, load: typeof LOAD, source: typeof SOURCE, markCurrent: typeof markCurrent, send: typeof send, typedIn: typeof typedIn, putTyped: typeof putTyped]} AddressCore
+ * @typedef {[apply: typeof apply, remember: typeof remember, drawn: (key: string) => void, submits: typeof submits, go: typeof go, load: typeof LOAD, source: typeof SOURCE, markCurrent: typeof markCurrent, send: typeof send, typedIn: typeof typedIn, putTyped: typeof putTyped, sendAgain: typeof sendAgain]} AddressCore
  */
 /** @type {AddressCore} */
-const addressCore = [apply, remember, (key) => (drawnFor = key), submits, go, LOAD, SOURCE, markCurrent, send, typedIn, putTyped];
+const addressCore = [apply, remember, (key) => (drawnFor = key), submits, go, LOAD, SOURCE, markCurrent, send, typedIn, putTyped, sendAgain];
 
 /**
  * A form's entries as the browser sends them in a body that is not multipart, or in a GET's

@@ -5240,15 +5240,23 @@ rules something out.
     (its body is not read). An error status's patch (a 422's, a 5xx's) is drawn and its address
     pushed, as the browser shows an error page at the form's address. A nav link to the new
     address is marked current, as for a navigation. Sending a marked form cancels every other
-    marked form's request still on its way, as a navigation cancels a pending submit, a write's
-    too (a Save button's), which the server may still apply but whose answer is not drawn: the
-    browser loads only the last form sent, so the last one's answer is the screen and its address
-    the one entry, whichever answer comes first; one sent while a navigation is on its way (a link's page,
+    marked form's GET still on its way, as a navigation cancels a pending submit: the browser
+    loads only the last form sent, so the last one's answer is the screen and its address the one
+    entry, whichever answer comes first; one sent while a navigation is on its way (a link's page,
     a traversal) is left to the browser, which drops that navigation for the form's, and the
     runtime reads the page at its address. A GET sent while a write of the same form is on its way
     (a Save button's `formmethod="post"`) waits for the write's answer, as any `data-patch`
     form's does, and is then sent as at the press, from the form that answer drew, without a second
-    `submit` event: its address follows too. The runtime keeps, in memory, the entries such forms
+    `submit` event: its address follows too. So does a GET sent while another marked form's write
+    is on its way, which it does not cancel: the server may have applied the write, and its answer
+    may be the only update of parts outside the GET's patch (an editor beside a filter), which the
+    browser's page at the GET's address would show and the GET's patch does not. The write's
+    answer is drawn first, then the GET's patch, the last one sent, so the screen is the newer
+    form's and its address the one entry; a submit of the write's own form waiting for it, pressed
+    before the GET, is dropped. After an answer that drops a submit of the write's own form waiting
+    for it (a refusal of the state it was made against, 409 or 410, a 5xx, a redirect, an answer
+    the runtime does not draw, none), the GET is not sent either: the user reads that answer first,
+    and presses again; nor is it once a newer marked GET has been sent. The runtime keeps, in memory, the entries such forms
     made at the path of the page on screen (the document's, then that of each page a navigation
     draws), and the one each was sent from when it is at that path too, and a traversal between
     two of them reads the destination as the form did (`corten: action`, which the HTTP cache can
@@ -5321,7 +5329,13 @@ rules something out.
     and would show a stale part. Sending a submit that waited for a write by `requestSubmit()`,
     which would run the form's submit handlers a second time for one press, or drawing it as a
     patch that leaves the address, which a reload loses. Leaving these traversals' scroll to the
-    browser, which restores it in Firefox before the patch is drawn. Without the Navigation API, patching and leaving the address as
+    browser, which restores it in Firefox before the patch is drawn. Cancelling another marked
+    form's write when a GET is sent, as the browser drops the page it was loading for the newer
+    form's: the browser's page shows what the write changed everywhere, the GET's patch only its
+    part, so the write's answer, the only update of the rest, would be lost while the screen
+    showed the rest as it was. Sending the GET at once and drawing the write's answer when it
+    comes, which would draw an older form's answer over the newer one's part, or leave either
+    answer undrawn. Without the Navigation API, patching and leaving the address as
     an unmarked form does was not chosen either: a reload would show another scope than the screen
     did, the error the mark is there to end, where a full load costs bytes (README conflict order 1
     over 2).
@@ -5342,7 +5356,8 @@ rules something out.
     or patch it inserts) or where the module calls in. The module is 3,439 bytes raw, 1,611 with
     gzip and 1,423 with brotli, fetched once (its URL is versioned) by a page that draws a marked
     form, whose head carries its `<script type="module">` tag, and by no other page. A submit reads
-    one attribute; a marked one cancels the other marked submits on their way, keeps what was typed
+    one attribute; a marked write listens for its form's error, a marked GET cancels the other
+    marked GETs on their way and, behind another's write, waits for its answer, keeps what was typed
     and the scroll of the entry it leaves, pushes an entry, forgets the entries it dropped and marks
     the current nav link, and a traversal looks the pending submits over, two keys up in a set and,
     once its patch is drawn, the typed fields of the part, and scrolls once. A traversal whose patch read is answered by anything but a patch (a

@@ -69,6 +69,15 @@ const addressed = new Set();
 const places = new Map();
 
 /**
+ * Each marked form's write on its way, by its submit (`submits`): whether, once its answer is
+ * drawn, a GET of another marked form sent while it was on its way goes ({@link submit}).
+ * @type {WeakMap<object, Promise<boolean>>}
+ */
+const writes = new WeakMap();
+/** The marked GET sent last: one that waits for a write goes only if it still is. */
+let latest = {};
+
+/**
  * Refuses a patch that is not the page at an address: one with no element, an element with no
  * place on the page, or one that adds to an element (`data-append`), which draws more of what is
  * there rather than the part as the address has it. The runtime calls it once the patch is parsed
@@ -109,15 +118,19 @@ const drawWhole = ([apply], html, signal, sent, took, within, before) =>
  * browser elsewhere, as without JavaScript. One sent while a navigation is on its way (a link's
  * page, a traversal) is left to the browser too, which drops that navigation for the form's, as
  * it does without JavaScript: the runtime reads the page at the form's address in its place.
- * Another marked form's submit still on its way is dropped, as a navigation drops the page asked
- * before it, since it would draw an older choice over this one: a write too, which the server may
- * still apply, but whose answer the browser does not show once a newer form is sent, as without
- * JavaScript. A write of this form makes this wait for it (`send`). A patch drawn whole puts the
- * address it asked for in history ({@link address}); a page, or a patch not drawn whole, has the
- * page at that address read instead, as the browser reads it for the form without JavaScript: in
- * an entry of its own (none when it is the address already), the form busy until it is drawn.
- * A submit that waited for a write of the form's answer comes again, with no submit event
- * (`sendAgain`), with `within`, where it was pressed.
+ * Another marked form's GET still on its way is dropped, as a navigation drops the page asked
+ * before it, since it would draw an older choice over this one. Another marked form's write still
+ * on its way is not: the server may have applied it, and its answer may be the only update of
+ * parts outside this form's patch, so this is sent once that answer is drawn ({@link writes}), and
+ * its patch, drawn after, is the screen. It is not sent after an answer that would stop a submit of
+ * the write's own form waiting for it (`send`: a refusal of the state, a 5xx, a redirect, an error),
+ * which the user reads first, nor once another marked GET has been sent since; a submit of the
+ * write's form waiting for it is dropped, pressed before this. A write of this form makes this wait
+ * for it (`send`). A patch drawn whole puts the address it asked for in history ({@link address});
+ * a page, or a patch not drawn whole, has the page at that address read instead, as the browser
+ * reads it for the form without JavaScript: in an entry of its own (none when it is the address
+ * already), the form busy until it is drawn. A submit that waited for a write's answer comes again,
+ * with no submit event (`sendAgain`), from the form as it is now.
  * @param {Event} event @param {HTMLFormElement} form
  * @param {HTMLElement | null | undefined} by the button that sent it
  * @param {Parameters<Core[8]>[2]} sends how the form is sent @param {Core} core @param {Set<string>} [within]
@@ -125,10 +138,37 @@ const drawWhole = ([apply], html, signal, sent, took, within, before) =>
 export function submit(event, form, by, sends, core, within) {
   const get = sends.method === "get";
   if (get && (!navigation || navigation.transition)) return;
-  const [, remember, , submits, go, LOAD, SOURCE, , send] = core;
+  const [apply, remember, , submits, go, LOAD, SOURCE, , send, , , sendAgain] = core;
   event.preventDefault();
-  if (!get) return void send(form, by, sends, within);
-  for (const [other, pending] of submits) if (other !== form && own.hasAttribute.call(other, "data-address")) pending.controller.abort();
+  if (!get) {
+    const before = submits.get(form);
+    /** @type {Response | undefined} */
+    let res;
+    let failed = false;
+    const off = new AbortController();
+    own.addEventListener.call(form, "corten:error", () => (failed = true), { signal: off.signal });
+    const sent = send(form, by, sends, within, { page: (r) => ((res = r), false), patch: apply });
+    const pending = submits.get(form);
+    // Only a write sent now: one sent while another of the form is on its way waits in `send`.
+    if (pending?.write && pending !== before)
+      writes.set(
+        pending,
+        sent.then(() => {
+          off.abort();
+          return !!res && !failed && !pending.controller.signal.aborted && !res.headers.has("corten-location") && (res.ok || res.status === 422);
+        }),
+      );
+    else off.abort();
+    return;
+  }
+  const mine = (latest = {});
+  /** @type {(Promise<boolean> | undefined)[]} */
+  const waits = [];
+  for (const [other, pending] of submits)
+    if (other !== form && own.hasAttribute.call(other, "data-address"))
+      if (pending.write) waits.push(writes.get(pending)), (pending.next = undefined);
+      else pending.controller.abort();
+  if (waits.length) return void Promise.all(waits).then((ok) => ok.every(Boolean) && latest === mine && sendAgain(form, by ?? null));
   let at = "";
   const read = () => {
     submits.delete(form);

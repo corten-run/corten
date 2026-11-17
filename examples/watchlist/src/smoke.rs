@@ -5,13 +5,15 @@
 //! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
 //! `<details>` drawn closed that a form outside each asks for again, a screen whose data a
 //! script reads (`corten/read`), a screen whose scope form's answer is the page at the address
-//! it asks for (`data-address`), and a form whose fields a handler is given as its controls.
+//! it asks for (`data-address`), with an editor beside a filter of that kind, and a form whose
+//! fields a handler is given as its controls.
 use corten::{
     Error, LiveResponse,
     http::{IntoResponse, Request, Response, StatusCode, header},
     prelude::*,
 };
 use futures_util::{StreamExt, stream};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::layout::Layout;
 
@@ -90,6 +92,15 @@ pub mod url {
     #[route("/smoke/scope-form", get = scope_form)]
     #[derive(Default)]
     pub struct ScopeForm {
+        #[route(query)]
+        pub q: super::ScopeQuery,
+    }
+
+    /// A screen with an editor beside a scope filter, each a marked form: the editor's Save posts
+    /// its title here, and its answer draws the editor alone, outside the filter's part.
+    #[route("/smoke/scope-edit", get = scope_edit, post = scope_edit_save)]
+    #[derive(Default)]
+    pub struct ScopeEdit {
         #[route(query)]
         pub q: super::ScopeQuery,
     }
@@ -232,13 +243,16 @@ struct SmokeScopeId;
 #[derive(Id)]
 struct SmokeScopeFormId;
 
+#[derive(Id)]
+struct SmokeQuarterFormId;
+
 /// The scope's panel with its form, one patch, so the form always shows the scope the panel does.
 /// The form is marked `data-address`: once its answer is drawn, the address is the one it asked
 /// for, and Back and Forward read this patch again. A button's `formaction`, and another marked
 /// form's `action`, name a place on the page, which the address keeps; another button's is
 /// another route's. A form that carries the scope (`keep_query`) is drawn by the patch too, so it
-/// sends the scope on screen, not the one the page was drawn with. The form has an id, so a GET
-/// sent while its Save is on its way is sent from the form Save's answer draws. The first scope's
+/// sends the scope on screen, not the one the page was drawn with. The marked forms have ids, so a
+/// GET sent while Save is on its way is sent from the form Save's answer draws. The first scope's
 /// panel has a field the others do not, but those whose name ends in draft, and a scope that starts
 /// with long a panel taller than the rest of the screen.
 #[component]
@@ -256,7 +270,7 @@ fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
                 <button name={f.scope} value="moved" formaction={url::ScopeMoved.at(SmokeScopeId)}>"Moved"</button>
                 <button name={f.scope} value="saved" formmethod="post">"Save"</button>
             </form>
-            <form method="get" action={here.at(SmokeScopeId)} data-patch data-address>
+            <form id={SmokeQuarterFormId} method="get" action={here.at(SmokeScopeId)} data-patch data-address>
                 <button name={f.scope} value="quarter">"Quarter"</button>
             </form>
             <form method="get" action={&here}>
@@ -363,6 +377,91 @@ async fn scope_form(req: Req, Params(at): Params<url::ScopeForm>) -> HtmlResult 
         })
     })
     .await
+}
+
+/// The editor's revision, counted by each title it saves: one count for the app, which the
+/// browser test's engines run against one after another.
+static REVISION: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Id)]
+struct ScopeEditorId;
+
+#[derive(Id)]
+struct ScopeFilterId;
+
+/// The title the editor posts.
+#[derive(Fields)]
+struct TitleForm {
+    title: String,
+}
+
+/// The editor: a marked form whose Save posts its title, the revision saved, and what the last
+/// Save said. Its answer is the editor alone, a part outside the filter's.
+#[component]
+fn ScopeEditor<'a>(revision: u64, said: &'a str) -> impl Patch {
+    html! {
+        <section id={ScopeEditorId}>
+            <form method="get" action={url::ScopeEdit::default()} data-patch data-address>
+                <label>"Title "<input name={TitleForm::FIELDS.title}></label>
+                <button formmethod="post">"Save title"</button>
+            </form>
+            <p>"Revision "<output>{revision}</output></p>
+            <p role="status">{said}</p>
+        </section>
+    }
+}
+
+/// The filter: a marked form whose answer is its part, the scope it shows.
+#[component]
+fn ScopeFilter<'a>(scope: &'a str) -> impl Patch {
+    html! {
+        <section id={ScopeFilterId}>
+            <form method="get" action={url::ScopeEdit::default()} data-patch data-address>
+                <button name={ScopeQuery::FIELDS.scope} value="b">"Scope B"</button>
+            </form>
+            <p>"Scope: "<output>{scope}</output></p>
+        </section>
+    }
+}
+
+/// The screen with the editor and the filter.
+fn scope_edit_page(req: &Req, scope: &str, said: &str, status: StatusCode) -> HtmlResult {
+    let revision = REVISION.load(Ordering::Relaxed);
+    req.page_with_status(
+        status,
+        html! {
+            <Layout req={req} title="Scope and editor" viewer={None} head="">
+                <ScopeEditor revision={revision} said={said} />
+                <ScopeFilter scope={scope} />
+            </Layout>
+        },
+    )
+}
+
+/// The filter's part for its scope, or the screen.
+async fn scope_edit(req: Req, Params(at): Params<url::ScopeEdit>) -> HtmlResult {
+    let scope = at.q.scope.as_deref().unwrap_or("all");
+    req.patch_or(html! { <ScopeFilter scope={scope} /> }, || async { scope_edit_page(&req, scope, "", StatusCode::OK) }).await
+}
+
+/// The editor's Save: a title left empty is refused with a 422, and `stale` with a 409, as a
+/// version check refuses a write made against what another saved since; any other is saved and
+/// counted. With JavaScript the answer is the editor; without it, the screen, or after a save a
+/// redirect to it.
+async fn scope_edit_save(req: Req, Form(form): Form<TitleForm>) -> HtmlResult {
+    let (status, said) = match form.title.trim() {
+        "" => (StatusCode::UNPROCESSABLE_ENTITY, "Title is required."),
+        "stale" => (StatusCode::CONFLICT, "Someone saved first."),
+        _ => {
+            REVISION.fetch_add(1, Ordering::Relaxed);
+            (StatusCode::OK, "Saved.")
+        }
+    };
+    match req.mode {
+        Mode::Action => req.patch_with_status(status, html! { <ScopeEditor revision={REVISION.load(Ordering::Relaxed)} said={said} /> }),
+        _ if status.is_success() => req.redirect(&url::ScopeEdit::default()),
+        _ => scope_edit_page(&req, "all", said, status),
+    }
 }
 
 /// The day's scope, by Corten's redirect, which [`MovedBy303`] answers in its place.

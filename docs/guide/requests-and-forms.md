@@ -2023,14 +2023,19 @@ send, in the part too, stays with the entry the form was sent from, as for a lin
 to it by its patch puts back what was typed in the part it draws. Back and Forward by a patch put
 the screen where it was scrolled on that entry once the part is drawn, so a part that is taller on
 one entry than on the next still opens where the user left it; Back pressed again before a part is
-drawn keeps each entry's own. Sending a marked form cancels any other marked form's request still
-on its way, a Save's too (the server may still apply it, but its answer is not drawn), so the
-screen and the address are always the last one sent, whichever answer comes first. A GET sent
-while a write of the same form is on its way
-(a Save button with `formmethod="post"`) waits for the write's answer, as in any `data-patch`
-form, and is then sent from the form that answer drew, its address following as at the press.
+drawn keeps each entry's own. Sending a marked form cancels any other marked form's GET still on
+its way, so the screen and the address are always the last one sent, whichever answer comes
+first. A GET sent while a write is on its way (a Save button with `formmethod="post"`) waits for
+the write's answer, as in any `data-patch` form, and is then sent from the form as that answer
+left it, its address following as at the press. That holds for a Save of another marked form too,
+which is not cancelled: the server may have applied it, and its answer may be the only update of
+what it changed outside the GET's part (an editor beside a filter), so it is drawn first and the
+GET's part after it, the screen being the last one sent. After a Save refused for the state it
+was made against (409, 410), a 5xx, a redirect, an answer the runtime does not draw or none, the
+GET is not sent: the user reads that answer first, and presses again. A 422 shows its errors and
+the GET goes.
 
-The runtime's part of the mark is a module of its own, `corten-address` (3,439 bytes, 1,611 gzipped),
+The runtime's part of the mark is a module of its own, `corten-address` (3,923 bytes, 1,844 gzipped),
 which only a page that draws a marked form loads: with its head, `html!` having noted the form as
 it rendered it, or with the page or patch the runtime inserts that has one. Until it has loaded,
 or if it fails to, a marked form is sent as any GET form is, and the page at its address is read.

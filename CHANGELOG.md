@@ -14,11 +14,13 @@ Corten is pre-1.0, so any minor version may change the API.
   page, putting back what was typed in the part and not sent and, once the part is drawn, where
   the entry was scrolled; entries at another route's address, a traversal while a write is on its
   way or after one redirected, an answer that is not a patch and a patch the runtime cannot draw
-  whole are read as a page. Sending a marked form cancels any other one still on its way, a write
-  of another marked form too (its answer is not drawn), so the last one sent is the screen; a GET
-  sent while a write of the same form is on its way is sent once the write's answer is drawn, and
-  its address follows too. `html!` refuses the mark on anything but a `<form>`, on a form without
-  `data-patch` and on one whose `method` is `post` or `dialog`. A link or form that carries the scope, a
+  whole are read as a page. Sending a marked form cancels any other marked GET still on its way,
+  so the last one sent is the screen. A GET sent while a write is on its way, of the same form or
+  another marked one, is sent once the write's answer is drawn (the write's answer may be the
+  only update of what it changed outside the GET's part), and its address follows too; not after
+  a refusal of the write's state (409, 410), a 5xx, a redirect or no answer, which the user reads
+  first. `html!` refuses the mark on anything but a `<form>`, on a form without `data-patch` and
+  on one whose `method` is `post` or `dialog`. A link or form that carries the scope, a
   `keep_query` form included, is drawn by the patch. The runtime that does this is a module of
   its own, `corten-address`, which only a page with a marked form loads; until it has, the form is
   sent as any GET form is. Without the Navigation API the browser sends the form itself, a full
