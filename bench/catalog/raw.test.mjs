@@ -302,9 +302,47 @@ test("timed request classification does not turn bad content types or arbitrary 
   const response = (status, type = "text/html", error_code = 0) => ({ status, headers: { "Content-Type": type }, error_code });
   assert.equal(requestOutcome(response(200), "page"), "successes");
   assert.equal(requestOutcome(response(0, "", 1050), "page"), "timeouts");
-  for (const status of [429, 500, 503]) assert.equal(requestOutcome(response(status), "page"), "http_errors");
-  for (const r of [response(200, "application/json"), response(500, "text/plain"), response(404), response(302), response(0, "", 1000)])
+  for (const status of [429, 500, 502, 503, 504]) for (const type of ["text/html", "application/json", "application/problem+json", "text/plain", ""])
+    for (const target of ["page", "json"]) assert.equal(requestOutcome(response(status, type), target), "http_errors");
+  for (const r of [response(200, "application/json"), response(404), response(302), response(0, "", 1000)])
     assert.equal(requestOutcome(r, "page"), "invalid_responses");
+});
+
+test("timed HTTP error accounting retains errors whose media type differs from a successful page", () => {
+  const native = loadSummary({ httpErrors: 2 });
+  native.root_group.checks["catalog content type"].passes -= 2;
+  native.root_group.checks["catalog content type"].fails += 2;
+  native.metrics.checks.passes -= 2;
+  native.metrics.checks.fails += 2;
+  native.metrics.checks.value = native.metrics.checks.passes / 200;
+  assert.equal(readTimedLoad(native).httpErrors, 2);
+  assert.equal(readTimedLoad(native).outcome, "failed");
+  for (const passes of [97, 101]) {
+    const changed = structuredClone(native);
+    changed.root_group.checks["catalog content type"].passes = passes;
+    assert.throws(() => readTimedLoad(changed), /content checks/);
+  }
+  const f = timedFixture(fixture(3), { app: "drogon", source: "api", pass: 2, phase: "sat64", httpErrors: 1, httpErrorType: false });
+  const report = replayCatalog(f.summary, f.reader, f.commit);
+  assert.equal(report.baseline, false); assert.equal(report.attemptComplete, true);
+  assert.equal(report.outcomes.find((row) => row.app === "drogon").outcome, "failed");
+  assert.ok(!report.comparisonEligibleApps.includes("drogon"));
+});
+
+test("timed positive checks must finish globally before the first cold timing", () => {
+  for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]) {
+    const f = timedFixture(fixture(), failure);
+    const firstCold = Math.min(...Object.values(f.summary.apps).flatMap((app) => Object.values(app.runs).flatMap((runs) => runs.map((run) => Date.parse(run.cold.containerStartedAt)))));
+    const lastPhase = Math.max(...[...f.files.keys()].filter((key) => key.endsWith("-boundary.json")).map((key) => f.reader.readJson(key).observedAt));
+    const path = "api/fastapi/checker.json", original = f.files.get(path);
+    for (const end of [firstCold + 1, lastPhase + 2000]) {
+      const boundary = JSON.parse(original);
+      boundary.checker.State.StartedAt = new Date(end - 1).toISOString();
+      boundary.checker.State.FinishedAt = new Date(end).toISOString();
+      f.put(path, boundary);
+      assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /before.*timing/);
+    }
+  }
 });
 
 test("timed HTTP errors and pressure-bound fixed drops are failed observed outcomes, not successful throughput", () => {

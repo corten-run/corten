@@ -5,19 +5,20 @@ import { aggregate, phases } from "./contract.mjs";
 import { summarizeSamples } from "./stats.mjs";
 import { timingPlan } from "./group.mjs";
 
-export function loadSummary({ timeouts = 0, httpErrors = 0, dropped = 0, invalid = 0 } = {}) {
+export function loadSummary({ timeouts = 0, httpErrors = 0, dropped = 0, invalid = 0, httpErrorType = true } = {}) {
   const successes = 100 - timeouts - httpErrors - invalid, errors = timeouts + httpErrors + invalid;
+  const typePasses = successes + (httpErrorType ? httpErrors : 0), checkPasses = successes + typePasses;
   return { metrics: {
     http_reqs: { count: 100, rate: 10 }, iterations: { count: 100 },
     http_req_duration: { avg: 1, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 10000 },
     http_req_failed: { passes: errors, fails: successes, value: errors / 100, thresholds: { "rate==0": errors > 0 } },
-    checks: { passes: 200 - 2 * timeouts - httpErrors - 2 * invalid, fails: 2 * timeouts + httpErrors + 2 * invalid,
-      value: (200 - 2 * timeouts - httpErrors - 2 * invalid) / 200, thresholds: { "rate==1": errors > 0 } },
+    checks: { passes: checkPasses, fails: 200 - checkPasses,
+      value: checkPasses / 200, thresholds: { "rate==1": errors > 0 } },
     dropped_iterations: { count: dropped, thresholds: { "count==0": dropped > 0 } },
     catalog_successes: { count: successes }, catalog_timeouts: { count: timeouts }, catalog_http_errors: { count: httpErrors }, catalog_invalid_responses: { count: invalid },
   }, root_group: { checks: {
     "catalog status 200": { passes: successes, fails: errors },
-    "catalog content type": { passes: 100 - timeouts - invalid, fails: timeouts + invalid },
+    "catalog content type": { passes: typePasses, fails: 100 - typePasses },
   } } };
 }
 

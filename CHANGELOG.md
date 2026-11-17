@@ -8,7 +8,9 @@ Corten is pre-1.0, so any minor version may change the API.
 - Preserve completed catalog load/request failures as versioned, replayable failed
   app outcomes, separate from successful baselines and apparatus failures. Retain
   all passes, raw counters, participant lifetimes and side errors; require successful
-  checker boundaries and attempt-wide upstream lifetime/CPU continuity; report successful
+  checker boundaries before any cold timing and attempt-wide upstream lifetime/CPU
+  continuity. Keep HTTP error responses failed regardless of their media type, retaining
+  their content-check failures; report successful
   throughput, failed requests and drops separately without excluding healthy peers
   ([#1556 Catalog benchmark discards failed-load metrics and cannot replay completed target outcomes](https://github.com/corten-run/corten/issues/1556)).
 

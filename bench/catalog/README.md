@@ -201,14 +201,18 @@ pass or unsuccessful request is filtered or retried. Request settings, CPU and
 memory budgets, duration, warmup, fixed rate and pass count are unchanged.
 
 The k6 producer adds exhaustive counters for successful responses, request
-timeouts (native error code 1050), HTTP 429/5xx responses with the expected content
-type, and invalid/unclassified responses. Unknown transport errors, other status
-codes and incorrect content types are not completed target outcomes. Counts,
+timeouts (native error code 1050), HTTP 429/5xx responses, and invalid/unclassified
+responses. HTTP errors may use a different representation, such as Problem JSON
+or plain text, but remain failed requests, never successful pages. Unknown transport
+errors, other status codes and incorrect content types on 200 responses are not
+completed target outcomes. Counts,
 root checks, rates, completed iterations and all three threshold results must
 agree exactly. Existing full page/JSON content and browser correctness gates
 remain mandatory; timed requests still discard bodies and check status/type,
-not full response-body parity under load. A content-check failure is never
-converted through the timed-outcome path.
+not full response-body parity under load. Error-response media-type check failures
+remain visible and agree exactly with the check totals; successful responses must
+still pass the success media-type check. Every positive checker must finish before
+the first cold timing starts, across the entire selected group.
 
 Each phase retains `*-boundary.json` (`catalog-timed-phase/v1`): actual Docker
 command exit, independent side errors, before/after app/upstream/load identities,

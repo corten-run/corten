@@ -39,13 +39,16 @@ export function readTimedLoad(summary) {
   assert.equal(metric("iterations")?.count, requests.count, "unfinished timed iterations");
   assert.equal(failed?.passes, errors, "HTTP error count differs"); assert.equal(failed?.fails, counts.successes, "HTTP success count differs");
   assert.ok(finite(failed.value ?? failed.rate) && Math.abs((failed.value ?? failed.rate) - errors / requests.count) < 1e-12, "HTTP error rate differs");
-  const expected = { "catalog status 200": [counts.successes, errors], "catalog content type": [counts.successes + counts.http_errors, counts.timeouts] };
+  const typePasses = summary.root_group?.checks?.["catalog content type"]?.passes;
+  assert.ok(count(typePasses) && typePasses >= counts.successes && typePasses <= counts.successes + counts.http_errors,
+    "timed content checks contradict successful responses or timeouts");
+  const expected = { "catalog status 200": [counts.successes, errors], "catalog content type": [typePasses, requests.count - typePasses] };
   same(Object.keys(summary.root_group?.checks ?? {}).sort(), Object.keys(expected).sort(), "timed check inventory differs");
   for (const [key, [passes, fails]] of Object.entries(expected)) {
     const check = summary.root_group.checks[key]; assert.equal(check.passes, passes, "timed check passes differ"); assert.equal(check.fails, fails, "timed check failures differ");
   }
-  assert.equal(checks?.passes, 2 * counts.successes + counts.http_errors, "total check passes differ");
-  assert.equal(checks?.fails, 2 * counts.timeouts + counts.http_errors, "total check failures differ");
+  assert.equal(checks?.passes, counts.successes + typePasses, "total check passes differ");
+  assert.equal(checks?.fails, errors + requests.count - typePasses, "total check failures differ");
   assert.ok(finite(checks.value ?? checks.rate) && Math.abs((checks.value ?? checks.rate) - checks.passes / (2 * requests.count)) < 1e-12, "total check rate differs");
   const dropped = metric("dropped_iterations")?.count;
   assert.ok(count(dropped), "dropped iteration count missing");

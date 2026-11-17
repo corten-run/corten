@@ -145,6 +145,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   const targetFailures = [];
   const timedIds = new Set();
   const timedParticipants = [];
+  let lastCheckFinishedAt = -Infinity, firstColdAt = Infinity;
   let negative = false;
   let upstreamId;
   for (const [app, entry] of Object.entries(summary.apps)) {
@@ -168,6 +169,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
         assert.deepEqual(qualification, qualificationIdentity(summary.group, app, source, entry.imageId));
         boundary = readJson(`${base}/checker.json`);
         verifyCheckBoundary(boundary, summary, app, source, !!checked.failure);
+        if (timed) lastCheckFinishedAt = Math.max(lastCheckFinishedAt, Date.parse(boundary.checker.State.FinishedAt));
         upstreamId ??= boundary.upstream.Id;
         assert.equal(boundary.upstream.Id, upstreamId, "upstream identity changed across functional checks");
         if (timed) for (const info of [boundary.runtime, boundary.upstream])
@@ -193,6 +195,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
         for (const run of entry.runs[key]) {
           const raw = `${base}/p${run.pass}-${profile.target}`;
           const cold = readJson(`${raw}/cold.json`);
+          if (timed) firstColdAt = Math.min(firstColdAt, Date.parse(cold.containerStartedAt));
           assert.deepEqual(cold, run.cold, "cold summary differs");
           const probe = JSON.parse(readText(`${raw}/cold.log`).split("\n").findLast((line) => line.startsWith("{")));
           const { first200MsFromContainerStart, containerStartedAt, clock, measuredBeforeReadinessOrWarmup, ...observedCold } = cold;
@@ -290,6 +293,8 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   }
   if (gated) assert.ok(negative, "global gate lacks replayed target violation");
   if (timed) {
+    assert.ok(Number.isFinite(lastCheckFinishedAt) && Number.isFinite(firstColdAt) && lastCheckFinishedAt <= firstColdAt,
+      "all positive checks must finish before cold timing begins");
     verifyTimedContinuity(timedParticipants);
     const ordered = (rows) => [...rows].sort((a, b) => `${a.app}/${a.source}/${a.target}/${a.pass}/${a.phase}`.localeCompare(`${b.app}/${b.source}/${b.target}/${b.pass}/${b.phase}`));
     assert.ok(isDeepStrictEqual(ordered(summary.targetFailures), ordered(targetFailures)), "timed target failure ledger differs from raw");
