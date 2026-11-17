@@ -43,7 +43,7 @@ export function shellTransport({ repo, spawn = spawnSync } = {}) {
       argv.unshift("-F", "none", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "ControlMaster=no", "-o", "ControlPath=none");
       if (binary === "ssh") {
         assert.match(args.at(-2), /^root@(?:\d{1,3}\.){3}\d{1,3}$/);
-        input = `set -euo pipefail\n${args.at(-1)}\n`; argv[argv.length - 1] = control ? control.command : "/bin/bash -s";
+        input = `${control?.inputPrefix ?? ""}set -euo pipefail\n${args.at(-1)}\n`; argv[argv.length - 1] = control ? control.command : "/bin/bash -s";
       } else {
         assert.equal(args.slice(-2).filter((v) => /^root@(?:\d{1,3}\.){3}\d{1,3}:\/bench\//.test(v)).length, 1, "one owned remote SCP endpoint required");
         assert.ok(args.slice(-2).some((v) => isAbsolute(v)), "absolute local SCP endpoint required");

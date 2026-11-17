@@ -193,6 +193,8 @@ def run(args, **kwargs):
         observer = 200 + len(units)
         rows[observer] = row(observer, 1, "/system.slice/" + unit)
         units[unit] = observer
+        if mode == "launcher-overlap":
+            rows[500] = row(500, current["guardian"], rows[current["child"]]["cgroup"][3:-1])
 
         def target():
             local.pid = observer
@@ -206,6 +208,9 @@ def run(args, **kwargs):
         thread = threading.Thread(target=target, name="outside-session-watcher")
         threads.append(thread)
         thread.start()
+        if mode == "launcher-overlap":
+            time.sleep(0.05)
+            rows.pop(500)
         return types.SimpleNamespace(returncode=0)
     assert args[0] == "/usr/bin/systemctl" and args[1] == "show", "unexpected host command"
     unit = args[2]
@@ -253,8 +258,12 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
         rows[current["guardian"]] = row(current["guardian"], ancestor, session)
         rows[current["child"]] = row(current["child"], current["guardian"], session)
         try:
-            with patch.object(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(payload))):
-                assert scope["guard"](request, source.encode()) == 0
+            raw = scope["encoded"](request)[:-1]
+            arguments = ["guard-stdin", str(len(raw))] if channel == "ssh" else ["guard", raw.hex()]
+            if sequence == 0:
+                arguments.append(source.encode().hex())
+            with patch.object(sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO((raw if channel == "ssh" else b"") + payload))):
+                assert scope["main"](arguments) == 0
         except scope["subprocess"].TimeoutExpired:
             pass
         except AssertionError as error:

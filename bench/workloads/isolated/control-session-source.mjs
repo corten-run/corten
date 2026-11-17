@@ -259,6 +259,11 @@ def watch(root, identifier):
     invocation = request_valid(request)
     start = load(root, "start-" + identifier + ".json")
     deadline = int(start["deadlineMonoNs"])
+    launcher = root / ("launcher-" + identifier + ".json")
+    while not launcher.exists():
+        assert time.monotonic_ns() < deadline, "watcher launcher did not settle"
+        time.sleep(0.025)
+    assert load(root, launcher.name) == {"unit": start["unit"], "code": 0}
     observer = identity(proc(os.getpid()))
     assert observer["cgroup"] == "0::/system.slice/" + start["unit"] + "\n"
     listener, chain, socket = ancestry(start["child"], start["connection"])
@@ -345,11 +350,12 @@ def guard(request, source):
     unit = "corten-bench-control-" + invocation["token"] + "-" + identifier + ".service"
     write(root / ("start-" + identifier + ".json"), encoded({"guardian": os.getpid(), "child": child.pid, "unit": unit,
           "connection": os.environ["SSH_CONNECTION"], "deadlineMonoNs": str(deadline)}))
-    subprocess.run(["/usr/bin/systemd-run", "--quiet", "--unit=" + unit, "--property=Restart=no",
+    launched = subprocess.run(["/usr/bin/systemd-run", "--quiet", "--unit=" + unit, "--property=Restart=no",
                     "--property=RuntimeMaxSec=" + str(invocation["deadlineMs"] / 1000),
                     "/usr/bin/python3", "-I", str(root / "helper.py"), "watch", invocation["token"], identifier],
                    check=True, timeout=min(10, invocation["deadlineMs"] / 1000), stdin=subprocess.DEVNULL,
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    write(root / ("launcher-" + identifier + ".json"), encoded({"unit": unit, "code": launched.returncode}))
     registration = root / ("registration-" + identifier + ".json")
     while not registration.exists():
         assert time.monotonic_ns() < deadline
@@ -475,7 +481,7 @@ def custody(root):
         destination.mkdir(mode=0o700)
     total = 0
     for path in sorted(root.iterdir()):
-        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|window\.json|campaign-active\.json|(?:request|start|registration|result|receipt|intrusion)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
+        assert re.fullmatch(r"(?:helper\.py|mutex|binding\.json|window\.json|campaign-active\.json|(?:request|start|launcher|registration|result|receipt|intrusion)-[a-f0-9]{32}\.json|(?:seal|admission|admission-blocked)-(?:bootstrap|audit-json-api|audit-mixed-production|collection)\.json)", path.name)
         data = read(path)
         total += len(data)
         assert total <= 64 * 1024 * 1024
@@ -487,8 +493,16 @@ def custody(root):
 
 
 def main(args):
-    if args[0] == "guard":
-        request = json.loads(bytes.fromhex(args[1]))
+    if args[0] in ("guard", "guard-stdin"):
+        if args[0] == "guard-stdin":
+            assert re.fullmatch(r"[1-9]\d{0,7}", args[1])
+            length = int(args[1])
+            assert length <= LIMIT
+            raw = sys.stdin.buffer.read(length)
+            assert len(raw) == length
+        else:
+            raw = bytes.fromhex(args[1])
+        request = json.loads(raw)
         source = bytes.fromhex(args[2]) if len(args) == 3 else read(root_for(request["invocation"]["token"]) / "helper.py")
         return guard(request, source)
     mode, token = args[:2]

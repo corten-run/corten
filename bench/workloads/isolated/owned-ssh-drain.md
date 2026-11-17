@@ -14,14 +14,20 @@ without this field retain their legacy interpretation, not retroactive proof.
 
 The earliest SSH command installs the fixed Python guardian/watcher bytes in a private,
 collision-refusing `/run/corten-bench-control-<token>` root. Subsequent commands use that
-installed helper. Python, unified cgroups and systemd are required; unsupported layouts
+installed helper. The fixed bootstrap loader consumes exactly the source byte length;
+the guardian then consumes the bounded request length before holding the remaining
+payload input. Source and SSH seal-ledger bytes travel over stdin, not process argv.
+Python, unified cgroups and systemd are required; unsupported layouts
 stop before native entry, without auth/PAM/config changes or an unregistered fallback.
 There is one authenticated readiness attempt, not repeated ambiguous SSH probes.
 
 SSH starts the fixed `/bin/bash -s`; modern SFTP starts the fixed installed
 `/usr/lib/openssh/sftp-server -e`, using the client's explicit `sftp -s` server command.
 The guardian holds input until its detached watcher publishes registration. The watcher
-reads the real endpoint's ancestry, SSH connection/socket ownership, host/boot, session
+waits for the source-owned `systemd-run` launcher to finish before its first session
+sample; launcher overlap is neither an ownership exception nor extra deadline grace.
+Installed-helper command builders reject malformed tokens and out-of-range sequences.
+The watcher reads the real endpoint's ancestry, SSH connection/socket ownership, host/boot, session
 scope and PID/start/executable/cmdline identities. Names are not ownership evidence.
 SFTP batch paths are escaped as protocol input, not interpolated into a shell command.
 Existing host-key, batch, forwarding and client deadline policy remains in force.
@@ -100,3 +106,20 @@ actual Ubuntu/PAM ancestry, exclusive session scopes, socket ownership, the inst
 SFTP server, input hold, every terminal receipt and actual watcher termination. Stop and
 preserve evidence if any premise fails. No separate paid calibration, native test,
 authentication change, provider action or launch clearance is implied by portable tests.
+
+## Source Closure
+
+Saved validation calls `campaign-verify.mjs` -> `control-admission.mjs` ->
+`../cloud-control-session.mjs` for receipt replay, plus the existing
+`campaign-journal.mjs` and `host-observation.mjs` for journal and raw-stat validation.
+The admission module also imports `../cloud-control-runtime.mjs` and
+`../cloud-local.mjs`; the runtime imports `./cloud-transport.mjs` and
+`./isolated/control-session-source.mjs`. All six imported paths must be captured even
+though saved validation never calls the live subprocess functions. The fixed Python
+string is imported and hashed during replay, not executed there.
+
+Controller/native producers additionally use `droplet.mjs`, `cloud-remote.mjs`,
+`cloud-audit.mjs`, `isolated/campaign-entry.mjs` and `isolated/campaign.mjs`.
+`isolated/control-session-qualification.mjs` is legacy test support, not a live producer
+or an import of saved validation. `test-fixtures/control-session-kernel.py` is test-only.
+No dependency, source-inventory allowlist or validation resource cap is changed here.

@@ -14,7 +14,7 @@ import { inspectCampaign } from "./cloud-validation.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript,
   verifyFailedNativeCustody, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
-import { controlRequest, guardianCommand, guardianSha256, sftpGuardianCommand } from "./cloud-control-runtime.mjs";
+import { controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -132,7 +132,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(!state.control.sealed.includes(controlEpoch), "control epoch already sealed");
       intent = controlRequest(state, binary, args, timeout ?? 60000, controlEpoch, sealing);
       state.control.ledger.push({ request: intent, localTerminal: false }); save();
-      registration = { request: intent, command: binary === "ssh" ? guardianCommand(intent) : sftpGuardianCommand(intent) };
+      registration = controlRegistration(intent);
     }
     const result = await execute(binary, [...(mixedRecovery ? ["-o", "StrictHostKeyChecking=yes"] : []), ...sshOptions, ...args], timeout, allowFail, undefined, undefined, registration);
     if (intent) { const row = state.control.ledger.at(-1); row.localTerminal = true; row.code = result.status; save(); }
