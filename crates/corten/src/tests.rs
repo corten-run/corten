@@ -16184,8 +16184,9 @@ mod layout_reads {
             );
         let count = CartCount { delay: Duration::from_millis(400), ..CartCount::default() };
         let router = App::new(Routes::from(routes)).layout_read(count.clone()).router();
-        let (status, _, body) = call_with(router.clone(), "GET", "/patch", None, None).await;
+        let (status, _, body) = call_with(router.clone(), "GET", "/patch", Some("action"), None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert!(body.contains("layout_reads::CartCount") && body.contains("which only a page fills"), "{body}");
         let started = tokio::time::Instant::now();
         let (status, _, body) = call_with(router, "GET", "/dropped", None, None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
