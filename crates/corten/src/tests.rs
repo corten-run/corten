@@ -11503,7 +11503,7 @@ async fn without_a_host_the_app_listens_on_both_loopback_addresses() {
         assert!(answer.starts_with("HTTP/1.1 200") && answer.ends_with("hi"), "{addr}: {answer}");
     }
     stop.send(()).unwrap();
-    server.await.unwrap().unwrap();
+    server.await.unwrap();
 }
 
 /// A server for `app` on a free port of `127.0.0.1` until `stop` is sent.
