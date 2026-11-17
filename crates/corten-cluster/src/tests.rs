@@ -5,8 +5,10 @@
 
 use std::time::{Duration, Instant};
 
+use async_nats::jetstream::consumer::{pull::OrderedConfig, DeliverPolicy};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use corten::feed::Change;
 
@@ -96,17 +98,48 @@ async fn take(conn: &mut PgConnection, who: &str, lease: Duration) -> bool {
     store::lease(conn, who, lease).await.unwrap()
 }
 
-/// Keys the relay could not publish, each for a reason NATS gives: empty tokens, protocol
-/// framing, and the subscription wildcards.
-const BAD_KEYS: [&str; 13] = ["my feed", "", ".x", "x.", "a..b", "a\tb", "a\rb", "a\nb", "*", ">", "a*b", "a>b", "a.>"];
+/// Keys that are not literal NATS subjects: empty tokens, whitespace (including the framing
+/// bytes and Unicode spaces), control characters (NUL also stops Postgres), the subscription
+/// wildcards, and subjects longer than a default server's control line holds.
+fn bad_keys() -> Vec<String> {
+    let mut keys: Vec<String> = [
+        "my feed",
+        "",
+        ".x",
+        "x.",
+        "a..b",
+        "a\tb",
+        "a\rb",
+        "a\nb",
+        "a\u{b}b",
+        "a\u{c}b",
+        "a\u{a0}b",
+        "a\u{2028}b",
+        "a\0b",
+        "a\u{7f}b",
+        "a\u{85}b",
+        "*",
+        ">",
+        "a*b",
+        "a>b",
+        "a.>",
+    ]
+    .map(String::from)
+    .into();
+    keys.push("a".repeat(5000));
+    keys.push("\u{e9}".repeat(2500));
+    keys
+}
 
 #[test]
 fn feed_keys_are_literal_nats_subjects() {
     for key in ["listings", "sellers.42", "a-b_c", "caf\u{e9}.\u{5e02}\u{5834}", "a:b", "x/y"] {
         assert!(check_key(key).is_ok(), "refused {key:?}");
+        // Never wider than the client's own structural check.
+        assert!(async_nats::Subject::from(key).is_valid(), "{key:?}");
     }
-    for key in BAD_KEYS {
-        assert!(check_key(key).unwrap_err().is::<InvalidFeedKey>(), "accepted {key:?}");
+    for key in bad_keys() {
+        assert!(check_key(&key).unwrap_err().is::<InvalidFeedKey>(), "accepted {key:?}");
     }
 }
 
@@ -114,8 +147,8 @@ fn feed_keys_are_literal_nats_subjects() {
 async fn begin_refuses_an_invalid_key_before_it_opens_a_transaction() {
     // Nothing listens there: reaching the database would fail with a connection error instead.
     let pool = PgPoolOptions::new().connect_lazy("postgres://corten@127.0.0.1:1/none").unwrap();
-    for key in BAD_KEYS {
-        let error = begin(&pool, key, Some("idem")).await.err().expect("refused");
+    for key in bad_keys() {
+        let error = begin(&pool, &key, Some("idem")).await.err().expect("refused");
         assert!(error.is::<InvalidFeedKey>(), "{key:?}: {error}");
     }
 }
@@ -125,11 +158,14 @@ async fn invalid_feed_keys_are_refused_before_the_insert() {
     let Some((db, _)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let pool = pool(&db).await;
     let mut tx = pool.begin().await.unwrap();
-    for key in BAD_KEYS {
-        let error = create_feed(&mut tx, key).await.err().unwrap_or_else(|| panic!("accepted {key:?}"));
+    for key in bad_keys() {
+        let error = create_feed(&mut tx, &key).await.err().unwrap_or_else(|| panic!("accepted {key:?}"));
         assert!(error.is::<InvalidFeedKey>(), "{key:?}: {error}");
+        if key.contains('\0') {
+            continue; // Postgres cannot bind it, so it cannot be looked up either.
+        }
         let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM corten_feeds WHERE key = $1)")
-            .bind(key)
+            .bind(&key)
             .fetch_one(&mut *tx)
             .await
             .unwrap();
@@ -146,7 +182,9 @@ async fn an_invalid_subject_prefix_is_refused_before_migration() {
     let Some((_, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     // Nothing listens there: migrating first would fail with a connection error instead.
     let pool = PgPoolOptions::new().connect_lazy("postgres://corten@127.0.0.1:1/none").unwrap();
-    for prefix in ["", "corten feeds", "corten.", "corten..feeds", "corten.*", "corten.>"] {
+    let long = "p".repeat(256);
+    for prefix in ["", "corten feeds", "corten.", "corten..feeds", "corten.*", "corten.>", "corten\u{a0}feeds", "corten\0", &long]
+    {
         let options = Options { subject_prefix: prefix.into(), ..Options::default() };
         let started = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), Items, options).await;
         let error = started.err().unwrap_or_else(|| panic!("accepted {prefix:?}")).to_string();
@@ -154,62 +192,164 @@ async fn an_invalid_subject_prefix_is_refused_before_migration() {
     }
 }
 
+/// The cluster's tables as corten-cluster 0.2.0 created them, before `rejected_at`.
+const SCHEMA_0_2: &str = "
+CREATE TABLE corten_feeds (key text PRIMARY KEY, generation text NOT NULL, seq bigint NOT NULL DEFAULT 0);
+CREATE TABLE corten_outbox (
+    id bigserial PRIMARY KEY,
+    feed text NOT NULL,
+    generation text NOT NULL,
+    seq bigint NOT NULL,
+    body text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    published_at timestamptz,
+    UNIQUE (feed, seq)
+);
+CREATE INDEX corten_outbox_pending ON corten_outbox (id) WHERE published_at IS NULL;
+CREATE TABLE corten_idempotency (
+    key text PRIMARY KEY,
+    feed text NOT NULL,
+    seq bigint,
+    committed_at bigint,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE corten_relay_lease (
+    id int PRIMARY KEY CHECK (id = 1),
+    holder text,
+    holder_pid int,
+    expires_at timestamptz NOT NULL DEFAULT '-infinity'
+);
+INSERT INTO corten_relay_lease (id) VALUES (1);
+CREATE FUNCTION corten_outbox_notify() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM pg_notify('corten_outbox', '');
+    RETURN NULL;
+END $$;
+CREATE TRIGGER corten_outbox_notify AFTER INSERT ON corten_outbox
+    FOR EACH STATEMENT EXECUTE FUNCTION corten_outbox_notify();
+";
+
+/// A pool on a new, empty Postgres schema of its own (its own tables and relay lease).
+async fn schema_pool(url: &str, schema: &str) -> PgPool {
+    let admin = PgPool::connect(url).await.unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+    admin.close().await;
+    let options = url.parse::<PgConnectOptions>().unwrap().options([("search_path", schema)]);
+    PgPoolOptions::new().max_connections(8).connect_with(options).await.unwrap()
+}
+
+/// A patch body as `append` writes it: item `a` set to `n`.
+fn patch(seq: u64, n: i64) -> String {
+    let item = Item { id: "a".into(), n };
+    format!("{{\"seq\":{seq},\"changes\":{}}}", serde_json::to_string(&[Change::Upsert { id: "a", value: &item }]).unwrap())
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn legacy_bad_keys_do_not_stop_other_feeds() {
+async fn an_upgraded_outbox_sets_bad_rows_aside_and_publishes_the_rest_in_order() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
-    let pool = pool(&db).await;
-    let feed = key("afterbad");
-    new_feed(&pool, &feed).await;
-    let cluster =
-        Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), Items, Options::default()).await.unwrap();
-    let followed = cluster.feed(&feed).await.unwrap().unwrap();
-    // More than a relay batch, including both client-rejected framing and server-rejected
-    // empty tokens. Insert as an older release (or an external writer) could have done, feed
-    // rows too, so prune would remove the patches if they counted as published.
+    let schema = format!("upgrade_{:x}", now_ms());
+    let pool = schema_pool(&db, &schema).await;
+    sqlx::raw_sql(SCHEMA_0_2).execute(&pool).await.unwrap();
+    sqlx::query("CREATE TABLE test_items (feed text, id text, n bigint, PRIMARY KEY (feed, id))").execute(&pool).await.unwrap();
+
+    // Rows the previous release (or other SQL) wrote, committed together so the relay's first
+    // batch mixes them: feed `good`'s first patch, keys NATS refuses (a space, 5,000 bytes of
+    // ASCII and of UTF-8), a patch over the server's max_payload on a valid key, `good`'s second
+    // patch, more bad rows than a batch holds, and `good`'s third. Every key has a feed row, so
+    // prune would remove a rejected patch if it counted as published.
+    let good = key("upgrade");
+    let big = key("bigpatch");
+    let mut rows: Vec<(String, u64, String)> = vec![(good.clone(), 1, patch(1, 1))];
+    for bad in [format!("{good} x"), format!("{good}{}", "a".repeat(5000)), format!("{good}{}", "\u{e9}".repeat(2500))] {
+        rows.push((bad, 1, patch(1, 0)));
+    }
+    rows.push((big.clone(), 1, "x".repeat(1_100_000)));
+    rows.push((good.clone(), 2, patch(2, 2)));
+    rows.extend((0..260).map(|n| (format!("{good}.{n}..x"), 1, patch(1, 0))));
+    rows.push((good.clone(), 3, patch(3, 3)));
     let mut tx = pool.begin().await.unwrap();
-    let mut bad_ids = Vec::new();
-    let mut bad_keys = Vec::new();
-    for n in 0..260 {
-        let bad = format!("{feed}-{n}{}", [" my feed", ".x.", ".", "..b"][n % 4]);
-        sqlx::query("INSERT INTO corten_feeds (key, generation, seq) VALUES ($1, 'legacy', 1)")
-            .bind(&bad)
-            .execute(&mut *tx)
-            .await
-            .unwrap();
-        let id: i64 = sqlx::query_scalar(
-            "INSERT INTO corten_outbox (feed, generation, seq, body) VALUES ($1, 'legacy', 1, '{\"seq\":1,\"changes\":[]}') RETURNING id",
+    sqlx::query("INSERT INTO test_items VALUES ($1, 'a', 3)").bind(&good).execute(&mut *tx).await.unwrap();
+    let mut ids = Vec::new();
+    for (feed, seq, body) in &rows {
+        sqlx::query(
+            "INSERT INTO corten_feeds (key, generation, seq) VALUES ($1, 'g', $2) ON CONFLICT (key) DO UPDATE SET seq = $2",
         )
-        .bind(&bad).fetch_one(&mut *tx).await.unwrap();
-        bad_ids.push(id);
-        bad_keys.push(bad);
+        .bind(feed)
+        .bind(*seq as i64)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        let id: i64 =
+            sqlx::query_scalar("INSERT INTO corten_outbox (feed, generation, seq, body) VALUES ($1, 'g', $2, $3) RETURNING id")
+                .bind(feed)
+                .bind(*seq as i64)
+                .bind(body)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+        ids.push(id);
     }
     tx.commit().await.unwrap();
-    set(&pool, &feed, 1, None).await;
-    eventually("a valid feed after legacy bad rows", || followed.seq() == 1).await;
-    assert_eq!(followed.read(|rows| rows["a"].n), 1);
-    set(&pool, &feed, 2, None).await;
-    eventually("a later patch too", || followed.seq() == 2).await;
 
-    // Each bad row is set aside, not counted as published, and kept for repair.
-    let state = async || -> (i64, i64) {
-        sqlx::query_as(
-            "SELECT count(*) FILTER (WHERE rejected_at IS NOT NULL), count(*) FILTER (WHERE published_at IS NOT NULL)
-               FROM corten_outbox WHERE id = ANY($1)",
-        )
-        .bind(&bad_ids)
-        .fetch_one(&pool)
+    let nats = async_nats::connect(&nats).await.unwrap();
+    let cluster = Cluster::start(pool.clone(), nats.clone(), Items, Options::default()).await.unwrap();
+    // `good`'s patches reach JetStream, in order, past every rejected row.
+    let stream = async_nats::jetstream::new(nats).get_stream("CORTEN_FEEDS").await.unwrap();
+    let consumer = stream
+        .create_consumer(OrderedConfig {
+            filter_subject: format!("corten.feeds.{good}"),
+            deliver_policy: DeliverPolicy::All,
+            ..Default::default()
+        })
         .await
-        .unwrap()
+        .unwrap();
+    let mut messages = consumer.messages().await.unwrap();
+    let mut seqs = Vec::new();
+    while seqs.len() < 3 {
+        let next = tokio::time::timeout(Duration::from_secs(10), messages.next()).await;
+        let msg = next.unwrap_or_else(|_| panic!("timed out after {seqs:?}")).unwrap().unwrap();
+        seqs.push(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"].as_u64().unwrap());
+    }
+    assert_eq!(seqs, [1, 2, 3]);
+
+    // Each good row is marked published once acknowledged; every other row is rejected and
+    // never counted as published.
+    let expected: Vec<(i64, bool, bool)> =
+        ids.iter().zip(&rows).map(|(id, (feed, ..))| (*id, *feed == good, *feed != good)).collect();
+    let state = async || -> Vec<(i64, bool, bool)> {
+        sqlx::query_as("SELECT id, published_at IS NOT NULL, rejected_at IS NOT NULL FROM corten_outbox ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
     };
-    assert_eq!(state().await, (260, 0));
+    let end = Instant::now() + Duration::from_secs(10);
+    while state().await != expected {
+        assert!(Instant::now() < end, "outbox rows not settled");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    // A second migration (another instance starting) keeps the rejections, and the pending
+    // index leaves rejected rows out.
+    migrate(&pool).await.unwrap();
+    assert_eq!(state().await, expected);
+    let indexes: Vec<String> =
+        sqlx::query_scalar("SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexdef LIKE '%published_at IS NULL%'")
+            .bind(&schema)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(indexes.len(), 1, "{indexes:?}");
+    assert!(indexes[0].contains("rejected_at IS NULL"), "{indexes:?}");
     prune(&pool, Duration::ZERO, 0).await.unwrap();
-    assert_eq!(state().await, (260, 0), "prune keeps rejected rows");
-    for bad in &bad_keys[..4] {
+    let rejected: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM corten_outbox WHERE rejected_at IS NOT NULL").fetch_one(&pool).await.unwrap();
+    assert_eq!(rejected as usize, rows.len() - 3, "prune keeps rejected rows");
+    for (bad, ..) in &rows[1..4] {
         assert!(cluster.feed(bad).await.unwrap().is_none(), "{bad:?}");
         assert!(begin(&pool, bad, None).await.err().unwrap().is::<InvalidFeedKey>(), "{bad:?}");
     }
-    sqlx::query("DELETE FROM corten_outbox WHERE id = ANY($1)").bind(&bad_ids).execute(&pool).await.unwrap();
-    sqlx::query("DELETE FROM corten_feeds WHERE key = ANY($1)").bind(&bad_keys).execute(&pool).await.unwrap();
+
+    let admin = PgPool::connect(&db).await.unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
 }
 
 /// One write's latency until a follower has it (begin, statements, commit, relay, JetStream,
