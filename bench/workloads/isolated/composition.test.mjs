@@ -115,6 +115,12 @@ test("candidate policy keeps all six rows, explicit unsupported Solid and the bo
   const future = { ...n, rankingEligible: true, comparisonEligibleApps: ["react"] };
   const result = composePhase({ ...b, latestStable: qualified }, future, host, [command]);
   assert.deepEqual(result.appOutcomes.map((r) => r.comparisonEligible), [false, true, false, false, false, false]);
+  // Even independent native admission cannot waive the actual forced Remix edge.
+  const allAdmitted = { ...future, comparisonEligibleApps: apps };
+  const gated = composePhase(b, allAdmitted, host, [command]);
+  assert.equal(gated.appOutcomes.find((r) => r.app === "remix").comparisonEligible, false);
+  assert.equal(p.candidates.find((r) => r.app === "remix").status, "blocked");
+  assert.equal(gated.appOutcomes.find((r) => r.app === "react").comparisonEligible, true);
   for (const [policy, hostState, audit] of [
     [null, host, true], [undefined, host, true], [{ ...qualified, schema: latestStableSchema }, host, true],
     [{ ...qualified, group: "json-api" }, host, true], [{ ...qualified, valid: false }, host, true],

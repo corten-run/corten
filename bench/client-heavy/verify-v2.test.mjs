@@ -148,7 +148,7 @@ test("v3 public replay preserves unsupported Solid and qualified diagnostic peer
   assert.equal(r.cells.solid.outcome, "unsupported"); assert.equal(r.cells.solid.qualification, null); assert.equal(r.cells.solid.measurement, null);
   assert.equal(r.cells.solid.build.bytes, null);
   assert.equal(r.cells.react.replayPassed, true); assert.ok(r.cells.react.measurement.timings);
-  assert.ok(r.latestStable.candidates.every((row) => row.latestStableEligible === (row.app !== "solid")));
+  assert.ok(r.latestStable.candidates.every((row) => row.latestStableEligible === !["solid", "remix"].includes(row.app)));
 });
 
 for (const [name, mutate] of [
@@ -184,11 +184,11 @@ test("v3 source-bound schema gate retains historical v2 and refuses policy strip
     assert.throws(() => replayProducerSchema(Buffer.from(source), "client-heavy-native/v2"));
 });
 
-for (const [name, packageName, version, changeRoot] of [
-  ["Vue exact compiler dependency", "@vue/compiler-core", "0.0.0-rc.1"],
-  ["React scheduler caret dependency", "scheduler", "0.0.0-rc.1"],
-  ["installed esbuild optional binary", "@esbuild/linux-x64", "0.0.0-rc.1"],
-  ["React DOM peer dependency", "react", "19.3.0", true],
+for (const [name, packageName, version, app, changeRoot] of [
+  ["Vue exact compiler dependency", "@vue/compiler-core", "0.0.0-rc.1", "vue"],
+  ["React scheduler caret dependency", "scheduler", "0.0.0-rc.1", "react"],
+  ["installed esbuild optional binary", "@esbuild/linux-x64", "0.0.0-rc.1", "corten"],
+  ["React DOM peer dependency", "react", "19.3.0", "react", true],
 ]) test(`review repair rejects incompatible ${name} through production policy replay`, async () => {
   const inputs = Object.fromEntries(await Promise.all(Object.entries(latestStableSources).map(async ([key, path]) =>
     [key, await readFile(new URL(`../../${path}`, import.meta.url))])));
@@ -199,9 +199,15 @@ for (const [name, packageName, version, changeRoot] of [
   }
   inputs.lockfile = Buffer.from(JSON.stringify(lock));
   const policy = evaluateLatestStable({ group: "client-heavy", ...inputs });
-  assert.throws(() => replayCandidatePolicy({ schema: "client-heavy-native/v3", latestStable: policy },
-    (path) => inputs[Object.entries(latestStableSources).find(([, sourcePath]) => sourcePath === path)[0]]));
-  assert.equal(policy.valid, false); assert.equal(policy.status, "invalid");
+  const replay = (latestStable) => replayCandidatePolicy({ schema: "client-heavy-native/v3", latestStable },
+    (path) => inputs[Object.entries(latestStableSources).find(([, sourcePath]) => sourcePath === path)[0]]);
+  const row = replay(policy).candidates.find((row) => row.app === app);
+  assert.equal(row.status, "blocked"); assert.equal(row.latestStableEligible, false);
+  assert.ok(Array.isArray(row.incompatible));
+  assert.ok(row.incompatible.some((edge) => edge.package === packageName));
+  const forged = structuredClone(policy), claimed = forged.candidates.find((row) => row.app === app);
+  claimed.status = "satisfied"; claimed.latestStableEligible = true; claimed.blockers = []; claimed.incompatible = [];
+  assert.throws(() => replay(forged));
 });
 
 test("native verifier import completes without running the CLI", () => {

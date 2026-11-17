@@ -78,7 +78,7 @@ ranking or cloud/load readiness. Offline `readyForLoad` remains false.
 
 New output is `client-heavy-native/v3`. It saves the recomputed
 `benchmark-latest-stable-evaluation/v2` alongside the native observations. The
-policy and both browser manifest/lock byte identities are retained, with exact
+policy, browser manifest/lock and root tooling manifest/lock byte identities are retained, with exact
 candidate roots and their resolved dependency/optional/peer paths. Saved replay
 recomputes that policy from the complete source snapshot and checks it against
 the exact commit, not a saved eligible flag. Historical native v1/v2 and policy
@@ -107,6 +107,16 @@ its blocker. Closure records describe the browser package graph, not authenticat
 of installed bytes or the full Rust/Playwright/toolchain; existing native,
 source/build, dependency-byte, replay, resource and independent review gates
 remain mandatory. Refresh and review the observation before a new source freeze.
+
+Every resolved dependency, installed optional dependency and peer edge must also
+satisfy its declared npm range, checked with exact `semver` 7.8.6 from the root
+tooling dependency. Absent optional edges are allowed; an installed incompatible
+optional or peer is not. An incompatible edge blocks each actual consumer,
+without imposing latest-every-transitive or hiding that consumer. Remix remains
+blocked: its consumed `@remix-run/test` declares esbuild `^0.27.1`, while the
+unchanged browser override resolves `0.28.2`. Root tooling source/lock identity
+is part of candidate replay; no global or transitive parser fallback is used.
+The parser is verification tooling only and is not shipped in client bundles.
 
 The isolated adapter retains exact captured policy input lengths/hashes and
 recomputes the native policy from those raw bytes. It separately recomputes the

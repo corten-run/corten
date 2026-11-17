@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { groupNames, selectedApps } from "./registry.mjs";
 import { candidateDependencies } from "../client-heavy/contract.mjs";
 import { posix } from "node:path";
+// Resolve only the declared root tooling package, never an ancestor/global or
+// the benchmark's unrelated transitive parser. Immutable replay must capture it too.
+import semver from "../../node_modules/semver/index.js";
 
 export const latestStableSchema = "benchmark-latest-stable-evaluation/v1";
 export const candidateLatestStableSchema = "benchmark-latest-stable-evaluation/v2";
@@ -9,7 +12,11 @@ export const latestStableSources = Object.freeze({
   policy: "bench/workloads/latest-stable.json",
   manifest: "bench/browser/package.json",
   lockfile: "bench/browser/package-lock.json",
+  toolingManifest: "package.json",
+  toolingLockfile: "package-lock.json",
 });
+export const policyParser = Object.freeze({ package: "semver", version: "7.8.6",
+  integrity: "sha512-9lpSSU4Mly3mrtruwLs1eLK6+gzbzqeBFwRNjIjE+9LuDpWdYctrQlQ3ej1Ilgi7gknpsTRnPoLP8DpCHqHIJw==" });
 
 // A policy edit, including removal of a blocker, needs a reviewed evaluator update.
 // This is an integrity check on the fixed record, not a signature or a latest resolver.
@@ -169,7 +176,16 @@ function evaluateCandidates(input) {
     result.observation = { observedAt, packages: Object.fromEntries(Object.entries(observations).map(([name, value]) =>
       [name, { version: value.version, peers: value.peerDependencies ?? {}, source: registry.packages[name].url, sha256: registry.packages[name].sha256 }])) };
     if (input.group !== "client-heavy") return { ...result, schema: latestStableSchema, valid: true, status: "not-applicable", groupComparisonEligible: null };
-    const manifest = read("manifest"), lock = read("lockfile");
+    const manifest = read("manifest"), lock = read("lockfile"), tooling = read("toolingManifest"), toolingLock = read("toolingLockfile");
+    need(tooling?.devDependencies?.semver === policyParser.version && !Object.hasOwn(tooling.dependencies ?? {}, "semver")
+      && !Object.hasOwn(tooling.optionalDependencies ?? {}, "semver") && !Object.hasOwn(tooling.overrides ?? {}, "semver")
+      && toolingLock?.lockfileVersion === 3 && toolingLock.packages?.[""]?.devDependencies?.semver === policyParser.version,
+    "tooling:parser-declaration-mismatch");
+    const parser = toolingLock.packages["node_modules/semver"];
+    need(parser?.version === policyParser.version && parser.integrity === policyParser.integrity
+      && parser.resolved === "https://registry.npmjs.org/semver/-/semver-7.8.6.tgz" && !parser.link
+      && Object.keys(toolingLock.packages).filter((path) => path === "node_modules/semver" || path.endsWith("/node_modules/semver")).length === 1,
+    "tooling:parser-lock-mismatch");
     need(lock?.lockfileVersion === 3 && lock.packages?.[""], "lockfile:invalid-shape");
     need(manifest && typeof manifest === "object" && !Array.isArray(manifest), "manifest:invalid-shape");
     need(canonical(manifest.overrides) === canonical({ "@remix-run/test": { esbuild: "$esbuild" } }), "manifest:unreviewed-overrides");
@@ -188,7 +204,7 @@ function evaluateCandidates(input) {
       }
     };
     for (const app of selectedApps("client-heavy")) {
-      const closure = new Map(), pending = [];
+      const closure = new Map(), pending = [], incompatible = [];
       for (const name of candidateDependencies[app]) {
         const version = manifest.devDependencies?.[name];
         need(typeof version === "string" && /^\d+\.\d+\.\d+$/.test(version)
@@ -200,7 +216,7 @@ function evaluateCandidates(input) {
         const path = pending.pop();
         if (closure.has(path)) continue;
         const pkg = lock.packages[path], name = path.slice(path.lastIndexOf("node_modules/") + 13);
-        need(pkg && !pkg.link && typeof pkg.version === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pkg.version), `lockfile:${name}:invalid-or-linked-package`);
+        need(pkg && !pkg.link && typeof pkg.version === "string" && semver.valid(pkg.version) !== null, `lockfile:${name}:invalid-or-linked-package`);
         // Even an unused nested copy of a consumed package can shadow a future
         // import. Do not certify a single-root closure while it is installed.
         if (candidateDependencies[app].includes(name) || Object.hasOwn(observations, name)) {
@@ -220,7 +236,13 @@ function evaluateCandidates(input) {
             const resolved = resolvePackage(path, dependency);
             const optional = kind === "optional" || kind === "peer" && pkg.peerDependenciesMeta?.[dependency]?.optional === true;
             need(resolved || optional, `lockfile:${dependency}:missing-${kind}`);
-            if (resolved) pending.push(resolved);
+            const range = edges[dependency];
+            need(typeof range === "string" && semver.validRange(range) !== null, `lockfile:${dependency}:invalid-${kind}-range`);
+            if (resolved) {
+              const version = lock.packages[resolved]?.version;
+              if (typeof version !== "string" || !semver.satisfies(version, range)) incompatible.push({ from: path, kind, package: dependency, range, resolved, version });
+              pending.push(resolved);
+            }
           }
         }
       }
@@ -229,10 +251,12 @@ function evaluateCandidates(input) {
       // Retain the existing explicit Babel-core target for EVERY actual graph
       // consumer. Do not invent a latest-all-transitives policy from metadata.
       if (dependencies.some((d) => d.package === "@babel/core") && !targets.includes("@babel/core")) targets.push("@babel/core");
-      const blockers = targets.flatMap((name) => !observations[name] ? [`latest-not-observed:${name}`]
-        : dependencies.filter((d) => d.package === name).some((d) => d.version !== observations[name].version) ? [`not-latest-stable:${name}`] : []);
+      incompatible.sort((a, b) => canonical(a).localeCompare(canonical(b), "en"));
+      const blockers = [...targets.flatMap((name) => !observations[name] ? [`latest-not-observed:${name}`]
+        : dependencies.filter((d) => d.package === name).some((d) => d.version !== observations[name].version) ? [`not-latest-stable:${name}`] : []),
+      ...incompatible.map((edge) => `incompatible-${edge.kind}:${edge.from}:${edge.package}`)];
       const row = { app, roots: [...candidateDependencies[app]], dependencies, status: blockers.length ? "blocked" : "satisfied",
-        targets,
+        targets, incompatible,
         reason: blockers.length ? "latest-stable-closure-not-qualified" : null,
         latestStableEligible: blockers.length === 0, measurements: null, blockers };
       if (app === "solid") {
