@@ -9,6 +9,8 @@ Corten is pre-1.0, so any minor version may change the API.
   successfully without running the command; `corten help <command>` prints the same and refuses an
   unknown command. `corten check` reports each step and its elapsed
   time on stderr, including in redirected logs, while preserving Cargo's output.
+- CI builds the Git-capable Playwright test-tools image only in the browser group that runs
+  the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
