@@ -199,6 +199,12 @@ response is ready, including the error page's waits, not the time to transmit th
 `bytes` is the final body's known size, or the string `"stream"` when its size is unknown;
 logging never consumes a stream or waits for it to close. A connection rejected before it
 reaches the router, such as a head too large for the HTTP parser, has no access event.
+A final `100` or `103` from a handler or layer, which the HTTP/1 server cannot send as a final
+answer and replaces with an empty `500` before closing the connection, is logged as that `500`;
+a `101` is logged as itself.
+A response future dropped before its response is ready (a connection that ended, a timeout of
+the app's own around the router) writes no line, and none is made up for it; once a response is
+ready its line is written, and a later disconnect or a stream that fails does not change it.
 
 An app with its own subscriber can filter or route `corten::access` as it does other tracing
 targets. Filtering the target out skips the line's clock reads and copies, but keeps the switch's

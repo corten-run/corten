@@ -70,6 +70,12 @@ impl Access {
     fn write(self, res: &Response, matched: Option<Arc<str>>) {
         let route = matched.as_deref();
         let duration = self.started.elapsed();
+        // Hyper's HTTP/1 server sends no final informational status but `101`: it writes an empty
+        // `500` in its place and closes the connection, so that is what the client gets.
+        let status = match res.status() {
+            status if status.is_informational() && status != http::StatusCode::SWITCHING_PROTOCOLS => 500,
+            status => status.as_u16(),
+        };
         macro_rules! line {
             ($bytes:expr) => {
                 tracing::info!(
@@ -77,14 +83,15 @@ impl Access {
                     method = %self.method,
                     path = self.path,
                     route,
-                    status = res.status().as_u16(),
+                    status,
                     bytes = $bytes,
                     ?duration,
                     "corten: request"
                 )
             };
         }
-        // HTTP has no content for these statuses, even if an app layer left a body on them.
+        // HTTP has no content for these statuses, even if an app layer left a body on them; the
+        // `500` sent in place of another `1xx` has none either.
         let size = if res.status().is_informational()
             || matches!(res.status(), http::StatusCode::NO_CONTENT | http::StatusCode::NOT_MODIFIED)
         {

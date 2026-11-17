@@ -579,6 +579,61 @@ mod tests {
         }
     }
 
+    /// Hyper's HTTP/1 server sends no final informational status but `101`: in place of a `100`
+    /// or a `103` it writes an empty `500` and closes the connection, even one kept alive. The
+    /// line says what the client got, over a real socket through `corten::serve`'s loop.
+    #[test]
+    fn access_log_records_the_500_a_client_gets_for_a_final_informational_status() {
+        let mut answers = Vec::new();
+        let lines = access_lines(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            for status in [http::StatusCode::CONTINUE, http::StatusCode::from_u16(103).unwrap()] {
+                let layer = tower::util::MapResponseLayer::new(move |mut res: crate::http::Response| {
+                    *res.status_mut() = status;
+                    res
+                });
+                let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+                let addr = listeners[0].local_addr().unwrap();
+                let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+                let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, access_app().layer(layer), async {
+                    let _ = stopped.await;
+                }));
+                let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+                stream.write_all(b"GET /items/7 HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+                let mut answer = String::new();
+                let read = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read_to_string(&mut answer));
+                read.await.expect("the server closes the kept-alive connection").unwrap();
+                answers.push(answer);
+                stop.send(()).unwrap();
+                server.await.unwrap().unwrap();
+            }
+        });
+        for answer in &answers {
+            assert!(answer.starts_with("HTTP/1.1 500 "), "{answer}");
+            assert_eq!(answer.split_once("\r\n\r\n").map(|(_, body)| body), Some(""), "{answer}");
+        }
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        for line in &lines {
+            assert!(line.contains("route=\"/items/{id}\" status=500 bytes=0 "), "{line}");
+        }
+    }
+
+    /// A response future dropped before it is ready (the client went away, a timeout around the
+    /// router) writes no line: there is no answer to describe, and none is made up.
+    #[test]
+    fn access_log_writes_nothing_for_a_dropped_request() {
+        let lines = access_lines(async {
+            use tower::ServiceExt;
+            let routes =
+                crate::router::Table::new().route("/wait", crate::router::get(|| std::future::pending::<&'static str>()));
+            let router = crate::App::new(crate::Routes::from(routes)).access_log(true).router();
+            let req = crate::http::Request::get("/wait").header("host", "localhost").body(crate::http::Body::empty()).unwrap();
+            let waited = tokio::time::timeout(std::time::Duration::from_millis(20), router.oneshot(req)).await;
+            assert!(waited.is_err(), "the handler never answers");
+        });
+        assert!(lines.is_empty(), "{lines:?}");
+    }
+
     #[cfg(feature = "compress")]
     #[test]
     fn access_log_counts_the_compressed_body() {

@@ -49,7 +49,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - `App::access_log(true)` writes one tracing `INFO` event with target `corten::access` after
   every stage and app layer, with method, path without the query, the route that answered when
-  one did, final status, body bytes (or `"stream"`) and duration to response readiness. Off
+  one did, final status (a final `100` or `103`, which the HTTP/1 server answers as an empty
+  `500`, as that `500`), body bytes (or `"stream"`) and duration to response readiness; a
+  request dropped before its answer is ready writes none. Off
   unless set, also in the app `corten new` writes. Uses the existing subscriber and escaping,
   which now copies text between control characters a run at a time. Measured: +9,618
   instructions on a parameter route (+54%), +8,168 on a `404`; off, within 12 of before.

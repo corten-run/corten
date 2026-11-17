@@ -4821,7 +4821,11 @@ rules something out.
     and an event through the existing tracing subscriber after the response is finished.**
     `App::access_log(true)` emits an `INFO` event with target `corten::access`, with method,
     path without the query, the route that answered when one did, final status, final body's known size
-    (or `"stream"`) and elapsed time until the response is ready. It sees the host check's
+    (or `"stream"`) and elapsed time until the response is ready. The status is what the client
+    gets: a final `100` or `103`, which hyper's HTTP/1 server replaces with an empty `500` before
+    closing the connection, is logged as that `500`, and a `101` as itself. A response future
+    dropped before it is ready writes nothing; a ready response's line is not changed by a later
+    disconnect. It sees the host check's
     `421`, cross-site refusals, error-page replacements, conditional `304`s, compression and
     app layers. It never polls a body to count it, so a live stream is logged when its answer
     is ready, not at a close it may never reach. The existing subscriber still owns formatting,
@@ -4871,7 +4875,8 @@ rules something out.
     an operator needs without a separate log format; or an enabled line costs a small share of
     a request (then the template could turn it on); or the switch off costs more than the
     measured difference above; or the stages decide after the match in another way the index
-    does not repeat.
+    does not repeat; or the HTTP server Corten runs on sends a final informational status other
+    than `101` (then the line logs it as itself).
 
     Last checked: 2026-11-16, the request stages, final HTTP handling, the API boundary and
     subscriber read, and the costs measured, at `f5f2132aa`.
