@@ -79,6 +79,9 @@ branch for one patch, not a maintained release branch.
 3. Open the release-preparation pull request against that branch. It carries the fix,
    cherry-picked from `main` (`git cherry-pick -x <fix-commit>`), steps 2 and 3 above for the
    files the patch tree has (a lockfile or example added on `main` since the tag is not added),
+   with the fix's own `CHANGELOG.md` line under `## Unreleased` before step 3 above renames it (the
+   tag's `Unreleased` is empty, and Release refuses an empty section; take only the fix's line,
+   not `main`'s other unshipped notes),
    `main`'s `SECURITY.md` (the tag's may name an older supported version), and `main`'s current
    `.github/workflows/release.yml` and the scripts it runs. GitHub runs the workflow as the
    tagged commit has it, so an older tag's workflow would publish without the attestation and
@@ -93,7 +96,11 @@ branch for one patch, not a maintained release branch.
    `git diff vX.Y.W CANDIDATE_SHA -- .github/workflows/ci.yml` prints nothing beyond what step 3
    added. CI does not run on pushes to that branch, so run the [checks](CONTRIBUTING.md#checks)
    the tag's tree has on that commit before tagging it; the Release run also reuses CI on the
-   tagged commit before anything publishes. Then [publish](#publish) that SHA.
+   tagged commit before anything publishes. Right before tagging, confirm `vX.Y.W` is still the
+   newest published release: the highest version of `corten` on crates.io that is not yanked,
+   which is what users install and what `SECURITY.md` means by the newest published minor. If a
+   newer minor shipped meanwhile, patch from its tag instead. Prepare one release at a time, so a
+   patch and a minor are never tagged in parallel. Then [publish](#publish) that SHA.
 5. After the release, add its versioned `CHANGELOG.md` section to `main` in a pull request, so
    `main`'s changelog records every published version.
 
