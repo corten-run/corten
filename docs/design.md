@@ -5784,7 +5784,15 @@ rules something out.
     Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the mark goes; or the
     runtime gains a general way to hand a module its events, when the hooks here become that.
 
-    Last checked: 2026-11-17, the runtime's size on this round's merge of main `27c29d7d2` against main's own,
+    Last checked: 2026-11-17, the module's size on `9c1b723d6` against `1bc469a9f`'s, and the runtime's on
+    `9c1b723d6`, unchanged since `1bc469a9f`; 2026-11-17, the watchlist smoke on `9c1b723d6`, Chromium
+    156.0.8078.4 516 checks, Firefox 157.0 513 (run again alone after a feed-reconnect timing check failed under load in the three-engine run), WebKit 27.2 381 and 5 over HTTP, 105 skipped in WebKit, the
+    `data-address` checks 55 in each browser, all passed; 2026-11-17, the steps for a GET waiting for
+    writes of its own form and another, answered in either order with a save, a 409 or a failure,
+    and for one a newer write of its form drops, against `1bc469a9f`'s module served in
+    `9c1b723d6`'s place: three of the eleven fail in all three engines (its own form's 409 or
+    failure answered first, and the newer write after the other's save) and all pass with
+    `9c1b723d6`'s; 2026-11-17, the runtime's size on the merge of main `27c29d7d2` against main's own,
     and `sendAgain`'s share on `a9dd75df6` against `68f245d5a`, the other hooks unchanged since
     each hook's share was taken out of `5365fede0`'s build; 2026-11-17, the module's
     size on `a9dd75df6` against `68f245d5a`'s; 2026-11-17, the watchlist smoke on `0a3a3ec83`,
