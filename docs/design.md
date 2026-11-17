@@ -4952,7 +4952,10 @@ rules something out.
     the runtime's settings (esbuild and terser, gzip by Node's `zlib`), the runtime would be 44,742
     bytes and 15,813 with gzip where it is 44,798 and 15,853, 40 less, and the module 490 and 326:
     a page that writes would load 286 bytes more in all, and its first write would wait for one more
-    script before it is sent (measured below). A navigation reads the record as it starts, before it
+    script before it is sent: a module of Corten's own (`corten-upload.js`) imported cold from the
+    watchlist over loopback takes a median of 10.3 ms in Chromium, 33 in Firefox and 22 in WebKit
+    (25 fresh pages each, Playwright, on a loaded host; 8.8 to 287), and over a network at least one
+    round trip more. A navigation reads the record as it starts, before it
     can wait for anything, so one that starts while the module loads would need a record of its own
     in the runtime for the writes it cuts off. 40 bytes on every page do not pay for a slower first
     write and a second record (Values 1 and 2).
@@ -4993,7 +4996,8 @@ rules something out.
     area's middleware takes before a write's route, a second copy beside the route's: the own page
     takes 66,413 and an `HtmlResult` patch 35,580 with a middleware that takes `Req` and passes the
     request on, about 2,100 and 2,550 more than without it once the `Req` itself (1,847 before) is
-    counted. Other requests pay a little: in an app without layout reads a patch takes 23,269 where
+    counted (at `70031a793`, where that head and the request's signal kept each other and were never
+    freed; see below for what freeing them costs). Other requests pay a little: in an app without layout reads a patch takes 23,269 where
     it took 22,752, a navigation in an app with them 22,358 where it took 22,221, and a whole
     document 53,072 where it took 52,782. Of the whole document's 290 (`callgrind_annotate`, each
     function's own instructions, `main` against the head): 145 is the test's own search of the
@@ -5011,8 +5015,19 @@ rules something out.
     crate's patch) and is not resolved. The route's
     fill is boxed: with the box only around the reads, past the handler, an `HtmlResult` patch took
     262 less but every other write about 480 to 590 more, as each route's future grew. Letting go of
-    the heads a `Req` kept before the route costs a late write one look among the request's
-    lookups as it ends (measured below). The runtime is 1,178 bytes larger raw and 446 with gzip
+    the heads a `Req` kept before the route (a mark on the signal, looked at as the write ends, and
+    the heads taken off it only where one was kept) costs a write the runtime sent in an app with
+    layout reads about 90 to 150 instructions (callgrind, release, `what_a_write_answering_in_an_action_costs`,
+    the head against `ef35919bb`, which leaked them, three alternating rounds, median [range]): its own
+    page 62,569 [62,546 to 62,581] where it took 62,482 [62,478 to 62,511], an `HtmlResult` patch
+    31,329 [31,328 to 31,329] where it took 31,180, a `Patches` one 25,862 where it took 25,716; the
+    same write without JavaScript is unchanged (57,619 [57,618 to 57,625] against 57,622 [57,576 to
+    57,644]). With a middleware that takes `Req` the own page takes 69,873 [69,804 to 69,891] where it
+    took 66,448 [66,447 to 66,498], and an `HtmlResult` patch 37,523 where it took 35,578: that is
+    the head and the request's signal freed where before they leaked, `_int_free`, `free` and
+    `malloc_consolidate` 4,253 more per request and `malloc` and `_int_malloc` 1,669 less
+    (`callgrind_annotate`, each function's own instructions, 1,200 requests of each build), the
+    memory the leak took handed back. The runtime is 1,178 bytes larger raw and 446 with gzip
     (15,407 to 15,853 at zlib's default level, against `main` at `76b5126b7`), numbering the
     writes a layout draws and which of them failed in view.
 
@@ -5035,8 +5050,10 @@ rules something out.
     it on), which would take the copy off an `HtmlResult` route's patch; or the copy of the head on an `HtmlResult` route's
     patch, that patch less the `Patches` one at the same commit
     (`what_a_write_answering_in_an_action_costs` with `WRITE_ANSWER=patch` and with
-    `WRITE_ANSWER=patches`), grows past the 5,464 taken at `70031a793` by more than it varied
-    between runs and builds of the same copy (5,462 to 5,466): this choice was weighed at that cost,
+    `WRITE_ANSWER=patches`), grows past 5,467 by more than it has varied between runs and builds of
+    the same copy (5,462 to 5,467, so 5): taken as 5,464 at `70031a793` and 5,467 at this round's
+    head, whose release of the early heads costs the `HtmlResult` patch 149 and the `Patches` one
+    146, the copy itself unchanged. This choice was weighed at that cost,
     6.8% of what the watchlist's watch costs in process on `main` (80,551; `what_a_watch_costs`, a
     real write's handler answering with its patch, a lower bound since it has no I/O), so any growth
     is work on every patch of such a route that nothing here has weighed. (Earlier rounds set the
@@ -5044,7 +5061,14 @@ rules something out.
     base, which moves with the base as much as with the copy; the difference at one commit is the
     copy's alone.)
 
-    Last checked: 2026-11-16, callgrind (valgrind 3.19.0) on `70031a793` against `main` at
+    Last checked: 2026-11-17, callgrind (valgrind 3.19.0) on `32ea2c896` against `ef35919bb`
+    (the early heads let go against leaked; `main` at `76b5126b7` merged), three alternating rounds,
+    the middleware case's own instructions per function compared by `callgrind_annotate`, the
+    runtime's size against `76b5126b7` by Node's `zlib`, the on-demand record built by the
+    runtime's settings, a module's cold import timed by Playwright, and the watchlist's own-page
+    checks in three engines (the own page drawn over a patch, the body cut off after its headers and
+    the read again after a whole own page failing with `6790fa5da`'s runtime);
+    2026-11-16, callgrind (valgrind 3.19.0) on `70031a793` against `main` at
     `1c72b037` with the harness tests added and `bb7562d9d` as a third build, three alternating
     rounds each, the whole document's own instructions per function compared by `callgrind_annotate`,
     and the runtime's size against `dbe1a34c7` by Node's `zlib` (the head merges `main` at
