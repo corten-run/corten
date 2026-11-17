@@ -5,11 +5,9 @@ import os from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { mock, test } from "node:test";
-import { failedResult } from "../../json-api/test-fixtures.mjs";
-import { productionFixture } from "../../json-api/production-fixtures.mjs";
-import { producerProvenance } from "../../json-api/production.mjs";
+import { gateFunctionalFixture, productionFixture } from "../../json-api/production-fixtures.mjs";
 import { timedCaseProjection } from "../../json-api/timed-outcomes.mjs";
-import { descriptor, timedSchema } from "../../json-api/contract.mjs";
+import { descriptor } from "../../json-api/contract.mjs";
 import { auditSubject, imageProof, inspectPreparation, snapshotSources, validateAuditDelivery, validateTimingAudit } from "./json-staging.mjs";
 import { digest, inside, inspectEvidence, tree } from "./evidence.mjs";
 import { inspectNative } from "./native-replay.mjs";
@@ -20,19 +18,6 @@ import { jsonSources as boundSources, saveJsonFixture } from "./test-fixtures/js
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-json-stage-test-"));
 const native = join(temporary, "native"), source = join(temporary, "sources"); mkdirSync(native); mkdirSync(source);
 const fixture = await productionFixture(native, { cells: [] }), s = fixture.summary;
-function gatedFixture(app) {
-  const f = failedResult(app), summary = f.summary;
-  summary.schema = timedSchema; summary.producer = producerProvenance(); summary.attemptComplete = true;
-  for (const entry of Object.values(summary.apps)) {
-    entry.projections = Object.fromEntries(summary.group.cases.map((p) => [p.key, timedCaseProjection([], summary.options.passes)]));
-    for (const check of Object.values(entry.checks)) {
-      const saved = f.load(check.native);
-      saved.receipt = structuredClone(receipts.find((r) => r.identity.app === check.identity.app && r.identity.key === check.identity.key));
-      check.native = f.put(saved);
-    }
-  }
-  return f;
-}
 // Synthetic independent image observations for the saved-audit equality controls.
 const images = descriptor().apps.flatMap((app) => descriptor().payloads.map((payload) => {
   const saved = s.apps[app].images[payload];
@@ -80,15 +65,16 @@ test("actual native raw functional replay can stage only an honestly blocked che
   }
 });
 
-test("replayed negative preparation can await the same independent image/source audit without approving itself", () => {
-  const f = gatedFixture(), summary = f.summary, folder = join(temporary, "negative-preparation"); mkdirSync(folder);
+test("replayed negative preparation can await the same independent image/source audit without approving itself", async () => {
+  const folder = join(temporary, "negative-preparation"); mkdirSync(folder);
+  const f = gateFunctionalFixture(await productionFixture(folder, { cells: [] })), summary = f.summary;
   summary.attemptComplete = false;
   summary.options.build = true; summary.options.checkOnly = true;
   for (const entry of Object.values(summary.apps)) for (const checked of Object.values(entry.checks)) {
     delete checked.native; checked.nativeSourceVerified = false; checked.nativeSerializationVerified = false;
   }
   summary.failures = structuredClone(s.failures);
-  for (const [path, bytes] of f.artifacts) writeFileSync(join(folder, path), bytes);
+  saveJsonFixture(f, folder);
   const save = () => writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); save();
   const b = { ...binding, execution: { effectiveOptions: summary.options } };
   const prepared = inspectPreparation(b, folder);
@@ -174,16 +160,14 @@ test("all timed native audits must equal the accepted receipts and sealed source
   delete checked.native; save();
   assert.equal(validateTimingAudit(timingBinding, folder, subject, bundle, sealedSources).complete, false, "missing failed cells are not fabricated or promoted");
 });
-test("consistent negative runtime/image rewrites still differ from independently inspected accepted images", () => {
+test("consistent negative runtime/image rewrites still differ from independently inspected accepted images", async () => {
   for (const role of ["app", "upstream"]) {
-    const f = gatedFixture("express"), summary = f.summary, folder = join(temporary, `execution-${role}`); mkdirSync(folder);
+    const folder = join(temporary, `execution-${role}`); mkdirSync(folder);
+    const f = gateFunctionalFixture(await productionFixture(folder, { cells: [] }), "express"), summary = f.summary;
     const b = { request: { group: "json-api", round: summary.round, commit: summary.commit },
       sources: boundSources(summary), execution: { effectiveOptions: summary.options }, resources: { expectedCpus: summary.measurement.cpus } };
     const { bundle } = validateAuditDelivery(delivery(), subject, sealedSources);
-    const save = () => {
-      for (const [path, bytes] of f.artifacts) writeFileSync(join(folder, path), bytes);
-      writeFileSync(join(folder, "summary.json"), JSON.stringify(summary));
-    };
+    const save = () => saveJsonFixture(f, folder);
     save(); assert.equal(validateTimingAudit(b, folder, subject, bundle, sealedSources).complete, true);
     const payload = descriptor().payloads[0];
     const execution = role === "app" ? summary.apps.express.images[payload].execution : summary.toolExecutions.node;
