@@ -7799,6 +7799,180 @@ async function run(browser) {
           refusedState.asked.join() === "action /smoke/scope-edit" && refusedState.reloaded.filter === "all" && refusedState.reloaded.at === "/smoke/scope-edit",
         JSON.stringify(refusedState),
       );
+      // A GET of a marked form sent while its own write and another marked form's are both on their
+      // way is sent only if every one of those writes' answers would let it go: the filter's Pin
+      // and the editor's Save are each held (Save reaches the server; Pin too, unless it fails), then
+      // Scope B is pressed, and the two answers are let go in either order. After two saves it is
+      // sent and its address pushed; after Pin's refusal (409) or failure, or Save's failure, in
+      // either order, it is not, and the screen keeps what the writes said.
+      const pinAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope-pin";
+      const filterOf = () => scope.evaluate(() => document.querySelector("#scope-filter output")?.textContent ?? "");
+      const filterSaid = () => scope.evaluate(() => document.querySelector("#scope-filter [role=status]")?.textContent ?? "");
+      const editorSaid = () => scope.evaluate(() => document.querySelector("#scope-editor [role=status]")?.textContent ?? "");
+      /**
+       * Holds the next POST to `asked`'s address: to the server and its answer held, or, to `fail`,
+       * held and then failed, with nothing sent.
+       * @param {(url: URL) => boolean} asked @param {boolean} fail
+       */
+      const holdWrite = async (asked, fail) => {
+        /** @type {() => void} */
+        let release = () => {};
+        const goes = new Promise((resolve) => (release = () => resolve(undefined)));
+        /** @type {() => void} */
+        let reach = () => {};
+        const reached = new Promise((resolve) => (reach = () => resolve(true)));
+        await scope.route(asked, async (route) => {
+          if (route.request().method() !== "POST") return route.fallback();
+          if (fail) {
+            reach();
+            await goes;
+            return route.abort("failed").catch(() => {});
+          }
+          const response = await route.fetch();
+          reach();
+          await goes;
+          await route.fulfill({ response }).catch(() => {});
+        });
+        return { reached: Promise.race([reached, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]), release };
+      };
+      /** Whether `section`'s form is no longer busy (a timeout is false). @param {string} section */
+      const notBusy = (section) =>
+        scope.waitForFunction((section) => !document.querySelector(`${section} form[aria-busy]`), section, { timeout: 5000 }).then(() => true, () => false);
+      /** Sends the filter by Scope B, or by Pin with `pin` as its title. @param {string} [pin] */
+      const pressFilter = (pin) =>
+        scope.evaluate((pin) => {
+          const button = /** @type {HTMLButtonElement} */ (document.querySelector(pin === undefined ? "#scope-filter button[value=b]" : "#scope-filter button[formmethod=post]"));
+          if (pin !== undefined) button.value = pin;
+          button.form?.requestSubmit(button);
+        }, pin);
+      /** Sends the editor's Save with `title`. @param {string} title */
+      const pressSave = async (title) => {
+        await scope.fill("#scope-editor input[name=title]", title);
+        await scope.evaluate(() => {
+          const button = /** @type {HTMLButtonElement} */ (document.querySelector("#scope-editor button[formmethod=post]"));
+          button.form?.requestSubmit(button);
+        });
+      };
+      /** The screen, the address, the entries added and whether Scope B was asked for, then after a reload. @param {number} before */
+      const filterState = async (before) => {
+        const result = {
+          filter: await filterOf(),
+          pinSaid: await filterSaid(),
+          saveSaid: await editorSaid(),
+          at: await whole(),
+          added: (await entries()) - before,
+          sentB: asked.includes("action /smoke/scope-edit?scope=b"),
+          asked: asked.splice(0),
+          reloaded: { filter: "", at: "" },
+        };
+        await scope.reload();
+        result.reloaded = { filter: await filterOf(), at: await whole() };
+        return result;
+      };
+      /**
+       * Save (`save`, or a failure) and Pin (`pin`, or a failure) held, Scope B pressed, then the
+       * answers let go, `first`'s first.
+       * @param {{ save: string, pin: string, first: "save" | "pin" }} c
+       */
+      const writesThenFilter = async ({ save, pin, first }) => {
+        await scope.goto(`${base}/smoke/scope-edit`);
+        await scope.mouse.move(1200, 700);
+        const before = await entries();
+        const saving = await holdWrite(editAsked, save === "fail");
+        const pinning = await holdWrite(pinAsked, pin === "fail");
+        asked.length = 0;
+        await pressSave(save === "fail" ? "first" : save);
+        const saveReached = await saving.reached;
+        await pressFilter(pin === "fail" ? "pin" : pin);
+        const pinReached = await pinning.reached;
+        await pressFilter();
+        await settle();
+        const whileHeld = asked.slice();
+        const order = first === "save" ? [[saving, "#scope-editor"], [pinning, "#scope-filter"]] : [[pinning, "#scope-filter"], [saving, "#scope-editor"]];
+        const drawn = [];
+        for (const [held, section] of /** @type {[{ release: () => void }, string][]} */ (order)) {
+          held.release();
+          drawn.push(await notBusy(section));
+          await settle();
+        }
+        // Scope B, if it is sent, which it is once both answers are drawn.
+        const ended = (await notBusy("main")) && (await settle(), await notBusy("main"));
+        await settle();
+        await scope.unroute(editAsked);
+        await scope.unroute(pinAsked);
+        return { saveReached, pinReached, whileHeld, drawn, ended, ...(await filterState(before)) };
+      };
+      /** @param {Awaited<ReturnType<typeof writesThenFilter>>} r */
+      const heldBoth = (r) => r.saveReached && r.pinReached && r.whileHeld.join() === "action /smoke/scope-edit,action /smoke/scope-pin" && r.drawn.every(Boolean) && r.ended;
+      /** Scope B not sent: the screen, the address and a reload are as the writes left them. @param {Awaited<ReturnType<typeof writesThenFilter>>} r @param {string} pinSaid */
+      const notSent = (r, pinSaid) =>
+        heldBoth(r) && !r.sentB && r.filter === "all" && r.pinSaid === pinSaid && r.at === "/smoke/scope-edit" && r.added === 0 && r.reloaded.filter === "all" &&
+        r.reloaded.at === "/smoke/scope-edit";
+      for (const first of /** @type {const} */ (["pin", "save"])) {
+        const bothSaved = await writesThenFilter({ save: "first", pin: "pin", first });
+        check(
+          `a data-address form's GET sent while its own write and another's are on their way is sent once both are saved (${first} answered first)`,
+          heldBoth(bothSaved) && bothSaved.sentB && bothSaved.filter === "b" && bothSaved.saveSaid === "Saved." && bothSaved.at === "/smoke/scope-edit?scope=b" &&
+            bothSaved.added === 1 && bothSaved.reloaded.filter === "b" && bothSaved.reloaded.at === "/smoke/scope-edit?scope=b",
+          JSON.stringify(bothSaved),
+        );
+        const ownRefused = await writesThenFilter({ save: "first", pin: "stale", first });
+        check(
+          `a data-address form's GET is not sent after its own write's refusal (409), with another's saved (${first} answered first), and the refusal stays`,
+          notSent(ownRefused, "Someone pinned first.") && ownRefused.saveSaid === "Saved.",
+          JSON.stringify(ownRefused),
+        );
+        const ownFailed = await writesThenFilter({ save: "first", pin: "fail", first });
+        check(
+          `a data-address form's GET is not sent after its own write fails, with another's saved (${first} answered first)`,
+          notSent(ownFailed, "") && ownFailed.saveSaid === "Saved.",
+          JSON.stringify(ownFailed),
+        );
+        const otherFailed = await writesThenFilter({ save: "fail", pin: "pin", first });
+        check(
+          `a data-address form's GET is not sent after another's write fails, with its own saved (${first} answered first)`,
+          notSent(otherFailed, "Pinned.") && otherFailed.saveSaid === "",
+          JSON.stringify(otherFailed),
+        );
+      }
+      // A newer submit of the form, a write too, drops its GET waiting for another's write: Save is
+      // held, Scope B pressed, then Pin pressed and answered. Once Save's answer is let go (saved,
+      // refused or failed), Scope B is not sent, and Pin's answer is the screen.
+      /** @param {string} save Save's title, or "fail" */
+      const newerDrops = async (save) => {
+        await scope.goto(`${base}/smoke/scope-edit`);
+        await scope.mouse.move(1200, 700);
+        const before = await entries();
+        const saving = await holdWrite(editAsked, save === "fail");
+        asked.length = 0;
+        await pressSave(save === "fail" ? "first" : save);
+        const saveReached = await saving.reached;
+        await pressFilter();
+        await settle();
+        await pressFilter("pin");
+        const pinned = await scope
+          .waitForFunction(() => document.querySelector("#scope-filter [role=status]")?.textContent === "Pinned." && !document.querySelector("#scope-filter form[aria-busy]"), undefined, {
+            timeout: 5000,
+          })
+          .then(() => true, () => false);
+        await settle();
+        const whileHeld = asked.slice();
+        saving.release();
+        const ended = (await notBusy("main")) && (await settle(), await notBusy("main"));
+        await settle();
+        await scope.unroute(editAsked);
+        return { saveReached, pinned, whileHeld, ended, ...(await filterState(before)) };
+      };
+      for (const [save, saveSaid] of [["first", "Saved."], ["stale", "Someone saved first."], ["fail", ""]]) {
+        const dropped = await newerDrops(save);
+        check(
+          `a data-address form's GET waiting for another's write is dropped by a newer write of its own form (the other's answer: ${save === "fail" ? "a failure" : saveSaid})`,
+          dropped.saveReached && dropped.pinned && dropped.whileHeld.join() === "action /smoke/scope-edit,action /smoke/scope-pin" && dropped.ended && !dropped.sentB &&
+            dropped.filter === "all" && dropped.pinSaid === "Pinned." && dropped.saveSaid === saveSaid && dropped.at === "/smoke/scope-edit" && dropped.added === 0 &&
+            dropped.reloaded.filter === "all" && dropped.reloaded.at === "/smoke/scope-edit",
+          JSON.stringify(dropped),
+        );
+      }
       // A traversal superseded before it draws leaves its entry's draft and scroll as they were
       // kept: from one, to a short scope with a field in its panel (typed in, scrolled a little), to
       // a tall one with it too (typed in, scrolled far), Back to the short one is held before its

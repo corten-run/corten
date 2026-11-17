@@ -179,8 +179,9 @@ division: end statements with `;` and keep a division on the line it continues.
    its way is sent once the write's answer is drawn, and its address follows too; so is one of
    another marked form, whose patch is then drawn last (the Save's answer may be the only update
    of what it changed outside that part), unless the Save was refused for its state (409, 410), a
-   5xx, a redirect or no answer, which the user reads first. A newer marked GET cancels an older
-   one.
+   5xx, a redirect or no answer, which the user reads first; with Saves of both forms on their way
+   it waits for both, and either answer can stop it. A newer marked GET cancels an older one, and
+   any newer submit of the form, a Save too, drops its GET still waiting.
 
 ## Text a script computes
 

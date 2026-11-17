@@ -5631,7 +5631,10 @@ rules something out.
     before the GET, is dropped. After an answer that drops a submit of the write's own form waiting
     for it (a refusal of the state it was made against, 409 or 410, a 5xx, a redirect, an answer
     the runtime does not draw, none), the GET is not sent either: the user reads that answer first,
-    and presses again; nor is it once a newer marked GET has been sent. The runtime keeps, in memory, the entries such forms
+    and presses again; nor is it once a newer marked GET has been sent. A GET waiting for another
+    marked form's write while a write of its own form is on its way too waits for both, and is not
+    sent if either answer would stop it, in whichever order they come; and any newer submit of its
+    form, a write too, drops it, as the newer submit is what the user asked for last. The runtime keeps, in memory, the entries such forms
     made at the path of the page on screen (the document's, then that of each page a navigation
     draws), and the one each was sent from when it is at that path too, and a traversal between
     two of them reads the destination as the form did (`corten: action`, which the HTTP cache can
@@ -5730,11 +5733,12 @@ rules something out.
     another marked form's write, added 8 bytes raw and 4 with gzip to the build it was measured
     against. None of the hooks can leave, being where the runtime hands the
     module what only it sees (the submit, a submit that waited, the traversal, the answer, a page
-    or patch it inserts) or where the module calls in. The module is 3,927 bytes raw, 1,843 with
-    gzip and 1,632 with brotli, fetched once (its URL is versioned) by a page that draws a marked
+    or patch it inserts) or where the module calls in. The module is 4,086 bytes raw, 1,893 with
+    gzip and 1,669 with brotli, fetched once (its URL is versioned) by a page that draws a marked
     form, whose head carries its `<script type="module">` tag, and by no other page. A submit reads
     one attribute; a marked write listens for its form's error, a marked GET cancels the other
-    marked GETs on their way and, behind another's write, waits for its answer, keeps what was typed
+    marked GETs on their way and, behind another's write, waits for its answer and its own form's
+    write's, keeps what was typed
     and the scroll of the entry it leaves, pushes an entry, forgets the entries it dropped and marks
     the current nav link, and a traversal looks the pending submits over, two keys up in a set and,
     once its patch is drawn, the typed fields of the part, and scrolls once. A traversal whose patch read is answered by anything but a patch (a

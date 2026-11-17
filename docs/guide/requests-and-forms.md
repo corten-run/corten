@@ -2105,9 +2105,12 @@ what it changed outside the GET's part (an editor beside a filter), so it is dra
 GET's part after it, the screen being the last one sent. After a Save refused for the state it
 was made against (409, 410), a 5xx, a redirect, an answer the runtime does not draw or none, the
 GET is not sent: the user reads that answer first, and presses again. A 422 shows its errors and
-the GET goes.
+the GET goes. A GET waiting for another form's Save while a Save of its own form is on its way too
+waits for both, and goes only if neither answer stops it, whichever comes first. Any newer submit
+of the GET's form, a Save too, drops a GET still waiting: the newer one is what the user asked for
+last.
 
-The runtime's part of the mark is a module of its own, `corten-address` (3,927 bytes, 1,843 gzipped),
+The runtime's part of the mark is a module of its own, `corten-address` (4,086 bytes, 1,893 gzipped),
 which only a page that draws a marked form loads: with its head, `html!` having noted the form as
 it rendered it, or with the page or patch the runtime inserts that has one. Until it has loaded,
 or if it fails to, a marked form is sent as any GET form is, and the page at its address is read.

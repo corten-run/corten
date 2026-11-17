@@ -19,7 +19,8 @@ Corten is pre-1.0, so any minor version may change the API.
   another marked one, is sent once the write's answer is drawn (the write's answer may be the
   only update of what it changed outside the GET's part), and its address follows too; not after
   a refusal of the write's state (409, 410), a 5xx, a redirect or no answer, which the user reads
-  first. `html!` refuses the mark on anything but a `<form>`, on a form without `data-patch` and
+  first; one waiting for writes of its own form and another waits for every one of them, and any
+  newer submit of its form, a write too, drops it. `html!` refuses the mark on anything but a `<form>`, on a form without `data-patch` and
   on one whose `method` is `post` or `dialog`. A link or form that carries the scope, a
   `keep_query` form included, is drawn by the patch. The runtime that does this is a module of
   its own, `corten-address`, which only a page with a marked form loads; until it has, the form is

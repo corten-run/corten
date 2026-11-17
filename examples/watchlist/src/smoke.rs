@@ -107,6 +107,10 @@ pub mod url {
         pub q: super::ScopeQuery,
     }
 
+    /// The filter's Pin posts here: its answer is the filter alone, saying whether it was pinned.
+    #[route("/smoke/scope-pin", post = scope_pin)]
+    pub struct ScopePin;
+
     /// Views whose holes are in a form, past one and a form's whole text, with controls outside
     /// each form, joined to it by `form=`, named `firstElementChild`, `nextElementSibling` and
     /// `textContent` (#1531).
@@ -397,6 +401,9 @@ struct ScopeEditorId;
 #[derive(Id)]
 struct ScopeFilterId;
 
+#[derive(Id)]
+struct ScopeFilterFormId;
+
 /// The title the editor posts.
 #[derive(Fields)]
 struct TitleForm {
@@ -419,15 +426,18 @@ fn ScopeEditor<'a>(revision: u64, said: &'a str) -> impl Patch {
     }
 }
 
-/// The filter: a marked form whose answer is its part, the scope it shows.
+/// The filter: a marked form whose answer is its part, the scope it shows, with a write of its
+/// own, Pin, whose answer is the filter too, and what Pin last said.
 #[component]
-fn ScopeFilter<'a>(scope: &'a str) -> impl Patch {
+fn ScopeFilter<'a>(scope: &'a str, said: &'a str) -> impl Patch {
     html! {
         <section id={ScopeFilterId}>
-            <form method="get" action={url::ScopeEdit::default()} data-patch data-address>
+            <form id={ScopeFilterFormId} method="get" action={url::ScopeEdit::default()} data-patch data-address>
                 <button name={ScopeQuery::FIELDS.scope} value="b">"Scope B"</button>
+                <button name={TitleForm::FIELDS.title} value="pin" formmethod="post" formaction={url::ScopePin}>"Pin"</button>
             </form>
             <p>"Scope: "<output>{scope}</output></p>
+            <p role="status">{said}</p>
         </section>
     }
 }
@@ -440,7 +450,7 @@ fn scope_edit_page(req: &Req, scope: &str, said: &str, status: StatusCode) -> Ht
         html! {
             <Layout req={req} title="Scope and editor" viewer={None} head="">
                 <ScopeEditor revision={revision} said={said} />
-                <ScopeFilter scope={scope} />
+                <ScopeFilter scope={scope} said="" />
             </Layout>
         },
     )
@@ -449,7 +459,20 @@ fn scope_edit_page(req: &Req, scope: &str, said: &str, status: StatusCode) -> Ht
 /// The filter's part for its scope, or the screen.
 async fn scope_edit(req: Req, Params(at): Params<url::ScopeEdit>) -> HtmlResult {
     let scope = at.q.scope.as_deref().unwrap_or("all");
-    req.patch_or(html! { <ScopeFilter scope={scope} /> }, || async { scope_edit_page(&req, scope, "", StatusCode::OK) }).await
+    req.patch_or(html! { <ScopeFilter scope={scope} said="" /> }, || async { scope_edit_page(&req, scope, "", StatusCode::OK) })
+        .await
+}
+
+/// The filter's Pin: `stale` is refused with a 409, any other pinned. With JavaScript the answer
+/// is the filter, at the first scope; without it, the screen, or after a pin a redirect to it.
+async fn scope_pin(req: Req, Form(form): Form<TitleForm>) -> HtmlResult {
+    let (status, said) =
+        if form.title == "stale" { (StatusCode::CONFLICT, "Someone pinned first.") } else { (StatusCode::OK, "Pinned.") };
+    match req.mode {
+        Mode::Action => req.patch_with_status(status, html! { <ScopeFilter scope="all" said={said} /> }),
+        _ if status.is_success() => req.redirect(&url::ScopeEdit::default()),
+        _ => scope_edit_page(&req, "all", said, status),
+    }
 }
 
 /// The editor's Save: a title left empty is refused with a 422, and `stale` with a 409, as a

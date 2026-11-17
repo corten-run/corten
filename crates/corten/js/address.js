@@ -76,6 +76,12 @@ const places = new Map();
 const writes = new WeakMap();
 /** The marked GET sent last: one that waits for a write goes only if it still is. */
 let latest = {};
+/**
+ * The GET of each marked form (by its id, else itself) waiting for writes ({@link submit}): any
+ * newer submit of the form takes it out, so it is not sent.
+ * @type {Map<string | HTMLFormElement, object>}
+ */
+const waiting = new Map();
 
 /**
  * Refuses a patch that is not the page at an address: one with no element, an element with no
@@ -122,11 +128,13 @@ const drawWhole = ([apply], html, signal, sent, took, within, before) =>
  * before it, since it would draw an older choice over this one. Another marked form's write still
  * on its way is not: the server may have applied it, and its answer may be the only update of
  * parts outside this form's patch, so this is sent once that answer is drawn ({@link writes}), and
- * its patch, drawn after, is the screen. It is not sent after an answer that would stop a submit of
- * the write's own form waiting for it (`send`: a refusal of the state, a 5xx, a redirect, an error),
- * which the user reads first, nor once another marked GET has been sent since; a submit of the
- * write's form waiting for it is dropped, pressed before this. A write of this form makes this wait
- * for it (`send`). A patch drawn whole puts the address it asked for in history ({@link address});
+ * its patch, drawn after, is the screen. A write of this form on its way then decides with the
+ * others': it is not sent after any answer that would stop a submit of the write's own form waiting
+ * for it (`send`: a refusal of the state, a 5xx, a redirect, an error), which the user reads
+ * first, nor once another marked GET or any newer submit of this form has been sent since
+ * ({@link waiting}); a submit of a write's form waiting for it is dropped, pressed before this.
+ * With no other marked form's write on its way, a write of this form makes this wait for it
+ * (`send`). A patch drawn whole puts the address it asked for in history ({@link address});
  * a page, or a patch not drawn whole, has the page at that address read instead, as the browser
  * reads it for the form without JavaScript: in an entry of its own (none when it is the address
  * already), the form busy until it is drawn. A submit that waited for a write's answer comes again,
@@ -140,6 +148,9 @@ export function submit(event, form, by, sends, core, within) {
   if (get && (!navigation || navigation.transition)) return;
   const [apply, remember, , submits, go, LOAD, SOURCE, , send, , , sendAgain] = core;
   event.preventDefault();
+  // Any newer submit of the form, a write too, drops a GET of it waiting for writes.
+  const key = own.getAttribute.call(form, "id") ?? form;
+  waiting.delete(key);
   if (!get) {
     const before = submits.get(form);
     /** @type {Response | undefined} */
@@ -168,7 +179,17 @@ export function submit(event, form, by, sends, core, within) {
     if (other !== form && own.hasAttribute.call(other, "data-address"))
       if (pending.write) waits.push(writes.get(pending)), (pending.next = undefined);
       else pending.controller.abort();
-  if (waits.length) return void Promise.all(waits).then((ok) => ok.every(Boolean) && latest === mine && sendAgain(form, by ?? null));
+  if (waits.length) {
+    // A write of this form on its way too: its answer decides with the others'.
+    const ours = submits.get(form);
+    if (ours?.write) waits.push(writes.get(ours)), (ours.next = undefined);
+    waiting.set(key, mine);
+    return void Promise.all(waits).then((ok) => {
+      if (waiting.get(key) !== mine) return;
+      waiting.delete(key);
+      if (latest === mine && ok.every(Boolean)) sendAgain(form, by ?? null);
+    });
+  }
   let at = "";
   const read = () => {
     submits.delete(form);
