@@ -71,7 +71,27 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    (`Area::route`) with a `get` that is not `HtmlResult<Patches>` (that one fails at
    `cargo build`, not `cargo check`). An answer type of the app's own says
    `type Kind = AnyAnswer;`; never claim `Patches`. Keep every other handler `HtmlResult`;
-   never redirect only to show "saving". Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
+   never redirect only to show "saving". A slow part the page does not wait for (a slow read)
+   is drawn waiting with `{ReadAgain::now(url::Home::default())}` inside the waiting element (the
+   page's own route, which says `patches`; the element needs the `#[derive(Id)]` id the part's
+   patch replaces, and is the only one the read marks busy or failed), and that route's handler
+   answers both:
+   `req.patch_or_with(|| async { req.patch(Part { .. }) }, || async { req.page(..) }).await`,
+   each side a closure that reads only what it draws; never a `<corten-live>` stream for it, and
+   never `req.patch` on the page side (it compiles, and a full load gets a fragment; a debug build answers it with a 500).
+   Tags naming one address share one read, so each waits for the slowest: give independent slow
+   parts a query field each (each its own address on the same route). A page in a `Public` has its
+   part answered to everyone, so a part read for one visitor there gets a route of its own that
+   says `patches`, named in its `ReadAgain::now`; otherwise no second route. Its waiting line has a
+   link to the page with the part read in (a query field the handler reads it in for,
+   `rel="nofollow"`), hidden only under the part's `[aria-busy]` (`[aria-busy] > .show`), which
+   the runtime's part module sets while its read is on its way, so the link shows without
+   JavaScript, when the module does not load and once the read failed (no patch, an error, a
+   redirect: the link follows it; the part is then `[data-corten-read-failed]`); never hide it
+   under `@media (scripting: enabled)`. A part waiting in a part's answer is marked failed, not
+   read: reads do not chain (a part a form's answer, a part read again or a script draws in the same moment is still read, even at the same address). A page that reads itself again (`ReadAgain`) needs an interval
+   longer than its slow part takes.
+   Never a `Refresh` header. Structured data is `JsonLd { value: &product }` among the head tags, never
    `raw` or an expression inside `<script>` (that does not compile).
 3. A client navigation gets only the `<title>`, the head tags, `<main>`'s children and the layout's
    elements marked `page`; the rest of the layout renders on full loads. Mark `page` an element

@@ -8,7 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use corten::{FromRef, HtmlResponse, extract::FromRequestParts, http::request::Parts};
+use corten::{ForOne, FromRef, HtmlResponse, extract::FromRequestParts, http::request::Parts};
 
 use crate::{market::Market, recent::Recent, visitor::Visitor};
 
@@ -76,8 +76,9 @@ impl Watching {
         self.ids = lists.change(self.visitor.id(), |ids| ids.retain(|watched| *watched != id));
     }
 
-    /// `res` with the cookie that names the browser, when it had none (`Visitor::with_cookie`).
-    pub fn with_cookie(&mut self, res: HtmlResponse) -> HtmlResponse {
+    /// `res` with the cookie that names the browser, when it had none (`Visitor::with_cookie`):
+    /// any answer for this browser, a page or the patch a page's part is read as.
+    pub fn with_cookie<Kind>(&mut self, res: HtmlResponse<ForOne, Kind>) -> HtmlResponse<ForOne, Kind> {
         self.visitor.with_cookie(res)
     }
 }

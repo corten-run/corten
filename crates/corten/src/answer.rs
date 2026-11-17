@@ -365,10 +365,11 @@ pub struct AnyAnswer;
 /// An answer that is a patch whenever the runtime asked ([`crate::Mode::Action`]), and the page
 /// or a redirect only without JavaScript: `HtmlResult<Patches>`, which only
 /// [`Req::patch`](crate::Req::patch), [`Req::patch_with_status`](crate::Req::patch_with_status),
-/// [`Req::patch_or`](crate::Req::patch_or), [`Req::invalid`](crate::Req::invalid) and
-/// [`Req::invalid_with`](crate::Req::invalid_with) make. It is what the `get` handler of a
+/// [`Req::patch_or`](crate::Req::patch_or), [`Req::patch_or_with`](crate::Req::patch_or_with),
+/// [`Req::invalid`](crate::Req::invalid) and [`Req::invalid_with`](crate::Req::invalid_with)
+/// make. It is what the `get` handler of a
 /// route that says `patches` returns, so the handler's answer to the runtime's read of a part of
-/// a page ([`crate::ReadAgain::from`]) is a patch. What answers before the handler (a stage, an
+/// a page ([`crate::ReadAgain::from`], [`crate::ReadAgain::now`]) is a patch. What answers before the handler (a stage, an
 /// extractor such as a `Caller` that refuses someone signed out), a response the handler
 /// replaces through `DerefMut`, and a handler that writes `req.mode` (to `Mode::Document`, say)
 /// before `patch_or`, `invalid` or `invalid_with`, which then answer the mode it wrote, the page
@@ -698,7 +699,7 @@ pub(crate) mod sealed {
     #[diagnostic::on_unimplemented(
         message = "`{Self}` cannot say `Kind = Patches`: only Corten's patch answers can",
         label = "this answer says `Kind = Patches`",
-        note = "only `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), which req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, is a patch whenever the runtime asked; an answer type of the app's own says `type Kind = AnyAnswer;`"
+        note = "only `HtmlResult<Patches>` (and `Public<..>` or `NoStore<..>` of it), which req.patch, req.patch_with_status, req.patch_or, req.patch_or_with, req.invalid and req.invalid_with make, is a patch whenever the runtime asked; an answer type of the app's own says `type Kind = AnyAnswer;`"
     )]
     pub trait PatchAnswer {}
     impl<For> PatchAnswer for HtmlResponse<For, Patches> {}
@@ -713,7 +714,7 @@ pub(crate) mod sealed {
     #[diagnostic::on_unimplemented(
         message = "the route says `patches`, and its get handler's answer may answer the runtime's read with a page or a redirect (its kind is `{Self}`, not `Patches`)",
         label = "this handler",
-        note = "return `HtmlResult<Patches>`, which only req.patch, req.patch_with_status, req.patch_or, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from)"
+        note = "return `HtmlResult<Patches>`, which only req.patch, req.patch_with_status, req.patch_or, req.patch_or_with, req.invalid and req.invalid_with make, with the page (or a redirect) in patch_or's or patch_or_with's other side for a browser without JavaScript; or leave `patches` out of the route if nothing reads it as a patch (ReadAgain::from, ReadAgain::now)"
     )]
     pub trait PatchKind {}
     impl PatchKind for Patches {}
