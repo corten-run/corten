@@ -184,6 +184,26 @@ test("v3 source-bound schema gate retains historical v2 and refuses policy strip
     assert.throws(() => replayProducerSchema(Buffer.from(source), "client-heavy-native/v2"));
 });
 
+for (const [name, packageName, version, changeRoot] of [
+  ["Vue exact compiler dependency", "@vue/compiler-core", "0.0.0-rc.1"],
+  ["React scheduler caret dependency", "scheduler", "0.0.0-rc.1"],
+  ["installed esbuild optional binary", "@esbuild/linux-x64", "0.0.0-rc.1"],
+  ["React DOM peer dependency", "react", "19.3.0", true],
+]) test(`review repair rejects incompatible ${name} through production policy replay`, async () => {
+  const inputs = Object.fromEntries(await Promise.all(Object.entries(latestStableSources).map(async ([key, path]) =>
+    [key, await readFile(new URL(`../../${path}`, import.meta.url))])));
+  const lock = JSON.parse(inputs.lockfile); lock.packages[`node_modules/${packageName}`].version = version;
+  if (changeRoot) {
+    const manifest = JSON.parse(inputs.manifest); manifest.devDependencies[packageName] = version;
+    lock.packages[""].devDependencies[packageName] = version; inputs.manifest = Buffer.from(JSON.stringify(manifest));
+  }
+  inputs.lockfile = Buffer.from(JSON.stringify(lock));
+  const policy = evaluateLatestStable({ group: "client-heavy", ...inputs });
+  assert.throws(() => replayCandidatePolicy({ schema: "client-heavy-native/v3", latestStable: policy },
+    (path) => inputs[Object.entries(latestStableSources).find(([, sourcePath]) => sourcePath === path)[0]]));
+  assert.equal(policy.valid, false); assert.equal(policy.status, "invalid");
+});
+
 test("native verifier import completes without running the CLI", () => {
   const child = spawnSync(process.execPath, ["--input-type=module", "-e",
     `const module = await import(${JSON.stringify(new URL("./verify.mjs", import.meta.url).href)}); console.log(typeof module.validateSaved);`],

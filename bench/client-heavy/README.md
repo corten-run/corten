@@ -108,6 +108,12 @@ of installed bytes or the full Rust/Playwright/toolchain; existing native,
 source/build, dependency-byte, replay, resource and independent review gates
 remain mandatory. Refresh and review the observation before a new source freeze.
 
+The isolated adapter retains exact captured policy input lengths/hashes and
+recomputes the native policy from those raw bytes. It separately recomputes the
+binding policy from custody-verified committed-equivalent inputs. Only the
+existing exact-byte or uniform LF-to-CRLF checkout conversion is accepted;
+different policy dispositions, invented hashes or mixed conversion fail closed.
+
 Composition can consider each candidate separately only after freshness and
 native admission. The current small one-measurement recipe still reports
 `rankingEligible: false` and no comparison-eligible apps. This change provides

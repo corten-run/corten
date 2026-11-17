@@ -8,7 +8,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import { mock, test } from "node:test";
 import { definition, selectedApps } from "../../registry.mjs";
 import { createClientWorkload } from "../../client.mjs";
-import { readLatestStable } from "../../../client-heavy/build.mjs";
+import { evaluateLatestStable, latestStableSources } from "../../latest-stable.mjs";
 
 // The native owner lands separately. Resolve only the exact missing static seam in
 // this test process; never create/copy a verifier or add a production injection API.
@@ -62,6 +62,23 @@ function fixture(t) {
   save(); return { folder, binding, output, plan, put, save, source, entries };
 }
 
+function candidateFixture(t, convert = (text) => text, committedText = (text) => text) {
+  const f = fixture(t), inputs = {}, checkout = {};
+  for (const [key, path] of Object.entries(latestStableSources)) {
+    inputs[key] = committedText(readFileSync(new URL(`../../../../${path}`, import.meta.url)).toString().replaceAll("\r\n", "\n"));
+    checkout[key] = convert(inputs[key]); f.source(path, inputs[key], checkout[key]);
+  }
+  const committed = evaluateLatestStable({ group: "client-heavy", ...inputs }), captured = evaluateLatestStable({ group: "client-heavy", ...checkout });
+  assert.equal(committed.valid, true); assert.equal(captured.valid, true);
+  f.binding.latestStable = committed; f.output.latestStable = captured; report.latestStable = structuredClone(captured);
+  report.schema = "client-heavy-saved-verification/v3"; f.output.schema = "client-heavy-native/v3";
+  report.status = "failed"; report.intrinsic.passed = false;
+  f.output.builds.solid = { outcome: "not-run" };
+  f.output.cells.solid = { outcome: "unsupported", qualification: null, measurement: null };
+  Object.assign(report.cells.solid, { outcome: "unsupported", qualification: null, measurement: null, replayPassed: false, build: { outcome: "not-run" } });
+  f.save(); return { ...f, committed, captured };
+}
+
 test("synthetic v2 intrinsic validity is supported without pretending external admission or OS isolation", async (t) => {
   const f = fixture(t), before = readFileSync(join(f.folder, "result.json"));
   const result = await inspectSaved(f.binding, f.folder);
@@ -72,14 +89,7 @@ test("synthetic v2 intrinsic validity is supported without pretending external a
 });
 
 test("synthetic v3 adapter binds the recomputed policy and preserves unsupported Solid without ranking admission", async (t) => {
-  const f = fixture(t), policy = readLatestStable();
-  report.schema = "client-heavy-saved-verification/v3"; f.output.schema = "client-heavy-native/v3";
-  report.latestStable = structuredClone(policy); f.output.latestStable = structuredClone(policy); f.binding.latestStable = structuredClone(policy);
-  report.status = "failed"; report.intrinsic.passed = false;
-  f.output.builds.solid = { outcome: "not-run" };
-  f.output.cells.solid = { outcome: "unsupported", qualification: null, measurement: null };
-  Object.assign(report.cells.solid, { outcome: "unsupported", qualification: null, measurement: null, replayPassed: false, build: { outcome: "not-run" } });
-  f.save();
+  const f = candidateFixture(t);
   const value = await inspectSaved(f.binding, f.folder);
   assert.equal(value.status, "failed", JSON.stringify(value)); assert.equal(value.attemptComplete, true); assert.equal(value.cleanupComplete, true);
   assert.equal(value.rankingEligible, false); assert.deepEqual(value.comparisonEligibleApps, []);
@@ -87,6 +97,51 @@ test("synthetic v3 adapter binds the recomputed policy and preserves unsupported
   f.binding.latestStable.schema = "benchmark-latest-stable-evaluation/v1";
   assert.equal((await inspectSaved(f.binding, f.folder)).status, "invalid");
 });
+
+test("review repair accepts committed LF versus captured CRLF policy with exact raw custody", async (t) => {
+  const f = candidateFixture(t, (text) => text.replaceAll("\n", "\r\n")), { committed, captured } = f;
+  assert.deepEqual(committed.candidates, captured.candidates); assert.notDeepEqual(committed.sources, captured.sources);
+  const before = readFileSync(join(f.folder, "result.json"));
+  const result = await inspectSaved(f.binding, f.folder);
+  assert.equal(result.status, "failed", JSON.stringify(result)); assert.equal(result.attemptComplete, true); assert.equal(result.cleanupComplete, true);
+  assert.equal(result.rankingEligible, false); assert.deepEqual(result.comparisonEligibleApps, []);
+  assert.equal(result.outcomes[3].outcome, "unsupported"); assert.equal(f.output.cells.solid.measurement, null);
+  assert.deepEqual(readFileSync(join(f.folder, "result.json")), before); assert.deepEqual(report.latestStable, captured);
+});
+
+test("review repair accepts exact committed CRLF policy without treating it as checkout conversion", async (t) => {
+  const f = candidateFixture(t, (text) => text, (text) => text.replaceAll("\n", "\r\n"));
+  assert.deepEqual(f.committed, f.captured);
+  const result = await inspectSaved(f.binding, f.folder);
+  assert.equal(result.status, "failed", JSON.stringify(result)); assert.equal(result.attemptComplete, true);
+  assert.equal(result.outcomes[3].outcome, "unsupported"); assert.equal(result.rankingEligible, false);
+});
+
+for (const mode of ["raw hash lie", "raw policy hash lie", "policy disposition lie", "output replay mismatch", "mixed checkout conversion", "non-conversion source edit", "missing policy input"])
+  test(`review repair policy conversion refuses ${mode}`, async (t) => {
+    const f = candidateFixture(t, (text) => text.replaceAll("\n", "\r\n"));
+    const entry = f.entries.find((file) => file.path === latestStableSources.policy), path = join(f.folder, entry.blob);
+    if (mode === "raw hash lie") writeFileSync(path, "forged raw bytes");
+    if (mode === "raw policy hash lie") {
+      f.output.latestStable.sources = structuredClone(f.committed.sources); report.latestStable = structuredClone(f.output.latestStable);
+    }
+    if (mode === "policy disposition lie") f.binding.latestStable.candidates[3].latestStableEligible = true;
+    if (mode === "output replay mismatch") f.output.latestStable = structuredClone(f.committed);
+    if (["mixed checkout conversion", "non-conversion source edit"].includes(mode)) {
+      const text = readFileSync(path).toString(), bytes = Buffer.from(mode === "mixed checkout conversion" ? text.replace("\r\n", "\n") : text + " ");
+      entry.bytes = bytes.length; entry.sha256 = hash(bytes); entry.blob = `evidence/blobs/${entry.sha256}`;
+      writeFileSync(join(f.folder, entry.blob), bytes);
+      report.sources.files = f.entries.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 }));
+    }
+    if (mode === "missing policy input") {
+      f.entries.splice(f.entries.indexOf(entry), 1);
+      report.sources.files = f.entries.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 }));
+    }
+    f.save(); const result = await inspectSaved(f.binding, f.folder);
+    assert.equal(result.status, mode === "missing policy input" ? "blocked" : "invalid", JSON.stringify(result));
+    assert.equal(result.attemptComplete, false); assert.equal(result.rankingEligible, false);
+    assert.deepEqual(result.comparisonEligibleApps, []);
+  });
 
 test("tracked historical browser inputs are native source bytes, not optional result summaries", async (t) => {
   const f = fixture(t); f.source("bench/browser/results/browser-1/summary.json", '{"historical":"input"}\n'); f.save();
