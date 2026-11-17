@@ -496,12 +496,80 @@ async function parsesAsHtmlMeans(browser) {
       `<input name="first" NAME="second">`,
       () => document.querySelector("input")?.name === "first",
     ],
+    // Each nesting rule html! refuses (crates/corten-macros/src/html/nesting.rs), for every tag
+    // it names: the browser takes #inner out of #outer, or drops it, in each engine.
+    ...refusedNesting().map(([around, outer, between, inner]) => {
+      const tag = (name, id) => `<${name}${id ? ` id="${id}"` : ""}${name === "optgroup" ? ' label="g"' : ""}>`;
+      const end = (name) => (["hr", "input"].includes(name) ? "" : `</${name}>`);
+      const markup =
+        around.map((n) => tag(n)).join("") +
+        tag(outer, "outer") +
+        (between ? tag(between) : "") +
+        `${tag(inner, "inner")}x${end(inner)}` +
+        (between ? end(between) : "") +
+        end(outer) +
+        [...around].reverse().map(end).join("");
+      return /** @type {[string, string, () => boolean]} */ ([
+        `<${inner}> in <${outer}>${between ? ` through <${between}>` : ""} leaves it (refused by html!)`,
+        markup,
+        () => {
+          const outer = document.getElementById("outer");
+          const inner = document.getElementById("inner");
+          return !!outer && !(inner && outer.contains(inner));
+        },
+      ]);
+    }),
+    // A template's content and a foreign element's start with nothing open in html!'s check:
+    // browsers keep these, so it must not refuse them.
+    ...[
+      ["svg", "foreignObject"],
+      ["svg", "title"],
+      ["svg", "desc"],
+      ["math", "mtext"],
+      ["math", "mi"],
+    ].map(([foreign, point]) => /** @type {[string, string, () => boolean]} */ ([
+      `an <a> in a <${point}> in an <${foreign}> in an <a> stays there`,
+      `<div><a id="outer"><${foreign}><${point}><a id="inner">Link</a></${point}></${foreign}></a></div>`,
+      () => !!document.getElementById("outer")?.contains(document.getElementById("inner")),
+    ])),
+    [
+      "a form in a form in a root template stays there",
+      `<template id="forms"><div><form id="outer"><form id="inner"><input></form></form></div></template>`,
+      () => !!(/** @type {HTMLTemplateElement | null} */ (document.getElementById("forms")))?.content.querySelector("#outer > #inner"),
+    ],
   ];
   for (const [name, markup, keeps] of shapes) {
     await page.setContent(`<!DOCTYPE html><html><head><title>Shapes</title></head><body>${markup}</body></html>`);
     check(`html! markup: ${name}`, await page.evaluate(keeps, { MATHML, XHTML }), markup);
   }
   await context.close();
+}
+
+/**
+ * The nestings html! refuses, as [around, outer, between, inner]: `inner` written in `outer`
+ * (through `between` when given), inside the `around` elements.
+ * @returns {[string[], string, string, string][]}
+ */
+function refusedNesting() {
+  /** @type {[string[], string, string, string][]} */
+  const shapes = [];
+  // Start tags that close a <p> in button scope (nesting.rs CLOSE_P).
+  const closesP = ["address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset", "figcaption", "figure", "footer", "header", "hgroup", "main", "menu", "nav", "ol", "p", "search", "section", "summary", "ul", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "listing", "form", "li", "dd", "dt", "plaintext", "hr", "xmp"];
+  for (const inner of closesP) shapes.push([["div"], "p", "span", inner]);
+  shapes.push([["ul"], "li", "span", "li"], [["ul"], "li", "div", "li"], [["dl"], "dt", "div", "dd"]);
+  for (const outer of ["dd", "dt"]) for (const inner of ["dd", "dt"]) shapes.push([["dl"], outer, "", inner]);
+  for (const name of ["a", "button", "nobr"]) for (const between of ["span", "div"]) shapes.push([["div"], name, between, name]);
+  shapes.push([["div"], "form", "div", "form"]);
+  const headings = ["h1", "h2", "h3", "h4", "h5", "h6"];
+  for (const outer of headings) for (const inner of headings) shapes.push([["div"], outer, "", inner]);
+  shapes.push([["div"], "select", "option", "input"], [["div"], "select", "option", "select"]);
+  for (const outer of ["option", "optgroup"])
+    for (const inner of ["option", "optgroup", "hr"]) if (!(outer === "optgroup" && inner === "option")) shapes.push([["div", "select"], outer, "", inner]);
+  shapes.push([["div"], "option", "", "option"], [["div"], "option", "", "optgroup"]);
+  const ruby = ["rb", "rtc", "rp", "rt"];
+  for (const outer of ruby) for (const inner of ruby) if (!(outer === "rtc" && ["rp", "rt"].includes(inner))) shapes.push([["div", "ruby"], outer, "", inner]);
+  shapes.push([["div", "ruby"], "p", "", "rt"]);
+  return shapes;
 }
 
 /** Whether the browser lets a navigation say when its address changes: the Navigation API with `precommitHandler`. */

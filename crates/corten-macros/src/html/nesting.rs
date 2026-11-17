@@ -1,5 +1,8 @@
 //! Literal HTML nesting whose start tags close or discard an open element. This is not an HTML
-//! validator: it follows the existing namespace evidence and never crosses a component's edge.
+//! validator: it follows the existing namespace evidence and never crosses a component's edge,
+//! a `<template>` or a foreign element (an `<svg>`, a `<math>`, their integration points, or
+//! one whose namespace the markup does not show). Their content starts with no element open, so
+//! the check never refuses markup there by an ancestor it cannot be sure the browser still holds.
 
 use super::{as_html, breaks_out, parsing_within, Attr, Error, Node, Parsing};
 use crate::tokens::err;
@@ -168,9 +171,9 @@ fn in_scope<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
 
 /// The open element this start tag closes or discards, if the literal ancestors establish it.
 fn displaced<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
-    // Forms use the form pointer, not element scope. A template allows a nested form, including
-    // one inside a form in that template; the pointer is not used while any template is open.
-    if name.eq_ignore_ascii_case("form") && !open.iter().any(|e| e.html && e.name.eq_ignore_ascii_case("template")) {
+    // Forms use the form pointer, not element scope. `walk` never puts a template here (its
+    // content starts afresh), and in a template the pointer is not used.
+    if name.eq_ignore_ascii_case("form") {
         if let Some(form) = open.iter().rev().find(|e| e.html && e.name.eq_ignore_ascii_case("form")) {
             return Some(form.name);
         }
@@ -266,7 +269,13 @@ fn walk<'a>(nodes: &'a [Node], parsing: Parsing, open: &mut Vec<Open<'a>>) -> Re
                 // Text holders are already checked by the parser; noscript is text with
                 // scripting enabled and markup without it, so do not assume either here.
                 if !(html && (super::reads_as_text(parsing, name) || name.eq_ignore_ascii_case("noscript"))) {
-                    walk(children, parsing_within(parsing, name, attrs), open)?;
+                    let within = parsing_within(parsing, name, attrs);
+                    // A template's content, and a foreign element's, start with no element open.
+                    if !html || name.eq_ignore_ascii_case("template") {
+                        walk(children, within, &mut Vec::new())?;
+                    } else {
+                        walk(children, within, open)?;
+                    }
                 }
                 open.pop();
             }
@@ -316,7 +325,6 @@ mod tests {
         assert!(!lost(&["a", "object"], "a"));
         assert!(!lost(&["a", "table", "caption"], "a"));
         assert!(lost(&["form", "table", "td"], "form"));
-        assert!(!lost(&["form", "template", "form"], "form"));
         assert!(lost(&["button", "span"], "button"));
         assert!(!lost(&["button", "object"], "button"));
         assert!(lost(&["h1"], "h2"));
@@ -337,6 +345,32 @@ mod tests {
         assert!(!lost(&["ruby", "rtc"], "rt"));
         assert!(!lost(&["ruby", "rt", "span"], "rt"));
         assert!(!lost(&["rt"], "rt"));
+    }
+
+    fn el(name: &str, children: Vec<Node>) -> Node {
+        Node::Element { name: name.into(), attrs: Vec::new(), children }
+    }
+
+    /// Browsers keep each of these; the check passes them by starting a template's content and a
+    /// foreign element's with nothing open. (A refusal needs a macro's span: see the
+    /// `compile_fail` examples in corten's `view` module.)
+    #[test]
+    fn templates_and_foreign_content_start_with_nothing_open() {
+        let link =
+            |point: &str, foreign: &str| el("div", vec![el("a", vec![el(foreign, vec![el(point, vec![el("a", Vec::new())])])])]);
+        let kept = [
+            link("foreignObject", "svg"),
+            link("title", "svg"),
+            link("desc", "svg"),
+            link("mtext", "math"),
+            link("mi", "math"),
+            el("template", vec![el("div", vec![el("form", vec![el("form", vec![el("input", Vec::new())])])])]),
+            el("div", vec![el("form", vec![el("template", vec![el("form", Vec::new())])])]),
+            el("div", vec![el("p", vec![el("template", vec![el("div", Vec::new())])])]),
+        ];
+        for node in kept {
+            assert!(check(std::slice::from_ref(&node)).is_ok());
+        }
     }
 
     #[test]

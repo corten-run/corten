@@ -4248,8 +4248,15 @@ rules something out.
     nodes once with a stack of literal ancestors, preserving it through control-flow bodies
     and starting a fresh unknown context for a component's children. It adds no render code.
     Each rule keeps its own scope boundaries; a nested list in a `<ul>` and a form in a
-    `<template>` still compile. A duplicate written HTML attribute name is refused case-insensitively,
-    with an expression value too; spreads remain opaque, so the first `encoding` rule still
+    `<template>` still compile. The content of a `<template>` and of a foreign element (an
+    `<svg>`, a `<math>`, their integration points, or an element whose namespace the markup does
+    not show) starts with nothing open rather than modelling the tree builder further: an `<a>`
+    reached through a `<foreignObject>`, `<title>`, `<desc>`, `<mi>` or `<mtext>` inside an
+    outer `<a>`, and nested forms under a root `<template>`, are kept by browsers and compile.
+    That gives up refusing a nested `<form>` inside a `<foreignObject>` within a form, which
+    browsers do drop, as an acceptable miss next to refusing markup they keep.
+    A duplicate written HTML attribute name is refused case-insensitively, with an expression
+    value too; spreads remain opaque, so the first `encoding` rule still
     matters when a spread precedes or follows a written one. Handler calls (`on:..`) still
     combine in one `data-on` attribute, including repeated events.
 
@@ -4295,7 +4302,10 @@ rules something out.
 
     Last checked: 2026-11-16, the HTML standard's "in body" start-tag rules, scope boundaries,
     special elements and active-formatting markers, read against `html/nesting.rs` in this
-    change based on `f5f2132aa`; 2026-11-15, the HTML standard's tree construction (its tokenization states for
+    change based on `f5f2132aa`, and each of its refusal rules, for every tag the rule names
+    (`refusedNesting` in `scripts/smoke.mjs`), parsed in Chromium 156, Firefox 157 and
+    WebKit 27.2, each of which moved or dropped the inner element, while keeping the template
+    and foreign-content cases; 2026-11-15, the HTML standard's tree construction (its tokenization states for
     RCDATA, RAWTEXT, script data and PLAINTEXT, its HTML and MathML text integration points, its
     tree construction dispatcher, which keeps `<mglyph>` and `<malignmark>` MathML's at a text
     integration point and reads an `<svg>` in a MathML `<annotation-xml>` as SVG's, and its rules for parsing tokens in foreign content, which take the same

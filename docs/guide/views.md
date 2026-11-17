@@ -70,8 +70,11 @@ another, use `<div>` rather than `<p>` around blocks, and wrap a nested list in 
 `<ol>`. This is checked even without refs: a ref in content the browser moves may leave its
 component's scope. Control-flow bodies and fragments retain the literal ancestor chain;
 components, their children, expressions and `raw` do not expose what they write or where they
-write it, so nesting across those boundaries is the app's to keep correct. A top-level `<a>`
-or `<form>` might be foreign content: wrap HTML fragments in an HTML element when their
+write it, so nesting across those boundaries is the app's to keep correct. The content of a
+`<template>`, and of an `<svg>` or `<math>` (their HTML integration points included), is
+checked with nothing open around it, as browsers keep these: an `<a>` in a `<foreignObject>`
+or `<mtext>` inside another `<a>`, and a form in a form inside a `<template>`, compile. A
+top-level `<a>` or `<form>` might be foreign content: wrap HTML fragments in an HTML element when their
 namespace needs to be established. This is not a complete HTML validator. It does not check
 insertion modes such as table foster parenting (a `<div>` straight in a `<table>`), or a
 `<table>` in a `<p>` (which closes the paragraph only outside quirks mode).

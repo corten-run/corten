@@ -66,3 +66,29 @@ fn nesting_boundaries_and_unknown_namespaces_still_compile() {
     assert!(markup.contains("<a><a>SVG links</a></a>"));
     assert!(markup.contains("<a><a>SVG children</a></a>"));
 }
+
+/// Browsers keep these trees: an anchor reached through an SVG or MathML integration point is
+/// independent of one around the drawing, and a template's forms do not see the form pointer.
+#[test]
+fn templates_and_foreign_content_start_with_nothing_open() {
+    for (markup, expected) in [
+        (
+            html! { <div><a><svg><foreignObject><a>"Link"</a></foreignObject></svg></a></div> }.to_html(),
+            "<div><a><svg><foreignObject><a>Link</a></foreignObject></svg></a></div>",
+        ),
+        (
+            html! { <div><a><math><mtext><a>"Link"</a></mtext></math></a></div> }.to_html(),
+            "<div><a><math><mtext><a>Link</a></mtext></math></a></div>",
+        ),
+        (
+            html! { <div><a><svg><title><a>"Link"</a></title></svg></a></div> }.to_html(),
+            "<div><a><svg><title><a>Link</a></title></svg></a></div>",
+        ),
+        (
+            html! { <template><div><form><form><input></form></form></div></template> }.to_html(),
+            "<template><div><form><form><input></form></form></div></template>",
+        ),
+    ] {
+        assert_eq!(markup, expected);
+    }
+}

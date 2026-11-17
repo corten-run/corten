@@ -293,7 +293,9 @@ use std::{
 /// Literal nesting that makes the browser close or discard an open HTML element is refused.
 /// Put the elements beside one another, or use a container that can hold them (`<div>` rather
 /// than `<p>` for a block). The check follows literal elements through control flow, not through
-/// components, expressions or `raw`, and does not guess a namespace the markup does not show:
+/// components, expressions or `raw`, and does not guess a namespace the markup does not show.
+/// A `<template>`'s content and an `<svg>`'s or a `<math>`'s start with nothing open, so an
+/// `<a>` in a `<foreignObject>` inside another `<a>` compiles, as browsers keep it. These do not:
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
