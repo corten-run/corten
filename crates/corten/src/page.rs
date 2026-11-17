@@ -1005,6 +1005,8 @@ impl FormPatch<'_> {
         let mut body = String::new();
         self.0.render_into(view, &mut body, false)?;
         self.0.section_links(&mut body);
+        #[cfg(debug_assertions)]
+        self.0.parses_whole(&body)?;
         Ok(DrawnPatch(body))
     }
 }
@@ -1409,8 +1411,11 @@ impl Req {
         self.signal.set_locale(index);
     }
 
-    /// The visitor's time zone (`zones` feature, [`crate::App::client_zone`]), with its rules: a
-    /// date the user picked (`<input type="date">`) becomes the instant it means where they are.
+    /// The visitor's time zone (`zones` feature, [`crate::App::client_zone`]), with its rules: the
+    /// zone a page draws a form's dates and times in (`DrawZone::from(req.zone())`). The form sends
+    /// that zone back, and its post reads a picked date and time, or where a picked day
+    /// (`<input type="date">`) begins, in it (`day.start(&input.zone)`), not in the post's
+    /// `req.zone()`, which can differ from the page's ([`crate::form::FormZone`]).
     /// UTC until the browser has reported it (its first page) and for a name the tz database
     /// lacks. Looked up in the tz database at each call, so a handler keeps it. With
     /// [`crate::App::zoned_dates`] a page needs it for nothing else: while Corten renders the
@@ -2345,6 +2350,21 @@ impl Req {
         Ok(HtmlResponse::new(res))
     }
 
+    /// In a debug build: the patch `body`, as sent, is one the browser keeps whole when the runtime
+    /// parses it as a `<template>`'s content (`crate::html::patch_parse`): a table part
+    /// beside other elements can be dropped or moved there, which the compiler does not see when a
+    /// component or an expression writes it. A release build sends it as it is.
+    #[cfg(debug_assertions)]
+    fn parses_whole(&self, body: &str) -> Result<()> {
+        match crate::html::patch_parse_checked(body, &format_args!("the patch for {}", self.path())) {
+            Some(problem) => {
+                Err(self
+                    .unserved(format!("the browser would lose part of this patch: {problem}. {}", crate::html::PATCH_PARSE_HELP)))
+            }
+            None => Ok(()),
+        }
+    }
+
     /// Answers a `<form data-patch>` submit with fragments: the runtime replaces each element on
     /// the page that has the id of one of `view`'s top-level elements. One without an id would
     /// be dropped in the browser, so `view` is a [`Patch`](crate::view::Patch), which the compiler
@@ -2392,6 +2412,8 @@ impl Req {
         if !self.shared.sections.is_empty() {
             self.section_links(&mut body);
         }
+        #[cfg(debug_assertions)]
+        self.parses_whole(&body)?;
         let mut res = html_response(status, body, Some(PATCH_HEADER));
         // A form's submit key is new on every render, so this body's tag would never match.
         if crate::form::DREW_KEY.take() {

@@ -3900,6 +3900,443 @@ fn a_place_elsewhere_on_a_path_panics_in_debug_builds() {
     let _ = crate::route::Elsewhere::at(&path, "place-7");
 }
 
+#[derive(crate::view::Id)]
+struct LostRowId;
+
+/// A message a patch sends.
+#[crate::component]
+fn SavedNote() -> impl crate::Patch {
+    html! { <p id={MsgId}>"saved"</p> }
+}
+
+/// A table row, a patch on its own.
+#[crate::component]
+fn LostRow() -> impl crate::Patch {
+    html! { <tr id={LostRowId}><td>"1"</td></tr> }
+}
+
+/// A patch whose table row comes after another element, which the runtime's parse (a
+/// `<template>`'s content) drops. Each is a component, so the `html!` that sends them together
+/// sees neither's tags: only the patch as sent shows the row after the message.
+fn lost_row() -> impl crate::Patch {
+    html! {
+        <SavedNote />
+        <LostRow />
+    }
+}
+
+/// `req.patch_or` and `req.invalid_with`'s `form.draw` answering with `lost_row`.
+fn lost_row_routes() -> Table {
+    Table::new()
+        .route(
+            "/",
+            crate::router::post(|req: Req| async move {
+                req.patch_or::<ForOne, AnyAnswer, _, _>(lost_row(), || async { req.redirect(&Done) }).await
+            }),
+        )
+        .route(
+            "/refused",
+            crate::router::post(|req: Req| async move {
+                let mut errors = crate::Errors::new();
+                errors.refuse(crate::Refusal::Conflict, "moved on");
+                req.invalid_with::<ForOne, AnyAnswer, _, _, _, _>(
+                    &errors,
+                    |form| async move { form.draw(lost_row()) },
+                    || async { req.redirect(&Done) },
+                )
+                .await
+            }),
+        )
+}
+
+/// A debug build answers a patch the browser would lose part of with an error that names the
+/// element lost and the one that came first, outside `corten dev` too: through `req.patch` (here
+/// `patch_or`) and a refusal's `form.draw`.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_the_browser_would_lose_part_of_is_an_error_in_debug_builds() {
+    for path in ["/", "/refused"] {
+        let (status, _, body) = call_with(app(lost_row_routes(), None), "POST", path, Some("action"), None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {body}");
+        let named = crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#);
+        assert!(body.contains(&named), "{path}: {body}");
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(crate::view::Id)]
+struct LostColId;
+
+/// The area's stylesheet links Corten writes after a patch's elements are read with them: after a
+/// leading `<col>` the browser drops them, so the patch would go in unstyled.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_whose_area_stylesheet_the_browser_would_drop_is_an_error_in_debug_builds() {
+    async fn col_patch(req: Req) -> HtmlResult {
+        req.patch(html! { <col id={LostColId}> })
+    }
+    let router = App::new(Routes::new())
+        .area::<Shop>(|shop| shop.route::<ShopItem>(crate::Methods::reads(get(col_patch))).components(&[COST_STYLED]))
+        .router();
+    let (status, _, body) = call_with(router, "GET", "/shop/item", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains(&crate::escape("the area's stylesheet (<link")), "{body}");
+    assert!(body.contains(&crate::escape(r#"since <col id="lost-col"> comes first"#)), "{body}");
+}
+
+/// A release build compiles none of the check: the patch is sent as drawn.
+#[cfg(not(debug_assertions))]
+#[tokio::test]
+async fn a_patch_the_browser_would_lose_part_of_is_sent_in_release_builds() {
+    for (path, status) in [("/", StatusCode::OK), ("/refused", StatusCode::CONFLICT)] {
+        let (got, headers, body) = call_with(app(lost_row_routes(), None), "POST", path, Some("action"), None).await;
+        assert_eq!(got, status, "{path}: {body}");
+        assert_eq!(headers["corten-patch"], "1", "{path}");
+        assert_eq!(body, r#"<p id="msg">saved</p><tr id="lost-row"><td>1</td></tr>"#, "{path}");
+    }
+}
+
+#[derive(crate::view::Id)]
+struct NoteScriptId;
+
+/// A data block whose text has `<!--` and a tag that begins like `<script` (`<scriptx>`, which
+/// hides no end tag), then the message and the row.
+fn lost_after_script() -> impl crate::Patch {
+    html! {
+        <script id={NoteScriptId} type="text/x-template">"<!-- <scriptx> -->"</script>
+        <SavedNote />
+        <LostRow />
+    }
+}
+
+/// The check reads a script's text as the tokenizer does, so what follows a script with `<!--` in
+/// its text is checked: the row after the message is an error in a debug build.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_lost_after_a_script_with_a_comment_in_its_text_is_an_error_in_debug_builds() {
+    let routes = Table::new()
+        .route("/", crate::router::post(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(lost_after_script()) }));
+    let (status, _, body) = call_with(app(routes, None), "POST", "/", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let named = crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#);
+    assert!(body.contains(&named), "{body}");
+}
+
+#[derive(crate::view::Id)]
+struct HeadFontId;
+
+/// `html!` writes an end tag for a `<basefont>` and a `<param>`, which the browser ignores: the
+/// checks read past them, so the loss beside them is found in what `html!` writes.
+#[test]
+fn the_patch_checks_read_the_void_end_tags_html_writes() {
+    let headed = html! {
+        <basefont id={HeadFontId} />
+        <SavedNote />
+        <LostRow />
+    }
+    .to_html();
+    let object = html! {
+        <SavedNote />
+        <tr id={LostRowId}>
+            <td>
+                <object type="image/svg+xml">
+                    <param name="a" value="1" />
+                    "fallback"
+                </object>
+            </td>
+        </tr>
+    }
+    .to_html();
+    for html in [headed, object] {
+        assert_eq!(crate::html::patch_problem(&html), None, "{html}");
+        let parse = crate::html::patch_parse(&html);
+        assert_eq!(parse.problem.as_deref(), Some(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#), "{html}");
+        assert_eq!(parse.unread, None, "{html}");
+    }
+}
+
+/// A patch the parse check cannot read to its end (an `<li>` closed by the next `<li>`, which
+/// `raw` markup can write) is sent, and a debug build logs where the check stopped, so it is not
+/// passed in silence.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_patch_the_parse_check_cannot_read_is_logged_in_debug_builds() {
+    use std::sync::Arc;
+    let routes = Table::new().route(
+        "/list",
+        crate::router::post(|req: Req| async move {
+            req.patch::<ForOne, AnyAnswer>(html! { <ul id={MsgId}>{crate::raw("<li>one<li>two")}</ul> })
+        }),
+    );
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let (status, _, body) = call_with(app(routes, None), "POST", "/list", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains("corten: the debug check of what the browser keeps of the patch for /list read it only up to <li> in <li>, which closes the <li> open around it"),
+        "{text}"
+    );
+}
+
+#[derive(crate::view::Id)]
+struct NoteEndId;
+
+/// Two data blocks whose text opens with `<!--<script>` and ends with `-->`, around the message:
+/// the browser reads the first block to the second's end tag, so the message is its text, which
+/// the markup does not say is not what was meant. The check stops there and a debug build logs it,
+/// rather than passing it as read (#1409).
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_patch_whose_script_text_carries_it_past_an_element_is_logged_in_debug_builds() {
+    use std::sync::Arc;
+    let routes = Table::new().route(
+        "/blocks",
+        crate::router::post(|req: Req| async move {
+            req.patch::<ForOne, AnyAnswer>(html! {
+                <script id={NoteScriptId} type="text/x-template">"<!--<script>"</script>
+                <SavedNote />
+                <script id={NoteEndId} type="text/x-template">"-->"</script>
+                <LostRow />
+            })
+        }),
+    );
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let (status, _, body) = call_with(app(routes, None), "POST", "/blocks", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains(r#"read it only up to <script id="note-script" type="text/x-template">, whose text a <!-- and a <script in it carry past its first </script>"#),
+        "{text}"
+    );
+}
+
+/// Markup placed with `raw` that the parse check does not read as the browser does is checked only
+/// up to there, and a debug build logs where it stopped rather than refusing the patch: an end tag
+/// written `</div ignored>`, which closes the `<div>` so the row after it is kept (a refusal would
+/// be a false 500); a `</bogus>` before a form's control, which a table's reading moves out of it;
+/// a `<col>` the patch ends in before its quote and `>`, which the browser drops, keeping the
+/// `<div>` whole (a refusal would be a false 500); and an `<image>`, which the browser reads as
+/// an `<img>`, dropping the row it holds (#1409).
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_patch_with_tokens_the_parse_check_does_not_read_is_sent_and_logged_in_debug_builds() {
+    use std::sync::Arc;
+    let routes = Table::new()
+        .route(
+            "/decorated",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <div id={MsgId}>{crate::raw(r#"</div ignored><tr id="kept"></tr>"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/form",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <div id={NoteEndId}>{crate::raw(r#"<form></bogus><input name="q"></form>"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/col",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! { <div id={MsgId}>{crate::raw("</div><col data-note='")}</div> })
+            }),
+        )
+        .route(
+            "/image",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <div id={MsgId}>{crate::raw(r#"</div><image id="i"><tr id="r"><td>1</td></tr></image>"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/doctype",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <div id={MsgId}>{crate::raw(r#"</div><!DOCTYPE html PUBLIC "><tr id='r'></tr>">"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/reference",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <form id={NoteEndId}>{crate::raw("&bogus;")}</form>
+                })
+            }),
+        );
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let app = app(routes, None);
+    for (path, stopped) in [
+        ("/decorated", "the patch for /decorated read it only up to the end tag </div ignored>, which is not written </name>"),
+        (
+            "/form",
+            "the patch for /form read it only up to </bogus> in <form>, which the check of what a form holds does not read",
+        ),
+        ("/col", "the patch for /col read it only up to <col data-note='</div>, a start tag the patch ends in before its >"),
+        (
+            "/image",
+            r#"the patch for /image read it only up to <image id="i">, which a browser reads as an <img>, an element with no end tag"#,
+        ),
+        (
+            "/doctype",
+            r#"the patch for /doctype read it only up to the doctype <!DOCTYPE html PUBLIC ">, which the check does not read"#,
+        ),
+        (
+            "/reference",
+            r#"the patch for /reference read it only up to &bogus; in <form id="note-end">, which the check of what a form holds does not read"#,
+        ),
+    ] {
+        let (status, _, body) = call_with(app.clone(), "POST", path, Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert!(text.contains(stopped), "{path}: {text}");
+    }
+}
+
+/// Characters past ASCII in the names, values and text of markup placed with `raw` are read
+/// without a panic, and the check reads on past them to the row the browser drops; text a
+/// `<form>` holds is read with its character references decoded, so a `&#32;`, which the browser
+/// reads as a space, is not a loss, and a `&nbsp;`, which it moves out of the form, is (#1409).
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_s_characters_past_ascii_and_references_are_read_as_the_browser_reads_them() {
+    let routes = Table::new()
+        .route(
+            "/multibyte",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <SavedNote />
+                    <div id={NoteEndId}>
+                        {crate::raw("<span \u{e9}=\"x\" data-\u{e9}='\u{65e5}>'>\u{e9}t\u{e9}</span><x-\u{e9}>\u{65e5}</x-\u{e9}>")}
+                    </div>
+                    <LostRow />
+                })
+            }),
+        )
+        .route(
+            "/space",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <form id={NoteEndId}>{crate::raw("&#32;")}</form>
+                })
+            }),
+        )
+        .route(
+            "/nbsp",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <form id={NoteEndId}>{crate::raw("&nbsp;")}</form>
+                })
+            }),
+        );
+    let app = app(routes, None);
+    let (status, _, body) = call_with(app.clone(), "POST", "/multibyte", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains(&crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#)), "{body}");
+    let (status, _, body) = call_with(app.clone(), "POST", "/space", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = call_with(app, "POST", "/nbsp", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body.contains(&crate::escape(r#"<form id="note-end"> loses what it holds, since <tr id="lost-row"> comes first"#)),
+        "{body}"
+    );
+}
+
+#[derive(crate::view::Id)]
+struct CostRowId(u32);
+
+/// A patch of 50 table rows, each with three cells, one of them holding a form.
+fn fifty_rows() -> impl crate::Patch {
+    html! {
+        for n in 0..50u32 {
+            <tr id={CostRowId(n)}>
+                <td>"Item "{n}</td>
+                <td>{n * 3}</td>
+                <td><form method="post"><input type="hidden" name="row" value={n}><button>"Save"</button></form></td>
+            </tr>
+        }
+    }
+}
+
+/// What the debug check of a patch's parse costs a debug build, which every test is: a 50-row patch
+/// (`fifty_rows`) checked `PARSE_ROUNDS` times (2,000 by default), timed beside the same patch sent
+/// through `req.patch` in process, which includes one check. Run in a debug build:
+/// `cargo test -p corten-run --all-features --lib -- --ignored --exact tests::what_the_patch_parse_check_costs --nocapture`.
+#[test]
+#[ignore]
+fn what_the_patch_parse_check_costs() {
+    use std::time::Instant;
+    let rounds: u32 = std::env::var("PARSE_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(2000);
+    let body = fifty_rows().to_html();
+    assert_eq!(crate::html::patch_parse_problem(&body), None);
+    let start = Instant::now();
+    for _ in 0..rounds {
+        std::hint::black_box(crate::html::patch_parse_problem(std::hint::black_box(&body)));
+    }
+    let check = start.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+    let routes =
+        Table::new().route("/", crate::router::post(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(fifty_rows()) }));
+    let router = app(routes, None);
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let requests = rounds / 10;
+    let start = Instant::now();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, sent) = call(router.clone(), "POST", Some("action")).await;
+            assert!(status == StatusCode::OK && sent.len() == body.len(), "{status}");
+        }
+    });
+    let request = start.elapsed().as_secs_f64() * 1e6 / f64::from(requests);
+    println!(
+        "debug={}: {} bytes; check {check:.1} us; req.patch request {request:.1} us (the check is {:.1}% of it)",
+        cfg!(debug_assertions),
+        body.len(),
+        100.0 * check / request
+    );
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+#[should_panic(
+    expected = "the browser would lose part of a live fragment: <tr id=\"b\"> is dropped, since <p id=\"a\"> comes first"
+)]
+async fn a_live_fragment_the_browser_would_lose_part_of_panics_in_debug_builds() {
+    let fragment = || String::from(r#"<p id="a">1</p><tr id="b"><td>2</td></tr>"#);
+    let router = Table::new().route("/", get(move || async move { crate::live(futures_util::stream::iter([fragment()])) }));
+    let _ = call(router, "GET", None).await;
+}
+
+/// A CDATA section in an SVG `<title>`, an HTML integration point, is the title's text, as it is
+/// in any element of an `<svg>`: the id check reads past it to the id-less `<p>` after the
+/// drawing, which the browser drops (#1409).
+#[cfg(debug_assertions)]
+#[tokio::test]
+#[should_panic(expected = "a live fragment's top-level <p> has no id")]
+async fn a_live_fragment_s_element_after_cdata_in_an_svg_title_is_checked_for_its_id() {
+    let fragment = || String::from(r#"<svg id="s"><title><![CDATA[x]]></title></svg><p>lost</p>"#);
+    let router = Table::new().route("/", get(move || async move { crate::live(futures_util::stream::iter([fragment()])) }));
+    let _ = call(router, "GET", None).await;
+}
+
 #[cfg(debug_assertions)]
 #[tokio::test]
 #[should_panic(expected = "top-level text \"saved\" outside an element")]
@@ -10081,6 +10518,280 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
         ZoneMsg::for_locale("en").date_time(at, DateStyle::Medium, TimeStyle::Short).to_string(),
         "Mar 22, 2026, 3:04 PM UTC"
     );
+}
+
+/// A form's date and time is read in the zone the form was drawn in, which it sends back
+/// (`FormZone`), not in the zone of the request that posts it: a browser's first page is drawn in
+/// UTC before the browser has reported its zone, and the post after it carries the zone. Without
+/// JavaScript no zone is ever reported, and the form says it is in UTC.
+#[cfg(feature = "zones")]
+#[tokio::test]
+async fn a_forms_date_and_time_is_read_in_the_zone_it_was_drawn_in() {
+    use crate::form::{DrawZone, Entry, FormZone};
+    use crate::i18n::{parse_timestamp, LocalDateTime, Utc};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    #[derive(crate::Fields)]
+    struct Repair {
+        live_at: Entry<LocalDateTime>,
+        zone: FormZone,
+    }
+    // Stored with seconds, as an instant an app keeps; listed with seconds too.
+    let stored = parse_timestamp("2026-11-13T20:05:09.250Z").unwrap();
+    let listed = parse_timestamp("2026-11-12T15:30:09Z").unwrap();
+    let millis =
+        |at: Option<SystemTime>| at.map_or("none".into(), |at| at.duration_since(UNIX_EPOCH).unwrap().as_millis().to_string());
+    // The form, as an edit page draws it: the stored instant to the minute, the step the input
+    // counts by from its min, and the posted text as sent when a refusal draws it again.
+    let form = move |zone: &DrawZone, stored: SystemTime, typed: Option<&Entry<LocalDateTime>>| {
+        let f = Repair::FIELDS;
+        let shown = zone.local(stored).map(LocalDateTime::floor_minute);
+        html! {
+            <form method="post">
+                {zone.field(f.zone)}
+                <label>
+                    "Goes live, " {zone.name()}
+                    <input
+                        type="datetime-local"
+                        name={f.live_at}
+                        min={zone.min(listed)}
+                        value={typed.map_or(shown.map(|t| t.to_string()), |e| e.text().map(str::to_owned))}
+                    >
+                </label>
+            </form>
+        }
+        .to_html()
+    };
+    // The post: an unchanged field keeps the stored instant; a field that does not read, or reads
+    // before the listing, draws the form again in the zone it was sent in.
+    let save = move |stored: SystemTime| {
+        move |req: Req, Form(input): Form<Repair>| async move {
+            let at = input.live_at.at_keeping(&input.zone, stored).filter(|at| *at >= listed);
+            if at.is_none() {
+                return form(&DrawZone::from(&input.zone), stored, Some(&input.live_at));
+            }
+            // What the request's own zone would have read: the mistake the form's zone prevents.
+            let request = input.live_at.value().and_then(|t| t.read_in(req.zone()));
+            format!("{} {}", millis(at), millis(request))
+        }
+    };
+    // Stored in the minute the listing went up, after it.
+    let early = parse_timestamp("2026-11-12T15:30:29Z").unwrap();
+    let routes = Routes::from(
+        Table::new()
+            // The form posts to the page it is on, so it needs no action.
+            .route(
+                "/edit",
+                get(move |req: Req| async move {
+                    req.test_page("Edit", crate::view::Raw(form(&DrawZone::from(req.zone()), stored, None)))
+                })
+                .post(save(stored)),
+            )
+            .route(
+                "/early",
+                get(move |req: Req| async move {
+                    req.test_page("Edit", crate::view::Raw(form(&DrawZone::from(req.zone()), early, None)))
+                })
+                .post(save(early)),
+            )
+            // A Public page is the same for everyone, so it is drawn in UTC.
+            .route(
+                "/public",
+                get(move |req: Req| async move {
+                    Public::new(
+                        std::time::Duration::from_secs(60),
+                        req.test_page_for("Edit", crate::view::Raw(form(&DrawZone::from(Utc), stored, None))),
+                    )
+                })
+                .post(save(stored)),
+            ),
+    );
+    let router = App::new(routes).client_zone().router();
+    let send = |method: &'static str, uri: &'static str, body: &'static str, cookie: Option<&'static str>| {
+        let router = router.clone();
+        async move {
+            let mut req = Request::builder().method(method).uri(uri).header("sec-fetch-site", "same-origin");
+            if let Some(cookie) = cookie {
+                req = req.header("cookie", cookie);
+            }
+            let req = req.header("content-type", "application/x-www-form-urlencoded").body(Body::from(body)).unwrap();
+            let res = router.oneshot(req).await.unwrap();
+            let (status, headers) = (res.status(), res.headers().clone());
+            (status, headers, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+        }
+    };
+    let chicago = Some("corten-zone=America/Chicago");
+    let ms = |text: &str| millis(parse_timestamp(text));
+    let at = millis(Some(stored));
+
+    // A browser's first page, and every page without JavaScript: drawn in UTC, and says so; the
+    // stored instant and the min to the minute.
+    let (_, _, page) = send("GET", "/edit", "", None).await;
+    assert!(page.contains(r#"<input type="hidden" name="zone" value="UTC">"#), "{page}");
+    assert!(page.contains("Goes live, UTC"), "{page}");
+    assert!(page.contains(r#"min="2026-11-12T15:30" value="2026-11-13T20:05""#), "{page}");
+    // Sent unchanged from that first page by a browser that has reported Chicago since: the
+    // stored instant, seconds and all, where the request's zone would have moved it six hours.
+    let (status, _, read) = send("POST", "/edit", "live_at=2026-11-13T20%3A05&zone=UTC", chicago).await;
+    assert_eq!((status, read), (StatusCode::OK, format!("{at} {}", ms("2026-11-14T02:05:00Z"))));
+    // Changed, it is the time picked, in the zone the form was drawn in.
+    let (_, _, read) = send("POST", "/edit", "live_at=2026-11-13T20%3A06&zone=UTC", chicago).await;
+    assert_eq!(read, format!("{} {}", ms("2026-11-13T20:06:00Z"), ms("2026-11-14T02:06:00Z")));
+    // Without JavaScript: UTC both ways.
+    let (_, _, read) = send("POST", "/edit", "live_at=2026-11-13T20%3A06&zone=UTC", None).await;
+    assert_eq!(read, format!("{0} {0}", ms("2026-11-13T20:06:00Z")));
+    // Refused, it is drawn again in the zone it was typed in, not the request's.
+    let (_, _, page) = send("POST", "/edit", "live_at=yesterday&zone=UTC", chicago).await;
+    assert!(
+        page.contains(r#"value="UTC""#) && page.contains("Goes live, UTC") && page.contains(r#"value="yesterday""#),
+        "{page}"
+    );
+
+    // Once the browser has reported its zone, the form is drawn in it and read back in it.
+    let (_, _, page) = send("GET", "/edit", "", chicago).await;
+    assert!(page.contains(r#"<input type="hidden" name="zone" value="America/Chicago">"#), "{page}");
+    assert!(page.contains("Goes live, America/Chicago"), "{page}");
+    assert!(page.contains(r#"min="2026-11-12T09:30" value="2026-11-13T14:05""#), "{page}");
+    let (_, _, read) = send("POST", "/edit", "live_at=2026-11-13T14%3A05&zone=America%2FChicago", chicago).await;
+    assert_eq!(read, format!("{at} {}", ms("2026-11-13T20:05:00Z")));
+    // A post without the zone came from no page of the app's.
+    let (status, _, _) = send("POST", "/edit", "live_at=2026-11-13T14%3A05", chicago).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A Public page is drawn in UTC whatever the visitor reported, stays shared, and its post is
+    // read in UTC.
+    let (_, headers, page) = send("GET", "/public", "", chicago).await;
+    assert!(headers["cache-control"].to_str().unwrap().starts_with("public"), "{headers:?}");
+    assert!(page.contains(r#"<input type="hidden" name="zone" value="UTC">"#) && page.contains("Goes live, UTC"), "{page}");
+    let (_, _, read) = send("POST", "/public", "live_at=2026-11-13T20%3A06&zone=UTC", chicago).await;
+    assert_eq!(read, format!("{} {}", ms("2026-11-13T20:06:00Z"), ms("2026-11-14T02:06:00Z")));
+
+    // Stored in the same minute as the min: drawn at it, not before it, so the browser sends the
+    // form unchanged, and the post keeps the stored instant.
+    let (_, _, page) = send("GET", "/early", "", None).await;
+    assert!(page.contains(r#"min="2026-11-12T15:30" value="2026-11-12T15:30""#), "{page}");
+    let (status, _, read) = send("POST", "/early", "live_at=2026-11-12T15%3A30&zone=UTC", None).await;
+    assert_eq!((status, read), (StatusCode::OK, format!("{} {}", millis(Some(early)), ms("2026-11-12T15:30:00Z"))));
+    // Picked at the min's minute on a form with nothing stored there, it is before the listing,
+    // and the handler's own comparison refuses it.
+    let (_, _, page) = send("POST", "/edit", "live_at=2026-11-12T15%3A30&zone=UTC", None).await;
+    assert!(page.contains(r#"value="2026-11-12T15:30""#) && page.contains("Goes live, UTC"), "{page}");
+}
+
+/// What a date and time field costs a request, for callgrind: `DATE_FORM_REQUESTS` (200)
+/// requests through the router with `oneshot`, from a browser that reported America/Chicago.
+/// `DATE_FORM_PATH=get` draws the form (the zone's hidden input and name, and the input's
+/// `value`, `min` and `max` from instants); the others post it, read as `Entry<LocalDateTime>`
+/// and `FormZone` with `at_keeping` and the bounds compared: `post` unchanged (the stored instant
+/// kept, no time resolved), `edit` changed by a minute (resolved in the posted zone), and
+/// `skipped` changed to a time the clocks skip (2027-03-14T02:30 in Chicago, resolved across the
+/// gap). `DATE_FORM=text` is the same markup and post
+/// with the field and the zone as text an app does not read, the cost before this field had a
+/// reader. Build the lib's test binary with `cargo test --release -p corten-run --all-features
+/// --lib --no-run`, run `DATE_FORM_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored
+/// --exact tests::what_a_date_and_time_field_costs --test-threads=1` and again at 200: the
+/// difference over 1,000 is a request's.
+#[cfg(feature = "zones")]
+#[tokio::test]
+#[ignore]
+async fn what_a_date_and_time_field_costs() {
+    use crate::form::{DrawZone, Entry, FormZone};
+    use crate::i18n::{parse_timestamp, LocalDateTime};
+    #[derive(crate::Fields)]
+    struct Repair {
+        live_at: Entry<LocalDateTime>,
+        zone: FormZone,
+    }
+    #[derive(crate::Fields)]
+    struct Text {
+        live_at: String,
+        zone: String,
+    }
+    let requests: usize = std::env::var("DATE_FORM_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    // The time posted, and whether the stored instant is kept; none for the page itself.
+    let posted = match std::env::var("DATE_FORM_PATH").as_deref() {
+        Ok("post") => Some(("2026-11-13T14%3A05", "kept")),
+        Ok("edit") => Some(("2026-11-13T14%3A06", "2026-11-13T20:06:00Z")),
+        Ok("skipped") => Some(("2027-03-14T02%3A30", "2027-03-14T08:30:00Z")),
+        _ => None,
+    };
+    let text = std::env::var("DATE_FORM").is_ok_and(|f| f == "text");
+    let stored = parse_timestamp("2026-11-13T20:05:09.250Z").unwrap();
+    let expected = posted.map(|(_, at)| if at == "kept" { stored } else { parse_timestamp(at).unwrap() });
+    let listed = parse_timestamp("2026-11-12T15:30:09Z").unwrap();
+    let until = parse_timestamp("2027-12-31T00:00:00Z").unwrap();
+    let typed = get(move |req: Req| async move {
+        let (zone, f) = (DrawZone::from(req.zone()), Repair::FIELDS);
+        req.test_page(
+            "Edit",
+            html! {
+                <form method="post">
+                    {zone.field(f.zone)}
+                    <label>
+                        "Goes live, " {zone.name()}
+                        <input
+                            type="datetime-local"
+                            name={f.live_at}
+                            min={zone.min(listed)}
+                            max={zone.max(until)}
+                            value={zone.local(stored).map(LocalDateTime::floor_minute)}
+                        >
+                    </label>
+                </form>
+            },
+        )
+    })
+    .post(move |Form(input): Form<Repair>| async move {
+        // Saved only as the instant each case expects, so a case cannot measure another path.
+        let at = input.live_at.at_keeping(&input.zone, stored).filter(|at| *at >= listed && *at <= until);
+        if at.is_some() && at == expected {
+            "saved"
+        } else {
+            "refused"
+        }
+    });
+    let plain = get(move |req: Req| async move {
+        let f = Text::FIELDS;
+        req.test_page(
+            "Edit",
+            html! {
+                <form method="post">
+                    <input type="hidden" name={f.zone} value="America/Chicago">
+                    <label>
+                        "Goes live, " {"America/Chicago"}
+                        <input
+                            type="datetime-local"
+                            name={f.live_at}
+                            min="2026-11-12T09:30"
+                            max="2027-12-30T18:00"
+                            value="2026-11-13T14:05"
+                        >
+                    </label>
+                </form>
+            },
+        )
+    })
+    .post(move |Form(input): Form<Text>| async move {
+        if input.live_at.is_empty() || input.zone.is_empty() {
+            "refused"
+        } else {
+            "saved"
+        }
+    });
+    let router = App::new(Routes::from(Table::new().route("/typed", typed).route("/text", plain))).client_zone().router();
+    let uri = if text { "/text" } else { "/typed" };
+    let body = posted.map(|(time, _)| format!("live_at={time}&zone=America%2FChicago"));
+    for _ in 0..requests {
+        let req = Request::builder()
+            .method(if body.is_some() { "POST" } else { "GET" })
+            .uri(uri)
+            .header("sec-fetch-site", "same-origin")
+            .header("cookie", "corten-zone=America/Chicago")
+            .header("content-type", "application/x-www-form-urlencoded");
+        let res = router.clone().oneshot(req.body(Body::from(body.clone().unwrap_or_default())).unwrap()).await.unwrap();
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        assert!(body.is_none() || &bytes[..] == b"saved", "{bytes:?}");
+        std::hint::black_box(bytes);
+    }
 }
 
 #[tokio::test]

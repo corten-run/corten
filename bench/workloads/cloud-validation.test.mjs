@@ -222,6 +222,29 @@ test("complete fixed native graph and pinned TypeScript evaluate captured bytes 
   assert.deepEqual(await h.inspect(h.input), { evidenceMode: "synthetic-import-control", modules: paths.length, typescript: "5.9.3", statements: 1 });
 });
 
+test("catalog timed replay uses exact captured source and missing or changed closure stays blocked", { timeout: 15000 }, async (t) => {
+  const path = "bench/catalog/timed.mjs";
+  assert.equal(validationPaths.filter((p) => p === path).length, 1);
+  assert.equal(validationPaths.includes("bench/catalog/load-outcome.js"), false, "k6-only producer code is not a native replay dependency");
+  const h = await fakeNative(t, `import {timedRawSchema} from "../../catalog/timed.mjs";
+    export function validateCampaign() { return { schema: timedRawSchema }; }`, { realGraph: true });
+  const snapshot = captureValidation(h.input.commit, { root: h.repo }), row = snapshot.sources.find((row) => row.path === path);
+  assert.equal(row.source, readFileSync(join(checkout, path), "utf8").replaceAll("\r\n", "\n"));
+  assert.equal(row.sha256, createHash("sha256").update(row.source).digest("hex"));
+  const marker = join(h.input.folder, "unapproved-timed");
+  writeFileSync(join(h.repo, path), `import {writeFileSync} from "node:fs";
+    writeFileSync(${JSON.stringify(marker)}, "unapproved"); export const timedRawSchema = "forged";`);
+  assert.deepEqual(await h.inspect(h.input), { schema: "catalog-saved-evidence/v3" });
+  assert.equal(existsSync(marker), false);
+  const missing = { ...snapshot, sources: snapshot.sources.filter((row) => row.path !== path) };
+  assert.throws(() => validationTask(h.input, { snapshot: missing }), /validation unavailable/);
+  const changed = structuredClone(snapshot); changed.sources.find((row) => row.path === path).source += "\n// changed bytes\n";
+  assert.throws(() => validationTask(h.input, { snapshot: changed }), /validation unavailable/);
+  git(h.repo, "rm", "--cached", "--", path);
+  git(h.repo, "-c", "user.name=Synthetic test", "-c", "user.email=synthetic@example.invalid", "-c", "core.hooksPath=", "commit", "-qm", "Missing timed replay source");
+  assert.throws(() => captureValidation(git(h.repo, "rev-parse", "HEAD"), { root: h.repo }), /validation unavailable/);
+});
+
 test("unchanged native campaign API evaluates captured real sources and rejects an empty archive", { timeout: 15000 }, async (t) => {
   const h = await fakeNative(t, undefined, { realGraph: true });
   assert.deepEqual(await h.inspect(h.input), {

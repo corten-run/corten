@@ -395,6 +395,8 @@ type of its own that implements `Deserialize`.
 |---|---|---|
 | `String`, a number, a unit-variant enum | the key's one value; sent twice is a 422 that names the field | `<input>`, `<select>`, a radio group drawn with one option checked |
 | `Entry<T>` of a number type | the text as sent and the number it reads as, `None` when blank or not a number | an `<input type="number">` the user types in |
+| `Entry<Day>`, `Entry<LocalDateTime>` | the text as sent and the day, or the date and time on the visitor's clock, it reads as, `None` when blank or not one | an `<input type="date">` or `<input type="datetime-local">` the user fills in |
+| `FormZone` | the zone the form was drawn in, the only zone its date and time fields are read in; not one, or not sent, is a 422 that names the field | the hidden input a `DrawZone` draws, `zone.field(f.zone)` |
 | `bool`, with `#[serde(default)]` | `true` for `on` or `true`, `false` when missing | a checkbox: `on` when checked, nothing when not |
 | `Option<T>` | `None` when missing or blank | an empty `<input type="number">` sends `max=`; a radio group with none checked sends nothing |
 | `Vec<T>`, with `#[serde(default)]` | every value, in order; empty when missing | checkboxes sharing a name, `<select multiple>` |
@@ -467,6 +469,91 @@ A value the app stores itself and draws back (a delay its rate limiter writes) m
 bounds hold, or the browser will not send the form until the user changes it: under `corten dev`
 the browser's console names such a control in a form when the page, a navigation or a patch draws
 it, whether its attributes come from `Bounds` or are written by hand.
+
+A date and time the user picks (`<input type="datetime-local">`) is what their clock read
+(`2026-11-13T14:05`), with no zone: an `Entry<corten::i18n::LocalDateTime>`. It is drawn in a zone
+and read in the same one, which the form carries. The page draws in a `corten::form::DrawZone`:
+`zone.field(f.zone)` writes the zone as a hidden input, `zone.name()` is its name for the visitor,
+and `zone.local(at)` writes an instant as the input's `value` (`zone.min(at)` and `zone.max(at)`
+its bounds, below). The post reads the hidden input as a `corten::form::FormZone` field, and
+`input.when.at(&input.zone)` is the instant, `None` for the field's message. The page takes its zone from the request
+(`DrawZone::from(req.zone())`, with the `zones` feature and `App::client_zone()`; else `Utc` or an
+`Offset`), and a form drawn again after a refused post from the zone the post sent
+(`DrawZone::from(&input.zone)`), so a time typed under `UTC` is not shown again as Chicago's. The
+post never reads in `req.zone()`: that is UTC on a browser's first page and in a `Public` page, and
+the visitor's own zone on the post after it, so a form read in it would store a time moved by the
+visitor's offset.
+
+The compiler checks part of this: `Entry::at`, `Entry::at_keeping` and `LocalDateTime::at` take
+only a `FormZone`, which is made only by deserializing what a client sent (a form, a query), never
+from a zone (no `FormZone::from(req.zone())`, no `at(req.zone())`, no `at(&draw_zone)`);
+`zone.field` takes only a `FormZone` field's name; and an instant becomes an
+input's time only through a `DrawZone`. It does not check that the form draws the hidden input (a
+form without it compiles, and its post is a 422), that the input and the times come from the same
+`DrawZone`, or that a form drawn again uses the posted zone. Nor is a `FormZone` proof that this
+form drew it: a client can send another zone a `DrawZone` writes, and the handler's own bounds on
+the instant are what keep it within what the app allows.
+
+```rust,ignore
+#[derive(Fields)]
+struct Repair { live_at: Entry<LocalDateTime>, zone: FormZone }
+
+// The post: unchanged, the field keeps the stored instant; changed, it is read in the form's zone.
+let Some(live_at) = input.live_at.at_keeping(&input.zone, stored).filter(|at| *at >= listed && *at <= now) else {
+    errors.add(f.live_at, t.live_at_between(..));
+    return req.invalid(&errors, ..).await; // the form drawn again with DrawZone::from(&input.zone)
+};
+
+// The form, drawn with `let zone = DrawZone::from(req.zone())` (`DrawZone::from(Utc)` on a
+// Public page), or `DrawZone::from(&input.zone)` when drawn again:
+// {zone.field(f.zone)}
+// <label>{t.goes_live(zone.name())}
+//   <input type="datetime-local" name={f.live_at}
+//       value={zone.local(stored).map(LocalDateTime::floor_minute)}  (&input.live_at when drawn again)
+//       min={zone.min(listed)}
+//       max={zone.max(now)}>
+// </label>
+```
+
+Show the zone's name (`zone.name()`: `UTC`, `-06:00`, `America/Chicago`) with the field. Without
+JavaScript the browser never reports its zone, so the form is drawn and read in UTC, and the
+visitor types a time in UTC only if the page says so: the guarantee holds when the page draws the
+name, which Corten cannot check. A browser's first page is the same until the next page. A
+`Public` page is the same for everyone, so it draws in `DrawZone::from(Utc)`; `req.zone()` there is
+UTC too, and a debug build logs a warning each time a `Public` answer reads it.
+
+Where the clocks change, a time on the clock names no instant (`02:30` on the morning they go from
+2 to 3) or two (`01:30` on the night they go back), and `at` has one answer, Temporal's default and
+iCalendar's: a skipped time moves forward by the gap (`03:30`), and a repeated one is the earlier
+instant, before the clocks go back. So an instant in the repeated hour, drawn and sent back
+unchanged, reads as the earlier one. An input counts its steps (a minute) from its `min`, else its
+`value`, so a `min` or `value` with seconds or a fraction of one is off a step and the form is not
+sent until the visitor picks a time on one (`corten dev` names such a control drawn with a value):
+draw every instant rounded down to the minute, the `value` with `floor_minute`, the `min` and the
+`max` with `zone.min(at)` and `zone.max(at)`. Rounding all of them down keeps their order, so a
+stored time in the same minute as the `min` (stored a few seconds after the listing) is not drawn
+before it, which would stop the form being sent even when the visitor changes another field.
+Where the clocks go back a later instant reads earlier on the clock (`01:45` before the change,
+`01:30` after it), so a `min` drawn at its own reading could be after the value of a later
+instant; `zone.min` draws it at the offset the clocks go back to when they do so within the day
+after it, and `zone.max` at the offset before when they did within the day before it, so the
+bounds hold every value between them, an hour wider near the change. An edit form reads the field with
+`at_keeping(&input.zone, stored)`, which is the stored instant, seconds and the second `01:30`
+included, when the field comes back as it was drawn. The input then allows the part of a minute
+before a `min` with seconds, up to an hour beside a bound near a change of the clocks, and a time
+the clocks skip or repeat near a bound reads outside it, so the handler's own comparison is the
+check, and refuses those with the field's message. A tz database zone's rules end late on
+9999-12-30 UTC (jiff's range): past that a time is neither drawn (`None`, no attribute) nor read
+(`None`, the field's message), rather than taken as UTC.
+
+A `LocalDateTime` is not an instant, so `t.date` and a field typed as one do not take it. A day
+(`<input type="date">`) is an `Entry<Day>` in no zone, and `day.start(&input.zone)` is the instant
+it begins where the visitor is, in the zone the form carries, a `GET` form's query included: the
+first instant the clock there reads the day, as Temporal's `startOfDay` gives, so where the clocks
+skip midnight it is the change, not `00:00` moved forward by the gap as a typed time would be
+(`day.start(req.zone())` only for a day that comes with no form, such as a link's parameter). A
+time of day alone (`<input type="time">`) names no day, so it has no reader; a date
+and a time the user picks together are one `datetime-local`.
 
 `#[derive(Fields)]` refuses a `bool` or `Vec` field without `#[serde(default)]`, since the browser
 sends nothing when no box is checked and the form would fail exactly then. A required list is a
@@ -758,6 +845,12 @@ html! {
 }
 errors.add(f.domains.at(&Domain::SellerPortal).max_concurrent, "At least 1.");
 ```
+
+Group, row and key types may be paths: `#[fields(group)] ship_to: addresses::Address`,
+`#[fields(rows)] #[serde(default)] lines: BTreeMap<keys::Sku, items::Line>` and
+`#[fields(map)] #[serde(default)] counts: BTreeMap<keys::Sku, u32>` need no imports of the
+types' bare names. A path back to the form's own type is still recursive and does not compile;
+a path to a different type with the same name is allowed.
 
 A key is a `RowKey`: text, an integer, or a `#[derive(UrlValue)]` enum, whose key is the word
 serde reads (`seller-portal`), so it reads back as the same variant. Its characters other than letters, digits, `-` and `_` are %-encoded in the name, so any text is
@@ -1090,6 +1183,100 @@ the error names the kind of part that is not a patch (`ComponentOrExpressionNotA
 the view's top-level parts. A `corten::live`
 fragment is already text, so debug builds check it when it is sent instead (it panics, naming the
 element).
+
+The runtime parses a patch as a `<template>`'s content, as the HTML standard's "in template"
+insertion mode reads it: the first top-level element other than a `<template>`, `<script>`,
+`<style>`, `<link>`, `<meta>`, `<title>` or another tag a document's head holds decides how
+the rest is read. After any other
+element, table parts (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`,
+`<col>`, `<colgroup>`) are dropped. After a table part, a table part of another kind is dropped
+or put in a `<tbody>`, `<tr>` or `<colgroup>` the browser adds, a `<table>` is dropped, a
+table part inside a later top-level element that is not a table part (a `<div>` after the rows)
+is moved out of it, a `<table>` there is taken apart, its parts moved out, and a `<form>` there or
+at the top level loses what it holds (its fields, or text, are moved out of it; a form of only
+whitespace or comments is not reported); a table or form inside a row's cell is kept. After a `<col>`, everything but a `<col>` or
+`<template>` is dropped. A `<template>`'s content (`Append`'s rows, or a `<template>` inside an
+element) is read the same way on its own, except that Firefox drops a `<form>` there whole after
+a table part. So a patch that sends a table's header row beside a summary loses the row.
+Send the `<table>` whole with an id, or put the table parts first, of one kind, with no
+`<table>` or `<form>` in what follows. Some shapes are lost wherever they are written, and
+`html!` refuses them when it compiles, where its markup writes the first element: a table part
+after a first `<table>` (dropped, or, where the patch began with a table part, the table taken
+apart); an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after a first
+`<col>`; and after a first other table part, a `<table>` at the top level or in a later element
+(taken apart), and a `<form>` there that holds an element, where an element HTML's wherever it
+lands is in or around it (a form holding a `<div>`, or one in a `<div>`, but not one in an `<svg>`
+or `<math>`, which is theirs and kept as written), whose content is moved
+out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Every other shape
+depends on what the patch began with or where the view is written, which a component's markup
+does not show: a `<p>` and then a `<tr>` lose the row on their own, but after a first `<tr>`
+both are kept, and an `<svg>` keeps a `<form>` of fields after a `<tr>` as written, so a
+component that writes them compiles. Debug builds check each patch as it is sent (`req.patch`,
+`req.patch_or`, `req.invalid`, `form.draw` and `corten::live`, with the area's stylesheet
+links Corten adds after its elements): the request fails with a 500, or the stream panics, naming
+the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`,
+`<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide, as a page's body would, so a patch
+with one is read both ways. A debug-build test of the app that draws such a patch fails with the
+500 too. A release build sends the patch as drawn, so a mix only some data
+draws (a row in one branch of an `if`) is found only by a debug render that draws it. The check
+covers what a table's reading does to a patch as `html!` writes it, each element closed by its own
+end tag, not every way a browser's parse can differ from the markup. It reads what an `<svg>` or
+`<math>` holds by their own rules (a `<title>` or `<style>` there holds elements, a CDATA section is
+text) only to find where it ends, so a row holding an icon with a `<title>` is checked like any
+other, but it reports no loss inside one. It reads a `<script>`'s text as the browser does, and a
+`<textarea>`'s, `<title>`'s, `<style>`'s, `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and
+`<noframes>`'s as text, and it ignores the end tag `html!` writes for a `<param>` or a
+`<basefont>`, as the browser does. Where text decides (in a `<form>` a table's reading would
+put in empty, in a table, row group, row or column group, after a first `<col>`, and at the top
+level) it reads the text with its character references decoded: a numeric one, `&Tab;` and
+`&NewLine;` (whitespace), and `html!`'s own escapes and `&nbsp;` (which show), so a form that
+holds only `&#32;` is kept and one that holds `&nbsp;` loses it; a NUL, which the parser ignores
+there, shows nothing. It reports a loss only from the tokens it reads as the browser does, and
+stops at any other, whether `html!` writes it (a `<div>` in a `<p>`, a `<form>` in a `<form>`, a
+`<noscript>`) or markup placed with `raw` does:
+
+1. an end tag left out, one written otherwise than `</name>` (`</div ignored>`), or one that
+   closes no element open (a `</p>` or `</br>`, which adds an element or, in an `<svg>` or
+   `<math>`, closes it);
+2. an HTML element's start tag ending `/>`, and a start tag the patch ends in before its `>`
+   (`<col data-note='` at the end, which the browser drops with what follows its `<`);
+3. a comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, `--!>` in it), a
+   CDATA section outside an `<svg>` or `<math>` or not ended by `]]>`, and a doctype other than
+   `<!DOCTYPE html>` (a quoted `>` in one ends it early);
+4. where text decides, a named character reference it does not decode (`&bogus;`), and in a
+   table, row group, row or column group, or after a first `<col>`, any text that shows (a `<`
+   that starts no tag among it), which the browser moves out or drops;
+5. a script whose text a `<!--` and a `<script` carry past its first `</script>` and over an
+   element, which may be text written for it or the patch's elements lost in it;
+6. in a `<form>` a table's reading would put in empty, any token before what it holds but a
+   comment, a bogus comment (`<!note>`, `</ x>`), a `<!DOCTYPE html>` and a void element's end
+   tag (`</input>`);
+7. an element HTML's wherever it lands written straight in an `<svg>` or `<math>`, which `html!`
+   refuses;
+8. an HTML `<image>`, which the browser reads as an `<img>`; a `<plaintext>`; a `<noscript>`,
+   whose content Firefox reads as text and Chromium and WebKit as elements; and an `<html>`,
+   `<body>`, `<head>`, `<frame>` or `<frameset>`;
+9. an element the browser does not put where it is written: a table part outside a table;
+   anything in a `<table>`, row group or row but its own parts and a `<script>`, `<style>` or
+   `<template>`, and in a column group (a `<colgroup>`) anything but a `<col>` or `<template>`;
+   an element that closes one open around it (a `<div>` in a `<p>`, an `<li>` in an `<li>`, a
+   heading in a heading, an `<option>` in an `<option>`, an `<a>` in an `<a>`, an `<svg>` or
+   `<math>` between them too); a `<form>` in a `<form>`; what a `<select>` holds but its
+   options; and, after a first table part, a `<form>`, `<table>` or table part in an SVG or
+   MathML integration point (`<foreignObject>`, `<desc>`, `<title>`, `<mi>` ..) that is not in a
+   top-level table part, and a `<template>` in one anywhere, past which Firefox reads the rest of
+   the patch as a body's (a later row is dropped there, and kept in Chromium and WebKit).
+
+A row or cell written straight in a `<table>` is read as kept, since the browser only adds the
+`<tbody>` or `<tr>` around it. At a stop the check still reports a loss found before, and
+otherwise logs a warning naming where it stopped, since what follows was not checked: markup
+written through `raw` is checked only as far as these rules reach. It does not check what a table part holds (a `<form>` written straight in a `<tr>`, which
+a page's table takes apart too). A patch that
+begins with a `<col>` from an area's handler is refused even on a page that already has the area's
+stylesheet: the parse drops the stylesheet's link after the `<col>`, and the server does not know
+what the page linked, so send the `<col>`s in a `<colgroup>` with an id. Neither the check nor
+`html!` reads how deep markup nests: Chromium attaches an element nested deeper than 512 elements
+at depth 512, in a page as in a patch.
 
 ## Work that must not run twice at once
 

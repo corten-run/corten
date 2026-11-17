@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/a-h/templ"
 	"github.com/gin-gonic/gin"
@@ -27,6 +28,15 @@ func render(c *gin.Context, status int, component templ.Component) {
 	c.Render(status, page{c.Request.Context(), component})
 }
 
+func newRouter() *gin.Engine {
+	if os.Getenv("PROFILE") == "catalog-lean" {
+		r := gin.New()
+		r.Use(gin.Recovery())
+		return r
+	}
+	return gin.Default()
+}
+
 func main() {
 	// Load the fixture before the first request.
 	items, err := newItemSource()
@@ -43,7 +53,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	r := gin.Default()
+	r := newRouter()
 	if err := configureProduction(r); err != nil {
 		log.Fatal(err)
 	}

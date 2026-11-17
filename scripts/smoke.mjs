@@ -621,6 +621,74 @@ async function run(browser) {
       watched.slice(0, 120),
     );
   }
+  // The runtime parses a patch as a <template>'s content (`parse`), where the first top-level
+  // element decides how the rest is read: what each engine keeps of the shapes the server's debug
+  // check (`patch_parse`) is held to, the leading head tags Chromium and WebKit let decide
+  // included, and of the shapes `html!` refuses, after each table part a patch may begin with.
+  {
+    /** @type {{ cases: { html: string, parsed: string[], parsedIn?: Record<string, string[]> }[] }} */
+    const { cases } = JSON.parse(readFileSync(new URL("../crates/corten/src/patch-parsing.json", import.meta.url), "utf8"));
+    const parsed = await page.evaluate(
+      (cases) =>
+        cases.map((html) => {
+          const template = document.createElement("template");
+          template.innerHTML = /** @type {any} */ (window).__html(html);
+          /** @param {Element} el @returns {string} */
+          const show = (el) => {
+            const name = el.localName + (el.id ? `#${el.id}` : "");
+            if (el instanceof HTMLTemplateElement) return `${name}{${Array.from(el.content.children, show).join(",")}}`;
+            return el.children.length ? `${name}(${Array.from(el.children, show).join(",")})` : name;
+          };
+          return Array.from(template.content.children, show);
+        }),
+      cases.map((c) => c.html),
+    );
+    const differ = cases.flatMap((c, i) => {
+      const want = c.parsedIn?.[engine] ?? c.parsed;
+      return JSON.stringify(parsed[i]) === JSON.stringify(want) ? [] : [`${c.html} => ${JSON.stringify(parsed[i])}`];
+    });
+    check(`a patch's top level parses as patch-parsing.json says, in ${cases.length} shapes`, !differ.length, differ.join("; "));
+  }
+  // Patches generated from a fixed seed (`patch-generated.json`, which html.rs's
+  // `generated_patches_carry_the_check_s_verdict` writes with the debug check's verdict on each):
+  // the shapes above composed with the tokens the check has been found to misread. The check
+  // reports a loss only in an engine that parses the patch otherwise than as written, and where
+  // one does, the check reports a loss in it or says where it stopped. Text counts here (a `"`,
+  // first for the patch's own top level), as anything but ASCII whitespace; and the id check
+  // (`patch_problem`) reports an element without an id or text outside one only where the
+  // engine's parse has one at its top level, or loses something.
+  {
+    /** @type {{ cases: [string, string[], string, boolean, boolean][] }} */
+    const { cases } = JSON.parse(readFileSync(new URL("./patch-generated.json", import.meta.url), "utf8"));
+    const parsed = await page.evaluate(
+      (cases) =>
+        cases.map((html) => {
+          const template = document.createElement("template");
+          template.innerHTML = /** @type {any} */ (window).__html(html);
+          /** @param {Node} node */
+          const text = (node) => (Array.from(node.childNodes).some((c) => c.nodeType === Node.TEXT_NODE && /[^\t\n\f\r ]/.test(/** @type {Text} */ (c).data)) ? '"' : "");
+          /** @param {Element} el @returns {string} */
+          const show = (el) => {
+            const name = el.localName + (el.id ? `#${el.id}` : "");
+            if (el instanceof HTMLTemplateElement) return `${name}${text(el.content)}{${Array.from(el.content.children, show).join(",")}}`;
+            return name + text(el) + (el.children.length ? `(${Array.from(el.children, show).join(",")})` : "");
+          };
+          const top = text(template.content) ? ['"'] : [];
+          const idless = !!top.length || Array.from(template.content.children).some((el) => !el.id);
+          return { shown: [...top, ...Array.from(template.content.children, show)].join(" "), idless };
+        }),
+      cases.map((c) => c[0]),
+    );
+    const wrong = cases.flatMap(([html, written, lost, stops, idless], i) => {
+      const differs = parsed[i].shown !== written.join(" ");
+      const reported = lost === "all" || lost.split(" ").includes(engine);
+      if (reported && !differs) return [`${html}: the check reports a loss, and ${engine} keeps it as written`];
+      if (differs && !reported && !stops) return [`${html} => ${parsed[i].shown}: ${engine} loses part of it, and the check passes it`];
+      if (idless && !parsed[i].idless && !differs) return [`${html}: the id check reports what ${engine} parses with an id at its top level`];
+      return [];
+    });
+    check(`the patch parse check's verdicts hold in ${cases.length} generated patches`, !wrong.length, wrong.slice(0, 5).join("; "));
+  }
   // A handler is given its text and JSON arguments as the server had them, with an apostrophe
   // (`&#39;` in the single-quoted attribute), quotes, `&` and `<` in them, and so are the text and
   // the booleans elements give their refs (`ref={said.with(..)}`, `data-ref-value`, JSON read with
@@ -3304,7 +3372,7 @@ async function run(browser) {
         scrollTo(0, 0);
         const brand = /** @type {HTMLElement} */ (document.querySelector("header span"));
         brand.id = "smoke-brand";
-        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        const corten = /** @type {typeof import("../crates/corten/js/corten.js")} */ (await import(/** @type {string} */ ("corten")));
         await corten.patch(__html('<span id="smoke-brand">Patched</span>'));
       });
       await thank();
@@ -3342,6 +3410,7 @@ async function run(browser) {
         // Firefox logs the refusal after the call has thrown: wait for it before leaving it out.
         const said = page.waitForEvent("console", { predicate: (m) => /trusted/i.test(m.text()), timeout: 3000 }).catch(() => {});
         const refused = await page.evaluate(async () => {
+          // Deliberately bypass patch's TrustedHTML type to exercise the browser's refusal too.
           const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
           const brand = /** @type {HTMLElement} */ (document.querySelector("header span"));
           brand.id = "smoke-brand";
@@ -3360,7 +3429,7 @@ async function run(browser) {
         let patchedLate = false;
         await page.route(lateStyle, async (route) => {
           await page.evaluate(async () => {
-            const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+            const corten = /** @type {typeof import("../crates/corten/js/corten.js")} */ (await import(/** @type {string} */ ("corten")));
             await corten.patch(__html('<span id="smoke-brand">Late</span>'));
           });
           patchedLate = true;
@@ -5013,7 +5082,7 @@ async function run(browser) {
       await page.evaluate(async (more) => {
         const badge = /** @type {Element} */ (document.getElementById("viewer-badge")).cloneNode(true);
         if (more) badge.appendChild(document.createTextNode(" (patched)"));
-        const corten = /** @type {{ patch: (html: string) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        const corten = /** @type {typeof import("../crates/corten/js/corten.js")} */ (await import(/** @type {string} */ ("corten")));
         await corten.patch(__html(/** @type {Element} */ (badge).outerHTML));
       }, more);
       await page.evaluate(() => {

@@ -109,7 +109,7 @@ use http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, Response
 use tower_service::Service;
 
 use crate::{
-    form::{Entry, FieldName, Numeric, Place, SubmitKey, Untyped},
+    form::{DrawZone, Entry, EntryValue, FieldName, FormZone, Place, SubmitKey, Untyped},
     page::{Mode, MODE_HEADER},
     route::{Href, Local, Route},
 };
@@ -237,7 +237,8 @@ pub fn submit_key() -> SubmitKey {
 /// `FieldName<u32>`, `Condition::Mint` for a `FieldName<Condition>`, a [`submit_key`], `true` for a
 /// checked checkbox, which the form reads as a browser's `on`: an unchecked one is a field left
 /// out), text for
-/// a `String` field, a number or any text for an [`Entry`] (which reads whatever was typed), and
+/// a `String` field, its value or any text for an [`Entry`] (which reads whatever was typed), the
+/// [`DrawZone`] the page drew or any text for a [`FormZone`], and
 /// any text for an [untyped](crate::FieldName::untyped) name (a word the form refuses, the blank
 /// an empty number input sends).
 pub trait FieldValue<T>: sealed::Value<T> {
@@ -267,15 +268,31 @@ impl FieldValue<String> for &str {
     }
 }
 
-impl<T: Numeric + Display> sealed::Value<Entry<T>> for T {}
-impl<T: Numeric + Display> FieldValue<Entry<T>> for T {
+impl<T: EntryValue + Display> sealed::Value<Entry<T>> for T {}
+impl<T: EntryValue + Display> FieldValue<Entry<T>> for T {
     fn write_value(&self, out: &mut String) {
         FieldValue::<T>::write_value(self, out);
     }
 }
 
-impl<T: Numeric> sealed::Value<Entry<T>> for &str {}
-impl<T: Numeric> FieldValue<Entry<T>> for &str {
+impl<T: EntryValue> sealed::Value<Entry<T>> for &str {}
+impl<T: EntryValue> FieldValue<Entry<T>> for &str {
+    fn write_value(&self, out: &mut String) {
+        out.push_str(self);
+    }
+}
+
+/// The zone the page drew its form in, as its hidden input sends it.
+impl sealed::Value<FormZone> for &DrawZone {}
+impl FieldValue<FormZone> for &DrawZone {
+    fn write_value(&self, out: &mut String) {
+        out.push_str(self.name());
+    }
+}
+
+/// Any text, as another client could send it (a zone no page of the app's draws is a 422).
+impl sealed::Value<FormZone> for &str {}
+impl FieldValue<FormZone> for &str {
     fn write_value(&self, out: &mut String) {
         out.push_str(self);
     }
@@ -516,6 +533,7 @@ mod tests {
         #[serde(default)]
         tags: Vec<String>,
         copies: Entry<u32>,
+        zone: FormZone,
     }
 
     #[crate::routes]
@@ -581,6 +599,10 @@ mod tests {
         );
         let forged = client().post(&url::Echo).field(f.copies, "two").field(f.item.untyped(), "x").await;
         assert!(forged.text().ends_with("body=copies=two&item=x"), "{}", forged.text());
+        // A form's zone: the one the page drew, or any text another client sends.
+        let drawn = crate::form::DrawZone::from(crate::i18n::Offset::hours(-6));
+        let zoned = client().post(&url::Echo).field(f.zone, &drawn).field(f.zone, "Mars/Olympus").await;
+        assert!(zoned.text().ends_with("body=zone=-06%3A00&zone=Mars%2FOlympus"), "{}", zoned.text());
         // Nothing checked or filled: still a form, as a browser posts it.
         let empty = client().post(&url::Echo).await;
         assert!(empty.text().ends_with("type=application/x-www-form-urlencoded lang= body="), "{}", empty.text());

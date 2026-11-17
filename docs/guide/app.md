@@ -569,7 +569,7 @@ What it sends is what the app's own pages send, typed the same way:
    no `GET`, gets a 500 that says why ([Where a form posts](requests-and-forms.md#where-a-form-posts)).
    `Mode::Action` sends `Prefer: corten-draws=whole` as the runtime does, so a write that answers
    its own page (`req.page(..)`) is answered with the whole document, layout and layout reads
-   included ([Choice 59](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
+   included ([Choice 60](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
    that, which is answered with `<main>`, add
    `.header(HeaderName::from_static("prefer"), "corten-draws=main")` (`corten::http::HeaderName`):
    a preference the test sets is sent first, and the first is the one read.
@@ -2489,6 +2489,11 @@ session while the parent can lay its page over the button. A link meant to leave
 page that may not be framed) opens in the parent's tab: `<base target="_top">` in the framed page's
 head, with `data-no-prefetch` around its links, since a hover's prefetch would fetch a page the
 frame never shows.
+
+To read a part of the page again from a script, use a hidden GET `data-patch` form with
+`requestSubmit()`, or render `ReadAgain::from` for a server-chosen delay
+([example](scripts.md#reading-a-part-again)). `patch(html, signal?)` takes `TrustedHTML`, not
+the text read from a fetched response; it does not pass a script's input through the runtime's policy.
 
 Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
 (`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rule-html-macro):

@@ -451,7 +451,7 @@ rules something out.
    costs a navigation nothing: on the item page a full document got about 7% faster than with
    the shell and a navigation stayed within noise (`render_cost` medians of alternating runs,
    same bytes). The answers the runtime reads whole are the two pages that follow a `data-patch`
-   write, the page it redirects to and its own ([Choice 59](#choice-write-own-page-whole)), so what
+   write, the page it redirects to and its own ([Choice 60](#choice-write-own-page-whole)), so what
    the write changed in the layout is drawn as a full load draws it.
    An element of the layout that depends on the page (a section's nav) is marked `page` and sent
    with `<main>`'s children, in place of the one on screen by its id, rather than adding a value
@@ -486,7 +486,7 @@ rules something out.
    standard header that says "part of a page" and that a script may set.
 
    A write the runtime sends also says that it draws its own page whole
-   ([Choice 59](#choice-write-own-page-whole)), and says it in the standard header for that, as an
+   ([Choice 60](#choice-write-own-page-whole)), and says it in the standard header for that, as an
    HTTP preference (RFC 7240): `Prefer: corten-draws=whole`. A preference is what this is, one the
    server may ignore, and RFC 7240 has a server that does not know one ignore it, which is the
    deploy crossing both ways: a runtime from before (a tab open across a deploy) sends none and gets
@@ -507,7 +507,7 @@ rules something out.
    header of its own did (a patch took 62 instructions less, within the runs' range), and any other
    line is split at the commas and semicolons outside quotes (`cache::split_unquoted`, as
    `Cache-Control` is read), about 820 instructions more
-   ([Choice 59](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
+   ([Choice 60](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
    7240 (3) keeps it for when it is not apparent whether a preference was applied, and here the
    answer says what it is (`corten-shell` and no `corten-page` on a whole page, `corten-page` on
    every `<main>`, a navigation's too, as the runtime reads them), so it would add its bytes to every
@@ -1696,7 +1696,7 @@ rules something out.
     `crates/corten/tests/derived_deserialize.rs` holds this one to by reading each of its types
     twice, with this derive and with serde's, and comparing values, errors and the names passed to
     the deserializer; and rustc reporting a cycle error (E0391) naming `SHAPE` when a `Fields`
-    type's rows reach that type through another type, which is all that refuses such rows at compile
+    type's rows reach that type through a path or another type, which is all that refuses such rows at compile
     time, so the reader never follows keys deeper than the types go; the `compile_fail,E0391`
     doctests in `crates/corten/src/form.rs` hold it); measured (reading a seven-field form costs
     9,241 instructions before, on `62eb57f7`, and after, on `8cd5934e`: callgrind, release build,
@@ -1729,7 +1729,9 @@ rules something out.
     (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each, all six within 174
     instructions of each other over the 1,000 reads); 2026-11-15, rustc's E0391 for rows that reach
     their own type through another type and through `Rule<u8>`, the `compile_fail,E0391` doctests at
-    `1e0bcd58`.
+    `1e0bcd58`; 2026-11-16, rustc's E0391 naming `SHAPE` for a row written as `self::Step`, after
+    preserving path punctuation, the `compile_fail,E0391` doctest at `4f83d633` (focused form
+    doctests with `--show-output`, 61 passed, one ignored).
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
@@ -3510,7 +3512,9 @@ rules something out.
     ([#1366 A patch answered by another area's handler draws that area's components unstyled: the runtime's patch loads no section stylesheet and check_rendered reads the handler's path](https://github.com/corten-run/corten/issues/1366)).
     Now `Req::patch` (and a refused form's patch) ends with the links of the handler's path, after
     the patch's elements, and `apply()` loads those the document lacks with the patch's modules,
-    through the function a navigation uses (`stylesOf`). A component a patch renders is then
+    through the function a navigation uses (`stylesOf`). A patch whose first element is a `<col>`
+    loses them, since the runtime's parse then keeps only `<col>`s and `<template>`s, which a debug
+    build refuses ([Limit 2](#limit-whole-element-patches)). A component a patch renders is then
     listed where its handler is, as a page's components are listed where the page is, and the
     debug check's path is the right one. A stylesheet that fails to load is taken out of the
     head again and the patch goes in unstyled, where a navigation loads the page in full: a
@@ -3597,7 +3601,10 @@ rules something out.
     it fails, `style-src 'self'` allows it under the policy the document loaded with, and its
     subresources are under that policy too; the load, the failure and a second patch waiting for
     a load are checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`, and a navigation
-    waiting for a patch's load in Chromium and Firefox, WebKit having no Navigation API); reasoned (a
+    waiting for a patch's load in Chromium and Firefox, WebKit having no Navigation API; a
+    `<template>` whose first element is a `<col>` keeps only `<col>`s and `<template>`s, the HTML
+    standard's "in column group" insertion mode, checked in the three by `scripts/smoke.mjs`
+    against `crates/corten/src/patch-parsing.json`); reasoned (a
     handler's path decides its area, as a page's does, so the links need nothing the request does
     not have; the runtime already skips a stylesheet the head has, by its URL; the wait a page
     outside the area pays is one request; the harness patch's buffer grows once more for the link,
@@ -3628,7 +3635,10 @@ rules something out.
     Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1) by `scripts/smoke.mjs`, and a navigation
     waiting for a patch's load in Chromium and Firefox; 2026-11-13, both of those waits drawn
     unstyled, and those two checks alone failing, in Chromium and Firefox with round 1's
-    `stylesOf` (`9c722e27`) put back in this head's runtime.
+    `stylesOf` (`9c722e27`) put back in this head's runtime; 2026-11-16, a leading `<col>`'s
+    patch losing its stylesheet link, a case of `crates/corten/src/patch-parsing.json` that
+    `scripts/smoke.mjs` loaded on `1f0bc47b7`, in Chromium 156.0.8078.80, Firefox 157.0 and
+    WebKit 27.2 (Playwright 1.64.1).
 
 48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
     `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what
@@ -4254,7 +4264,8 @@ rules something out.
     Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
 54. <a id="choice-html-parse-refusals"></a>**`html!` refuses three kinds of markup a browser parses differently from how it
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
-    taken out of foreign content), where the markup shows how a browser parses it, and acts
+    taken out of foreign content), and the shapes of a patch's top level the runtime's parse of it
+    loses wherever they are written, where the markup shows how a browser parses it, and acts
     nowhere else.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
@@ -4270,6 +4281,53 @@ rules something out.
     (`compile_fail` examples of `html!`). Text
     and expressions in the elements read as text compile as before, written escaped; an expression
     in a `<script>` or a `<style>` was refused already.
+
+    The runtime parses a patch as a `<template>`'s content, where the first top-level element
+    other than a head's (`<script>`, `<style>`, `<link>`, `<template>` ..) decides how the
+    rest is read, so a table row beside a status line was dropped with only a console error
+    ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
+    In a view that could be a patch (every top-level element has an `id={..}`), `html!` refuses
+    three shapes: a table part (`<tr>`, `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`,
+    `<caption>`, `<col>`, `<colgroup>`) after a first `<table>`; an element HTML's wherever it
+    lands (one the rules for foreign content take out of an `<svg>`: a `<p>`, a `<div>`, a
+    `<table>` ..) after a first `<col>`; and after a first other table part, a `<table>` at the
+    top level or in a later top-level element that is not a table part, and a `<form>` there that
+    holds an element, where an element HTML's wherever it lands is the form's, around it or in it (a
+    `<form>` holding a `<div>` or a `<p>`, or one in a `<div>`), neither read into a
+    `<template>`, an `<svg>` or a `<math>` (whose `<form>` is SVG's or MathML's, kept as written
+    even in a `<div>`), or an SVG or MathML integration point. Each is lost wherever the view is written,
+    under the rule below: in a patch the view begins, the parse drops the table part, or every
+    element after the `<col>` but a `<col>` or a `<template>`, or drops the `<table>` tag and
+    moves its parts out, or puts the `<form>` in empty and moves what it holds out of it; in a
+    patch that already began with a table part (one an element or a component before the view
+    wrote), it drops the `<table>` tag and reads the table's parts as the patch's, drops the `<col>`
+    or puts it in a `<colgroup>` it adds, or does to the third shape what it does where the view
+    begins; in a patch that began with another element, and in a page's body, the parse drops the
+    table part, the `<col>` or the first table part; in a page's table, the `<table>` closes it,
+    the element after a `<col>` is moved out of it, and the third shape's `<table>` closes it or
+    its `<form>` is put in empty; and in an `<svg>` or a `<math>`, the `<table>`, the element
+    after a `<col>` or the element HTML's wherever it lands in or around the `<form>` closes the
+    drawing or the formula. A test in `corten` (`a_shape_html_refuses_is_lost_after_each_table_part`)
+    holds each shape, and each kind of the third (a `<table>` at the top level, in a `<div>` and
+    in a `<label>`'s `<span>`; a `<form>` holding a `<div>`, a `<p>` or a `<label>`'s `<span>`,
+    and one in a `<div>`), written first and after each of the nine table parts, to
+    `crates/corten/src/patch-parsing.json`, whose parses `scripts/smoke.mjs` checks in Chromium,
+    Firefox and WebKit; the other places were probed once (Last checked). No other shape of the
+    kinds these come from is lost wherever it is written: after a first `<tr>`, `<td>`, `<tbody>`
+    or `<caption>`, a `<p>`, `<div>` or `<span>` is kept (moved before the table that is not
+    there) and a table part after it too, so a component that writes
+    `<p id={NoteId}>..</p><tr id={RowId(8)}>..</tr>` is correct where its parent writes a row
+    before it, and compiles; and a `<form>` of fields (`<input>`, `<select>`, `<textarea>`,
+    `<button>`, a `<label>` around them) after a first table part, which the patch's parse puts in
+    empty, is kept as written in an `<svg>` or a `<math>`, where none of them is taken out, so it
+    compiles, though few views will be written there: refusing it would refuse a component that is
+    correct where its parent writes it, which the rule below does not allow. Those shapes, what a
+    component, an expression or a block writes, and a first element an `<svg>` keeps, are left to
+    the debug check that answers such a patch with a 500 when it is sent
+    ([Limit 2](#limit-whole-element-patches)); a release build sends them as drawn. Head tags
+    before the first element do not change a refused shape: the standard and Firefox read them as
+    a head's, and Chromium and WebKit, which let a leading `<title>`, `<base>`, `<basefont>`,
+    `<bgsound>` or `<noframes>` decide, read the rest as a body's, where each is lost too.
 
     `html!` sees only its own markup, so it acts only where that markup shows how a browser
     parses it, following the HTML standard's tree construction: HTML under an element that is
@@ -4333,7 +4391,13 @@ rules something out.
     rest are dropped;
     and the start tags its rules for parsing tokens in foreign content take out
     of an `<svg>` or a `<math>`, which `TEXT_ONLY`, `RAW_TEXT`, `SVG_HTML_POINTS`,
-    `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the browsers
+    `MATH_HTML_POINTS` and `BREAKOUT` in `crates/corten-macros/src/html.rs` copy; the "in
+    template" insertion mode's head tags and table start tags, and what the table insertion
+    modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy, held equal to
+    the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there;
+    the tree construction dispatcher, which reads an `<svg>`'s or a `<math>`'s `<form>` as foreign
+    content's whatever HTML element is around the drawing, so the third shape is not read into one;
+    the browsers
     Playwright runs, which read an element in those holders as text and keep one in an `<svg>`'s
     own `<title>`, and keep the first of a duplicated `encoding`); reasoned (an `html!` sees its
     own markup and nothing around it, so what its top and a component's children land in is not
@@ -4345,7 +4409,12 @@ rules something out.
     written; a mistake the compiler can see is a compile error, its 3 and Values 4).
 
     Revisit when: the HTML standard changes the elements it reads as text, its integration points
-    or the start tags it takes out of foreign content, when the lists in `html.rs` follow it; or an
+    or the start tags it takes out of foreign content, when the lists in `html.rs` follow it; or the
+    runtime parses a patch some other way than as a `<template>`'s content, when the patch
+    refusals go or change with it; or a browser keeps one of the refused patch shapes as written
+    after some first element or in some place a view is written, when `patch-parsing.json`'s cases
+    fail in the smoke (or the probe in Last checked, run again, finds it kept) and that refusal
+    goes; or an
     app is found to write one of the refused shapes across a component's edge (a component whose
     top-level element lands in an `<svg>` and writes an element there a browser moves out, or
     children a component writes into a `<textarea>`), when following the context across
@@ -4379,7 +4448,54 @@ rules something out.
     `querySelectorAll` for an element written in a `<textarea>`, an HTML `<title>` (in `<head>`,
     in the body and in an `<svg>`'s `<desc>`), an `<iframe>`, an `<xmp>`, a `<noembed>` and a
     `<noframes>`, which found none, and in an `<svg>`'s own `<title>`, which found it. To repeat
-    it, load such a page in the three engines and count the matches.
+    it, load such a page in the three engines and count the matches; 2026-11-16, for a patch's top
+    level, the "in template", "in table", "in table body", "in row" and "in column group"
+    insertion modes read again that day against `TEMPLATE_HEAD`, `TABLE_PARTS` and `patch_top`
+    in `crates/corten-macros/src/html.rs`, and `scripts/smoke.mjs` loading the 740 shapes in
+    `crates/corten/src/patch-parsing.json` (among them every refused shape and each kind of the
+    third, written first and after each of the nine table parts, and a row holding an `<svg>`
+    with a `<title>`) as a `<template>`'s content on `b89eead89`, which passed
+    in Chromium 156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1), with Chromium
+    and WebKit letting a leading `<title>`, `<base>`, `<basefont>`, `<bgsound>` or
+    `<noframes>` decide; 2026-11-16, the same check of the 767 shapes there on `8b124f980`, among
+    them an `<svg>`'s and a `<math>`'s `<form>` in a `<div>` after four first table parts, kept
+    as written in all three; 2026-11-16, the same check of the 782 shapes there on `72ea009ac`,
+    among them an `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and `<noframes>`'s markup kept as text
+    after a `<tr>`, and the shapes the debug check stops at (a `</p>` or `</br>` in an `<svg>` or
+    `<math>`, Firefox taking one in a `<foreignObject>` or `<mi>` out of it, and a script whose
+    text carries it past its first `</script>` over a `<p>`); 2026-11-16, the same check of the 790
+    shapes there on `b02b1c706`, among them an end tag written `</div ignored>` and a `<tr/>`, which
+    the browsers read otherwise than as written and the debug check stops at, and a `<form>` whose
+    `</input>` before its control the browsers ignore; 2026-11-16, the same check of the 795 shapes
+    there on `2ae79c0a5`, among them a `<col>` the patch ends in before its `>`, an `<image>` read
+    as an `<img>` and a `<div>` in a `<p>`, and of the 3,000 patches of
+    `scripts/patch-generated.json` (seed 1409), where the debug check reported a loss only in an
+    engine that loses something and, where one did, reported it or stopped; 2026-11-16, the same
+    check of the 802 shapes there on `81d83650e`, among them a doctype a quoted `>` ends early, a
+    `<form>` holding only `&#32;` after a `<tr>`, kept, names past ASCII, and a `<template>`'s
+    `<form>` holding a `<label>` after a `<td>`, moved out of it in every engine, and of the 3,000
+    patches of `scripts/patch-generated.json` (seed 1409, now with characters past ASCII, character
+    references, NUL and doctypes, compared with their text and the id check's verdict), with the
+    same result and the id check reporting only what an engine's parse shows at its top level;
+    2026-11-16, the same check of the 819 shapes there on `80e9fa8f8`, among them a `<form>`
+    holding a start tag the patch ends in after a `<tr>`, kept empty, an `<annotation-xml>` whose
+    `encoding` is `text&#x2F;html`, an HTML integration point, an `<a>` in an `<a>` across a
+    `<foreignObject>`, which closes the outer one, and a `<template>` in an `<mi>` after a
+    `<tbody>`, past which Firefox alone reads the rest as a body's, and of the 3,000 patches of
+    `scripts/patch-generated.json` (now with forms holding a tag the patch ends in), with the same
+    result; 2026-11-17, the same check of the 824 shapes there on `7f9cb8ad8`, among them a loss
+    found before a start tag the patch ends in, kept, and a `<select>` in a `<foreignObject>` or
+    `<mi>` after a `<tr>`, past which every engine, Firefox 157 included, keeps a later row, and of
+    the 3,000 generated patches, with the same result; 2026-11-16, a one-off probe, not a repository check, in Chromium
+    156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): each kind of the third shape (a `<table>` at the top level, in a `<div>` and in a
+    `<label>`'s `<span>`; a `<form>` holding a `<div>` or a `<p>`, one in a `<div>`, and one
+    holding a `<label>`'s `<span>`), after each of the eight first table parts but `<col>`, parsed
+    as a `<template>`'s content after a `<p>` and after a leading `<title>`, and in a page's
+    body, `<table>`, `<tbody>`, `<tr>`, `<td>`, `<caption>`, `<colgroup>`, `<svg>`, `<math>` and
+    `<select>` (`DOMParser`), was kept as written in none of them, while a `<form>` of fields
+    alone, or in a `<label>`, was kept in an `<svg>` and a `<math>`, and a `<table>` in a
+    `<label>`'s `<foreignObject>` in an `<svg>`. To repeat it, parse those shapes there and
+    compare the elements with the markup.
 
 55. <a id="choice-screen-read"></a>**A script reads a screen's data with `read()`, from a module of its own, typed by its route; not
     from a data block in the page.** A rich screen in the browser needs data the page did not draw:
@@ -4879,7 +4995,217 @@ rules something out.
     and passes on with `fetch(event.request)`, probed in Chromium 156 and WebKit 27.2 (Firefox was
     not run).
 
-59. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in every mode, and the runtime draws it as the page a write
+59. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
+    zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
+    what the post reads); a time the clocks skip or repeat is read as Temporal's default
+    (`compatible`) reads it.** `<input type="datetime-local">` sends what the visitor's clock read
+    (`2026-11-13T14:05`), with no offset. Corten wrote an instant in the visitor's zone
+    (`t.date_time`) but read none back, so an app took the field as a `String`, parsed it, and found
+    the instant with `Zone::offset`, whose offset is the instant's, the one being found: each app
+    corrected its own guess and decided on its own what a time the clocks skip or repeat means, and
+    one that got it wrong stored the wrong instant
+    ([#1421 A datetime-local field has no typed reader: each app parses the visitor's local time and resolves its zone offset itself](https://github.com/corten-run/corten/issues/1421)).
+    Now `corten::i18n::LocalDateTime` reads and writes HTML's local date and time syntax, and an
+    `Entry<LocalDateTime>` field keeps the text as sent, as `Entry<u32>` does. A
+    `LocalDateTime` is not an instant (no `Into<SystemTime>`, not a `DateValue`), so a clock
+    reading is not written or stored as one without its zone (a `compile_fail` example on the
+    type). `Entry` now holds a sealed `EntryValue` (a number, a `Day` or a `LocalDateTime`, a
+    `compile_fail` example for an app's own) rather than numbers alone, so `<input type="date">`
+    became `Entry<Day>` at no further cost, and `day.start(zone)` is where a picked day begins
+    (the first instant its clock reads the day: its midnight, or, where the clocks skip midnight,
+    the change; `day.start(&input.zone)` in a form that carries its zone); `day.midnight_utc()`, the same as `day.start(Utc)`, is deprecated for it.
+
+    The zone a form is read in is the one it was drawn in, and the form carries it. `req.zone()`
+    is not the same across the two requests: it is UTC on a browser's first page, which loads the
+    script that reports the zone, and in a `Public` page, and the visitor's zone on the post after
+    it. A form drawn on the first page and read in the post's zone would store its time moved by
+    the visitor's offset, with no error. So a page draws in a `DrawZone`, made from the request's
+    zone (`DrawZone::from(req.zone())`), from `Utc` or an `Offset`, or, for a form drawn again
+    after a refused post, from the zone that post sent (`DrawZone::from(&input.zone)`), so a time
+    typed under `UTC` is not shown again as another zone's. It writes the hidden input
+    (`zone.field(f.zone)`), the zone's name (`zone.name()`) and an instant as the input's
+    `value` (`zone.local(at)`) or its `min` and `max` (`zone.min(at)`, `zone.max(at)`), the only
+    public ways to, so the three come from one zone. The post reads the hidden input as a typed `FormZone` field (a 422 naming it when it is
+    missing or names no zone, as any typed field a page writes itself). What the compiler checks,
+    each with a `compile_fail` example: `Entry::at` and `LocalDateTime::at` take only a
+    `FormZone`, so neither `req.zone()` nor a `DrawZone` reads a posted time; a `FormZone` has no
+    constructor but its `Deserialize`, so it is made only from what a client sent (a form, a
+    query, JSON) and `FormZone::from(req.zone())` does not compile; and
+    `field` takes only a `FormZone` field's name. What it does not check: that the form draws the
+    hidden input at all (a form without it compiles, and its post is a 422), that a page draws the
+    input and the times from the same `DrawZone`, and that a form drawn again is drawn in the
+    posted zone rather than the request's. The zone is sent as a name that already exists: a tz
+    database name (`America/Chicago`, `UTC`) or an offset (`-06:00`, to the minute and less than a
+    day, so an `Offset` of a day or more is drawn as `±23:59`), one way for each zone: UTC is sent
+    as `UTC`, and `+00:00` or `-00:00` is refused.
+
+    Without JavaScript the browser never reports its zone, so the form is drawn and read in UTC.
+    The answer is to say so: the page shows `zone.name()` with the field (the guide's example draws
+    it in the label), so a visitor types a time in the zone the page states, the form works as
+    plain HTML, posts with no script, and reads back what the visitor saw (Value 3, HTML that works
+    on its own). That holds only for a page that draws the name, which Corten cannot check; the
+    guide, the skill and the types' documentation draw it. A browser with JavaScript gets the same on its first
+    page and its own zone from the next. A `Public` page is the same for everyone, so it draws in
+    `DrawZone::from(Utc)` (`req.zone()` there is UTC too, and a debug build warns each time a
+    `Public` answer reads it). Drawing in UTC and saying nothing would store a visitor's `14:05` as
+    UTC's; guessing a zone (from the language, the address) would store it in a zone the visitor
+    was never shown.
+
+    A skipped time (`02:30` on the morning the clocks go from 2 to 3) moves forward by the gap,
+    and a repeated one (`01:30` on the night they go back) is the earlier instant. That is
+    Temporal's default disambiguation, `compatible`, which its documentation says is what legacy
+    `Date` does, and RFC 5545 (iCalendar) section 3.3.5 prescribes the same: the first
+    occurrence of a repeated time, and a skipped time read at the UTC offset before the gap. A
+    day's start is not a typed time: `day.start(zone)` is the first instant whose clock reads the
+    day, as Temporal's `startOfDay` (its spec's `GetStartOfDay`) gives it: the earlier midnight
+    where midnight repeats, and where the clocks skip midnight, the change itself. Reading `00:00`
+    as a typed time gives the same where a gap begins at midnight, but where one starts the day
+    before and crosses midnight (Toronto's clocks went from `23:30` to `00:30` at
+    1919-03-31T04:30Z) it moves `00:00` forward to `01:00`, and a query from it would leave out
+    the day's first half hour; so where the clock shows a later time than midnight at the instant
+    `00:00` reads as, `day.start` searches back across the gap for the change. So an instant in the second of two repeated hours, drawn and sent back
+    unchanged, reads as the first: the form carries the zone, not the instant. Every instant a form
+    draws, the stored `value`, the `min` and the `max`, is rounded down to the minute
+    (`floor_minute`): an input counts its steps from its `min`, so one with seconds is off every
+    step and the browser would not send the form, and rounding all of them down keeps their order,
+    so a stored time in the same minute as its `min` is not drawn before it. Where the clocks go
+    back, a later instant reads earlier on the clock (`01:45` before the change, `01:30` after
+    it), so a `min` drawn at its own reading can be after the value of a later instant, and a
+    `max` before the value of an earlier one; `zone.min(at)` draws at the smaller of the offsets
+    at `at` and a day after it, and `zone.max(at)` at the larger of those at `at` and a day before
+    it, so the bounds hold every value drawn between them, an hour wider near the change. An edit
+    form reads
+    the field with `Entry::at_keeping(&input.zone, stored)`, which is the stored instant when the
+    field comes back equal to the value drawn from it, so an unchanged field keeps its seconds and
+    its offset in a repeated hour (Temporal's `ZonedDateTime.with` keeps the offset an edit started
+    from, `offset: 'prefer'`, for the same reason). The input then allows the part of a minute
+    before a `min` with seconds, and a time the clocks skip or repeat near a bound reads outside
+    it, so the handler's comparison stays the check. Reading asks the zone only for its offset
+    (`Zone::known_offset`, `Zone::offset` with `None` where the zone's rules end, as jiff's range
+    does late on 9999-12-30 UTC), a day before and a day after the time and at the two instants
+    those give, so
+    it works for every zone a form is drawn in (`Utc`, an `Offset`, `req.zone()`'s `Visitor`)
+    without the `zones` feature and adds no dependency; a zone whose offset changed twice within
+    two days would be read with the outer two; where the platform has no instant a day away (its
+    first and last days), the nearest instant it has stands in, so `day.start(Utc)` is midnight
+    UTC on every day the platform has. A time whose instant is past a zone's rules is refused
+    (drawn as nothing, read as `None`, the field's message) rather than taken at UTC's offset,
+    which `Visitor::offset` gives there for a written date. A test reads every zone in the bundled tz database
+    around every change of offset from 1970 to 2040, compares each reading with jiff's
+    `compatible()`, which finds the candidates in the database itself, fails if any zone
+    changes its offset twice within two days, checks that a `min` and a `max` drawn around each
+    change hold every value drawn between them, and checks that each zone is sent by a name a
+    `FormZone` reads back. Another reads every zone from its first change (its local mean time,
+    before 1900 for most) to 2040, where some zones do change twice within two days, and checks
+    the start of the day before, of and after each change against Temporal's start of day, the
+    earlier midnight or, where midnight is skipped, the change jiff finds in the database.
+
+    Not chosen: reading a day's `00:00` as a typed time for `day.start`, which this Choice did
+    before: it dropped the start of a day whose gap crosses midnight (Toronto, 1919-03-31). Reading in the request's zone (`req.zone()`) with no zone in the form, which this
+    Choice first did: it is right only when the draw and the post have the same zone, which a
+    first page and its post do not. One type for the zone drawn and the zone posted, which this
+    Choice did next: it had to be made from `req.zone()` to draw, so a post could make one from
+    `req.zone()` too and read in it, and `LocalDateTime::at` took any zone; two types leave the
+    post only the zone it was sent. Rounding a `min` up to the minute, which this Choice did next:
+    a stored time in the same minute as its `min` (a few seconds after a listing) was drawn before
+    it, and the browser would not send the form, even with only another field changed. Keeping
+    the stored instant by a comparison each handler wrote, which this Choice showed before
+    `at_keeping`: a handler that left it out lost the stored seconds and, in a repeated hour, moved
+    an unchanged time by an hour. Drawing a `min` and a `max` at their own readings, which this
+    Choice did next: where the clocks go back they could be out of order with the stored value,
+    and the browser would not send the form unchanged. Finding the instant of the change to draw
+    the bounds exactly: it asks the zone for its offset some thirty times where a day either side
+    is two, and only near a change does it draw tighter bounds than the handler checks anyway.
+    Taking a zone's offset past its database's range as UTC's, as reading did before: a time in
+    the year 9999 was read and drawn in UTC under the zone's name. Carrying the drawn instant or each field's offset instead of
+    the zone: a visitor who changes the time across a change of the clocks would be read at the
+    offset of a time they did not pick. Reading or writing in the zone Corten writes dates in
+    while it renders (`App::zoned_dates`), so a component would draw an input from an instant with
+    no zone, as `t.date_time` does: the handler reads the form before any render, outside that
+    zone. Asking the visitor for their zone in the form (a `<select>` of zones): an app can, and the
+    zone it posts is a `FormZone` then; most forms have no room for it. Temporal's other answers
+    (`earlier`, `later`, `reject`) as options: one answer is one way to do it, and no app has asked
+    which of two `01:30`s a visitor meant. `<input type="time">`: a time of day names no day, so it
+    is no instant in any zone, and a type for it would be a new concept no app has needed; an app
+    with a date and a time posts one `datetime-local`. A `Bounds` for times (`min`, `max` and
+    `step` written once for the input and the handler): a time's bounds are mostly instants known
+    only at the request (now, when a listing went up), so the handler compares the instants.
+    `Serialize` and JSON for `LocalDateTime`: an API sends an instant with its offset (RFC 3339,
+    `parse_timestamp`); it is read from text (`Deserialize`) only as a form's or a query's field.
+
+    Stands on: platform (the HTML standard's valid local date and time string, `T` or a space
+    between a date and a time of `HH:MM` with optional seconds and one to three fraction digits,
+    its valid normalized form, which an `<input type="datetime-local">`'s value sanitization
+    gives and its picker sets, and its step base, `min` before `value`, with a step of 60 seconds
+    by default and a step scale factor of 1000 milliseconds; Temporal's
+    `disambiguation: "compatible"`, `earlier` for a repeated time and `later` for a skipped one
+    (its spec's `DisambiguatePossibleEpochNanoseconds`), its start of a day (`startOfDay`,
+    `GetStartOfDay`: the first valid wall-clock time of the date), and its time zone identifiers, a tz
+    database name (`America/Chicago`, `UTC`) or an offset to the minute written `±HH:MM`
+    (RFC 3339's `time-numoffset`), which a browser's reported zone is one of and a `FormZone` is
+    sent as;
+    RFC 5545 section 3.3.5; jiff 0.2.38 and its bundled tz database, jiff-tzdb 0.1.9, whose
+    `compatible()` agrees with `at` in `every_change_in_every_zone_reads_as_temporal_compatible_reads_it`;
+    a browser reports its zone only from a script, so `req.zone()` is UTC before the first page's
+    script runs and without one (`App::client_zone`)); reasoned (a zone whose offset changes at
+    most once in any two days has, for a time on its clock, its candidates at the time minus the
+    offset a day before or a day after, and a time the clock skips has neither, so both reads are
+    exact; a form read in the zone it was drawn in reads back what the visitor saw, whichever
+    request drew it; a clock reading that is no `Into<SystemTime>` and no `DateValue` cannot reach
+    `t.date` or a field typed as an instant, and a reader that takes only a type with no
+    constructor but deserializing what a client sent cannot be given the request's zone; rounding
+    every instant a form draws down keeps their order, and a clock read at the smaller of two
+    offsets a day apart is no later than it reads at any instant in that day, where the zone
+    changes its offset at most once); measured (callgrind, instructions a request, by
+    `tests::what_a_date_and_time_field_costs` in the lib's release test binary with all features
+    on `939be002f`: 1,200 and 200 requests through the router with `oneshot` from a browser that
+    reported America/Chicago, the difference over 1,000, three rounds alternating the eight cases,
+    medians with every round within 2 instructions of them; the baseline is the same page and post
+    with the times and the zone as text the app does not read: drawing the form, the zone's hidden
+    input and name and a `datetime-local` with `value`, `min` and `max`, 29,382 against 25,280,
+    +4,102 (16%); reading a post sent unchanged, which `at_keeping` keeps without resolving a
+    time, 29,607 against 27,788, +1,819 (6.5%); a post changed by a minute, resolved in the posted
+    zone, 30,616, +2,828 (10%); and one changed to a time the clocks skip (2027-03-14T02:30 in
+    Chicago), resolved across the gap, 30,862, +3,074 (11%). Only a page that draws such a field
+    and a post that reads one pay it: no other page or form calls these. Correctness comes before
+    speed (README, Values), and the cost buys a time read in the zone it was typed in, with the
+    browser's own bounds and validation, no dependency and no client script. Not measured: the
+    change to `Visitor::known_offset`, through which every date `t.date_time` writes in the
+    visitor's zone goes; it now compares the instant's fraction of a second and, only before
+    1970, makes a second timestamp); value (a standard's answer
+    before one of Corten's, HTML that works on its own, a mistake the compiler can catch is a
+    compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
+
+    Revisit when: an app needs to ask a visitor which of two repeated times they meant, or to
+    refuse a skipped one; an app needs a time of day alone; the tz database gives a zone two
+    changes of offset within two days (the all-zones test fails after a jiff-tzdb update); the
+    runtime can redraw a first page's dates and times in the zone it reports, so a first page
+    need not be in UTC; a way appears to tie a form's hidden zone input to its time fields at
+    compile time (a form type that draws both); an app needs a time to the second in a form
+    (`step` under a minute), which drawing to the minute would cut; or an app repeats the same
+    instant bounds check on many forms, when a `Bounds` for times would earn its place.
+
+    Last checked: 2026-11-15, the HTML standard's local dates and times microsyntax, its
+    `datetime-local` state and its step base (Living Standard, last updated 14 November 2026),
+    Temporal's `ZonedDateTime` documentation for `disambiguation` and its spec's
+    `DisambiguatePossibleEpochNanoseconds`, and RFC 5545 section 3.3.5, read that day, against
+    `1c72b0379`; 2026-11-16, the HTML standard's step scale factor and default step for
+    `datetime-local` and Temporal's `ZonedDateTime` documentation for time zone identifiers, read
+    that day and checked against the `FormZone` reader at `5f2b8cb8a` (the split into `DrawZone`
+    and `FormZone`), with jiff 0.2.38 and jiff-tzdb 0.1.9 (`Cargo.lock`), and the all-zones test
+    passing on `5f2b8cb8a`; 2026-11-16, the `FormZone` reader refusing `+00:00` and `-00:00`,
+    `Entry::at_keeping`, the drawn `min` and `value` in one minute, a day's start on the platform's
+    first and last days, and the all-zones test with its `FormZone` round trip, passing on
+    `12794f3ff`; 2026-11-16, jiff 0.2.38's `Timestamp::MAX` (its documentation read that day), a
+    time past it refused in a tz database zone, `zone.min` and `zone.max` holding an unchanged value
+    where the clocks go back, `LocalDateTime::at`'s `compile_fail` doctests, and the all-zones
+    test with its `min` and `max` check, passing on `e9c2ce45e`; 2026-11-17, Temporal's
+    `GetStartOfDay` in its spec (read that day), Toronto's 1919-03-31 change in the bundled
+    database, and `day.start` against Temporal's start of day around every change in every zone
+    from its first, with `Visitor::known_offset` asking jiff at the second an instant is in,
+    passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`.
+
+60. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in every mode, and the runtime draws it as the page a write
     redirects to; a patch does not fill a layout read.** A `data-patch` write that answers with its
     own result (a form drawn again with what it refused, a bulk add whose failed lines the page
     lists) could not bring a layout read up to date: `req.page` in `Mode::Action` rendered `<main>`
@@ -5104,7 +5430,8 @@ rules something out.
 2. <a id="rule-patchable-components"></a>A fragment that can be patched is a component, rendered by the page and by the patch, so the
    two cannot drift. It is declared `-> impl Patch`, and its markup's top-level elements each have
    a `#[derive(Id)]` id, which the compiler checks (`view::Patch`), so no patch loses an element in
-   the browser.
+   the browser for want of an id; what the browser's parse of a patch's top level loses is
+   [Limit 2](#limit-whole-element-patches).
 3. <a id="rule-handler-arguments"></a>A handler reaches the page only through its arguments: refs, form fields (a form's
    control by its `#[derive(Fields)]` name, found in the handler's form,
    [Choice 57](#choice-field-arguments)), `event`, `target`, `signal`, `scope` and values. State that outlives an event is the DOM itself or `keep(init)`, the
@@ -5201,7 +5528,73 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `<details>` that moved takes another's state. A dialog the server drew open, which the user
    closed and opened again, looks unchanged, so an answer that draws it closed closes it, without
    a `close` event ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)). Other
-   browser state inside a replaced element (scroll position) resets, so keep targets small.
+   browser state inside a replaced element (scroll position) resets, so keep targets small. The
+   runtime parses a patch as a `<template>`'s content, where the first top-level element (other
+   than a head's, such as a `<script>` or `<template>`; Chromium and WebKit let a leading
+   `<title>`, `<base>`, `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the
+   rest is read, so a table part beside other elements is dropped or moved there unless the table
+   parts come first. `html!` refuses the shapes lost wherever they are written: a table part
+   after a first `<table>`; an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>`
+   ..) after a first `<col>`; and after a first other table part, a `<table>` at the top level or
+   in a later element, and a `<form>` there that holds an element, with an element HTML's
+   wherever it lands in or around it ([Choice 54](#choice-html-parse-refusals)). The rest depend
+   on what the patch began with or where the view is written (a `<p>` and a `<tr>` after it are
+   kept after a first `<tr>`, and an `<svg>` keeps a `<form>` of fields after a `<tr>`), so for
+   them, and where a
+   component or an expression writes the first element, a debug build refuses such a patch, as
+   `html!` writes it, when it sends it, naming the element, but a release build sends it as drawn
+   and the browser loses the part, so a mix that only some data draws is found only by a debug
+   render that draws it
+   ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
+   That check refuses a patch from an area's handler that begins with a `<col>` even where the page
+   already has the area's stylesheet, whose link Corten writes after the patch's elements and the
+   parse drops: the server does not know what the page linked, and on a page without it the patch
+   would land unstyled, so it is refused on both, and a `<colgroup>` with an id keeps the link.
+   The check reads markup as `html!` writes it (a script's text as the browser's tokenizer does,
+   a `<textarea>`'s, `<title>`'s, `<style>`'s, `<xmp>`'s, `<iframe>`'s, `<noembed>`'s and
+   `<noframes>`'s as text, a void element's end tag ignored, and text where it decides with its
+   numeric character references, `&Tab;`, `&NewLine;`, `html!`'s escapes and `&nbsp;` decoded and a
+   NUL ignored), and reports a loss only from the tokens it reads as the browser does. It stops at
+   any other, whether `html!` writes it (a `<div>` in a `<p>`, a `<form>` in a `<form>`, a
+   `<noscript>`) or markup placed with `raw` does: an end tag left out, one written otherwise than `</name>` (`</div ignored>`) or one
+   that closes no element open (a `</p>` or `</br>`, which adds an element or, in an `<svg>` or
+   `<math>`, closes it); an HTML element's start tag ending `/>`, which the browser opens; a
+   comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, one with `--!>` in it);
+   a CDATA section outside an `<svg>` or `<math>`, or one not ended by `]]>`; a doctype other
+   than `<!DOCTYPE html>`, which a quoted `>` in it ends early; where text decides (in such a form,
+   in a table holder, after a first `<col>`, at the top level), a named character reference it does
+   not decode, and any text that shows in a table, row group, row or column group or after a first
+   `<col>`, a `<` that starts no tag among it too; an element HTML's
+   wherever it lands written straight in an `<svg>` or `<math>`, which `html!` refuses; a `<!--`
+   and a `<script` in a script's text that carry it past its first `</script>` and over an
+   element, which the markup does not say was written as its text; in a `<form>` a table's
+   reading would put in empty, any token before what it holds but a comment, a bogus comment, a
+   `<!DOCTYPE html>` and a void element's end tag; a start tag the patch ends in before its `>` (`<col data-note='`
+   at the end, which the browser drops with what follows its `<`, an end tag in its value too); an HTML `<image>`, which the browser reads as an `<img>`;
+   a `<plaintext>`, and a `<noscript>`, whose content Firefox reads as text and Chromium and
+   WebKit as elements; and an element the browser does not put where it is written: a table part
+   outside a table, anything in a `<table>`, row group or row but its own parts, a `<script>`,
+   `<style>` or `<template>`, anything in a column group but a `<col>` or `<template>` (a `<script>`
+   or `<style>` there closes it), and text in any of them, an element that closes one open around it
+   (a `<div>` in a `<p>`, an `<li>` in an `<li>`, a heading in a heading, an `<a>` in an `<a>`, an
+   `<svg>` or `<math>` between them too, since only a cell, caption, `<object>`, `<applet>`,
+   `<marquee>` or `<template>` keeps the outer one open),
+   a `<form>` in a `<form>`, what a `<select>` holds but its options, an `<html>`, `<body>`,
+   `<head>`, `<frame>` or `<frameset>`, and, after a first table part, a `<form>`, `<table>` or
+   table part in an SVG or MathML integration point, and a `<template>` in one, past whose end tag
+   Firefox, unlike the standard and the other engines, reads the rest of the patch as a body's. There it
+   reports a loss found before and otherwise logs a warning naming where it stopped, so markup
+   written through `raw` is checked only as far as these rules reach, and what a patch loses after
+   one of them is found by neither the check nor `html!`. `scripts/patch-generated.json` holds
+   the check to these rules in 3,000 patches generated from a fixed seed (with characters past
+   ASCII in names, values and text, character references, doctypes and text at the top level),
+   which the smoke parses in all three engines, text included: it reports a loss only where an
+   engine loses something, and where one does, reports it or says where it stopped; and the id
+   check reports an element without an id or text outside one only where the engine's parse has
+   one at its top level or loses something. Neither reads how deep markup nests: Chromium attaches
+   an element nested deeper than 512 elements at depth 512 (measured in Chromium 156; Firefox and
+   WebKit not checked), in a page as in a patch, which a recursive component (a comment thread)
+   can reach.
 3. <a id="limit-swapped-scripts"></a>`<script>` tags inside swapped pages do not run. Put behavior in a component's script.
 4. <a id="limit-document-listeners"></a>Handlers run from one listener per event type on the document, so a third-party listener that
    stops an event before it reaches the document stops its handlers too, as in any delegating
@@ -5562,7 +5955,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
     text, a `<plaintext>`, an element taken out of foreign content;
     [Choice 54](#choice-html-parse-refusals)) and the debug check of a keyed ref's
     keys ([Choice 46](#choice-ref-values)) act only where that markup shows how a browser parses
-    it, and where it does not they let a mistake pass rather than stop correct markup. At the top
+    it (and the refusal of a patch's top level, only where the first element is written in it,
+    and only for the shapes lost whatever the patch began with and wherever the view lands, since a
+    component's markup does not show which table part, if any, an element before it wrote, or
+    whether its parent writes it in an `<svg>`), and where it does not they let
+    a mistake pass rather than stop correct markup. At the top
     of a component's markup, which its parent may write into an `<svg>` or a `<math>`, none of
     the refusals acts: an element a browser moves out of foreign content (`<b>`, `<div>`, `<p>`,
     `<span>`, `<table>` and the rest of the standard's list, a `<font>` with `color`, `face` or
