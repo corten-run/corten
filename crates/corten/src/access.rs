@@ -36,7 +36,18 @@ pub(crate) fn answer(
     matched: impl FnOnce(&Request) -> Option<Arc<str>>,
     next: impl FnOnce(Request) -> crate::router::RouterFuture,
 ) -> crate::router::Answering {
-    if !tracing::event_enabled!(target: "corten::access", tracing::Level::INFO) {
+    // The check names the line's fields, so a subscriber that filters on one of them sees it.
+    if !tracing::event_enabled!(
+        target: "corten::access",
+        tracing::Level::INFO,
+        message,
+        method,
+        path,
+        route,
+        status,
+        bytes,
+        duration
+    ) {
         let answering = next(req);
         return Box::pin(async move {
             let Ok(res) = answering.await;
@@ -91,9 +102,11 @@ impl Access {
             };
         }
         // HTTP has no content for these statuses, even if an app layer left a body on them; the
-        // `500` sent in place of another `1xx` has none either.
+        // `500` sent in place of another `1xx` has none either, and a `2xx` to `CONNECT` opens a
+        // tunnel instead of sending its body.
         let size = if res.status().is_informational()
             || matches!(res.status(), http::StatusCode::NO_CONTENT | http::StatusCode::NOT_MODIFIED)
+            || (self.method == Method::CONNECT && res.status().is_success())
         {
             Some(0)
         } else {

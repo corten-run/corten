@@ -5154,8 +5154,10 @@ rules something out.
     disconnect. It sees the host check's
     `421`, cross-site refusals, error-page replacements, conditional `304`s, compression and
     app layers. It never polls a body to count it, so a live stream is logged when its answer
-    is ready, not at a close it may never reach. The existing subscriber still owns formatting,
-    escaping and routing; no access-log format or dependency is added. With the switch off,
+    is ready, not at a close it may never reach; a body HTTP gives no content (a `204`, a `304`,
+    a `1xx`, a `2xx` to `CONNECT`) counts zero. The existing subscriber still owns formatting,
+    escaping and routing, including a filter on the line's fields: the check before a request
+    names them. No access-log format or dependency is added. With the switch off,
     no clock is read and no request metadata is retained for logging.
     Ordinary enabled requests keep the route beside the answer's future, without a response
     extension, second wrapper or URI clone; the route's name is the router's own `Arc<str>`,

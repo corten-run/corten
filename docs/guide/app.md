@@ -194,7 +194,8 @@ the API matched, and a segment without the text its route writes after a paramet
 several routes is logged with the last one matched. The status and bytes describe the final
 response, after the host and cross-site
 checks, the error page, a conditional `304`, compression, the app's tower layers and the router's
-final HTTP handling (`HEAD` has zero body bytes). `duration` is the elapsed time until that
+final HTTP handling (`HEAD` has zero body bytes, as do a `204`, a `304` and a `2xx` to
+`CONNECT`, which opens a tunnel rather than sending content). `duration` is the elapsed time until that
 response is ready, including the error page's waits, not the time to transmit the body.
 `bytes` is the final body's known size, or the string `"stream"` when its size is unknown;
 logging never consumes a stream or waits for it to close. A connection rejected before it
@@ -207,8 +208,9 @@ the app's own around the router) writes no line, and none is made up for it; onc
 ready its line is written, and a later disconnect or a stream that fails does not change it.
 
 An app with its own subscriber can filter or route `corten::access` as it does other tracing
-targets. Filtering the target out skips the line's clock reads and copies, but keeps the switch's
-wrapper; leaving the switch off removes it.
+targets, including on the line's fields (`corten::access[{status}]=info`). Filtering the target out
+skips the line's clock reads and copies, but keeps the switch's wrapper; leaving the switch off
+removes it.
 
 What a line costs, measured in instructions per request (release build, Corten's subscriber
 writing to a sink, [design Choice 60](../design.md#choice-access-logs)): a parameter route goes

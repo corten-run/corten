@@ -633,6 +633,102 @@ mod tests {
         assert!(lines.is_empty(), "{lines:?}");
     }
 
+    /// Takes only `corten::access` events that carry a `status` field, as a filter directive on
+    /// the field does (`corten::access[{status}]=info`), and counts them.
+    #[derive(Clone, Default)]
+    struct WithStatus(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl WithStatus {
+        fn taken(&self) -> usize {
+            self.0.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Subscriber for WithStatus {
+        fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
+            Interest::sometimes()
+        }
+
+        fn enabled(&self, meta: &Metadata<'_>) -> bool {
+            meta.target() == "corten::access" && meta.fields().field("status").is_some()
+        }
+
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+
+        fn event(&self, _: &Event<'_>) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn enter(&self, _: &Id) {}
+
+        fn exit(&self, _: &Id) {}
+    }
+
+    /// A subscriber that filters `corten::access` on one of the line's fields still gets the line:
+    /// the check before a request asks about an event with the line's fields, not one with none.
+    #[test]
+    fn access_log_reaches_a_subscriber_that_filters_on_its_fields() {
+        let subscriber = WithStatus::default();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        tracing::subscriber::with_default(subscriber.clone(), || {
+            tracing::info!(target: "corten::access", status = 200u16, "an event with a status");
+            assert_eq!(subscriber.taken(), 1, "the subscriber takes a corten::access event with a status");
+            runtime.block_on(async {
+                access_call(access_app().router(), "GET", "/items/7", &[]).await;
+            });
+        });
+        assert_eq!(subscriber.taken(), 2, "the request's line reaches it too");
+    }
+
+    /// A `2xx` to `CONNECT` opens a tunnel and has no HTTP content, so the line counts none even
+    /// when the handler's body is a stream of unknown size; the client gets no content either.
+    #[test]
+    fn access_log_counts_no_content_for_a_connect_tunnel() {
+        let mut answer = String::new();
+        let lines = access_lines(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let routes = crate::router::Table::new().route(
+                "/",
+                crate::router::any(|| async {
+                    let chunks = [Ok::<_, std::io::Error>(crate::http::Bytes::from_static(b"not content"))];
+                    crate::http::Body::from_stream(futures_util::stream::iter(chunks))
+                }),
+            );
+            let app = crate::App::new(crate::Routes::from(routes)).access_log(true);
+            let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+            let addr = listeners[0].local_addr().unwrap();
+            let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+            let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+                let _ = stopped.await;
+            }));
+            let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+            stream.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+            // Everything sent until the connection closes or stays quiet.
+            let mut read = Vec::new();
+            let mut buf = [0u8; 256];
+            while let Ok(Ok(n)) = tokio::time::timeout(std::time::Duration::from_millis(300), stream.read(&mut buf)).await {
+                if n == 0 {
+                    break;
+                }
+                read.extend_from_slice(&buf[..n]);
+            }
+            answer = String::from_utf8(read).unwrap();
+            drop(stream);
+            stop.send(()).unwrap();
+            server.await.unwrap().unwrap();
+        });
+        assert!(answer.starts_with("HTTP/1.1 200 "), "{answer}");
+        assert_eq!(answer.split_once("\r\n\r\n").map(|(_, body)| body), Some(""), "{answer}");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("method=CONNECT") && lines[0].contains("status=200 bytes=0 "), "{}", lines[0]);
+    }
+
     #[cfg(feature = "compress")]
     #[test]
     fn access_log_counts_the_compressed_body() {
