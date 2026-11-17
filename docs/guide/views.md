@@ -262,7 +262,7 @@ keeps an unknown URL a scanner asks for as cheap as before. For any other failur
 refused before anything runs) it starts none and waits for none: it draws a value only if its read is
 in by the time the page is drawn, since what made the request fail (a database that is down) is
 likely what the read needs too. A patch or a live fragment is not a page and fills no place: pass it the
-value instead (`req.patch(Badge { count })`). A `later` whose `to_html()` string the page never
+value instead (`req.patch(Badge { count })` in `Mode::Action`). A `later` whose `to_html()` string the page never
 writes draws nothing and is no error, and the page does not wait for its read. In a debug build, a
 `later` for a read the app does not start, one inside `<main>` (which a navigation would not fill),
 one in a patch, one rendered as text or whose `to_html()` string is placed twice, or one on a page
@@ -437,7 +437,7 @@ async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> H
 ```
 
 Either way there is one answer that brings a layout read up to date after a write, a page: the page
-the write redirects to, or its own ([design Choice 58](../design.md#choice-write-own-page-whole)).
+the write redirects to, or its own ([design Choice 59](../design.md#choice-write-own-page-whole)).
 
 A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}>"News"</a>`:
 `href`, `data-nav` and `aria-current="page"` when it is the page (`req.nav_section` for a link
@@ -529,7 +529,7 @@ html! {
     <p>{t.item_show_all_offers(item.offers.len())}</p>
     <li id={OfferId(&offer.id)}>{offer.seller}</li>                         // a patch's target
 }
-req.patch(html! { {Remove(OfferId(&sold.id))} })                             // the same id
+req.patch(html! { {Remove(OfferId(&sold.id))} })                             // the same id, in Mode::Action
 ```
 
 | What | Fails to compile when |

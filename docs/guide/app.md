@@ -564,10 +564,13 @@ What it sends is what the app's own pages send, typed the same way:
    GET form's checkbox (`?mine=on`, where a link writes `true`) is a `Local`.
 3. A request asks for HTML as a browser's page load does. `.mode(Mode::Action)` asks as the
    runtime's `data-patch` submit does, `Mode::Navigation` as its link, `Mode::Data` as a client
-   that wants JSON. `Mode::Action` sends `Prefer: corten-draws=whole` as the runtime does, so a
-   write that answers its own page (`req.page(..)`) is answered with the whole document, layout
-   and layout reads included ([Choice 58](../design.md#choice-write-own-page-whole)). To ask as a
-   runtime from before that, which is answered with `<main>`, add
+   that wants JSON. So the same form posted without `.mode(..)` is the browser without JavaScript:
+   in a test (a debug build) a handler that answers it with a patch, or with a page at a path with
+   no `GET`, gets a 500 that says why ([Where a form posts](requests-and-forms.md#where-a-form-posts)).
+   `Mode::Action` sends `Prefer: corten-draws=whole` as the runtime does, so a write that answers
+   its own page (`req.page(..)`) is answered with the whole document, layout and layout reads
+   included ([Choice 59](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
+   that, which is answered with `<main>`, add
    `.header(HeaderName::from_static("prefer"), "corten-draws=main")` (`corten::http::HeaderName`):
    a preference the test sets is sent first, and the first is the one read.
 4. `.cookie(name, value)` sends a cookie (`answer.cookie(name)` reads one an answer set),
@@ -2803,7 +2806,8 @@ read (a JSON error names the value it could not parse, so part of an upstream an
 message above it could already (an HTTP client's names the URL); none of it reaches the client.
 A debug build's error about the app's own code (a component it
 does not serve, a `Refresh` header, a write redirected outside `form-action`, a page answering
-a post to a path with no `GET` ([Where a form posts](requests-and-forms.md#where-a-form-posts)))
+a post to a path with no `GET`, a patch answering a browser's plain request
+([Where a form posts](requests-and-forms.md#where-a-form-posts)))
 is the exception:
 it is set in every debug build, so a router test's error page names it.
 The error page `corten new` writes names every case without `_`, so when Corten adds one the

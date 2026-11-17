@@ -2348,6 +2348,11 @@ impl Req {
     /// be dropped in the browser, so `view` is a [`Patch`](crate::view::Patch), which the compiler
     /// checks: usually a component declared `-> impl Patch` whose root has a `#[derive(Id)]` id.
     /// It is any [`HtmlResult`], `HtmlResult<Patches>` too ([`crate::Patches`]).
+    ///
+    /// It answers whatever mode reached the handler: a browser that asked by itself (a form
+    /// without JavaScript, a link, a reload) shows the fragment as the whole document. Answer
+    /// both with [`Req::patch_or`], or call this only when `req.mode == Mode::Action`; a debug
+    /// build answers a browser's plain request that got a patch with a 500 naming the route.
     pub fn patch<For, Kind: crate::answer::PatchingKind>(
         &self,
         view: impl crate::view::Patch,
@@ -2355,7 +2360,9 @@ impl Req {
         self.patch_with_status(StatusCode::OK, view)
     }
 
-    /// Same as [`Req::patch`] with another status.
+    /// Same as [`Req::patch`] with another status. Like it, it answers whatever mode reached the
+    /// handler, and a debug build answers a browser's plain request that got it with a 500: use
+    /// [`Req::patch_or`], or check `req.mode == Mode::Action` first.
     pub fn patch_with_status<For, Kind: crate::answer::PatchingKind>(
         &self,
         status: StatusCode,
@@ -2860,8 +2867,12 @@ fn refresh_header_is_an_error(res: Response, dev: bool) -> Response {
 /// `Shared::pages`), so a hand-built `Table` router's paths are not checked, and a page a
 /// hand-built route serves at a path a post-only macro route also matches is taken for that
 /// route's, a false 500; an `unstaged` route skips the stages this runs in, so it is not checked;
-/// an `any = ..` route answers `GET` too; and a release build compiles none of it, so it never
-/// runs in a production image or a smoke test against one.
+/// an `any = ..` route answers `GET` too; a post whose fetch metadata says it is not a top-level
+/// navigation ([`top_level`]: a page's own `fetch`, a form posted into an `<iframe>`), whose
+/// answer is not shown as the tab's page, or a navigation a service worker passes on, which may
+/// be; a relayed upstream answer (`Relay`), checked by the
+/// upstream; and a release build compiles none of it, so it never runs in a production image or a
+/// smoke test against one.
 #[cfg(debug_assertions)]
 fn page_where_no_page_is(res: Response, shared: &Shared, path: &str) -> Response {
     if !res.status().is_success()
@@ -2872,16 +2883,74 @@ fn page_where_no_page_is(res: Response, shared: &Shared, path: &str) -> Response
         return res;
     }
     let Some((route, false)) = crate::route::chosen(&shared.pages, path) else { return res };
-    let (parts, _) = res.into_parts();
-    let mut error = unserved(
+    in_place_of(
+        res,
         shared.dev,
         format!(
             "a browser's post to {route}, which has no GET handler, was answered with a page, so the browser shows it at an address that answers 405 when it is opened again: post a form that belongs to one page to that page's route (get = .., post = ..), or answer this write with req.redirect or req.redirect_with_notice once it is done and draw a page only to refuse it (req.invalid)"
         ),
     )
-    .into_response();
-    // What the browser would have done with the page's cookies and stored data, it does with the
-    // error's; the page's other headers are the page's own, which the error page's replace.
+}
+
+/// A patch answering a browser's plain request (no `data-patch`, asking for HTML): the browser
+/// shows the fragment as the whole document, with no layout, stylesheets or navigation, at the
+/// request's address. [`Req::patch_or`] answers the page or a redirect then, and a handler that
+/// checks `req.mode == Mode::Action` itself answers its patch only in that mode. The route is
+/// named as `#[corten::routes]` declares it, and by the request's path where no macro route
+/// matches it (a hand-built `Table`'s). The handler's cookies and `Clear-Site-Data` go out with
+/// the error page, as for [`page_where_no_page_is`].
+///
+/// What it does not see: a request whose fetch metadata says it is not a top-level navigation
+/// ([`top_level`]: a page's own `fetch`, an `<iframe>`'s load), whose answer is not shown as the
+/// tab's page, or a navigation a service worker passes on with `fetch(event.request)`, whose
+/// answer may be; an `unstaged` route skips the stages this runs in; a fragment answered
+/// without `corten-patch` (a response built by hand, or one put in place of the handler's through
+/// `DerefMut`) is not a patch to it; a relayed upstream answer (`Relay`), checked by the
+/// upstream; and a release build compiles none of it, so it never runs in a production image or a
+/// smoke test against one.
+#[cfg(debug_assertions)]
+fn patch_where_a_page_belongs(res: Response, shared: &Shared, method: &http::Method, path: &str) -> Response {
+    if !res.headers().contains_key(PATCH_HEADER) || res.extensions().get::<crate::answer::Relayed>().is_some() {
+        return res;
+    }
+    let route = crate::route::chosen(&shared.pages, path).map_or(path, |(route, _)| route);
+    in_place_of(
+        res,
+        shared.dev,
+        format!(
+            "a browser's plain {method} to {route} (no data-patch, asking for HTML) was answered with a patch, which the browser shows as the whole page, with no layout, stylesheets or navigation: answer both with req.patch_or(view, || async {{ .. }}), which draws the page or a redirect when the runtime did not ask, or check req.mode == Mode::Action before req.patch"
+        ),
+    )
+}
+
+/// Whether a request's fetch metadata, where the browser sent it, says it is a top-level
+/// navigation (a link, a reload, a form the browser submits): `Sec-Fetch-Mode: navigate` to a
+/// `Sec-Fetch-Dest: document`. A page's own `fetch` (`cors`, `same-origin`) and an `<iframe>`'s
+/// load (`iframe`) are not, so what answers them is not shown as the tab's page. A client that
+/// sends neither (a router test, an HTTP library) is taken at its `Accept`.
+///
+/// A navigation a service worker answers from navigation preload keeps its destination. One the
+/// worker passes on with `fetch(event.request)` arrives as `navigate` to `empty`, the tab's and
+/// a frame's alike, so it is not taken for the tab's: a known gap, since the worker may show its
+/// answer as the tab's page (`docs/design.md#choice-plain-request-patch`).
+///
+/// Browsers send fetch metadata only to a secure context (HTTPS, `localhost`): a debug build
+/// reached over plain HTTP at another address (a phone on the LAN) gets none, so a page's own
+/// `fetch` that asks for `text/html` there is taken for a navigation, a false 500.
+#[cfg(debug_assertions)]
+fn top_level(headers: &HeaderMap) -> bool {
+    headers.get("sec-fetch-mode").is_none_or(|mode| mode.as_bytes() == b"navigate")
+        && headers.get("sec-fetch-dest").is_none_or(|dest| dest.as_bytes() == b"document")
+}
+
+/// The error a debug build answers in place of `res`, an answer a browser would have shown wrongly.
+/// What the browser would have done with its cookies and stored data, it does with the error's
+/// (`Set-Cookie`, `Clear-Site-Data`); its other headers are its own, which the error page's
+/// replace.
+#[cfg(debug_assertions)]
+fn in_place_of(res: Response, dev: bool, message: String) -> Response {
+    let (parts, _) = res.into_parts();
+    let mut error = unserved(dev, message).into_response();
     for name in [header::SET_COOKIE, HeaderName::from_static("clear-site-data")] {
         for value in parts.headers.get_all(&name) {
             error.headers_mut().append(name.clone(), value.clone());
@@ -3170,14 +3239,26 @@ async fn page_or_error(
     let mut req = req;
     #[cfg(debug_assertions)]
     let check = req.extensions_mut().remove::<crate::security::FormCheck>();
-    // A browser's plain form post, which leaves it at the address it posted to.
+    // A browser's plain request (a link, a reload, a form without JavaScript), which shows what
+    // answers it as the whole document at the address it asked; its method, for what it is told.
     #[cfg(debug_assertions)]
-    let plain_post = browser && !fetched && mode == Mode::Document && req.method() == http::Method::POST;
+    let plain = (browser && !fetched && mode == Mode::Document && top_level(req.headers())).then(|| req.method().clone());
     let res = run(req, next, deadline, signal).await;
     #[cfg(debug_assertions)]
     let res = refresh_header_is_an_error(res, shared.dev);
     #[cfg(debug_assertions)]
-    let res = if plain_post { page_where_no_page_is(res, shared, asked.path()) } else { res };
+    let res = match &plain {
+        Some(method) => {
+            let res = patch_where_a_page_belongs(res, shared, method, asked.path());
+            // A plain form post, which leaves the browser at the address it posted to.
+            if *method == http::Method::POST {
+                page_where_no_page_is(res, shared, asked.path())
+            } else {
+                res
+            }
+        }
+        None => res,
+    };
     #[cfg(debug_assertions)]
     let mut res = redirect_outside_form_action(res, check.as_ref(), shared.dev);
     #[cfg(not(debug_assertions))]
@@ -3552,7 +3633,7 @@ impl ReadAgain {
     ///         pub after: Option<&'a str>,
     ///     }
     /// }
-    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch(html! {}) }
+    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch_or(html! {}, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await }
     ///
     /// #[derive(Id)]
     /// struct AlertsId;
@@ -3579,7 +3660,7 @@ impl ReadAgain {
     /// #     #[route("/alerts", get = alerts, patches)]
     /// #     pub struct Alerts<'a> { pub after: Option<&'a str> }
     /// # }
-    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch(html! {}) }
+    /// # async fn alerts(req: Req) -> HtmlResult<Patches> { req.patch_or(html! {}, || async { req.redirect(&corten::Local::parse("/").unwrap()) }).await }
     /// # use url::Alerts;
     /// #[derive(Id)]
     /// struct ListId;
