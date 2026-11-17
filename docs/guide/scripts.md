@@ -810,6 +810,37 @@ throws; inside one that something else's handler interrupts (an event it dispatc
 version, the undo and redo stacks and the saves still on their way, shared by its handlers and its
 feed's callbacks.
 
+## Reading a part again
+
+`patch(html, signal?)` from `corten` applies trusted markup, not a fetched string. Its `html`
+parameter is `TrustedHTML`: pages require Trusted Types, so the browser refuses a string with a
+`TypeError`, and `corten check` refuses it too. Only a policy the page explicitly allows can
+make that value; `patch` does not use the runtime's policy for a script's input.
+
+When a script knows a part changed (a provider's confirmation, a timer or a message), give it
+a ref to a hidden GET form marked `data-patch` and call `requestSubmit()`:
+
+```rust,ignore
+let refresh = refs();
+html! {
+    <form hidden method="get" action={url::Status { id }} data-patch ref={refresh}></form>
+    <button type="button" on:click={js::refresh(refresh)}>{t.refresh()}</button>
+}
+```
+
+```js
+/** @param {HTMLFormElement} form */
+export function refresh(form) {
+  form.requestSubmit();
+}
+```
+
+The route answers the part as a patch (`req.patch_or` if it also serves a page). The runtime
+fetches and draws it through its own policy. Use `requestSubmit()`, not `submit()`, which skips
+the submit event the runtime handles. For reads after a server-chosen delay, render
+[`ReadAgain { after }.from(route)`](requests-and-forms.md#a-read-that-has-not-caught-up-yet)
+instead; each answer decides whether to read again.
+
 ## Rules
 
 1. Markup is written in `html!`, never built from strings in a script. A script makes new

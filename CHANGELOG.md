@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
+  Trusted Types enforcement would reject. The scripts guide shows how to read a part again
+  with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
+
 - Apply supported lean settings to catalog-page competitors as well as Corten:
   reduce optional access logging, compression and timer work where supported,
   record the exact profile in container evidence and reports, and retain full
