@@ -3896,6 +3896,443 @@ fn a_place_elsewhere_on_a_path_panics_in_debug_builds() {
     let _ = crate::route::Elsewhere::at(&path, "place-7");
 }
 
+#[derive(crate::view::Id)]
+struct LostRowId;
+
+/// A message a patch sends.
+#[crate::component]
+fn SavedNote() -> impl crate::Patch {
+    html! { <p id={MsgId}>"saved"</p> }
+}
+
+/// A table row, a patch on its own.
+#[crate::component]
+fn LostRow() -> impl crate::Patch {
+    html! { <tr id={LostRowId}><td>"1"</td></tr> }
+}
+
+/// A patch whose table row comes after another element, which the runtime's parse (a
+/// `<template>`'s content) drops. Each is a component, so the `html!` that sends them together
+/// sees neither's tags: only the patch as sent shows the row after the message.
+fn lost_row() -> impl crate::Patch {
+    html! {
+        <SavedNote />
+        <LostRow />
+    }
+}
+
+/// `req.patch_or` and `req.invalid_with`'s `form.draw` answering with `lost_row`.
+fn lost_row_routes() -> Table {
+    Table::new()
+        .route(
+            "/",
+            crate::router::post(|req: Req| async move {
+                req.patch_or::<ForOne, AnyAnswer, _, _>(lost_row(), || async { req.redirect(&Done) }).await
+            }),
+        )
+        .route(
+            "/refused",
+            crate::router::post(|req: Req| async move {
+                let mut errors = crate::Errors::new();
+                errors.refuse(crate::Refusal::Conflict, "moved on");
+                req.invalid_with::<ForOne, AnyAnswer, _, _, _, _>(
+                    &errors,
+                    |form| async move { form.draw(lost_row()) },
+                    || async { req.redirect(&Done) },
+                )
+                .await
+            }),
+        )
+}
+
+/// A debug build answers a patch the browser would lose part of with an error that names the
+/// element lost and the one that came first, outside `corten dev` too: through `req.patch` (here
+/// `patch_or`) and a refusal's `form.draw`.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_the_browser_would_lose_part_of_is_an_error_in_debug_builds() {
+    for path in ["/", "/refused"] {
+        let (status, _, body) = call_with(app(lost_row_routes(), None), "POST", path, Some("action"), None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {body}");
+        let named = crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#);
+        assert!(body.contains(&named), "{path}: {body}");
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(crate::view::Id)]
+struct LostColId;
+
+/// The area's stylesheet links Corten writes after a patch's elements are read with them: after a
+/// leading `<col>` the browser drops them, so the patch would go in unstyled.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_whose_area_stylesheet_the_browser_would_drop_is_an_error_in_debug_builds() {
+    async fn col_patch(req: Req) -> HtmlResult {
+        req.patch(html! { <col id={LostColId}> })
+    }
+    let router = App::new(Routes::new())
+        .area::<Shop>(|shop| shop.route::<ShopItem>(crate::Methods::reads(get(col_patch))).components(&[COST_STYLED]))
+        .router();
+    let (status, _, body) = call_with(router, "GET", "/shop/item", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains(&crate::escape("the area's stylesheet (<link")), "{body}");
+    assert!(body.contains(&crate::escape(r#"since <col id="lost-col"> comes first"#)), "{body}");
+}
+
+/// A release build compiles none of the check: the patch is sent as drawn.
+#[cfg(not(debug_assertions))]
+#[tokio::test]
+async fn a_patch_the_browser_would_lose_part_of_is_sent_in_release_builds() {
+    for (path, status) in [("/", StatusCode::OK), ("/refused", StatusCode::CONFLICT)] {
+        let (got, headers, body) = call_with(app(lost_row_routes(), None), "POST", path, Some("action"), None).await;
+        assert_eq!(got, status, "{path}: {body}");
+        assert_eq!(headers["corten-patch"], "1", "{path}");
+        assert_eq!(body, r#"<p id="msg">saved</p><tr id="lost-row"><td>1</td></tr>"#, "{path}");
+    }
+}
+
+#[derive(crate::view::Id)]
+struct NoteScriptId;
+
+/// A data block whose text has `<!--` and a tag that begins like `<script` (`<scriptx>`, which
+/// hides no end tag), then the message and the row.
+fn lost_after_script() -> impl crate::Patch {
+    html! {
+        <script id={NoteScriptId} type="text/x-template">"<!-- <scriptx> -->"</script>
+        <SavedNote />
+        <LostRow />
+    }
+}
+
+/// The check reads a script's text as the tokenizer does, so what follows a script with `<!--` in
+/// its text is checked: the row after the message is an error in a debug build.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_lost_after_a_script_with_a_comment_in_its_text_is_an_error_in_debug_builds() {
+    let routes = Table::new()
+        .route("/", crate::router::post(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(lost_after_script()) }));
+    let (status, _, body) = call_with(app(routes, None), "POST", "/", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let named = crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#);
+    assert!(body.contains(&named), "{body}");
+}
+
+#[derive(crate::view::Id)]
+struct HeadFontId;
+
+/// `html!` writes an end tag for a `<basefont>` and a `<param>`, which the browser ignores: the
+/// checks read past them, so the loss beside them is found in what `html!` writes.
+#[test]
+fn the_patch_checks_read_the_void_end_tags_html_writes() {
+    let headed = html! {
+        <basefont id={HeadFontId} />
+        <SavedNote />
+        <LostRow />
+    }
+    .to_html();
+    let object = html! {
+        <SavedNote />
+        <tr id={LostRowId}>
+            <td>
+                <object type="image/svg+xml">
+                    <param name="a" value="1" />
+                    "fallback"
+                </object>
+            </td>
+        </tr>
+    }
+    .to_html();
+    for html in [headed, object] {
+        assert_eq!(crate::html::patch_problem(&html), None, "{html}");
+        let parse = crate::html::patch_parse(&html);
+        assert_eq!(parse.problem.as_deref(), Some(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#), "{html}");
+        assert_eq!(parse.unread, None, "{html}");
+    }
+}
+
+/// A patch the parse check cannot read to its end (an `<li>` closed by the next `<li>`, which
+/// `raw` markup can write) is sent, and a debug build logs where the check stopped, so it is not
+/// passed in silence.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_patch_the_parse_check_cannot_read_is_logged_in_debug_builds() {
+    use std::sync::Arc;
+    let routes = Table::new().route(
+        "/list",
+        crate::router::post(|req: Req| async move {
+            req.patch::<ForOne, AnyAnswer>(html! { <ul id={MsgId}>{crate::raw("<li>one<li>two")}</ul> })
+        }),
+    );
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let (status, _, body) = call_with(app(routes, None), "POST", "/list", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains("corten: the debug check of what the browser keeps of the patch for /list read it only up to <li> in <li>, which closes the <li> open around it"),
+        "{text}"
+    );
+}
+
+#[derive(crate::view::Id)]
+struct NoteEndId;
+
+/// Two data blocks whose text opens with `<!--<script>` and ends with `-->`, around the message:
+/// the browser reads the first block to the second's end tag, so the message is its text, which
+/// the markup does not say is not what was meant. The check stops there and a debug build logs it,
+/// rather than passing it as read (#1409).
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_patch_whose_script_text_carries_it_past_an_element_is_logged_in_debug_builds() {
+    use std::sync::Arc;
+    let routes = Table::new().route(
+        "/blocks",
+        crate::router::post(|req: Req| async move {
+            req.patch::<ForOne, AnyAnswer>(html! {
+                <script id={NoteScriptId} type="text/x-template">"<!--<script>"</script>
+                <SavedNote />
+                <script id={NoteEndId} type="text/x-template">"-->"</script>
+                <LostRow />
+            })
+        }),
+    );
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let (status, _, body) = call_with(app(routes, None), "POST", "/blocks", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        text.contains(r#"read it only up to <script id="note-script" type="text/x-template">, whose text a <!-- and a <script in it carry past its first </script>"#),
+        "{text}"
+    );
+}
+
+/// Markup placed with `raw` that the parse check does not read as the browser does is checked only
+/// up to there, and a debug build logs where it stopped rather than refusing the patch: an end tag
+/// written `</div ignored>`, which closes the `<div>` so the row after it is kept (a refusal would
+/// be a false 500); a `</bogus>` before a form's control, which a table's reading moves out of it;
+/// a `<col>` the patch ends in before its quote and `>`, which the browser drops, keeping the
+/// `<div>` whole (a refusal would be a false 500); and an `<image>`, which the browser reads as
+/// an `<img>`, dropping the row it holds (#1409).
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_patch_with_tokens_the_parse_check_does_not_read_is_sent_and_logged_in_debug_builds() {
+    use std::sync::Arc;
+    let routes = Table::new()
+        .route(
+            "/decorated",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <div id={MsgId}>{crate::raw(r#"</div ignored><tr id="kept"></tr>"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/form",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <div id={NoteEndId}>{crate::raw(r#"<form></bogus><input name="q"></form>"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/col",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! { <div id={MsgId}>{crate::raw("</div><col data-note='")}</div> })
+            }),
+        )
+        .route(
+            "/image",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <div id={MsgId}>{crate::raw(r#"</div><image id="i"><tr id="r"><td>1</td></tr></image>"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/doctype",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <div id={MsgId}>{crate::raw(r#"</div><!DOCTYPE html PUBLIC "><tr id='r'></tr>">"#)}</div>
+                })
+            }),
+        )
+        .route(
+            "/reference",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <form id={NoteEndId}>{crate::raw("&bogus;")}</form>
+                })
+            }),
+        );
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let app = app(routes, None);
+    for (path, stopped) in [
+        ("/decorated", "the patch for /decorated read it only up to the end tag </div ignored>, which is not written </name>"),
+        (
+            "/form",
+            "the patch for /form read it only up to </bogus> in <form>, which the check of what a form holds does not read",
+        ),
+        ("/col", "the patch for /col read it only up to <col data-note='</div>, a start tag the patch ends in before its >"),
+        (
+            "/image",
+            r#"the patch for /image read it only up to <image id="i">, which a browser reads as an <img>, an element with no end tag"#,
+        ),
+        (
+            "/doctype",
+            r#"the patch for /doctype read it only up to the doctype <!DOCTYPE html PUBLIC ">, which the check does not read"#,
+        ),
+        (
+            "/reference",
+            r#"the patch for /reference read it only up to &bogus; in <form id="note-end">, which the check of what a form holds does not read"#,
+        ),
+    ] {
+        let (status, _, body) = call_with(app.clone(), "POST", path, Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert!(text.contains(stopped), "{path}: {text}");
+    }
+}
+
+/// Characters past ASCII in the names, values and text of markup placed with `raw` are read
+/// without a panic, and the check reads on past them to the row the browser drops; text a
+/// `<form>` holds is read with its character references decoded, so a `&#32;`, which the browser
+/// reads as a space, is not a loss, and a `&nbsp;`, which it moves out of the form, is (#1409).
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn a_patch_s_characters_past_ascii_and_references_are_read_as_the_browser_reads_them() {
+    let routes = Table::new()
+        .route(
+            "/multibyte",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <SavedNote />
+                    <div id={NoteEndId}>
+                        {crate::raw("<span \u{e9}=\"x\" data-\u{e9}='\u{65e5}>'>\u{e9}t\u{e9}</span><x-\u{e9}>\u{65e5}</x-\u{e9}>")}
+                    </div>
+                    <LostRow />
+                })
+            }),
+        )
+        .route(
+            "/space",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <form id={NoteEndId}>{crate::raw("&#32;")}</form>
+                })
+            }),
+        )
+        .route(
+            "/nbsp",
+            crate::router::post(|req: Req| async move {
+                req.patch::<ForOne, AnyAnswer>(html! {
+                    <LostRow />
+                    <form id={NoteEndId}>{crate::raw("&nbsp;")}</form>
+                })
+            }),
+        );
+    let app = app(routes, None);
+    let (status, _, body) = call_with(app.clone(), "POST", "/multibyte", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.contains(&crate::escape(r#"<tr id="lost-row"> is dropped, since <p id="msg"> comes first"#)), "{body}");
+    let (status, _, body) = call_with(app.clone(), "POST", "/space", Some("action"), None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = call_with(app, "POST", "/nbsp", Some("action"), None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body.contains(&crate::escape(r#"<form id="note-end"> loses what it holds, since <tr id="lost-row"> comes first"#)),
+        "{body}"
+    );
+}
+
+#[derive(crate::view::Id)]
+struct CostRowId(u32);
+
+/// A patch of 50 table rows, each with three cells, one of them holding a form.
+fn fifty_rows() -> impl crate::Patch {
+    html! {
+        for n in 0..50u32 {
+            <tr id={CostRowId(n)}>
+                <td>"Item "{n}</td>
+                <td>{n * 3}</td>
+                <td><form method="post"><input type="hidden" name="row" value={n}><button>"Save"</button></form></td>
+            </tr>
+        }
+    }
+}
+
+/// What the debug check of a patch's parse costs a debug build, which every test is: a 50-row patch
+/// (`fifty_rows`) checked `PARSE_ROUNDS` times (2,000 by default), timed beside the same patch sent
+/// through `req.patch` in process, which includes one check. Run in a debug build:
+/// `cargo test -p corten-run --all-features --lib -- --ignored --exact tests::what_the_patch_parse_check_costs --nocapture`.
+#[test]
+#[ignore]
+fn what_the_patch_parse_check_costs() {
+    use std::time::Instant;
+    let rounds: u32 = std::env::var("PARSE_ROUNDS").ok().and_then(|n| n.parse().ok()).unwrap_or(2000);
+    let body = fifty_rows().to_html();
+    assert_eq!(crate::html::patch_parse_problem(&body), None);
+    let start = Instant::now();
+    for _ in 0..rounds {
+        std::hint::black_box(crate::html::patch_parse_problem(std::hint::black_box(&body)));
+    }
+    let check = start.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+    let routes =
+        Table::new().route("/", crate::router::post(|req: Req| async move { req.patch::<ForOne, AnyAnswer>(fifty_rows()) }));
+    let router = app(routes, None);
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let requests = rounds / 10;
+    let start = Instant::now();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, sent) = call(router.clone(), "POST", Some("action")).await;
+            assert!(status == StatusCode::OK && sent.len() == body.len(), "{status}");
+        }
+    });
+    let request = start.elapsed().as_secs_f64() * 1e6 / f64::from(requests);
+    println!(
+        "debug={}: {} bytes; check {check:.1} us; req.patch request {request:.1} us (the check is {:.1}% of it)",
+        cfg!(debug_assertions),
+        body.len(),
+        100.0 * check / request
+    );
+}
+
+#[cfg(debug_assertions)]
+#[tokio::test]
+#[should_panic(
+    expected = "the browser would lose part of a live fragment: <tr id=\"b\"> is dropped, since <p id=\"a\"> comes first"
+)]
+async fn a_live_fragment_the_browser_would_lose_part_of_panics_in_debug_builds() {
+    let fragment = || String::from(r#"<p id="a">1</p><tr id="b"><td>2</td></tr>"#);
+    let router = Table::new().route("/", get(move || async move { crate::live(futures_util::stream::iter([fragment()])) }));
+    let _ = call(router, "GET", None).await;
+}
+
+/// A CDATA section in an SVG `<title>`, an HTML integration point, is the title's text, as it is
+/// in any element of an `<svg>`: the id check reads past it to the id-less `<p>` after the
+/// drawing, which the browser drops (#1409).
+#[cfg(debug_assertions)]
+#[tokio::test]
+#[should_panic(expected = "a live fragment's top-level <p> has no id")]
+async fn a_live_fragment_s_element_after_cdata_in_an_svg_title_is_checked_for_its_id() {
+    let fragment = || String::from(r#"<svg id="s"><title><![CDATA[x]]></title></svg><p>lost</p>"#);
+    let router = Table::new().route("/", get(move || async move { crate::live(futures_util::stream::iter([fragment()])) }));
+    let _ = call(router, "GET", None).await;
+}
+
 #[cfg(debug_assertions)]
 #[tokio::test]
 #[should_panic(expected = "top-level text \"saved\" outside an element")]
