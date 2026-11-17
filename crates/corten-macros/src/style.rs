@@ -423,13 +423,21 @@ fn rename_names(css: &str, names: &[&str], prefix: &str, properties: bool) -> Re
             }
             // Function names can be escaped too. A var/env/attr lookup is not a position
             // option, but its fallback can name one; a URL is never an option.
-            c if !properties && ident(c) && c != b'-' => {
+            c if !properties && ident(c) => {
                 let end = css_name_end(css, i);
                 if end == i {
                     i += 1;
                     continue;
                 }
                 let function = unescape(&css[i..end]);
+                if let Some(name) = function.strip_prefix("--").filter(|name| names.contains(name)) {
+                    out.push_str(&css[copied..i]);
+                    out.push_str("--");
+                    out.push_str(prefix);
+                    out.push_str("__");
+                    out.push_str(name);
+                    copied = end;
+                }
                 i = end;
                 if b.get(i) == Some(&b'(') && function.eq_ignore_ascii_case("url") {
                     while i < b.len() && b[i] != b')' {
@@ -1595,6 +1603,8 @@ mod tests {
         let functions = scope("@position-try --above { top: 0 } .a { position-try: v\\61r(--above, --above); position-try-fallbacks: env(--above, --above), attr(--above), u\\72l(--above); }", "x").unwrap();
         assert!(functions.css.contains("v\\61r(--above, --x__above)"));
         assert!(functions.css.contains("env(--above, --x__above), attr(--above), u\\72l(--above)"));
+        let escaped = scope("@position-try --above { top: 0 } .a { position-try: \\2d \\2d above; position-try-fallbacks: var(--above, \\-\\-above) }", "x").unwrap();
+        assert!(escaped.css.contains("position-try:--x__above;position-try-fallbacks:var(--above, --x__above)"));
         assert_eq!(
             scope("@position-try --md { position-area: top } @media (--md) { .a { position-try: --md } }", "x").unwrap().media[0]
                 .1,
