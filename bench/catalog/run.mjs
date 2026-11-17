@@ -141,7 +141,8 @@ const apiBase = `http://${upstreamName}:8080`;
 function appArgs(name, source, image) {
   return ["--network", network, ...cpus.app.args, "--memory", "1g", "-p", "127.0.0.1::8080",
     "-v", `${fixtureDir}:/fixtures:ro`, "-e", `CATALOG_SOURCE=${source}`, "-e", "CATALOG_FIXTURE_PATH=/fixtures/catalog.json",
-    "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`, image];
+    "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`,
+    ...(name === `${runId}-corten` ? ["-e", "PROFILE=catalog-lean"] : []), image];
 }
 async function ready(base) {
   const deadline = Date.now() + options.startupTimeout * 1000;
@@ -256,7 +257,7 @@ try {
         log(`building ${app}`);
         const context = app === "corten" ? repo : join(repo, "bench/fullstack/apps", app);
         const dockerfile = app === "corten" ? join(here, "corten/Dockerfile") : join(context, "Dockerfile");
-        await docker(["build", "-t", entry.image, "-f", dockerfile, context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
+        await docker(["build", "-t", entry.image, "-f", dockerfile, ...(app === "corten" ? ["--build-arg", "CATALOG_LEAN=1"] : []), context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
       }
       const image = JSON.parse(await docker(["image", "inspect", entry.image]))[0];
       entry.imageId = image.Id;
