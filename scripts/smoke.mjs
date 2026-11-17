@@ -4807,8 +4807,9 @@ async function run(browser) {
   }
   // A write's own page that refuses it (422), with a field marked invalid below the fold: drawn in
   // the same document at the same address, with no history entry added, focus on that field (in
-  // view), and what the user typed into a control of the layout kept as they left it, though the
-  // layout around it is drawn anew (the brand changed).
+  // view), and what the user typed into a control of the layout kept, though the layout around it is
+  // drawn anew (the brand changed). Its caret is not asserted: the runtime keeps a selection only for
+  // the focused control, and focus is on the refused field.
   {
     const find = (/** @type {string} */ body) => body.replace(/(<header\b[^>]*>)/, '$1<input id="smoke-find" name="find" aria-label="Find">');
     const refusal = (/** @type {string} */ body, /** @type {number} */ _writes, /** @type {Record<string, string> | undefined} */ headers) =>
@@ -4817,7 +4818,6 @@ async function run(browser) {
     seen.status = 422;
     const entries = await own.evaluate(() => history.length);
     await own.fill("#smoke-find", "abcdef");
-    await own.evaluate(() => /** @type {HTMLInputElement} */ (document.getElementById("smoke-find")).setSelectionRange(2, 4));
     await own.click("main form button");
     const drawn = await own
       .waitForFunction(() => document.activeElement?.getAttribute("name") === "price", null, { timeout: 5000 })
@@ -4832,8 +4832,8 @@ async function run(browser) {
       return {
         entries: history.length,
         find: findIn?.value,
-        caret: [findIn?.selectionStart, findIn?.selectionEnd],
-        inView: !!field && field.top >= 0 && field.bottom <= innerHeight,
+        // Shown, not whole: WebKit scrolls a focused field just far enough to show part of it.
+        inView: !!field && field.bottom > 0 && field.top < innerHeight,
         scrolled: scrollY > 0,
       };
     });
@@ -4845,8 +4845,6 @@ async function run(browser) {
         shown.path === "/smoke/written" &&
         state.entries === entries &&
         state.find === "abcdef" &&
-        state.caret[0] === 2 &&
-        state.caret[1] === 4 &&
         state.inView &&
         state.scrolled,
       JSON.stringify({ drawn, shown, entries, state }),
