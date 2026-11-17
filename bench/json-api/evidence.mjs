@@ -180,6 +180,7 @@ export function replayTimedRun(run, expected, options, load, tools, context, nat
   const cold = load(run.cold.raw);
   same(verifyCold(cold, expected, options, context), run.cold.result, "v2 cold differs from raw");
   const observations = {}, loadIds = new Set(), previousCounters = {}; let priorTailUnobserved = false;
+  let timedUpstreamLife;
   let previousReads = cold.upstreamReads.after, previousEnd = Date.parse(cold.result.first200At), appId = cold.runtime.containerId;
   for (const phase of ["warmup", ...phases]) {
     const saved = phase === "warmup" ? run.warmup : run.phases?.[phase];
@@ -206,6 +207,7 @@ export function replayTimedRun(run, expected, options, load, tools, context, nat
       if (phase !== "fixed") assert.equal(load.bytes(raw.files.stdout, captureLimits.auxiliaryBytes).length, 0, "closed native stdout not empty");
       const stream = phase === "fixed" ? load.stream?.(raw.eventStream) : undefined;
       const derived = deriveProductionPhase(raw, expected, phase, options, tools, context, { stream, native, priorTailUnobserved });
+      timedUpstreamLife = raw.after.liveness.upstream;
       same(saved.metrics, derived, `${phase} saved metrics differ from independent raw replay`);
       for (const [role, counter] of Object.entries(raw.counters)) {
         if (previousCounters[role] !== undefined) assert.ok(counter.before >= previousCounters[role], "CPU counters reset between phases");
@@ -223,5 +225,5 @@ export function replayTimedRun(run, expected, options, load, tools, context, nat
     && Number.isSafeInteger(tail.afterStopAt) && tail.afterStopAt >= tail.beforeStopAt, "missing/invalid app cleanup read window");
   assert.ok(tail.afterStopAt <= Date.parse(context.runFinishedAt), "teardown outside terminal run clock");
   return { pass: run.pass, phases: observations, window: { appId, startedAt: Date.parse(cold.result.containerStartedAt), finishedAt: tail.afterStopAt,
-    upstreamLife: cold.upstreamLife, readsBefore: cold.upstreamReads.before, readsAfter: tail.after } };
+    upstreamLife: timedUpstreamLife, readsBefore: cold.upstreamReads.before, readsAfter: tail.after } };
 }
