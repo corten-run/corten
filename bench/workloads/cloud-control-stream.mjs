@@ -1,7 +1,8 @@
 // One supervised SSH stream. No provider, shell payload, reconnect or status server.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, writeSync } from "node:fs";
+import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, opendirSync, readSync, renameSync, writeSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
 import { durable, digest, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { streamLimits, verifyApparatus } from "./isolated/control-stream.mjs";
@@ -16,12 +17,57 @@ function monitorRegistration(local, state) {
   return value;
 }
 
-function auditSubject(local, intent, commit) {
-  const prefix = intent.group === "json-api" ? "json" : "mixed", path = join(local, "monitor-audit-" + intent.group, prefix + "-audit-subject.json");
+function auditSubject(local, intent, commit, directory = join(local, "monitor-audit-" + intent.group)) {
+  const prefix = intent.group === "json-api" ? "json" : "mixed", path = join(directory, prefix + "-audit-subject.json");
   const subject = JSON.parse(regular(path, streamLimits.deliveryBytes)), { subjectSha256, ...body } = subject;
   assert.equal(subject.schema, "benchmark-" + prefix + "-audit-subject/v1"); assert.equal(subject.commit, commit);
   assert.equal(subjectSha256, intent.subjectSha256); assert.equal(deploymentSha256(body), subjectSha256);
   return subject;
+}
+
+// Transfer custody only. This does not approve the subject or attest its builds.
+export function verifyAuditInventory(subject, group, files) {
+  assert.ok(["json-api", "mixed-production"].includes(group));
+  const source = group === "json-api" ? "audit-sources" : "mixed-audit-sources";
+  const { sha256, ...manifest } = subject.sourcesManifest;
+  assert.equal(deploymentSha256(manifest), sha256, "audit manifest hash differs");
+  const { entries } = manifest.snapshot;
+  assert.ok(Array.isArray(entries) && entries.length <= streamLimits.auditFiles + 3);
+  assert.equal(deploymentSha256(entries), manifest.snapshot.sha256, "audit snapshot hash differs");
+  const seen = new Set(), directories = []; let count = 0, total = 0;
+  for (const entry of entries) {
+    assert.ok(!seen.has(entry.path), "duplicate audit snapshot path"); seen.add(entry.path);
+    if (entry.type === "directory") {
+      assert.ok(["", "blobs", ...(group === "mixed-production" ? ["contexts"] : [])].includes(entry.path));
+      directories.push(entry.path ? source + "/" + entry.path : source);
+    } else {
+      assert.equal(entry.type, "file");
+      assert.match(entry.path, /^(?:blobs\/[a-f0-9]{64}|contexts\/[a-z][a-z0-9-]*\.tar)$/);
+      assert.ok(group === "mixed-production" || entry.path.startsWith("blobs/"));
+      assert.ok(Number.isSafeInteger(entry.bytes) && entry.bytes >= 0 && entry.bytes <= streamLimits.auditFileBytes);
+      assert.match(entry.sha256, /^[a-f0-9]{64}$/);
+      const actual = files.get(source + "/" + entry.path);
+      assert.equal(actual?.bytes, entry.bytes, "audit source size/inventory differs");
+      assert.equal(actual.sha256, entry.sha256, "audit source hash differs");
+      total += entry.bytes; count++;
+    }
+  }
+  assert.ok(seen.has("") && seen.has("blobs"));
+  for (const entry of entries.filter((e) => e.type === "file")) assert.ok(seen.has(dirname(entry.path).replaceAll("\\", "/")));
+  assert.ok(total <= streamLimits.auditBytes && count < streamLimits.auditFiles);
+  assert.equal(files.size, count + 1, "audit export inventory differs");
+  return directories.sort((a, b) => a.length - b.length);
+}
+
+function auditStat(stat) {
+  assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1, "audit file alias/type");
+  return [stat.dev, stat.ino, stat.mode, stat.nlink, stat.size, stat.mtimeMs, stat.ctimeMs];
+}
+
+function auditDirectory(path) {
+  physical(dirname(path));
+  if (lstatSync(path, { throwIfNoEntry: false }) === undefined) mkdirSync(path, { mode: 0o700 });
+  physical(path);
 }
 
 export function localStreamStatus(local) {
@@ -114,6 +160,7 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
   }
   function fail() {
     if (settled || closing) return;
+    if (file) { closeSync(file.fd); file = undefined; }
     closing = true; revoke(); clearInterval(timer); child?.stdin.destroy();
     // Closing input requests cooperative EOF only. No guessed remote/local kill.
     readyReject(uncertain());
@@ -143,28 +190,69 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
       else if (kind === "audit-begin") {
         assert.equal(audit, undefined); assert.ok(["json-api", "mixed-production"].includes(payload.group));
         assert.match(payload.campaign, /^r[1-9]\d*-[a-f0-9]{16}$/); assert.match(payload.subjectSha256, /^[a-f0-9]{64}$/);
-        audit = payload; auditBytes = 0; append(frame);
+        const root = join(local, "monitor-audit-" + payload.group), stage = root + ".partial";
+        assert.equal(lstatSync(root, { throwIfNoEntry: false }), undefined, "audit export already exists");
+        mkdirSync(stage, { mode: 0o700 }); physical(stage);
+        audit = { ...payload, root, stage, files: new Map() }; auditBytes = 0; append(frame);
       } else if (kind === "audit-file") {
         assert.ok(audit && !file && payload.group === audit.group);
         const prefix = audit.group === "json-api" ? "json" : "mixed", source = prefix === "json" ? "audit-sources" : "mixed-audit-sources";
-        assert.ok(payload.path === `${prefix}-audit-subject.json` || payload.path.startsWith(`${source}/`));
-        assert.ok(payload.path.split("/").every((p) => /^[A-Za-z0-9_.-]+$/.test(p) && ![".", ".."].includes(p)));
-        assert.ok(Number.isSafeInteger(payload.bytes) && payload.bytes >= 0 && payload.bytes <= streamLimits.auditBytes); assert.match(payload.sha256, /^[a-f0-9]{64}$/);
-        file = { ...payload, blocks: [], size: 0 };
+        const subject = payload.path === prefix + "-audit-subject.json";
+        assert.ok(subject || payload.path.startsWith(source + "/") && /^(?:blobs\/[a-f0-9]{64}|contexts\/[a-z][a-z0-9-]*\.tar)$/.test(payload.path.slice(source.length + 1)));
+        assert.ok(audit.files.size < streamLimits.auditFiles && !audit.files.has(payload.path), "duplicate/excess audit file");
+        assert.ok(Number.isSafeInteger(payload.bytes) && payload.bytes >= 0 && payload.bytes <= (subject ? streamLimits.deliveryBytes : streamLimits.auditFileBytes));
+        assert.match(payload.sha256, /^[a-f0-9]{64}$/);
+        auditBytes += payload.bytes; assert.ok(auditBytes <= streamLimits.auditBytes, "audit byte limit");
+        const path = join(audit.stage, payload.path);
+        if (!subject) { auditDirectory(join(audit.stage, source)); auditDirectory(dirname(path)); }
+        physical(dirname(path));
+        const out = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW ?? 0), 0o600);
+        file = { ...payload, path, fd: out, hash: createHash("sha256"), size: 0 };
       } else if (kind === "audit-data") {
         assert.ok(file && payload.offset === file.size); assert.match(payload.data, /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
-        const data = Buffer.from(payload.data, "base64"); file.size += data.length; auditBytes += data.length;
-        assert.ok(file.size <= file.bytes && auditBytes <= streamLimits.auditBytes); file.blocks.push(data);
+        const data = Buffer.from(payload.data, "base64");
+        assert.ok(data.length > 0 && data.length <= streamLimits.auditChunkBytes && data.toString("base64") === payload.data);
+        file.size += data.length; assert.ok(file.size <= file.bytes);
+        let offset = 0; while (offset < data.length) { const n = writeSync(file.fd, data, offset); assert.ok(n > 0); offset += n; }
+        file.hash.update(data);
       } else if (kind === "audit-file-end") {
-        assert.ok(file && file.size === file.bytes); const data = Buffer.concat(file.blocks); assert.equal(digest(data), file.sha256);
-        const root = join(local, `monitor-audit-${audit.group}`), path = resolve(root, file.path);
-        assert.ok(!relative(root, path).startsWith("..")); mkdirSync(dirname(path), { recursive: true, mode: 0o700 }); physical(dirname(path)); durable(path, data); file = undefined;
+        assert.ok(file && file.size === file.bytes); assert.equal(file.hash.digest("hex"), file.sha256);
+        fsyncSync(file.fd); physical(dirname(file.path));
+        const identity = auditStat(fstatSync(file.fd)); assert.deepEqual(auditStat(lstatSync(file.path)), identity);
+        assert.equal(identity[4], file.bytes);
+        audit.files.set(relative(audit.stage, file.path).replaceAll("\\", "/"), { bytes: file.bytes, sha256: file.sha256, identity });
+        closeSync(file.fd); file = undefined;
       } else if (kind === "audit-end") {
         assert.ok(audit && !file && payload.group === audit.group && payload.subjectSha256 === audit.subjectSha256);
-        auditSubject(local, audit, expected.binding.commit);
-        durable(join(local, `monitor-audit-${audit.group}-ready.json`), JSON.stringify(audit)); append(frame); audit = undefined;
+        const subject = auditSubject(local, audit, expected.binding.commit, audit.stage);
+        const directories = verifyAuditInventory(subject, audit.group, audit.files);
+        for (const name of directories) auditDirectory(join(audit.stage, name));
+        const present = new Set();
+        function inventory(path, key = "") {
+          physical(path); const dir = opendirSync(path);
+          try {
+            let entry; while ((entry = dir.readSync())) {
+              const name = key ? key + "/" + entry.name : entry.name, target = join(path, entry.name);
+              if (directories.includes(name)) inventory(target, name);
+              else {
+                assert.ok(audit.files.has(name), "unexpected audit export member");
+                assert.deepEqual(auditStat(lstatSync(target)), audit.files.get(name).identity, "audit export changed");
+                present.add(name);
+              }
+            }
+          } finally { dir.closeSync(); }
+          syncDirectory(path);
+        }
+        inventory(audit.stage);
+        assert.equal(present.size, audit.files.size, "audit export member disappeared");
+        assert.equal(lstatSync(audit.root, { throwIfNoEntry: false }), undefined);
+        append(frame);
+        renameSync(audit.stage, audit.root); syncDirectory(local);
+        const { campaign, group, subjectSha256 } = audit;
+        durable(join(local, `monitor-audit-${audit.group}-ready.json`), JSON.stringify({ campaign, group, subjectSha256 })); audit = undefined;
       } else if (kind === "delivery-sealed") append(frame);
       else if (kind === "terminal") {
+        assert.equal(audit, undefined, "terminal with incomplete audit export");
         assert.equal(payload.id, expected.id); assert.equal(payload.nativeTerminal, true); assert.match(payload.sealSha256, /^[a-f0-9]{64}$/);
         terminal = payload; append(frame); send("close", {}); child.stdin.end();
       } else assert.fail("unknown control stream frame");
@@ -184,6 +272,7 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
       const late = settled;
       clearInterval(timer); clearTimeout(timer); settled = true;
       try {
+        if (file) { closeSync(file.fd); file = undefined; }
         const closedAtMs = Date.now();
         durable(join(local, "monitor-local-closed.json"), JSON.stringify({ id: expected.id, binding: expected.binding,
           code, signal, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs }));

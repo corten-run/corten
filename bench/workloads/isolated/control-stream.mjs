@@ -7,7 +7,8 @@ import { processStat } from "./host-observation.mjs";
 import { socketProof } from "../cloud-control-session.mjs";
 
 export const streamLimits = Object.freeze({ leaseMs: 15000, challengeMs: 1000, maximumMs: 48 * 60 * 60 * 1000,
-  frameBytes: 65536, journalBytes: 64 * 1024 * 1024, auditBytes: 24 * 1024 * 1024, deliveryBytes: 16 * 1024 * 1024,
+  frameBytes: 65536, journalBytes: 64 * 1024 * 1024, auditBytes: 256 * 1024 * 1024, auditFileBytes: 128 * 1024 * 1024,
+  auditFiles: 8192, auditChunkBytes: 32768, deliveryBytes: 16 * 1024 * 1024,
   frames: 100000, sampleGapMs: 2000 });
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export const streamHash = (value) => hash(JSON.stringify(value));

@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { registration, binding } from "./test-fixtures/control-stream-fixture.mjs";
-import { localStreamStatus, queueStreamAudit, streamRecoveryReady } from "./cloud-control-stream.mjs";
+import { localStreamStatus, queueStreamAudit, streamRecoveryReady, verifyAuditInventory } from "./cloud-control-stream.mjs";
 import { shellTransport } from "./cloud-transport.mjs";
 import { auditProtocol } from "./cloud-audit.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
-import { digest } from "./cloud-local.mjs";
+import { digest, fileHash } from "./cloud-local.mjs";
+import { streamLimits } from "./isolated/control-stream.mjs";
+
+function manifest(entries = [{ path: "", type: "directory" }, { path: "blobs", type: "directory" }]) {
+  const body = { files: [], snapshot: { entries, sha256: deploymentSha256(entries) } };
+  return { ...body, sha256: deploymentSha256(body) };
+}
 
 function fixture(t, { autoClose = true, sealExec } = {}) {
   const local = mkdtempSync(join(tmpdir(), "corten-control-wire-")), child = new EventEmitter(), input = [], calls = [];
@@ -92,7 +99,7 @@ test("late close is actual local evidence even after the foreground lost the lea
 
 test("paused audit material and approved delivery use the same existing stream, never another process or channel", async (t) => {
   const f = fixture(t), result = await f.ready, group = "json-api", campaign = "r21-0123456789abcdef", protocol = auditProtocol(group);
-  const body = { schema: "benchmark-json-audit-subject/v1", commit: binding.commit, campaignSha256: "f".repeat(64), identities: protocol.members };
+  const body = { schema: "benchmark-json-audit-subject/v1", commit: binding.commit, campaignSha256: "f".repeat(64), identities: protocol.members, sourcesManifest: manifest() };
   const subjectSha256 = deploymentSha256(body), bytes = Buffer.from(JSON.stringify({ ...body, subjectSha256 }));
   f.frame("audit-begin", { campaign, group, subjectSha256 });
   f.frame("audit-file", { group, path: "json-audit-subject.json", bytes: bytes.length, sha256: digest(bytes) });
@@ -116,3 +123,72 @@ test("paused audit material and approved delivery use the same existing stream, 
   assert.equal(f.calls.length, 1); assert.throws(() => queueStreamAudit(f.local, state, { deliverAudit: path, campaign, auditGroup: group, approveSubject: subjectSha256 }, digest(readFileSync(path))));
   f.close(255); await result.monitor.done;
 });
+
+function packet(f, content = Buffer.from("source"), count = 1) {
+  const group = "mixed-production", campaign = "r21-0123456789abcdef", path = "mixed-audit-sources/contexts/corten.tar";
+  const hash = createHash("sha256"); for (let i = 0; i < count; i++) hash.update(content);
+  const row = { path: "contexts/corten.tar", type: "file", bytes: content.length * count, sha256: hash.digest("hex") };
+  const body = { schema: "benchmark-mixed-audit-subject/v1", commit: binding.commit,
+    sourcesManifest: manifest([{ path: "", type: "directory" }, { path: "blobs", type: "directory" }, { path: "contexts", type: "directory" }, row]) };
+  const subjectSha256 = deploymentSha256(body), subject = Buffer.from(JSON.stringify({ ...body, subjectSha256 }));
+  const intent = { group, campaign, subjectSha256 };
+  const header = { group, path, bytes: row.bytes, sha256: row.sha256 };
+  const sendFile = (header, value, count = 1) => {
+    f.frame("audit-file", header);
+    for (let i = 0; i < count; i++) f.frame("audit-data", { offset: i * value.length, data: value.toString("base64") });
+    f.frame("audit-file-end", {});
+  };
+  const begin = () => { f.frame("audit-begin", intent); sendFile({ group, path: "mixed-audit-subject.json", bytes: subject.length, sha256: digest(subject) }, subject); };
+  return { intent, header, begin, sendFile, finish: () => f.frame("audit-end", { group, subjectSha256 }) };
+}
+
+test("audit receiver streams a 32MiB context beyond the original 24MiB gate and atomically publishes complete custody", async (t) => {
+  const f = fixture(t), result = await f.ready, block = Buffer.alloc(streamLimits.auditChunkBytes, 97), count = 1024;
+  const p = packet(f, block, count), ready = join(f.local, "monitor-audit-mixed-production-ready.json");
+  p.begin(); assert.equal(existsSync(ready), false); p.sendFile(p.header, block, count);
+  assert.equal(existsSync(ready), false); assert.equal(existsSync(join(f.local, "monitor-audit-mixed-production")), false);
+  p.finish(); assert.ok(existsSync(ready)); assert.equal(existsSync(join(f.local, "monitor-audit-mixed-production.partial")), false);
+  assert.equal(fileHash(join(f.local, "monitor-audit-mixed-production", p.header.path), p.header.bytes), p.header.sha256);
+  assert.equal(f.calls.length, 1); f.close(255); await result.monitor.done;
+});
+
+test("audit inventory rejects aggregate and file-count bounds without allocating the declared content", () => {
+  for (const mode of ["aggregate", "count"]) {
+    const rows = Array.from({ length: mode === "aggregate" ? 3 : streamLimits.auditFiles }, (_, i) => ({
+      path: "contexts/app-" + i + ".tar", type: "file", bytes: mode === "aggregate" ? streamLimits.auditFileBytes : 0, sha256: "a".repeat(64) }));
+    const subject = { sourcesManifest: manifest([{ path: "", type: "directory" }, { path: "blobs", type: "directory" }, { path: "contexts", type: "directory" }, ...rows]) };
+    const files = new Map(rows.map((row) => ["mixed-audit-sources/" + row.path, row])); files.set("mixed-audit-subject.json", {});
+    assert.throws(() => verifyAuditInventory(subject, "mixed-production", files));
+  }
+});
+
+for (const mode of ["disconnect", "terminal", "truncated", "hash", "missing", "extra", "oversize", "chunk", "duplicate", "replaced", "hardlink", "alias", "partial"]) {
+  test("audit payload intentional negative: " + mode, async (t) => {
+    const f = fixture(t), result = await f.ready, value = Buffer.from("source"), p = packet(f, value);
+    const stage = join(f.local, "monitor-audit-mixed-production.partial"), target = join(stage, p.header.path);
+    if (mode === "partial") mkdirSync(stage);
+    p.begin();
+    if (mode === "disconnect") { f.frame("audit-file", p.header); f.frame("audit-data", { offset: 0, data: "cw==" }); f.close(255); }
+    else if (mode === "terminal") f.frame("terminal", { id: registration.id, nativeTerminal: true, sealSha256: "f".repeat(64) });
+    else if (mode === "truncated") { f.frame("audit-file", p.header); f.frame("audit-file-end", {}); }
+    else if (mode === "hash") p.sendFile({ ...p.header, sha256: "0".repeat(64) }, value);
+    else if (mode === "missing") p.finish();
+    else if (mode === "extra") { p.sendFile(p.header, value); p.sendFile({ ...p.header, path: "mixed-audit-sources/contexts/extra.tar" }, value); p.finish(); }
+    else if (mode === "oversize") f.frame("audit-file", { ...p.header, bytes: streamLimits.auditFileBytes + 1 });
+    else if (mode === "chunk") { f.frame("audit-file", { ...p.header, bytes: 65536 }); f.frame("audit-data", { offset: 0, data: Buffer.alloc(32769).toString("base64") }); }
+    else if (mode === "duplicate") { p.sendFile(p.header, value); f.frame("audit-file", p.header); }
+    else if (mode === "replaced" || mode === "hardlink") {
+      p.sendFile(p.header, value);
+      if (mode === "hardlink") linkSync(target, join(f.local, "second-link")); else writeFileSync(target, "tamper");
+      p.finish();
+    } else if (mode === "alias") {
+      const outside = join(f.local, "outside"); mkdirSync(outside); mkdirSync(join(stage, "mixed-audit-sources"));
+      symlinkSync(outside, join(stage, "mixed-audit-sources/contexts"), process.platform === "win32" ? "junction" : "dir");
+      f.frame("audit-file", p.header);
+    }
+    const done = await result.monitor.done;
+    assert.equal(done.terminal, false); assert.equal(done.publicationRevoked, true);
+    assert.equal(existsSync(join(f.local, "monitor-audit-mixed-production-ready.json")), false);
+    assert.equal(existsSync(join(f.local, "monitor-audit-mixed-production")), false);
+  });
+}

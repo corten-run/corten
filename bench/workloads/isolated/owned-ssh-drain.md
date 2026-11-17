@@ -75,6 +75,32 @@ foreground launch retains the existing operation/launch custody until the stream
 An unresolved reservation prevents another launch; the legacy `--detach` spelling
 now stays foreground for this supervised path. It is not connection-independent.
 
+Audit export uses the existing typed frames, with 32KiB decoded data chunks, at most
+8192 files including the subject, 128MiB per source file and 256MiB total including
+the subject. The small subject/approval limit remains 16MiB. The guardian compares
+the exact private source inventory with the subject snapshot, opens each file with
+no-follow/nonblocking flags, incrementally hashes its actual bytes and checks stable
+file identity before emitting its end frame. It never reads a context archive whole.
+The receiver writes exclusive private partial files with incremental hashing, fsyncs
+completed files and validates the subject, manifest, snapshot and complete saved
+inventory before renaming the partial directory and publishing its ready marker.
+Wrong/missing/extra/replaced/aliased files, truncation and disconnect leave no ready
+marker. Partial exports are retained and cannot be adopted or retried in place.
+Export custody is not independent source/build audit approval.
+
+The audit wait remains 24 hours and the guardian select wait remains 50ms. Writable
+output normally returns immediately; there is no intentional per-chunk sleep. The
+retained mixed packet used to reproduce the old limit contains 121812613 bytes
+including its subject, 4184 files and 15632 payload frames. A conservative one
+50ms wait per frame accounts for 781.6 seconds of scheduling, not a network
+throughput guarantee. Disk/backpressure, progress traffic and human review consume
+the same unchanged deadline; an incomplete transfer never extends it or qualifies.
+With six-digit frame sequences, payload framing is at most 165553126 wire bytes
+(excluding monitoring traffic), with a largest frame of 43850 bytes below the
+unchanged 65536-byte frame cap. Payload alone therefore needs about 1917 wire
+bytes/second averaged over the entire audit wait; usable transfer must also leave
+time for review. Portable disk/fixture results do not certify native SSH throughput.
+
 A challenged 15-second local-monitor lease is checked by both the guardian and an
 independent campaign watchdog. Lease loss or apparatus change permanently invalidates
 publication and triggers existing bounded native cancellation. It cannot resume a
@@ -207,5 +233,10 @@ campaign/admission/host verification. Its pure verifiers execute during replay.
 be captured: its Python bytes are hashed during saved replay, not executed there.
 Producer-only modules are `cloud-control-stream.mjs` (also a literal dynamic import of
 `cloud-transport.mjs`) and `isolated/control-stream-remote.mjs` (campaign entry).
+The Python source module imports `isolated/control-stream.mjs` for its literal audit
+bounds, adding that replay import edge but no new production module. The read-only
+`test-fixtures/control-stream-material.py` fixture is test-only, never saved replay;
+on Windows it models Linux private permission bits/no-follow availability rather
+than claiming to qualify those native filesystem guarantees.
 The new stream fixture/kernel and stream test modules are test-only. Parent integration
 must recompute exact immutable closure; no inventory allowlist or resource cap is edited.

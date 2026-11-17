@@ -15,9 +15,13 @@ binding = {'round': 'r21', 'commit': 'a' * 40, 'token': token, 'helperSha256': h
 host = {'hostname': 'synthetic-host', 'bootId': '01234567-89ab-cdef-0123-456789abcdef'}
 campaign, subject = 'r21-0123456789abcdef', 'e' * 64
 folder = '/bench/campaign/' + campaign
+blob = b'fixed source material'
+blob_hash = hashlib.sha256(blob).hexdigest()
+entries = [{'path': '', 'type': 'directory'}, {'path': 'blobs', 'type': 'directory'},
+           {'path': 'blobs/' + blob_hash, 'type': 'file', 'bytes': len(blob), 'sha256': blob_hash}]
 data = {root + '/helper.py': source.encode(), root + '/binding.json': json.dumps(binding).encode(),
-        folder + '/json-audit-subject.json': json.dumps({'subjectSha256': subject, 'commit': binding['commit']}).encode(),
-        folder + '/audit-sources/source.txt': b'fixed source material'}
+        folder + '/json-audit-subject.json': json.dumps({'subjectSha256': subject, 'commit': binding['commit'], 'sourcesManifest': {'snapshot': {'entries': entries}}}).encode(),
+        folder + '/audit-sources/blobs/' + blob_hash: blob}
 rows, descriptors, incoming, output, pinned = {}, {}, bytearray(), [], []
 clock, next_fd = 1000000, 2
 session = '/user.slice/user-0.slice/session-7.scope'
@@ -47,7 +51,7 @@ class Path:
     def is_relative_to(self, other): return self.value.startswith(str(other) + '/')
     def relative_to(self, other): return self.value[len(str(other)) + 1:]
     def is_symlink(self): return False
-    def is_dir(self): return self.value == folder or self.value == folder + '/audit-sources'
+    def is_dir(self): return self.value in (folder, folder + '/audit-sources', folder + '/audit-sources/blobs')
     def exists(self): return self.value in data or self.is_dir() or self.value == '/sys/fs/cgroup' + session
     def rglob(self, pattern): return [Path(p) for p in sorted(data) if p.startswith(self.value + '/')]
     def iterdir(self):
@@ -55,7 +59,8 @@ class Path:
         parts = self.value.split('/')
         if self.name == 'task': return [Path(self.value + '/' + parts[2])]
         if self.name == 'fd': return [Path(self.value + '/3')] if int(parts[2]) in (10, 20) else []
-        return [Path(p) for p in data if p.rsplit('/', 1)[0] == self.value]
+        names = {p[len(self.value) + 1:].split('/')[0] for p in data if p.startswith(self.value + '/')}
+        return [Path(self.value + '/' + p) for p in sorted(names)]
     def read_text(self):
         if self.value == '/proc/sys/kernel/hostname': return host['hostname'] + '\n'
         if self.value == '/proc/sys/kernel/random/boot_id': return host['bootId'] + '\n'
@@ -70,6 +75,7 @@ class Path:
         if self.name == 'cmdline': return rows[int(self.value.split('/')[2])]['cmdline']
         return data[self.value]
     def stat(self): return types.SimpleNamespace(st_dev=1, st_ino=int(self.value.split('/')[2]) + 100)
+    def lstat(self): return file_stat(self.value, self.is_dir())
 
 def encoded(value): return scope['encoded'](value)
 def put(name, value): data[root + '/' + name] = encoded(value)
@@ -114,9 +120,10 @@ def opened(path, flags, *args):
     if flags & 64:
         assert name not in data; data[name] = b''
     next_fd += 1; descriptors[next_fd] = {'path': name, 'offset': 0}; return next_fd
-def fstat(fd):
-    size = len(data.get(descriptors[fd]['path'], b''))
-    return types.SimpleNamespace(st_dev=1, st_ino=fd, st_size=size, st_uid=0, st_mode=stat.S_IFREG | 0o600, st_nlink=1, st_mtime_ns=1)
+def file_stat(path, directory=False):
+    return types.SimpleNamespace(st_dev=1, st_ino=int(hashlib.sha256(path.encode()).hexdigest()[:8], 16), st_size=len(data.get(path, b'')), st_uid=0,
+        st_mode=(stat.S_IFDIR | 0o700) if directory else (stat.S_IFREG | 0o600), st_nlink=1, st_mtime_ns=1, st_ctime_ns=1)
+def fstat(fd): return file_stat(descriptors[fd]['path'])
 def raw_read(fd, length):
     if fd == 0:
         result = bytes(incoming[:length]); del incoming[:length]; return result
@@ -138,9 +145,13 @@ def select(readers, writers, errors, timeout):
     clock += 100000000
     assert clock < 30000000000, 'fixture producer did not terminate'
     return ([0] if incoming else [], writers, [])
+class Scan:
+    def __init__(self, path): self.path = path
+    def __enter__(self): return iter(self.path.iterdir())
+    def __exit__(self, *args): return False
 fake_os = types.SimpleNamespace(getuid=lambda: 0, getpid=lambda: 21, uname=lambda: types.SimpleNamespace(nodename=host['hostname']), environ={'SSH_CONNECTION': '192.0.2.20 40000 192.0.2.10 22'},
-    readlink=readlink, sched_setaffinity=pin, open=opened, fstat=fstat, read=raw_read, write=raw_write, replace=replace, fsync=lambda fd: None,
-    close=lambda fd: None, set_blocking=lambda fd, value: None, O_RDONLY=0, O_WRONLY=1, O_CREAT=64, O_EXCL=128, O_NOFOLLOW=256, O_DIRECTORY=512)
+    readlink=readlink, sched_setaffinity=pin, scandir=Scan, open=opened, fstat=fstat, read=raw_read, write=raw_write, replace=replace, fsync=lambda fd: None,
+    close=lambda fd: None, set_blocking=lambda fd, value: None, O_RDONLY=0, O_WRONLY=1, O_CREAT=64, O_EXCL=128, O_NOFOLLOW=256, O_DIRECTORY=512, O_NONBLOCK=1024)
 scope.update({'os': fake_os, 'pathlib': types.SimpleNamespace(Path=Path), 'private': lambda p: None, 'read': read, 'write': write,
               'time': types.SimpleNamespace(monotonic_ns=lambda: clock)})
 sys.modules['select'] = types.SimpleNamespace(select=select)

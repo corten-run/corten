@@ -1,4 +1,5 @@
 // Included in measured guardian bytes, never a remote-selected import.
+import { streamLimits } from "./control-stream.mjs";
 export default String.raw`
 def stream_replace(path, value):
     stage = path.parent / ('.stage-' + secrets.token_hex(16))
@@ -115,20 +116,77 @@ def stream_material(root, state):
     folder = pathlib.Path('/bench/campaign') / campaign
     private(folder)
     source = 'audit-sources' if group == 'json-api' else 'mixed-audit-sources'
-    paths = [folder / (prefix + '-audit-subject.json')] + sorted((folder / source).rglob('*'))
-    total = 0
+    subject_path = folder / (prefix + '-audit-subject.json')
+    subject_bytes = read(subject_path, 16777216)
+    subject = json.loads(subject_bytes)
+    assert subject['subjectSha256'] == state['subjectSha256']
+    entries = subject['sourcesManifest']['snapshot']['entries']
+    assert isinstance(entries, list) and len(entries) <= ${streamLimits.auditFiles} + 3
+    expected, directories, seen = {}, set(), set()
+    for row in entries:
+        name = row['path']
+        assert name not in seen
+        seen.add(name)
+        if row['type'] == 'directory':
+            assert name in ('', 'blobs', 'contexts') and (group == 'mixed-production' or name != 'contexts')
+            directories.add(name)
+        else:
+            assert row['type'] == 'file' and re.fullmatch(r'(?:blobs/[a-f0-9]{64}|contexts/[a-z][a-z0-9-]*\.tar)', name)
+            assert group == 'mixed-production' or name.startswith('blobs/')
+            assert isinstance(row['bytes'], int) and 0 <= row['bytes'] <= ${streamLimits.auditFileBytes} and re.fullmatch(r'[a-f0-9]{64}', row['sha256'])
+            expected[source + '/' + name] = row
+    assert '' in directories and 'blobs' in directories and len(expected) < ${streamLimits.auditFiles}
+    paths, total = [subject_path], len(subject_bytes)
+    visited = set()
+    def walk(directory, name):
+        assert name in directories and name not in visited
+        visited.add(name)
+        private(directory)
+        with os.scandir(directory) as items:
+            for item in items:
+                path = directory / item.name
+                info = path.lstat()
+                assert not stat.S_ISLNK(info.st_mode)
+                if stat.S_ISDIR(info.st_mode):
+                    walk(path, str(path.relative_to(folder / source)))
+                else:
+                    assert stat.S_ISREG(info.st_mode) and len(paths) < ${streamLimits.auditFiles} and str(path.relative_to(folder)) in expected
+                    paths.append(path)
+    walk(folder / source, '')
+    assert visited == directories
+    assert {str(path.relative_to(folder)) for path in paths[1:]} == set(expected), 'audit inventory differs from subject'
+    for path in paths[1:]:
+        info = path.lstat()
+        assert 0 <= info.st_size <= ${streamLimits.auditFileBytes}
+        total += info.st_size
+    assert total <= ${streamLimits.auditBytes}
+    def stable(info):
+        return tuple(getattr(info, key) for key in ('st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_uid', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
     yield ('audit-begin', state)
-    for path in paths:
-        assert not path.is_symlink() and path.resolve().is_relative_to(folder)
-        if path.is_dir():
-            continue
-        value = read(path, 24 * 1024 * 1024)
-        total += len(value)
-        assert total <= 24 * 1024 * 1024
-        yield ('audit-file', {'group': group, 'path': str(path.relative_to(folder)), 'bytes': len(value), 'sha256': sha(value)})
-        for offset in range(0, len(value), 32768):
-            yield ('audit-data', {'offset': offset, 'data': base64.b64encode(value[offset:offset + 32768]).decode('ascii')})
-        yield ('audit-file-end', {})
+    for path in [paths[0]] + sorted(paths[1:]):
+        private(path.parent)
+        before, name = path.lstat(), str(path.relative_to(folder))
+        assert path.resolve().is_relative_to(folder)
+        assert stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_uid == os.getuid() and before.st_mode & 0o077 == 0
+        wanted = {'bytes': len(subject_bytes), 'sha256': sha(subject_bytes)} if path == subject_path else expected[name]
+        assert before.st_size == wanted['bytes']
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            assert stable(os.fstat(fd)) == stable(before)
+            yield ('audit-file', {'group': group, 'path': name, 'bytes': before.st_size, 'sha256': wanted['sha256']})
+            offset, hashed = 0, hashlib.sha256()
+            while offset < before.st_size:
+                value = os.read(fd, min(${streamLimits.auditChunkBytes}, before.st_size - offset))
+                assert value, 'truncated audit source'
+                hashed.update(value)
+                yield ('audit-data', {'offset': offset, 'data': base64.b64encode(value).decode('ascii')})
+                offset += len(value)
+            assert not os.read(fd, 1) and hashed.hexdigest() == wanted['sha256'], 'audit source hash differs'
+            private(path.parent)
+            assert stable(os.fstat(fd)) == stable(before) == stable(path.lstat()), 'audit source changed'
+            yield ('audit-file-end', {})
+        finally:
+            os.close(fd)
     yield ('audit-end', {'group': group, 'subjectSha256': state['subjectSha256']})
 
 
