@@ -55,17 +55,23 @@ async fn json(State(source): State<Source>, Params(at): Params<api::Record<'_>>)
     Ok(Json(source.record(&at.id).await?.ok_or_else(corten::Error::not_found)?))
 }
 
-fn app(source: Source) -> App {
-    App::new(routes::router(source.clone()))
+fn app(source: Source, lean: bool) -> App {
+    let app = App::new(routes::router(source.clone()))
         .api(|routes| api::api(routes, source))
         .assets(views::Static)
-        .components(&[views::SiteHeader])
+        .components(&[views::SiteHeader]);
+    if lean {
+        app.deadline(None).header_timeout(None).send_timeout(None)
+    } else {
+        app
+    }
 }
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let source = Source::from_env().map_err(|error| std::io::Error::other(error.to_string()))?;
-    corten::serve(app(source)).await
+    let lean = std::env::var("PROFILE").as_deref() == Ok("catalog-lean");
+    corten::serve(app(source, lean)).await
 }
 
 #[cfg(test)]
@@ -75,6 +81,10 @@ mod tests {
     use serde_json::json;
 
     fn application() -> corten::testing::Client {
+        application_with_profile(false)
+    }
+
+    fn application_with_profile(lean: bool) -> corten::testing::Client {
         let record = json!({
             "id": "record_1", "title": "Trail <script> & friends", "subtitle": "Notes",
             "description": "<img src=x onerror=alert(1)>", "tags": ["a&b"],
@@ -82,7 +92,21 @@ mod tests {
             "related": [{"id":"record_2","title":"Other <trail>"}]
         });
         let data = serde_json::from_value(json!({"record_1": record})).unwrap();
-        app(Source::Fixture(Arc::new(data))).test()
+        app(Source::Fixture(Arc::new(data)), lean).test()
+    }
+
+    #[tokio::test]
+    async fn lean_and_default_profiles_keep_page_and_json_contracts() {
+        for lean in [false, true] {
+            let app = application_with_profile(lean);
+            let page = app.get(&routes::Catalog { id: "record_1", query: CatalogQuery::default() }).await;
+            assert_eq!(page.status(), StatusCode::OK);
+            assert!(page.text().contains("Trail &lt;script&gt; &amp; friends"));
+            assert!(page.headers().contains_key("content-security-policy"));
+            assert_eq!(page.headers()["x-content-type-options"], "nosniff");
+            assert_eq!(app.get(&api::Record { id: "record_1" }).await.status(), StatusCode::OK);
+            assert_eq!(app.get(&api::Record { id: "missing" }).await.status(), StatusCode::NOT_FOUND);
+        }
     }
 
     #[tokio::test]
@@ -96,6 +120,8 @@ mod tests {
         assert!(html.contains("<th scope=\"row\">Access</th>"));
         assert!(html.contains("<th scope=\"row\">access</th>"));
         assert!(html.contains("href=\"/catalog/record_2\""));
+        assert!(answer.headers().contains_key("content-security-policy"));
+        assert_eq!(answer.headers()["x-content-type-options"], "nosniff");
     }
 
     #[tokio::test]

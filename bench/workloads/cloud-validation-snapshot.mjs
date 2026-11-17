@@ -18,6 +18,7 @@ export const validationPaths = Object.freeze([
   "bench/catalog/record-attempt.mjs",
   "bench/catalog/report.mjs",
   "bench/catalog/stats.mjs",
+  "bench/catalog/timed.mjs",
   "bench/catalog/verify.mjs",
   "bench/client-heavy/build-replay.mjs",
   "bench/client-heavy/compiler.mjs",

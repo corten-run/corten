@@ -5,6 +5,38 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
+  Trusted Types enforcement would reject. The scripts guide shows how to read a part again
+  with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
+
+- Apply supported lean settings to catalog-page competitors as well as Corten:
+  reduce optional access logging, compression and timer work where supported,
+  record the exact profile in container evidence and reports, and retain full
+  source/rendering correctness. Richer groups keep their existing configuration.
+  Keep ASP.NET's native Kestrel header/keepalive timers at their defaults: setting
+  them to infinite caused early connection closure in Linux correctness checks
+  ([#1564 Catalog lean ASP.NET fails native JSON correctness with connection errors](https://github.com/corten-run/corten/issues/1564)).
+
+- Configure the standalone catalog Corten benchmark for the lean rendering
+  workload: omit optional compression and remove handler/header/send timers using
+  supported settings, while keeping page stages, error logs, full correctness
+  checks and the HTTP-source timeout. Production defaults and richer benchmarks
+  are unchanged; historical results keep their measured configuration. Keep the
+  shared JSON API consumer's default compression build and timers by selecting
+  lean build/runtime settings only in the catalog runner.
+
+- Preserve completed catalog load/request failures as versioned, replayable failed
+  app outcomes, separate from successful baselines and apparatus failures. Retain
+  all passes, raw counters, participant lifetimes and side errors; require successful
+  checker boundaries before any cold timing and attempt-wide upstream lifetime/CPU
+  continuity. Reject unknown prior termination in v3 functional participants and
+  require full lifetime-state consistency across observations. Summary-only reports
+  reconcile failure ledgers and baseline disposition with retained phases before
+  labeling an attempt complete. Keep HTTP error responses failed regardless of
+  their media type, retaining their content-check failures; report successful
+  throughput, failed requests and drops separately without excluding healthy peers
+  ([#1556 Catalog benchmark discards failed-load metrics and cannot replay completed target outcomes](https://github.com/corten-run/corten/issues/1556)).
+
 - The watchlist smoke's check that a submit which waited for a write the network failed is not
   sent holds that write until the newer press is made, and presses both buttons in the page, where
   it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the
