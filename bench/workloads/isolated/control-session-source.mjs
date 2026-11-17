@@ -638,6 +638,8 @@ def main(args):
     assert sha(read(root / "helper.py")) == load(root, "binding.json")["helperSha256"]
     if mode == "monitor":
         return stream_monitor(root, json.loads(bytes.fromhex(args[2])))
+    elif mode == "stream-watchdog":
+        return stream_watchdog(root, args[2])
     elif mode == "stream-drain":
         proof = stream_drain(root)
         if proof is None:

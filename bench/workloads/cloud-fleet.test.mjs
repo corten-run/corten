@@ -209,10 +209,17 @@ test("first host requires account room for the whole reserved fleet, not just it
   assert.equal(h.creates, 0); assert.equal(h.deletes, 0);
 });
 
+function finishSupervisedFixture(h, status) {
+  h.flags.active = false; h.flags.reportStatus = status;
+  const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+  closed.closedAtMs = Date.now() - 31000; closed.recoverAfterMs = closed.closedAtMs + 30000;
+  writeFileSync(path, JSON.stringify(closed));
+  return h.report();
+}
+
 test("group inspection is distinct from whole-campaign evidence and retains terminal deletion gates", async (t) => {
   const { h, options } = configured(t); await h.task({}, options).launch();
-  h.flags.active = false;
-  const report = syntheticInspection("verified");
+  const report = finishSupervisedFixture(h, "verified");
   report.schema = "benchmark-isolated-group-campaign-inspection/v1";
   report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
   report.groups = report.groups.filter((row) => row.group === options.group);
@@ -242,8 +249,7 @@ test("CLI group selection cannot omit the full fleet or change collection scope"
 test("failed and blocked collection preserves a host when evidence belongs to another selection", async (t) => {
   for (const status of ["failed", "blocked"]) for (const change of ["group", "apps", "contract"]) {
     const { h, options } = configured(t); await h.task({}, options).launch();
-    h.flags.active = false;
-    const report = syntheticInspection(status);
+    const report = finishSupervisedFixture(h, status);
     report.schema = "benchmark-isolated-group-campaign-inspection/v1";
     report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
     report.groups = [];

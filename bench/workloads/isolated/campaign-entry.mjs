@@ -58,7 +58,7 @@ export async function runCampaignEntry(args) {
     const control = bootstrapControl(input);
     const admission = await waitControlAdmission(control, "bootstrap", { signal: abort.signal, deadline: Date.now() + 45 * 60000 });
     if (admission.apparatus) {
-      stream = superviseControlStream(control, admission, abort);
+      stream = await superviseControlStream(control, admission, abort);
     }
     controlOperation(control, "activate");
     const request = { round: input.round, commit: input.commit };
@@ -119,7 +119,7 @@ export async function runCampaignEntry(args) {
     if (handle) campaign.stop(handle, error.message);
     throw error;
   } finally {
-    stream?.dispose();
+    await stream?.dispose();
     process.off("SIGINT", cancel); process.off("SIGTERM", cancel);
   }
 }

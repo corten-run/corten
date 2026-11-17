@@ -429,7 +429,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (monitor) {
             let result;
             try { result = await monitor.done; }
-            catch (error) { preserveOperationLock = true; throw error; }
+            catch (error) { preserveOperationLock = true; state.control.monitor.phase = "invalid"; save(); throw error; }
             state.control.monitor.phase = result.terminal ? "closed" : "invalid"; save();
             if (!result.terminal) {
               preserveOperationLock = true;

@@ -1,6 +1,6 @@
 // Campaign-owned lease consumer, independent of the SSH guardian. No reconnect.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { constants, closeSync, existsSync, fstatSync, openSync, readFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -21,8 +21,46 @@ function leaseJSON(path) {
   } finally { closeSync(fd); }
 }
 
+// Launch once, before native bookends. Only this child inherits the control mask.
+async function startWatchdog(launch, binding, registration, invalidate) {
+  const child = launch("/usr/bin/taskset", ["--cpu-list", "0", "/usr/bin/python3", "-I", "-c", guardianSource,
+    "stream-watchdog", binding.token, streamHash(registration)], { cwd: "/bench", shell: false, windowsHide: true,
+    stdio: ["pipe", "pipe", "ignore"], env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" } });
+  const ready = Promise.withResolvers(), closed = Promise.withResolvers();
+  let admitted = false, stopping = false, ended = false;
+  const fault = () => {
+    invalidate(); ready.reject(new Error("pinned control watchdog failed"));
+  };
+  child.on("error", fault); child.stdin.on("error", fault);
+  child.stdout.on("data", (bytes) => {
+    if (admitted || !bytes.equals(Buffer.from("R"))) { fault(); return; }
+    admitted = true; ready.resolve();
+  });
+  child.once("close", (code, signal) => {
+    ended = true;
+    const clean = admitted && stopping && code === 0 && signal === null;
+    if (!clean) fault();
+    closed.resolve(clean);
+  });
+  const bounded = async (promise) => {
+    let timer;
+    try {
+      return await Promise.race([promise, new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("control watchdog deadline expired")), 5000);
+      })]);
+    } catch (error) {
+      invalidate(); if (!ended) child.kill("SIGKILL"); throw error;
+    } finally { clearTimeout(timer); }
+  };
+  await bounded(ready.promise);
+  return async () => {
+    if (!ended && !stopping) { stopping = true; child.stdin.end("S"); }
+    return bounded(closed.promise);
+  };
+}
+
 // Injection is local test support, never selected from reservation or wire data.
-export function superviseControlStream(binding, admission, abort, runtime = {}) {
+export async function superviseControlStream(binding, admission, abort, runtime = {}) {
   const root = runtime.root ?? "/run/corten-bench-control-" + binding.token, registration = admission.apparatus;
   assert.ok(registration, "supervised entry requires presealed apparatus");
   const now = runtime.now ?? (() => process.hrtime.bigint()), sample = runtime.sample ?? readApparatus;
@@ -30,8 +68,9 @@ export function superviseControlStream(binding, admission, abort, runtime = {}) 
     { cwd: "/bench", encoding: "utf8", timeout: 1000, maxBuffer: 65536, env: { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" }, windowsHide: true }));
   const read = (name) => name === "stream-lease.json" ? leaseJSON(join(root, name)) : JSON.parse(readRegular(join(root, name)));
   assert.equal(streamHash(read("stream-registration.json")), streamHash(registration));
-  let revoked = false, timer, ended = false, sealed = false, draining = false, windowStart, renewal = 0;
+  let revoked = false, ended = false, sealed = false, draining = false, windowStart, renewal = 0;
   const invalidate = () => {
+    if (revoked) return;
     revoked = true;
     try {
       if (!existsSync(join(root, "stream-invalid.json"))) durable(join(root, "stream-invalid.json"), JSON.stringify({ id: registration.id,
@@ -55,7 +94,9 @@ export function superviseControlStream(binding, admission, abort, runtime = {}) 
     durable(stage, JSON.stringify({ kind, payload })); renameSync(stage, path); syncDirectory(root);
   };
   check();
-  timer = setInterval(() => { try { check(); } catch { clearInterval(timer); } }, 250);
+  let stopWatchdog;
+  try { stopWatchdog = await startWatchdog(runtime.launch ?? spawn, binding, registration, invalidate); }
+  catch (error) { invalidate(); throw error; }
   return {
     registration, check,
     open(cpus) { assert.ok(!sealed && !draining && !windowStart); const observed = check(); apparatusProof(binding, registration, observed, cpus); windowStart = observed.monoNs; return observed; },
@@ -85,7 +126,9 @@ export function superviseControlStream(binding, admission, abort, runtime = {}) 
       verifyStreamSeal(binding, proof); sealed = true; return proof;
     },
     async finish(payload) {
-      assert.ok(sealed && !draining && !windowStart); publish("terminal", payload); draining = true; clearInterval(timer);
+      assert.ok(sealed && !draining && !windowStart);
+      assert.ok(await stopWatchdog(), "pinned watchdog did not exit cleanly");
+      publish("terminal", payload); draining = true;
       // Only the independently owned campaign process may observe the SSH tree
       // disappear. Local EOF is not an input to this proof.
       const deadline = now() + 10000000000n;
@@ -102,6 +145,6 @@ export function superviseControlStream(binding, admission, abort, runtime = {}) 
         assert.fail("apparatus disappearance deadline expired");
       } catch (error) { invalidate(); throw error; }
     },
-    dispose() { clearInterval(timer); if (!ended && !revoked) invalidate(); },
+    async dispose() { if (!ended && !revoked) invalidate(); await stopWatchdog(); },
   };
 }

@@ -1,6 +1,6 @@
-// Synchronous process boundary for the reviewed lifecycle. No shell, retries or logs.
+// Fixed process boundary for the reviewed lifecycle. No shell, retries or logs.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { isAbsolute } from "node:path";
 import { setImmediate as turn } from "node:timers/promises";
 
@@ -19,7 +19,7 @@ export const controlEnvironment = (binary) => {
     if (process.env[key] !== undefined) env[key] = process.env[key];
   return { ...env, GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0" };
 };
-export function shellTransport({ repo, spawn = spawnSync, streamSpawn } = {}) {
+export function shellTransport({ repo, spawn = spawnSync, streamSpawn, sealExec = spawn === spawnSync ? execFile : undefined } = {}) {
   assert.ok(isAbsolute(repo));
   // Capture inherited credentials/config locations once, never re-read mutable
   // process.env between account proof and a mutation. Nothing is logged or saved.
@@ -75,29 +75,50 @@ export function shellTransport({ repo, spawn = spawnSync, streamSpawn } = {}) {
         } else argv.unshift("-B"); // Explicit legacy evidence transport, never SCP -O.
       }
     }
+    const options = { cwd: repo, shell: false, windowsHide: true, encoding: "utf8", timeout, killSignal: "SIGKILL",
+      maxBuffer: 16 * 1024 ** 2, env: { ...environments.get(binary) } };
+    if (sealExec && binary === "ssh" && control?.request.seal) {
+      // The monitor's renewal callbacks must run even if this final SSH takes its whole budget.
+      return new Promise((resolve) => {
+        const complete = (result) => { clearTimeout(deadline); resolve(result); };
+        const uncertain = () => complete({ error: new Error("seal SSH uncertain") });
+        // A killed direct child need not close pipes inherited by a descendant.
+        const deadline = setTimeout(uncertain, timeout);
+        try {
+          const child = sealExec(executable, argv, options, (error, stdout, stderr) => {
+            if (error && (error.killed || error.signal || !Number.isInteger(error.code))) return uncertain();
+            complete({ status: error?.code ?? 0, stdout, stderr });
+          });
+          child.stdin.once("error", uncertain); child.stdin.end(input);
+        } catch { uncertain(); }
+      }).then((result) => checked(result, binary, allowFail, control));
+    }
     let result;
     try {
-      result = spawn(executable, argv, { cwd: repo, shell: false, windowsHide: true, encoding: "utf8", input,
-        stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout, killSignal: "SIGKILL", maxBuffer: 16 * 1024 ** 2, env: { ...environments.get(binary) } });
+      result = spawn(executable, argv, { ...options, input, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     } catch { result = { status: null, error: new Error("control spawn uncertain"), stdout: "", stderr: "" }; }
-    const failed = result.error || result.status !== 0 || result.signal;
-    // spawnSync only proves the direct child has ended. On every platform a
-    // timeout/signal/overflow can leave descendants alive. Never retry, and keep
-    // the lifecycle locks until an operator establishes the whole tree is gone.
-    if (result.error || result.signal || !Number.isInteger(result.status))
-      throw Object.assign(new Error("control tree uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true });
-    if (control) {
-      const id = control.request.invocation.id;
-      assert.match(id, /^[a-f0-9]{32}$/);
-      const ack = new RegExp(`^CORTEN_CONTROL ${id} ([a-f0-9]{64})\\r?$`, "m").exec(result.stderr ?? "");
-      const terminal = new RegExp(`^CORTEN_RESULT ${id} ([0-9]{1,3})\\r?$`, "m").exec(result.stderr ?? "");
-      if (!ack || !terminal || result.status === 255 || Number(terminal[1]) !== result.status)
-        throw Object.assign(new Error("remote control completion uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true });
-    }
-    if (failed && !allowFail) throw new Error("control process failed or uncertain; preserve state/evidence/host");
-    // Keep stdout only for fixed parsers. Never return credentials/stacks/stderr.
-    return { status: failed ? result.status === 0 ? null : result.status ?? null : 0, stdout: result.stdout ?? "", stderr: "",
-      ...(["ssh", "scp"].includes(binary) ? { remoteDrained: false } : {}),
-      ...(failed ? { error: new Error("control result uncertain") } : {}) };
+    return checked(result, binary, allowFail, control);
   };
+}
+
+function checked(result, binary, allowFail, control) {
+  const failed = result.error || result.status !== 0 || result.signal;
+  // A child result only proves the direct child has ended. On every platform a
+  // timeout/signal/overflow can leave descendants alive. Never retry, and keep
+  // the lifecycle locks until an operator establishes the whole tree is gone.
+  if (result.error || result.signal || !Number.isInteger(result.status))
+    throw Object.assign(new Error("control tree uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true });
+  if (control) {
+    const id = control.request.invocation.id;
+    assert.match(id, /^[a-f0-9]{32}$/);
+    const ack = new RegExp(`^CORTEN_CONTROL ${id} ([a-f0-9]{64})\\r?$`, "m").exec(result.stderr ?? "");
+    const terminal = new RegExp(`^CORTEN_RESULT ${id} ([0-9]{1,3})\\r?$`, "m").exec(result.stderr ?? "");
+    if (!ack || !terminal || result.status === 255 || Number(terminal[1]) !== result.status)
+      throw Object.assign(new Error("remote control completion uncertain; preserve locks/state/evidence/host"), { controlTreeUncertain: true });
+  }
+  if (failed && !allowFail) throw new Error("control process failed or uncertain; preserve state/evidence/host");
+  // Keep stdout only for fixed parsers. Never return credentials/stacks/stderr.
+  return { status: failed ? result.status === 0 ? null : result.status ?? null : 0, stdout: result.stdout ?? "", stderr: "",
+    ...(["ssh", "scp"].includes(binary) ? { remoteDrained: false } : {}),
+    ...(failed ? { error: new Error("control result uncertain") } : {}) };
 }
