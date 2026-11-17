@@ -219,6 +219,12 @@ Timeout/cancellation, OOM, restarts, unknown lifecycle, early termination,
 counter/sampler/copy errors and incomplete cleanup cannot complete an attempt.
 Side errors are preserved together even when k6 has already exited 99.
 
+V3 replay requires a successful `checker.json` boundary for every positive
+functional check, including peers of a timed-failed app, and binds the shared
+upstream identity and start time to timing. Cumulative CPU windows are checked
+by participant ID across all runs and passes in observation-clock order, not
+the app/source/pass order in the summary.
+
 Replay checks raw CPU deltas and cumulative continuity, raw/sample agreement,
 complete resource windows (no sample gap over two seconds), exact aggregates,
 immutable native images and unchanged source/cleanup provenance. App and load

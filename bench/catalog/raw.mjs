@@ -9,7 +9,7 @@ import { qualificationIdentity } from "./group.mjs";
 import { verifyRecordAttempt, verifyAttemptWindow } from "./record-attempt.mjs";
 import { summarizeSamples, memoryMiB } from "./stats.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
-import { timedRawSchema, verifyTimedPhase } from "./timed.mjs";
+import { timedRawSchema, verifyTimedPhase, verifyTimedContinuity } from "./timed.mjs";
 import { isDeepStrictEqual } from "node:util";
 
 export const rawSchema = "catalog-saved-evidence/v2";
@@ -144,6 +144,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   const outcomes = [];
   const targetFailures = [];
   const timedIds = new Set();
+  const timedParticipants = [];
   let negative = false;
   let upstreamId;
   for (const [app, entry] of Object.entries(summary.apps)) {
@@ -162,12 +163,17 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
       assert.deepEqual(readJson(`${base}/checks.json`), nativeCheck, "native checker receipt differs");
       readText(`${base}/checks.log`);
       readText(`${base}/app.log`);
-      if (gated) {
+      let boundary;
+      if (gated || timed) {
         assert.deepEqual(qualification, qualificationIdentity(summary.group, app, source, entry.imageId));
-        const boundary = readJson(`${base}/checker.json`);
+        boundary = readJson(`${base}/checker.json`);
         verifyCheckBoundary(boundary, summary, app, source, !!checked.failure);
         upstreamId ??= boundary.upstream.Id;
         assert.equal(boundary.upstream.Id, upstreamId, "upstream identity changed across functional checks");
+        if (timed) for (const info of [boundary.runtime, boundary.upstream])
+          timedParticipants.push({ id: info.Id, startedAt: info.State.StartedAt });
+      }
+      if (gated) {
         if (checked.failure !== undefined) {
           assert.deepEqual(Object.keys(nativeCheck), ["failure"], "contradictory positive/negative checker receipt");
           assert.deepEqual(readJson(`${base}/checks.json.failure.json`), checked.failure);
@@ -214,6 +220,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
               previousCounters = observed.counters; previousFinishedAt = observed.finishedAt;
               assert.ok(!timedIds.has(observed.loadId), "timed load container reused across phases"); timedIds.add(observed.loadId);
               upstreamId ??= observed.upstreamId; assert.equal(observed.upstreamId, upstreamId, "timed upstream identity changed");
+              timedParticipants.push(...observed.participants);
               if (observed.metrics.outcome === "failed") {
                 failed = true;
                 targetFailures.push({ app, source, target: profile.target, pass: run.pass, phase, failed: observed.metrics.failed,
@@ -283,6 +290,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   }
   if (gated) assert.ok(negative, "global gate lacks replayed target violation");
   if (timed) {
+    verifyTimedContinuity(timedParticipants);
     const ordered = (rows) => [...rows].sort((a, b) => `${a.app}/${a.source}/${a.target}/${a.pass}/${a.phase}`.localeCompare(`${b.app}/${b.source}/${b.target}/${b.pass}/${b.phase}`));
     assert.ok(isDeepStrictEqual(ordered(summary.targetFailures), ordered(targetFailures)), "timed target failure ledger differs from raw");
   }

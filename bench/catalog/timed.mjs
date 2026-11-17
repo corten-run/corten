@@ -161,7 +161,31 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
     upstream: source === "api" ? { ...derived[upstreamName], cpuUsec: deltas[upstreamName].usec, highCpu: derived[upstreamName].cpuAvgPct >= 80,
       interpretation: "single-process upstream; a busy API may be the throughput limit, not the app" } : null });
   readText(`${phase}.log`);
-  return { metrics, counters: proof.after, finishedAt: receipt.observedAt, upstreamId: receipt.after.upstream.id, loadId: load.id };
+  const participants = [receipt.after.runtime, receipt.after.upstream].map((info) => {
+    const name = info.name.slice(1);
+    return { id: info.id, startedAt: info.state.StartedAt, ...(Object.hasOwn(proof.ids, name) ? {
+      cpu: { startedAt: proof.startedAt, finishedAt: proof.finishedAt, before: proof.before[name], after: proof.after[name] },
+    } : {}) };
+  });
+  return { metrics, counters: proof.after, finishedAt: receipt.observedAt, upstreamId: receipt.after.upstream.id, loadId: load.id, participants };
+}
+
+// Summary traversal groups passes by app, not by their native observation clock.
+export function verifyTimedContinuity(observations) {
+  const participants = new Map();
+  for (const { id, startedAt, cpu } of observations) {
+    const participant = participants.get(id) ?? { startedAt, windows: [] };
+    assert.equal(startedAt, participant.startedAt, "timed participant lifetime changed across attempt");
+    if (cpu) participant.windows.push(cpu);
+    participants.set(id, participant);
+  }
+  for (const { windows } of participants.values()) {
+    windows.sort((a, b) => a.startedAt - b.startedAt);
+    for (let i = 1; i < windows.length; i++) {
+      assert.ok(windows[i].startedAt >= windows[i - 1].finishedAt, "timed CPU windows overlap across attempt");
+      assert.ok(windows[i].before >= windows[i - 1].after, "timed CPU counter moved backwards across attempt");
+    }
+  }
 }
 
 // Dependencies are the native runner's existing bounded commands, never saved code.

@@ -168,6 +168,104 @@ test("timed successful v3 replay still establishes only a fully successful basel
   assert.equal(report.baseline, true); assert.equal(report.attemptComplete, true); assert.equal(report.comparisonEligibleApps.length, 7);
 });
 
+test("timed v3 requires every positive checker boundary for both successful and failed attempts", () => {
+  for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]) {
+    const f = timedFixture(fixture(), failure), saved = new Map();
+    for (const app of f.summary.group.apps) for (const source of f.summary.group.sources) {
+      const path = `${source}/${app}/checker.json`, bytes = f.files.get(path);
+      saved.set(path, bytes); f.files.delete(path);
+      assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), undefined, `missing ${path}`);
+      f.files.set(path, bytes);
+    }
+    for (const path of saved.keys()) f.files.delete(path);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
+    for (const [path, bytes] of saved) {
+      const boundary = JSON.parse(bytes);
+      boundary.exit.code = 137; boundary.exit.expired = true; boundary.runtime.State.OOMKilled = true;
+      f.put(path, boundary);
+    }
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /checker client lifetime/);
+  }
+});
+
+test("timed v3 rejects contradictory functional checker execution and lifecycle evidence", () => {
+  const f = timedFixture(fixture(), null), path = "api/fastapi/checker.json", original = f.files.get(path);
+  for (const mutate of [
+    (b) => { b.exit.expired = true; },
+    (b) => { b.exit.code = 137; },
+    (b) => { b.exit.interrupted = true; },
+    (b) => { b.exit.signal = "SIGTERM"; },
+    (b) => { b.runtime.State.OOMKilled = true; },
+    (b) => { b.upstream.State.OOMKilled = true; },
+    (b) => { b.checker.State.ExitCode = 137; },
+    (b) => { b.runtime.Path = "/unreviewed/app"; },
+    (b) => { b.checker.Args.push("--skip-content"); },
+    (b) => { b.upstream.mounts = []; },
+    (b) => { b.runtime.Config.Env = b.runtime.Config.Env.filter((v) => !v.startsWith("CATALOG_SOURCE=")); },
+    (b) => { b.upstream.Id = "f".repeat(64); },
+    (b) => { b.upstream.State.StartedAt = new Date(Date.parse(f.summary.startedAt) + 1).toISOString(); },
+  ]) {
+    const boundary = JSON.parse(original); mutate(boundary); f.put(path, boundary);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit));
+  }
+});
+
+test("timed v3 CPU chronology follows observation clocks across rotated passes, not summary traversal", () => {
+  const f = timedFixture(fixture(3), null), s = f.summary;
+  const [first, second] = s.group.apps;
+  const time = (app, pass) => f.reader.readJson(`api/${app}/p${pass}-page/warmup-cpu-counters.json`).startedAt;
+  assert.ok(time(first, 3) > time(second, 1), "fixture must differ from app-grouped summary traversal");
+  for (const entry of Object.values(s.apps)) for (const runs of Object.values(entry.runs)) runs.reverse();
+  s.apps = Object.fromEntries(Object.entries(s.apps).reverse());
+  const report = replayCatalog(s, f.reader, f.commit);
+  assert.equal(report.attemptComplete, true); assert.equal(report.baseline, true);
+  assert.equal(report.comparisonEligibleApps.length, 7);
+});
+
+test("timed v3 binds the shared functional upstream identity and lifetime to timing", () => {
+  for (const change of ["identity", "lifetime"]) {
+    const f = timedFixture(fixture(), null);
+    for (const app of f.summary.group.apps) for (const source of f.summary.group.sources) {
+      const path = `${source}/${app}/checker.json`, boundary = f.reader.readJson(path);
+      if (change === "identity") boundary.upstream.Id = "f".repeat(64);
+      else boundary.upstream.State.StartedAt = new Date(Date.parse(f.summary.startedAt) + 1).toISOString();
+      f.put(path, boundary);
+    }
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), change === "identity" ? /timed upstream identity changed/ : /lifetime changed across attempt/);
+  }
+});
+
+test("timed v3 does not retrofit legacy v2 checks or partial metrics into new proof", () => {
+  const f = fixture();
+  assert.ok(![...f.files.keys()].some((path) => path.endsWith("/checker.json")));
+  assert.equal(replayCatalog(f.summary, f.reader, f.commit).baseline, true, "v2 positive-check semantics stay unchanged");
+  f.summary.savedEvidence.schema = "catalog-saved-evidence/v3";
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /timed native attempt is not complete/);
+  f.summary.attemptComplete = true; f.summary.targetFailures = [];
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /timed native attempt is not complete/);
+});
+
+for (const scope of ["app", "source", "pass"]) for (const change of ["lifetime", "counter", "both"]) {
+  if (scope === "source" && change !== "lifetime") continue; // Fixture-source upstream has no CPU samples.
+  test(`timed v3 rejects upstream ${change} discontinuity across ${scope} runs`, () => {
+    const f = timedFixture(fixture(scope === "pass" ? 3 : 1), null), s = f.summary;
+    const app = s.group.apps[scope === "app" ? 1 : 0], source = scope === "source" ? "fixture" : "api", pass = scope === "pass" ? 2 : 1;
+    const raw = `${source}/${app}/p${pass}-page`, name = `${s.runId}-upstream`;
+    for (const phase of ["warmup", ...phases]) {
+      if (change !== "lifetime" && source === "api") {
+        const path = `${raw}/${phase}-cpu-counters.json`, p = f.reader.readJson(path);
+        p.before[name] -= 1e6; p.after[name] -= 1e6; f.put(path, p);
+      }
+      if (change !== "counter") {
+        const path = `${raw}/${phase}-boundary.json`, b = f.reader.readJson(path);
+        for (const edge of ["before", "after"]) b[edge].upstream.state.StartedAt = s.apps[app].runs[`${source}-page`].find((r) => r.pass === pass).cold.containerStartedAt;
+        f.put(path, b);
+      }
+    }
+    assert.throws(() => replayCatalog(s, f.reader, f.commit), change === "counter" ? /CPU counter moved backwards across attempt/ : /lifetime changed across attempt/);
+  });
+}
+
 test("timed summary reporting cannot hide request failures behind passing flags or incomplete attempts", () => {
   const f = timedFixture(fixture()), s = f.summary, run = s.apps.fastapi.runs["api-page"][0];
   run.phases.sat256.failed = 0; run.phases.sat256.outcome = "passed"; run.outcome = "passed";
