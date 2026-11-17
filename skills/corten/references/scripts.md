@@ -228,14 +228,17 @@ translated text and its dates take `.zone(..)`.
 Another source (a change stream, a queue) is `corten::live(stream)`: give each item its version,
 `Fragment::new(html).cursor(v)`, and use the `LiveSince` argument (the page's `since`, or
 `Last-Event-ID` after a reconnect) to send nothing until the next change when it is current. A
-slow part sent once is a stream of one item. Where no stream will bring it (no JavaScript, or a
-stream that gave up), its placeholder's link shows:
-`<a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">..</a>`, the page's own
-route with a query field its handler reads the part in for (no second route per part; the route
-derives `Default`, so other links are `url::Home::default()`). The component's CSS swaps it for
-the loading line: `@media (scripting: enabled) { .show { display: none } }` and
-`@media (scripting: none) { .finding { display: none } }`, and the same swap inside
-`corten-live[status="closed"]`, so a browser without the `scripting` feature shows both. See the
+slow part sent once is not a stream: the page's own handler answers it (`ReadAgain::now` and
+`req.patch_or_with`, in [pages-and-routes.md](pages-and-routes.md)). Its placeholder's link,
+`<a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">..</a>`, is the page's own
+route with a query field its handler reads the part in for (the route derives `Default`, so other
+links are `url::Home::default()`). The component's CSS swaps it for the loading line only while
+the part is busy, which the runtime's part module alone marks:
+`.finding { visibility: hidden }`, `[aria-busy] > .finding { visibility: visible }` and
+`[aria-busy] > .show { visibility: hidden }`, both in one grid cell of the part
+(`display: grid`, `grid-area: 1 / 1`) so the swap moves nothing, and the link shows wherever no
+read is bringing the part (no JavaScript, the module not loaded, a failed read), with no
+`scripting` media query. See the
 live-data guide.
 
 A job's progress is a `<progress value max>` a `corten::live` stream draws again as the job
