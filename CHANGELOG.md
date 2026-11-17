@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Permit custody-only terminal retirement of the exact r21 lean catalog attempt
+  if ordinary native collection refuses its failed evidence. Keep original raw
+  failures, source/reservation/archive binding, live-job refusal, current ownership
+  and quiescence proofs, separate reviewed approval and single-delete confirmation.
+  This is cleanup eligibility, not benchmark validation or permission to stop a run.
+
 - **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in a shape
   the runtime's parse loses wherever it is written no longer compiles: a table part (`<tr>`,
   `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`, `<colgroup>`) after a
