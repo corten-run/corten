@@ -5005,7 +5005,11 @@ rules something out.
     `12794f3ff`; 2026-11-16, jiff 0.2.38's `Timestamp::MAX` (its documentation read that day), a
     time past it refused in a tz database zone, `zone.min` and `zone.max` holding an unchanged value
     where the clocks go back, `LocalDateTime::at`'s `compile_fail` doctests, and the all-zones
-    test with its `min` and `max` check, passing on `e9c2ce45e`.
+    test with its `min` and `max` check, passing on `e9c2ce45e`; 2026-11-17, Temporal's
+    `GetStartOfDay` in its spec (read that day), Toronto's 1919-03-31 change in the bundled
+    database, and `day.start` against Temporal's start of day around every change in every zone
+    from its first, with `Visitor::known_offset` asking jiff at the second an instant is in,
+    passing on `591222898`.
 
 ## Rules
 
