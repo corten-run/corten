@@ -11,4 +11,3 @@ export function getter(prototype, key) {
   const get = /** @type {() => T[K]} */ (Object.getOwnPropertyDescriptor(prototype, key)?.get);
   return (node) => get.call(node);
 }
-
