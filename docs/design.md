@@ -3122,8 +3122,8 @@ rules something out.
     navigation's page, a form's answer, a `<corten-live>` fragment, a layout element a write's page
     draws again in place. Served beside the runtime, not with the app's scripts, so an app with no
     static files or components has it too. The runtime is 15,462 bytes gzipped and 13,979 brotli
-    at `83acf8662` (15,407 and 13,925 on main at `dbe1a34c7`, so 55 and 54 more), and the module
-    1,512 and 1,347; those 55 bytes are the import, the hand-over, the search of a
+    at `83acf8662` and `a7cd2d4a0` (15,407 and 13,925 on main at `dbe1a34c7`, so 55 and 54 more),
+    and the module 1,619 and 1,438 at `a7cd2d4a0`; those 55 bytes are the import, the hand-over, the search of a
     markup's text and the query of the head on load, which every page runs (a search of text
     already in hand, one query of the head) and which a page without a slow part ends there. With
     the module's discovery and its failure marks in the runtime instead, as at `73279ab7a`, it was
@@ -3254,8 +3254,8 @@ rules something out.
     Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
     less than a marker Corten reads on every request); measured (`npm run build:js`'s
     `js/dist/corten.js` and `js/dist/part.js`, gzip level 6 and brotli level 11 by Node's
-    `zlib`: the runtime 15,462 and 13,979 bytes at `83acf8662` and the module 1,512 and
-    1,347, against 15,407 and 13,925 for the runtime on main at `dbe1a34c7`, 15,631 and 14,094 with
+    `zlib`: the runtime 15,462 and 13,979 bytes at `83acf8662` (and unchanged at `a7cd2d4a0`) and
+    the module 1,619 and 1,438 at `a7cd2d4a0`, against 15,407 and 13,925 for the runtime on main at `dbe1a34c7`, 15,631 and 14,094 with
     the discovery in it at `73279ab7a`, and 16,685 and 15,059 with the reads in it at
     `cd6861c76`, so a page without a slow part loads 55 bytes gzipped more than on main, where it
     loaded 224 and 1,278 more); platform (`aria-busy` means the element is being updated, WAI-ARIA
