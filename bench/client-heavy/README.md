@@ -6,7 +6,7 @@ benchmark. All six selected frameworks stay in the result, including failures.
 Each application owns its mutations and renders through its native framework.
 
 Implementation checks:
-1. Build the six native apps against the same explicit fixture; retain build failures.
+1. Keep all six native apps inventoried against the same explicit fixture; retain build failures and reviewed unsupported dispositions.
 2. Capture actual loaded data, every operation's DOM and node identities, network,
    errors and owned resources. Validate with the offline oracle before timing.
 3. Run a separate measured journey only after qualification, validate it again,
@@ -73,6 +73,41 @@ collected only in the separate measurement pass after qualification. `readyMs`
 is mount-to-visible-screen-and-subscription readiness, not document load time.
 These local bounded numbers are diagnostics, not a
 ranking or cloud/load readiness. Offline `readyForLoad` remains false.
+
+## Candidate freshness
+
+New output is `client-heavy-native/v3`. It saves the recomputed
+`benchmark-latest-stable-evaluation/v2` alongside the native observations. The
+policy and both browser manifest/lock byte identities are retained, with exact
+candidate roots and their resolved dependency/optional/peer paths. Saved replay
+recomputes that policy from the complete source snapshot and checks it against
+the exact commit, not a saved eligible flag. Historical native v1/v2 and policy
+v1 retain their old semantics; an old group-wide blocker is not reinterpreted as
+candidate qualification.
+
+The reviewed 2026-11-17 registry observation has Solid and `@solidjs/web` 2.0.0
+and Babel 8.1.2, but the stable `babel-preset-solid` 1.9.19 requires Solid
+`^1.9.16` and Babel `^7.0.0`. Solid remains visible as `unsupported`, reason
+`latest-stable-solid-2-needs-compatible-stable-compiler`, with null qualification
+and measurement. Its compiler hook is not invoked and it has no build artifacts.
+Replay rejects attempted Solid builds/captures, missing or mixed policy, and
+invented unsupported peers. A failed build is never renamed unsupported.
+
+Only Solid's hook loads Babel core. Other candidates retain their own compiler
+and runtime closures; an actual shared consumer of an incompatible package is
+still blocked. This does not remove Solid or any other benchmark inventory,
+change the browser package pins, install an RC, force peers, or hide a compiler
+error. The current four-package observation is not a complete latest-stable
+qualification for any peer. Missing observations stay explicit per-candidate
+blockers. Closure records describe the browser package graph, not authentication
+of installed bytes or the full Rust/Playwright/toolchain; existing native,
+source/build, dependency-byte, replay, resource and independent review gates
+remain mandatory. Refresh and review the observation before a new source freeze.
+
+Composition can consider each candidate separately only after freshness and
+native admission. The current small one-measurement recipe still reports
+`rankingEligible: false` and no comparison-eligible apps. This change provides
+no framework performance qualification, no new baseline, and no ranking.
 
 Integration left to the parent: add `node --test bench/client-heavy/*.test.mjs`
 to the check command and route the client-heavy group's native execution to

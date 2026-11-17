@@ -10,6 +10,7 @@ import { depInputs, compilerSourcePath, compilerWorkingDirectory, cargoMetadata 
 import { npmClosure, compilerGraph, vendorConfiguration } from "./build-replay.mjs";
 import { installLayout } from "./install-layout.mjs";
 import { launchOptions } from "./launch.mjs";
+import { evaluateLatestStable, latestStableSources, candidateLatestStableSchema, unsupportedSolidReason } from "../workloads/latest-stable.mjs";
 
 const apps = selectedApps("client-heavy"), hash = (b) => createHash("sha256").update(b).digest("hex");
 const encode = (v) => JSON.stringify(v, null, 2) + "\n";
@@ -82,10 +83,12 @@ export async function validateV2(request) {
   });
   const output = await check("result.json", () => {
     const o = json("result.json");
+    const candidatePolicy = o.schema === "client-heavy-native/v3";
     keys(o, ["schema", "group", "round", "effectiveWorkload", "settings", "timeoutMs", "provenance", "selectedApps", "definition",
-      "builds", "cells", "passed", "readyForLoad", "collection", "terminal", "cleanupFailures"], ["failure"]);
-    need(o.schema === "client-heavy-native/v2" && o.group === "client-heavy" && o.round === request.round
+      "builds", "cells", "passed", "readyForLoad", "collection", "terminal", "cleanupFailures", ...(candidatePolicy ? ["latestStable"] : [])], ["failure"]);
+    need(["client-heavy-native/v2", "client-heavy-native/v3"].includes(o.schema) && o.group === "client-heavy" && o.round === request.round
       && o.provenance.commit === request.commit, "wrong-run-identity");
+    if (candidatePolicy) report.schema = "client-heavy-saved-verification/v3";
     need(same(o.selectedApps, apps) && same(o.definition, definition("client-heavy")), "incomplete-or-changed-registry-inventory");
     inventory(o.cells); inventory(o.builds);
     need(typeof o.passed === "boolean" && o.readyForLoad === false, "invalid-summary-readiness");
@@ -212,6 +215,14 @@ export async function validateV2(request) {
   });
   const sourceRef = (path) => sourceMap.get(path) ?? (path.startsWith("node_modules/") ? nodeDependencies.get(path.slice(13))
     : path.startsWith("bench/browser/node_modules/") ? browserDependencies.get(path.slice(27)) : null);
+  let candidatePolicy = null;
+  if (output.schema === "client-heavy-native/v3") candidatePolicy = await check("latest-stable", () => {
+    const inputs = Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) => [key, blob(sourceMap.get(path))]));
+    const policy = evaluateLatestStable({ group: "client-heavy", ...inputs });
+    need(policy.schema === candidateLatestStableSchema && policy.valid && same(policy, output.latestStable), "candidate-policy-differs-from-source-recomputation");
+    report.latestStable = policy;
+    return policy;
+  }) ?? null;
   for (const [label, deps, path] of [["node", nodeDependencies, "package-lock.json"], ["browser", browserDependencies, "bench/browser/package-lock.json"]])
     if (apps.some((a) => output.builds[a].outcome === "built")) await check(`${label}:locked-dependencies`, () => npmClosure(deps, JSON.parse(blob(sourceMap.get(path))), blob, dependencyComplete.get(`${label}-dependencies`) === true));
   const allBuildEnd = await check("build-clock-inventory", () => Math.max(0, ...apps.map((app) => output.builds[app].outcome === "built" ? json(`native/${app}/build-receipt.json`).endedAt : 0))) ?? 0;
@@ -228,7 +239,10 @@ export async function validateV2(request) {
       replayPassed: false, qualification: null, measurement: null, build: null };
     await check(`${app}:build`, () => {
       const b = output.builds[app], cell = report.cells[app];
-      if (b.outcome === "not-run") { keys(b, ["outcome", "reason"]); need(b.reason === "runner-failed-before-build", "invalid-unrun-build"); cell.build = { outcome: b.outcome, bytes: null }; return; }
+      if (b.outcome === "not-run") { keys(b, ["outcome", "reason"]);
+        const unsupported = candidatePolicy?.candidates.find((row) => row.app === app && row.status === "unsupported");
+        need(b.reason === "runner-failed-before-build" || unsupported && b.reason === unsupported.reason, "invalid-unrun-build");
+        cell.build = { outcome: b.outcome, bytes: null }; return; }
       if (b.outcome === "failed") {
         keys(b, ["outcome", "reason", "diagnosticSha256"]);
         need(b.reason === "native-build-failed" && digest(b.diagnosticSha256) && files.has(`native/${app}/failure.log`)
@@ -273,6 +287,16 @@ export async function validateV2(request) {
       const c = output.cells[app]; keys(c, ["outcome", "qualification", "measurement", "readyForMeasurement"], ["reason"]);
       need(["passed", "failed", "unsupported", "not-run"].includes(c.outcome) && (c.reason === undefined || typeof c.reason === "string" && c.reason.trim()), "invalid-cell-outcome");
       need(same(json(`${app}.json`), c), "raw-app-differs-from-summary");
+      if (output.schema === "client-heavy-native/v3") {
+        need(candidatePolicy !== null, "candidate-policy-required");
+        const unsupported = candidatePolicy.candidates.find((row) => row.app === app && row.status === "unsupported");
+        if (unsupported) {
+          need(app === "solid" && unsupported.reason === unsupportedSolidReason && c.outcome === "unsupported"
+            && c.reason === unsupported.reason && c.qualification === null && c.measurement === null && c.readyForMeasurement === false
+            && output.builds[app].outcome === "not-run" && [unsupported.reason, "runner-failed-before-build"].includes(output.builds[app].reason)
+            && ![...files.keys()].some((path) => path.startsWith(`native/${app}/`)), "unsupported-client-has-build-or-capture");
+        } else if (c.outcome === "unsupported" && c.qualification === null) need(false, "unsupported-client-without-policy-or-capture");
+      }
       for (const phase of ["qualification", "measurement"]) if (c[phase] !== null) report.cells[app][phase] = await check(`${app}:${phase}`, () =>
         replayV2(c[phase], app, phase, plan.workload, plan.settings, plan.timeoutMs, origins)) ?? null;
       for (const phase of ["qualification", "measurement"]) if (c[phase]?.lifecycle.contextCreatedAt !== null && c[phase] !== null) {

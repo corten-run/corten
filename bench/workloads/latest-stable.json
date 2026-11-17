@@ -1,4 +1,20 @@
 {
+  "schema": "benchmark-latest-stable-policy/v2",
+  "checkedOn": "2026-11-17",
+  "observedAt": "2026-11-17T13:47:50.142Z",
+  "observations": {
+    "solid-js": { "version": "2.0.0", "peers": {} },
+    "@solidjs/web": { "version": "2.0.0", "peers": { "solid-js": "^2.0.0" } },
+    "@babel/core": { "version": "8.1.2", "peers": {} },
+    "babel-preset-solid": { "version": "1.9.19", "peers": { "solid-js": "^1.9.16", "@babel/core": "^7.0.0" } }
+  },
+  "candidates": {
+    "corten": ["esbuild"], "react": ["esbuild", "react", "react-dom"], "vue": ["esbuild", "vue"],
+    "solid": ["esbuild", "@babel/core", "babel-preset-solid", "solid-js"],
+    "svelte": ["esbuild", "svelte"], "remix": ["esbuild", "remix"]
+  },
+  "unsupported": { "app": "solid", "reason": "latest-stable-solid-2-needs-compatible-stable-compiler" },
+  "legacy": {
   "schema": "benchmark-latest-stable-policy/v1",
   "checkedOn": "2026-11-13",
   "targets": [
@@ -39,4 +55,5 @@
       }
     }
   ]
+  }
 }

@@ -33,7 +33,7 @@ export async function inspectSaved(binding, folder) {
     assert.equal(group, "client-heavy");
     const native = await validateSaved({ folder, round, commit });
     assert.ok(object(native));
-    if (native.schema !== "client-heavy-saved-verification/v2") {
+    if (!["client-heavy-saved-verification/v2", "client-heavy-saved-verification/v3"].includes(native.schema)) {
       // v1 is diagnostic only; it has no source-bound plan, raw clocks or terminal proof.
       assert.equal(native.schema, "client-heavy-saved-verification/v1");
       assert.equal(native.group, group); assert.equal(native.round, round); assert.equal(native.commit, commit);
@@ -56,7 +56,14 @@ export async function inspectSaved(binding, folder) {
       return result;
     }
     const output = read("result.json"), plan = read("plan.json"), effective = binding.execution.effectiveOptions;
-    assert.equal(output.schema, "client-heavy-native/v2");
+    assert.equal(output.schema, native.schema === "client-heavy-saved-verification/v3" ? "client-heavy-native/v3" : "client-heavy-native/v2");
+    if (output.schema === "client-heavy-native/v3") {
+      assert.deepEqual(native.latestStable, binding.latestStable);
+      assert.deepEqual(output.latestStable, native.latestStable);
+      // This bounded one-measurement recipe still has no ranking admission.
+      result.rankingEligible = false;
+      result.comparisonEligibleApps = [];
+    }
     assert.equal(output.group, group); assert.equal(output.round, round); assert.equal(output.provenance.commit, commit);
     assert.equal(plan.schema, "client-heavy-plan/v1"); assert.equal(plan.round, round); assert.equal(plan.commit, commit);
     for (const value of [output, plan, native]) assert.deepEqual(value.selectedApps, apps);

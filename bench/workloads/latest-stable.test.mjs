@@ -2,11 +2,15 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { evaluateLatestStable, latestStableSchema, latestStableSources } from "./latest-stable.mjs";
+import { evaluateLatestStable, latestStableSchema, latestStableSources, candidateLatestStableSchema, unsupportedSolidReason } from "./latest-stable.mjs";
+import { readLatestStable } from "../client-heavy/build.mjs";
+import { candidateDependencies } from "../client-heavy/contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 
 const original = Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) =>
   [key, readFileSync(new URL(`../../${path}`, import.meta.url))]));
+// The historical v1 record is intentionally preserved, not relabeled v2.
+original.policy = Buffer.from(JSON.stringify(JSON.parse(original.policy).legacy));
 const inputs = () => ({ group: "client-heavy", ...structuredClone(original) });
 const changed = (key, edit) => {
   const input = inputs(), value = JSON.parse(Buffer.from(input[key]).toString("utf8"));
@@ -133,4 +137,59 @@ test("all nine groups and every contender stay visible, with no global launch de
   invalid(undefined, "policy:missing-source");
   invalid(null, "policy:missing-source");
   invalid("not source input", "policy:missing-source");
+});
+
+const candidateInputs = () => ({ group: "client-heavy", ...Object.fromEntries(Object.entries(latestStableSources).map(([key, path]) =>
+  [key, readFileSync(new URL(`../../${path}`, import.meta.url))])) });
+const mutateCandidate = (key, edit) => {
+  const input = candidateInputs(), value = JSON.parse(input[key]); edit(value); input[key] = JSON.stringify(value); return input;
+};
+
+test("production builder recomputes six candidate dispositions, never qualifies peers from a partial latest observation", () => {
+  const input = candidateInputs(), result = evaluateLatestStable(input);
+  assert.equal(result.schema, candidateLatestStableSchema); assert.equal(result.valid, true, JSON.stringify(result.errors));
+  assert.deepEqual(result, readLatestStable());
+  assert.deepEqual(result.candidates.map((r) => r.app), selectedApps("client-heavy"));
+  for (const row of result.candidates) {
+    assert.deepEqual(row.roots, candidateDependencies[row.app]);
+    assert.equal(row.measurements, null); assert.equal(row.latestStableEligible, false);
+    assert.ok(row.blockers.length > 0);
+    assert.equal(row.dependencies.some((d) => d.package === "@babel/core"), row.app === "solid");
+    assert.equal(row.status, row.app === "solid" ? "unsupported" : "blocked");
+  }
+  assert.equal(result.candidates.find((r) => r.app === "solid").reason, unsupportedSolidReason);
+  for (const [key, bytes] of Object.entries(input).filter(([key]) => key !== "group")) assert.equal(result.sources[key].sha256, createHash("sha256").update(bytes).digest("hex"));
+  for (const group of groupNames) {
+    const evaluated = evaluateLatestStable({ ...input, group }); assert.equal(evaluated.valid, true);
+    assert.equal(evaluated.status, group === "client-heavy" ? "blocked" : "not-applicable");
+  }
+});
+
+for (const [name, key, edit] of [
+  ["invented latest", "policy", (p) => { p.observations["solid-js"].version = "3.0.0"; }],
+  ["stale observation relabeled current", "policy", (p) => { p.checkedOn = "2026-11-18"; }],
+  ["candidate missing", "policy", (p) => { delete p.candidates.solid; }],
+  ["candidate membership changed", "policy", (p) => { p.candidates.react.push("@babel/core"); }],
+  ["invented unsupported peer", "policy", (p) => { p.unsupported.app = "react"; }],
+  ["unsupported reason missing", "policy", (p) => { delete p.unsupported.reason; }],
+  ["unknown schema", "policy", (p) => { p.schema = "benchmark-latest-stable-policy/v3"; }],
+  ["manifest alternate version", "manifest", (p) => { p.devDependencies.react = "19.0.0"; }],
+  ["manifest alternate resolution", "manifest", (p) => { p.dependencies = { react: "19.3.1" }; }],
+  ["lock alternate version", "lockfile", (p) => { p.packages["node_modules/react"].version = "19.0.0"; }],
+  ["lock missing dependency", "lockfile", (p) => { delete p.packages["node_modules/react-dom"]; }],
+  ["lock duplicate compiler", "lockfile", (p) => { p.packages["node_modules/babel-preset-solid/node_modules/@babel/core"] = structuredClone(p.packages["node_modules/@babel/core"]); }],
+  ["lock duplicate framework", "lockfile", (p) => { p.packages["node_modules/somewhere/node_modules/react"] = { version: "19.3.1" }; }],
+  ["forced compiler peer", "lockfile", (p) => { p.packages["node_modules/babel-preset-solid"].peerDependencies["@babel/core"] = "^8.0.0"; }],
+]) test(`candidate policy fails closed on ${name}`, () => {
+  const r = evaluateLatestStable(mutateCandidate(key, edit)); assert.equal(r.valid, false); assert.equal(r.status, "invalid");
+  assert.equal(r.groupComparisonEligible, false); assert.ok(!r.candidates?.length); assert.ok(r.errors.length > 0);
+});
+
+test("an actual shared compiler consumer remains blocked instead of borrowing another candidate's disposition", () => {
+  const r = evaluateLatestStable(mutateCandidate("lockfile", (p) => { p.packages["node_modules/react"].dependencies = { "@babel/core": "^7.0.0" }; }));
+  assert.equal(r.valid, true, JSON.stringify(r.errors));
+  const react = r.candidates.find((row) => row.app === "react");
+  assert.ok(react.dependencies.some((d) => d.package === "@babel/core"));
+  assert.ok(react.blockers.includes("not-latest-stable:@babel/core"));
+  assert.equal(react.status, "blocked"); assert.equal(react.latestStableEligible, false);
 });
