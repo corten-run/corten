@@ -330,6 +330,12 @@ or causes the recorded executable to run. A self-recorded digest is not an indep
 executable attestation. Every custom-clock counter count/rate must join the full raw stream,
 and latency average must match its raw sum/point count, not just its extrema.
 
+The isolated controller also joins all four production v2 load-asset hashes to
+its measured-commit source binding. Matching a mutable local producer alone is
+not sufficient. Its captured verifier includes the complete fixed-stream and
+timed-outcome import closure; neither evidence nor a recorded producer path can
+select executable code. Historical v1 evidence stays on its original verifier.
+
 The disjoint successor `timed-outcomes.mjs` derives complete or incomplete load observations
 and projects all requested pass/phase cells with failure counts and ranges. Normal exit99
 can retain a complete classified no-drop load observation; it does not itself attribute a

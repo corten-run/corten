@@ -10,10 +10,10 @@ import { summarizeSamples } from "../catalog/stats.mjs";
 const same = (a, b, message) => assert.ok(isDeepStrictEqual(a, b), message);
 const count = (n) => Number.isSafeInteger(n) && n >= 0;
 export const captureLimits = Object.freeze({ ...streamLimits, stderrBytes: 4 * 2 ** 20, auxiliaryBytes: 2 * 2 ** 20 });
-const sources = ["load.js", "load-outcome.js", "timed-load.js", "fixed-prototype-load.js"];
+export const producerSources = Object.freeze(["load.js", "load-outcome.js", "timed-load.js", "fixed-prototype-load.js"]);
 export function producerProvenance() {
   return { schema: "json-api-producer/v2", fixedOutput: "full-stock-json-stdout", changedGeneratorIO: true, gzip: false,
-    limits: captureLimits, sources: Object.fromEntries(sources.map((name) => [name, sha256(readFileSync(new URL(name, import.meta.url)))])) };
+    limits: captureLimits, sources: Object.fromEntries(producerSources.map((name) => [name, sha256(readFileSync(new URL(name, import.meta.url)))])) };
 }
 export const verifyProducer = (value) => same(value, producerProvenance(), "timed producer source/I/O/caps differ from verifier");
 
