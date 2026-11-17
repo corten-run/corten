@@ -91,7 +91,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const confirmDeleted = async () => {
     assert.ok(state.deletionIntentAt, "deletion intent required before absence confirmation");
     let previous = now(); const deadline = previous + 120000;
-    const uncertain = "deletion not confirmed; outcome uncertain; preserve intent without another DELETE";
+    const uncertain = "deletion not confirmed; outcome uncertain; no automatic repeated deletion; preserve intent without another DELETE";
     const remaining = () => {
       check(); const current = now();
       assert.ok(Number.isFinite(current) && Number.isFinite(deadline) && current >= previous && current < deadline, uncertain);
