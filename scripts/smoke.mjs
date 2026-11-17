@@ -5296,6 +5296,36 @@ async function run(browser) {
     );
     await sheet.evaluate(() => ["smoke-queue", "smoke-queue-spot", "smoke-queued"].forEach((id) => document.getElementById(id)?.remove()));
     await sheet.close();
+    // Without JavaScript the same forms are plain GETs: each answer is the whole sheet page, in
+    // its layout, with what was asked for drawn open, never the bare fragment (#1423).
+    const noScript = await browser.newContext({ javaScriptEnabled: false });
+    const bare = await noScript.newPage();
+    await bare.goto(`${base}/smoke/sheet`);
+    /** Presses `name` and says where the page landed and what is open. @param {string} name */
+    const pressed = async (name) => {
+      const [answer] = await Promise.all([bare.waitForNavigation(), bare.getByRole("button", { name, exact: true }).click()]);
+      return bare.evaluate((status) => ({
+        status,
+        path: location.pathname,
+        title: document.title,
+        main: !!document.querySelector("main"),
+        dialog: !!(/** @type {HTMLDialogElement | null} */ (document.getElementById("smoke-sheet"))?.open),
+        details: !!(/** @type {HTMLDetailsElement | null} */ (document.getElementById("smoke-more"))?.open),
+      }), answer?.status());
+    };
+    const bareSheet = await pressed("Preview");
+    check(
+      "without JavaScript a form that asks for a dialog gets the page with the dialog open, not the bare dialog",
+      bareSheet.status === 200 && bareSheet.path === "/smoke/sheet/open" && bareSheet.main && bareSheet.title.startsWith("Sheet") && bareSheet.dialog && !bareSheet.details,
+      JSON.stringify(bareSheet),
+    );
+    const bareMore = await pressed("Unfold");
+    check(
+      "without JavaScript a form that asks for a <details> gets the page with it open",
+      bareMore.status === 200 && bareMore.path === "/smoke/sheet/more" && bareMore.main && bareMore.details && !bareMore.dialog,
+      JSON.stringify(bareMore),
+    );
+    await noScript.close();
   }
   await page.focus("#kept button");
   const buttonFocus = await page.evaluate(async (html) => {

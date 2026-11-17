@@ -134,9 +134,10 @@ fn StyledNote() -> impl Patch {
 }
 
 /// Answers with the note: the patch brings the area's stylesheet, so the note is styled on a page
-/// outside the area as it is on one inside.
+/// outside the area as it is on one inside. Without JavaScript the form goes back to the
+/// watchlist, where the test writes it.
 async fn styled(req: Req) -> HtmlResult {
-    req.patch(StyledNote {})
+    req.patch_or(StyledNote {}, || async { req.redirect(&crate::app::url::Home::default()) }).await
 }
 
 #[derive(Id)]
@@ -148,12 +149,26 @@ struct SmokeMoreId;
 /// The page: the triggers outside the dialog and the `<details>`, and the two their answers
 /// replace.
 async fn sheet_page(req: Req) -> HtmlResult {
+    sheet(&req, false, false)
+}
+
+/// The sheet's page with the dialog (`sheet_open`) or the `<details>` (`more_open`) drawn
+/// open, as a form that asks for one is answered without JavaScript.
+fn sheet(req: &Req, sheet_open: bool, more_open: bool) -> HtmlResult {
     req.page(html! {
-        <Layout req={&req} title="Sheet" viewer={None} head="">
+        <Layout req={req} title="Sheet" viewer={None} head="">
             <form method="get" action={url::OpenSheet} data-patch><button>"Preview"</button></form>
-            <dialog id={SmokeSheetId}></dialog>
+            if sheet_open {
+                <Sheet />
+            } else {
+                <dialog id={SmokeSheetId}></dialog>
+            }
             <form method="get" action={url::OpenMore} data-patch><button>"Unfold"</button></form>
-            <details id={SmokeMoreId}><summary>"More"</summary></details>
+            if more_open {
+                <More />
+            } else {
+                <details id={SmokeMoreId}><summary>"More"</summary></details>
+            }
         </Layout>
     })
 }
@@ -171,19 +186,26 @@ fn Sheet() -> impl Patch {
     }
 }
 
-/// Answers any form that asks with the dialog drawn open.
-async fn open_sheet(req: Req) -> HtmlResult {
-    req.patch(Sheet {})
-}
-
-/// Answers with the `<details>` drawn open.
-async fn open_more(req: Req) -> HtmlResult {
-    req.patch(html! {
+/// The `<details>` drawn open.
+#[component]
+fn More() -> impl Patch {
+    html! {
         <details id={SmokeMoreId} open>
             <summary>"More"</summary>
             <p>"Unfolded"</p>
         </details>
-    })
+    }
+}
+
+/// Answers any form that asks with the dialog drawn open; without JavaScript, the sheet's page
+/// with it open.
+async fn open_sheet(req: Req) -> HtmlResult {
+    req.patch_or(Sheet {}, || async { sheet(&req, true, false) }).await
+}
+
+/// Answers with the `<details>` drawn open; without JavaScript, the sheet's page with it open.
+async fn open_more(req: Req) -> HtmlResult {
+    req.patch_or(More {}, || async { sheet(&req, false, true) }).await
 }
 
 /// A shipment's package: drawn by `PackageFields`, which knows nothing of the script that fills it.
@@ -339,4 +361,33 @@ async fn reading(req: Req, Params(at): Params<url::Reading>) -> HtmlResult<corte
 /// One large event and then nothing: the browser must show it without more of the stream coming.
 async fn large() -> LiveResponse {
     corten::live(stream::once(async { LargeList {}.to_html() }).chain(stream::pending()))
+}
+
+#[cfg(test)]
+mod tests {
+    use corten::Mode;
+
+    use super::url;
+    use crate::market::Market;
+
+    /// The smoke's patches answer a browser without JavaScript with a page or a redirect, never the
+    /// bare fragment (which a debug build refuses with a 500): the styled note's form goes back to
+    /// the watchlist, and Preview and Unfold draw the sheet's page with the dialog or the
+    /// `<details>` open. The runtime's request still gets the patch.
+    #[tokio::test]
+    async fn the_smokes_patches_answer_a_plain_request_with_a_page_or_a_redirect() {
+        let app = crate::app::app(Market::new()).area(|area| url::area(area).components(super::COMPONENTS)).test();
+        let plain = app.post(&url::Styled).await;
+        assert_eq!(plain.status(), 303, "{}", plain.text());
+        assert_eq!(plain.headers()["location"], "/");
+        let patch = app.post(&url::Styled).mode(Mode::Action).await;
+        assert_eq!(patch.status(), 200, "{}", patch.text());
+        assert!(patch.headers().contains_key("corten-patch") && patch.text().contains(">Saved</p>"), "{}", patch.text());
+        let (sheet, more) = (app.get(&url::OpenSheet).await, app.get(&url::OpenMore).await);
+        for (to, open) in [(sheet, "<p>Preview</p>"), (more, "<p>Unfolded</p>")] {
+            assert_eq!(to.status(), 200, "{}", to.text());
+            assert!(!to.headers().contains_key("corten-patch"), "a page: {}", to.text());
+            assert!(to.text().contains(" open>") && to.text().contains(open), "drawn open: {}", to.text());
+        }
+    }
 }
