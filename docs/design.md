@@ -5405,10 +5405,16 @@ rules something out.
     Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the mark goes; or the
     runtime gains a general way to hand a module its events, when the hooks here become that.
 
-    Last checked: 2026-11-17, the runtime's size on `5365fede0` against main's runtime at
-    `b0c2abd4d` (built the same as at `f5f2132aa`), and each hook's share taken out of that build,
-    the runtime unchanged since; 2026-11-17, the module's size on `17884c6f5` against
-    `7a064d11d`'s; 2026-11-17, the watchlist smoke on `17884c6f5`, Chromium 156.0.8078.4 443
+    Last checked: 2026-11-17, the runtime's size on `7784737fb` against main's at `7d9bbbf1e`,
+    and `sendAgain`'s share on `a9dd75df6` against `68f245d5a`, the other hooks unchanged since
+    each hook's share was taken out of `5365fede0`'s build; 2026-11-17, the module's
+    size on `a9dd75df6` against `68f245d5a`'s; 2026-11-17, the watchlist smoke on `7784737fb`'s
+    build with `b1aaeb0db`'s script: its 44 `data-address` checks passed in Chromium 156.0.8078.4,
+    Firefox 157.0 and WebKit 27.2, and all 455 checks in Chromium; 2026-11-17, the steps for a GET
+    sent while another marked form's write is on its way, and for an editor's write answered with
+    a save, a 422 and a 409 while a filter's GET waits, against `68f245d5a`'s module served in
+    `7784737fb`'s place: all four fail in all three engines and pass with `7784737fb`'s;
+    2026-11-17, the watchlist smoke on `17884c6f5`, Chromium 156.0.8078.4 443
     checks, Firefox 157.0 441, WebKit 27.2 320 and 5 over HTTP, 92 skipped in WebKit, the
     `data-address` checks 41 in each browser and none skipped, all passed; 2026-11-17, the steps
     for a GET that waited for its form's write, a field the patch takes away and entries of
