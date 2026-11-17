@@ -1139,8 +1139,7 @@ stops at any other, whether `html!` writes it (a `<div>` in a `<p>`, a `<form>` 
    closes no element open (a `</p>` or `</br>`, which adds an element or, in an `<svg>` or
    `<math>`, closes it);
 2. an HTML element's start tag ending `/>`, and a start tag the patch ends in before its `>`
-   (`<col data-note='` at the end, which the browser drops with what follows its `<`, so a loss
-   found in an element open around it is not reported);
+   (`<col data-note='` at the end, which the browser drops with what follows its `<`);
 3. a comment a browser ends elsewhere than at its `-->` (`<!-->`, `<!--->`, `--!>` in it), a
    CDATA section outside an `<svg>` or `<math>` or not ended by `]]>`, and a doctype other than
    `<!DOCTYPE html>` (a quoted `>` in one ends it early);

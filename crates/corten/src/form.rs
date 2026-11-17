@@ -2112,8 +2112,7 @@ pub(crate) fn keyless_submit_field(html: &str) -> Option<&str> {
 
 /// How deep a scan of markup is in `<template>`s, read on from where it last stopped, so the
 /// markup is read once however many fields it holds. It reads the markup `html!` writes, where a
-/// `<` in text or a value is `&lt;` and an attribute is `name="value"` with no space around the `=`
-/// (hand-written `raw(..)` markup such as `shadowrootmode = "open"` can mislead it); it does not parse literal `<script>` or `<style>` text,
+/// `<` in text or a value is `&lt;`; it does not parse literal `<script>` or `<style>` text,
 /// comments or `raw(..)`, so a `<template` in them can mislead this debug check.
 #[cfg(debug_assertions)]
 #[derive(Default)]

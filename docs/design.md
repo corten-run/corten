@@ -5080,8 +5080,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
    element, which the markup does not say was written as its text; in a `<form>` a table's
    reading would put in empty, any token before what it holds but a comment, a bogus comment, a
    `<!DOCTYPE html>` and a void element's end tag; a start tag the patch ends in before its `>` (`<col data-note='`
-   at the end, which the browser drops with what follows its `<`, an end tag in its value too, so a
-   loss found in an element open around it is not reported); an HTML `<image>`, which the browser reads as an `<img>`;
+   at the end, which the browser drops with what follows its `<`, an end tag in its value too); an HTML `<image>`, which the browser reads as an `<img>`;
    a `<plaintext>`, and a `<noscript>`, whose content Firefox reads as text and Chromium and
    WebKit as elements; and an element the browser does not put where it is written: a table part
    outside a table, anything in a `<table>`, row group or row but its own parts, a `<script>`,

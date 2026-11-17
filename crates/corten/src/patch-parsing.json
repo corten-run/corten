@@ -7185,7 +7185,7 @@
         "tr#r",
         "div#d"
       ],
-      "unread": "a start tag the patch ends in before its >"
+      "lost": "<table> in <div id=\"d\"> is taken apart"
     },
     {
       "html": "<tr id=\"r\"></tr><div id=\"d\"><math><annotation-xml encoding=\"text&#x2F;html\"><form><label>x</label></form></annotation-xml></math></div>",
@@ -7321,6 +7321,48 @@
         ]
       },
       "unread": "<template> in <annotation-xml>, an SVG or MathML integration point"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><form id=\"f\"><b>x</b><i title='</form>",
+      "parsed": [
+        "tr#r",
+        "form#f",
+        "b"
+      ],
+      "lost": "<form id=\"f\"> loses what it holds, since <tr id=\"r\"> comes first"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><div id=\"d\"><form><b>x</b><i title='</form></div>",
+      "parsed": [
+        "tr#r",
+        "div#d(form,b)"
+      ],
+      "lost": "<form> in <div id=\"d\"> loses what it holds"
+    },
+    {
+      "html": "<tr id=\"r\"></tr><table id=\"t\"><b title='",
+      "parsed": [
+        "tr#r"
+      ],
+      "lost": "<table id=\"t\"> is dropped, since <tr id=\"r\"> comes first"
+    },
+    {
+      "html": "<tr id=\"a\"></tr><svg><foreignObject><select><option>1</option></select></foreignObject></svg><tr id=\"b\"></tr>",
+      "parsed": [
+        "tr#a",
+        "svg(foreignObject(select(option)))",
+        "tr#b"
+      ],
+      "lost": null
+    },
+    {
+      "html": "<tr id=\"a\"></tr><math><mi><select><option>1</option></select></mi></math><tr id=\"b\"></tr>",
+      "parsed": [
+        "tr#a",
+        "math(mi(select(option)))",
+        "tr#b"
+      ],
+      "lost": null
     }
   ]
 }

@@ -86,7 +86,8 @@ pub(crate) struct Tag<'a> {
     /// It ends `/>`.
     pub self_closing: bool,
     /// It ends at its `>`: the patch does not end inside it (a browser drops a tag the input ends
-    /// in, `<col data-note='` without its quote's end or its `>`).
+    /// in, `<col data-note='` without its quote's end or its `>`). Read by the debug check only.
+    #[cfg(any(debug_assertions, test))]
     pub complete: bool,
 }
 
@@ -152,7 +153,15 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
             attrs.push((attr, value));
         }
     }
-    Tag { start, end: (i + 1).min(bytes.len()), name, attrs, self_closing, complete: i < bytes.len() }
+    Tag {
+        start,
+        end: (i + 1).min(bytes.len()),
+        name,
+        attrs,
+        self_closing,
+        #[cfg(any(debug_assertions, test))]
+        complete: i < bytes.len(),
+    }
 }
 
 /// Each start tag of `html` in order, past comments, end tags, a doctype and the text of the
@@ -1149,6 +1158,20 @@ struct Read {
     unread: Option<String>,
 }
 
+/// Where an HTML element in foreign content is, for a message: `in <foreignobject>, an SVG or MathML
+/// integration point` when the innermost element open is the integration point, and `in <div>, inside
+/// <foreignobject>, an SVG or MathML integration point` when it is an HTML element inside one,
+/// naming the nearest SVG or MathML element.
+#[cfg(any(debug_assertions, test))]
+fn integration_point(open: &[Open]) -> String {
+    let holder = open.last().map_or("", |last| last.name.as_str());
+    match open.iter().rev().find(|el| el.foreign).map(|el| el.name.as_str()) {
+        Some(point) if point != holder => format!("in <{holder}>, inside <{point}>, an SVG or MathML integration point"),
+        Some(point) => format!("in <{point}>, an SVG or MathML integration point"),
+        None => format!("in <{holder}>"),
+    }
+}
+
 /// [`patch_parse`] for one way of reading a leading head tag ([`DECIDING_HEAD`]'s
 /// decide when `head_decides`), in one pass that also reads whether the patch is closed as
 /// [`Read`] says. `nested`: `html` is the content of a `<template>` in the patch, which is on the
@@ -1320,10 +1343,10 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         let tag = start_tag(html, i);
         if !tag.complete {
             // The patch ends in it, and the browser drops it, with what the patch writes after its
-            // `<`, an end tag in a value included: as where an end tag is left out, a loss found in
-            // the elements open around it is not kept.
-            let since = open.first().map_or(usize::MAX, |outer| outer.start);
-            unread!(since; "{}, a start tag the patch ends in before its >", shown(&html[tag.start..]));
+            // `<` (an end tag in a value too). What came before it is placed as written, and no
+            // verdict before it read past it (what a form holds stops at it), so a loss found before
+            // is kept.
+            unread!(usize::MAX; "{}, a start tag the patch ends in before its >", shown(&html[tag.start..]));
         }
         i = tag.end;
         let Some((foreign_element, within)) = placed(open.last().map_or(Within::Html, |last| last.within), &tag) else {
@@ -1346,10 +1369,10 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             // Past its end tag, Firefox reads the rest of the patch as a body's (it drops a later
             // row, and a form keeps what it holds), and Chromium and WebKit by the table's rules,
             // as the HTML standard does.
-            let holder = open.last().map_or("", |last| last.name.as_str());
+            let point = integration_point(&open);
             unread!(
                 usize::MAX;
-                "{} in <{holder}>, an SVG or MathML integration point, past whose end tag Firefox reads the rest by other rules than a table's{}",
+                "{} {point}, past whose end tag Firefox reads the rest by other rules than a table's{}",
                 shown(written),
                 since(first)
             );
@@ -1454,8 +1477,8 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
             && open.first().is_some_and(|outer| !TABLE_PARTS.contains(&outer.name.as_str()))
             && (part || name == "table" || name == "form")
         {
-            let holder = open.last().map_or("", |last| last.name.as_str());
-            unread!(usize::MAX; "{} in <{holder}>, an SVG or MathML integration point, where a table's reading moves it{}", shown(written), since(first));
+            let point = integration_point(&open);
+            unread!(usize::MAX; "{} {point}, where a table's reading moves it{}", shown(written), since(first));
         }
         // An HTML element, or an `<svg>` or `<math>` in one, the browser does not put where it is
         // written: what it does there is not followed (in a `<template>`'s content it is read when
@@ -1704,9 +1727,6 @@ mod tests {
                 r#"<b title='</form> in <form id="f">, which the check of what a form holds does not read"#,
             ),
             (r#"<tr id="r"></tr><div id="d"><form><b title="</form></div>"#, r#"<b title="</form></div> in <form>"#),
-            // A loss found in the elements open around a start tag the patch ends in is not kept,
-            // as where an end tag is left out.
-            (r#"<tr id="r"></tr><div id="d"><table></table><b title='"#, "<b title=', a start tag the patch ends in"),
             // An `<annotation-xml>` whose `encoding` is `text/html` written with a character
             // reference is an HTML integration point.
             (
@@ -1816,6 +1836,31 @@ mod tests {
             assert_eq!(parse.problem.as_deref(), Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#), "{html}");
             assert!(parse.unread.is_some(), "{html}");
         }
+        // A loss found in an element still open at a start tag the patch ends in is kept: the
+        // browser places what came before as written, and closes it at the patch's end.
+        for (html, lost) in [
+            (r#"<tr id="r"></tr><form id="f"><b>x</b><i title='</form>"#, r#"<form id="f"> loses what it holds"#),
+            (
+                r#"<tr id="r"></tr><div id="d"><form><b>x</b><i title='</form></div>"#,
+                r#"<form> in <div id="d"> loses what it holds"#,
+            ),
+            (r#"<tr id="r"></tr><table id="t"><b title='"#, r#"<table id="t"> is dropped"#),
+            (r#"<tr id="r"></tr><div id="d"><table></table><b title='"#, r#"<table> in <div id="d"> is taken apart"#),
+        ] {
+            let parse = super::patch_parse(html);
+            let problem = parse.problem.unwrap_or_else(|| panic!("{html}: no loss"));
+            assert!(problem.contains(lost), "{html}: {problem}");
+            assert!(parse.unread.is_some_and(|why| why.contains("a start tag the patch ends in")), "{html}");
+        }
+        // The round-9 case: a form that holds only a start tag the patch ends in is kept empty.
+        assert_eq!(super::patch_parse_problem(r#"<tr id="r"></tr><form id="f"><b title='</form>"#), None);
+        // An HTML element in an integration point is named with the SVG or MathML element it is in.
+        let why = super::patch_parse(
+            r#"<tr id="a"></tr><svg><foreignObject><div><template></template></div></foreignObject></svg><tr id="b"></tr>"#,
+        )
+        .unread
+        .expect("a stop");
+        assert!(why.contains("<template> in <div>, inside <foreignobject>, an SVG or MathML integration point"), "{why}");
         // A loss found before a `</p>` in an `<svg>` is kept.
         let parse = super::patch_parse(r#"<p id="m"></p><tr id="r"></tr><svg id="s"></p></svg>"#);
         assert_eq!(parse.problem.as_deref(), Some(r#"<tr id="r"> is dropped, since <p id="m"> comes first"#));
