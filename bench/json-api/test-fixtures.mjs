@@ -32,7 +32,7 @@ export function functional(profile, records) {
 }
 export function k6Summary(count, seconds) {
   return { root_group: { checks: Object.fromEntries(["JSON status 200", "JSON content type"].map((key) => [key, { passes: count, fails: 0 }])) },
-    metrics: { http_reqs: { values: { count, rate: count / seconds } },
+    metrics: { http_reqs: { values: { count, rate: count / seconds } }, iterations: { values: { count, rate: count / seconds } },
     http_req_duration: { values: { avg: 2, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 } },
     http_req_failed: { values: { rate: 0 } }, checks: { values: { passes: count * 2, fails: 0 } }, dropped_iterations: { values: { count: 0 } } } };
 }
@@ -58,14 +58,14 @@ export function runtimeInfo(expected, context, role = "app") {
 }
 export const runtime = (expected, context) => runtimeReceipt(runtimeInfo(expected, context), expected, context);
 const participants = (expected, context, roles) => Object.fromEntries(roles.map((role) => [role, participantReceipt(runtimeInfo(expected, context, role), expected, context, role)]));
-export function result() {
-  const group = descriptor(), options = parseArgs(["j1", "--group", "json-api", "--passes", "1"]), artifacts = new Map();
+export function result(args = []) {
+  const group = descriptor(), options = parseArgs(["j1", "--group", "json-api", "--passes", "1", ...args]), artifacts = new Map();
   let serial = 0;
   const put = (value) => { const path = `test-${serial++}.json`, bytes = JSON.stringify(value); artifacts.set(path, bytes); return { path, sha256: sha256(bytes) }; };
   const load = (ref) => { if (!ref || !artifacts.has(ref.path)) throw new Error("raw artifact missing"); const bytes = artifacts.get(ref.path); if (sha256(bytes) !== ref.sha256) throw new Error("raw digest differs"); return JSON.parse(bytes); };
   const s = { schema, group, options, timingPlan: timingPlan(options), round: "j1", commit: "a".repeat(40), commitAfter: "a".repeat(40), dirty: false, dirtyAfter: false,
     complete: true, checksPassed: true, failures: [], cleanupFailures: [], startedAt: "2026-11-12T10:00:00Z", finishedAt: "2026-11-12T11:00:00Z",
-    measurement: { cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
+    measurement: { cpus: cpuSettings({}), encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
       loadMemoryBytes: 2 ** 31, nativeProfile: group.nativeProfile, phases: ["warmup", ...phases] },
     runId: "json-api-j1-0123456789", host: { checkout: "/synthetic/checkout" },
     toolExecutions: { node: { Entrypoint: ["docker-entrypoint.sh"], Cmd: ["node"] }, k6: { Entrypoint: ["k6"], Cmd: null } },

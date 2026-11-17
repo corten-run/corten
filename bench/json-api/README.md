@@ -126,7 +126,22 @@ Every load phase retains host start/end clocks and k6's measured `testRunDuratio
 The k6 duration must cover the configured interval without exceeding its existing 10-second
 graceful stop; the host bracket must contain that duration with at most 10 seconds of control
 overhead. Request count/rate must agree with that measured k6 clock. Fixed phases must complete
-exactly `rate * duration` requests (9000 at the defaults), not merely report zero failures.
+at least the configured `rate * duration` arrivals, with no failures or dropped iterations,
+not merely report zero failures. The upper count follows the pinned
+[k6 v2.4.0 scheduler](https://github.com/grafana/k6/blob/v2.4.0/lib/executor/constant_arrival_rate.go):
+index zero is immediate, subsequent arrivals use an integer-nanosecond period
+`floor(1e9 / rate)` ([period conversion](https://github.com/grafana/k6/blob/v2.4.0/lib/executor/helpers.go)),
+and the last timer races the duration deadline. Thus completed requests cannot exceed
+`floor(duration * 1e9 / floor(1e9 / rate)) + 1`: 9000 or 9001 at the defaults.
+This is a schedule bound, not a percentage tolerance or permission to extend arrivals into
+grace. Counts below the configured offer or above that bound fail, even if checks and upstream
+reads are rewritten consistently. Every request still needs both passing named checks and,
+in API mode, exactly one upstream read. Retained `iterations` must match the request count
+and its rate (if supplied) must match the measured clock; retained dropped counters must be
+zero, including their rate if supplied. These optional standard k6 counters are cross-checked
+when present, not new mandatory evidence in `json-api-results/v1`. Historical v1 captures
+without them retain the request/check/clock/source accounting checks; no independent started
+iteration count is inferred from a metric that was not captured.
 Raw statistics must have strictly increasing timestamps inside the host bracket, with no gap
 or uncovered edge over five seconds. These evidence limits reject incomplete measurements;
 they do not establish machine admission or saturation. Existing raw artifacts missing these

@@ -211,7 +211,27 @@ export function deriveLoad(raw, expected, phase, options, tools, context) {
   assert.ok(Number.isFinite(duration) && duration >= requested && duration <= requested + 10000, "phase did not run its configured duration/grace");
   const rate = metrics.requests * 1000 / duration;
   assert.ok(Math.abs(metrics.rps - rate) <= Math.max(1e-9, rate * 1e-9), "request count/rate/phase duration differ");
-  if (phase === "fixed") assert.equal(metrics.requests, options.rate * options.duration, "fixed phase must complete all offered requests");
+  if (phase === "fixed") {
+    // k6 v2.4.0 schedules index 0 immediately, then integer-nanosecond periods.
+    // The final timer races the duration deadline; grace drains work, not arrivals.
+    const periodNs = Math.floor(1e9 / raw.config.rate);
+    const lastArrival = Math.floor(raw.config.seconds * 1e9 / periodNs);
+    assert.ok(metrics.requests >= raw.config.rate * raw.config.seconds && metrics.requests <= lastArrival + 1,
+      "fixed phase must complete all offered requests without unexplained extra work");
+    // v1 captures need not retain these counters. When present, they must agree
+    // with this script's one request per completed iteration and zero drops.
+    if (Object.hasOwn(raw.k6.metrics, "iterations")) {
+      const iterations = raw.k6.metrics.iterations?.values ?? raw.k6.metrics.iterations;
+      assert.equal(iterations?.count, metrics.requests, "JSON requests/completed iterations differ");
+      if (Object.hasOwn(iterations, "rate")) assert.ok(Math.abs(iterations.rate - rate) <= Math.max(1e-9, rate * 1e-9),
+        "iteration count/rate/phase duration differ");
+    }
+    if (Object.hasOwn(raw.k6.metrics, "dropped_iterations")) {
+      const dropped = raw.k6.metrics.dropped_iterations?.values ?? raw.k6.metrics.dropped_iterations;
+      assert.equal(dropped?.count, 0, "load dropped iterations missing or nonzero");
+      if (Object.hasOwn(dropped, "rate")) assert.equal(dropped.rate, 0, "load dropped iteration rate differs");
+    }
+  }
   const named = raw.k6.root_group?.checks;
   assert.deepEqual(Object.keys(named ?? {}).sort(), ["JSON content type", "JSON status 200"], "wrong/missing JSON load checks");
   for (const check of Object.values(named)) { assert.equal(check.passes, metrics.requests); assert.equal(check.fails, 0); }

@@ -4,14 +4,116 @@ import test from "node:test";
 import { createServer } from "node:http";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { catalogServer } from "../catalog/upstream.mjs";
 import { marketplaceServer } from "../marketplace/upstream.mjs";
 import { aggregate, deriveLoad, descriptor, loadConfig, participantReceipt, payloads, runtimeContext, runtimeReceipt } from "./contract.mjs";
 import { functionalVerifier, verifyCold, verifyFunctional } from "./evidence.mjs";
 import { captureJson } from "./check.mjs";
 import { inspectJson } from "./report.mjs";
-import { functional, observations, result, runtimeInfo } from "./test-fixtures.mjs";
+import { inspectNative } from "../workloads/isolated/native-replay.mjs";
+import { functional, k6Summary, observations, result, runtimeInfo } from "./test-fixtures.mjs";
+
+test("fixed arrival accounting accepts the pinned scheduler's boundary iteration in every JSON case", async (t) => {
+  const e = result(), s = e.summary;
+  for (const profile of descriptor().cases) {
+    const run = s.apps.corten.runs[profile.key][0], raw = e.load(run.phases.fixed.raw);
+    const count = s.options.rate * s.options.duration + 1;
+    raw.k6 = k6Summary(count, raw.clock.k6DurationMs / 1000);
+    if (profile.source === "api") raw.upstreamReads.after = { [payloads[profile.payload].first]: count };
+    const metrics = deriveLoad(raw, run.identity, "fixed", s.options, s.tools, runtimeContext(s, profile));
+    assert.equal(metrics.requests, count, profile.key);
+    run.phases.fixed = { raw: e.put(raw), metrics };
+    s.apps.corten.aggregates[profile.key].fixed = { ...aggregate([metrics]), asked: 1 };
+  }
+  const report = inspectJson(s, { load: e.load });
+  assert.equal(report.baseline, true, report.warnings.slice(0, 3).join("\n"));
+  const folder = mkdtempSync(join(tmpdir(), "json-fixed-boundary-"));
+  t.after(() => {
+    assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep));
+    rmSync(folder, { recursive: true, force: true });
+  });
+  for (const [path, bytes] of e.artifacts) writeFileSync(join(folder, path), bytes);
+  const save = () => writeFileSync(join(folder, "summary.json"), JSON.stringify(s));
+  const binding = { request: { group: "json-api", round: s.round, commit: s.commit }, selection: { apps: s.group.apps },
+    execution: { effectiveOptions: s.options }, resources: { expectedCpus: s.measurement.cpus } };
+  save();
+  const replay = await inspectNative(binding, folder);
+  assert.equal(replay.status, "verified");
+  assert.equal(replay.attemptComplete, true);
+  assert.deepEqual(replay.blockers, ["native-proof-or-external-observation-required"], "synthetic replay does not establish native qualification");
+  const profile = descriptor().cases.find((p) => p.source === "api"), run = s.apps.corten.runs[profile.key][0];
+  const good = run.phases.fixed;
+  for (const count of [1, s.options.rate * s.options.duration - 1, s.options.rate * s.options.duration + 2]) {
+    const raw = e.load(good.raw), seconds = raw.clock.k6DurationMs / 1000;
+    raw.k6 = k6Summary(count, seconds);
+    raw.upstreamReads.after = { [payloads[profile.payload].first]: count };
+    const metrics = { ...good.metrics, requests: count, rps: count / seconds, perCpuSecond: count / (good.metrics.cpuUsec / 1e6) };
+    run.phases.fixed = { raw: e.put(raw), metrics };
+    s.apps.corten.aggregates[profile.key].fixed = { ...aggregate([metrics]), asked: 1 };
+    writeFileSync(join(folder, run.phases.fixed.raw.path), e.artifacts.get(run.phases.fixed.raw.path)); save();
+    assert.equal(inspectJson(s, { load: e.load }).baseline, false, `rewritten count ${count}`);
+    assert.equal((await inspectNative(binding, folder)).status, "invalid", `public replay: rewritten count ${count}`);
+  }
+});
+
+test("fixed count, rate, check, iteration and drop corruption fails even at an allowed boundary count", () => {
+  const e = result(), s = e.summary;
+  for (const profile of descriptor().cases) {
+    const run = s.apps.corten.runs[profile.key][0], raw = e.load(run.phases.fixed.raw);
+    const count = s.options.rate * s.options.duration + 1, seconds = raw.clock.k6DurationMs / 1000;
+    const setCount = (r, n) => {
+      r.k6 = k6Summary(n, seconds);
+      if (profile.source === "api") r.upstreamReads.after = { [payloads[profile.payload].first]: n };
+    };
+    setCount(raw, count);
+    const derive = (r) => deriveLoad(r, run.identity, "fixed", s.options, s.tools, runtimeContext(s, profile));
+    assert.equal(derive(raw).requests, count);
+    for (const [name, mutate] of [
+      ["one coherent request", (r) => setCount(r, 1)],
+      ["below offered", (r) => setCount(r, count - 2)],
+      ["extra unexplained work", (r) => setCount(r, count + 1)],
+      ["fractional request", (r) => setCount(r, count - 0.5)],
+      ["request rate", (r) => { r.k6.metrics.http_reqs.values.rate = count / s.options.duration; }],
+      ["named check coverage", (r) => { r.k6.root_group.checks["JSON status 200"].passes--; }],
+      ["named check failure", (r) => { r.k6.root_group.checks["JSON content type"].fails++; }],
+      ["total check coverage", (r) => { r.k6.metrics.checks.values.passes--; }],
+      ["total check failure", (r) => { r.k6.metrics.checks.values.fails++; }],
+      ["HTTP failure", (r) => { r.k6.metrics.http_req_failed.values.rate = 1 / count; }],
+      ["fewer completed iterations", (r) => { r.k6.metrics.iterations.values.count--; }],
+      ["extra completed iterations", (r) => { r.k6.metrics.iterations.values.count++; }],
+      ["iteration rate", (r) => { r.k6.metrics.iterations.values.rate *= 2; }],
+      ["malformed iterations", (r) => { r.k6.metrics.iterations = null; }],
+      ["dropped arrival", (r) => { r.k6.metrics.dropped_iterations.values.count = 1; }],
+      ["underload plus drop equals offer", (r) => { setCount(r, count - 2); r.k6.metrics.dropped_iterations.values.count = 1; }],
+      ["negative drops", (r) => { r.k6.metrics.dropped_iterations.values.count = -1; }],
+      ["drop rate", (r) => { r.k6.metrics.dropped_iterations.values.rate = 1; }],
+      ["malformed drops", (r) => { r.k6.metrics.dropped_iterations = {}; }],
+      ["upstream reads", (r) => { r.upstreamReads.after[payloads[profile.payload].first] = count - 1; }],
+    ]) {
+      const bad = structuredClone(raw); mutate(bad);
+      assert.throws(() => derive(bad), `${profile.key}: ${name}`);
+    }
+    const legacy = structuredClone(raw); delete legacy.k6.metrics.iterations; delete legacy.k6.metrics.dropped_iterations;
+    assert.equal(derive(legacy).requests, count, "v1 does not require new raw counters");
+    const flat = structuredClone(raw);
+    for (const [key, value] of Object.entries(flat.k6.metrics)) flat.k6.metrics[key] = value.values;
+    assert.equal(derive(flat).requests, count, "legacy k6 summary-export metric shape");
+    flat.k6.metrics.iterations.count--;
+    assert.throws(() => derive(flat), /requests\/completed iterations differ/);
+  }
+});
+
+test("fixed arrival upper bound uses nanosecond schedule positions, not a percent tolerance or grace", () => {
+  for (const [rate, duration, offered, upper] of [[1, 1, 1, 2], [150, 60, 9000, 9001], [9990, 300, 2997000, 2997003]]) {
+    const e = result(["--rate", String(rate), "--duration", String(duration)]), s = e.summary, profile = descriptor().cases[0];
+    const run = s.apps.corten.runs[profile.key][0], raw = e.load(run.phases.fixed.raw);
+    const derive = (count) => deriveLoad({ ...raw, k6: k6Summary(count, raw.clock.k6DurationMs / 1000) },
+      run.identity, "fixed", s.options, s.tools, runtimeContext(s, profile));
+    for (const count of [offered, upper]) assert.equal(derive(count).requests, count, `${rate}/s ${duration}s`);
+    for (const count of [offered - 1, upper + 1, offered + rate * 10]) assert.throws(() => derive(count));
+  }
+});
 
 test("prepared functional replay preserves exact, reformatted and typed complete-record checks", () => {
   for (const profile of descriptor().cases) {
