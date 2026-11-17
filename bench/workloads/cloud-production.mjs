@@ -10,7 +10,7 @@ import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { validateFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { failedNativeRoots } from "./cloud-retirement.mjs";
+import { failedNativePolicy, failedNativeRoots } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -72,7 +72,7 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
       if (saved.group === "mixed-production") verifyMixedSignal(join(physicalRequest, `groups-${options.round}`), saved);
       else assert.ok(saved.archiveSha256 && saved.evidenceSha256 && saved.evidence && saved.fullGroupQualified === false, "preserved failed evidence required");
       recovery = { measuredCommit: saved.commit, archiveSha256: saved.archiveSha256, evidenceSha256: saved.evidenceSha256, roots,
-        policy: "r21-9f-failed-native-custody-only-no-qualification" };
+        policy: failedNativePolicy(saved) };
     } else assert.equal(saved.commit, head, "current native verifier needs the measured integrated checkout");
     reservationSha256 = digest(bytes);
   }
