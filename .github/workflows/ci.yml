@@ -60,15 +60,15 @@ jobs:
           node "$RUNNER_TEMP/ts6/node_modules/typescript/bin/tsc" -p jsconfig.json
       - name: Pinned compiler checks the template's scripts
         run: cargo test -p corten-cli the_pinned_repository_compiler_checks_template_scripts -- --ignored --nocapture
+      # No cargo build between the commands: corten new and corten ui add write the lock the
+      # check requires, so this is the path a developer takes straight after creating the app.
       - name: corten new writes an app that passes corten check, and so does every kit component in it
         run: |
           cargo build -q -p corten-cli
           target/debug/corten new "$RUNNER_TEMP/app" --corten-path crates/corten
           cd "$RUNNER_TEMP/app"
-          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" cargo build
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
           "$GITHUB_WORKSPACE/target/debug/corten" ui init && "$GITHUB_WORKSPACE/target/debug/corten" ui add --all
-          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" cargo build
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
       - name: PATH compiler checks an app without the checkout alias
         shell: bash
@@ -79,7 +79,6 @@ jobs:
           trap 'mv "$RUNNER_TEMP/typescript7-alias" "$alias"' EXIT
           "$GITHUB_WORKSPACE/target/debug/corten" new "$RUNNER_TEMP/path-app" --corten-path "$GITHUB_WORKSPACE/crates/corten"
           cd "$RUNNER_TEMP/path-app"
-          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" cargo build
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check 2>&1 | tee "$RUNNER_TEMP/path-check.log"
           grep -F "corten: script types: TypeScript $version (tsc)" "$RUNNER_TEMP/path-check.log"
       # Every published crate still packages and builds on its own from the .crate files, in a

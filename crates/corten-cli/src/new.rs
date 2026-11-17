@@ -21,6 +21,14 @@ const FILES: &[(&str, &str)] = &[
 ];
 
 pub fn run(args: &[String]) -> Result<(), String> {
+    let (dir, name) = write_app(args)?;
+    lock(&dir).map_err(|e| format!("created {name} in {}, but {e}", dir.display()))?;
+    println!("Created {name} in {}.\n\n  cd {}\n  corten dev\n\nthen open http://localhost:3000.", dir.display(), dir.display());
+    Ok(())
+}
+
+/// Writes the app's files into `args`' directory, and returns it with the crate's name.
+fn write_app(args: &[String]) -> Result<(PathBuf, String), String> {
     let dir = args.first().filter(|a| !a.starts_with('-')).ok_or("usage: corten new <dir>")?;
     let dir = PathBuf::from(dir);
     let name = match option(args, "--name")? {
@@ -37,8 +45,35 @@ pub fn run(args: &[String]) -> Result<(), String> {
             text.replace("{{name}}", &name).replace("{{crate}}", &name.replace('-', "_")).replace("{{corten}}", &dependency);
         write(&dir.join(path), &text)?;
     }
-    println!("Created {name} in {}.\n\n  cd {}\n  corten dev\n\nthen open http://localhost:3000.", dir.display(), dir.display());
-    Ok(())
+    Ok((dir, name))
+}
+
+/// Writes or updates the `Cargo.lock` of the app in `dir` after this command (or `corten ui add`)
+/// wrote its manifest, so its next `corten check`, which refuses a missing or stale lock, passes.
+/// Cargo runs in the app's directory, so it reads the configuration a build there would
+/// (`net.offline`, source replacement) and writes the lock where a build would: the app's own, or
+/// its workspace's root. `--workspace` adds what the lock lacks and moves no package it already
+/// has, so an app in an existing workspace leaves that workspace's versions as they were, where
+/// `cargo generate-lockfile` would move every one to its newest.
+pub(crate) fn lock(dir: &Path) -> Result<(), String> {
+    let what_to_run = |why: String| {
+        format!(
+            "{why}\nIn {}, run cargo build or corten dev, then commit Cargo.lock (at the workspace root if the app is in one) \
+             before running corten check.",
+            dir.display()
+        )
+    };
+    let output = std::process::Command::new("cargo")
+        .args(["update", "--workspace"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| what_to_run(format!("could not run cargo to write Cargo.lock: {e}")))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let error = String::from_utf8_lossy(&output.stderr);
+        Err(what_to_run(format!("cargo update --workspace could not write Cargo.lock:\n{}", error.trim())))
+    }
 }
 
 /// The app is a library its `main.rs` names (`my_app::app()`), so its name with `-` as `_` must
@@ -143,7 +178,7 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_name, dependency, run};
+    use super::{check_name, dependency, lock, write_app};
 
     #[test]
     fn a_name_the_app_cannot_be_reached_by_is_refused() {
@@ -166,12 +201,57 @@ mod tests {
         // Without an id of the app's own, every app's build on a host would wait for every other's.
         let dir = std::env::temp_dir().join(format!("corten-new-dockerfile-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        run(&[dir.to_string_lossy().into_owned(), "--name".into(), "shop-front".into()]).unwrap();
+        write_app(&[dir.to_string_lossy().into_owned(), "--name".into(), "shop-front".into()]).unwrap();
         let dockerfile = std::fs::read_to_string(dir.join("Dockerfile")).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!dockerfile.contains("{{"), "a placeholder is left in the Dockerfile:\n{dockerfile}");
         assert!(dockerfile.contains("id=shop-front-target,target=/src/target"), "{dockerfile}");
         assert!(dockerfile.contains("cargo build --release --locked"), "{dockerfile}");
+    }
+
+    #[test]
+    fn a_new_app_gets_the_lock_its_first_check_requires() {
+        let base = std::env::temp_dir().join(format!("corten-new-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let write = |path: &str, text: &str| {
+            let path = base.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        let package = |name: &str| format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n");
+        let locked = |dir: &str| {
+            let out = std::process::Command::new("cargo")
+                .args(["metadata", "--format-version", "1", "--locked", "--offline"])
+                .current_dir(base.join(dir))
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        };
+        // Cargo's configuration in the app's directory applies: offline, it needs no registry.
+        write(".cargo/config.toml", "[net]\noffline = true\n");
+        write("alone/Cargo.toml", &format!("{}\n[workspace]\n", package("alone")));
+        write("alone/src/lib.rs", "");
+        assert_eq!(lock(&base.join("alone")), Ok(()));
+        locked("alone");
+        // A member of a workspace: the lock at its root gains the new member.
+        write("ws/Cargo.toml", "[workspace]\nmembers = [\"apps/*\"]\nresolver = \"3\"\n");
+        write("ws/apps/old/Cargo.toml", &package("old"));
+        write("ws/apps/old/src/lib.rs", "");
+        assert_eq!(lock(&base.join("ws/apps/old")), Ok(()));
+        let before = std::fs::read_to_string(base.join("ws/Cargo.lock")).unwrap();
+        write("ws/apps/new/Cargo.toml", &format!("{}\n[dependencies]\nold = {{ path = \"../old\" }}\n", package("new")));
+        write("ws/apps/new/src/lib.rs", "");
+        assert_eq!(lock(&base.join("ws/apps/new")), Ok(()));
+        assert!(!base.join("ws/apps/new/Cargo.lock").exists(), "the member uses its workspace's lock");
+        let after = std::fs::read_to_string(base.join("ws/Cargo.lock")).unwrap();
+        assert!(after.contains("name = \"new\"") && after.contains("name = \"old\""), "{before}\n{after}");
+        locked("ws/apps/new");
+        // When Cargo cannot write it, the error says what to run.
+        write("broken/Cargo.toml", "[package]\nname = \n");
+        let error = lock(&base.join("broken")).unwrap_err();
+        let _ = std::fs::remove_dir_all(&base);
+        assert!(error.contains("cargo update --workspace could not write Cargo.lock"), "{error}");
+        assert!(error.contains("run cargo build or corten dev, then commit Cargo.lock"), "{error}");
     }
 
     #[test]
