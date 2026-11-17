@@ -288,7 +288,10 @@ test("v5 campaign carries presealed registration through native bookends, final 
   writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
   writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
   const request = { folder: root, round: "r21", commit: s.plan.commit };
-  assert.notEqual((await validateSavedCampaign(request)).status, "invalid");
+  const inspected = await validateSavedCampaign(request);
+  assert.notEqual(inspected.status, "invalid");
+  assert.deepEqual(inspected.supervisedTerminal, { registrationSha256: streamHash(admittedApparatus),
+    sealSha256: evidence.digest(readFileSync(join(handle.directory, "control-stream-seal.json"))) });
   drain.identitiesAbsent = false; writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
   const collectionPath = join(handle.directory, "collection-manifest.json"), collection = JSON.parse(readFileSync(collectionPath));
   const entries = evidence.tree(handle.directory).entries.filter((e) => e.path !== "collection-manifest.json");

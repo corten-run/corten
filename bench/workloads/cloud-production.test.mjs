@@ -6,7 +6,7 @@ import { existsSync, readFileSync, renameSync, symlinkSync, writeFileSync } from
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { accountId, commit, context, harness, syntheticProviderRequest } from "./cloud-fixtures.mjs";
+import { accountId, commit, context, harness, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
 import { controllerPaths, nativePaths, parseProductionArgs, productionMain } from "./cloud-production.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
 import { fleetPlan } from "./cloud-contract.mjs";
@@ -14,6 +14,8 @@ import { groupNames } from "./registry.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { registration as streamRegistration } from "./test-fixtures/control-stream-fixture.mjs";
 import { controlRegistration } from "./cloud-control-runtime.mjs";
+import { deploymentSha256 } from "./deployments.mjs";
+import { digest } from "./cloud-local.mjs";
 
 function productionHarness(t, flags = {}) {
   const h = harness(t, flags), calls = [], stdout = [];
@@ -30,6 +32,7 @@ function productionHarness(t, flags = {}) {
       if (argv[0] === "fetch" && flags.fetchError) return { status: 1, stderr: "private" };
       if (argv[0] === "fetch" && flags.afterFetch) flags.afterFetch();
       if (argv[0] === "status" && flags.dirty) return { status: 0, stdout: " M private-file" };
+      if (argv[0] === "status" && existsSync(join(h.local, "audit-delivery.lock"))) flags.underAuditLock?.();
       return h.run(binary, argv, options.timeout);
     }
     const args = [...argv];
@@ -78,6 +81,161 @@ function productionHarness(t, flags = {}) {
   async function approve(mode) { const values = args(mode); await productionMain([...values, "--print-approval"], deps); return [...values, "--approve-reviewed-merged-ready", stdout.at(-1).approvalSha256]; }
   return { h, calls, stdout, deps, args, approve };
 }
+
+async function supervisedAudit(t, group, flags = {}) {
+  flags.active = true;
+  const p = productionHarness(t, flags), prefix = group === "json-api" ? "json" : "mixed", campaign = "r21-0123456789abcdef";
+  const delivery = syntheticDelivery(group), identities = delivery.bundle.receipts.map((r) => r.identity);
+  const body = { schema: "benchmark-" + prefix + "-audit-subject/v1", commit, campaignSha256: "f".repeat(64),
+    ...(group === "json-api" ? { identities } : { requests: identities.map((identity) => ({ identity })) }) };
+  const subjectSha256 = deploymentSha256(body), subject = Buffer.from(JSON.stringify({ ...body, subjectSha256 }));
+  delivery.subjectSha256 = subjectSha256; delivery.review.subjectSha256 = subjectSha256;
+  const path = join(p.h.temp, "approved-delivery.json"); writeFileSync(path, JSON.stringify(delivery));
+  const input = []; let finish, started = 0;
+  p.deps.streamSpawn = (binary, argv) => {
+    assert.equal(binary, "ssh"); started++;
+    const expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex")), child = new EventEmitter();
+    let sequence = 0, closed = false;
+    const frame = (kind, payload) => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1", id: expected.id, sequence: ++sequence, kind, payload }) + "\n");
+    const close = (code) => { if (!closed) { closed = true; child.emit("close", code, null); } };
+    child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.stdin = new Writable({ write(bytes, encoding, next) {
+      const value = JSON.parse(bytes); input.push(value);
+      if (value.kind === "close") setImmediate(() => close(0));
+      if (value.kind === "delivery-end") frame("delivery-sealed", { group, campaign, subjectSha256 });
+      next();
+    } });
+    child.stdin.on("close", () => setImmediate(() => close(255)));
+    setImmediate(() => { frame("registered", { ...structuredClone(streamRegistration), binding: expected.binding, id: expected.id }); frame("progress", { state: "active" }); });
+    finish = () => frame("terminal", { id: expected.id, nativeTerminal: true, campaign, sealSha256: "f".repeat(64) });
+    const timer = setInterval(() => {
+      if (!p.h.saved().control.sealed.includes("bootstrap")) return;
+      clearInterval(timer); frame("audit-begin", { campaign, group, subjectSha256 });
+      frame("audit-file", { group, path: prefix + "-audit-subject.json", bytes: subject.length, sha256: digest(subject) });
+      frame("audit-data", { offset: 0, data: subject.toString("base64") }); frame("audit-file-end", {}); frame("audit-end", { group, subjectSha256 });
+    }, 5);
+    t.after(() => { clearInterval(timer); close(255); }); return child;
+  };
+  const pending = productionMain(await p.approve("--detach"), p.deps);
+  const wait = async (predicate) => {
+    const deadline = Date.now() + 2000;
+    while (!predicate()) { assert.ok(Date.now() < deadline, "bounded audit stream wait"); await new Promise((r) => setTimeout(r, 5)); }
+  };
+  await wait(() => existsSync(join(p.h.local, "monitor-audit-" + group + "-ready.json")));
+  const args = ["r21", "--state-dir", p.h.base, "--deliver-audit", path, "--audit-group", group, "--campaign", campaign, "--approve-subject", subjectSha256];
+  const approve = async () => {
+    await productionMain([...args, "--print-approval"], p.deps);
+    return [...args, "--approve-reviewed-merged-ready", p.stdout.at(-1).approvalSha256];
+  };
+  return { ...p, path, input, wait, approve, started: () => started, finish: async () => { finish(); await pending; } };
+}
+
+test("supervised approved audit delivery uses locked production approval and the existing stream for JSON and mixed", async (t) => {
+  for (const group of ["json-api", "mixed-production"]) {
+    const flags = {}, p = await supervisedAudit(t, group, flags); let checked = 0;
+    try {
+      const approval = await p.approve(), calls = p.calls.length;
+      flags.underAuditLock = () => { checked++; assert.ok(existsSync(join(p.h.local, "operation.lock"))); };
+      assert.equal(await productionMain(approval, p.deps), 3); assert.equal(checked, 1);
+      await p.wait(() => p.input.some((v) => v.kind === "delivery-end"));
+      const frames = p.input.filter((v) => v.kind.startsWith("delivery-"));
+      assert.deepEqual(frames.map((v) => v.kind), ["delivery-begin", "delivery-data", "delivery-end"]);
+      assert.equal(Buffer.from(frames[1].payload.data, "base64").toString(), readFileSync(p.path, "utf8"));
+      assert.equal(p.started(), 1); assert.ok(p.calls.slice(calls).every(([binary]) => binary === "git"));
+      assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
+      assert.ok(!existsSync(join(p.h.local, "audit-delivery.lock")));
+      await assert.rejects(productionMain(approval, p.deps), /already queued/);
+      assert.equal(p.input.filter((v) => v.kind === "delivery-begin").length, 1);
+    } finally { await p.finish(); }
+    assert.ok(!existsSync(join(p.h.local, "operation.lock")));
+  }
+});
+
+test("supervised audit rejects a stale explicit action approval before any publication", async (t) => {
+  const p = await supervisedAudit(t, "json-api");
+  try {
+    const approval = await p.approve(), calls = p.calls.length;
+    const value = JSON.parse(readFileSync(p.path)); value.review.reviewer = "replaced reviewer";
+    writeFileSync(p.path, JSON.stringify(value));
+    await assert.rejects(productionMain(approval, p.deps), /explicit operator-approved exact action/);
+    assert.ok(!existsSync(join(p.h.local, "monitor-delivery-json-api.json")));
+    assert.ok(p.calls.slice(calls).every(([binary]) => binary === "git"));
+    assert.equal(p.input.filter((v) => v.kind.startsWith("delivery-")).length, 0);
+  } finally { await p.finish(); }
+});
+
+test("supervised audit rechecks replacement delivery and reservation under its exclusive lock", async (t) => {
+  for (const group of ["json-api", "mixed-production"]) for (const replaced of ["delivery", "reservation"]) {
+    const flags = {}, p = await supervisedAudit(t, group, flags);
+    try {
+      const approval = await p.approve(), calls = p.calls.length;
+      flags.underAuditLock = () => {
+        flags.underAuditLock = undefined;
+        assert.ok(existsSync(join(p.h.local, "operation.lock")));
+        if (replaced === "delivery") {
+          const value = JSON.parse(readFileSync(p.path)); value.review.reviewer = "replaced after preflight";
+          writeFileSync(p.path, JSON.stringify(value));
+        } else p.h.change((s) => { s.auditIntents = {}; });
+      };
+      await assert.rejects(productionMain(approval, p.deps), /locked action changed after approval/);
+      assert.ok(!existsSync(join(p.h.local, "monitor-delivery-" + group + ".json")));
+      assert.ok(!existsSync(join(p.h.local, "audit-delivery.lock")));
+      assert.ok(existsSync(join(p.h.local, "operation.lock")));
+      assert.equal(p.started(), 1); assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
+      assert.ok(p.calls.slice(calls).every(([binary]) => binary === "git"));
+      assert.equal(p.input.filter((v) => v.kind.startsWith("delivery-")).length, 0);
+    } finally { await p.finish(); }
+  }
+});
+
+test("supervised audit refuses a competing publication lock without touching live monitor custody", async (t) => {
+  const p = await supervisedAudit(t, "mixed-production");
+  try {
+    const approval = await p.approve();
+    writeFileSync(join(p.h.local, "audit-delivery.lock"), "competing approved publisher");
+    await assert.rejects(productionMain(approval, p.deps), /EEXIST/);
+    assert.equal(readFileSync(join(p.h.local, "audit-delivery.lock"), "utf8"), "competing approved publisher");
+    assert.ok(existsSync(join(p.h.local, "operation.lock")));
+    assert.ok(!existsSync(join(p.h.local, "monitor-delivery-mixed-production.json")));
+    assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
+  } finally { await p.finish(); }
+});
+
+test("supervised audit never consumes or replaces an interrupted pending publication", async (t) => {
+  const p = await supervisedAudit(t, "mixed-production");
+  try {
+    const approval = await p.approve(), target = join(p.h.local, "monitor-delivery-mixed-production.json");
+    writeFileSync(target + ".pending", "interrupted publisher evidence");
+    await assert.rejects(productionMain(approval, p.deps), /EEXIST/);
+    assert.ok(!existsSync(target)); assert.equal(readFileSync(target + ".pending", "utf8"), "interrupted publisher evidence");
+    assert.ok(!existsSync(join(p.h.local, "audit-delivery.lock"))); assert.ok(existsSync(join(p.h.local, "operation.lock")));
+    assert.equal(p.input.filter((v) => v.kind.startsWith("delivery-")).length, 0);
+    assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
+  } finally { await p.finish(); }
+});
+
+test("supervised audit settlement uncertainty retains both locks and never repeats a queued delivery", async (t) => {
+  const flags = {}, p = await supervisedAudit(t, "json-api", flags), factory = p.deps.providerFactory;
+  let fail = false, closed = 0;
+  p.deps.providerFactory = (options) => {
+    const run = factory(options);
+    run.close = async () => { closed++; if (fail) throw Object.assign(new Error("synthetic unsettled control"), { controlTreeUncertain: true, controlUncertain: true }); };
+    return run;
+  };
+  try {
+    const approval = await p.approve(); closed = 0;
+    flags.underAuditLock = () => { fail = true; };
+    await assert.rejects(productionMain(approval, p.deps), (error) => error.controlTreeUncertain && error.controlUncertain && error.controllerStage === "provider-settlement");
+    assert.equal(closed, 2); assert.ok(existsSync(join(p.h.local, "audit-delivery.lock")));
+    assert.ok(existsSync(join(p.h.local, "operation.lock")));
+    assert.ok(existsSync(join(p.h.local, "monitor-delivery-json-api.json")));
+    fail = false; flags.underAuditLock = undefined;
+    await assert.rejects(productionMain(approval, p.deps), /EEXIST/);
+    await p.wait(() => p.input.some((v) => v.kind === "delivery-end"));
+    assert.equal(p.input.filter((v) => v.kind === "delivery-begin").length, 1);
+    assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 0);
+  } finally { await p.finish(); }
+});
 
 test("production entry forwards source-bound stream registration and settles asynchronous stream failure without dropping custody", async (t) => {
   const p = productionHarness(t, { active: true }); let started = 0, closed = 0;

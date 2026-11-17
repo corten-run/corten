@@ -67,18 +67,21 @@ test("paused audit material and approved delivery use the same existing stream, 
   f.frame("audit-file", { group, path: "json-audit-subject.json", bytes: bytes.length, sha256: digest(bytes) });
   f.frame("audit-data", { offset: 0, data: bytes.toString("base64") }); f.frame("audit-file-end", {}); f.frame("audit-end", { group, subjectSha256 });
   writeFileSync(join(f.local, "operation.lock"), "test monitor custody");
+  writeFileSync(join(f.local, "audit-delivery.lock"), "test approved publisher custody");
   const delivery = { schema: protocol.schema, subjectSha256,
     review: { subjectSha256, decision: "approved", findings: [], reviewer: "test reviewer", reviewedAt: "2026-11-17T12:00:00.000Z" },
     bundle: { schema: protocol.bundleSchema, receipts: protocol.members.map((identity) => ({ identity })) } };
   const path = join(f.local, "approval.json"); writeFileSync(path, JSON.stringify(delivery));
   const state = { round: binding.round, commit: binding.commit, token: binding.token,
     control: { helperSha256: binding.helperSha256, monitor: { id: registration.id, registrationSha256: digest(JSON.stringify(registration)), phase: "live" } } };
-  queueStreamAudit(f.local, state, { deliverAudit: path, campaign, auditGroup: group, approveSubject: subjectSha256 });
+  queueStreamAudit(f.local, state, { deliverAudit: path, campaign, auditGroup: group, approveSubject: subjectSha256 }, digest(readFileSync(path)));
+  assert.ok(!existsSync(join(f.local, "monitor-delivery-" + group + ".json.pending")));
+  assert.equal(digest(readFileSync(join(f.local, "monitor-delivery-" + group + ".json"))), digest(readFileSync(path)));
   await new Promise((resolve, reject) => { const deadline = Date.now() + 1000; const timer = setInterval(() => {
     if (f.input.some((v) => v.kind === "delivery-end")) { clearInterval(timer); resolve(); }
     else if (Date.now() >= deadline) { clearInterval(timer); reject(new Error("bounded delivery missing")); }
   }, 10); });
   assert.deepEqual(f.input.filter((v) => v.kind.startsWith("delivery-")).map((v) => v.kind), ["delivery-begin", "delivery-data", "delivery-end"]);
-  assert.equal(f.calls.length, 1); assert.throws(() => queueStreamAudit(f.local, state, { deliverAudit: path, campaign, auditGroup: group, approveSubject: subjectSha256 }));
+  assert.equal(f.calls.length, 1); assert.throws(() => queueStreamAudit(f.local, state, { deliverAudit: path, campaign, auditGroup: group, approveSubject: subjectSha256 }, digest(readFileSync(path))));
   f.close(255); await result.monitor.done;
 });

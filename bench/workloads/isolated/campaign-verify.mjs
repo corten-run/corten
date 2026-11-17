@@ -60,7 +60,7 @@ export async function validateCampaign(input) {
       journal.push(event);
     }
     const replay = replayJournal(plan, id, journal, status);
-    let controlHost, apparatus, streamSeal;
+    let controlHost, apparatus, streamSeal, supervisedTerminal;
     for (const [epoch, event] of replay.controlAdmissions) {
       const bytes = readRegular(join(folder, id, event.path)); assert.equal(digest(bytes), event.sha256);
       const admission = JSON.parse(bytes);
@@ -83,6 +83,7 @@ export async function validateCampaign(input) {
       if (status.state === "finished") {
         const drained = read(`${id}/control-stream-drain.json`);
         verifyStreamDrain(event.binding, apparatus, drained); assert.ok(BigInt(drained.monoNs) >= BigInt(streamSeal.sealedMonoNs));
+        supervisedTerminal = { registrationSha256: digest(JSON.stringify(apparatus)), sealSha256: event.sha256 };
       }
     }
     if (controlHost && journal.some((event) => event.kind === "started")) {
@@ -282,6 +283,7 @@ export async function validateCampaign(input) {
       && verifiedGroups.length === plan.order.length && verifiedGroups.every((g, i) => g.group === plan.order[i]) && !blockers.length;
     const common = { schema: groupScoped ? "benchmark-isolated-group-campaign-inspection/v1" : "benchmark-isolated-campaign-inspection/v1", scope: "intrinsic-evidence",
       round, commit, campaign: id, campaignSha256: plan.campaignSha256, sourceSha256: plan.sourceSha256,
+      ...(supervisedTerminal ? { supervisedTerminal } : {}),
       selection: currentExecution ? { schema: registrySchema, groups: plan.bindings.map((b) => ({ group: b.request.group,
         contractSha256: b.selection.contractSha256, apps: b.selection.apps })) } : undefined, groups: verifiedGroups, blockers,
       collectionIntegrity: collectionEntry && !replay.incomplete && replay.pending.length === 0 ? "manifest-verified" : "unsealed-partial",

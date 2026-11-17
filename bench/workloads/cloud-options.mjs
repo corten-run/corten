@@ -194,12 +194,18 @@ export function campaignOutcome(report, s, exitCode) {
   assert.deepEqual(report.uncollectedNativeRoots, [], "native evidence remains on host");
   assert.equal(report.collectionIntegrity, "manifest-verified", "unsealed native evidence");
   assert.equal(report.commandLifecycle, "observed-terminal", "uncertain native command lifecycle");
+  if (s.control?.monitor?.phase === "closed") {
+    assert.deepEqual(Object.keys(report.supervisedTerminal ?? {}).sort(), ["registrationSha256", "sealSha256"]);
+    assert.equal(report.supervisedTerminal.registrationSha256, s.control.monitor.registrationSha256);
+    full(report.supervisedTerminal.sealSha256, /[a-f0-9]{64}/, "native stream seal");
+  }
   assert.ok(Array.isArray(report.blockers) && report.blockers.every((b) => typeof b === "string"));
   for (const key of ["campaignSha256", "sourceSha256", "archiveTreeSha256", "reservationSha256"]) full(report[key], /[a-f0-9]{64}/, key);
   assert.equal(exitCode, report.status === "verified" ? 0 : 1, "native CLI exit disagrees or remains uncertain; preserve host");
   if (report.status === "verified") {
     const fields = ["schema", "scope", "status", "round", "commit", "campaign", "campaignSha256", "sourceSha256", "selection", "groups", "blockers",
       "collectionIntegrity", "commandLifecycle", "uncollectedNativeRoots", "archiveTreeSha256", "reservationSha256"];
+    if (s.control?.monitor?.phase === "closed") fields.push("supervisedTerminal");
     assert.deepEqual(Object.keys(report).sort(), fields.sort(), "verified inspection schema differs");
     assert.deepEqual(report.blockers, []);
     assert.deepEqual(report.groups.map((r) => r.group), s.selection.groups.map((r) => r.group), "complete ordered native groups required");

@@ -26,7 +26,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval } = {}) {
+  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleet = options.group === undefined ? undefined : validateFleet(JSON.parse(regular(options.fleet, 1024 * 1024)));
@@ -186,8 +186,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       await sleep(Math.min(30000, remaining()));
     }
   }
-  async function locked(fn, recovery = false) {
-    boundary(); const lock = join(local, recovery ? "stream-recovery.lock" : "operation.lock");
+  async function locked(fn, recovery = false, name = recovery ? "stream-recovery.lock" : "operation.lock") {
+    boundary(); const lock = join(local, name);
     if (recovery) assert.ok(existsSync(join(local, "operation.lock")), "original uncertain monitor custody required");
     durable(lock, `${JSON.stringify({ pid: process.pid, at: new Date().toISOString() })}\n`);
     preserveOperationLock = false;
@@ -228,6 +228,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       check();
       assert.ok(state.control?.monitor?.phase !== "invalid" || report.status !== "verified", "lost monitor cannot qualify");
       outcome = campaignOutcome(report, state, exitCode);
+      if (state.control?.monitor?.phase === "closed") {
+        const terminal = JSON.parse(regular(join(local, "monitor-terminal.json")));
+        assert.equal(terminal.id, state.control.monitor.id);
+        assert.equal(terminal.nativeTerminal, true); assert.equal(terminal.campaign, report.campaign);
+        assert.equal(terminal.sealSha256, report.supervisedTerminal.sealSha256);
+      }
     } catch { throw new Error("native campaign validation unavailable or invalid; evidence/host preserved"); }
     // Never retain/print native assertion messages: they may contain private raw values.
     assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence"); verifyArchive();
@@ -431,7 +437,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(options.collect, "collect options required");
       const observed = read();
       let failedMonitorRecovery = false;
-      if (observed.control?.monitor) {
+      const neverProvisioned = (s) => s.control?.monitor?.phase === "pending" && !s.control.monitor.registrationSha256
+        && s.id && s.ip && s.createIntentAt && !s.control.sealed.length
+        && s.control.ledger.every((row) => row.request.epoch === "collection" && row.localTerminal)
+        && (s.status === "preparing" || s.status === "retired" && s.retirement?.kind === "unused")
+        && !readdirSync(local).some((name) => name.startsWith("monitor-"));
+      // A settled create can leave an identified host before the first SSH operation.
+      // No monitor exists then. The ordinary exclusive lock and fresh unused-host
+      // proof still apply; neither a pending registration nor local state permits deletion.
+      const unusedCandidate = neverProvisioned(observed);
+      if (observed.control?.monitor && !unusedCandidate) {
         const { localStreamStatus, streamRecoveryReady } = await import("./cloud-control-stream.mjs");
         const status = localStreamStatus(local);
         if (["pending", "progress"].includes(status.kind)) {
@@ -443,6 +458,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         if (failedMonitorRecovery) assert.equal(observed.control.monitor.phase, "invalid", "foreground monitor has not settled");
       }
       return locked(async () => {
+        if (unusedCandidate) assert.ok(neverProvisioned(state), "unused allocation changed; preserve host");
         if (state.status === "retired") {
           verifyRetirement();
           await confirmDeleted();
@@ -607,7 +623,17 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       assert.ok(options.deliverAudit, "audit delivery options required");
       const observed = read();
       if (observed.control?.monitor) {
-        assert.fail("supervised audit publication requires the locked approval checkpoint; preserve host and review wait");
+        assert.equal(typeof authorizeAudit, "function", "supervised audit publication requires the locked approval checkpoint");
+        return locked(async () => {
+          const { queueStreamAudit } = await import("./cloud-control-stream.mjs");
+          const approved = await authorizeAudit(); check();
+          const bytes = regular(statePath, 1024 * 1024);
+          assert.equal(digest(bytes), approved.reservationSha256, "locked audit reservation changed");
+          state = controllerState(JSON.parse(bytes), options.round);
+          assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");
+          queueStreamAudit(local, state, options, approved.deliverySha256);
+          return 3; // Pending publication only; remote sealed admission is observed on the existing stream.
+        }, false, "audit-delivery.lock");
       }
       return locked(async () => {
         assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");

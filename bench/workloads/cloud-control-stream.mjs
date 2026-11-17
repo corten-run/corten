@@ -1,9 +1,9 @@
 // One supervised SSH stream. No provider, shell payload, reconnect or status server.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, writeSync } from "node:fs";
+import { constants, closeSync, existsSync, fsyncSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, renameSync, writeSync } from "node:fs";
 import { dirname, join, resolve, relative } from "node:path";
-import { durable, digest, physical, regular } from "./cloud-local.mjs";
+import { durable, digest, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { streamLimits, verifyApparatus } from "./isolated/control-stream.mjs";
 import { auditDelivery } from "./cloud-audit.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
@@ -58,11 +58,14 @@ export function streamRecoveryReady(local, monitor) {
   return Date.now() >= closed.recoverAfterMs;
 }
 
-export function queueStreamAudit(local, state, options) {
+export function queueStreamAudit(local, state, options, approvedDeliverySha256) {
   assert.ok(state.control.monitor.phase === "live" && existsSync(join(local, "operation.lock")), "foreground monitor required");
+  assert.ok(existsSync(join(local, "audit-delivery.lock")), "exclusive audit publisher required");
   monitorRegistration(local, state);
   assert.equal(localStreamStatus(local).kind, "progress");
-  const bytes = regular(resolve(options.deliverAudit), streamLimits.deliveryBytes), intent = auditDelivery(bytes, options);
+  const bytes = regular(resolve(options.deliverAudit), streamLimits.deliveryBytes);
+  assert.equal(digest(bytes), approvedDeliverySha256, "locked audit delivery changed");
+  const intent = auditDelivery(bytes, options);
   if (state.group !== undefined) assert.equal(state.group, intent.group);
   const ready = JSON.parse(regular(join(local, "monitor-audit-" + intent.group + "-ready.json")));
   for (const key of ["campaign", "group", "subjectSha256"]) assert.equal(intent[key], ready[key]);
@@ -75,7 +78,11 @@ export function queueStreamAudit(local, state, options) {
     assert.ok(wanted); assert.equal(deploymentSha256(receipt.identity), deploymentSha256(wanted));
   }
   assert.ok(!existsSync(join(local, "monitor-invalid.json")) && !existsSync(join(local, "monitor-terminal.json")));
-  durable(join(local, "monitor-delivery-" + intent.group + ".json"), bytes);
+  const target = join(local, "monitor-delivery-" + intent.group + ".json"), pending = target + ".pending";
+  assert.equal(lstatSync(target, { throwIfNoEntry: false }), undefined, "audit delivery already queued; never repeat");
+  durable(pending, bytes);
+  assert.ok(!existsSync(join(local, "monitor-invalid.json")) && !existsSync(join(local, "monitor-terminal.json")));
+  renameSync(pending, target); syncDirectory(local);
 }
 
 export function openControlStream({ repo, argv, env, expected, local, launch = spawn, interrupted = () => false }) {

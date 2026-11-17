@@ -150,19 +150,24 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
   let entered = false;
+  const authorizeLocked = async () => {
+    assert.ok(!interrupted(), "cancelled before provider access");
+    const locked = await productionPlan(options, { repo, run });
+    assert.equal(locked.approvalSha256, approval, "locked action changed after approval");
+    return locked.subject;
+  };
   const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration) => {
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
-      assert.ok(!interrupted(), "cancelled before provider access");
-      assert.equal((await productionPlan(options, { repo, run })).approvalSha256, approval, "locked action changed after approval");
+      await authorizeLocked();
       entered = true;
     }
     return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration);
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
-    mergedHead: remoteHead, settle: () => providerRun.close(), ...(options.retireFailedNative || options.cancelMixedWait ? {
+    mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, ...(options.retireFailedNative || options.cancelMixedWait ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256 },
     } : {}) });
   let result;
