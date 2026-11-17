@@ -36,6 +36,10 @@
 //!    (`docs/design.md#limit-etag`), then compression. A middleware sees the `200` with the
 //!    whole body, also when the client gets the `304`.
 //!
+//! [`crate::App::access_log`] is outside every stage and app layer. It sees the finished
+//! response, including a host refusal, an error-page replacement and a `304`; an app's own
+//! middleware cannot write that line. It also covers routes that say `unstaged`.
+//!
 //! Whatever a middleware answers (a 429) leaves through 7 and 8 like a handler's answer. A header
 //! it sets on a failure (a request id, `Retry-After`) stays on the error page. A middleware that
 //! turns a request away answers with a [`crate::Refused`] (`Refused::too_many(wait)`,
