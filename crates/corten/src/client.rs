@@ -147,8 +147,9 @@ impl<S: Send + Sync> OptionalFromRequestParts<S> for ClientIp {
 
 /// The visitor's time zone, as the browser names it (IANA: `America/Chicago`), with
 /// [`App::client_zone`](crate::App::client_zone): `async fn schedule(zone: Option<ClientZone>, ..)`.
-/// Its name only: with Corten's `zones` feature, `req.zone()` is the zone with its rules (for a
-/// date the user picked, `<input type="date">`, as the instant it means where they are), and with
+/// Its name only: with Corten's `zones` feature, `req.zone()` is the zone with its rules (the zone
+/// a page draws a form's dates and times in, `DrawZone::from(req.zone())`, whose post reads them
+/// in the zone the form sends back, a `FormZone`), and with
 /// `App::zoned_dates` dates are written in it while Corten renders the answer, so a handler that
 /// only draws dates takes neither. This is for the name itself (a log line, "Alerts follow America/Chicago time").
 ///
@@ -191,7 +192,7 @@ pub struct ClientZone(pub String);
 pub(crate) const ZONE_COOKIE: &str = "corten-zone";
 
 /// An IANA zone name as a browser writes it: letters, digits and `/ _ + -`, at most 64 bytes.
-fn zone_name(value: &str) -> bool {
+pub(crate) fn zone_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && !value.starts_with(['/', '-', '+'])

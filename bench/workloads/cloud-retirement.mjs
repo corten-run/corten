@@ -16,6 +16,10 @@ const failedNativeCases = [
     id: "620052965", token: "39fa09440f45df00", name: "corten-bench-groups-r21-39fa09440f45df00",
     tag: "corten-bench-groups-run-39fa09440f45df00", unit: "corten-bench-groups-r21-39fa09440f45df00.service" },
     policy: "r21-dbe-exact-catalog-attempt-custody-only-no-qualification" },
+  { identity: { commit: "2a4ceb043747b92c753becc2bbcc5def655fc53d", round: "r21", group: "catalog-page",
+    id: "620157651", token: "e38164eb06fc2043", name: "corten-bench-groups-r21-e38164eb06fc2043",
+    tag: "corten-bench-groups-run-e38164eb06fc2043", unit: "corten-bench-groups-r21-e38164eb06fc2043.service" },
+    policy: "r21-2a-exact-lean-catalog-custody-only-no-qualification" },
 ];
 // Eligibility only; original custody, current terminal proof and exact approval still apply.
 export function failedNativePolicy(state) {

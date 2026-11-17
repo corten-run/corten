@@ -343,9 +343,15 @@ The row type goes from the feed to the script, checked at each step. `Feed<Stock
 `FeedResponse<Stock>`; the route says `rows = Stock`, and a handler that answers with other rows
 (or a feed's route that names none) does not compile. The markup passes the route,
 `js::watch(.., url::Stocks, signal)`, to a parameter the script declares as `FeedUrl<Stock>`
-(from `corten`). `Stock` there is the Rust type of that name in the component's module (bring it
-in with `use`; `FeedUrl<import("../types/app").Stock>` reads the same), so the parameter takes
-only a route whose rows are that type. A `FeedUrl` Corten cannot read (`FeedUrl<Stock[]>`) is an
+(from `corten`). `Stock` must come from the declarations `corten::types` writes:
+`FeedUrl<import("../types/app").Stock>` written there, `/** @import { Stock } from "../types/app" */`
+(at any depth, `../../types/app`), or a `@typedef` of either as below, including renamed imports
+and aliases of aliases. A local row typedef, an import from another module, or an undeclared
+name does not compile: matching only the name would let the script invent the rows' shape.
+Corten checks the import path, not the file, so leave `types/app.d.ts` to `corten::types`.
+The declaration names the Rust type in the component's module (bring it in with `use` under
+its declared name), so the parameter takes only a route whose rows are that type.
+A `FeedUrl` Corten cannot read (`FeedUrl<Stock[]>`) is an
 error, not an unchecked string. `subscribe()` takes the row type from it, so `snapshot` and
 `patch` are typed without a `@param` of their own, and a `Stock` handler given a `Level` feed
 fails `tsc`:

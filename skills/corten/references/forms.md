@@ -54,7 +54,15 @@ no form, so send such a tab as a field if a write must follow it.
 A patch may hold several top-level elements; each replaces the element with the same `id`, so
 each needs one, a `#[derive(Id)]` type: `req.patch` and `req.invalid` take a `Patch`, and a view
 whose top level has text, an element without an id or an id written as text does not compile. A
-component a patch sends is rooted at the element with the id and declared `-> impl Patch`. Fields
+component a patch sends is rooted at the element with the id and declared `-> impl Patch`. The
+browser parses a patch's top level as a `<template>`'s content, so table parts (`<tr>`, `<td>`,
+`<tbody>` ..) beside other elements are lost unless they come first; send the `<table>` whole
+with an id instead (`html!` refuses the shapes lost wherever they are written: a table part after
+a first `<table>`; an element HTML's wherever it lands, such as a `<p>`, a `<div>` or a
+`<table>`, after a first `<col>`; and after a first other table part, a `<table>` at the top
+level or in a later element, and a `<form>` there holding an element with a `<div>`, `<p>` or
+the like in or around it. A debug build refuses the rest when the patch is sent, naming the
+element). Fields
 the user edited (after the form was sent), the files chosen in a file input (until a successful
 answer to the form that sent them) and the focus carry over to the new markup, so a patch can
 include the form the user is typing in, and a refusal can mark a file input invalid.
@@ -194,7 +202,26 @@ its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new
 (`Number::new(e.id(f.qty), f.qty, ..)`), never text. A number the user types is
 `qty: Entry<u32>`, read with its `Bounds` (`QTY.read(&input.qty)`, `None` for the field's
 message) and drawn again with `value={&input.qty}`; a typed `qty: u32` is only for a number a
-page writes itself, since one that does not read is the error page. A value the app stores and
+page writes itself, since one that does not read is the error page. A date and time the user
+picks (`<input type="datetime-local">`) is `when: Entry<LocalDateTime>` (`corten::i18n`) beside
+`zone: FormZone` (`corten::form`): the page draws in `let zone = DrawZone::from(req.zone())`
+(`DrawZone::from(Utc)` on a `Public` page): `{zone.field(f.zone)}`, `zone.name()` by the field
+(without JavaScript it is `UTC`, and the visitor knows only if the page shows it),
+`value={zone.local(stored).map(LocalDateTime::floor_minute)}`, `min={zone.min(at)}` and
+`max={zone.max(at)}` (every instant rounded down, so a stored time in its `min`'s minute is not
+drawn before it, and the bounds drawn at the offset that keeps a value between them inside them
+where the clocks go back); the post reads
+`input.when.at(&input.zone)` (`None` for the field's message), never in `req.zone()`, which
+differs between a first page and its post (`Entry::at` takes only a `FormZone`, which is made only
+by deserializing what a client sent), and the handler's own bounds check refuses what the input
+let through, and a refused post draws again in `DrawZone::from(&input.zone)` with
+`value={&input.when}`. A form without `zone.field` compiles and its post is a 422. Never a
+`String` parsed by hand or an offset worked out with `Zone::offset`. A time the clocks skip moves
+forward by the gap and a repeated one is the earlier (Temporal's default), so an edit form reads
+`input.when.at_keeping(&input.zone, stored)`, the stored instant when the field comes back as it
+was drawn. A picked day is `Entry<Day>`, `day.start(&input.zone)` where it begins (its first
+instant there, the change where the clocks skip midnight, not `00:00` read as a typed time; a `GET` form
+carries its zone too; `day.start(req.zone())` only for a day with no form, a link's parameter). A value the app stores and
 draws back into a number field must be one its `Bounds` hold (a ported screen's `min`/`step`
 never ran under `fetcher.submit`), or the browser will not send the form; `corten dev` names
 such a control in the console. A helper that takes a name of any field is generic over it

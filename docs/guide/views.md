@@ -442,7 +442,12 @@ fn job_dialog(job: &Job) -> impl Render + '_ {
 
 With the `let` outside the `html!`, the view would borrow a local of a function that has
 returned (E0515). `let`s and a layout component are a document, like the layout alone, and `let`s and a patch
-component are a patch.
+component are a patch. A patch's top-level elements are parsed together, as a `<template>`'s
+content, so table rows or cells beside other elements are dropped unless they come first: `html!`
+refuses the shapes lost wherever they are written, such as a row after a first `<table>`
+(`<table id={TotalsId}>..</table> <tr id={RowId(7)}>..</tr>`) or a `<table>` after a first row,
+and a debug build refuses the shapes that depend on what the patch began with when it is sent
+([Requests and forms](requests-and-forms.md)).
 
 A view lent to a prop inside another view (`action={&html! { .. }}`), or to a call written in its
 markup (`{keep_query(&at, &html! { .. })}`), is built and rendered inside the view around it, so it borrows what it uses instead of owning it: a step bar's action and the
@@ -657,7 +662,10 @@ another (a store's own zone). A page that writes a date in the visitor's zone an
 (`Cache-Control: private`), and the zone is not part of the page's key, so it does not make the
 runtime load the next page in full; a date the layout writes is drawn in `LocalTime` for that
 reason (a navigation keeps the layout's text from the first page). `req.zone()` is the zone itself (a
-`corten::i18n::Visitor`, a `Zone`), for turning a picked date into the instant it means there;
+`corten::i18n::Visitor`, a `Zone`), for the zone a page draws a form's dates and times in
+(`DrawZone::from(req.zone())`), which the form sends back as a `FormZone`; its post reads a
+picked date and time, and finds where a picked day begins (`day.start(&input.zone)`), in that, not
+in the post's `req.zone()` ([Requests and forms](requests-and-forms.md));
 `Option<ClientZone>` is its name. Both are UTC (`None`) on a browser's first page, before it
 has reported its zone, and without JavaScript; draw a date the first page shows in
 `corten_ui::LocalTime`, whose script writes it again in the browser's zone there, in the
@@ -668,7 +676,7 @@ than an instant (a report's window, a week's start, a due date, an API's `"2026-
 `corten::i18n::Day`, which `t.date(day, style)` writes as that day in every zone; it has no
 `.zone(..)` and no time, so the compiler keeps it from being written as an instant. `Day` parses
 `YYYY-MM-DD` (what `<input type="date">` sends), reads and writes JSON and serde as that text,
-and `day.midnight_utc()` is the instant where a query needs one (an `Option`: `None` before the
+and `day.start(Utc)` is the instant where a query needs one (an `Option`: `None` before the
 earliest instant the platform has, 1601 on Windows; `t.date` writes every day). A script writes
 a day with `format("2026-09-02")` and no offset. A day already kept as an
 instant at UTC midnight takes `.zone(Utc)`, or it reads a day early west of UTC. A script's `t.js().date(..)` writes UTC unless
