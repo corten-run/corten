@@ -228,6 +228,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       check();
       assert.ok(state.control?.monitor?.phase !== "invalid" || report.status !== "verified", "lost monitor cannot qualify");
       outcome = campaignOutcome(report, state, exitCode);
+      if (state.control?.monitor?.phase === "closed") {
+        const terminal = JSON.parse(regular(join(local, "monitor-terminal.json")));
+        assert.equal(terminal.id, state.control.monitor.id);
+        assert.equal(terminal.nativeTerminal, true); assert.equal(terminal.campaign, report.campaign);
+        assert.equal(terminal.sealSha256, report.supervisedTerminal.sealSha256);
+      }
     } catch { throw new Error("native campaign validation unavailable or invalid; evidence/host preserved"); }
     // Never retain/print native assertion messages: they may contain private raw values.
     assert.equal(treeHash(extracted), state.evidenceSha256, "validator mutated evidence"); verifyArchive();

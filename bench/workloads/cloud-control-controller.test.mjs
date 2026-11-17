@@ -62,6 +62,35 @@ test("closed monitor cannot delete running work or duplicate a host; terminal ev
   assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1);
 });
 
+test("terminal monitor and archived native campaign must agree before deletion", async (t) => {
+  for (const patch of [{ campaign: "r21-" + "f".repeat(16) }, { sealSha256: "e".repeat(64) }]) {
+    const h = harness(t, { active: true }); await h.launch().launch();
+    const path = join(h.local, "monitor-terminal.json"), closedPath = join(h.local, "monitor-local-closed.json");
+    writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path)), ...patch }));
+    const closed = JSON.parse(readFileSync(closedPath)); closed.closedAtMs = Date.now() - 31000;
+    closed.recoverAfterMs = closed.closedAtMs + 30000; writeFileSync(closedPath, JSON.stringify(closed));
+    h.flags.active = false;
+    await assert.rejects(h.task().collect()); assert.equal(h.deletes, 0); assert.equal(h.saved().deletionIntentAt, undefined);
+    assert.ok(h.saved().archiveSha256 && h.saved().evidenceSha256);
+  }
+});
+
+test("a closed supervised reservation refuses legacy or differently registered inspections", async (t) => {
+  const h = harness(t, { active: true }); await h.launch().launch(); h.flags.active = false;
+  const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+  closed.closedAtMs = Date.now() - 31000; closed.recoverAfterMs = closed.closedAtMs + 30000;
+  writeFileSync(path, JSON.stringify(closed));
+  for (const legacy of [true, false]) {
+    await assert.rejects(h.task({ inspect: async () => {
+      const s = structuredClone(h.report());
+      if (legacy) delete s.supervisedTerminal;
+      else s.supervisedTerminal.registrationSha256 = "f".repeat(64);
+      return s;
+    } }).collect());
+    assert.equal(h.deletes, 0); assert.equal(h.saved().deletionIntentAt, undefined);
+  }
+});
+
 test("controller persists earliest SSH and every SFTP intent before spawn, then seals including itself", async (t) => {
   const h = harness(t, { active: true }), controls = [];
   const state = await h.launch({ run(binary, args, timeout, allowFail, expiry, registration) {

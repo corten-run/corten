@@ -57,8 +57,9 @@ export function harness(t, flags = {}) {
     networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } });
   const calls = []; let droplets = [], creates = 0, deletes = 0, units = 0, downloads = 0, inspections = 0;
   let bytes = archive([...metadata(), { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]);
+  let supervisedTerminal;
   const good = (stdout = "") => ({ status: 0, stdout, stderr: "" });
-  const report = () => syntheticInspection(flags.reportStatus);
+  const report = () => ({ ...syntheticInspection(flags.reportStatus), ...(supervisedTerminal ? { supervisedTerminal } : {}) });
   const run = (binary, args, timeout, allowFail, expiry, registration) => {
     calls.push([binary, ...args]); assert.ok(timeout > 0 && timeout <= 15 * 60000);
     if (flags.cancelAt?.(binary, args, calls)) flags.cancelled = true;
@@ -104,8 +105,9 @@ export function harness(t, flags = {}) {
         writeFileSync(join(local, "monitor-journal.jsonl"), JSON.stringify({ kind: "progress", id: apparatus.id, payload: { state: "active" } }) + "\n");
         const done = new Promise((resolve) => {
           flags.completeMonitor = (terminal = true) => {
+            if (terminal) supervisedTerminal = { registrationSha256: digest(JSON.stringify(apparatus)), sealSha256: digest("synthetic native seal") };
             const value = { id: apparatus.id, binding: apparatus.binding, nativeTerminal: terminal, localClosed: true, remoteDrained: false,
-              ...(terminal ? {} : { publicationRevoked: true }) };
+              ...(terminal ? { campaign, sealSha256: supervisedTerminal.sealSha256 } : { publicationRevoked: true }) };
             writeFileSync(join(local, "monitor-" + (terminal ? "terminal" : "invalid") + ".json"), JSON.stringify(value));
             const closedAtMs = Date.now();
             writeFileSync(join(local, "monitor-local-closed.json"), JSON.stringify({ id: apparatus.id, binding: apparatus.binding,
