@@ -4836,7 +4836,8 @@ rules something out.
 
     Weighed in README order: correctness favors rejecting unchecked typed construction in
     every build rather than only in plain-request tests; performance adds only a borrowed
-    token to the existing mode check (measured below); compile-time safety and one way to do
+    token to the existing mode check, with the small instruction differences measured below;
+    compile-time safety and one way to do
     things favor the capability over a second unchecked route to the same answer. The
     framework owns this mode-dependent rendering contract, not the handler's domain writes
     or its choice of fallback. Do not require Action for low-level HTTP or live feeds, or
@@ -4860,6 +4861,27 @@ rules something out.
     another address (a phone on the LAN) gets none, and both checks take a page's own `fetch` that
     asks for `text/html` there for a navigation: a false 500, which opening the app over HTTPS or
     at `localhost` avoids.
+
+    For the checked construction change, release callgrind 3.19.0 with rustc 1.99.1 and
+    jemalloc, the same package-only `--all-features --lib` build and release profile, counted
+    `2292cd604` against `b77577301`: three alternating rounds of 1,200 less 200 requests,
+    divided by 1,000. These are medians (ranges), instructions per request:
+
+    | Answer | Before | Checked Action |
+    |---|---|---|
+    | `patch_or`, `AnyAnswer`, Action | 17,970.830 (17,970.797-17,970.836) | 17,975.752 (17,975.735-17,975.791) |
+    | `patch_or`, `Patches`, Action | 17,970.840 (17,970.804-17,970.848) | 17,975.812 (17,975.810-17,975.812) |
+    | `patch_or`, `AnyAnswer`, Document | 18,383.752 (18,383.662-18,383.753) | 18,388.700 (18,388.679-18,388.739) |
+    | `patch_or`, `Patches`, Document | 18,383.709 (18,383.652-18,383.724) | 18,388.724 (18,388.629-18,388.724) |
+    | Direct small component, Action | 17,534.418 (17,534.381-17,534.434) | 17,545.935 (17,545.897-17,545.946) |
+
+    The full test binary differs by about five instructions (0.028%) for `patch_or` in
+    either mode, not zero and not hidden by the runs' variation. The direct helper gains
+    about 11.5 (0.066%); its baseline did not check the mode at all, whereas its migrated
+    handler checks and can refuse. The token itself is a borrow, with no allocation.
+    As below, the crate's tests share the optimized binary with the measured request path,
+    so this comparison alone cannot attribute the differences to production code rather
+    than test-binary optimization.
 
     Stands on: platform (a browser shows an HTML response to a navigation or a form submit as the
     document, whatever its markup); platform (the
@@ -4903,7 +4925,9 @@ rules something out.
     tests in it can move what the optimizer inlines and lays out (reasoned; which functions moved
     was not traced); an app's binary has no `tests.rs`.
     The counted page asks for no HTML, which in a release build reaches the
-    same code, since the check and the method it clones are not compiled there); value (Values 3, a
+    same code, since the check and the method it clones are not compiled there);
+    measured (the checked-construction comparison above on `2292cd604` and `b77577301`,
+    including its medians and ranges); value (Values 3, a
     form works without JavaScript; Values 9, the developer sees it in a test).
 
     Revisit when: `req.mode` ceases to be an application override, or the low-level response
@@ -4927,7 +4951,9 @@ rules something out.
     HTTP at a LAN address, against the Fetch Metadata Working Draft of 21 September 2026;
     2026-11-16, the fetch metadata of navigations a service worker answers from navigation preload
     and passes on with `fetch(event.request)`, probed in Chromium 156 and WebKit 27.2 (Firefox was
-    not run).
+    not run); 2026-11-17, the checked Action's six compile-fail doctests, positive example,
+    four-mode/GET/await/status test and release wire-guard regressions, and the callgrind
+    comparison above, on `b77577301` against `2292cd604`.
 
 59. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
