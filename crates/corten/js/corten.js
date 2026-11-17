@@ -69,8 +69,8 @@ const PART = "./part.js";
 /**
  * Has the part module (`js/part.js`) read the parts the page waits for (`ReadAgain::now`): imported
  * once the page loaded with one (its head preloads the module) or markup the server sent, or a
- * script's {@link patch}, draws one, and handed what draws its answers ({@link apply}, whose `p` is
- * the markup it parsed last); from then on it finds the parts itself, so later calls (the
+ * script's {@link patch}, draws one, and handed what draws its answers ({@link apply}); from then on
+ * it finds the parts itself, so later calls (the
  * browser's own module, imported once) do nothing. A page that never draws one fetches and runs
  * none of it, and one whose module does not load shows each part's link, as without JavaScript
  * (docs/design.md#choice-slow-part-link).
@@ -1049,9 +1049,10 @@ export function patch(html, signal) {
  *   it replaces takes ({@link opened})
  */
 async function apply(html, signal, sent, took, own = true, asked, within) {
-  // Kept for the part module, which reads it as soon as it calls this, before anything is drawn:
-  // the waiting parts in it are its answer's own.
-  const content = (/** @type {{ p?: DocumentFragment }} */ (/** @type {unknown} */ (apply)).p = parse(html, own));
+  const content = parse(html, own);
+  // A part's read (part.js) is shown what this call parsed, before anything can run: the waiting
+  // parts in it are its answer's own. Kept by nothing else.
+  /** @type {{ o?: (content: DocumentFragment) => void } | undefined} */ (signal)?.o?.(content);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);

@@ -5315,6 +5315,150 @@ async function run(browser) {
     await page.unroute(`**/smoke/${id}-*`);
   }
 
+
+  // A patch a script makes before a part's answer has even waited for its stylesheet (from the
+  // `connectedCallback` of the answer's stylesheet link, a customized built-in, as the runtime puts
+  // it in the head) is not taken for the answer: its waiting part is read, and the answer's own is
+  // still marked failed, not read (#1400).
+  {
+    // WebKit has no customized built-in elements.
+    const supported = await page.evaluate(() => {
+      try {
+        class Probe extends HTMLLinkElement {}
+        customElements.define("smoke-built-in-probe", Probe, { extends: "link" });
+        return document.createElement("link", { is: "smoke-built-in-probe" }) instanceof Probe;
+      } catch {
+        return false;
+      }
+    });
+    const name = "a script's patch from a part's answer's stylesheet link as it connects is read, and the answer's own part is not";
+    if (supported) {
+      /** @type {string[]} */
+      const asked = [];
+      const patchOf = (/** @type {string} */ body) => ({ status: 200, headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" }, body });
+      await page.route("**/smoke/sheet-cb*", (route) => {
+        const path = new URL(route.request().url()).pathname;
+        if (path.endsWith(".css")) return route.fulfill({ status: 200, contentType: "text/css", body: "" });
+        asked.push(path);
+        if (path.endsWith("-a"))
+          return route.fulfill(
+            patchOf(
+              '<section id="sheet-cb-a">A done<link is="smoke-sheet-patcher" rel="stylesheet" data-corten-style href="/smoke/sheet-cb.css">' +
+                '<div id="sheet-cb-owned">Owned waiting<template data-corten-read-now data-from="/smoke/sheet-cb-owned"></template></div></section>',
+            ),
+          );
+        if (path.endsWith("-b")) return route.fulfill(patchOf('<p id="sheet-cb-bp">B drawn</p>'));
+        return route.fulfill(patchOf('<div id="sheet-cb-owned">Owned drawn</div>'));
+      });
+      await page.evaluate(async () => {
+        const w = /** @type {any} */ (window);
+        const corten = /** @type {{ patch: (html: unknown) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        customElements.define(
+          "smoke-sheet-patcher",
+          class extends HTMLLinkElement {
+            connectedCallback() {
+              if (w.__sheetPatched) return;
+              w.__sheetPatched = true;
+              corten.patch(__html('<div id="sheet-cb-b"><p id="sheet-cb-bp">B waiting<template data-corten-read-now data-from="/smoke/sheet-cb-b"></template></p></div>'));
+            }
+          },
+          { extends: "link" },
+        );
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="sheet-cb-1"></div>'));
+        await corten.patch(
+          __html('<div id="sheet-cb-1"><section id="sheet-cb-a">A waiting<template data-corten-read-now data-from="/smoke/sheet-cb-a"></template></section><div id="sheet-cb-b"></div></div>'),
+        );
+      });
+      await page.waitForFunction(() => document.getElementById("sheet-cb-bp")?.textContent === "B drawn", null, { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(300);
+      const state = await page.evaluate(() => ({
+        patched: !!(/** @type {any} */ (window).__sheetPatched),
+        a: document.getElementById("sheet-cb-a")?.firstChild?.textContent ?? null,
+        b: document.getElementById("sheet-cb-bp")?.textContent ?? null,
+        owned: [document.getElementById("sheet-cb-owned")?.textContent ?? null, document.getElementById("sheet-cb-owned")?.getAttribute("data-corten-read-failed") ?? null],
+      }));
+      check(
+        name,
+        state.patched && state.a === "A done" && state.b === "B drawn" && JSON.stringify(state.owned) === JSON.stringify(["Owned waiting", ""]) && JSON.stringify(asked) === JSON.stringify(["/smoke/sheet-cb-a", "/smoke/sheet-cb-b"]),
+        `${JSON.stringify(state)}, asked ${asked.join(" ")}`,
+      );
+      await page.evaluate(() => {
+        document.getElementById("sheet-cb-1")?.remove();
+        document.head.querySelector('link[href="/smoke/sheet-cb.css"]')?.remove();
+      });
+      await page.unroute("**/smoke/sheet-cb*");
+    } else skip(name, "no customized built-in elements");
+  }
+
+  // What a patch parsed is kept by nothing once it settles: not when the part it answers left
+  // before its stylesheet loaded, not when its signal had aborted, not when its element's target
+  // is not on the page. Counted with Chromium's heap, after a collection (#1400).
+  {
+    const name = "the markup a patch parsed is not kept once it is cancelled, aborted or finds no target";
+    if (engine === "chromium") {
+      const cdp = await page.context().newCDPSession(page);
+      /** Fragments still alive whose first element carries `data-release`, after a collection. @param {string} which */
+      const alive = async (which) => {
+        await cdp.send("HeapProfiler.collectGarbage");
+        const proto = await cdp.send("Runtime.evaluate", { expression: "DocumentFragment.prototype" });
+        const found = await cdp.send("Runtime.queryObjects", { prototypeObjectId: /** @type {string} */ (proto.result.objectId) });
+        const counted = await cdp.send("Runtime.callFunctionOn", {
+          objectId: /** @type {string} */ (found.objects.objectId),
+          functionDeclaration: `function () { return this.filter((f) => f.firstElementChild?.getAttribute("data-release") === ${JSON.stringify(which)}).length; }`,
+          returnByValue: true,
+        });
+        await cdp.send("Runtime.releaseObject", { objectId: /** @type {string} */ (found.objects.objectId) });
+        return /** @type {number} */ (counted.result.value);
+      };
+      /** @type {(value?: unknown) => void} */
+      let releaseSheet = () => {};
+      const sheetHeld = new Promise((resolve) => (releaseSheet = resolve));
+      await page.route("**/smoke/release.css", async (route) => {
+        await sheetHeld;
+        await route.fulfill({ status: 200, contentType: "text/css", body: "" }).catch(() => {});
+      });
+      await page.route("**/smoke/release-part", (route) =>
+        route.fulfill({
+          status: 200,
+          headers: { "corten-patch": "1", "content-type": "text/html; charset=utf-8" },
+          body: '<section id="release-a" data-release="cancelled"><link rel="stylesheet" data-corten-style href="/smoke/release.css">Drawn</section>',
+        }),
+      );
+      const answered = page.waitForResponse((r) => r.url().endsWith("/smoke/release-part"), { timeout: 5000 }).catch(() => null);
+      await page.evaluate(async () => {
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="release-1"></div>'));
+        const corten = /** @type {{ patch: (html: unknown) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch(__html('<div id="release-1"><section id="release-a">Waiting<template data-corten-read-now data-from="/smoke/release-part"></template></section></div>'));
+      });
+      await answered;
+      await page.waitForTimeout(200);
+      // The part leaves while its answer waits for the stylesheet; then the stylesheet loads.
+      await page.evaluate(() => document.getElementById("release-a")?.remove());
+      releaseSheet();
+      await page.waitForTimeout(500);
+      const cancelled = await alive("cancelled");
+      await page.evaluate(async () => {
+        const corten = /** @type {{ patch: (html: unknown, signal?: AbortSignal) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch(__html('<div id="release-1" data-release="aborted">Aborted</div>'), AbortSignal.abort());
+      });
+      const aborted = await alive("aborted");
+      await page.evaluate(async () => {
+        const corten = /** @type {{ patch: (html: unknown) => Promise<void> }} */ (await import(/** @type {string} */ ("corten")));
+        await corten.patch(__html('<template id="release-nowhere" data-release="missing" data-remove></template>'));
+      });
+      const missing = await alive("missing");
+      const kept = await page.evaluate(() => document.getElementById("release-1")?.textContent ?? null);
+      check(name, cancelled === 0 && aborted === 0 && missing === 0 && kept === "", `cancelled ${cancelled}, aborted ${aborted}, missing ${missing}, release-1 "${kept}"`);
+      await page.evaluate(() => {
+        document.getElementById("release-1")?.remove();
+        document.head.querySelector('link[href="/smoke/release.css"]')?.remove();
+      });
+      await page.unroute("**/smoke/release.css");
+      await page.unroute("**/smoke/release-part");
+      await cdp.detach();
+    } else skip(name, "the heap is counted through Chromium's DevTools protocol");
+  }
+
   // A script's patch that draws a page's first waiting part has the part module, which the page's
   // head did not preload, read it, however its markup spells the tag's attribute: after a newline,
   // a tab, in capitals, as HTML reads them (#1400).

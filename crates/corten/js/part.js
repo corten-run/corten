@@ -24,9 +24,10 @@ const fromOf = (tag) => /** @type {string} */ (own.getAttribute.call(tag, "data-
 /**
  * The runtime's `apply`: draws the patch `html` unless `signal.aborted`, which it reads right
  * before it draws (after the patch's modules and stylesheets have loaded); `asked` is the tag of
- * the read it answers. It parses the patch as soon as it is called, before its first `await`,
- * and keeps what it parsed as its `p`: the elements it will put in the page.
- * @typedef {((html: string, signal: AbortSignal, sent: null, took: undefined, own: boolean, asked: Element) => Promise<void>) & { p?: DocumentFragment }} Apply
+ * the read it answers. It parses the patch as soon as it is called and, before anything else
+ * runs (a stylesheet it links, a module it loads), hands what it parsed, the elements it will put
+ * in the page, to `signal.o` if the signal has one: this call's alone, kept by nothing.
+ * @typedef {(html: string, signal: AbortSignal & { o?: (content: DocumentFragment) => void }, sent: null, took: undefined, own: boolean, asked: Element) => Promise<void>} Apply
  */
 /**
  * A read on its way: the address it is of, the tags that wait for it, the parts they are in, its
@@ -184,14 +185,15 @@ function take(tags) {
 }
 
 /**
- * Takes the waiting tags in a part's answer, as `apply` parsed it and before any of it is drawn,
+ * Takes the waiting tags in a part's answer, as `apply` parsed it and before anything else runs,
  * as that answer's ({@link chained}): those in its elements, and in the content of a template
  * that appends it, which goes into the page; not those in any other template's content, which
- * does not. One whose element the page has no target for is never drawn, so never taken.
- * @param {DocumentFragment | undefined} content
+ * does not. One whose element the page has no target for is never drawn, so never taken. `apply`
+ * calls it with its own call's markup, so a patch a script makes meanwhile (from a stylesheet's
+ * link the answer inserts, as it connects) is never taken for it.
+ * @param {DocumentFragment} content
  */
 function owned(content) {
-  if (!content) return;
   const tags = Array.from(content.querySelectorAll(PART_NOW));
   for (const el of Array.from(content.children))
     if (el instanceof HTMLTemplateElement && own.hasAttribute.call(el, "data-append")) tags.push(...Array.from(el.content.querySelectorAll(PART_NOW)));
@@ -233,21 +235,23 @@ async function readPart(from, tags, parts) {
   const at = hidden;
   let again = false;
   const here = () => tags.every((tag) => inPage(tag) && reading.get(tag) === read && fromOf(tag) === from);
-  // Read by `apply` right before it draws: its answer is for what is no longer there.
-  const now = /** @type {AbortSignal} */ (/** @type {unknown} */ ({ get aborted() { return signal.aborted || !here(); } }));
+  // Read by `apply` right before it draws: its answer is for what is no longer there. `o` is
+  // shown the answer as `apply` parsed it, before anything can run.
+  const now = /** @type {AbortSignal} */ (
+    /** @type {unknown} */ ({
+      get aborted() {
+        return signal.aborted || !here();
+      },
+      o: owned,
+    })
+  );
   // Settled once a part leaves, even while the answer waits for a stylesheet that never loads.
   const left = new Promise((resolve) => signal.addEventListener("abort", resolve));
   try {
     const res = await fetch(from, { headers: { corten: "action" }, signal });
     if (res.headers.has("corten-patch") && res.url !== "" && new URL(res.url).origin === location.origin) {
       const html = await res.text();
-      if (here()) {
-        // Not one an earlier call left, should this one fail before it parses.
-        draw.p = undefined;
-        const drawn = draw(html, now, null, undefined, true, /** @type {Element} */ (tags[0]));
-        owned(draw.p);
-        await Promise.race([drawn.catch(reportError), left]);
-      }
+      if (here()) await Promise.race([draw(html, now, null, undefined, true, /** @type {Element} */ (tags[0])).catch(reportError), left]);
     } else if (res.ok && !res.headers.has("corten-location")) {
       // A success that is not a patch is the app's mistake (the route answered its page).
       console.error("corten: ReadAgain::now needs a patch from this origin, at", from, res);
