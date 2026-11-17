@@ -277,11 +277,11 @@ pub enum NotAFeed {}
 /// handler's own (`res.headers_mut().insert(..)`).
 ///
 /// `For` is who the answer is for, read from where it goes: [`ForOne`], the visitor who asked
-/// (an [`HtmlResult`]), or [`ForAll`], inside a [`Public`]. The `Req` methods that make one
+/// (an [`HtmlResult`]), or [`ForAll`], inside a [`Public`]. The methods that make one
 /// take it from there, so a handler never names it.
 ///
 /// `Kind` is what a request from the runtime ([`crate::Mode::Action`]) can get: [`AnyAnswer`], a
-/// page, a patch or a redirect, or [`Patches`], a patch and nothing else, which only the `Req`
+/// page, a patch or a redirect, or [`Patches`], a patch and nothing else, which only the
 /// methods that answer one make. A handler names it in its return type, `HtmlResult<Patches>`,
 /// for a route that says `patches` ([`crate::routes`]).
 pub struct HtmlResponse<For = ForOne, Kind = AnyAnswer>(pub(crate) Response, PhantomData<(For, Kind)>);

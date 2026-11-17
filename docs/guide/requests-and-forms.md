@@ -218,8 +218,9 @@ application override, not the HTTP method: a part read uses GET too. `patch_or`,
 and `invalid_with` already check the mode themselves and keep their signatures.
 
 The type checks construction, not arbitrary responses. A handler can still override `req.mode`
-before checking, or replace a response through `DerefMut` or raw HTTP. [Choice 58](../design.md#choice-plain-request-patch)'s debug
-check therefore stays: it answers a browser's plain HTML request (any method, a top-level
+before checking, or replace a response through `DerefMut` or raw HTTP.
+[Choice 58](../design.md#choice-plain-request-patch)'s debug check therefore stays: it answers
+a browser's plain HTML request (any method, a top-level
 navigation where fetch metadata is sent) that got a marked patch with a 500 naming the route.
 It uses the original request, and preserves `Set-Cookie` and `Clear-Site-Data` on the error.
 A runtime fetch and a client not asking for HTML are not checked by that guard

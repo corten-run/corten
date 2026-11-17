@@ -49,7 +49,7 @@ page with named posts drawn at a `do` address with a post form that has no `acti
 patch answering a browser's plain request (no `data-patch`). Direct builders require
 `if let Some(action) = req.action() { return action.patch(view); }` (or
 `action.patch_with_status(status, view)`), with a page or redirect otherwise; unchecked
-`action.patch` and `action.patch_with_status` do not exist. Prefer `req.patch_or` for the usual case.
+`Req::patch` and `Req::patch_with_status` do not exist. Prefer `req.patch_or` for the usual case.
 `Action` borrows the request, has no public constructor, cannot be cloned or copied, and
 consumes itself. It checks the effective mode, including an app override; the debug guard
 still catches a marked patch built through an override or raw response. A post's
