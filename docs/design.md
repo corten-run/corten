@@ -5317,19 +5317,18 @@ rules something out.
     Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the mark goes; or the
     runtime gains a general way to hand a module its events, when the hooks here become that.
 
-    Last checked: 2026-11-17, the runtime's and the module's sizes on `5365fede0` against main's
-    runtime at `b0c2abd4d` (built the same as at `f5f2132aa`), and each hook's share taken out of
-    that build; 2026-11-17, the watchlist smoke on `5365fede0`, Chromium 156.0.8078.4 438 checks,
-    Firefox 157.0 436, WebKit 27.2 312 and 5 over HTTP, 92 skipped in WebKit, the `data-address`
-    checks 38 in each browser and none skipped, all passed but three WebKit checks of other
-    features on a loaded machine, which passed when WebKit ran again (320 checks); 2026-11-17, the
-    new steps for a GET that waited for its form's write, a field the patch takes away and entries
-    of different heights against `1325c854a`'s runtime and module, served in this build's place:
-    the first two fail in all three engines and the third in Firefox; 2026-11-17, the module's
-    size on `SHA_R14` against `7a064d11d`'s, and the steps for a write of another marked form, a
-    traversal superseded before it draws and a form that is its patch's part, with
-    controls named after an element's members, against `7a064d11d`'s module served in this
-    build's place: all three fail in all three engines; 2026-11-15, the
+    Last checked: 2026-11-17, the runtime's size on `5365fede0` against main's runtime at
+    `b0c2abd4d` (built the same as at `f5f2132aa`), and each hook's share taken out of that build,
+    the runtime unchanged since; 2026-11-17, the module's size on `17884c6f5` against
+    `7a064d11d`'s; 2026-11-17, the watchlist smoke on `17884c6f5`, Chromium 156.0.8078.4 443
+    checks, Firefox 157.0 441, WebKit 27.2 320 and 5 over HTTP, 92 skipped in WebKit, the
+    `data-address` checks 41 in each browser and none skipped, all passed; 2026-11-17, the steps
+    for a GET that waited for its form's write, a field the patch takes away and entries of
+    different heights against `1325c854a`'s runtime and module, served in that build's place: the
+    first two fail in all three engines and the third in Firefox; 2026-11-17, the steps for a write
+    of another marked form, a traversal superseded before it draws and a form that is its patch's
+    part, with controls named after an element's members, against `7a064d11d`'s module served in
+    `17884c6f5`'s place: all three fail in all three engines and pass with `17884c6f5`'s; 2026-11-15, the
     traversals' bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and
     the request path's count on `307d00bca` against `c9ed56785`; 2026-11-15, the request path's
     count on `2d619cbb5` against `a3ee0c05f`.
