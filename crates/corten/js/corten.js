@@ -41,7 +41,7 @@ import { parseOn } from "./on.js";
 /**
  * The platform's Trusted Types, which TypeScript's DOM types do not have yet.
  * @typedef {{ toString(): string, toJSON(): string }} TrustedHTML
- * @typedef {{ createHTML(text: string): unknown, createScriptURL(url: string): unknown }} TrustedPolicy
+ * @typedef {{ createHTML(text: string): TrustedHTML, createScriptURL(url: string): unknown }} TrustedPolicy
  * @typedef {{ createPolicy(name: string, rules: { createHTML(text: string): string, createScriptURL(url: string): string }): TrustedPolicy }} TrustedTypes
  */
 const trusted = (() => {

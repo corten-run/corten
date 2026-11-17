@@ -20,10 +20,11 @@ import { register } from "corten";
 /** @typedef {import("../examples/seller-desk/types/app").Level} Level Generated from the Rust struct. */
 /** @import { FeedUrl } from "corten" */
 
-/** @param {import("corten").TrustedHTML} html @param {AbortSignal} signal */
-export async function patchHTML(html, signal) {
+/** @param {import("corten").TrustedHTML} html @param {import("corten").TrustedPolicy} policy @param {AbortSignal} signal */
+export async function patchHTML(html, policy, signal) {
   await patch(html);
   await patch(html, signal);
+  await patch(policy.createHTML("<p id=\"status\">Updated</p>"));
   // @ts-expect-error Pages require TrustedHTML: a script's string is refused by the browser.
   await patch("<p id=\"status\">Updated</p>");
 }

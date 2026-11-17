@@ -2484,7 +2484,7 @@ frame never shows.
 To read a part of the page again from a script, use a hidden GET `data-patch` form with
 `requestSubmit()`, or render `ReadAgain::from` for a server-chosen delay
 ([example](scripts.md#reading-a-part-again)). `patch(html, signal?)` takes `TrustedHTML`, not
-the string `fetch` returns; it does not pass a script's input through the runtime's policy.
+the text read from a fetched response; it does not pass a script's input through the runtime's policy.
 
 Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
 (`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rule-html-macro):
