@@ -5,6 +5,86 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in a shape
+  the runtime's parse loses wherever it is written no longer compiles: a table part (`<tr>`,
+  `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`, `<colgroup>`) after a
+  first `<table>`; an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after
+  a first `<col>`; and after a first other table part, a `<table>` at the top level or in a later
+  element, and a `<form>` there that holds an element, with an element HTML's wherever it lands in
+  or around it (a `<form>` holding a `<div>`, or one in a `<div>`). Each was dropped, the table
+  taken apart or the form's content moved out of it, in the browser with only a console error.
+  Send the table part inside the `<table>`, the `<col>`s in a `<colgroup>` with an id, or the rest
+  in a patch of its own. Every other shape depends on what the patch began with or where the view
+  is written (a `<p>` and a `<tr>` after it are kept after a first `<tr>`, and an `<svg>` keeps a
+  `<form>` of fields after a `<tr>`), so it still compiles and the debug check below finds it
+  when it is sent
+  ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409),
+  [design Choice 54](docs/design.md#choice-html-parse-refusals)).
+
+- A debug build refuses a patch the browser would lose part of: the runtime parses a patch as a
+  `<template>`'s content, where the first top-level element (other than a head's, such as a
+  `<script>` or `<template>`; Chromium and WebKit let a leading `<title>`, `<base>`,
+  `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the rest is read, so a table
+  row, cell or other table part beside another element was dropped (or a `<table>` or `<form>`
+  after a row taken apart) with only a console error about the next element. `req.patch`,
+  `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
+  fragment panics, naming the element lost and the one that came first, so an app's own
+  debug-build tests that draw such a patch now fail; a patch with a token the check does not read
+  as the browser does, whether `html!` writes it or markup placed with `raw` does (an end tag left
+  out, written otherwise than `</name>` or that closes no element open; an HTML start tag ending
+  `/>`; a comment a browser ends elsewhere than at its `-->`; a CDATA section outside an `<svg>`
+  or `<math>` or not ended; a doctype other than `<!DOCTYPE html>`; where text decides, a named
+  character reference it does not decode, and text in a table holder or after a first `<col>`; an
+  element HTML's wherever it lands written straight in an `<svg>` or `<math>`; a script whose text
+  a `<!--` and a `<script` carry past its first `</script>` and over an element; in a form a
+  table's reading empties, any token before what it holds but a comment; a start tag the patch
+  ends in; an HTML `<image>`, `<plaintext>`, `<noscript>`, `<html>`, `<body>`, `<head>`,
+  `<frame>` or `<frameset>`; after a first table part, a `<template>` in an SVG or MathML
+  integration point, past which Firefox reads the rest as a body's; an element the browser does
+  not put where it is written, such as a table part outside a table, a `<div>` in a `<p>` or an
+  `<a>` in an `<a>`; the full list is Limit 2), is checked up to there and sent, with a warning
+  naming where it stopped. A release build sends what it sent before; only `corten dev`'s check
+  that each `data-vars` has a style rule, which reads start tags with the same code, now reads them
+  as the browser's tokenizer does (whitespace around `=`, a `/` not before the `>`, names past
+  ASCII, and the text of an `<xmp>`, `<iframe>`, `<noembed>` or `<noframes>`), which only markup
+  placed with `raw` writes
+  ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
+
+- Preserve type-token punctuation in `#[derive(Fields)]`, so group, row and key types
+  written as paths compile, including keys of `#[fields(map)]` fields.
+
+- `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
+  Trusted Types enforcement would reject. The scripts guide shows how to read a part again
+  with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
+
+- Apply supported lean settings to catalog-page competitors as well as Corten:
+  reduce optional access logging, compression and timer work where supported,
+  record the exact profile in container evidence and reports, and retain full
+  source/rendering correctness. Richer groups keep their existing configuration.
+  Keep ASP.NET's native Kestrel header/keepalive timers at their defaults: setting
+  them to infinite caused early connection closure in Linux correctness checks
+  ([#1564 Catalog lean ASP.NET fails native JSON correctness with connection errors](https://github.com/corten-run/corten/issues/1564)).
+
+- Configure the standalone catalog Corten benchmark for the lean rendering
+  workload: omit optional compression and remove handler/header/send timers using
+  supported settings, while keeping page stages, error logs, full correctness
+  checks and the HTTP-source timeout. Production defaults and richer benchmarks
+  are unchanged; historical results keep their measured configuration. Keep the
+  shared JSON API consumer's default compression build and timers by selecting
+  lean build/runtime settings only in the catalog runner.
+
+- Preserve completed catalog load/request failures as versioned, replayable failed
+  app outcomes, separate from successful baselines and apparatus failures. Retain
+  all passes, raw counters, participant lifetimes and side errors; require successful
+  checker boundaries before any cold timing and attempt-wide upstream lifetime/CPU
+  continuity. Reject unknown prior termination in v3 functional participants and
+  require full lifetime-state consistency across observations. Summary-only reports
+  reconcile failure ledgers and baseline disposition with retained phases before
+  labeling an attempt complete. Keep HTTP error responses failed regardless of
+  their media type, retaining their content-check failures; report successful
+  throughput, failed requests and drops separately without excluding healthy peers
+  ([#1556 Catalog benchmark discards failed-load metrics and cannot replay completed target outcomes](https://github.com/corten-run/corten/issues/1556)).
+
 - The watchlist smoke's check that a submit which waited for a write the network failed is not
   sent holds that write until the newer press is made, and presses both buttons in the page, where
   it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the
@@ -30,6 +110,11 @@ Corten is pre-1.0, so any minor version may change the API.
 - Show the grouped controller's closed failure stage and allowed provider detail
   in direct CLI errors, without reflecting raw exceptions or changing recovery,
   cleanup or benchmark acceptance rules.
+
+- `FeedUrl<Row>` now requires `Row` to resolve to the declarations `corten::types` generates
+  (`import("../types/app").Row`), as `ScreenUrl<Data>` does. A local typedef, an import from
+  another module, or an undeclared row name does not compile; generated imports and their
+  aliases keep the feed's row type tied to the server's.
 
 - A handler is given a form's control by its `#[derive(Fields)]` field,
   `on:change={js::fill(f.service, f.weight, f.size)}`, and its parameter is the control:

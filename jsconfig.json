@@ -1,5 +1,5 @@
 {
-  "//": "Type-checks the runtime and the scripts next to components without a build step: npm run check",
+  "//": "Type-checks the runtime and the scripts next to components without a build step: npm run check. It leaves out only the scripts of compile_fail doctests that TypeScript refuses too; scripts/compile-fail-scripts.test.mjs checks each is refused for its one error.",
   "compilerOptions": {
     "checkJs": true,
     "allowJs": true,
@@ -27,5 +27,6 @@
     "examples/*/types/*.d.ts",
     "crates/corten-cli/template/src/**/*.js",
     "scripts/typecheck-fixture.js"
-  ]
+  ],
+  "exclude": ["crates/corten/src/undeclared_feed.js"]
 }
