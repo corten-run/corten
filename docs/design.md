@@ -4978,7 +4978,23 @@ rules something out.
     constructor but deserializing what a client sent cannot be given the request's zone; rounding
     every instant a form draws down keeps their order, and a clock read at the smaller of two
     offsets a day apart is no later than it reads at any instant in that day, where the zone
-    changes its offset at most once); value (a standard's answer
+    changes its offset at most once); measured (callgrind, instructions a request, by
+    `tests::what_a_date_and_time_field_costs` in the lib's release test binary with all features
+    on `939be002f`: 1,200 and 200 requests through the router with `oneshot` from a browser that
+    reported America/Chicago, the difference over 1,000, three rounds alternating the eight cases,
+    medians with every round within 2 instructions of them; the baseline is the same page and post
+    with the times and the zone as text the app does not read: drawing the form, the zone's hidden
+    input and name and a `datetime-local` with `value`, `min` and `max`, 29,382 against 25,280,
+    +4,102 (16%); reading a post sent unchanged, which `at_keeping` keeps without resolving a
+    time, 29,607 against 27,788, +1,819 (6.5%); a post changed by a minute, resolved in the posted
+    zone, 30,616, +2,828 (10%); and one changed to a time the clocks skip (2027-03-14T02:30 in
+    Chicago), resolved across the gap, 30,862, +3,074 (11%). Only a page that draws such a field
+    and a post that reads one pay it: no other page or form calls these. Correctness comes before
+    speed (README, Values), and the cost buys a time read in the zone it was typed in, with the
+    browser's own bounds and validation, no dependency and no client script. Not measured: the
+    change to `Visitor::known_offset`, through which every date `t.date_time` writes in the
+    visitor's zone goes; it now compares the instant's fraction of a second and, only before
+    1970, makes a second timestamp); value (a standard's answer
     before one of Corten's, HTML that works on its own, a mistake the compiler can catch is a
     compile error, one way to do each thing and a small surface: Values 2, 3, 4, 5 and 6).
 
@@ -5009,7 +5025,7 @@ rules something out.
     `GetStartOfDay` in its spec (read that day), Toronto's 1919-03-31 change in the bundled
     database, and `day.start` against Temporal's start of day around every change in every zone
     from its first, with `Visitor::known_offset` asking jiff at the second an instant is in,
-    passing on `591222898`.
+    passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`.
 
 ## Rules
 
