@@ -8,7 +8,7 @@ Corten is pre-1.0, so any minor version may change the API.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 
-- **Breaking:** `html!` refuses duplicate written HTML attribute names (case-insensitively, including
+- **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
   names with expression values), hand-written `data-key` (write `key={..}`), and visible HTML
   nesting whose start tags close or discard an open element: blocks in paragraphs, nested list
   and definition items without a boundary, active anchors, buttons or `nobr` still in scope,
@@ -53,9 +53,11 @@ Corten is pre-1.0, so any minor version may change the API.
   text, so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a component compiles, as
   browsers keep it, and nothing after such a `<plaintext>` is refused.
 
-- `html!` compares attribute names as it writes them, so `key` (written `data-key`) beside `KEY`
-  compiles as two attributes; a hand-written `data-key` is still refused, and `Key` beside `KEY`
-  is a duplicate.
+- `html!` compares attribute names as it writes them: `ref` (written `data-ref`), bare `page`
+  (written `data-corten-page`) and `key` (written `data-key`) beside their uppercase literal names
+  (`REF`, `PAGE`, `KEY`) compile as distinct attributes, as does bare `page` beside `page=".."`.
+  Repeated pseudo-attributes and case-insensitive duplicate literals (`Key` beside `KEY`) are
+  still refused, as are hand-written generated attributes.
 
 - The patch shapes `html!` refuses (below) compile where output the markup does not show (an
   expression, a component, or a `<script>` or `<style>` whose text holds a `<`) comes before the

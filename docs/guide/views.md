@@ -26,8 +26,12 @@ render of that component reserves that size once (a 1-byte render right after a 
 | `<Card title="x" compact>children</Card>` | a component: a struct with those fields (`compact` is `true`), children in `children` |
 | `<>...</>`, `<!DOCTYPE html>`, `<input>` | fragments, the doctype, void elements without a closing tag |
 
-An HTML attribute name is written once per element, case-insensitively: `name="a" NAME={b}` does
-not compile, even when one value might be absent. Combine values in one expression instead.
+An emitted HTML attribute name is written once per element, case-insensitively:
+`name="a" NAME={b}` does not compile, even when one value might be absent. Combine values in one
+expression instead.
+`ref` writes `data-ref`, bare `page` writes `data-corten-page`, and `key` writes `data-key`, so
+each can appear beside its uppercase literal name (`REF`, `PAGE`, `KEY`); bare `page` can also
+appear beside `page=".."`. Repeating a pseudo-attribute is still a duplicate.
 Spreads can still write duplicate names: the macro cannot see their contents, and the browser
 keeps the first. Handler calls (`on:..`) still combine in one generated `data-on` attribute,
 including several calls for one event. `data-key` is Corten's output; write `key={item.id}`,

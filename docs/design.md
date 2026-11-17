@@ -4715,10 +4715,12 @@ rules something out.
     not show) starts with nothing open rather than modelling the tree builder further: an `<a>`
     reached through a `<foreignObject>`, `<title>`, `<desc>`, `<mi>` or `<mtext>` inside an
     outer `<a>` is kept by browsers and compiles.
-    A duplicate written HTML attribute name is refused case-insensitively, with an expression
-    value too; spreads remain opaque, so the first `encoding` rule still
-    matters when a spread precedes or follows a written one. Handler calls (`on:..`) still
-    combine in one `data-on` attribute, including repeated events.
+    A duplicate emitted HTML attribute name is refused case-insensitively, with an expression
+    value too: `ref`, bare `page` and `key` are compared as `data-ref`, `data-corten-page` and
+    `data-key`, so their uppercase literal names are distinct, as is `page=".."` beside bare
+    `page`. Repeated pseudo-attributes are still duplicates. Spreads remain opaque, so the first
+    `encoding` rule still matters when a spread precedes or follows a written one. Handler calls
+    (`on:..`) still combine in one `data-on` attribute, including repeated events.
 
     Not chosen: a complete HTML validator or table insertion-mode simulation. A `<div>` straight
     in a `<table>` still compiles (foster parenting), as does a `<table>` in a `<p>`, whose

@@ -809,3 +809,56 @@ fn key_and_upper_case_key_are_two_attributes() {
         r#"<my-widget data-key="row-1" KEY="widget-value"></my-widget>"#
     );
 }
+
+#[test]
+fn ref_and_upper_case_ref_are_two_attributes() {
+    #[component]
+    fn Marked() -> impl Render {
+        let node = refs();
+        html! { <div ref={node} REF="widget-value"></div> }
+    }
+    assert_eq!(Marked {}.to_html(), r#"<div data-scope="marked" data-ref="node" REF="widget-value"></div>"#);
+}
+
+#[test]
+fn bare_page_and_literal_page_are_two_attributes() {
+    #[derive(Id)]
+    struct NavId;
+
+    for (doc, expected) in [
+        (
+            html! {
+                <html>
+                    <head>
+                        <title>"Page attributes"</title>
+                        <Corten />
+                    </head>
+                    <body>
+                        <nav page PAGE="widget-value" id={NavId}></nav>
+                        <main></main>
+                    </body>
+                </html>
+            }
+            .to_html(),
+            r#"<nav data-corten-page PAGE="widget-value" id="nav"></nav>"#,
+        ),
+        (
+            html! {
+                <html>
+                    <head>
+                        <title>"Page attributes"</title>
+                        <Corten />
+                    </head>
+                    <body>
+                        <nav page page="widget-value" id={NavId}></nav>
+                        <main></main>
+                    </body>
+                </html>
+            }
+            .to_html(),
+            r#"<nav data-corten-page page="widget-value" id="nav"></nav>"#,
+        ),
+    ] {
+        assert!(doc.contains(expected), "{doc}");
+    }
+}

@@ -279,6 +279,39 @@ use std::{
 /// let _ = html! { <input disabled disabled> };
 /// ```
 ///
+/// Pseudo-attributes are compared by their generated names: `ref` writes `data-ref`, bare
+/// `page` writes `data-corten-page`, and `key` writes `data-key`. Repeating one is still a
+/// duplicate:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <my-widget Key="first" KEY="second"></my-widget> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <my-widget key="first" key="second"></my-widget> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn Marked() -> impl Render {
+///     let node = refs();
+///     html! { <div ref={node} ref={node}></div> }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct NavId;
+/// let _ = html! {
+///     <html><head><title>"Page"</title><Corten /></head>
+///         <body><nav page page id={NavId}></nav><main></main></body></html>
+/// };
+/// ```
+///
 /// `data-key` is printed by Corten: give a keyed ref its key with `key={..}` instead:
 ///
 /// ```compile_fail

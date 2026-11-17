@@ -1523,34 +1523,12 @@ impl Cursor {
                     props.push((stream([TokenTree::Ident(field)]), value));
                 }
                 Some(TokenTree::Ident(_)) => {
-                    let mut name = self.attr_name()?;
-                    let written = name.to_ascii_lowercase();
-                    if written == "data-key" {
+                    let name = self.attr_name()?;
+                    let lower = name.to_ascii_lowercase();
+                    if lower == "data-key" {
                         return err(span, "data-key is printed by Corten: write key={item.id} to give a keyed ref its key");
                     }
-                    // Compared as written out: `key` is written `data-key` (below), so a `KEY`
-                    // beside it is another attribute, and a `Key` beside `KEY` the same one.
-                    let emitted = if name == "key" { "data-key".to_string() } else { written.clone() };
-                    // Handler calls share one generated data-on attribute, including repeated events.
-                    if !name.starts_with("on:") && !names.insert(emitted) {
-                        let instead = if written == "style" {
-                            "give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}"
-                        } else {
-                            "write the attribute once, combining its values in one expression if needed"
-                        };
-                        return err(
-                            span,
-                            format!(
-                                "attribute {name} is written twice on this element: {instead}; a browser keeps only the first"
-                            ),
-                        );
-                    }
-                    // `key={item.id}` names an element in a keyed ref (a handler's `Map`).
-                    if name == "key" {
-                        name = "data-key".into();
-                    }
                     // HTML attribute names are case-insensitive: `data-Vars` is `data-vars`.
-                    let lower = name.to_ascii_lowercase();
                     if lower == "data-nav" || lower == "data-nav-group" {
                         return err(span, format!("{name} is printed by Corten: write <a {{..req.nav(&url::News)}}> (or req.nav_section, or a link of req.nav_of), which writes href, data-nav, data-nav-group and aria-current from one mention of the route"));
                     }
@@ -1571,11 +1549,9 @@ impl Cursor {
                     }
                     // `page`: an element of a document's layout that is the page's (a section's
                     // nav), which a navigation sends with `<main>`'s children.
-                    if name == "page" && !is_punct(self.peek(), '=') {
-                        attrs.push(Attr::Page(span));
-                        continue;
-                    }
-                    if name == "ref" || name.starts_with("on:") {
+                    let attr = if name == "page" && !is_punct(self.peek(), '=') {
+                        Attr::Page(span)
+                    } else if name == "ref" || name.starts_with("on:") {
                         let braced = is_punct(self.peek(), '=')
                             && matches!(self.peek2(), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace);
                         if !braced {
@@ -1586,7 +1562,7 @@ impl Cursor {
                         }
                         self.next();
                         let (_, expr) = self.value(false)?;
-                        attrs.push(match name.strip_prefix("on:") {
+                        match name.strip_prefix("on:") {
                             Some(event) => {
                                 // `on:document:keydown`: the element's handler for an event anywhere on
                                 // the page, printed `document.keydown` (the last `:` before the module
@@ -1643,31 +1619,55 @@ impl Cursor {
                                     Attr::Ref(expr, None)
                                 }
                             }
-                        });
-                        continue;
-                    }
-                    if is_punct(self.peek(), '=') {
-                        self.next();
-                        let value_span = self.span();
-                        match self.value(false)? {
-                            (Some(text), _) => {
-                                if let Some(path) = local_path(&lower, &text) {
-                                    return err(value_span, refused_path(&name, path));
-                                }
-                                attrs.push(Attr::Static(name, text))
-                            }
-                            (None, expr) => {
-                                if let Some(text) = braced_text(&expr) {
+                        }
+                    } else {
+                        // `key={item.id}` names an element in a keyed ref (a handler's `Map`).
+                        let emitted = if name == "key" { "data-key".into() } else { name.clone() };
+                        if is_punct(self.peek(), '=') {
+                            self.next();
+                            let value_span = self.span();
+                            match self.value(false)? {
+                                (Some(text), _) => {
                                     if let Some(path) = local_path(&lower, &text) {
                                         return err(value_span, refused_path(&name, path));
                                     }
+                                    Attr::Static(emitted, text)
                                 }
-                                attrs.push(Attr::Expr(name, expr))
+                                (None, expr) => {
+                                    if let Some(text) = braced_text(&expr) {
+                                        if let Some(path) = local_path(&lower, &text) {
+                                            return err(value_span, refused_path(&name, path));
+                                        }
+                                    }
+                                    Attr::Expr(emitted, expr)
+                                }
                             }
+                        } else {
+                            Attr::Bare(emitted)
                         }
-                    } else {
-                        attrs.push(Attr::Bare(name));
+                    };
+                    let emitted = match &attr {
+                        Attr::Ref(..) => Some("data-ref".into()),
+                        Attr::Page(_) => Some("data-corten-page".into()),
+                        Attr::Bare(name) | Attr::Static(name, _) | Attr::Expr(name, _) => Some(name.to_ascii_lowercase()),
+                        // Handler calls share one generated data-on attribute, including repeated events.
+                        Attr::On(..) => None,
+                        Attr::Spread(_) => unreachable!(),
+                    };
+                    if emitted.is_some_and(|name| !names.insert(name)) {
+                        let instead = if lower == "style" {
+                            "give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}"
+                        } else {
+                            "write the attribute once, combining its values in one expression if needed"
+                        };
+                        return err(
+                            span,
+                            format!(
+                                "attribute {name} is written twice on this element: {instead}; a browser keeps only the first"
+                            ),
+                        );
                     }
+                    attrs.push(attr);
                 }
                 _ => return err(span, format!("expected an attribute, > or /> in <{name}>")),
             }
