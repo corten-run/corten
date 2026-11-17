@@ -207,6 +207,23 @@ component's script imports as `./refund.js`), and one table of cases a test runs
 checks its own formats against the server's the same way (`scripts/format.mjs`). The test runs
 `node`, so it needs Node on the `PATH` of every machine that runs `cargo test` (CI included).
 
+The helper is the same module the browser uses, not a test copy:
+
+```js
+// src/matrix/refund.js
+/** @param {number} paid @param {number} received */
+export function refundOf(paid, received) {
+  const refund = Math.max(0, paid - received);
+  return { refund, net: paid - refund };
+}
+```
+
+Declare it with `script!(pub mod refund = "refund.js");` beside that file and list
+`refund::COMPONENT` with the app's components. The component's script imports
+`{ refundOf }` from `"./refund.js"`; it may also import `keep` from `"corten"` or a view from
+`"corten/views"`. The test imports only `refund.js`, so none of those browser imports needs a
+stub. Keep the helper's imports, if any, free of browser modules too.
+
 ```rust,ignore
 /// Paid and received, then the refund and what the seller nets, in cents.
 const CASES: &[[i64; 4]] = &[[1000, 750, 250, 750], [1000, 1200, 0, 1000], [7, 3, 4, 3]];
@@ -216,13 +233,16 @@ fn the_script_refunds_what_the_server_does() {
     for [paid, received, refund, net] in CASES {
         assert_eq!(super::refund(*paid, *received), Refund { refund: *refund, net: *net });
     }
-    // The same cases through the script's export (the test runs in the crate's directory).
+    // The same cases through the script's export, relative to this crate.
     let cases = CASES.iter().map(|[paid, received, ..]| format!("[{paid},{received}]")).collect::<Vec<_>>().join(",");
     let script = format!(
         "import {{ refundOf }} from './src/matrix/refund.js';
          for (const [paid, received] of [{cases}]) {{ const r = refundOf(paid, received); console.log(r.refund, r.net); }}"
     );
-    let out = std::process::Command::new("node").args(["--input-type=module", "-e", &script]).output().expect("node runs");
+    let out = std::process::Command::new("node")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(["--input-type=module", "-e", &script])
+        .output().expect("node runs");
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let lines: Vec<String> = String::from_utf8(out.stdout).unwrap().lines().map(str::to_string).collect();
     let expected: Vec<String> = CASES.iter().map(|[.., refund, net]| format!("{refund} {net}")).collect();
@@ -233,6 +253,57 @@ fn the_script_refunds_what_the_server_does() {
 Keep money in integer minor units on both sides, and round with the same rule: `Math.round` and
 `f64::round` differ on a negative half (`-2.5` is `-2` in JavaScript and `-3` in Rust). Writing the
 result is the formats' job, which already agree ([below](#numbers-money-and-dates-a-script-writes)).
+
+### Testing scripts
+
+Test the part that needs no browser with Node's own test runner (`node --test`), or from a Rust
+test when the same cases must agree with the server, as above. Import the source helper, not the
+component script that calls it. This needs no Corten loader, fake `corten` package or DOM stubs.
+
+Test behavior that uses `corten`, `corten/views`, refs, events or `signal` in a browser on a page
+the app serves. The page's import map resolves the real runtime and its generated view classes;
+opening a source file in Node does not. Mapping the names alone is not enough: the runtime
+starts listeners and scans the document as it loads, and views use the browser's DOM prototypes.
+Corten ships no Node loader or stub runtime. A fake `keep` or `rows` would not test the behavior
+the page runs.
+
+Use a browser runner such as Playwright, start the app as for a browser smoke test, and interact
+with its rendered controls. For example, against the seller-desk example:
+
+```js
+import assert from "node:assert/strict";
+import { chromium } from "@playwright/test";
+
+const browser = await chromium.launch();
+try {
+  const page = await browser.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  await page.goto(process.argv[2]);
+  await page.evaluate(async () => {
+    const { ready } = await import("corten");
+    await ready;
+  });
+  await page.locator("tbody input[type=checkbox]").first().click();
+  assert.equal(await page.getByRole("group", { name: "Selected items" }).locator("output").textContent(), "1");
+  assert.deepEqual(errors, []);
+} finally {
+  await browser.close();
+}
+```
+
+Run it with `node test-selection.mjs http://localhost:18484` after installing Playwright and
+its Chromium browser in the test environment. This runs `inventory_grid.js`, which imports both
+`corten` and `corten/views`, without replacing either module. It also checks the markup's call
+and refs, which calling the export alone would miss. Check cancellation by removing the component
+through a navigation or patch and checking that its work stops, not by supplying a different
+lifecycle in the test. [The seller-desk smoke](../../examples/seller-desk/smoke.mjs) covers selection,
+filtering and sorting this way; [the runtime smoke](../../scripts/smoke.mjs) covers connection and
+cleanup. Neither harness needs per-app implementations of Corten's modules. Browser tests run
+separately from `cargo test` and `corten check`; keep them in the app's CI too.
 
 ## Components and their roots
 

@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Document script testing without runtime stubs: import-free shared logic in Node, including
+  Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
+
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
