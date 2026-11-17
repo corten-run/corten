@@ -19,6 +19,28 @@ Corten is pre-1.0, so any minor version may change the API.
   the form itself, a full load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
+- The watchlist smoke's check that a submit which waited for a write the network failed is not
+  sent holds that write until the newer press is made, and presses both buttons in the page, where
+  it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the
+  failure, went out as a submit of its own and watched a stock that a later case then could not
+  select, which ended the run in a 30 s `selectOption` timeout
+  ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
+  Runtime behavior is unchanged.
+
+- Distinguish a failed benchmark account observation from uncertain worker lifetime
+  only after native request/response/socket closure, a bound terminal reply and
+  timely exit0. Preserve the failed operation and fresh cleanup proofs without
+  retries, worker reuse or repeated mutations; uncertain paths keep their locks.
+
+- Preserve closed rejection-site details for benchmark provider account requests
+  through private-worker diagnostics and cached teardown, without exposing native
+  errors or changing retries, credential use, acceptance or lifecycle locks.
+
+- Launch only the first complete official benchmark group initially; require its
+  replayed native evidence and confirmed cleanup before a separately approved,
+  once-only admission of the remaining dedicated group hosts. Keep deferred groups
+  visible, the complete registry mandatory and legacy collection available.
+
 - Show the grouped controller's closed failure stage and allowed provider detail
   in direct CLI errors, without reflecting raw exceptions or changing recovery,
   cleanup or benchmark acceptance rules.

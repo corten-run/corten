@@ -22,14 +22,39 @@ or remove Corten's features to manufacture parity.
 ## Implementation status
 
 The [grouped cloud controller](CLOUD.md) supports a dedicated fresh host for each complete
-registry group. The fleet stages admission behind the first group's common setup,
-then admits remaining hosts serially while their remote jobs overlap. Each host runs only its group's
+registry group. `fleet.mjs ROUND --fleet-root ROOT --prepare` reserves the complete current
+inventory (with the exact commit, SSH key and saved provider identity). An explicitly reviewed
+`--detach` approval launches only the first complete group, not a common-setup qualification run.
+Every other group remains visibly deferred, including during first-stage `--collect`;
+the fleet is still incomplete. Each host runs only its group's
 native entries. The [campaign procedure](isolated/CAMPAIGN.md) retains independent source-audit
 waits and terminal-only evidence collection for each host. A separate fleet gate requires
 every current group before reporting a complete round. These are separate from the legacy marketplace
 schedule and the per-group development commands below. Exact merged-source review, native
 producer/validator integration and host-readiness gates remain mandatory before allocation;
 an implemented controller or a passing portable suite is not a completed benchmark.
+
+After collecting that same first host, a separate `--admit-remaining --print-approval`
+replays its actual intrinsic native evidence and checks its archive, extracted tree,
+source/provenance, complete selection and confirmed deletion. It requires the campaign's
+authoritative `verified` outcome, not perfect performance or success from every competitor;
+valid failed and unsupported app outcomes remain visible. Synthetic inspection, bootstrap
+readiness, operation receipts and saved status alone cannot authorize later admission.
+The new exact approval binds that evidence snapshot and every remaining child subject.
+Execution rechecks it under the fleet lock and consumes a once-only remaining intent before
+dispatch. Remaining dedicated hosts are admitted serially after each local worker settles;
+their remote group campaigns overlap. Changed evidence, uncertainty, interruption or an
+admission failure stops untouched children without making the intent replayable. Final fleet
+verification still refuses an active root operation lock and requires every official group.
+Use `--print-approval` for each fresh action, then supply its reviewed hash with
+`--approve-reviewed-merged-ready`; neither preview nor these commands grants operational
+approval. Historical fleets remain collectable, but legacy or consumed launch intents cannot
+acquire new remaining-admission authority.
+An accepted root alias remains bound to the same physical fleet: collection and remaining
+admission can use either spelling while the original requested path still resolves there.
+Removing or retargeting it refuses remaining admission, even via the physical path. Each
+invocation's requested spelling still requires its own exact approval; consumed intents are
+never rewritten to repair path identity.
 
 The [client-heavy runner](../client-heavy/README.md) builds all selected native
 applications, observes their actual DOM and resources, and gates a separate

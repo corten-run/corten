@@ -530,8 +530,11 @@ async function run(browser) {
   /** Every feed source the page has opened, oldest first: true while open. */
   const feedSources = () =>
     page.evaluate(() => (/** @type {any} */ (window)).__sources.filter((/** @type {EventSource} */ s) => s.url.includes("/feed/")).map((/** @type {EventSource} */ s) => s.readyState !== EventSource.CLOSED));
-  // The next /watch post waits this long before reaching the server, or fails as if offline.
+  // The next /watch post waits this long, and for `holdWatch` to settle, before reaching the
+  // server, or fails as if offline.
   let delayWatch = 0;
+  /** @type {Promise<unknown> | null} */
+  let holdWatch = null;
   let failWatch = false;
   /** @type {string[]} */
   const abandoned = [];
@@ -539,14 +542,18 @@ async function run(browser) {
   const offline = new Set();
   await page.route("**/watch", async (route) => {
     const wait = delayWatch;
+    const hold = holdWatch;
     delayWatch = 0;
+    holdWatch = null;
     if (failWatch) {
       failWatch = false;
       if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+      await hold;
       offline.add(route.request());
       return route.abort("internetdisconnected");
     }
     if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+    await hold;
     await route.continue().catch(() => {});
   });
   // Navigation requests the runtime sends (`corten: nav`), prefetches included.
@@ -2154,26 +2161,36 @@ async function run(browser) {
   const lifeClosed = await feedsAre(feedsBefore);
   check("a form with controls named after the members the runtime reads on it ends its life when it leaves: its handler's signal aborts", lifeOpened && lifeClosed, JSON.stringify({ feedsBefore, lifeOpened, lifeClosed }));
   // A newer submit that waited for a write the network failed is not sent: it would fail the
-  // same way, and the user sends it again.
+  // same way, and the user sends it again. The failed write is held until the newer press is
+  // made, so that press meets it still out (a fixed delay let a loaded browser press after the
+  // failure, #1149), and both presses run in the page, so the first is sent before the test
+  // picks another stock.
   let afterFailure = 0;
   /** @param {import("@playwright/test").Request} r */
-  const onRetry = (r) => r.method() === "POST" && r.url().endsWith("/watch") && (afterFailure += 1);
+  const isWrite = (r) => r.method() === "POST" && r.url().endsWith("/watch");
+  /** @param {import("@playwright/test").Request} r */
+  const onRetry = (r) => isWrite(r) && (afterFailure += 1);
   const failedAgain = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", resolve, { once: true })));
   page.on("request", onRetry);
-  delayWatch = 600;
+  let releaseWatch = () => {};
+  holdWatch = new Promise((resolve) => (releaseWatch = () => resolve(undefined)));
   failWatch = true;
-  await page.click("#watch-form button");
+  const watchSent = page.waitForRequest(isWrite, { timeout: 5000 }).then(() => true, () => false);
+  const pressWatch = () => page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#watch-form button")).click());
+  await pressWatch();
+  const watchWasSent = await watchSent;
   // Another stock the form still offers, so the newer submit differs from the one it waits for.
   const other = await page.$eval("select[name=id]", (s) =>
     [.../** @type {HTMLSelectElement} */ (s).options].map((o) => o.value).find((v) => v && v !== /** @type {HTMLSelectElement} */ (s).value),
   );
   check("the form offers another stock to send", other !== undefined);
   if (other) await page.selectOption("select[name=id]", other);
-  await page.click("#watch-form button");
+  await pressWatch();
+  releaseWatch();
   await failedAgain;
   await page.waitForTimeout(500);
   page.off("request", onRetry);
-  check("a submit that waited for a write the network failed is not sent", afterFailure === 1, `posts: ${afterFailure}`);
+  check("a submit that waited for a write the network failed is not sent", watchWasSent && afterFailure === 1, `posts: ${afterFailure}${watchWasSent ? "" : ", the first not sent in 5 s"}`);
 
   // A submit key (SubmitKey::field) is sent again until the submission has an answer, then renewed
   // as another UUID v4.
