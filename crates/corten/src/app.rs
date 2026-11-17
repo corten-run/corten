@@ -1589,7 +1589,7 @@ impl<M: Middleware> App<M> {
         };
         // A lane makes no API's check; a route whose scope its path finds may be another API's.
         let names = access.map(|scopes| {
-            let foreign = |pattern: &str| !lanes.iter().any(|lane| *lane == pattern) && scopes.of_route(pattern).is_none();
+            let foreign = |pattern: &str| !lanes.contains(&pattern) && scopes.of_route(pattern).is_none();
             router.access_names(scopes.clone(), foreign)
         });
         // With app layers, the route is named inside them and carried out to the log.
