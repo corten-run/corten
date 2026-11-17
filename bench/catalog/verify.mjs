@@ -5,6 +5,7 @@ import { isAbsolute, join, parse, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { rawSchema, replayCatalog } from "./raw.mjs";
 import { timedRawSchema } from "./timed.mjs";
+import { workerRawSchema } from "./apparatus.mjs";
 
 const full = (value, pattern) => typeof value === "string" && pattern.exec(value)?.[0] === value;
 export function savedReader(folder) {
@@ -73,7 +74,7 @@ export function validateSaved({ folder, round, commit }) {
     assert.equal(summary.round, round, "round differs");
     assert.equal(summary.commit, commit, "commit differs");
     if (summary.savedEvidence === undefined) return { status: "blocked", complete: false, errors: ["native raw evidence version absent; historical summary is not qualification"] };
-    assert.ok([rawSchema, timedRawSchema].includes(summary.savedEvidence.schema), "unsupported native evidence schema");
+    assert.ok([rawSchema, timedRawSchema, workerRawSchema].includes(summary.savedEvidence.schema), "unsupported native evidence schema");
     const report = replayCatalog(summary, reader, commit);
     return { status: "verified", complete: true, round, commit, report,
       scope: "native saved evidence replay; host isolation and independent source audit are separate campaign gates" };

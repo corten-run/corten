@@ -69,6 +69,14 @@ lifecycle/collection, interrupted review or an invalid replay exits 2 and preser
 No result file authorizes host deletion. The parent records its own unit terminal state, run.log,
 host.txt and exit-code, and verifies an archive before any owned-resource deletion.
 
+An irrecoverable host-observer fault requests command-local cooperative cancellation
+once, without changing caller-signal ownership. This includes caught interval or
+sticky writer failures and admitted continuity or Docker-participant gaps, including
+initial capture and attachment. The command's owned supervisor must still settle;
+invalid lifetime evidence preserves custody and prevents further commands. See
+[fault shutdown](host-lifetime.md#fault-shutdown). Notification is not terminal,
+empty-scope, archive-completeness or host-deletion proof.
+
 ## Rounds and recipes
 
 Campaign rN maps to catalog cN, JSON prepare j(2N), JSON timing j(2N+1), marketplace rN,
@@ -534,11 +542,12 @@ core checkpoint. Raw replay is not independent source/build or host ownership ap
    and the complete regular-file byte seal against the safely inspected native tree.
    Independent kernel observations must still establish the actual process, Docker
    population, executable, PID/start, cgroup and continuous-window proof. Intrinsic
-   qualification or HostConfig declarations never establish OS resources. The reviewed
-   caller at cef285ea0 still omits replayed `toolIdentities.lockSha256`; until the native
-   caller forwards that identity, core explicitly withholds the host handoff rather than
-   substituting saved source declarations. Native public DOM/tool producer work remains
-   separately reviewed; this adapter is not whole-browser or whole-campaign qualification.
+   qualification or HostConfig declarations never establish OS resources. The current
+   native verifier checks `toolIdentities.lockSha256` against the immutable source lock
+   and includes that replayed identity in its host subject. Core verifies the forwarded
+   identity again; a historical subject that omits it remains blocked, rather than
+   borrowing a saved source declaration. This handoff does not establish independent
+   OS proof, native browser qualification or whole-campaign readiness.
 6. Catalog/JSON raw replay distinguishes a complete failed functional attempt from a
    successful baseline. The bounded negative path is an initial JSON record-sweep violation:
    actual request intents and complete responses replay against canonical records, all
