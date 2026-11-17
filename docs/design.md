@@ -5161,26 +5161,29 @@ rules something out.
     asks for `text/html` there for a navigation: a false 500, which opening the app over HTTPS or
     at `localhost` avoids.
 
-    For the checked construction change, release callgrind 3.19.0 with rustc 1.99.1 and
-    jemalloc, the same package-only `--all-features --lib` build and release profile, counted
-    `2292cd604` against `b77577301`: three alternating rounds of 1,200 less 200 requests,
-    divided by 1,000. These are medians (ranges), instructions per request:
+    For the checked construction, release callgrind 3.19.0 with rustc 1.99.1 and jemalloc
+    counted main `bbd9d7432` against this change merged with it, `abbdf9831`: each built alone
+    (`--all-features --lib`, the release profile), three alternating rounds of 1,200 less 200
+    requests, divided by 1,000. Medians (ranges), instructions per request:
 
     | Answer | Before | Checked Action |
     |---|---|---|
-    | `patch_or`, `AnyAnswer`, Action | 17,970.830 (17,970.797-17,970.836) | 17,975.752 (17,975.735-17,975.791) |
-    | `patch_or`, `Patches`, Action | 17,970.840 (17,970.804-17,970.848) | 17,975.812 (17,975.810-17,975.812) |
-    | `patch_or`, `AnyAnswer`, Document | 18,383.752 (18,383.662-18,383.753) | 18,388.700 (18,388.679-18,388.739) |
-    | `patch_or`, `Patches`, Document | 18,383.709 (18,383.652-18,383.724) | 18,388.724 (18,388.629-18,388.724) |
-    | Direct small component, Action | 17,534.418 (17,534.381-17,534.434) | 17,545.935 (17,545.897-17,545.946) |
+    | `patch_or`, `AnyAnswer`, Action | 17,984.501 (17,984.469-17,984.576) | 17,988.603 (17,988.477-17,988.605) |
+    | `patch_or`, `Patches`, Action | 17,984.590 (17,984.494-17,984.607) | 17,988.405 (17,987.066-17,988.497) |
+    | `patch_or`, `AnyAnswer`, Document | 18,403.771 (18,403.722-18,403.805) | 18,403.761 (18,403.724-18,403.777) |
+    | `patch_or`, `Patches`, Document | 18,403.770 (18,403.708-18,403.797) | 18,403.604 (18,402.128-18,403.693) |
+    | Direct small component, Action | 17,539.291 (17,539.284-17,539.291) | 17,549.334 (17,549.306-17,549.428) |
+    | `patch_or_with`, slow part read | 17,770.887 (17,770.815-17,770.894) | 17,770.835 (17,770.775-17,770.885) |
 
-    The full test binary differs by about five instructions (0.028%) for `patch_or` in
-    either mode, not zero and not hidden by the runs' variation. The direct helper gains
-    about 11.5 (0.066%); its baseline did not check the mode at all, whereas its migrated
-    handler checks and can refuse. The token itself is a borrow, with no allocation.
-    As below, the crate's tests share the optimized binary with the measured request path,
-    so this comparison alone cannot attribute the differences to production code rather
-    than test-binary optimization.
+    The page side and the lazy read are unchanged. A patch through `patch_or` counts about
+    four more (0.02%) and the direct patch about ten more (0.06%). A per-function comparison of
+    the first round's profiles puts those four, and eight of the ten, in glibc's `memcmp`: the
+    same header lookup (once a request through `patch_or`, twice on the direct route) calls it as
+    often in both builds, and each call takes 22 instructions instead of 18. Nothing on the request path calls it more often, and
+    `Action::patch` counts what `Req::patch` did. That fits a compared constant placed
+    differently in the rebuilt binary (reasoned; which one was not traced). The remaining two
+    are the direct handler's own mode check, which its unchecked baseline did not make. The
+    token is a borrow and allocates nothing.
 
     Stands on: platform (a browser shows an HTML response to a navigation or a form submit as the
     document, whatever its markup); platform (the
@@ -5225,8 +5228,8 @@ rules something out.
     was not traced); an app's binary has no `tests.rs`.
     The counted page asks for no HTML, which in a release build reaches the
     same code, since the check and the method it clones are not compiled there);
-    measured (the checked-construction comparison above on `2292cd604` and `b77577301`,
-    including its medians and ranges); value (Values 3, a
+    measured (the checked-construction comparison above, `abbdf9831` against `bbd9d7432`,
+    its medians, ranges and the per-function profile comparison); value (Values 3, a
     form works without JavaScript; Values 9, the developer sees it in a test).
 
     Revisit when: `req.mode` ceases to be an application override, or the low-level response
@@ -5251,8 +5254,10 @@ rules something out.
     2026-11-16, the fetch metadata of navigations a service worker answers from navigation preload
     and passes on with `fetch(event.request)`, probed in Chromium 156 and WebKit 27.2 (Firefox was
     not run); 2026-11-17, the checked Action's six compile-fail doctests, positive example,
-    four-mode/GET/await/status test and release wire-guard regressions, and the callgrind
-    comparison above, on `b77577301` against `2292cd604`.
+    four-mode/GET/await/status test and release wire-guard regressions, and a callgrind
+    comparison then, on `b77577301` against `2292cd604`; 2026-11-17, the checked Action,
+    `patch_or_with` part token and the callgrind comparison above, on `abbdf9831` against
+    `bbd9d7432`.
 
 59. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
