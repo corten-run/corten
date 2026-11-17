@@ -11,6 +11,51 @@ Corten is pre-1.0, so any minor version may change the API.
   and quiescence proofs, separate reviewed approval and single-delete confirmation.
   This is cleanup eligibility, not benchmark validation or permission to stop a run.
 
+- **Breaking:** a view that could be a patch (each top-level element has an `id={..}`) in a shape
+  the runtime's parse loses wherever it is written no longer compiles: a table part (`<tr>`,
+  `<td>`, `<th>`, `<tbody>`, `<thead>`, `<tfoot>`, `<caption>`, `<col>`, `<colgroup>`) after a
+  first `<table>`; an element HTML's wherever it lands (a `<p>`, a `<div>`, a `<table>` ..) after
+  a first `<col>`; and after a first other table part, a `<table>` at the top level or in a later
+  element, and a `<form>` there that holds an element, with an element HTML's wherever it lands in
+  or around it (a `<form>` holding a `<div>`, or one in a `<div>`). Each was dropped, the table
+  taken apart or the form's content moved out of it, in the browser with only a console error.
+  Send the table part inside the `<table>`, the `<col>`s in a `<colgroup>` with an id, or the rest
+  in a patch of its own. Every other shape depends on what the patch began with or where the view
+  is written (a `<p>` and a `<tr>` after it are kept after a first `<tr>`, and an `<svg>` keeps a
+  `<form>` of fields after a `<tr>`), so it still compiles and the debug check below finds it
+  when it is sent
+  ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409),
+  [design Choice 54](docs/design.md#choice-html-parse-refusals)).
+
+- A debug build refuses a patch the browser would lose part of: the runtime parses a patch as a
+  `<template>`'s content, where the first top-level element (other than a head's, such as a
+  `<script>` or `<template>`; Chromium and WebKit let a leading `<title>`, `<base>`,
+  `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the rest is read, so a table
+  row, cell or other table part beside another element was dropped (or a `<table>` or `<form>`
+  after a row taken apart) with only a console error about the next element. `req.patch`,
+  `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
+  fragment panics, naming the element lost and the one that came first, so an app's own
+  debug-build tests that draw such a patch now fail; a patch with a token the check does not read
+  as the browser does, whether `html!` writes it or markup placed with `raw` does (an end tag left
+  out, written otherwise than `</name>` or that closes no element open; an HTML start tag ending
+  `/>`; a comment a browser ends elsewhere than at its `-->`; a CDATA section outside an `<svg>`
+  or `<math>` or not ended; a doctype other than `<!DOCTYPE html>`; where text decides, a named
+  character reference it does not decode, and text in a table holder or after a first `<col>`; an
+  element HTML's wherever it lands written straight in an `<svg>` or `<math>`; a script whose text
+  a `<!--` and a `<script` carry past its first `</script>` and over an element; in a form a
+  table's reading empties, any token before what it holds but a comment; a start tag the patch
+  ends in; an HTML `<image>`, `<plaintext>`, `<noscript>`, `<html>`, `<body>`, `<head>`,
+  `<frame>` or `<frameset>`; after a first table part, a `<template>` in an SVG or MathML
+  integration point, past which Firefox reads the rest as a body's; an element the browser does
+  not put where it is written, such as a table part outside a table, a `<div>` in a `<p>` or an
+  `<a>` in an `<a>`; the full list is Limit 2), is checked up to there and sent, with a warning
+  naming where it stopped. A release build sends what it sent before; only `corten dev`'s check
+  that each `data-vars` has a style rule, which reads start tags with the same code, now reads them
+  as the browser's tokenizer does (whitespace around `=`, a `/` not before the `>`, names past
+  ASCII, and the text of an `<xmp>`, `<iframe>`, `<noembed>` or `<noframes>`), which only markup
+  placed with `raw` writes
+  ([#1409 A patch that puts a table row beside other top-level elements loses the row: the runtime's template parse drops it, and only a console error says so](https://github.com/corten-run/corten/issues/1409)).
+
 - Preserve type-token punctuation in `#[derive(Fields)]`, so group, row and key types
   written as paths compile, including keys of `#[fields(map)]` fields.
 
