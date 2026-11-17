@@ -4968,7 +4968,9 @@ rules something out.
     each build); platform (`history.pushState` adds an entry the Navigation API reports and does
     not ask the runtime to load, `navigatesuccess` follows each navigation the runtime draws, and
     a same-document traversal can be intercepted, in Chromium, Firefox and WebKit; the smoke's
-    checks in all three); reasoned (the form's mark says which answers are the page at their
+    checks in all three; Firefox 157.0 restores an intercepted traversal's scroll as the address
+    changes unless the handler takes it, which the smoke's step for entries of different heights
+    shows against `1325c854a`'s runtime); reasoned (the form's mark says which answers are the page at their
     address, which neither the handler nor the runtime can tell; an entry of the screen read as a
     patch shows what a page read would, provided the route's patch draws all its address changes,
     which the guide asks of a marked form's route); value (an address that names what the screen
@@ -4983,12 +4985,15 @@ rules something out.
     Navigation API, when [Limit 1](#limit-navigation-api)'s sentence on the mark goes; or the
     runtime gains a general way to hand a module its events, when the hooks here become that.
 
-    Last checked: 2026-11-16, the runtime's and the module's sizes on `321a303c1` against
-    `f5f2132aa` (main's runtime unchanged since, at `36e551158`), and each hook's share taken out
-    of that build; 2026-11-16, the watchlist smoke on `46fb09ed4` (main at `76b5126b7` merged),
-    Chromium 156.0.8078.4 435 checks, Firefox 157.0 433, WebKit 27.2 312 and 5 over HTTP, 92
-    skipped in WebKit, the `data-address` checks 35 in each browser and none skipped, all passed
-    but a feed's reconnect timing in WebKit, which passed when WebKit ran again; 2026-11-15, the
+    Last checked: 2026-11-17, the runtime's and the module's sizes on `5365fede0` against main's
+    runtime at `b0c2abd4d` (built the same as at `f5f2132aa`), and each hook's share taken out of
+    that build; 2026-11-17, the watchlist smoke on `5365fede0`, Chromium 156.0.8078.4 438 checks,
+    Firefox 157.0 436, WebKit 27.2 312 and 5 over HTTP, 92 skipped in WebKit, the `data-address`
+    checks 38 in each browser and none skipped, all passed but three WebKit checks of other
+    features on a loaded machine, which passed when WebKit ran again (320 checks); 2026-11-17, the
+    new steps for a GET that waited for its form's write, a field the patch takes away and entries
+    of different heights against `1325c854a`'s runtime and module, served in this build's place:
+    the first two fail in all three engines and the third in Firefox; 2026-11-15, the
     traversals' bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and
     the request path's count on `307d00bca` against `c9ed56785`; 2026-11-15, the request path's
     count on `2d619cbb5` against `a3ee0c05f`.
