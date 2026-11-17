@@ -5538,7 +5538,10 @@ rules something out.
 
     Last checked: 2026-11-17, the check's metadata and Cargo-step order read at `7d9bbbf1e`;
     2026-11-17, `corten new` then `corten check`, and `corten ui add --all` then `corten check`,
-    each with no step between, on the change after `dd4baf7a4`.
+    each with no step between, on the change after `dd4baf7a4`; 2026-11-17, Cargo 1.99.1 on a
+    new member of a workspace whose lock held `itoa` 1.0.0: `cargo generate-lockfile` moved it to
+    1.0.19, `cargo update --workspace` kept 1.0.0, and for a standalone app with no lock the two
+    wrote identical locks.
 
 ## Rules
 
