@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { beginControlWindow, verifyControlAdmission } from "./control-admission.mjs";
 import { isDeepStrictEqual } from "node:util";
 import { randomBytes } from "node:crypto";
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
@@ -59,7 +60,7 @@ export function createCampaign({ authorize }) {
     own(c.handle);
     return freeze({ schema: "benchmark-isolated-campaign-status/v1", campaign: c.handle.id, round: c.plan.round,
       campaignSha256: c.plan.campaignSha256, state: c.state, nextGroup: c.plan.order[c.index] ?? null,
-      executionVersion: 3,
+      executionVersion: c.control ? 4 : 3,
       outcomes: structuredClone(c.outcomes), auditSubjectSha256: c.audit?.subject.subjectSha256 ?? null,
       uncollectedNativeRoots: structuredClone(c.pendingNative),
       mixedAuditSubjectSha256: c.mixedAudit?.subject.subjectSha256 ?? null,
@@ -140,6 +141,7 @@ export function createCampaign({ authorize }) {
     c.attempted.add(binding.request.group);
     const pending = { group: binding.request.group, phase: phaseName, artifactRoot: binding.validation.artifactRoot };
     c.pendingNative.push(pending); event(c, "native-output-reserved", pending);
+    const closeControlWindow = c.control ? beginControlWindow(c.control) : null;
     const before = observeHost(); save(c, `${relative}/host-before.json`, before);
     const commands = [];
     for (const invocation of [...binding.preparation.fixtures, binding.execution.invocation]) {
@@ -162,6 +164,7 @@ export function createCampaign({ authorize }) {
     event(c, "phase-sealed", { ...pending, nativeManifestSha256: manifest.sha256,
       phaseManifestSha256: phaseSnapshot(directory, binding.request.group === "json-api" && phaseName === "prepare").sha256 });
     if (boundaryError) throw boundaryError;
+    closeControlWindow?.();
     p.cleanup = verifyHostBoundary(before, after);
     return p;
   }
@@ -171,7 +174,7 @@ export function createCampaign({ authorize }) {
     return true;
   }
   return Object.freeze({
-    async begin(plan, { stateRoot, signal } = {}) {
+    async begin(plan, { stateRoot, signal, control } = {}) {
       plan = freeze(structuredClone(plan)); validateCampaign(plan);
       assert.equal(os.platform(), "linux"); assert.ok(os.availableParallelism() >= 8);
       assert.ok(Number(process.versions.node.split(".")[0]) >= 24); assert.ok(!signal?.aborted);
@@ -193,13 +196,32 @@ export function createCampaign({ authorize }) {
       const directory = join(root, id); mkdirSync(directory, { mode: 0o700 }); syncDirectory(root);
       const info = lstatSync(directory), handle = Object.freeze({ id, directory });
       const c = { handle, root, directory, inode: info.ino, device: info.dev, lockHash: digest(lock), plan,
+        control: control ? freeze(structuredClone(control.binding)) : null, controlEpochs: new Set(),
         files: [], sequence: 0, commandIndex: 0, busy: false, index: 0, phases: [], outcomes: [], attempted: new Set(), pendingNative: [], state: "active", audit: null, mixedAudit: null };
       owned.set(handle, c); save(c, "plan.json", plan); event(c, "authorized", { subject, trustBoundary: "explicit trusted parent policy, not review data" });
       try {
+        if (control) {
+          assert.equal(control.binding.commit, plan.commit); assert.equal(control.binding.round, plan.round);
+          verifyControlAdmission(control.binding, "bootstrap", control.admission);
+          c.control = freeze(structuredClone(control.binding));
+          save(c, "control-bootstrap.json", control.admission);
+          event(c, "control-admitted", { epoch: "bootstrap", path: "control-bootstrap.json", sha256: digest(json(control.admission)), binding: c.control });
+          c.controlEpochs.add("bootstrap");
+        }
         const observed = observeHost(); save(c, "host-initial.json", observed);
+        if (control) for (const field of ["hostname", "bootId"]) assert.equal(observed[field], control.admission.host[field]);
         assert.deepEqual(observed.containers, [], "fresh campaign host has preexisting containers");
         event(c, "started"); return handle;
       } catch (error) { halt(c, error); throw error; }
+    },
+    recordControlAdmission(handle, admission) {
+      const c = own(handle); assert.equal(c.busy, false); assert.ok(c.control);
+      assert.equal(c.state, "blocked-review-needed");
+      const group = c.plan.order[c.index], epoch = `audit-${group}`;
+      verifyControlAdmission(c.control, epoch, admission);
+      const path = `control-audit-${group}.json`;
+      save(c, path, admission); event(c, "control-admitted", { epoch, path, sha256: digest(json(admission)), binding: c.control });
+      c.controlEpochs.add(epoch);
     },
     async advance(handle, { signal } = {}) {
       return exclusive(handle, async (c) => {
@@ -276,6 +298,7 @@ export function createCampaign({ authorize }) {
     },
     async submitJsonAudit(handle, delivery) {
       return exclusive(handle, async (c) => {
+        if (c.control) assert.ok(c.controlEpochs.has("audit-json-api"), "live audit control admission missing");
         assert.equal(c.state, "blocked-review-needed"); assert.ok(c.audit && !c.audit.accepted);
         assert.ok(Buffer.byteLength(JSON.stringify(delivery)) <= 16 * 1024 * 1024, "audit delivery too large");
         delivery = freeze(structuredClone(delivery)); save(c, "json-audit-delivery-retained.json", delivery);
@@ -300,6 +323,7 @@ export function createCampaign({ authorize }) {
     },
     async submitMixedAudit(handle, delivery) {
       return exclusive(handle, async (c) => {
+        if (c.control) assert.ok(c.controlEpochs.has("audit-mixed-production"), "live mixed audit control admission missing");
         assert.equal(c.state, "blocked-review-needed"); assert.equal(c.plan.order[c.index], "mixed-production");
         assert.ok(c.mixedAudit && !c.mixedAudit.accepted);
         assert.ok(Buffer.byteLength(JSON.stringify(delivery)) <= 16 * 1024 * 1024);

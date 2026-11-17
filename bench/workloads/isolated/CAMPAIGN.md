@@ -8,6 +8,11 @@ skipping an entire group. Actual source/OS integration is not inferred from synt
 adapter tests. No benchmark timing was measured to test this code. Independent review,
 merged native producers/validators and the explicit unit preparation below remain required.
 
+The [owned SSH/SFTP drain contract](owned-ssh-drain.md) adds production registration,
+input hold, sealed bootstrap/audit admission and watcher-terminal proof. Actual first-host
+native qualification remains pending. Local transport exit still does not clear a remote
+session, relax a host bookend, or release an uncertain lock.
+
 ## Parent interface
 
 ```sh

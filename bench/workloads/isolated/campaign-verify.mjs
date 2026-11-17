@@ -15,6 +15,7 @@ import { verifyHostBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { verifyControlAdmission } from "./control-admission.mjs";
 
 export async function validateCampaign(input) {
   try {
@@ -37,7 +38,7 @@ export async function validateCampaign(input) {
     assert.equal(status.schema, "benchmark-isolated-campaign-status/v1");
     assert.equal(status.campaign, id); assert.equal(status.round, round); assert.equal(status.campaignSha256, plan.campaignSha256);
     assert.equal(status.controllerReady, false); assert.equal(status.isolation, "unverified");
-    const currentExecution = [2, 3].includes(status.executionVersion), mixedStaging = status.executionVersion === 3, groups = currentExecution ? executionGroups : supportedGroups;
+    const currentExecution = [2, 3, 4].includes(status.executionVersion), mixedStaging = [3, 4].includes(status.executionVersion), groups = currentExecution ? executionGroups : supportedGroups;
     assert.ok(!groupScoped || mixedStaging, "group campaigns require current audit and host lifetime gates");
     assert.ok(["finished", "preserved-uncertain"].includes(status.state));
     assert.deepEqual(status.outcomes.map((r) => r.group), plan.order, "every fixed registry group must be retained once");
@@ -58,6 +59,17 @@ export async function validateCampaign(input) {
       journal.push(event);
     }
     const replay = replayJournal(plan, id, journal, status);
+    let controlHost;
+    for (const [epoch, event] of replay.controlAdmissions) {
+      const bytes = readRegular(join(folder, id, event.path)); assert.equal(digest(bytes), event.sha256);
+      const admission = JSON.parse(bytes); verifyControlAdmission(event.binding, epoch, admission);
+      if (controlHost) assert.deepEqual(admission.host, controlHost);
+      else controlHost = admission.host;
+    }
+    if (controlHost && journal.some((event) => event.kind === "started")) {
+      const initial = read(`${id}/host-initial.json`);
+      for (const field of ["hostname", "bootId"]) assert.equal(initial[field], controlHost[field]);
+    }
     const lastEvent = read(`${id}/${events.at(-1).path}`);
     assert.ok(isDeepStrictEqual(lastEvent.status, status), "terminal journal and result disagree");
     const collectionEntry = subtree.entries.find((e) => e.path === "collection-manifest.json");
@@ -84,6 +96,7 @@ export async function validateCampaign(input) {
         assert.equal(phaseSnapshot(join(folder, id, entry.path), group === "json-api" && phase === "prepare").sha256,
           recorded.phaseManifestSha256, "phase host/native evidence differs from journal seal");
         hostBefore = read(`${id}/${entry.path}/host-before.json`);
+        if (controlHost) for (const field of ["hostname", "bootId"]) assert.equal(hostBefore[field], controlHost[field]);
         try { boundary = verifyHostBoundary(hostBefore, read(`${id}/${entry.path}/host-after.json`)); }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
         if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }

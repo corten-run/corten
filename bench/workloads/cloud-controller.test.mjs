@@ -43,9 +43,9 @@ test("preflight dirty/wrong HEAD/source/capacity/busy host rejects before create
   }
   const h = harness(t); h.hosts(); await assert.rejects(h.launch().launch(), /already exists/); assert.equal(h.creates, 0);
 });
-test("bounded SSH readiness does not power cycle, rerun jobs or force terminate", async (t) => {
+test("one SSH readiness attempt does not retry, power cycle, rerun jobs or force terminate", async (t) => {
   const h = harness(t, { noSsh: true }); await assert.rejects(h.launch().launch(), /SSH unavailable/);
-  assert.equal(h.calls.filter((c) => c[0] === "ssh").length, 40); assert.equal(h.creates, 1);
+  assert.equal(h.calls.filter((c) => c[0] === "ssh").length, 1); assert.equal(h.creates, 1);
   assert.ok(!h.calls.some((c) => /power|reboot|restart|kill/.test(c.slice(1).join(" "))));
 });
 test("running collection takes one look, never packs, waits, downloads or deletes", async (t) => {

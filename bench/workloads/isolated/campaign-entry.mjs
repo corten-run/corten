@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { lstatSync } from "node:fs";
+import { linkSync, lstatSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -39,7 +39,8 @@ export function readAuditInbox(directory, group = "json-api") {
 
 export async function runCampaignEntry(args) {
   const input = parseCampaignArgs(args);
-  const [{ bindCampaign, bindGroupCampaign }, { createCampaign }] = await Promise.all([import("./campaign-contract.mjs"), import("./campaign.mjs")]);
+  const [{ bindCampaign, bindGroupCampaign }, { createCampaign }, { bootstrapControl, controlOperation, waitControlAdmission }] =
+    await Promise.all([import("./campaign-contract.mjs"), import("./campaign.mjs"), import("./control-admission.mjs")]);
   const abort = new AbortController(), cancel = () => abort.abort();
   process.on("SIGINT", cancel); process.on("SIGTERM", cancel);
   let handle, transport = null;
@@ -53,9 +54,12 @@ export async function runCampaignEntry(args) {
       && readAuditInbox(handle.directory, transport.group)?.sha256 === transport.sha256;
   } });
   try {
+    const control = bootstrapControl(input);
+    const admission = await waitControlAdmission(control, "bootstrap", { signal: abort.signal, deadline: Date.now() + 45 * 60000 });
+    controlOperation(control, "activate");
     const request = { round: input.round, commit: input.commit };
     const plan = input.group === undefined ? bindCampaign(request) : bindGroupCampaign({ ...request, group: input.group });
-    handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal });
+    handle = await campaign.begin(plan, { stateRoot: input.stateRoot, signal: abort.signal, control: { binding: control, admission } });
     let status = campaign.status(handle), deadline = null;
     while (status.state === "active" || status.state === "blocked-review-needed") {
       if (abort.signal.aborted) { status = campaign.stop(handle); break; }
@@ -63,7 +67,20 @@ export async function runCampaignEntry(args) {
       else {
         deadline ??= Date.now() + auditWaitMs;
         if (Date.now() >= deadline) { status = campaign.stop(handle, "independent native audit delivery deadline expired"); break; }
-        const group = status.auditGroup ?? "json-api", inbox = readAuditInbox(handle.directory, group);
+        const group = status.auditGroup ?? "json-api", prefix = group === "mixed-production" ? "mixed" : "json";
+        const pending = join(handle.directory, `${prefix}-audit-delivery-pending.json`);
+        if (lstatSync(pending, { throwIfNoEntry: false })) {
+          const proof = await waitControlAdmission(control, `audit-${group}`, { signal: abort.signal, deadline });
+          campaign.recordControlAdmission(handle, proof);
+          // Exclusive hard-link publication; no overwrite, symlink traversal or shell.
+          const info = lstatSync(pending);
+          assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1 && info.size <= 16 * 1024 * 1024);
+          if (process.platform === "linux") assert.ok(info.uid === process.getuid() && (info.mode & 0o077) === 0);
+          const bytes = readRegular(pending), current = lstatSync(pending);
+          assert.ok(bytes.length === info.size && current.ino === info.ino && current.dev === info.dev && current.mtimeMs === info.mtimeMs);
+          linkSync(pending, join(handle.directory, `${prefix}-audit-delivery.json`)); unlinkSync(pending);
+        }
+        const inbox = readAuditInbox(handle.directory, group);
         if (inbox) {
           transport = { sha256: inbox.sha256, group, subjectSha256: group === "mixed-production" ? status.mixedAuditSubjectSha256 : status.auditSubjectSha256 };
           status = group === "mixed-production" ? await campaign.submitMixedAudit(handle, inbox.delivery) : await campaign.submitJsonAudit(handle, inbox.delivery);

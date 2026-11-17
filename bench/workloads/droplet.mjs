@@ -14,6 +14,7 @@ import { inspectCampaign } from "./cloud-validation.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript,
   verifyFailedNativeCustody, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
+import { controlRequest, guardianCommand, guardianSha256, sftpGuardianCommand } from "./cloud-control-runtime.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export function command(binary, args, timeout = 60000, allowFail = false) {
@@ -38,7 +39,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   mkdirSync(requested, { recursive: true, mode: 0o700 });
   const base = realpathSync(requested); physical(base);
   const local = join(base, `groups-${options.round}`), statePath = join(local, "state.json"), archive = join(local, "results.tgz");
-  let state, preserveOperationLock = false;
+  let state, preserveOperationLock = false, controlEpoch = "collection", sealing;
   const boundary = (path = local) => { physical(base); physical(path); assert.equal(dirname(path), base, "reservation left root"); };
   const check = () => { assert.ok(!interrupted(), "controller cancelled; preserve reservation/host"); boundary(); };
   const read = (path = local, round = options.round) => { boundary(path); return controllerState(JSON.parse(regular(join(path, "state.json"), 1024 * 1024)), round); };
@@ -47,7 +48,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     durable(`${statePath}.tmp`, `${JSON.stringify(state, null, 2)}\n`);
     renameSync(`${statePath}.tmp`, statePath); syncDirectory(local);
   };
-  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining) {
+  async function execute(binary, args, timeout = 60000, allowFail = false, deleteProofExpiresAtMs, remaining, registration) {
     if (deleteProofExpiresAtMs !== undefined) {
       assert.equal(binary, "doctl"); assert.equal(args[2], "delete");
       assert.ok(Number.isSafeInteger(deleteProofExpiresAtMs));
@@ -60,7 +61,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       let r;
       const limit = remaining ? Math.min(timeout, remaining()) : timeout;
-      try { r = await run(binary, argv, limit, permittedFailure, expiry); }
+      try { r = await run(binary, argv, limit, permittedFailure, expiry, registration); }
       catch (error) { if (error.controlTreeUncertain || error.controlUncertain) preserveOperationLock = true; throw error; }
       if (r.controlTreeUncertain || r.controlUncertain) { preserveOperationLock = true; throw new Error("control uncertain; preserve locks"); }
       check();
@@ -125,13 +126,31 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative);
     if (mixedRecovery) assert.equal(fileHash(join(local, "known_hosts")), mixedWait.knownHostsSha256, "native host keys changed");
     if (existsSync(join(local, "known_hosts"))) regular(join(local, "known_hosts"), 1024 * 1024);
-    const result = await execute(binary, [...(mixedRecovery ? ["-o", "StrictHostKeyChecking=yes"] : []), ...sshOptions, ...args], timeout, allowFail);
+    let registration, intent;
+    if (state.control) {
+      assert.equal(state.control.helperSha256, guardianSha256, "control source changed; preserve host");
+      assert.ok(!state.control.sealed.includes(controlEpoch), "control epoch already sealed");
+      intent = controlRequest(state, binary, args, timeout ?? 60000, controlEpoch, sealing);
+      state.control.ledger.push({ request: intent, localTerminal: false }); save();
+      registration = { request: intent, command: binary === "ssh" ? guardianCommand(intent) : sftpGuardianCommand(intent) };
+    }
+    const result = await execute(binary, [...(mixedRecovery ? ["-o", "StrictHostKeyChecking=yes"] : []), ...sshOptions, ...args], timeout, allowFail, undefined, undefined, registration);
+    if (intent) { const row = state.control.ledger.at(-1); row.localTerminal = true; row.code = result.status; save(); }
     if (mixedRecovery) assert.equal(fileHash(join(local, "known_hosts")), mixedWait.knownHostsSha256, "native host keys changed during transport");
     return result;
   };
   const ssh = (script, timeout = 60000, allowFail = false) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail);
   const scp = (from, to) => transport("scp", ["-q", from, to], 15 * 60000);
   const unit = async () => terminalUnit((await ssh(`systemctl show ${state.unit} --property=Id --property=LoadState --property=FragmentPath --property=ActiveState --property=Restart --property=MainPID --property=ExecMainCode --property=ExecMainStartTimestamp`)).stdout, state);
+  async function sealControl(epoch) {
+    if (!state.control) return;
+    assert.equal(controlEpoch, epoch);
+    const rows = state.control.ledger.filter((r) => r.request.epoch === epoch);
+    assert.ok(rows.length > 0 && rows.every((r) => r.localTerminal), "unsettled local control ledger");
+    sealing = rows.map((r) => r.request.invocation);
+    try { await ssh(":"); } finally { sealing = undefined; }
+    state.control.sealed.push(epoch); save(); controlEpoch = "collection";
+  }
   async function commonBootstrap() {
     const deadline = now() + 45 * 60000; let previous = deadline - 45 * 60000;
     const remaining = () => {
@@ -147,7 +166,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       if (result.status === 0 && !result.error) {
         assert.ok(Buffer.byteLength(result.stdout) <= 1024, "bounded bootstrap marker required");
         assert.deepEqual(JSON.parse(result.stdout), bootstrapMarker(state), "common bootstrap identity differs");
-        state.bootstrapReady = { sha256: digest(result.stdout), observedAt: new Date().toISOString() }; save(); return;
+        if (state.group !== undefined && state.group === state.fleet.jobs[0].group) {
+          state.bootstrapReady = { sha256: digest(result.stdout), observedAt: new Date().toISOString() }; save();
+        }
+        await sealControl("bootstrap"); return;
       }
       assert.equal(result.status, 3, "common bootstrap marker observation failed");
       await sleep(Math.min(30000, remaining()));
@@ -310,7 +332,9 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         state = { ...reservation({ round: options.round, commit: options.commit,
           token: fleet ? fleet.jobs.find((row) => row.group === options.group).token : randomBytes(8).toString("hex"),
           ...(fleet ? { group: options.group, fleet } : {}) }),
-          provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false };
+          provider: { accountId: options.accountId, context: options.context }, fullGroupQualified: false,
+          control: { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [] } };
+        controlEpoch = "bootstrap";
         durable(statePath, `${JSON.stringify(state, null, 2)}\n`);
         return await locked(async () => {
           assert.equal(realpathSync((await execute("git", ["rev-parse", "--show-toplevel"])).stdout.trim()), repo);
@@ -349,12 +373,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.ok(Array.isArray(completed) && completed.length === 1 && Number.isSafeInteger(completed[0]?.id)
             && completed[0].id > 0 && String(completed[0].id) === state.id,
           "completed create and owned host differ; preserve reservation without provisioning");
-          let ready = false;
-          for (let i = 0; i < 40; i++) {
-            if ((await ssh("true", 30000, true)).status === 0) { ready = true; break; }
-            if (i < 39) { check(); await sleep(10000); }
-          }
-          assert.ok(ready, "SSH unavailable; never relaunch");
+          assert.equal((await ssh("true", 30000, true)).status, 0, "SSH unavailable; never retry or relaunch");
           await ssh("mkdir -m 700 /bench && touch /bench/run.log");
           for (const [name, content] of Object.entries(remoteFiles(state))) {
             durable(join(local, name), content); await scp(join(local, name), `root@${state.ip}:/bench/${name}`);
@@ -366,7 +385,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           if (state.group !== undefined && state.group !== state.fleet.jobs[0].group)
             assert.equal(ended, false, "group ended before running admission; collect its evidence");
           state.status = "running"; save();
-          if (state.group !== undefined && state.group === state.fleet.jobs[0].group) await commonBootstrap();
+          await commonBootstrap();
           return structuredClone(state);
         });
       } finally { if (!preserveOperationLock) { unlinkSync(launchLock); syncDirectory(base); } }
@@ -534,6 +553,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       return locked(async () => {
         assert.ok(state.id && state.ip && !state.deletionIntentAt && !state.collectedAt && ["starting", "running"].includes(state.status), "live owned campaign required");
         const { group, prefix } = auditProtocol(options.auditGroup);
+        controlEpoch = `audit-${group}`;
         if (state.group !== undefined) assert.equal(group, state.group, "audit delivery belongs to a different group host");
         assert.ok(!state.auditIntents?.[group] && !(group === "json-api" && state.auditIntent), "audit delivery already attempted; inspect, never repeat");
         const bytes = regular(resolve(options.deliverAudit), 16 * 1024 ** 2), intent = auditDelivery(bytes, options);
@@ -546,6 +566,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         await scp(join(local, `${prefix}-audit-delivery.json`), `root@${state.ip}:${stage}`);
         assert.equal(await unit(), false, "campaign ended during audit transfer");
         assert.equal((await ssh(auditScript(state, intent, true))).stdout.trim(), intent.subjectSha256);
+        await sealControl(controlEpoch);
         return 3;
       });
     },

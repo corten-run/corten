@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import os from "node:os";
 
-function processStat(stat) {
+export function processStat(stat) {
   if (typeof stat !== "string") return null;
   const match = /^([1-9]\d*) \([\s\S]*\) [A-Za-z] ((?:-?\d+ )*-?\d+)\n?$/.exec(stat);
   if (!match) return null;
@@ -13,7 +13,7 @@ function processStat(stat) {
   const flags = BigInt(fields[5]);
   if (flags > 0xffffffffn) return null;
   // Linux include/linux/sched.h PF_KTHREAD, exposed in /proc/PID/stat field 9.
-  return { pid, startTicks: fields[18], kernelThread: (flags & 0x00200000n) !== 0n };
+  return { pid, parentPid: Number(fields[0]), startTicks: fields[18], kernelThread: (flags & 0x00200000n) !== 0n };
 }
 
 // Fixed read-only probes. No provider access, cleanup, commands from metadata or caller hooks.
