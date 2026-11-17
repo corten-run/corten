@@ -72,6 +72,13 @@ fn help_names_a_command_as_its_own_help_does() {
         assert!(!stdout.contains("corten new "), "help {} printed every command", command.join(" "));
         assert!(out.stderr.is_empty());
     }
+    for flag in ["--help", "-h"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_corten")).args(["help", flag]).output().unwrap();
+        let stdout = String::from_utf8(out.stdout).unwrap();
+        assert!(out.status.success(), "help {flag}");
+        assert!(stdout.starts_with("Usage:\n  corten help "), "{stdout}");
+        assert!(out.stderr.is_empty());
+    }
     for command in [["unknown"].as_slice(), &["ui", "unknown"]] {
         let out = Command::new(env!("CARGO_BIN_EXE_corten")).arg("help").args(command).output().unwrap();
         assert!(!out.status.success(), "help {} succeeded", command.join(" "));
