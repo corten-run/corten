@@ -4410,7 +4410,14 @@ rules something out.
     `<form>` holding a `<label>` after a `<td>`, moved out of it in every engine, and of the 3,000
     patches of `scripts/patch-generated.json` (seed 1409, now with characters past ASCII, character
     references, NUL and doctypes, compared with their text and the id check's verdict), with the
-    same result and the id check reporting only what an engine's parse shows at its top level; 2026-11-16, a one-off probe, not a repository check, in Chromium
+    same result and the id check reporting only what an engine's parse shows at its top level;
+    2026-11-16, the same check of the 819 shapes there on `80e9fa8f8`, among them a `<form>`
+    holding a start tag the patch ends in after a `<tr>`, kept empty, an `<annotation-xml>` whose
+    `encoding` is `text&#x2F;html`, an HTML integration point, an `<a>` in an `<a>` across a
+    `<foreignObject>`, which closes the outer one, and a `<template>` in an `<mi>` after a
+    `<tbody>`, past which Firefox alone reads the rest as a body's, and of the 3,000 patches of
+    `scripts/patch-generated.json` (now with forms holding a tag the patch ends in), with the same
+    result; 2026-11-16, a one-off probe, not a repository check, in Chromium
     156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): each kind of the third shape (a `<table>` at the top level, in a `<div>` and in a
     `<label>`'s `<span>`; a `<form>` holding a `<div>` or a `<p>`, one in a `<div>`, and one
     holding a `<label>`'s `<span>`), after each of the eight first table parts but `<col>`, parsed
