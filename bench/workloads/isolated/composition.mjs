@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { latestStableSchema } from "../latest-stable.mjs";
+import { latestStableSchema, candidateLatestStableSchema, unsupportedSolidReason } from "../latest-stable.mjs";
+import { selectedApps } from "../registry.mjs";
 
 export const commandResult = (record) => Object.fromEntries(["terminal", "code", "signal", "cancelled", "forced", "error", "success"].map((key) => [key, record[key]]));
 
@@ -22,15 +23,31 @@ export function composePhase(binding, native, host, commands, timingAudit = true
     && ["verified", "failed"].includes(native.status) && lifecycle && timingAudit;
   assert.deepEqual(native.outcomes.map((r) => r.app), binding.selection.apps);
   const policy = binding.latestStable;
-  const policyAllowsComparison = policy?.schema === latestStableSchema && policy.group === binding.request.group && policy.valid === true
+  const legacyPolicyAllowsComparison = policy?.schema === latestStableSchema && policy.group === binding.request.group && policy.valid === true
     && policy.status === "not-applicable" && policy.groupComparisonEligible === null;
+  const client = binding.request.group === "client-heavy";
+  const candidatePolicy = client && policy?.schema === candidateLatestStableSchema && policy.group === "client-heavy" && policy.valid === true
+    && policy.status === "blocked" && policy.groupComparisonEligible === false && Array.isArray(policy.candidates)
+    && JSON.stringify(policy.candidates.map((row) => row.app)) === JSON.stringify(selectedApps("client-heavy"))
+    && JSON.stringify(binding.selection.apps) === JSON.stringify(selectedApps("client-heavy"));
+  if (candidatePolicy) for (const row of policy.candidates.filter((row) => row.status === "unsupported")) {
+    assert.ok(row.app === "solid" && row.reason === unsupportedSolidReason && row.latestStableEligible === false && row.measurements === null,
+      "unreviewed unsupported client disposition");
+    const observed = native.outcomes.find((r) => r.app === row.app);
+    assert.ok(observed.outcome !== "passed" && observed.measurement == null && observed.measurements == null,
+      "unsupported client cannot carry measured success");
+  }
+  const policyAllowsComparison = (app) => client ? candidatePolicy
+    && policy.candidates.some((row) => row.app === app && row.status === "satisfied" && row.latestStableEligible === true && row.blockers?.length === 0)
+    : legacyPolicyAllowsComparison;
   // These native runners gate timing for the whole group after a parity failure.
-  const nativeAllowsComparison = (app) => !["mixed-production", "catalog-page", "json-api"].includes(binding.request.group)
+  const nativeAllowsComparison = (app) => client ? native.rankingEligible === true && Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app)
+    : !["mixed-production", "catalog-page", "json-api"].includes(binding.request.group)
     || (Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app));
   const browserAllowsComparison = (app) => !browser || native.qualificationPassed === true && native.expectedExitCode === 0
     && Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app);
   return { outcome: complete ? "native-validated" : native.status === "failed" || commands.some((r) => !r.success) ? "failed" : "blocked",
     nativeStatus: native.status,
-    appOutcomes: native.outcomes.map((r) => ({ ...r, comparisonEligible: complete && policyAllowsComparison && r.outcome === "passed" && nativeAllowsComparison(r.app) && browserAllowsComparison(r.app) })),
+    appOutcomes: native.outcomes.map((r) => ({ ...r, comparisonEligible: complete && policyAllowsComparison(r.app) && r.outcome === "passed" && nativeAllowsComparison(r.app) && browserAllowsComparison(r.app) })),
     report: { qualification: complete ? "native-replay-passed" : "blocked", latestStable: policy ?? null } };
 }
