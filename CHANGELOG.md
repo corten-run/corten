@@ -11,6 +11,11 @@ Corten is pre-1.0, so any minor version may change the API.
   and `invalid_with` keep their APIs; the plain-request debug guard still covers
   explicit mode overrides and raw marked responses.
 
+- `serve_wrapped_with` carries a TLS handshake's value to each request as
+  `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
+  nothing to the document) and `Identify`. The existing serve paths carry no value;
+  connection limits, timeouts and shutdown still cover the handshake.
+
 - The watchlist smoke's first field change after a link now tests a same-shell page swap, with
   the field module held back, rather than racing the scripts of a full document load.
 
@@ -41,7 +46,7 @@ Corten is pre-1.0, so any minor version may change the API.
   `<script>` or `<template>`; Chromium and WebKit let a leading `<title>`, `<base>`,
   `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the rest is read, so a table
   row, cell or other table part beside another element was dropped (or a `<table>` or `<form>`
-  after a row taken apart) with only a console error about the next element. `req.patch`,
+  after a row taken apart) with only a console error about the next element. `action.patch`,
   `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
   fragment panics, naming the element lost and the one that came first, so an app's own
   debug-build tests that draw such a patch now fail; a patch with a token the check does not read
@@ -71,6 +76,13 @@ Corten is pre-1.0, so any minor version may change the API.
 - `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
   Trusted Types enforcement would reject. The scripts guide shows how to read a part again
   with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
+
+- Form controls named `parentElement`, `parentNode` or other DOM members no longer hang
+  patching or stand in for the form's members that the runtime (patches, navigation),
+  `shortcut()`, `view()`, `rows()` and the generated view classes read. A generated class now
+  reads a hole whose path starts from a form, into it or past it, and a form's whole text through
+  the platform's getters; its steps from any other element are unchanged
+  ([#1531 Patching a form with a control named parentElement hangs the tab: the runtime walks parentElement, which the control shadows](https://github.com/corten-run/corten/issues/1531)).
 
 - Apply supported lean settings to catalog-page competitors as well as Corten:
   reduce optional access logging, compression and timer work where supported,

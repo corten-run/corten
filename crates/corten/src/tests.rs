@@ -12247,11 +12247,11 @@ async fn a_switched_connection_after_a_step_counts_against_max_connections() {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // A stand-in for a handshake: the client sends "hello\n" first.
-    async fn hello(mut tcp: tokio::net::TcpStream) -> std::io::Result<tokio::net::TcpStream> {
+    async fn hello(mut tcp: tokio::net::TcpStream) -> std::io::Result<(tokio::net::TcpStream, ())> {
         let mut greeting = [0u8; 6];
         tcp.read_exact(&mut greeting).await?;
         match &greeting {
-            b"hello\n" => Ok(tcp),
+            b"hello\n" => Ok((tcp, ())),
             _ => Err(std::io::Error::other("not a greeting")),
         }
     }
@@ -12428,11 +12428,13 @@ async fn a_step_before_http_is_counted_and_timed_as_the_connection() {
     use std::time::{Duration, Instant};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // A stand-in for a handshake: the client sends "hello\n" first, anything else fails it.
-    async fn hello(mut tcp: tokio::net::TcpStream) -> std::io::Result<tokio::net::TcpStream> {
+    async fn hello(
+        mut tcp: tokio::net::TcpStream,
+    ) -> std::io::Result<(tokio::net::TcpStream, crate::ConnectionInfo<&'static str>)> {
         let mut greeting = [0u8; 6];
         tcp.read_exact(&mut greeting).await?;
         match &greeting {
-            b"hello\n" => Ok(tcp),
+            b"hello\n" => Ok((tcp, crate::ConnectionInfo("verified"))),
             _ => Err(std::io::Error::other("not a greeting")),
         }
     }

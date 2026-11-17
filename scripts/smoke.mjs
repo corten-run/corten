@@ -46,6 +46,30 @@ const shadowing = [
   "addEventListener",
   "removeEventListener",
   "reset",
+  "parentElement",
+  "parentNode",
+  "nextSibling",
+  "firstChild",
+  "firstElementChild",
+  "nextElementSibling",
+  "localName",
+  "nodeName",
+  "childNodes",
+  "childElementCount",
+  "outerHTML",
+  "textContent",
+  "cloneNode",
+  "ownerDocument",
+  "tagName",
+  "insertBefore",
+  "showPopover",
+  "scrollWidth",
+  "clientWidth",
+  "clientLeft",
+  "getBoundingClientRect",
+  "getClientRects",
+  "scrollBy",
+  "scrollIntoView",
 ];
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
 // The markup this test writes into pages goes through a policy of its own, which the watchlist
@@ -274,6 +298,8 @@ for (engine of names) {
   track(browser);
   trusting(browser);
   try {
+    await namedFormNavigation(browser);
+    await generatedFormViews(browser);
     await run(browser);
   } catch (error) {
     console.log(`[${engine}] still loading when it failed:\n${pending().join("\n") || "  nothing"}`);
@@ -289,6 +315,112 @@ for (engine of names) {
 if (skipped.length) console.log(`\n${skipped.length} skipped`);
 console.log(failures.length ? `\n${failures.length} failed:\n${failures.join("\n")}` : "\nall passed");
 process.exit(failures.length ? 1 : 0);
+
+/**
+ * A named control must not turn a runtime walk into form -> control -> form. The timeout
+ * lives outside the page: a renderer stuck in that loop cannot run its own timers.
+ * @param {import("@playwright/test").Browser} browser
+ */
+async function namedFormNavigation(browser) {
+  for (const names of [["parentElement"], ["parentNode"], shadowing]) {
+    const label = names.length === 1 ? `a control named ${names[0]}` : "controls named after DOM members";
+    const page = await browser.newPage();
+    let timer;
+    try {
+      await page.goto(base);
+      const patched = await Promise.race([
+        page.evaluate(async (names) => {
+          const { patch, ready } = await import("corten");
+          await ready;
+          const controls = names.map((name) => `<input type="hidden" name="${name}">`).join("");
+          document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<form id="named-form">${controls}<p id="named-output">Before</p></form>`));
+          await patch(__html('<p id="named-output">After</p>'));
+          await patch(__html(`<form id="named-form">${controls}<p id="named-output">Replaced</p></form>`));
+          await patch(__html('<template id="named-form" data-append><span id="named-appended">Appended</span></template>'));
+          await new Promise((done) => setTimeout(done, 0));
+          return document.getElementById("named-output")?.textContent === "Replaced" && document.getElementById("named-appended")?.textContent === "Appended";
+        }, names),
+        new Promise((_, reject) => (timer = setTimeout(() => reject(new Error("tab did not answer within 6 s")), 6000))),
+      ]);
+      check(`patching a form with ${label} applies and leaves the tab responsive`, patched === true);
+    } catch (error) {
+      check(`patching a form with ${label} applies and leaves the tab responsive`, false, String(error));
+    } finally {
+      clearTimeout(timer);
+      await page.context().close();
+    }
+  }
+}
+
+/**
+ * The view classes #[component(view)] generates (`/smoke/views`, served as `corten/views`) whose
+ * holes are two elements into a form, past a form, and a form's whole text, with controls outside
+ * each form, joined to it by `form=`, named after the members the classes' paths read
+ * (`firstElementChild`, `nextElementSibling`, `textContent`): each property reads, writes and
+ * fills its element, never one of those controls.
+ * @param {import("@playwright/test").Browser} browser
+ */
+async function generatedFormViews(browser) {
+  const page = await browser.newPage();
+  try {
+    await page.goto(`${base}/smoke/views`);
+    const seen = await page.evaluate(async () => {
+      const { FormNested, PastForm, FormText } = await import("corten/views");
+      const own = Element.prototype;
+      /** @param {string} id */
+      const form = (id) => /** @type {Element} */ (document.getElementById(id));
+      /** The text of the element `css` finds under `root`, read past any named control. @param {Element} root @param {string} css */
+      const shown = (root, css) => Reflect.get(Node.prototype, "textContent", css ? own.querySelector.call(root, css) : root);
+      /** @param {() => unknown} step */
+      const run = (step) => {
+        try {
+          return String(step());
+        } catch (error) {
+          return String(error);
+        }
+      };
+      const nestedForm = form("nested-form");
+      const nested = new FormNested(nestedForm);
+      const pastRoot = /** @type {Element} */ (form("past-form").parentElement);
+      const past = new PastForm(pastRoot);
+      const textForm = form("text-form");
+      const whole = new FormText(textForm);
+      const out = {
+        nested: run(() => {
+          const read = nested.label;
+          nested.label = "Set";
+          const set = shown(nestedForm, "span");
+          FormNested.fill(nestedForm, { label: "Filled" });
+          return `${read};${set};${shown(nestedForm, "span")}`;
+        }),
+        past: run(() => {
+          const read = past.note;
+          past.note = "Set";
+          const set = shown(pastRoot, "p");
+          PastForm.fill(pastRoot, { note: "Filled" });
+          return `${read};${set};${shown(pastRoot, "p")}`;
+        }),
+        whole: run(() => {
+          const read = whole.text;
+          whole.text = "Set";
+          const set = `${typeof whole.text}:${whole.text}:${shown(textForm, "")}`;
+          FormText.fill(textForm, { text: "Filled" });
+          return `${typeof read}:${read};${set};${shown(textForm, "")}`;
+        }),
+        // The controls each form's members would have been: none was written (a value, or text
+        // put inside one).
+        controls: Array.from(document.querySelectorAll("input[form]"), (input) => `${/** @type {HTMLInputElement} */ (input).value}/${input.childNodes.length}`).join(),
+      };
+      return out;
+    });
+    check("a generated view reads, writes and fills a hole two elements into a form with a control named firstElementChild", seen.nested === "Nested;Set;Filled", seen.nested);
+    check("a generated view reads, writes and fills a hole past a form with a control named nextElementSibling", seen.past === "Past;Set;Filled", seen.past);
+    check("a generated view reads, writes and fills a form's whole text with a control named textContent", seen.whole === "string:;string:Set:Set;Filled", seen.whole);
+    check("a generated view's named form controls are left as they were", seen.controls === Array(9).fill("kept/0").join(), seen.controls);
+  } finally {
+    await page.context().close();
+  }
+}
 
 /**
  * How the browser parses the shapes `html!`'s examples in `view.rs` hold, accepted and refused
@@ -1221,6 +1353,44 @@ async function run(browser) {
   }, [...shadowing, "id"]);
   check("rows() finds, removes, reorders, fills and drops rows that are forms with controls named remove, getAttribute and the like", formViews.removed === "a,c;c,a;true/false;c", formViews.removed);
   check("view() draws and adopts a root that is a form with controls named id, children and the like", formViews.viewed === "true", formViews.viewed);
+  const formParent = await page.evaluate(async (names) => {
+    const { view, rows } = await import("/smoke-views.js");
+    const own = Element.prototype;
+    const form = document.createElement("form");
+    const template = document.createElement("template");
+    template.innerHTML = __html('<span id="form-parent-branch">Branch</span>');
+    document.body.append(form);
+    // Associated controls outside the form shadow its members without becoming its rows.
+    const controls = names.map((name) => {
+      const input = document.createElement("input");
+      input.name = name;
+      input.setAttribute("form", "form-parent");
+      document.body.append(input);
+      return input;
+    });
+    form.id = "form-parent";
+    class Row {
+      constructor(el) { this.el = el; }
+      static key(el) { return own.getAttribute.call(el, "data-key") ?? ""; }
+      static keyOf(data) { return data.k; }
+      static fill(el, data) { own.setAttribute.call(el, "data-key", data.k); }
+    }
+    try {
+      const first = view(form, Row, template).el;
+      const adopted = view(form, Row, template).el === first;
+      template.innerHTML = __html('<span data-key="a">Row</span>');
+      const list = rows(form, Row, template);
+      list.replace([{ k: "a" }, { k: "b" }]);
+      list.swap(0, 1);
+      const moved = list.at(0)?.el && own.getAttribute.call(list.at(0).el, "data-key") === "b";
+      list.clear();
+      return adopted && moved && own.querySelectorAll.call(form, "*").length === 0;
+    } finally {
+      own.remove.call(form);
+      for (const control of controls) control.remove();
+    }
+  }, shadowing);
+  check("view() and rows() use a form host's DOM members past named associated controls", formParent);
   // Form rows with controls named parentNode and nextSibling: `of` walks up from a control inside
   // one (a walk through the form's own `parentNode` would never end, so this runs on its own page,
   // timed), from `window` and from a node of another realm; `swap` moves neighbors past one, and a
@@ -1689,6 +1859,19 @@ async function run(browser) {
     "k=null k=null k=null k=null k=k k=null k=k k=k k=null k=k",
   ].join(" ");
   check("shortcut() gives each key with its modifiers, and null for each key something else has", shortcuts === expected, shortcuts);
+  const formShortcut = await page.evaluate(async (names) => {
+    const { shortcut } = await import("corten/keys");
+    const form = document.createElement("form");
+    form.innerHTML = __html(names.map((name) => `<input type="hidden" name="${name}">`).join(""));
+    form.tabIndex = -1;
+    document.body.append(form);
+    let got;
+    document.addEventListener("keydown", (event) => (got = shortcut(event)), { once: true });
+    EventTarget.prototype.dispatchEvent.call(form, new KeyboardEvent("keydown", { key: "k", bubbles: true }));
+    Element.prototype.remove.call(form);
+    return got === "k";
+  }, [...shadowing, "isContentEditable"]);
+  check("shortcut() reads a focused form past controls named matches, closest and isContentEditable", formShortcut);
   // A change's text is the move in money since the open, signed (t.js().signed_money(USD), as the
   // server's t.signed_money), then a percent whose sign is its trend's.
   const changes = await page.$$eval('[data-ref="change"]', (cells) => cells.map((c) => [c.textContent ?? "", c.getAttribute("data-trend")]));
@@ -2586,7 +2769,7 @@ async function run(browser) {
     const inputs = names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("");
     // With a custom property of its own (`style={..}`), which the runtime sets through the
     // form's `style`, a member its control named style shadows.
-    const fresh = form.outerHTML.replace(/^<form([^>]*)>/, (_, attrs) => `<form${attrs} data-vars="--smoke-shadowed:3px">${inputs}`);
+    const fresh = /** @type {string} */ (Reflect.get(Element.prototype, "outerHTML", form)).replace(/^<form([^>]*)>/, (_, attrs) => `<form${attrs} data-vars="--smoke-shadowed:3px">${inputs}`);
     /** @type {unknown} */
     let failed = null;
     try {
