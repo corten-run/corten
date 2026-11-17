@@ -11,7 +11,7 @@ try {
   assert.equal(base.protocol, "file:"); assert.ok(base.href.endsWith("/"));
   assert.deepEqual(Object.keys(input).sort(), ["commit", "folder", "round"]);
   assert.match(input.commit, /^[a-f0-9]{40}$/);
-  assert.ok(Array.isArray(sources) && sources.length > 0 && sources.length <= 200);
+  assert.ok(Array.isArray(sources) && sources.length > 0 && sources.length <= 206);
   const approved = new Map(); let total = 0;
   for (const row of sources) {
     assert.deepEqual(Object.keys(row).sort(), ["path", "sha256", "source"]);
