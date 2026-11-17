@@ -1368,82 +1368,150 @@ fn pseudo_element(selector: &str) -> bool {
     false
 }
 
-/// Comments removed and whitespace collapsed, outside strings and escapes. Whitespace is CSS's
-/// (space, tab and line breaks), so a no-break space stays part of an identifier. An escape is
-/// kept whole, the one whitespace that ends a hex escape written as a space, so whitespace after
-/// it still separates tokens: `--abov\65  flip-block` is two (CSS Syntax Level 3, consume an
-/// escaped code point). A comment right after a hex escape ends the escape and separates tokens,
-/// so the space written for it is doubled: `--abov\65/**/flip-block` is `--abov\65  flip-block`,
-/// where one space would end the escape and join the two names.
+/// Comments removed and whitespace collapsed, outside strings, escapes and unquoted URLs, with
+/// the tokens the source had (CSS Syntax Level 3). Whitespace is CSS's (space, tab and line
+/// breaks), so a no-break space stays part of an identifier, and a run of it is one space. An
+/// escape is kept whole, the one whitespace that ends a hex escape written as a space, so
+/// whitespace after it still separates tokens: `--abov\65  flip-block` is two. A comment with no
+/// whitespace beside it separates tokens without being whitespace, so it is dropped where the
+/// tokens on its two sides stay apart (`#\62/**/.c` is `#\62.c`, the compound `#b.c`), written
+/// `/**/` where they would join (`--abov\65/**/flip-block` stays two names), and a space after an
+/// at-keyword (`@media/**/screen`), where whitespace means nothing. `/*` in an unquoted `url(..)`
+/// is part of the URL, which is copied as written.
 fn squash(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    let mut space = false;
+    // Whitespace, and a comment with no whitespace beside it, waiting before the next token.
+    let (mut space, mut comment) = (false, false);
+    // The last character written, `a` for an escape, which continues an identifier.
+    let mut last = ' ';
     // The last thing written is a hex escape that no whitespace has ended yet.
     let mut open = false;
-    let gap = |out: &mut String, space: &mut bool, open: &mut bool| {
-        if *space && !out.is_empty() {
-            out.push_str(if *open { "  " } else { " " });
+    // Where in `out` the identifier being written starts, with a `#` or `@` just before it.
+    let mut word: Option<usize> = None;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '/' && chars.get(i + 1) == Some(&'*') {
+            i = (i + 2..chars.len())
+                .find(|&at| chars[at - 1] == '*' && chars[at] == '/' && at > i + 2)
+                .map_or(chars.len(), |at| at + 1);
+            comment = true;
+            continue;
         }
-        *space = false;
-        *open = false;
-    };
-    while let Some(c) = chars.next() {
-        match c {
-            '/' if chars.peek() == Some(&'*') => {
-                chars.next();
-                let mut last = ' ';
-                for c in chars.by_ref() {
-                    if last == '*' && c == '/' {
-                        break;
-                    }
-                    last = c;
-                }
-                space = true;
+        if c.is_ascii_whitespace() {
+            space = true;
+            i += 1;
+            continue;
+        }
+        if !out.is_empty() && space {
+            // A hex escape not yet ended takes the first space as its own.
+            out.push_str(if open { "  " } else { " " });
+            (last, word) = (' ', None);
+        } else if !out.is_empty() && comment && css_joins(last, c, chars.get(i + 1).copied()) {
+            if word.is_some_and(|at| out[at..].starts_with('@')) {
+                out.push(' ');
+                last = ' ';
+            } else {
+                out.push_str("/**/");
+                last = '/';
             }
+            word = None;
+        }
+        (space, comment, open) = (false, false, false);
+        match c {
             '"' | '\'' => {
-                gap(&mut out, &mut space, &mut open);
                 out.push(c);
-                while let Some(s) = chars.next() {
+                i += 1;
+                while let Some(&s) = chars.get(i) {
                     out.push(s);
+                    i += 1;
                     if s == '\\' {
-                        if let Some(next) = chars.next() {
+                        if let Some(&next) = chars.get(i) {
                             out.push(next);
+                            i += 1;
                         }
                     } else if s == c {
                         break;
                     }
                 }
+                (last, word) = (c, None);
             }
-            c if c.is_ascii_whitespace() => space = true,
-            '\\' if chars.peek().is_some_and(|next| !matches!(next, '\n' | '\r' | '\u{c}')) => {
-                gap(&mut out, &mut space, &mut open);
+            '\\' if chars.get(i + 1).is_some_and(|next| !matches!(next, '\n' | '\r' | '\u{c}')) => {
+                word = word.or(Some(out.len()));
                 out.push(c);
-                let mut hex = 0;
-                while hex < 6 && chars.peek().is_some_and(char::is_ascii_hexdigit) {
-                    out.extend(chars.next());
-                    hex += 1;
-                }
+                i += 1;
+                let hex = chars[i..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).count();
                 if hex == 0 {
-                    out.extend(chars.next());
-                } else if chars.peek().is_some_and(char::is_ascii_whitespace) {
-                    if chars.next() == Some('\r') && chars.peek() == Some(&'\n') {
-                        chars.next();
-                    }
-                    out.push(' ');
+                    out.push(chars[i]);
+                    i += 1;
                 } else {
-                    open = true;
+                    out.extend(&chars[i..i + hex]);
+                    i += hex;
+                    if chars.get(i).is_some_and(char::is_ascii_whitespace) {
+                        i += if chars[i] == '\r' && chars.get(i + 1) == Some(&'\n') { 2 } else { 1 };
+                        out.push(' ');
+                    } else {
+                        open = true;
+                    }
                 }
+                last = 'a';
+            }
+            '(' if word.is_some_and(|at| unescape(&out[at..]).eq_ignore_ascii_case("url"))
+                && !matches!(chars[i + 1..].iter().find(|c| !c.is_ascii_whitespace()), Some('"' | '\'')) =>
+            {
+                // An unquoted URL is one token to its `)`, comments and spaces included.
+                let end = url_end(&chars, i + 1);
+                out.extend(&chars[i..end]);
+                i = end;
+                (last, word) = (')', None);
             }
             c => {
-                gap(&mut out, &mut space, &mut open);
+                if css_name(c) {
+                    if word.is_none() {
+                        let mark = matches!(last, '#' | '@') && out.ends_with(last);
+                        word = Some(out.len() - if mark { 1 } else { 0 });
+                    }
+                } else {
+                    word = None;
+                }
                 out.push(c);
+                last = c;
+                i += 1;
             }
         }
     }
     out
 }
 
+/// Whether `c` continues an identifier, a number's digits or a unit (CSS Syntax Level 3).
+fn css_name(c: char) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, '-' | '_') || !c.is_ascii()
+}
+
+/// Whether writing `next` (and `after` it) right after `last` would make one token of what a
+/// comment between them kept as two (CSS Syntax Level 3, serialization's pairs that need a
+/// comment): `last` is `a` after an escape. It errs toward yes, where keeping the comment is only
+/// longer.
+fn css_joins(last: char, next: char, after: Option<char>) -> bool {
+    let number = |c: Option<char>| c.is_some_and(|c| c.is_ascii_digit() || c == '.');
+    (css_name(last) && (css_name(next) || matches!(next, '\\' | '(' | '%') || (matches!(next, '.' | '+') && number(after))))
+        || (matches!(last, '#' | '@') && (css_name(next) || next == '\\'))
+        || (matches!(last, '.' | '+') && number(Some(next)))
+        || matches!((last, next), ('/', '*') | ('<', '!') | ('-', '>'))
+}
+
+/// Where the unquoted URL whose contents start at `at` ends, after its `)`, or the text's end
+/// (CSS Syntax Level 3, consume a url token): an escape is kept whole.
+fn url_end(chars: &[char], mut at: usize) -> usize {
+    while let Some(&c) = chars.get(at) {
+        at += if c == '\\' { 2 } else { 1 };
+        if c == ')' {
+            break;
+        }
+    }
+    at.min(chars.len())
+}
 fn split_declaration(text: &str) -> Option<(&str, &str)> {
     let (name, value) = text.split_once(':')?;
     let space = |c: char| c.is_ascii_whitespace();
@@ -1856,20 +1924,31 @@ mod tests {
 
     #[test]
     fn position_references_are_whole_css_tokens() {
-        // A hex escape takes one whitespace; the next one, or a comment, still separates the
-        // tactic.
-        for space in ["  ", "\r\n ", "\t\t", "\n\n", " /* a */ ", "/**/", "/*comment*/ ", "/* a */\n", " /**/"] {
+        // A hex escape takes one whitespace; the next one still separates the tactic, and so
+        // does a comment, kept where the two names would otherwise join.
+        for (space, written) in [
+            ("  ", " "),
+            ("\r\n ", " "),
+            ("\t\t", " "),
+            ("\n\n", " "),
+            (" /* a */ ", " "),
+            ("/*comment*/ ", " "),
+            ("/* a */\n", " "),
+            (" /**/", "/**/"),
+            ("/**/", "/**/"),
+            ("/* a *//**/", "/**/"),
+        ] {
             let css = format!("@position-try --above {{ top: 0 }} .a {{ position-try-fallbacks: --abov\\65{space}flip-block; position-try: most-width --abov\\65{space}flip-inline }}");
             assert_eq!(
                 scope(&css, "x").unwrap().css,
-                "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above flip-block;position-try:most-width --x__above flip-inline}",
+                format!("@position-try --x__above{{top:0}}.x__a{{position-try-fallbacks:--x__above{written}flip-block;position-try:most-width --x__above{written}flip-inline}}"),
                 "{space:?}"
             );
         }
         // The review's spellings: a comment glued to the escape is not the escape's whitespace.
         assert_eq!(
             scope("@position-try --above { top: 0 } .a { position-try-fallbacks: --abov\\65/**/flip-block, --abov\\65/*comment*/ flip-inline; position-try: --abov\\65/**/flip-block }", "x").unwrap().css,
-            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above flip-block, --x__above flip-inline;position-try:--x__above flip-block}"
+            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above/**/flip-block, --x__above flip-inline;position-try:--x__above/**/flip-block}"
         );
         assert_eq!(
             scope(".a { position-try-fallbacks: --abov\\65\r\n\tflip-block }", "x").unwrap().css,
@@ -1890,6 +1969,34 @@ mod tests {
         assert_eq!(
             conditional.css,
             "@position-try --x__above{top:0}.x__a{position-try:if(style(--above: 1): --x__above; else: flip-block);position-try-fallbacks:i\\66(st\\79le(--above: 1): --x__above; else: flip-block), var(--choice, if(style(--above: 2): if(style(--above: 3): --x__above; else: flip-inline); else: --x__above)), inherit(--above, --x__above), anchor(--above top), --x__above}"
+        );
+    }
+
+    #[test]
+    fn removing_a_comment_keeps_the_tokens_the_source_had() {
+        let css = |src: &str| scope(src, "x").unwrap().css;
+        // A comment separates tokens without being whitespace: `#\62/**/.c` is the compound
+        // `#b.c`, the space a hex escape takes is its own, and whitespace beside a comment is a
+        // descendant combinator.
+        assert_eq!(css(".a #\\62/**/.c { color: red }"), ".x__a #\\62.x__c{color:red}");
+        assert_eq!(css(".a #\\62 .c { color: red }"), ".x__a #\\62 .x__c{color:red}");
+        assert_eq!(css(".a #\\62/**/ .c { color: red }"), ".x__a #\\62  .x__c{color:red}");
+        assert_eq!(css(".a/**/.c, .a/* x */ .c { color: red }"), ".x__a.x__c, .x__a .x__c{color:red}");
+        assert_eq!(css(".a #b/**/c, .a #\\62/**/c { color: red }"), ".x__a #b/**/c, .x__a #\\62/**/c{color:red}");
+        // `/*` inside an unquoted URL is part of it, and its spaces are the URL's.
+        assert_eq!(
+            css(".a { position-try: var(--choice, url(\\61/**/b)); background: url( a/**/b.png ) u\\72l(/*c*/) }"),
+            ".x__a{position-try:var(--choice, url(\\61/**/b));background:url( a/**/b.png ) u\\72l(/*c*/)}"
+        );
+        assert_eq!(
+            css(".a { background: url/**/(x.png), url(/**/'x.png') }"),
+            ".x__a{background:url/**/(x.png), url(/**/'x.png')}"
+        );
+        // Numbers, units and keywords stay apart; an at-keyword takes a space, which means nothing
+        // in its prelude.
+        assert_eq!(
+            css("@media/**/screen { .a { margin: 1px/**/2px; width: 1/**/%; color: red/**/!important; order: +/**/1 } }"),
+            "@media screen{.x__a{margin:1px/**/2px;width:1/**/%;color:red!important;order:+/**/1}}"
         );
     }
 
