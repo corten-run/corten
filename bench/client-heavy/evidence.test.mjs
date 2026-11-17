@@ -242,14 +242,18 @@ test("final accounting retains failed/unsupported/not-run cells and writes every
 test("a real failed producer invocation saves complete six-app accounting but no strict positive", { timeout: 120000 }, async (t) => {
   const f = await fixture(t), out = join(f.root, "run"), args = ["unit-failed", "--out", out, "--cargo", join(f.root, "no-such-cargo")];
   const output = await run(args), saved = JSON.parse(await readFile(join(out, "result.json"), "utf8"));
-  assert.equal(saved.schema, "client-heavy-native/v2"); assert.deepEqual(output, saved);
+  assert.equal(saved.schema, "client-heavy-native/v3"); assert.deepEqual(output, saved);
   assert.equal(saved.collection.accounting, "complete"); assert.equal(saved.collection.proof, "blocked");
   assert.equal(saved.collection.isolation, "unknown"); assert.equal(saved.collection.rankingEligible, false); assert.equal(saved.readyForLoad, false);
   assert.equal(saved.passed, false); assert.ok(saved.collection.blockers.length > 0);
   assert.deepEqual(JSON.parse(await readFile(join(out, "plan.json"), "utf8")).invocation.argv, args);
   for (const app of selectedApps("client-heavy")) {
     assert.deepEqual(JSON.parse(await readFile(join(out, `${app}.json`), "utf8")), saved.cells[app]);
-    assert.ok(["passed", "failed", "not-run"].includes(saved.cells[app].outcome));
+    if (app === "solid") {
+      assert.equal(saved.cells[app].outcome, "unsupported");
+      assert.equal(saved.cells[app].reason, "latest-stable-solid-2-needs-compatible-stable-compiler");
+      assert.equal(saved.cells[app].qualification, null);
+    } else assert.ok(["passed", "failed", "not-run"].includes(saved.cells[app].outcome));
     if (saved.cells[app].outcome !== "passed") assert.equal(saved.cells[app].measurement, null);
   }
   // Missing Cargo guarantees no Rust build and no Corten performance qualification,
@@ -260,7 +264,7 @@ test("a real failed producer invocation saves complete six-app accounting but no
   assert.ok(subject.files.some((entry) => entry.path === "evidence/source-after.json"));
   assert.ok(subject.files.some((entry) => entry.path === "native/build.json"));
   const rejected = await validateSaved({ folder: out, round: "unit-failed", commit: saved.provenance.commit });
-  assert.equal(rejected.schema, "client-heavy-saved-verification/v2");
+  assert.equal(rejected.schema, "client-heavy-saved-verification/v3");
   assert.equal(rejected.status, "blocked", JSON.stringify(rejected.errors)); assert.equal(rejected.diagnosticsPassed, true); assert.equal(rejected.ready, false);
   const before = sha256(await readFile(join(out, "result.json")));
   await assert.rejects(run(args), /EEXIST/); assert.equal(sha256(await readFile(join(out, "result.json"))), before);
