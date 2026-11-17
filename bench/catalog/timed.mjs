@@ -166,7 +166,7 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
   readText(`${phase}.log`);
   const participants = [receipt.after.runtime, receipt.after.upstream].map((info) => {
     const name = info.name.slice(1);
-    return { id: info.id, startedAt: info.state.StartedAt, ...(Object.hasOwn(proof.ids, name) ? {
+    return { id: info.id, lifetime: { restarts: info.restarts, state: info.state }, ...(Object.hasOwn(proof.ids, name) ? {
       cpu: { startedAt: proof.startedAt, finishedAt: proof.finishedAt, before: proof.before[name], after: proof.after[name] },
     } : {}) };
   });
@@ -176,9 +176,9 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
 // Summary traversal groups passes by app, not by their native observation clock.
 export function verifyTimedContinuity(observations) {
   const participants = new Map();
-  for (const { id, startedAt, cpu } of observations) {
-    const participant = participants.get(id) ?? { startedAt, windows: [] };
-    assert.equal(startedAt, participant.startedAt, "timed participant lifetime changed across attempt");
+  for (const { id, lifetime, cpu } of observations) {
+    const participant = participants.get(id) ?? { lifetime, windows: [] };
+    same(lifetime, participant.lifetime, "timed participant lifetime changed across attempt");
     if (cpu) participant.windows.push(cpu);
     participants.set(id, participant);
   }

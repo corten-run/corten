@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { allApps } from "../fullstack/apps.mjs";
 import { aggregate, cpuSettings, expectedPageChecks, phases } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
@@ -120,13 +121,23 @@ export function inspectCatalog(summary, expectedCommit) {
   const started = Date.parse(summary.startedAt);
   const validClock = terminal && Number.isFinite(started) && Date.parse(summary.finishedAt) >= started;
   if (!validClock) warnings.push("Start/end timestamps do not establish a completed, non-negative elapsed duration.");
+  const targetFailures = timed ? expectedApps.flatMap((app) => (group?.descriptor.cases ?? []).flatMap(({ source, target }) =>
+    (summary.apps[app]?.runs?.[`${source}-${target}`] ?? []).flatMap((run) => phases.flatMap((phase) => {
+      const metrics = run.phases?.[phase];
+      return metrics?.outcome === "failed" ? [{ app, source, target, pass: run.pass, phase, failed: metrics.failed,
+        timeouts: metrics.timeouts, httpErrors: metrics.httpErrors, dropped: metrics.dropped }] : [];
+    })))) : [];
+  const ordered = (rows) => [...rows].sort((a, b) => `${a?.app}/${a?.source}/${a?.target}/${a?.pass}/${a?.phase}`.localeCompare(`${b?.app}/${b?.source}/${b?.target}/${b?.pass}/${b?.phase}`));
+  const dispositionComplete = !timed || Array.isArray(summary.targetFailures)
+    && isDeepStrictEqual(ordered(summary.targetFailures), ordered(targetFailures)) && summary.complete === (targetFailures.length === 0);
+  if (!dispositionComplete) warnings.push("Timed target failure ledger or baseline disposition is missing or differs from retained phases.");
   const baseline = validClock && summary.complete === true && summary.checksPassed === true && summary.dirty === false
     && allAppsPresent && everyCheck && everyPass && fixtureMatches && configurationComplete && failures.length === 0 && summary.options.checkOnly !== true
-    && (!timed || summary.attemptComplete === true && Array.isArray(summary.targetFailures) && summary.targetFailures.length === 0)
+    && (!timed || summary.attemptComplete === true && dispositionComplete)
     && (group === null || group.complete);
   const attemptComplete = timed && validClock && summary.attemptComplete === true && summary.checksPassed === true && summary.dirty === false
     && allAppsPresent && everyCheck && everyPass && fixtureMatches && configurationComplete && failures.length === 0
-    && summary.options.checkOnly !== true && group?.attemptComplete === true;
+    && summary.options.checkOnly !== true && group?.attemptComplete === true && dispositionComplete;
   const timedCells = timed ? Object.entries(summary.apps).flatMap(([app, entry]) => Object.entries(entry.runs ?? {}).flatMap(([profile, runs]) => phases.map((phase) => {
     const values = runs.map((r) => r.phases?.[phase]).filter(Boolean);
     return { app, profile, phase, ...aggregate(values), asked: passes };

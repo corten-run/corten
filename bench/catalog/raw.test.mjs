@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import childProcess from "node:child_process";
 import { EventEmitter } from "node:events";
@@ -166,6 +167,101 @@ test("timed threshold outcomes retain every pass, failed requests and healthy pe
 test("timed successful v3 replay still establishes only a fully successful baseline", () => {
   const f = timedFixture(fixture(), null), report = replayCatalog(f.summary, f.reader, f.commit);
   assert.equal(report.baseline, true); assert.equal(report.attemptComplete, true); assert.equal(report.comparisonEligibleApps.length, 7);
+});
+
+test("timed v3 positive checker participants require known no-termination state", async (t) => {
+  for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]) {
+    const f = timedFixture(fixture(), failure), path = "fixture/corten/checker.json", original = f.files.get(path);
+    for (const role of ["runtime", "upstream"]) for (const finishedAt of ["2026-11-07T21:59:00.000Z", undefined, null, "invalid", ""]) {
+      await t.test(`${failure ? "failed" : "successful"} attempt ${role} FinishedAt ${String(finishedAt)}`, () => {
+        const boundary = JSON.parse(original);
+        boundary[role].State.FinishedAt = finishedAt; f.put(path, boundary);
+        assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /termination|lifetime|state|participant/);
+      });
+    }
+  }
+});
+
+test("timed v3 full participant lifetime must agree across functional and timed observations", async (t) => {
+  for (const scope of ["functional peer", "functional to timed", "timed phases"]) await t.test(scope, () => {
+    const f = timedFixture(fixture(), null);
+    const paths = scope === "functional peer" ? ["fixture/corten/checker.json"]
+      : scope === "functional to timed" ? [...f.files.keys()].filter((path) => path.endsWith("/checker.json"))
+      : ["fixture/corten/p1-page/sat256-boundary.json"];
+    for (const path of paths) {
+      const boundary = f.reader.readJson(path);
+      // Both dates pass a per-observation <= 0 check, but the retained state changed.
+      if (path.endsWith("/checker.json")) boundary.upstream.State.FinishedAt = "1970-01-01T00:00:00Z";
+      else for (const edge of ["before", "after"]) boundary[edge].upstream.state.FinishedAt = "1970-01-01T00:00:00Z";
+      f.put(path, boundary);
+    }
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /lifetime changed across attempt/);
+  });
+});
+
+test("timed v3 saved verifier rejects positive checker prior termination without rewriting evidence", () => {
+  const f = timedFixture(fixture(), null), path = "fixture/corten/checker.json";
+  const folder = mkdtempSync(join(tmpdir(), "catalog-positive-lifetime-"));
+  try {
+    for (const [key, bytes] of f.files) { mkdirSync(dirname(join(folder, key)), { recursive: true }); writeFileSync(join(folder, key), bytes); }
+    assert.equal(validateSaved({ folder, round: "c1", commit: f.commit }).status, "verified");
+    for (const role of ["runtime", "upstream"]) {
+      const boundary = f.reader.readJson(path); boundary[role].State.FinishedAt = f.summary.finishedAt;
+      const bytes = JSON.stringify(boundary); writeFileSync(join(folder, path), bytes);
+      const saved = validateSaved({ folder, round: "c1", commit: f.commit });
+      assert.equal(saved.status, "invalid", role); assert.equal(saved.complete, false);
+      assert.equal(readFileSync(join(folder, path), "utf8"), bytes);
+    }
+  } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
+});
+
+test("timed v3 summary reports require an exact retained-phase failure disposition", async (t) => {
+  const invented = { app: "fastapi", source: "api", target: "page", pass: 1, phase: "sat256", failed: 1, timeouts: 1, httpErrors: 0, dropped: 0 };
+  const cases = [
+    ["missing ledger", (s) => { delete s.targetFailures; }],
+    ["null ledger", (s) => { s.targetFailures = null; }],
+    ["invented ledger", (s) => { s.targetFailures = [invented]; }],
+    ["invented completion failure", (s) => { s.complete = false; }],
+    ["missing completion", (s) => { delete s.complete; }],
+  ];
+  for (const failure of [null, { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 6 }]) {
+    const f = timedFixture(fixture(), failure), original = structuredClone(f.summary);
+    const changes = failure ? [...cases,
+      ["omitted failure", (s) => { s.targetFailures = []; }],
+      ["duplicate failure", (s) => { s.targetFailures.push({ ...s.targetFailures[0] }); }],
+      ["wrong failed phase", (s) => { s.targetFailures[0].phase = "sat64"; }],
+      ["wrong failed app", (s) => { s.targetFailures[0].app = "corten"; }],
+      ["wrong failure count", (s) => { s.targetFailures[0].failed++; }],
+      ["extra failure field", (s) => { s.targetFailures[0].invented = true; }],
+      ["contradictory baseline", (s) => { s.complete = true; }],
+    ].filter(([name]) => name !== "invented completion failure") : cases;
+    for (const [name, mutate] of changes) await t.test(`${failure ? "failed" : "successful"} attempt ${name}`, () => {
+      const summary = structuredClone(original); mutate(summary);
+      const before = structuredClone(summary), report = inspectCatalog(summary, f.commit);
+      assert.equal(report.attemptComplete, false); assert.equal(report.baseline, false);
+      assert.equal(report.status, "FAILED OR INCOMPLETE: not a baseline");
+      assert.doesNotMatch(renderCatalog(report), /COMPLETE ATTEMPT: observed load\/request failure/);
+      assert.deepEqual(summary, before, "reporting must not repair or rewrite the summary");
+      assert.throws(() => replayCatalog(summary, f.reader, f.commit));
+    });
+  }
+});
+
+test("timed v3 summary-only CLI cannot call missing or invented ledgers completed failures", () => {
+  const f = timedFixture(fixture(), null), folder = mkdtempSync(join(tmpdir(), "catalog-report-disposition-"));
+  try {
+    for (const missing of [true, false]) {
+      const summary = structuredClone(f.summary); summary.complete = false;
+      if (missing) delete summary.targetFailures;
+      else summary.targetFailures = [{ app: "fastapi", source: "api", target: "page", pass: 1, phase: "sat256", failed: 1, timeouts: 1, httpErrors: 0, dropped: 0 }];
+      const path = join(folder, "summary.json"); writeFileSync(path, JSON.stringify(summary));
+      const cli = childProcess.spawnSync(process.execPath, ["--max-old-space-size=384", fileURLToPath(new URL("./report.mjs", import.meta.url)), path,
+        "--commit", f.commit, "--require-complete"], { encoding: "utf8", timeout: 10000, windowsHide: true });
+      assert.equal(cli.error, undefined); assert.equal(cli.signal, null); assert.equal(cli.status, 1);
+      assert.match(cli.stdout, /FAILED OR INCOMPLETE: not a baseline/);
+      assert.doesNotMatch(cli.stdout, /COMPLETE ATTEMPT: observed load\/request failure/);
+    }
+  } finally { assert.equal(dirname(folder), tmpdir()); rmSync(folder, { recursive: true, force: true }); }
 });
 
 test("timed v3 requires every positive checker boundary for both successful and failed attempts", () => {

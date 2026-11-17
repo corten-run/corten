@@ -69,6 +69,9 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
     for (const key of ["OOMKilled", "Dead", "Paused", "Restarting"]) assert.equal(info.State[key], false);
     assert.equal(info.State.ExitCode, 0); assert.equal(info.State.Error, "");
     assert.ok(Date.parse(info.State.StartedAt) >= Date.parse(summary.startedAt));
+    if (summary.savedEvidence?.schema === timedRawSchema) assert.ok(typeof info.State.FinishedAt === "string"
+      && Number.isFinite(Date.parse(info.State.FinishedAt)) && Date.parse(info.State.FinishedAt) <= 0,
+      "participant has an unknown prior termination");
   };
   const execution = (info, image, command = image?.Cmd) => {
     assert.ok(image && typeof image === "object" && !Array.isArray(image), "image execution observation missing");
@@ -173,7 +176,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
         upstreamId ??= boundary.upstream.Id;
         assert.equal(boundary.upstream.Id, upstreamId, "upstream identity changed across functional checks");
         if (timed) for (const info of [boundary.runtime, boundary.upstream])
-          timedParticipants.push({ id: info.Id, startedAt: info.State.StartedAt });
+          timedParticipants.push({ id: info.Id, lifetime: { restarts: info.RestartCount, state: info.State } });
       }
       if (gated) {
         if (checked.failure !== undefined) {

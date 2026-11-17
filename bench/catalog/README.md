@@ -224,8 +224,10 @@ counter/sampler/copy errors and incomplete cleanup cannot complete an attempt.
 Side errors are preserved together even when k6 has already exited 99.
 
 V3 replay requires a successful `checker.json` boundary for every positive
-functional check, including peers of a timed-failed app, and binds the shared
-upstream identity and start time to timing. Cumulative CPU windows are checked
+functional check, including peers of a timed-failed app. Both app and upstream
+must retain a valid no-termination state. The full retained lifetime state and
+restart count for each participant ID must agree across functional and timed
+observations, including the shared upstream. Cumulative CPU windows are checked
 by participant ID across all runs and passes in observation-clock order, not
 the app/source/pass order in the summary.
 
@@ -244,7 +246,10 @@ complete raw replay returns `attemptComplete: true` and the affected app's
 `outcome: "failed"`. That app is never comparison-eligible; fully passing peers
 retain their own eligibility. The saved verifier's exit 0 means a complete
 replayed attempt, not that every app passed. The strict report command still
-exits 1 for a failed baseline. Reports expose all phase/pass outcome counts and
+exits 1 for a failed baseline. Summary-only reports require an exact failure ledger
+derived from retained phases and a matching baseline disposition before labeling
+an attempt complete; missing or invented failures remain incomplete. This does
+not replace raw replay or retrofit old evidence. Reports expose all phase/pass outcome counts and
 median [minimum, maximum] ranges, separating successful req/s from attempted
 req/s, request failures and dropped work. Campaign host/source/lifecycle gates
 remain independent and unchanged.
