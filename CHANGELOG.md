@@ -5,6 +5,52 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
+  drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the
+  page is on the screen (a GET with `corten: action` to the page's own route, which says
+  `patches`), and `req.patch_or_with(part, page)` answers both, its two sides closures so the
+  part's read runs only for the part and the page's only for the page. Before, the part was a
+  `<corten-live>` stream of one item on a route of its own whose handler repeated the page's
+  reads, with a second waiting state; and a `patches` route whose part needed a read of its own
+  could not answer its page without building a patch it would not send. Tags that name one address
+  are read once, so two parts one read draws share it (each waits for the slowest; independent
+  parts take a query field each). The part, and only it, is `aria-busy="true"` while the read is
+  on its way, so a patch of a cell or row beside it changes nothing; a part its read did not
+  replace (no patch, an error page, a redirect, or one of a shared read's parts gone meanwhile) is
+  marked `data-corten-read-failed`. The app's link to the page with the part read in shows unless
+  the part is busy (`[aria-busy] > .show { visibility: hidden }`, in the grid cell its loading line
+  shares, so the swap moves nothing), so it shows without JavaScript, when the part module does not
+  load and once the read failed, and follows a redirect as a navigation.
+  A read is its tag's at its address: a part that is a live region a write's page draws again in
+  place with a new tag has the new tag read and the old read stopped, so an old answer never lands
+  over a newer one (even one waiting for the same stylesheet); a kept tag the page draws with
+  another address is read there, its old read stopped and an old failure forgotten; and a kept
+  part whose own attributes the page draws again keeps its busy or failed mark. A read the
+  back-forward cache ended is made again when the page is shown, and a prerendered page reads
+  once it is shown. A part waiting in a part's answer is marked failed, not read, so reads do not
+  chain; which tags the answer drew is told by the elements of its markup, taken from the patch
+  the runtime parsed, handed to that read alone before anything else runs (an argument of the
+  runtime's own call, never a property of a script's signal), so a part a form's answer or a part read again
+  draws in the same task (both waiting for one stylesheet) is read, even in place of one the
+  part's answer drew or at its address, and so is one a script draws from a callback the drawing
+  runs (a `focusin`, a custom element's `connectedCallback`, even its stylesheet link's), and
+  nothing keeps the markup once the patch is drawn or cancelled; a page whose head asks to be read again is read on its interval, and draws its part
+  waiting again when its `<main>` changed. The reads, and finding the parts, are a script module
+  of their own, `part.js`, served beside the runtime and loaded only by a page that draws such a
+  part (and precached once by a PWA's service worker); the runtime only imports it, on a load
+  whose head preloads it or for markup with a waiting part (the server's, or a script's
+  `patch`, its attribute's name found in any case and after any separator), and grows by 44 bytes
+  gzipped and 40 brotli (15,568 and 14,060 on main at `7d9bbbf1e`, 15,612 and 14,100 at
+  `051f040ef`), and the module is 1,534 gzipped, 1,359 brotli at `051f040ef` (`npm run build:js`'s `js/dist`, gzip 6 and brotli 11 by Node's
+  `zlib`). An app with such a stream moves to this shape: drop the stream's route and handler,
+  put `ReadAgain::now` inside the part where the `<corten-live>` was, and hide the link under the
+  part's `[aria-busy]` instead of showing it on `corten-live[status="closed"]`. Choices 7 and 44 are rewritten: declarative shadow
+  DOM places a part streamed later without a script only at a slot of a shadow tree around the
+  page, as a child of a host still open, and Chromium's `<template for>` (on by default since
+  Chrome 150) anywhere in the page, but Firefox and WebKit not at all, so Choice 7, reopened, keeps
+  pages whole; `scripts/dsd-probe.mjs` checks both again
+  ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
+  [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
 - `serve_wrapped_with` carries a TLS handshake's value to each request as
   `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
   nothing to the document) and `Identify`. The existing serve paths carry no value;
@@ -70,6 +116,13 @@ Corten is pre-1.0, so any minor version may change the API.
 - `patch` takes `TrustedHTML`, not a string, so `corten check` refuses markup the browser's
   Trusted Types enforcement would reject. The scripts guide shows how to read a part again
   with a hidden GET `data-patch` form and `requestSubmit()`, or `ReadAgain::from`.
+
+- Form controls named `parentElement`, `parentNode` or other DOM members no longer hang
+  patching or stand in for the form's members that the runtime (patches, navigation),
+  `shortcut()`, `view()`, `rows()` and the generated view classes read. A generated class now
+  reads a hole whose path starts from a form, into it or past it, and a form's whole text through
+  the platform's getters; its steps from any other element are unchanged
+  ([#1531 Patching a form with a control named parentElement hangs the tab: the runtime walks parentElement, which the control shadows](https://github.com/corten-run/corten/issues/1531)).
 
 - Apply supported lean settings to catalog-page competitors as well as Corten:
   reduce optional access logging, compression and timer work where supported,
@@ -1004,7 +1057,7 @@ Corten is pre-1.0, so any minor version may change the API.
   takes about 31,300 where it took 22,900; one that answers patches alone (`HtmlResult<Patches>`)
   keeps none, about 25,900 where it took 23,532. A navigation takes 22,358 where it took 22,221, a whole
   document 53,072 where it took 52,782, a patch in an app without layout reads 23,269 where it took
-  22,752. The runtime is 446 bytes larger with gzip. A read an `Ahead` starts
+  22,752. The runtime is 454 bytes larger with gzip. A read an `Ahead` starts
   before the handler may not see the write. With two writes out at once, whichever page is drawn
   last may be older than the other write, a patch to a layout element included, so the next
   navigation reads the whole page; so does one after a write a navigation cut off before its

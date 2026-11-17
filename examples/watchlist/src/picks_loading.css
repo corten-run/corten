@@ -1,20 +1,24 @@
-/* The line saying the picks are on their way shows while a stream can still bring them, and the
-   link to the page with them read in where none will: without JavaScript, which opens no stream,
-   and once the stream has given up (`closed`: an error or a 204 answered it). A browser without
-   the `scripting` media feature matches neither query and shows both. */
-@media (scripting: enabled) {
-  .show {
-    display: none;
-  }
+/* The link to the page with the picks read in shows unless a read is bringing them, and the line
+   saying they are on their way only while one is: the runtime's part module marks the picks
+   `aria-busy` then. So the link shows without JavaScript, which reads nothing, when the module
+   does not load, and once the read has failed (offline, or no patch came back), which the module
+   marks `data-corten-read-failed`. The two share one cell, as tall as the taller, so the one that
+   shows takes the other's place and nothing around them moves; the hidden one cannot be focused or
+   clicked, and assistive technology skips it. */
+.waiting {
+  display: grid;
+  justify-items: start;
 }
-@media (scripting: none) {
-  .finding {
-    display: none;
-  }
+.finding,
+.show {
+  grid-area: 1 / 1;
 }
-corten-live[status="closed"] .finding {
-  display: none;
+.finding {
+  visibility: hidden;
 }
-corten-live[status="closed"] .show {
-  display: inline;
+[aria-busy] > .finding {
+  visibility: visible;
+}
+[aria-busy] > .show {
+  visibility: hidden;
 }

@@ -10,6 +10,7 @@ import { gzipped } from "./readme-size.mjs";
 export const MODULES = {
   "corten-format": "format.js",
   "corten-field": "field.js",
+  "corten-part": "part.js",
   "corten-upload": "upload.js",
   "corten/keys": "keys.js",
   "corten/read": "read.js",
