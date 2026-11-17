@@ -69,6 +69,41 @@ fn nesting_boundaries_and_unknown_namespaces_still_compile() {
 
 /// Browsers keep these trees: an anchor reached through an SVG or MathML integration point is
 /// independent of one around the drawing, and a template's forms do not see the form pointer.
+/// The twin of the nested-form `compile_fail` example in `view`: the same document with one form.
+#[component]
+fn Checkout() -> impl Document {
+    html! {
+        <html>
+            <head>
+                <title>"Checkout"</title>
+                <Corten />
+            </head>
+            <body><main><form><div><input></div></form></main></body>
+        </html>
+    }
+}
+
+#[component]
+fn FormTemplate(children: impl Render) -> impl Render {
+    html! { <template>{children}</template> }
+}
+
+#[component]
+fn NestedForms() -> impl Render {
+    html! { <div><form><form><input></form></form></div> }
+}
+
+/// A fragment's caller may write it into a template, where a browser keeps a form in a form, so
+/// outside a document the nested form compiles: in a component's children it writes into a
+/// template, and as a component's own markup used in a literal one.
+#[test]
+fn nested_forms_compile_where_a_template_may_hold_them() {
+    let nested = "<template><div><form><form><input></form></form></div></template>";
+    assert_eq!(html! { <FormTemplate><div><form><form><input></form></form></div></FormTemplate> }.to_html(), nested);
+    assert_eq!(html! { <template><NestedForms /></template> }.to_html(), nested);
+    assert!(Checkout {}.to_html().contains("<main><form><div><input></div></form></main>"));
+}
+
 #[test]
 fn templates_and_foreign_content_start_with_nothing_open() {
     #[component]

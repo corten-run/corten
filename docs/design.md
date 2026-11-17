@@ -4240,13 +4240,27 @@ rules something out.
     no special element but an `<address>`, `<div>` or `<p>` intervenes; an `<a>` acts on an
     active anchor before the last formatting-list marker; a `<button>` or `<nobr>` closes an
     earlier one in scope; a heading directly in a heading closes it; and an inner `<form>`
-    outside a `<template>` is ignored. A nested `<select>` or `<input>` closes a select in
+    outside a `<template>` is ignored. That last one is refused only in a document's markup
+    (`<!DOCTYPE html>` and `<html>`, the page itself, which a browser would not keep as written
+    inside a template anyway, since it drops the `<html>`, `<head>` and `<body>` tags there):
+    any other `html!`, and a component's children, may be written into a `<template>` by a
+    caller, where browsers keep a form in a form, so a nested form there compiles, a miss rather
+    than a refusal of kept markup. Every other nesting rule searches the literal ancestors from
+    the innermost out and stops at the first literal match or boundary, so what a caller writes
+    around the markup cannot change its answer; only the form pointer, which scope does not
+    reset, depends on ancestors `html!` does not see. A nested `<select>` or `<input>` closes a select in
     scope; option, option-group and ruby starts generate implied end tags where their scope
     establishes it, keeping the exceptions for an `<option>` in an `<optgroup>` and an `<rt>`
     in an `<rtc>`. These now fail at compile time, with or without refs,
     since moved content can leave the component's scope. `html/nesting.rs` walks the parsed
     nodes once with a stack of literal ancestors, preserving it through control-flow bodies
-    and starting a fresh unknown context for a component's children. It adds no render code.
+    and starting a fresh unknown context for a component's children. It adds no render code:
+    `Gen` and what `html!` writes are unchanged, so a view renders as before. Its compile-time
+    cost, measured at `960b2d5a0` by the ignored `nesting_check_cost` test in a release build
+    (one Linux container, 4 CPUs): a 3,001-element list four elements deep, walked 1,000 times
+    a sample, took 308.2, 304.1 and 280.5 µs a walk (median 304.1 µs, about 0.1 µs an element).
+    Not measured: the whole macro expansion, the duplicate-attribute check, and how the walk
+    grows with ancestor depth.
     Each rule keeps its own scope boundaries; a nested list in a `<ul>` and a form in a
     `<template>` still compile. The content of a `<template>` and of a foreign element (an
     `<svg>`, a `<math>`, their integration points, or an element whose namespace the markup does
@@ -4305,7 +4319,9 @@ rules something out.
     change based on `f5f2132aa`, and each of its refusal rules, for every tag the rule names
     (`refusedNesting` in `scripts/smoke.mjs`), parsed in Chromium 156, Firefox 157 and
     WebKit 27.2, each of which moved or dropped the inner element, while keeping the template
-    and foreign-content cases; 2026-11-15, the HTML standard's tree construction (its tokenization states for
+    and foreign-content cases, and again after review that the form pointer is the only rule that
+    depends on ancestors outside the markup (template contents do not use it); 2026-11-15, the
+    HTML standard's tree construction (its tokenization states for
     RCDATA, RAWTEXT, script data and PLAINTEXT, its HTML and MathML text integration points, its
     tree construction dispatcher, which keeps `<mglyph>` and `<malignmark>` MathML's at a text
     integration point and reads an `<svg>` in a MathML `<annotation-xml>` as SVG's, and its rules for parsing tokens in foreign content, which take the same
@@ -5181,7 +5197,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     component's children, which it may write into an `<svg>`'s `<desc>`, the same holds, unless
     they are in an `<svg>` the children write themselves. An expression that writes an element a
     browser moves out of an `<svg>` into one is not refused, and the check takes what follows for
-    the drawing's. Following the parsing context across components would lift this: each
+    the drawing's. A nested `<form>` is refused only in a document's markup, the one place the
+    markup shows no `<template>` holds it. Following the parsing context across components would lift this: each
     component's render would tell the next what it is written into, at a cost to every render,
     for markup few apps write.
 

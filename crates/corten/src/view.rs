@@ -326,9 +326,17 @@ use std::{
 /// let _ = html! { <div><a href="#one"><span><a href="#two">"Two"</a></span></a></div> };
 /// ```
 ///
+/// A nested `<form>` is refused only in a document's markup, the page itself: any other view may
+/// be written into a `<template>` by its caller, where a browser keeps a form in a form.
+///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <div><form><div><form><input></form></div></form></div> };
+/// #[component]
+/// fn Checkout() -> impl Document {
+///     html! {
+///         <html><head><title>"Checkout"</title><Corten /></head><body><main><form><div><form><input></form></div></form></main></body></html>
+///     }
+/// }
 /// ```
 ///
 /// ```compile_fail

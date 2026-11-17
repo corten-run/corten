@@ -41,7 +41,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             mark_scope(&mut nodes, scope)?;
         }
         check_raw_text(&nodes, None)?;
-        nesting::check(&nodes)?;
+        nesting::check(&nodes, is_document(&nodes))?;
         check_pages(&nodes)?;
         Ok(nodes)
     }) {

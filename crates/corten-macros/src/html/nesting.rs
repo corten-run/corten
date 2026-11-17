@@ -144,6 +144,16 @@ const SPECIAL: &[&str] = &[
 
 const IMPLIED_END: &[&str] = &["dd", "dt", "li", "optgroup", "option", "p", "rb", "rp", "rt", "rtc"];
 
+/// Whether the markup being walked is in a template's content, as far as it shows. Only a
+/// document's markup (`is_document`) is known to be outside one: any other `html!`, and a
+/// component's children, may be written into a `<template>` by a caller.
+#[derive(Clone, Copy, PartialEq)]
+enum Template {
+    Inside,
+    Outside,
+    Unknown,
+}
+
 struct Open<'a> {
     name: &'a str,
     html: bool,
@@ -170,10 +180,12 @@ fn in_scope<'a>(open: &[Open<'a>], name: &str) -> Option<&'a str> {
 }
 
 /// The open element this start tag closes or discards, if the literal ancestors establish it.
-/// `in_template`: the tag is in a literal `<template>`'s content.
-fn displaced<'a>(open: &[Open<'a>], name: &str, in_template: bool) -> Option<&'a str> {
-    // Forms use the form pointer, not element scope, and a template's content does not use it.
-    if name.eq_ignore_ascii_case("form") && !in_template {
+/// Every rule but the form's searches `open` from the innermost element out and stops at a
+/// literal match or boundary, so what lies outside the markup cannot change its answer. The form
+/// pointer is not reset by scope, and a template's content does not use it, so a nested form is
+/// refused only where the markup shows it is outside every template.
+fn displaced<'a>(open: &[Open<'a>], name: &str, template: Template) -> Option<&'a str> {
+    if name.eq_ignore_ascii_case("form") && template == Template::Outside {
         if let Some(form) = open.iter().rev().find(|e| e.html && e.name.eq_ignore_ascii_case("form")) {
             return Some(form.name);
         }
@@ -241,17 +253,21 @@ fn displaced<'a>(open: &[Open<'a>], name: &str, in_template: bool) -> Option<&'a
     open.last().filter(|e| e.html && heading(e.name) && heading(name)).map(|e| e.name)
 }
 
-pub(super) fn check(nodes: &[Node]) -> Result<(), Error> {
-    walk(nodes, Parsing::Unknown, &mut Vec::new(), false)
+/// `document`: the markup is a whole document (`<!DOCTYPE html>` and `<html>`), the page itself,
+/// so outside every template. Written into a template it would not be kept as written anyway:
+/// a browser drops its `<html>`, `<head>` and `<body>` tags there.
+pub(super) fn check(nodes: &[Node], document: bool) -> Result<(), Error> {
+    let template = if document { Template::Outside } else { Template::Unknown };
+    walk(nodes, Parsing::Unknown, &mut Vec::new(), template)
 }
 
-fn walk<'a>(nodes: &'a [Node], parsing: Parsing, open: &mut Vec<Open<'a>>, in_template: bool) -> Result<(), Error> {
+fn walk<'a>(nodes: &'a [Node], parsing: Parsing, open: &mut Vec<Open<'a>>, template: Template) -> Result<(), Error> {
     for node in nodes {
         match node {
             Node::Element { name, attrs, children } => {
                 let html = html_element(parsing, name, attrs);
                 if html {
-                    if let Some(parent) = displaced(open, name, in_template) {
+                    if let Some(parent) = displaced(open, name, template) {
                         let action = if name.eq_ignore_ascii_case("form") && parent.eq_ignore_ascii_case("form") {
                             "ignores the nested <form> start tag".into()
                         } else {
@@ -271,22 +287,27 @@ fn walk<'a>(nodes: &'a [Node], parsing: Parsing, open: &mut Vec<Open<'a>>, in_te
                 if !(html && (super::reads_as_text(parsing, name) || name.eq_ignore_ascii_case("noscript"))) {
                     let within = parsing_within(parsing, name, attrs);
                     // A template's content, and a foreign element's, start with no element open.
-                    let template = name.eq_ignore_ascii_case("template");
-                    if !html || template {
-                        walk(children, within, &mut Vec::new(), in_template || template)?;
+                    if name.eq_ignore_ascii_case("template") {
+                        walk(children, within, &mut Vec::new(), Template::Inside)?;
+                    } else if !html {
+                        walk(children, within, &mut Vec::new(), template)?;
                     } else {
-                        walk(children, within, open, in_template)?;
+                        walk(children, within, open, template)?;
                     }
                 }
                 open.pop();
             }
             Node::Block { bodies, .. } => {
                 for body in bodies {
-                    walk(body, parsing, open, in_template)?;
+                    walk(body, parsing, open, template)?;
                 }
             }
-            // A component's children go where it writes them, but still in this template.
-            Node::Component { children: Some(children), .. } => walk(children, Parsing::Unknown, &mut Vec::new(), in_template)?,
+            // A component's children go where it writes them, perhaps into a template of its
+            // own; inside a template they stay in it.
+            Node::Component { children: Some(children), .. } => {
+                let template = if template == Template::Inside { Template::Inside } else { Template::Unknown };
+                walk(children, Parsing::Unknown, &mut Vec::new(), template)?
+            }
             _ => {}
         }
     }
@@ -306,7 +327,7 @@ mod tests {
 
     fn lost(ancestors: &[&str], name: &str) -> bool {
         let open: Vec<_> = ancestors.iter().map(|name| Open { name, html: true }).collect();
-        displaced(&open, name, false).is_some()
+        displaced(&open, name, Template::Outside).is_some()
     }
 
     #[test]
@@ -327,7 +348,9 @@ mod tests {
         assert!(!lost(&["a", "object"], "a"));
         assert!(!lost(&["a", "table", "caption"], "a"));
         assert!(lost(&["form", "table", "td"], "form"));
-        assert!(displaced(&[Open { name: "form", html: true }], "form", true).is_none());
+        for template in [Template::Inside, Template::Unknown] {
+            assert!(displaced(&[Open { name: "form", html: true }], "form", template).is_none());
+        }
         assert!(lost(&["button", "span"], "button"));
         assert!(!lost(&["button", "object"], "button"));
         assert!(lost(&["h1"], "h2"));
@@ -370,9 +393,11 @@ mod tests {
             el("template", vec![el("div", vec![el("form", vec![el("form", vec![el("input", Vec::new())])])])]),
             el("div", vec![el("form", vec![el("template", vec![el("form", Vec::new())])])]),
             el("div", vec![el("p", vec![el("template", vec![el("div", Vec::new())])])]),
+            // A fragment's caller may write it into a template, where a nested form is kept.
+            el("div", vec![el("form", vec![el("form", vec![el("input", Vec::new())])])]),
         ];
         for node in kept {
-            assert!(check(std::slice::from_ref(&node)).is_ok());
+            assert!(check(std::slice::from_ref(&node), false).is_ok());
         }
     }
 
@@ -397,7 +422,7 @@ mod tests {
         for _ in 0..3 {
             let start = std::time::Instant::now();
             for _ in 0..rounds {
-                check(std::hint::black_box(&nodes)).unwrap();
+                check(std::hint::black_box(&nodes), false).unwrap();
             }
             println!("nesting check, 3001 elements: {:.1} us/expansion", start.elapsed().as_secs_f64() * 1e6 / rounds as f64);
         }

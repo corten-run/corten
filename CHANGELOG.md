@@ -11,7 +11,7 @@ Corten is pre-1.0, so any minor version may change the API.
 - **Breaking:** `html!` refuses duplicate written HTML attribute names (case-insensitively, including
   names with expression values), hand-written `data-key` (write `key={..}`), and visible HTML
   nesting whose start tags close or discard an open element: blocks in paragraphs, nested list
-  and definition items without a boundary, active anchors, forms outside templates, buttons or
+  and definition items without a boundary, active anchors, nested forms in a document's markup outside templates, buttons or
   `nobr` still in scope, directly nested headings, and select, option-group, option and ruby
   starts that close an open element. Diagnostics say what to change. The content of a
   `<template>` or of SVG and MathML is checked apart from the elements around it, where browsers
