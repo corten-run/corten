@@ -81,6 +81,8 @@ try {
       '<div class="scoped"><div id="scopedPopover" class="scopedPopover" popover></div></div><div id="outsidePopover" class="scopedPopover" popover></div>',
       '<div class="scopeHost"><div class="scopeInner"><dialog id="nestedScope" class="nestedScope"></dialog></div></div><div class="scopeInner"><dialog id="outsideNestedScope" class="nestedScope"></dialog></div>',
       '<div class="outerScope"><div class="innerScope"><dialog id="doubleScope" class="doubleScope"></dialog></div></div><div class="innerScope"><dialog id="outsideDoubleScope" class="doubleScope"></dialog></div>',
+      '<div class="outerExact"><div class="innerExact"><dialog id="exactScope"></dialog></div><div><div class="innerExact"><dialog id="outsideExact"></dialog></div></div></div>',
+      '<dialog id="documentScope" data-note=":scope"></dialog><dialog id="documentAmp" data-note="&"></dialog><dialog id="notDocumentScope"></dialog><dialog id="notDocumentAmp"></dialog>',
       '<dialog id="lastrail" class="rail"></dialog>',
     ].join("");
     const sheet = '<link rel="stylesheet" href="/dialog-in-place.css">';
@@ -112,6 +114,8 @@ try {
         "@scope (.relativeList) { @media (min-width: 1px) { > dialog:not(:scope, .other), .other { display: flex; outline-style: solid; } } }",
         ".scopeHost { @scope (.scopeInner) { @media (min-width: 1px) { :scope > .nestedScope { display: flex; } } } }",
         "@scope (.outerScope) { @scope (.innerScope) { @media (min-width: 1px) { :scope > .doubleScope { display: grid; } } } }",
+        "@scope (.outerExact) { @scope (:scope > .innerExact:not(:scope)) { @media (min-width: 1px) { :scope > dialog:not(:scope) { display: flex; outline-style: solid; } } } }",
+        '@media (min-width: 1px) { :scope > body > #documentScope[data-note=":scope"], & > body > #documentAmp[data-note="&"], :scope#notDocumentScope, &#notDocumentAmp { display: flex; outline-style: solid; } }',
       ].join("\n"),
     }),
   );
@@ -125,7 +129,7 @@ try {
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
   const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
   const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
-  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,sameRoot,listPlain,listExplicit,literalAttribute,literalEscape,relativeScope,relativeAmp,relativeList,relativeOther,scopedPopover,nestedScope,doubleScope,lastrail", railNames);
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,sameRoot,listPlain,listExplicit,literalAttribute,literalEscape,relativeScope,relativeAmp,relativeList,relativeOther,scopedPopover,nestedScope,doubleScope,exactScope,documentScope,documentAmp,lastrail", railNames);
   const warned = new Set(railOnLoad.map((e) => e.split(" ")[1]));
   check("plain scoped selectors stay descendants, independently in each selector-list member", !warned.has("scopedSelf") && !warned.has("outsideAncestor") && !warned.has("listSelf") && warned.has("listPlain") && warned.has("listExplicit"));
   check("every :scope in a selector binds the same root", warned.has("sameRoot") && !warned.has("differentRoots"));
@@ -135,6 +139,9 @@ try {
   check("the browser applies the relative scoped selectors to the same controls", relativeLooks === "solid,solid,solid,solid,none", relativeLooks);
   const scopedLooks = await drawn.evaluate(() => ["sameRoot", "differentRoots", "listSelf", "listPlain", "listExplicit", "literalAttribute", "literalEscape", "literalImpostor", "literalSelf"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle).join(","));
   check("the browser applies the scoped regression rules only to the positive controls", scopedLooks === "solid,none,none,solid,solid,solid,solid,none,none", scopedLooks);
+  const anchorCases = ["exactScope", "outsideExact", "documentScope", "documentAmp", "notDocumentScope", "notDocumentAmp"];
+  const anchorLooks = await drawn.evaluate((ids) => ids.map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle === "solid"), anchorCases);
+  check("exact nested roots and unscoped document roots agree with native styles", anchorLooks.join(",") === "true,false,true,true,false,false" && anchorCases.every((id, i) => warned.has(id) === anchorLooks[i]), anchorLooks.join(","));
   check(
     "its warning names the rule, the query, the rule that draws it in place and the open one's look",
     !!railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") &&
@@ -209,32 +216,86 @@ try {
   });
   check("dev mode does not report a value the user typed", (await marker) && !(await Promise.race([moved, Promise.resolve(false)])));
   await drawn.close();
-  // Count queries, not elapsed time: each scoped rule/root is queried once, not once per dialog.
-  const many = await browser.newPage();
+  // Count work, not elapsed time: rule reads, fixture matches, and queries (including their results).
+  /** @param {string} markup @param {string} css @param {number} count @param {boolean} [patch] */
+  async function dialogWork(markup, css, count, patch = false) {
+    const many = await browser.newPage();
+    let warnings = 0;
+    many.on("console", (m) => { if (m.type() === "warning" && m.text().startsWith("corten: work")) warnings++; });
+    await many.addInitScript(() => {
+      const counter = { reads: 0, matches: 0, queries: 0, results: 0 };
+      Object.assign(window, { dialogWork: counter });
+      const selectorText = Object.getOwnPropertyDescriptor(CSSStyleRule.prototype, "selectorText");
+      Object.defineProperty(CSSStyleRule.prototype, "selectorText", {
+        ...selectorText,
+        get() {
+          const selector = selectorText?.get?.call(this) ?? "";
+          if (selector.includes(".workDialog")) counter.reads++;
+          return selector;
+        },
+      });
+      const matches = Element.prototype.matches;
+      Element.prototype.matches = function (selector) {
+        if (selector.includes(".work") || this.classList.contains("workScope") && selector.includes(":scope")) counter.matches++;
+        return matches.call(this, selector);
+      };
+      /** @type {(this: Element | Document, selector: string) => NodeListOf<Element>} */
+      function query(selector) {
+        const result = (this instanceof Document ? documentQuery : elementQuery).call(this, selector);
+        if (selector.includes(".work") || this instanceof Element && this.classList.contains("workScope") && selector.includes(":scope")) {
+          counter.queries++;
+          counter.results += result.length;
+        }
+        return result;
+      }
+      const elementQuery = Element.prototype.querySelectorAll;
+      const documentQuery = Document.prototype.querySelectorAll;
+      Element.prototype.querySelectorAll = query;
+      Document.prototype.querySelectorAll = query;
+    });
+    await many.route(base + "/", async (route) => {
+      if (route.request().headers().corten) return route.continue();
+      const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "gzip" } });
+      await route.fulfill({ response: res, body: (await res.text()).replace("</head>", '<link rel="stylesheet" href="/dialog-work.css"></head>').replace("</body>", `${markup}</body>`) });
+    });
+    await many.route(base + "/dialog-work.css", (route) => route.fulfill({ contentType: "text/css", body: css }));
+    const done = many.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: work${count - 1} `), timeout: 30000 }).then(() => true, () => false);
+    await many.goto(base + "/");
+    if (patch) {
+      // Wait for the startup check and observer before drawing one dialog in a small patch.
+      await many.waitForFunction(() => !!(/** @type {any} */ (window)).dialogWork.reads);
+      await many.evaluate(() => {
+        const counter = (/** @type {any} */ (window)).dialogWork;
+        Object.assign(counter, { reads: 0, matches: 0, queries: 0, results: 0 });
+        document.getElementById("workPatch")?.append(Object.assign(document.createElement("dialog"), { id: "work0", className: "workDialog" }));
+      });
+    }
+    const completed = await done;
+    const { reads, matches, queries, results, looks } = await many.evaluate((count) => ({
+      ...(/** @type {{reads: number, matches: number, queries: number, results: number}} */ (/** @type {any} */ (window)).dialogWork),
+      looks: Array.from({ length: count }, (_, i) => document.getElementById(`work${i}`)).every((el) => el !== null && getComputedStyle(el).outlineStyle === "solid"),
+    }), count);
+    await many.close();
+    return { reads, matches, queries, results, ok: completed && warnings === count && looks, detail: `${warnings}/${count} warnings, native styles ${looks}, ${reads} rule reads, ${matches} matches, ${queries} queries, ${results} results` };
+  }
+  const scopedRule = "@media (min-width: 1px) { .workDialog { display: flex; outline-style: solid; } }";
+  const dialog = (/** @type {number} */ i) => `<dialog class="workDialog" id="work${i}"></dialog>`;
+  const scopeRoot = '<div class="workScope">';
   const count = 1600;
-  let manyWarnings = 0;
-  many.on("console", (m) => { if (m.type() === "warning" && m.text().startsWith("corten: many")) manyWarnings++; });
-  await many.addInitScript(() => {
-    const query = Element.prototype.querySelectorAll;
-    (/** @type {any} */ (window)).__scopeQueries = 0;
-    Element.prototype.querySelectorAll = function (selector) {
-      if (this.classList.contains("manyScope")) (/** @type {any} */ (window)).__scopeQueries++;
-      return query.call(this, selector);
-    };
-  });
-  await many.route(base + "/", async (route) => {
-    if (route.request().headers().corten) return route.continue();
-    const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "gzip" } });
-    const roots = Array.from({ length: count }, (_, i) => `<div class="manyScope"><dialog id="many${i}"></dialog></div>`).join("");
-    await route.fulfill({ response: res, body: (await res.text()).replace("</head>", '<link rel="stylesheet" href="/many-scopes.css"></head>').replace("</body>", `${roots}</body>`) });
-  });
-  await many.route(base + "/many-scopes.css", (route) => route.fulfill({ contentType: "text/css", body: "@scope (.manyScope) { @media (min-width: 1px) { dialog { display: flex; } } }" }));
-  const manyDone = many.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: many${count - 1} `), timeout: 30000 });
-  await many.goto(base + "/");
-  await manyDone;
-  const queries = await many.evaluate(() => (/** @type {any} */ (window)).__scopeQueries);
-  check("each scoped display rule queries its root once, independently of dialog count", manyWarnings === count && queries === count, `${manyWarnings} warnings, ${queries} queries for ${count} roots`);
-  await many.close();
+  const many = await dialogWork(Array.from({ length: count }, (_, i) => scopeRoot + dialog(i) + "</div>").join(""), `@scope (.workScope) { ${scopedRule} }`, count);
+  check("one scoped rule is read once even with many candidates", many.ok && many.reads <= 2 && many.queries === 0 && many.matches <= 5 * count, many.detail);
+  for (const depth of [80, 160, 320]) {
+    // Keep the deep fixture out of layout; the browser still computes the dialog's style.
+    const nested = await dialogWork("<div hidden>" + scopeRoot.repeat(depth) + dialog(0) + "</div>".repeat(depth + 1), `@scope (.workScope) { @scope (.workScope) { ${scopedRule} } }`, 1);
+    check(`overlapping nested scopes do linear work at depth ${depth}`, nested.ok && nested.reads <= 2 && nested.queries === 0 && nested.matches <= 4 * depth, nested.detail);
+  }
+  const flatScopes = await dialogWork(scopeRoot + dialog(0) + "</div>" + (scopeRoot + "</div>").repeat(count - 1), `@scope (.workScope) { @media (min-width: 1px) { ${Array.from({ length: 64 }, (_, i) => `.workDialog:not(.workSkip${i}) { display: flex; outline-style: solid; }`).join("")} } }`, 1);
+  check("64 scoped rules do not scan 1,600 sibling roots", flatScopes.ok && flatScopes.reads <= 64 && flatScopes.queries === 0 && flatScopes.matches <= 128, flatScopes.detail);
+  const unscopedRules = Array.from({ length: 32 }, (_, i) => `.workDialog:not(.workSkip${i}, #workReady) { display: flex; outline-style: solid; }`).join("");
+  for (const unrelated of [0, 6400]) {
+    const unscoped = await dialogWork('<dialog id="workReady"></dialog><div id="workPatch"></div>' + '<div class="workDialog"></div>'.repeat(unrelated), `@media (min-width: 1px) { ${unscopedRules} }`, 1, true);
+    check(`a one-dialog patch does not query unscoped rules across ${unrelated} unrelated matches`, unscoped.ok && unscoped.reads <= 64 && unscoped.queries === 0 && unscoped.matches <= 32, unscoped.detail);
+  }
   // A handler given a form field its form does not have as the handler takes it (the compiler
   // cannot see the control, which another component may draw) is reported when the page draws
   // it, before any event calls it, and when a later draw adds one; one whose fields fit is not.
