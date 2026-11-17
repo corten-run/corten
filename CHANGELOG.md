@@ -20,17 +20,45 @@ Corten is pre-1.0, so any minor version may change the API.
   only update of what it changed outside the GET's part), and its address follows too; not after
   a refusal of the write's state (409, 410), a 5xx, a redirect or no answer, which the user reads
   first; one waiting for writes of its own form and another waits for every one of them, and any
-  newer submit of its form, a write too, drops it. `html!` refuses the mark on anything but a `<form>`, on a form without `data-patch` and
-  on one whose `method` is `post` or `dialog`. A link or form that carries the scope, a
-  `keep_query` form included, is drawn by the patch. The runtime that does this is a module of
-  its own, `corten-address`, which only a page with a marked form loads; until it has, the form is
-  sent as any GET form is. Without the Navigation API the browser sends the form itself, a full
-  load of the page at its address
+  newer submit of its form, a write too, drops it. `html!` refuses the mark on anything but a
+  `<form>`, on a form without `data-patch` and on one whose `method` is `post` or `dialog`. A link
+  or form that carries the scope, a `keep_query` form included, is drawn by the patch. The runtime
+  that does this is a module of its own, `corten-address`, which only a page with a marked form
+  loads; until it has, the form is sent as any GET form is. Without the Navigation API the browser
+  sends the form itself, a full load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
-
+- CI builds the Git-capable Playwright test-tools image only in the browser group that runs
+  the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
+
+- The catalog benchmark uses a fixed two-worker upstream within its existing CPU
+  and memory budget, retaining per-process headroom and a first-host preflight.
+  Saved worker evidence joins every preflight to the timed upstream and the
+  apparatus source hashes to the bound measured commit; failed capacity checks
+  remain unqualified rather than attributed to the measured framework.
+
+- Preserve every client benchmark candidate's not-run record when policy input
+  is invalid or missing. Such attempts still fail before any native build.
+
+- Capture the benchmark validator's pinned semver library and committed tooling
+  declaration before replay. Resolve its CommonJS imports only from those
+  verified bytes, without reopening installed files or enabling package fallback.
+
+- Stop an isolated benchmark command cooperatively when its host observer detects
+  an irrecoverable observation/storage failure, broken continuity or a recorded
+  Docker-participant gap. Preserve invalid evidence and uncertain ownership;
+  cancellation does not qualify a run or authorize host deletion.
+
+- Correct the grouped browser documentation to describe the current replayed
+  tool/lock identity handoff. Missing historical identities and independent OS
+  proof still block qualification; the documentation grants no readiness.
+
+- The catalog stand-in upstream reuses UTF-8 record bytes and handles canonical
+  reads synchronously, retaining exact controls and read counts. Measured apps
+  still fetch, parse and render or serialize per request; apparatus capacity
+  checks, resource budgets and failure interpretation are unchanged.
 
 - A slow part is answered by the page's own handler: `{ReadAgain::now(route)}` inside the part
   drawn waiting (the element whose id the part's patch replaces) has the runtime read it once the

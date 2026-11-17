@@ -6,14 +6,14 @@ import { pathToFileURL } from "node:url";
 import { cpus, platform, release } from "node:os";
 import { selectedApps, definition } from "../workloads/registry.mjs";
 import { clientCaptureSchema, validateClientCapture } from "../workloads/client.mjs";
-import { buildApps, root, here, sha256 } from "./build.mjs";
+import { buildApps, readLatestStable, root, here, sha256 } from "./build.mjs";
 import { installObserver } from "./observer.mjs";
 import { Evidence, closeObserved, clock, json, failure } from "./evidence.mjs";
 import { options, configurationNames } from "./contract.mjs";
 import { launchBrowser, browserIdentity } from "./launch.mjs";
 export { options, defaults } from "./contract.mjs";
 
-export const schema = "client-heavy-native/v2";
+export const schema = "client-heavy-native/v3";
 
 export async function serve(directory) {
   const base = resolve(directory);
@@ -211,6 +211,7 @@ export async function run(args) {
     node: process.version, platform: platform(), release: release(), cpu: cpus()[0]?.model ?? "unknown", logicalCpus: cpus().length,
     browser: null, browserInstances: 1, rendererProcessLimit: 1, concurrentPages: 1, passes: 2, note: "Bounded local verification on an uncontrolled host; no throughput or ranking claim. No OS CPU or memory isolation." };
   const output = { schema, group: "client-heavy", round: config.round, effectiveWorkload: config.workload, settings: config.settings, timeoutMs: config.timeoutMs, provenance,
+    latestStable: null,
     selectedApps: selectedApps("client-heavy"), definition: definition("client-heavy"),
     builds: Object.fromEntries(selectedApps("client-heavy").map((app) => [app, { outcome: "not-run", reason: "runner-failed-before-build" }])),
     cells: {}, passed: false, readyForLoad: false,
@@ -228,6 +229,9 @@ export async function run(args) {
   const onInt = () => interrupt("SIGINT"), onTerm = () => interrupt("SIGTERM");
   process.on("SIGINT", onInt); process.on("SIGTERM", onTerm);
   try {
+    output.latestStable = readLatestStable();
+    for (const row of output.latestStable.candidates.filter((row) => row.status === "unsupported")) output.cells[row.app] = {
+      outcome: "unsupported", reason: row.reason, qualification: null, measurement: null, readyForMeasurement: false };
     await evidence.save("native/workload.json", config.workload);
     await evidence.save("native/build.json", output.builds);
     sourceBefore = await evidence.source("before"); provenance.commit = sourceBefore.commit;
@@ -267,7 +271,9 @@ export async function run(args) {
     catch { evidence.blockers.push("browser-executable-bytes-unavailable"); }
     for (const app of output.selectedApps) {
       assert.ok(!interrupted, "native-runner-interrupted");
-      if (output.builds[app].outcome !== "built") {
+      if (output.cells[app]?.outcome === "unsupported") {
+        assert.equal(output.builds[app].reason, output.cells[app].reason, "unsupported-disposition-differs-from-build");
+      } else if (output.builds[app].outcome !== "built") {
         output.cells[app] = { outcome: "failed", reason: "native-build-failed", qualification: null, measurement: null, readyForMeasurement: false };
       } else {
         const result = await qualifyAndMeasure((phase) => journey(browser, server.url, app, config.workload, config.settings, config.timeoutMs, undefined, phase === "measurement"));
@@ -278,7 +284,8 @@ export async function run(args) {
     }
     output.passed = output.selectedApps.every((app) => output.cells[app].outcome === "passed");
   } catch (error) {
-    output.failure = { reason: interrupted ? "native-runner-interrupted" : "runner-failed", name: error.name, diagnosticSha256: sha256(String(error)) };
+    output.failure = { reason: interrupted ? "native-runner-interrupted" : output.latestStable === null ? "candidate-policy-unavailable" : "runner-failed",
+      name: error.name, diagnosticSha256: sha256(String(error)) };
   } finally {
     try {
       await finishRun(output, config.out, { browser, server, closeBrowser, interruptCleanup, isInterrupted: () => interrupted, signals });
