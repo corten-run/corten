@@ -284,6 +284,26 @@ pub enum NotAFeed {}
 /// page, a patch or a redirect, or [`Patches`], a patch and nothing else, which only the
 /// methods that answer one make. A handler names it in its return type, `HtmlResult<Patches>`,
 /// for a route that says `patches` ([`crate::routes`]).
+///
+/// An app cannot make one but through those methods, so a patch answer is always built behind
+/// [`Req::action`]'s check (docs/design.md#choice-plain-request-patch). It cannot construct one
+/// from a response:
+///
+/// ```compile_fail,E0624
+/// use corten::{prelude::*, ForOne, HtmlResponse};
+/// fn forged() -> HtmlResult<Patches> {
+///     Ok(HtmlResponse::<ForOne, Patches>::new(todo!()))
+/// }
+/// ```
+///
+/// nor say a page it drew is a patch:
+///
+/// ```compile_fail,E0624
+/// use corten::prelude::*;
+/// fn retyped(req: &Req) -> HtmlResult<Patches> {
+///     Ok(req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main></main></body></html> })?.of())
+/// }
+/// ```
 pub struct HtmlResponse<For = ForOne, Kind = AnyAnswer>(pub(crate) Response, PhantomData<(For, Kind)>);
 
 /// An answer for the visitor who asked: it may set a cookie. What [`HtmlResult`] holds.
@@ -609,7 +629,7 @@ impl<T: ?Sized, U: ?Sized + sealed::DataOf<T>> ScreenKind<U> for Screen<T> {}
 /// (before `Screen<T>`, those methods took any kind):
 ///
 /// ```
-/// use corten::{answer::PatchingKind, prelude::*, ForOne, HtmlResponse};
+/// use corten::{answer::PatchingKind, prelude::*, Action, ForOne, HtmlResponse};
 ///
 /// #[derive(Id)]
 /// struct PartId;
@@ -626,7 +646,7 @@ impl<T: ?Sized, U: ?Sized + sealed::DataOf<T>> ScreenKind<U> for Screen<T> {}
 /// and with any other bound does not compile:
 ///
 /// ```compile_fail,E0277
-/// use corten::{answer::AnswerKind, prelude::*, ForOne, HtmlResponse};
+/// use corten::{answer::AnswerKind, prelude::*, Action, ForOne, HtmlResponse};
 ///
 /// #[derive(Id)]
 /// struct PartId;

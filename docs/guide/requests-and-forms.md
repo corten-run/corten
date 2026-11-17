@@ -213,7 +213,7 @@ runs in; an `any = ..` route answers `GET` too; and a release build compiles non
 never runs in a production image or a smoke test against one.
 
 A patch is only for the runtime. `req.action()` returns `Some(action)` only in the request's
-effective `Mode::Action`; only that borrowed `Action` has `patch` and `patch_with_status`.
+effective `Mode::Action`; only that borrowed `corten::Action` has `patch` and `patch_with_status`.
 An unchecked `req.patch(..)` no longer compiles. For the usual two-mode answer, keep
 `req.patch_or(view, || async { .. })`, whose other side draws a page or redirect. For a patch
 with reads or a status of its own, bind the builder and keep the fallback:
@@ -226,7 +226,9 @@ if let Some(action) = req.action() {
 req.redirect(&url::Home)
 ```
 
-`Action` has no public constructor and cannot be cloned or copied. It consumes itself to
+It is not in the prelude, where a bare `Action` would clash with a post's address,
+`route::Action`; a function that takes it names it `corten::Action`. It has no public
+constructor and cannot be cloned or copied. It consumes itself to
 answer; obtain another by checking again. Its borrow prevents writing that request's mode
 while the builder still has a subsequent use. It reads `req.mode`, including an explicit
 application override, not the HTTP method: a part read uses GET too. `patch_or`, `invalid`
@@ -301,7 +303,7 @@ The compiler checks the rest: a page names only the posts it has (`at.sell()` is
 each has one handler, a page with posts has a `get` and is in no API's module, none of its query
 parameters is `do`, a name is an ASCII identifier and not one of the route's own methods (`href`,
 `at`), and a route with a type parameter cannot have posts. A post's address is not a link
-(`Action` is not an `Href`), so `req.redirect(&at.price())` does not compile: a write goes
+(`route::Action` is not an `Href`), so `req.redirect(&at.price())` does not compile: a write goes
 back to the page, not to its own address.
 
 A page drawn at a post's address (a refusal without JavaScript) stays there, so a post form in it

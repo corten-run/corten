@@ -5105,7 +5105,10 @@ rules something out.
     `FormPatch` precedent without a new response
     kind, wire format or dependency. `Action` consumes itself, has no public constructor or
     `Clone`/`Copy`, and its borrow prevents writing the request's mode while it still has a
-    subsequent use. Compile-fail doctests pin these guarantees and the removed methods.
+    subsequent use. Compile-fail doctests pin these guarantees, the removed methods, and that an
+    app can neither construct an `HtmlResponse` nor recast a page's kind to `Patches`. The builder
+    is `corten::Action`, left out of the prelude: `route::Action` already names a post's address,
+    and an app that glob-imports `route` with the prelude would get an ambiguous name.
     The sealed `PatchingKind` still permits `AnyAnswer` and `Patches`, not `Screen<T>`;
     `Public` and `NoStore` keep their inference. Patch content, live SSE fragments and feed
     protocol values are not HTTP patch answers and need no token.
@@ -5175,15 +5178,20 @@ rules something out.
     | Direct small component, Action | 17,539.291 (17,539.284-17,539.291) | 17,549.334 (17,549.306-17,549.428) |
     | `patch_or_with`, slow part read | 17,770.887 (17,770.815-17,770.894) | 17,770.835 (17,770.775-17,770.885) |
 
-    The page side and the lazy read are unchanged. A patch through `patch_or` counts about
-    four more (0.02%) and the direct patch about ten more (0.06%). A per-function comparison of
-    the first round's profiles puts those four, and eight of the ten, in glibc's `memcmp`: the
-    same header lookup (once a request through `patch_or`, twice on the direct route) calls it as
-    often in both builds, and each call takes 22 instructions instead of 18. Nothing on the request path calls it more often, and
-    `Action::patch` counts what `Req::patch` did. That fits a compared constant placed
-    differently in the rebuilt binary (reasoned; which one was not traced). The remaining two
-    are the direct handler's own mode check, which its unchecked baseline did not make. The
-    token is a borrow and allocates nothing.
+    The page side and the lazy read are unchanged. The `patch_or` Action case counts about four
+    more (0.02%) and the direct patch about ten more (0.06%); a per-function comparison of the
+    first round's profiles places both. All four of `patch_or`'s are in the benchmark, not the
+    request path: the test's check after each response, `headers.contains_key("corten-patch")`,
+    makes one `memcmp` call a request in both builds, which takes 22 instructions instead of 18,
+    while the framework's own header lookups on that route count what they did. Eight of the
+    direct route's ten are on the request path, in `Mode::asked`'s two header lookups a request:
+    the same number of `memcmp` calls, each 22 instructions instead of 18, though the same
+    function on the `patch_or` route of the same binary counts what it did before. The other two
+    are in the direct handler itself, its mode check, which the unchecked baseline did not make.
+    `Action::patch` counts what `Req::patch` did and nothing calls `memcmp` more often. Why
+    those calls take glibc's longer path was not traced; `memcmp`'s cost depends on where the
+    compared bytes lie, which a rebuild can move (reasoned). The token is a borrow and allocates
+    nothing.
 
     Stands on: platform (a browser shows an HTML response to a navigation or a form submit as the
     document, whatever its markup); platform (the

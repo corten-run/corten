@@ -49,7 +49,7 @@ These are what the framework is built around. Code that breaks them fights the f
    without. Direct patches require `Some(action)` from `req.action()`, then
    `action.patch(view)` or `action.patch_with_status(status, view)`; otherwise return a page
    or redirect. Prefer `req.patch_or(view, page)` when no custom branch is needed. Never
-   build a slow part before selecting its mode: `patch_or_with` passes `Action` to its part
+   build a slow part before selecting its mode: `patch_or_with` passes `corten::Action` to its part
    closure, `|action| async move { action.patch(view) }`, and runs only the requested side. Never
    unwrap `req.action()` to avoid writing a fallback; a feature only a browser can provide
    (drag and drop, a canvas) needs JavaScript.

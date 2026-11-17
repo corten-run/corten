@@ -985,7 +985,7 @@ static DEFAULT: LazyLock<Arc<Shared>> =
 /// Its field is private:
 ///
 /// ```compile_fail,E0423
-/// use corten::prelude::*;
+/// use corten::{prelude::*, Action};
 /// fn unchecked(req: &Req) {
 ///     let action = Action(req);
 /// }
@@ -994,7 +994,7 @@ static DEFAULT: LazyLock<Arc<Shared>> =
 /// It cannot be cloned:
 ///
 /// ```compile_fail,E0599
-/// use corten::prelude::*;
+/// use corten::{prelude::*, Action};
 /// fn duplicate(action: Action<'_>) {
 ///     let another = action.clone();
 /// }
@@ -1003,7 +1003,7 @@ static DEFAULT: LazyLock<Arc<Shared>> =
 /// Nor copied to answer twice:
 ///
 /// ```compile_fail,E0382
-/// use corten::prelude::*;
+/// use corten::{prelude::*, Action};
 /// fn duplicate(action: Action<'_>) -> HtmlResult {
 ///     let first: HtmlResult = action.patch(html! {});
 ///     action.patch(html! {})

@@ -2115,6 +2115,18 @@ impl<R: Route + ?Sized, I: crate::view::Id> fmt::Display for At<'_, R, I> {
 /// stays there, so a post form in it with no `action` would send its post to that action again: a
 /// page with actions writes each form's `action`. A debug build answers such a page with an error
 /// that says so (docs/design.md#limit-page-action-address).
+///
+/// The prelude leaves out [`crate::Action`], the checked patch builder, so a bare `Action` here
+/// is not ambiguous when both are glob-imported:
+///
+/// ```
+/// use corten::prelude::*;
+/// use corten::route::*;
+///
+/// fn address<R: Route>(post: Action<'_, R>) -> String {
+///     post.to_string()
+/// }
+/// ```
 pub struct Action<'a, R: ?Sized> {
     route: &'a R,
     name: &'static str,
