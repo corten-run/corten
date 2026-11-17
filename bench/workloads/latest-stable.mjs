@@ -142,6 +142,7 @@ function evaluateCandidates(input) {
     const manifest = read("manifest"), lock = read("lockfile");
     need(lock?.lockfileVersion === 3 && lock.packages?.[""], "lockfile:invalid-shape");
     need(manifest && typeof manifest === "object" && !Array.isArray(manifest), "manifest:invalid-shape");
+    need(canonical(manifest.overrides) === canonical({ "@remix-run/test": { esbuild: "$esbuild" } }), "manifest:unreviewed-overrides");
     for (const kind of ["dependencies", "devDependencies", "optionalDependencies"]) need(canonical(manifest[kind] ?? {}) === canonical(lock.packages[""][kind] ?? {}), `lockfile:root-${kind}-mismatch`);
     const resolvePackage = (from, name) => {
       need(/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+$/i.test(name), "lockfile:invalid-package-name");

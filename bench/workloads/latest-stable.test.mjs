@@ -175,6 +175,7 @@ for (const [name, key, edit] of [
   ["unknown schema", "policy", (p) => { p.schema = "benchmark-latest-stable-policy/v3"; }],
   ["manifest alternate version", "manifest", (p) => { p.devDependencies.react = "19.0.0"; }],
   ["manifest alternate resolution", "manifest", (p) => { p.dependencies = { react: "19.3.1" }; }],
+  ["forced peer override", "manifest", (p) => { p.overrides["@babel/core"] = "8.1.2"; }],
   ["lock alternate version", "lockfile", (p) => { p.packages["node_modules/react"].version = "19.0.0"; }],
   ["lock missing dependency", "lockfile", (p) => { delete p.packages["node_modules/react-dom"]; }],
   ["lock duplicate compiler", "lockfile", (p) => { p.packages["node_modules/babel-preset-solid/node_modules/@babel/core"] = structuredClone(p.packages["node_modules/@babel/core"]); }],

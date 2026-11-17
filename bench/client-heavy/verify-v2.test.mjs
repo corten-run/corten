@@ -13,7 +13,7 @@ import { fixturePass, workload, settings } from "./replay-fixture.mjs";
 import { vendorConfiguration } from "./build-replay.mjs";
 import { admitSaved } from "./admission.mjs";
 import { hostFixture } from "./host-fixture.mjs";
-import { readLatestStable } from "./build.mjs";
+import { evaluateLatestStable, latestStableSources } from "../workloads/latest-stable.mjs";
 import { inspectSaved } from "../workloads/isolated/adapters/client-heavy.mjs";
 
 const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(), apps = selectedApps("client-heavy");
@@ -111,7 +111,9 @@ async function fixture(t, version = 2) {
     }
   }
   if (version === 3) {
-    output.latestStable = readLatestStable();
+    const inputs = Object.fromEntries(await Promise.all(Object.entries(latestStableSources).map(async ([key, path]) =>
+      [key, await readFile(join(folder, source.get(path).blob))])));
+    output.latestStable = evaluateLatestStable({ group: "client-heavy", ...inputs });
     const row = output.latestStable.candidates.find((r) => r.app === "solid");
     await remove("native/solid");
     output.builds.solid = { outcome: "not-run", reason: row.reason };
