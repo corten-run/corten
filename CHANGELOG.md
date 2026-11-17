@@ -5,6 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Accept component-local `@position-try` definitions and rewrite their fallback references;
+  match statement at-rule names case-insensitively and document the complete component CSS
+  at-rule inventory, including raw bodies and global names.
+
 - Preserve type-token punctuation in `#[derive(Fields)]`, so group, row and key types
   written as paths compile, including keys of `#[fields(map)]` fields.
 

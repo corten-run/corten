@@ -89,6 +89,58 @@ dialog:where(:not([open], [popover])) { display: none !important; }
 Inline `style="..."` stays blocked by the CSP; one-off values come from the token utilities, and
 a size drawn from data from a custom property ([below](#values-from-data)).
 
+## At-rules
+
+Component CSS accepts exactly these block at-rules. At-rule names are ASCII case-insensitive
+(`@MEDIA`, `@LAYER`), as in CSS; this is a scoping pass, not a full CSS validator.
+
+| At-rules | What happens |
+|---|---|
+| `@media`, `@supports`, `@container`, `@layer`, `@starting-style` | Rules checked and classes prefixed as in the surrounding block, including nested declarations. `@media (--md)` names a token breakpoint ([below](#breakpoints)). |
+| `@scope` | Root and limit prefixed and rules checked as in the table above; no implicit root. |
+| `@property` | Body copied without selector scoping, then required descriptors and syntax checked; registered names and their references prefixed ([values from data](#values-from-data)). Not inside a style rule. |
+| `@position-try` | Declaration body copied without selector scoping; the defined name and references in `position-try-fallbacks` and `position-try` declarations in this file prefixed. Not inside a style rule. |
+| `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied without selector checks or class prefixes. Names stay global, including font families and feature-value names; qualify a private name with the component's name yourself. |
+| `@page` | A global name starting with the component's name and `-`, written by the author, with the body copied without selector scoping ([printing](#printing)). An unnamed page or an unqualified name does not compile. |
+
+Raw bodies still lose comments and extra whitespace, and registered custom properties are
+renamed there too. Nested block at-rules inside them are copied raw (font feature `@styleset`,
+page margin `@top-left`, and others), not independently selector-checked. The only statement
+at-rules accepted are `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded, since
+the generated stylesheet is UTF-8). Unknown statements are refused even inside raw bodies.
+
+`@import` does not compile: imported CSS is not checked or owned by the component. Put it in
+`static/style.css`. `@custom-media` does not compile either: the token file defines breakpoints,
+and the component names them with `@media (--md)`. Every other block or statement at-rule,
+including `@namespace` and `@document`, is refused outside raw bodies: the macro does not yet
+know how to keep its selectors or names inside the component. Use the global stylesheet for it.
+An `@scope` without a root is refused because its implicit root is outside the component.
+Escaped at-rule and class names are not supported.
+
+A popup can define a fallback beside its default position, including a corten-ui `MenuButton`
+or `ComboBox` styled by this component:
+
+```css
+/* actions.css */
+@position-try --above { position-area: block-start span-inline-end; }
+.menu [role="menu"] {
+  inset: auto;
+  position-area: block-end span-inline-end;
+  position-try-fallbacks: --above, flip-inline;
+}
+```
+
+`--above` becomes `--actions__above` in the definition and the declaration, including in the
+`position-try` shorthand and references before the definition. CSS gives these names a
+tree-wide namespace, not one per component ([design Limit 9](../design.md#limit-stylesheet-support));
+prefixing prevents two components' options from colliding. Names defined here use `--` followed
+by ASCII letters, digits, `-` and `_`, without `__`, as `@property` does; references can use CSS
+escapes. An option not defined in this file stays global. Anchor names, custom-property names,
+strings and URLs are not position references: `position-try: var(--choice, --above)` keeps the
+lookup `--choice` and scopes the fallback. Other raw named rules remain global for compatibility
+with references from global CSS and font files; a private name should include the component's
+name. This does not isolate anchors or change the browser's supported position descriptors.
+
 ## Motion
 
 Motion belongs in the component's stylesheet and script, using browser standards rather than a

@@ -41,6 +41,10 @@ const SYNTAXES: &[(&str, &str)] = &[
     ("<time>", "Time"),
 ];
 
+const GROUP_AT_RULES: &[&str] = &["media", "supports", "container", "layer", "starting-style"];
+const RAW_AT_RULES: &[&str] =
+    &["keyframes", "font-face", "property", "page", "counter-style", "font-palette-values", "font-feature-values"];
+
 /// Prefixes every class in `src` with `{prefix}__`. A rule outside any at-rule (or in `@media`,
 /// `@supports`, `@container`, `@layer`) must name one of the file's classes, so a component's
 /// styles cannot reach elements it does not render; so must each rule in an `@scope` there unless
@@ -58,6 +62,8 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
         out: String::with_capacity(src.len()),
         classes: Vec::new(),
         properties: Vec::new(),
+        positions: Vec::new(),
+        position_refs: Vec::new(),
         media: Vec::new(),
         prefix,
         scope_root: None,
@@ -68,6 +74,13 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
         return Err(format!(
             "(--{name}) in an @media rule names a breakpoint of the token file, and --{name} is this stylesheet's @property: rename the property"
         ));
+    }
+    let positions: Vec<&str> = s.positions.iter().map(String::as_str).collect();
+    // Work backwards so expanding a reference does not move the remaining ranges. Definitions
+    // may follow their references, including inside conditional rules.
+    for (start, end) in s.position_refs.into_iter().rev() {
+        let value = rename_names(&s.out[start..end], &positions, prefix, false)?;
+        s.out.replace_range(start..end, &value);
     }
     let css = rename_properties(&s.out, &names, prefix)?;
     let media = media_refs(&css);
@@ -372,6 +385,10 @@ const LENGTHS: &[&str] = &[
 /// load, and an `!important` rule of the component's with more specificity than that rule would
 /// win on a full load and lose after a patch.
 fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, String> {
+    rename_names(css, names, prefix, true)
+}
+
+fn rename_names(css: &str, names: &[&str], prefix: &str, properties: bool) -> Result<String, String> {
     if names.is_empty() {
         return Ok(css.to_string());
     }
@@ -404,38 +421,37 @@ fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, 
                     i += if b[i] == b'\\' { 2 } else { 1 };
                 }
             }
-            b'-' if b.get(i + 1) == Some(&b'-') && (i == 0 || !ident(b[i - 1])) => {
-                // The whole name, escapes included: `--f\69 ll` is `--fill` to the browser.
-                let mut end = i + 2;
-                while end < b.len() {
-                    if b[end] == b'\\' {
-                        if matches!(b.get(end + 1), None | Some(b'\n' | b'\r' | b'\x0c')) {
-                            break;
-                        }
-                        let hex = b[end + 1..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).count();
-                        end += 1 + hex.max(1);
-                        if hex > 0 && b.get(end) == Some(&b'\r') && b.get(end + 1) == Some(&b'\n') {
-                            end += 2;
-                        } else if hex > 0 && matches!(b.get(end), Some(b' ' | b'\t' | b'\n' | b'\r' | b'\x0c')) {
-                            end += 1;
-                        }
-                        // A multi-byte character after the `\` is one code point.
-                        while end < b.len() && !css.is_char_boundary(end) {
-                            end += 1;
-                        }
-                    } else if ident(b[end]) {
-                        end += 1;
-                    } else {
-                        break;
+            // Function names can be escaped too. A var/env/attr lookup is not a position
+            // option, but its fallback can name one; a URL is never an option.
+            c if !properties && ident(c) && c != b'-' => {
+                let end = css_name_end(css, i);
+                if end == i {
+                    i += 1;
+                    continue;
+                }
+                let function = unescape(&css[i..end]);
+                i = end;
+                if b.get(i) == Some(&b'(') && function.eq_ignore_ascii_case("url") {
+                    while i < b.len() && b[i] != b')' {
+                        i += if b[i] == b'\\' { 2 } else { 1 };
+                    }
+                } else if b.get(i) == Some(&b'(') && ["var", "env", "attr"].iter().any(|name| function.eq_ignore_ascii_case(name))
+                {
+                    while i < b.len() && !matches!(b[i], b',' | b')') {
+                        i += if b[i] == b'\\' { 2 } else { 1 };
                     }
                 }
+            }
+            b'-' if b.get(i + 1) == Some(&b'-') && (i == 0 || !ident(b[i - 1])) => {
+                // The whole name, escapes included: `--f\69 ll` is `--fill` to the browser.
+                let end = css_name_end(css, i + 2);
                 let written = &css[i + 2..end];
                 let name = if written.contains('\\') { unescape(written) } else { written.to_string() };
                 if names.contains(&name.as_str()) {
                     let declared =
                         b[..i].iter().rev().find(|c| !c.is_ascii_whitespace()).is_none_or(|c| matches!(c, b'{' | b';'))
                             && b[end..].iter().find(|c| !c.is_ascii_whitespace()) == Some(&b':');
-                    if declared && important(&css[end..]) {
+                    if properties && declared && important(&css[end..]) {
                         return Err(format!(
                             "--{name}: !important on a property markup sets would beat markup's value on a full load and lose to it after a patch; set it from markup (style={{..}}) or without !important"
                         ));
@@ -453,6 +469,32 @@ fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, 
     }
     out.push_str(&css[copied.min(css.len())..]);
     Ok(out)
+}
+
+fn css_name_end(css: &str, mut end: usize) -> usize {
+    let b = css.as_bytes();
+    while end < b.len() {
+        if b[end] == b'\\' {
+            if matches!(b.get(end + 1), None | Some(b'\n' | b'\r' | b'\x0c')) {
+                break;
+            }
+            let hex = b[end + 1..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).count();
+            end += 1 + hex.max(1);
+            if hex > 0 && b.get(end) == Some(&b'\r') && b.get(end + 1) == Some(&b'\n') {
+                end += 2;
+            } else if hex > 0 && matches!(b.get(end), Some(b' ' | b'\t' | b'\n' | b'\r' | b'\x0c')) {
+                end += 1;
+            }
+            while end < b.len() && !css.is_char_boundary(end) {
+                end += 1;
+            }
+        } else if b[end].is_ascii_alphanumeric() || matches!(b[end], b'-' | b'_') || b[end] >= 0x80 {
+            end += 1;
+        } else {
+            break;
+        }
+    }
+    end
 }
 
 /// Whether the declaration value at the start of `rest` (up to its `;` or `}`, outside strings
@@ -506,6 +548,8 @@ struct Scoper<'a> {
     out: String,
     classes: Vec<String>,
     properties: Vec<(String, Option<&'static str>)>,
+    positions: Vec<String>,
+    position_refs: Vec<(usize, usize)>,
     /// The breakpoints its `@media` rules name, without the `--`.
     media: Vec<String>,
     prefix: &'a str,
@@ -559,8 +603,23 @@ impl Scoper<'_> {
                         (Ctx::Raw, _) => Ctx::Raw,
                         // A rule nested in a style rule holds style rules or declarations; the
                         // browser ignores an `@property` there (CSS Nesting).
-                        (Ctx::Style, "property") => {
-                            return Err(self.error(start, "@property registers a property for the whole page: put it at the top of the stylesheet, outside any rule"))
+                        (Ctx::Style, "property" | "position-try") => {
+                            return Err(self.error(start, format!("@{name} defines a name for the whole page: put it at the top of the stylesheet, outside any rule")))
+                        }
+                        (_, "position-try") => {
+                            let written = rule["position-try".len()..].trim();
+                            let Some(name) = written.strip_prefix("--").filter(|name| !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))) else {
+                                return Err(self.error(start, "@position-try: a name starts with -- and has letters, digits, - and _"));
+                            };
+                            if name.contains("__") {
+                                return Err(self.error(start, "@position-try: __ separates the component's name from the option; use - or _"));
+                            }
+                            if !self.positions.iter().any(|other| other == name) {
+                                self.positions.push(name.to_string());
+                            }
+                            let at = self.out.len() + text.len() - written.len();
+                            self.position_refs.push((at, at + written.len()));
+                            Ctx::Raw
                         }
                         (_, "scope") => {
                             let (prelude, unowned) = self.scope_prelude(&rule["scope".len()..], ctx == Ctx::Top, start)?;
@@ -577,18 +636,9 @@ impl Scoper<'_> {
                                 _ => ctx,
                             }
                         }
-                        (_, "media" | "supports" | "container" | "layer" | "starting-style") => ctx,
-                        (
-                            _,
-                            "keyframes"
-                            | "font-face"
-                            | "property"
-                            | "page"
-                            | "counter-style"
-                            | "font-palette-values"
-                            | "font-feature-values",
-                        ) => Ctx::Raw,
-                        _ => return Err(self.error(start, format!("@{name} is not supported in a component's stylesheet"))),
+                        (_, name) if GROUP_AT_RULES.contains(&name) => ctx,
+                        (_, name) if RAW_AT_RULES.contains(&name) => Ctx::Raw,
+                        _ => return Err(self.unsupported_at_rule(start, name)),
                     }
                 } else {
                     Ctx::Style
@@ -625,8 +675,9 @@ impl Scoper<'_> {
                 continue;
             }
             if let Some(rule) = text.strip_prefix('@') {
-                let name = rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
-                match name {
+                let name =
+                    rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("").to_ascii_lowercase();
+                match name.as_str() {
                     "custom-media" => {
                         return Err(self.error(
                             start,
@@ -644,7 +695,7 @@ impl Scoper<'_> {
                         self.out.push_str(&text);
                         self.out.push(';');
                     }
-                    _ => return Err(self.error(start, format!("@{name} is not supported in a component's stylesheet"))),
+                    _ => return Err(self.unsupported_at_rule(start, &name)),
                 }
                 continue;
             }
@@ -662,9 +713,16 @@ impl Scoper<'_> {
             };
             self.out.push_str(name);
             self.out.push(':');
+            if name.eq_ignore_ascii_case("position-try") || name.eq_ignore_ascii_case("position-try-fallbacks") {
+                self.position_refs.push((self.out.len(), self.out.len() + value.len()));
+            }
             self.out.push_str(value);
             self.out.push(';');
         }
+    }
+
+    fn unsupported_at_rule(&self, at: usize, name: &str) -> String {
+        self.error(at, format!("@{name} is not supported in a component's stylesheet: the macro does not know how to keep its rules or names inside the component; put it in the app's stylesheet (docs/guide/styles.md, At-rules)"))
     }
 
     /// An `@media` prelude with each breakpoint it names (`( --md )`, a custom media query of
@@ -1520,6 +1578,107 @@ fn regroup(g: &Group, stream: TokenStream) -> TokenTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn position_options_are_component_local() {
+        let css = ".popup { position-try-fallbacks: --below flip-inline, --global; position-try: most-width --below; position-anchor: --below; --below: 2px; width: var(--below) } @position-try --below { position-area: block-end; margin: 2px }";
+        let sheet = scope(css, "menu").unwrap();
+        assert_eq!(sheet.css, ".menu__popup{position-try-fallbacks:--menu__below flip-inline, --global;position-try:most-width --menu__below;position-anchor:--below;--below:2px;width:var(--below)}@position-try --menu__below{position-area:block-end;margin:2px}");
+        assert!(scope(css, "other").unwrap().css.contains("@position-try --other__below"));
+        let nested = scope("@supports (position-area: top) { @POSITION-TRY --below { top: anchor(bottom); width: anchor-size(width) } .a { @media (width > 10px) { POSITION-TRY: var(--below, --b\\65 low) !important; content: '--below'; } } } @position-try --below { position-area: top }", "x").unwrap();
+        assert_eq!(nested.css, "@supports (position-area: top){@POSITION-TRY --x__below{top:anchor(bottom);width:anchor-size(width)}.x__a{@media (width > 10px){POSITION-TRY:var(--below, --x__below) !important;content:'--below'}}}@position-try --x__below{position-area:top}");
+        assert!(nested.properties.is_empty(), "position options are not custom properties for markup");
+        let same = scope("@property --above { syntax: '*'; inherits: false } @position-try --above { position-area: top } .a { position-try: var(--above, --above); position-try-fallbacks: --above-extra, --Above, --above; content: '--above'; background: url(--above.svg) }", "x").unwrap();
+        assert!(same.css.contains("position-try:var(--x__above, --x__above)"));
+        assert!(same.css.contains("position-try-fallbacks:--above-extra, --Above, --x__above"));
+        assert!(same.css.contains("content:'--above';background:url(--above.svg)"));
+        let functions = scope("@position-try --above { top: 0 } .a { position-try: v\\61r(--above, --above); position-try-fallbacks: env(--above, --above), attr(--above), u\\72l(--above); }", "x").unwrap();
+        assert!(functions.css.contains("v\\61r(--above, --x__above)"));
+        assert!(functions.css.contains("env(--above, --x__above), attr(--above), u\\72l(--above)"));
+        assert_eq!(
+            scope("@position-try --md { position-area: top } @media (--md) { .a { position-try: --md } }", "x").unwrap().media[0]
+                .1,
+            "md"
+        );
+        for (css, why) in [
+            ("@position-try below { top: 0 }", "starts with --"),
+            ("@position-try --a__b { top: 0 }", "__ separates"),
+            (".a { @position-try --b { top: 0 } }", "outside any rule"),
+        ] {
+            assert!(scope(css, "x").unwrap_err().contains(why), "{css}");
+        }
+    }
+
+    #[test]
+    fn at_rules_match_the_documented_inventory() {
+        let mut accepted: Vec<&str> =
+            GROUP_AT_RULES.iter().chain(RAW_AT_RULES).copied().chain(["scope", "position-try"]).collect();
+        accepted.sort_unstable();
+        let design = include_str!("../../../docs/design.md")
+            .split("id=\"limit-stylesheet-support\"")
+            .nth(1)
+            .unwrap()
+            .split("10. <a")
+            .next()
+            .unwrap();
+        let guide =
+            include_str!("../../../docs/guide/styles.md").split("## At-rules").nth(1).unwrap().split("## Motion").next().unwrap();
+        for doc in [design, guide] {
+            let mut documented = Vec::new();
+            for line in doc.lines().filter(|line| line.starts_with("| `@")) {
+                let names = line.split('|').nth(1).unwrap();
+                documented.extend(names.split('`').filter_map(|word| word.strip_prefix('@')));
+            }
+            documented.sort_unstable();
+            assert_eq!(documented, accepted, "the block at-rule table must match the parser");
+            for name in ["@charset", "@import", "@custom-media", "@namespace", "@document"] {
+                assert!(doc.contains(name), "missing statement or refusal: {name}");
+            }
+        }
+        for name in GROUP_AT_RULES {
+            let sheet = scope(&format!("@{} screen {{ .a {{ color: red }} }}", name.to_ascii_uppercase()), "x").unwrap();
+            assert_eq!(sheet.classes, ["a"]);
+            assert!(scope(&format!("@{name} screen {{ body {{ color: red }} }}"), "x").is_err());
+        }
+        for (name, prelude, body) in [
+            ("keyframes", "spin", "from { opacity: 0 }"),
+            ("font-face", "", "font-family: test"),
+            ("counter-style", "bullets", "system: cyclic; symbols: 'x'"),
+            ("font-palette-values", "--ink", "font-family: Test; base-palette: 0"),
+            ("font-feature-values", "Test", "@styleset { fancy: 1 }"),
+            ("page", "x-slip", "@top-left { content: 'x' }"),
+        ] {
+            let sheet = scope(&format!("@{name} {prelude} {{ {body} }}"), "x").unwrap();
+            assert!(sheet.classes.is_empty(), "{name} contents are raw");
+            assert!(sheet.css.starts_with(format!("@{name} {prelude}").trim()));
+        }
+        assert_eq!(scope("@CHARSET 'utf-8'; @LAYER base, widgets;", "x").unwrap().css, "@LAYER base, widgets;");
+        for name in ["import", "IMPORT", "custom-media", "CUSTOM-MEDIA", "namespace", "document", "unknown"] {
+            assert!(scope(&format!("@{name} x;"), "x").is_err(), "{name}");
+        }
+        for name in ["document", "unknown"] {
+            assert!(scope(&format!("@{name} x {{ .a {{ color: red }} }}"), "x").unwrap_err().contains("does not know how"));
+        }
+    }
+
+    #[test]
+    fn refused_at_rule_doctests_fail_for_their_reasons() {
+        for (css, prefix, why) in [
+            (include_str!("../../corten/src/imported_styles.css"), "imported-styles", "does not own"),
+            (include_str!("../../corten/src/custom_media_styles.css"), "custom-media-styles", "token file's breakpoints"),
+            (include_str!("../../corten/src/namespaced_styles.css"), "namespaced-styles", "does not know how"),
+            (include_str!("../../corten/src/document_styles.css"), "document-styles", "does not know how"),
+            (include_str!("../../corten/src/unnamed_page.css"), "unnamed-page", "with no name"),
+            (include_str!("../../corten/src/global_page.css"), "global-page", "start it with this component's"),
+            (include_str!("../../corten/src/nested_property.css"), "nested-property", "outside any rule"),
+            (include_str!("../../corten/src/nested_position.css"), "nested-position", "outside any rule"),
+            (include_str!("../../corten/src/invalid_position.css"), "invalid-position", "starts with --"),
+            (include_str!("../../corten/src/reserved_position.css"), "reserved-position", "__ separates"),
+        ] {
+            let error = scope(css, prefix).unwrap_err();
+            assert!(error.contains(why), "{prefix}: {error}");
+        }
+    }
 
     #[test]
     fn classes_are_prefixed_and_rules_stay_inside_the_component() {

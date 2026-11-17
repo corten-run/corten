@@ -1553,6 +1553,19 @@ async function run(browser) {
     return button && menu && { gap: Math.max(menu.top - button.bottom, button.top - menu.bottom), left: menu.left - button.left };
   });
   check("the menu is anchored to its button", !!menuBox && menuBox.gap >= 0 && menuBox.gap <= 8 && Math.abs(menuBox.left) <= 1, JSON.stringify(menuBox));
+  // Put the real MenuButton at the viewport's bottom: its component-local option, not the
+  // built-in flip-block tactic, must move the menu above the button.
+  await trigger.evaluate((button) => button.scrollIntoView({ block: "end" }));
+  await page.waitForFunction(() => {
+    const button = document.querySelector("#actions-button")?.getBoundingClientRect();
+    const menu = document.querySelector("#actions")?.getBoundingClientRect();
+    return button && menu && button.bottom >= innerHeight - 1 && menu.bottom <= button.top;
+  });
+  const fallback = await page.locator("#actions").evaluate((menu) => ({
+    names: getComputedStyle(menu).positionTryFallbacks,
+    area: getComputedStyle(menu).positionArea,
+  }));
+  check("the menu uses its component-local @position-try when below overflows", fallback.names.includes("--gallery__above") && fallback.area.includes("start"), JSON.stringify(fallback));
   await page.keyboard.press("ArrowDown");
   check("Arrow Down moves", (await page.evaluate(() => document.activeElement?.textContent)) === "Archive");
   await page.keyboard.press("ArrowDown");

@@ -4952,16 +4952,48 @@ by design; where it is known, a limit says what would lift it or why it is so.
 8. <a id="limit-views-render-once"></a>`html!` views render once and own what they capture; read from `req` before building the view.
    A value borrowed from one the view owns is computed inside the markup:
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
-9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting and `@media`, `@supports`, `@container`,
-   `@layer`, `@scope`, `@keyframes` and `@font-face`; `@import`, `@scope` with no root and
-   escaped class names are not supported. At the top of the file, an `@scope` rule's root names
+9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting.
+   At-rule names match ASCII case-insensitively. The accepted block at-rules are exactly:
+
+| At-rules | Processing |
+|---|---|
+| `@media`, `@supports`, `@container`, `@layer`, `@starting-style` | Rules checked and classes prefixed as at the surrounding level; declarations in a nested rule stay declarations. Token breakpoints in `@media` are resolved at app startup. |
+| `@scope` | Root and limit selectors checked and prefixed; rules checked as described below. |
+| `@property` | Body copied raw, then required descriptors and supported syntax checked; registered names and references prefixed to the component. Not allowed inside a style rule. |
+| `@position-try` | Declaration body copied raw; its dashed-ident name and matching references in `position-try-fallbacks` and `position-try` declarations in this file prefixed to the component, even before the definition. Not allowed inside a style rule. |
+| `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied raw, without selector checks or class prefixes. Their names (animation, font family, counter style, palette and feature-value names) remain global: use component-qualified names when private. |
+| `@page` | Name must start with the component's name and `-` (written by the author); body copied raw, including margin at-rules. The name remains global. An unnamed page or a name without that prefix is refused. |
+
+   Raw bodies still lose comments and extra whitespace and receive registered-property
+   renaming; their nested block at-rules are copied raw too (for example `@styleset` and
+   `@top-left`), not independently checked against this list. Statement at-rules are only
+   `@layer` (copied) and `@charset` (discarded: the generated stylesheet is UTF-8).
+   `@import` is refused because it loads a stylesheet the component does not own;
+   `@custom-media` is refused because tokens define breakpoints. Every other block or statement
+   at-rule, including `@namespace` and `@document`, is refused outside raw bodies because the
+   macro has no scoping rule for it; put those rules in the app's global stylesheet. Unknown
+   statements are refused inside raw bodies too. Escaped at-rule and class names are not supported.
+
+   A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
+   digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
+   CSS escapes. Only names defined in this file are rewritten; other position options remain
+   global. A `var()` lookup still names a custom property, while its fallback can name a local
+   option. Strings, URLs, anchor names and unrelated declarations are not position references.
+   [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
+   gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
+   components share the document tree, so prefixing prevents collisions. This does not make
+   anchors component-local. The older raw global namespaces stay global rather than silently
+   renaming names that apps can already share through global CSS or font files; revisit that
+   policy when an app needs checked private names for them.
+
+   An `@scope` with no root is refused because its implicit root is outside the component.
+   At the top of the file, an `@scope` rule's root names
    one of its classes, or else each rule in the body must start at one, as at the top. A root
    nested in a rule, or in an `@scope` whose root names one of the file's classes, is relative to
    that one's elements and is not checked; one nested in any other `@scope` is checked as at the top.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's
    root.
-   Keyframe names are not scoped, so an area's keyframes share one namespace with the rest.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
    item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
    and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file

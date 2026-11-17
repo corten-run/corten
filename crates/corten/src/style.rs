@@ -316,6 +316,95 @@
 //! }
 //! ```
 //!
+//! Named position options are local too (`popup_styles.css`):
+//!
+//! ```
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn PopupStyles() -> impl ClassList { Popup }
+//! let css = PopupStyles.style.unwrap().css;
+//! assert_eq!(css, "@LAYER popups;@position-try --popup-styles__above{position-area:block-start span-inline-end}.popup-styles__popup{position-try-fallbacks:--popup-styles__above, flip-inline;position-try:most-width --popup-styles__above}");
+//! ```
+//!
+//! Imported CSS is not owned or checked by the component (`imported_styles.css` has `@IMPORT`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn ImportedStyles() -> impl ClassList { () }
+//! ```
+//!
+//! Breakpoints come from tokens, not `@custom-media` (`custom_media_styles.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CustomMediaStyles() -> impl ClassList { () }
+//! ```
+//!
+//! Unknown statement at-rules, such as `@namespace` (`namespaced_styles.css`), have no scoping rule:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NamespacedStyles() -> impl ClassList { () }
+//! ```
+//!
+//! Nor do unknown block at-rules, such as `@document` (`document_styles.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn DocumentStyles() -> impl ClassList { () }
+//! ```
+//!
+//! An unnamed `@page` affects every printed page (`unnamed_page.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn UnnamedPage() -> impl ClassList { () }
+//! ```
+//!
+//! A global page name must start with this component's name and `-` (`global_page.css` does not):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn GlobalPage() -> impl ClassList { () }
+//! ```
+//!
+//! A browser ignores name-defining `@property` and `@position-try` rules inside style rules
+//! (`nested_property.css` and `nested_position.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NestedProperty() -> impl ClassList { () }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NestedPosition() -> impl ClassList { () }
+//! ```
+//!
+//! A position option needs a dashed name (`invalid_position.css` lacks `--`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn InvalidPosition() -> impl ClassList { () }
+//! ```
+//!
+//! `__` is reserved for the component prefix (`reserved_position.css` uses it in a name):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn ReservedPosition() -> impl ClassList { () }
+//! ```
+//!
 //! Nor does a stylesheet with a merge conflict's markers left in it (`conflicted_list.css`, as
 //! `corten ui add --merge` or git leaves one), whose `.row` rule a browser would drop:
 //!

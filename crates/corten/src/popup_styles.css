@@ -1,0 +1,3 @@
+@LAYER popups;
+@position-try --above { position-area: block-start span-inline-end; }
+.popup { position-try-fallbacks: --above, flip-inline; position-try: most-width --above; }
