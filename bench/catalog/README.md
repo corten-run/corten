@@ -60,6 +60,60 @@ benchmark-only fast path in the framework.
 
 ## Results
 
+### Speed Configuration
+
+Catalog is the lean rendering workload, not a production-hardening comparison.
+The standalone Corten app builds without optional response compression (load
+requests use identity encoding), and its exact `PROFILE=catalog-lean` sets the
+handler deadline, header timeout and send timeout to `None` through the public
+`App` configuration. The catalog runner alone selects `CATALOG_LEAN=1` at build
+time to omit the app's default compression feature. The JSON API group shares
+this source but retains its default compression-enabled build and blank runtime
+profile, including the original timers. Its HTTP
+source still bounds each upstream request to ten seconds. Error logging stays
+enabled. Other Corten apps and the framework's production defaults are unchanged.
+
+Axum/Maud uses its lean router here, not its `PROFILE=matched` middleware stack.
+Corten still uses its normal typed routes, escaped `html!` templates, document
+layout, assets and `req.page`: mandatory page security headers, cache metadata,
+error handling and other built-in stages remain framework costs. This is not
+identical middleware or a claim that all production protections have been matched.
+An `unstaged` data route is not a substitute: its sandbox would disable the
+catalog's working form. No output cache, pre-rendered response or framework
+internal bypass is used. Both sources retain the complete page/JSON correctness
+gate, browser checks, field filtering and fresh request-time rendering.
+
+The runner selects `PROFILE=catalog-lean` for the registry's catalog-page
+contenders in both correctness and timed containers. Other diagnostic adapters
+retain their existing profile; richer group runners keep their production or
+matched settings. This is one supported lean recipe per contender, not an
+unbounded search across runtimes, compilers or framework internals.
+
+| Contender | Supported lean configuration |
+|---|---|
+| Corten | No optional response compression or handler/header/send timers; normal page stages and error logs remain. |
+| Axum + Maud | Existing lean router without the optional matched production middleware. |
+| ASP.NET Razor | Minimum request/response data rates unset; native Kestrel header/keepalive timers remain at their defaults after infinite timers caused early connection closure in Linux checks. Razor rendering, source failures and logging remain. |
+| Express | Production EJS view cache; no ETag generation or HTTP header/request/keepalive timers; fresh response rendering remains. |
+| FastAPI | Uvicorn access logging disabled; error logging, worker count, event loop and parser selection unchanged. |
+| Gin | Release mode with `gin.New()` plus panic recovery, without the per-request access logger. |
+| Drogon | Gzip/Brotli disabled; warning/error logging, release build and existing thread selection retained. |
+
+These use public [Node HTTP options](https://nodejs.org/api/http.html),
+[Kestrel limits](https://learn.microsoft.com/aspnet/core/fundamentals/servers/kestrel/options),
+[Uvicorn settings](https://uvicorn.dev/settings/),
+[Gin router constructors](https://github.com/gin-gonic/gin/blob/v1.12.0/gin.go)
+and [Drogon configuration](https://github.com/drogonframework/drogon/blob/v1.9.14/lib/inc/drogon/HttpAppFramework.h).
+Different stacks still retain different mandatory stages and transport behavior;
+settings not safely supported as disabled stay unchanged. In particular, Uvicorn's
+keepalive setting stays at its normal value rather than incorrectly treating zero
+as an unlimited timeout. Raw container evidence and reports record the selected
+profile; historical evidence without it is not relabeled.
+
+Results measured before these settings changed retain their original settings.
+The next measurement establishes the lean configuration; do not relabel earlier
+numbers or attribute their gap to these settings without a matched A/B measurement.
+
 No comparative results are published for this workload yet. Its first round establishes a new
 baseline. Marketplace rounds `r1` through `r16` must not be described as before measurements of
 this page, or mixed into a catalog trend. Framework production settings can still differ;
@@ -93,7 +147,7 @@ Such failures remain incomplete and block timing; they do not become replayable 
 attempts or passing checks.
 
 Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT` to replay
-`catalog-saved-evidence/v2` observations without running Docker, Git or a browser.
+`catalog-saved-evidence/v2` or `catalog-saved-evidence/v3` observations without running Docker, Git or a browser.
 This schema requires the selected k6 image, platform and actual executable version;
 older evidence is not retroactively assigned that identity.
 The native producer preserves the fixture, checker receipts, native build/image
@@ -185,6 +239,74 @@ duplicate passes, unexpected apps/sources/targets or wrong identity bindings are
 only and disclose the stronger correctness gate. Ungrouped CLI defaults, summary shape and
 historical full-baseline validation remain unchanged. This integration is not a claim that a
 native group run has passed or that a dedicated-host baseline exists.
+
+### Completed timed request outcomes
+
+New group runs write `catalog-saved-evidence/v3`. This separates an observed
+load/request failure from an incomplete apparatus attempt and from a successful
+baseline. It does not diagnose the framework, event loop or underlying cause.
+The v2 replay rules remain unchanged; an old partial run cannot acquire v3 proof
+or become a new baseline by relabeling its summary or copying its raw metrics.
+
+All functional checks still pass before any timing. Warmup remains strictly
+successful. Every requested app/source/pass and fixed/64-user/256-user phase
+is retained, including phases after an observed timed request failure. No app,
+pass or unsuccessful request is filtered or retried. Request settings, CPU and
+memory budgets, duration, warmup, fixed rate and pass count are unchanged.
+
+The k6 producer adds exhaustive counters for successful responses, request
+timeouts (native error code 1050), HTTP 429/5xx responses, and invalid/unclassified
+responses. HTTP errors may use a different representation, such as Problem JSON
+or plain text, but remain failed requests, never successful pages. Unknown transport
+errors, other status codes and incorrect content types on 200 responses are not
+completed target outcomes. Counts,
+root checks, rates, completed iterations and all three threshold results must
+agree exactly. Existing full page/JSON content and browser correctness gates
+remain mandatory; timed requests still discard bodies and check status/type,
+not full response-body parity under load. Error-response media-type check failures
+remain visible and agree exactly with the check totals; successful responses must
+still pass the success media-type check. Every positive checker must finish before
+the first cold timing starts, across the entire selected group.
+
+Each phase retains `*-boundary.json` (`catalog-timed-phase/v1`): actual Docker
+command exit, independent side errors, before/after app/upstream/load identities,
+native commands, source environment, mounts, budgets and lifetime state. The
+load container must exit normally with code 0 for a passing phase or exactly 99
+for independently replayed crossed thresholds. Exit 99 alone proves nothing.
+Timeout/cancellation, OOM, restarts, unknown lifecycle, early termination,
+counter/sampler/copy errors and incomplete cleanup cannot complete an attempt.
+Side errors are preserved together even when k6 has already exited 99.
+
+V3 replay requires a successful `checker.json` boundary for every positive
+functional check, including peers of a timed-failed app. Both app and upstream
+must retain a valid no-termination state. The full retained lifetime state and
+restart count for each participant ID must agree across functional and timed
+observations, including the shared upstream. Cumulative CPU windows are checked
+by participant ID across all runs and passes in observation-clock order, not
+the app/source/pass order in the summary.
+
+Replay checks raw CPU deltas and cumulative continuity, raw/sample agreement,
+complete resource windows (no sample gap over two seconds), exact aggregates,
+immutable native images and unchanged source/cleanup provenance. App and load
+containers cannot be reused across separate runs/phases. Failed phases require
+observed load-generator CPU headroom (sampled peak below 80% of its quota);
+API-source phases additionally require upstream peak below 80% of one core.
+Only fixed-rate phases can retain drops, and they additionally require app
+average CPU at least 95% of its quota. These conservative eligibility conditions
+do not establish a causal capacity limit.
+
+An observed failure keeps native runner exit 1 and `baseline: false`, while a
+complete raw replay returns `attemptComplete: true` and the affected app's
+`outcome: "failed"`. That app is never comparison-eligible; fully passing peers
+retain their own eligibility. The saved verifier's exit 0 means a complete
+replayed attempt, not that every app passed. The strict report command still
+exits 1 for a failed baseline. Summary-only reports require an exact failure ledger
+derived from retained phases and a matching baseline disposition before labeling
+an attempt complete; missing or invented failures remain incomplete. This does
+not replace raw replay or retrofit old evidence. Reports expose all phase/pass outcome counts and
+median [minimum, maximum] ranges, separating successful req/s from attempted
+req/s, request failures and dropped work. Campaign host/source/lifecycle gates
+remain independent and unchanged.
 
 ### Explicit catalog-page droplet
 

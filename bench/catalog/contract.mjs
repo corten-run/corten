@@ -6,6 +6,8 @@ export const workload = "catalog-v1";
 export const sources = ["fixture", "api"];
 export const targets = ["page", "json"];
 export const phases = ["fixed", "sat64", "sat256"];
+export const leanProfile = "catalog-lean";
+export const leanApps = Object.freeze(groupDescriptor("catalog-page").apps);
 export function cpuSettings(env) {
   const quotas = { app: 1, load: 4, api: 2 };
   const used = new Map();
@@ -151,5 +153,9 @@ export function readLoad(summary) {
 export function aggregate(runs) {
   const result = { passes: runs.length };
   for (const key of ["rps", "p50", "p95", "p99", "cpuUsec", "perCpuSecond", "memAvgMiB", "memMaxMiB"]) result[key] = spread(runs.map((r) => r[key]));
+  if (runs.some((r) => r.outcome !== undefined)) {
+    for (const key of ["requests", "successfulRequests", "successfulRps", "failed", "timeouts", "httpErrors", "dropped"]) result[key] = spread(runs.map((r) => r[key]));
+    result.outcomes = { passed: runs.filter((r) => r.outcome === "passed").length, failed: runs.filter((r) => r.outcome === "failed").length };
+  }
   return result;
 }
