@@ -40,7 +40,8 @@ import { parseOn } from "./on.js";
 // Where the browser has no Trusted Types it is the identity.
 /**
  * The platform's Trusted Types, which TypeScript's DOM types do not have yet.
- * @typedef {{ createHTML(text: string): unknown, createScriptURL(url: string): unknown }} TrustedPolicy
+ * @typedef {{ toString(): string, toJSON(): string }} TrustedHTML
+ * @typedef {{ createHTML(text: string): TrustedHTML, createScriptURL(url: string): unknown }} TrustedPolicy
  * @typedef {{ createPolicy(name: string, rules: { createHTML(text: string): string, createScriptURL(url: string): string }): TrustedPolicy }} TrustedTypes
  */
 const trusted = (() => {
@@ -943,11 +944,12 @@ export function subscribe(url, handlers, { signal } = {}) {
  * reloads the page once it is in the document); with scripting on a browser never shows it, so
  * it is dropped. Markup the runtime fetched (`own`) goes through its Trusted Types policy; a
  * script's ({@link patch}) does not.
- * @param {string} text @param {boolean} [own]
+ * @param {string | TrustedHTML} text @param {boolean} [own]
  */
 function parse(text, own = true) {
   const template = document.createElement("template");
-  template.innerHTML = own ? trustedHTML(text) : text;
+  // lib.dom types this sink as string only; own requests carry text, patch() carries TrustedHTML.
+  template.innerHTML = /** @type {string} */ (own ? trustedHTML(/** @type {string} */ (text)) : text);
   for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
   return template.content;
 }
@@ -1008,7 +1010,11 @@ function modulesOf(node) {
  * Pages require Trusted Types, so a string from a script is refused (a `TypeError`), as at any
  * other sink: markup comes from the server. A test that needs one passes a `TrustedHTML` from a
  * policy the page allows.
- * @param {string} html
+ * To read a part of this page again, submit a hidden GET form marked `data-patch` instead:
+ * `form.requestSubmit()` (not `form.submit()`). Or render `ReadAgain::from` to read it after a
+ * server-chosen delay. Both draw the server's answer through the runtime's policy; fetching
+ * text yourself and passing it to patch() does not. See docs/guide/scripts.md#reading-a-part-again.
+ * @param {TrustedHTML} html
  * @param {AbortSignal} [signal] Nothing changes once it aborts.
  */
 export function patch(html, signal) {
@@ -1020,7 +1026,7 @@ export function patch(html, signal) {
 /**
  * {@link patch}, for a form's response: `sent` holds the values the form sent, so a field counts
  * as edited only when it changed after the request left; `took`, that the answer accepted them.
- * @param {string} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
+ * @param {string | TrustedHTML} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {boolean} [own] whether the runtime fetched `html` itself ({@link parse})
  * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
  * the patch's own tag takes its place, so the part's next read is the one on the page
