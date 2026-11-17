@@ -38,6 +38,8 @@ try {
   /** @param {string} name */
   const reportOf = (name) => drawn.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: ${name} `), timeout: 10000 }).then(() => true, () => false);
   await drawn.route(base + "/", async (route) => {
+    // The page's own load only: the runtime's read of its picks (`corten: action`) goes as it is.
+    if (route.request().headers().corten) return route.continue();
     const res = await route.fetch();
     const controls = [
       '<form><input type="number" name="delay" min="0" step="100" value="250"><input type="number" name="fresh" required>',
@@ -129,6 +131,22 @@ try {
     document.body.append(form);
   });
   check("dev mode reports such a control a patch draws", await patched);
+  const namedInvalid = reportOf("named-invalid");
+  const namedRegion = reportOf("named-region");
+  await drawn.evaluate(() => {
+    const form = document.createElement("form");
+    form.setAttribute("role", "alert");
+    const input = Object.assign(document.createElement("input"), { type: "number", name: "named-invalid", min: "1" });
+    input.setAttribute("value", "0");
+    const region = Object.assign(document.createElement("p"), { id: "named-region" });
+    region.setAttribute("role", "status");
+    for (const name of ["noValidate", "parentElement", "closest", "getAttribute", "id", "localName", "isConnected"]) {
+      form.append(Object.assign(document.createElement("input"), { type: "hidden", name }));
+    }
+    form.append(input, region);
+    document.body.append(form);
+  });
+  check("dev diagnostics read a form past controls named noValidate, parentElement, closest and the like", (await namedInvalid) && (await namedRegion));
   // What the user typed is theirs, not the page's: a bound a script moves past it is not reported.
   await drawn.evaluate(() => {
     const input = /** @type {HTMLInputElement} */ (document.querySelector('input[name="delay"]'));
@@ -158,6 +176,9 @@ try {
   const fieldErrors = [];
   shipped.on("console", (m) => m.type() === "error" && m.text().includes(" takes field ") && fieldErrors.push(m.text()));
   await shipped.route(base + "/", async (route) => {
+    // The page's own read of its picks (`corten: action`, a patch) goes as it is: one still out
+    // when the page closes would fail its fetch here.
+    if (route.request().headers().corten) return route.continue();
     const res = await route.fetch();
     const forms = [
       '<form id="ship"><input name="weight"><textarea name="note"></textarea>',
@@ -225,6 +246,7 @@ try {
     !!fieldErrors[5]?.startsWith("corten: ship_form.fill takes field weight as one <input>, and its form has input, input"),
     fieldErrors.join(" | "),
   );
+  await shipped.unrouteAll({ behavior: "ignoreErrors" });
   await shipped.close();
   // Bounded: a blocking call holds the event loop, so the stall watchdog could not stop it.
   execFileSync("docker", ["restart", "-t", "1", container], { stdio: "ignore", timeout: 60_000 });

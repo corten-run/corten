@@ -1596,6 +1596,36 @@ pub struct Field {
 /// # }
 /// ```
 ///
+/// So is a path that starts from a `<form>`, into it or past it, and a form's whole text: a
+/// control named `firstElementChild`, `nextElementSibling` or `textContent`, in the form or joined
+/// to it by `form=`, is the form's member of that name. Steps from every other element keep the
+/// property:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[component(view)]
+/// pub fn Notes<'a>(label: &'a str, note: &'a str, text: &'a str) -> impl Render {
+///     html! {
+///         <div>
+///             <form><p><span>{label}</span></p></form>
+///             <p>{note}</p>
+///             <form>{text}</form>
+///         </div>
+///     }
+/// }
+///
+/// # fn main() {
+/// let js = Notes.view.unwrap().js;
+/// let first = r#"Reflect.get(Element.prototype, "firstElementChild", this.el.firstElementChild)"#;
+/// assert!(js.contains(&format!("get label() {{ return {first}.firstElementChild.textContent; }}")), "{js}");
+/// let past = r#"Reflect.get(Element.prototype, "nextElementSibling", this.el.firstElementChild)"#;
+/// assert!(js.contains(&format!("get note() {{ return {past}.textContent; }}")), "{js}");
+/// assert!(js.contains(&format!(r#"get text() {{ return Reflect.get(Node.prototype, "textContent", {past}.nextElementSibling); }}"#)), "{js}");
+/// assert!(js.contains(&format!("set text(v) {{ text({past}.nextElementSibling, v); }}")), "{js}");
+/// # }
+/// ```
+///
 /// An `<input>`'s `value` and `checked` are what it shows now, which the user changes: the view
 /// reads and writes them as properties (and writes the default a form reset goes back to).
 ///
@@ -2949,6 +2979,11 @@ pub(crate) const UPLOAD_MODULE: &str = "corten-upload";
 
 /// [`UPLOAD_MODULE`]'s source.
 pub(crate) const UPLOAD_JS: &str = include_str!("../js/dist/upload.js");
+
+/// The reads of the parts a page waits for (`ReadAgain::now`, [`crate::PART_JS`]): noted by the
+/// tag that draws one, so the page's head preloads it with the runtime (served beside it, at
+/// [`crate::part_path`], not with the app's scripts). Not a name a component's script can have.
+pub(crate) const PART_MODULE: &str = "corten-part";
 
 /// Notes that the page rendering uses script module `name`, so its head loads it.
 pub(crate) fn uses(name: &'static str) {
