@@ -4835,8 +4835,9 @@ rules something out.
     redirect's when there was one, with the `#fragment` of the form's `action` or `formaction`,
     as the browser does for the form without JavaScript (a fragment a redirect's `Location` names
     itself is not seen, as `fetch` does not show it, the same as for a link the runtime follows);
-    the same address again adds no entry. What the user typed outside the part and did not send
-    is kept for Back to the entry left, as for a link followed. A patch it cannot draw whole (it
+    the same address again adds no entry. What the user typed and did not send, in the part too,
+    and where the screen was scrolled are kept for Back to the entry left, as for a link followed,
+    read once the patch has passed the check below and before it draws anything. A patch it cannot draw whole (it
     throws, is empty, has an element with no place on the page, or adds to one, `data-append`,
     which no address's page is) draws nothing and is followed by a read of the page at the
     address, by a navigation there, as the browser loads it, and so is an answer that is a page
@@ -4847,11 +4848,20 @@ rules something out.
     loads only the last form sent, so the last one's answer is the screen and its address the one
     entry, whichever answer comes first; one sent while a navigation is on its way (a link's page,
     a traversal) is left to the browser, which drops that navigation for the form's, and the
-    runtime reads the page at its address. The runtime keeps, in memory, the entries such forms
+    runtime reads the page at its address. A GET sent while a write of the same form is on its way
+    (a Save button's `formmethod="post"`) waits for the write's answer, as any `data-patch`
+    form's does, and is then sent as at the press, from the form that answer drew, without a second
+    `submit` event: its address follows too. The runtime keeps, in memory, the entries such forms
     made at the path of the page on screen (the document's, then that of each page a navigation
     draws), and the one each was sent from when it is at that path too, and a traversal between
     two of them reads the destination as the form did (`corten: action`, which the HTTP cache can
-    answer) and applies its patch, the rest of the screen and the focus staying. A page of that
+    answer) and applies its patch, the rest of the screen and the focus staying. What the user
+    typed in that part on that entry and did not send is put back in the part drawn, the fields
+    outside it keeping what they have now, and the entry's scroll is restored once the patch is
+    drawn, from where the module kept it as the entry was left: such a traversal's scroll is the
+    module's (`scroll: "manual"`), since Firefox restores an intercepted traversal's scroll as
+    the address changes, against the screen being left, which a shorter part can leave too short
+    to scroll back to where the entry was. A page of that
     route read since (a link to it, Back to an entry read as a page) is the same screen, its part
     drawn for its entry's address, so the entries stay. A form sent to another route's address
     makes no patch entry, nor do two entries at that address, since that route's patch drawn into
@@ -4874,8 +4884,8 @@ rules something out.
     as a module script, and the runtime loads it with a page or patch it inserts that has one, so
     a marked form is the module's from its first submit. Corten serves it with any app's assets,
     a component script of the app's or not. The runtime every page loads keeps only the hooks the
-    module needs: a marked form's submit handed to it, a traversal asked of it before the page is
-    read, a patch answer drawn by it and a page answer given to it, a check `apply` runs before it
+    module needs: a marked form's submit handed to it, and a submit of one that waited for a
+    write, a traversal asked of it before the page is read, a patch answer drawn by it and a page answer given to it, a check `apply` runs before it
     draws, and the runtime's functions the module calls. Until the module has loaded, or if it
     fails to, a marked form is sent as any GET form is and the page at its address is read, as
     without JavaScript; so is every marked form of an app with no static files and no components,
@@ -4908,27 +4918,34 @@ rules something out.
     for and the browser's own form does not do; a hook for a script to push the address and answer
     the traversal, a second way to do what the mark does, with URLs written in scripts (README
     Value 5); and keeping each patch in memory to draw on Back, which the HTTP cache does already
-    and would show a stale part. Without the Navigation API, patching and leaving the address as
+    and would show a stale part. Sending a submit that waited for a write by `requestSubmit()`,
+    which would run the form's submit handlers a second time for one press, or drawing it as a
+    patch that leaves the address, which a reload loses. Leaving these traversals' scroll to the
+    browser, which restores it in Firefox before the patch is drawn. Without the Navigation API, patching and leaving the address as
     an unmarked form does was not chosen either: a reload would show another scope than the screen
     did, the error the mark is there to end, where a full load costs bytes (README conflict order 1
     over 2).
 
-    What it costs, at this Choice's last build: the runtime every page loads is 261 bytes larger
-    raw (43,620 to 43,881), 133 with gzip (15,407 to 15,540) and 112 with brotli (13,925 to
-    14,037), paid once a release by every user. Of the gzip bytes, measured by taking each out of
-    the minified build: the runtime's functions the module calls 27, the traversal hook 19,
-    handing the submit over 16, loading the module with inserted markup 13, the two answer hooks
-    in `send` 20, the module's name 5 and `apply`'s check 6, 109 together; the other 24 are the
-    two parameters the hooks add to `apply` and `send` and the minifier's names, a character
-    longer where the runtime has more of them. None can leave, being where the runtime hands the
-    module what only it sees (the submit, the traversal, the answer, a page or patch it inserts)
-    or where the module calls in. The module is 2,763 bytes raw, 1,348 with gzip and 1,168 with
-    brotli,
-    fetched once (its URL is versioned) by a page that draws a marked form, whose head carries its
-    `<script type="module">` tag, and by no other page. A submit reads one attribute; a marked one
-    cancels the other marked submits on their way, its answer pushes an entry, forgets the entries
-    it dropped and marks the current nav link, and a traversal looks the pending submits over and
-    two keys up in a set. A traversal whose patch read is answered by anything but a patch (a
+    What it costs, at this Choice's last build: the runtime every page loads is 308 bytes larger
+    raw (43,620 to 43,928), 155 with gzip (15,407 to 15,562) and 129 with brotli (13,925 to
+    14,054), paid once a release by every user. Each hook's share was measured by replacing its
+    code in the minified build with what that code is without it (the hook's statement removed, or
+    the call it wraps called directly) and compressing again: alone, the runtime's functions and
+    state the module uses take 32 bytes of gzip, the traversal hook 20, handing the submit over 20,
+    loading the module with inserted markup 14, the page hook in `send` 10, the patch hook in
+    `send` 10, a submit that waited for a write handed over 7, `apply`'s check 6 and the module's
+    name 5. Gzip's shares are not additive: all of them taken out together save 128 bytes, leaving
+    27 over main's runtime, which are the parameters the hooks add (`apply`'s check, `send`'s
+    answers, where a waiting submit was pressed) and the minifier's names, a character longer where
+    the runtime has more of them. None of the hooks can leave, being where the runtime hands the
+    module what only it sees (the submit, a submit that waited, the traversal, the answer, a page
+    or patch it inserts) or where the module calls in. The module is 3,405 bytes raw, 1,610 with
+    gzip and 1,418 with brotli, fetched once (its URL is versioned) by a page that draws a marked
+    form, whose head carries its `<script type="module">` tag, and by no other page. A submit reads
+    one attribute; a marked one cancels the other marked submits on their way, keeps what was typed
+    and the scroll of the entry it leaves, pushes an entry, forgets the entries it dropped and marks
+    the current nav link, and a traversal looks the pending submits over, two keys up in a set and,
+    once its patch is drawn, the typed fields of the part, and scrolls once. A traversal whose patch read is answered by anything but a patch (a
     page, a redirect, an error) or cannot be drawn whole costs a second round trip, the page read
     after it, as does a submit answered by a page or by a patch that cannot be drawn whole; each
     is a route that does not draw its part as the guide asks, or a failure. On the server,

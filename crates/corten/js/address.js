@@ -31,7 +31,13 @@ const fromHere = (url) => url !== "" && new URL(url).origin === location.origin;
  */
 let screenPath = location.pathname;
 let drawsNone = false;
-navigation?.addEventListener("navigate", (event) => (drawsNone = event.destination.sameDocument && event.navigationType !== "traverse"));
+navigation?.addEventListener("navigate", (event) => {
+  drawsNone = event.destination.sameDocument && event.navigationType !== "traverse";
+  // Where the entry left was scrolled, read before anything is drawn: Back or Forward to it by its
+  // patch puts it there again ({@link read}).
+  const key = navigation?.currentEntry?.key;
+  if (!drawsNone && key && addressed.has(key)) places.set(key, [scrollX, scrollY]);
+});
 navigation?.addEventListener("navigatesuccess", () => drawsNone || (screenPath = location.pathname));
 
 /**
@@ -41,6 +47,15 @@ navigation?.addEventListener("navigatesuccess", () => drawsNone || (screenPath =
  * @type {Set<string>}
  */
 const addressed = new Set();
+
+/**
+ * Where each entry a marked form's patch left or Back and Forward between them left was scrolled,
+ * by key, read before its screen changed. A traversal that draws the patch restores it itself, once
+ * the patch is drawn: the browser's own restoring, which Firefox does as the address changes,
+ * would meet the screen it leaves, which may be shorter.
+ * @type {Map<string, [number, number]>}
+ */
+const places = new Map();
 
 /**
  * Refuses a patch that is not the page at an address: one with no element, an element with no
@@ -61,12 +76,14 @@ function check(content) {
 
 /**
  * The runtime's `apply` with {@link check}: whether the patch was drawn whole. One that throws as
- * it is drawn was not either. An abort is the caller's: it rejects.
- * @param {Core} core @param {string} html @param {AbortSignal} signal
- * @param {Parameters<Core[0]>[2]} sent @param {boolean | undefined} took @param {Set<string>} [within]
+ * it is drawn was not either. An abort is the caller's: it rejects. `before` runs once the patch
+ * passed the check, before it draws anything.
+ * @param {Core} core @param {Parameters<Core[0]>[0]} html @param {AbortSignal} signal
+ * @param {Parameters<Core[0]>[2]} sent @param {boolean | undefined} took @param {Set<string> | undefined} within
+ * @param {(content: DocumentFragment) => void} before
  */
-const drawWhole = ([apply], html, signal, sent, took, within) =>
-  apply(html, signal, sent, took, true, undefined, within, check).then(
+const drawWhole = ([apply], html, signal, sent, took, within, before) =>
+  apply(html, signal, sent, took, true, undefined, within, (content) => (check(content), before(content))).then(
     () => true,
     (error) => {
       if (signal.aborted) throw error;
@@ -81,29 +98,30 @@ const drawWhole = ([apply], html, signal, sent, took, within) =>
  * browser elsewhere, as without JavaScript. One sent while a navigation is on its way (a link's
  * page, a traversal) is left to the browser too, which drops that navigation for the form's, as
  * it does without JavaScript: the runtime reads the page at the form's address in its place.
- * Another marked form's submit still on its
- * way is dropped, as a navigation drops the page asked before it, since it would draw an older
- * choice over this one. A patch drawn whole puts the address it asked for in history
- * ({@link address}); a page, or a patch not drawn whole, has the page at that address read
- * instead, as the browser reads it for the form without JavaScript: in an entry of its own (none
- * when it is the address already), the form busy until it is drawn.
+ * Another marked form's submit still on its way is dropped, as a navigation drops the page asked
+ * before it, since it would draw an older choice over this one. A patch drawn whole puts the
+ * address it asked for in history ({@link address}); a page, or a patch not drawn whole, has the
+ * page at that address read instead, as the browser reads it for the form without JavaScript: in
+ * an entry of its own (none when it is the address already), the form busy until it is drawn.
+ * A submit that waited for a write of the form's answer comes again, with no submit event
+ * (`sendAgain`), with `within`, where it was pressed.
  * @param {Event} event @param {HTMLFormElement} form
  * @param {HTMLElement | null | undefined} by the button that sent it
- * @param {Parameters<Core[8]>[2]} sends how the form is sent @param {Core} core
+ * @param {Parameters<Core[8]>[2]} sends how the form is sent @param {Core} core @param {Set<string>} [within]
  */
-export function submit(event, form, by, sends, core) {
+export function submit(event, form, by, sends, core, within) {
   const get = sends.method === "get";
   if (get && (!navigation || navigation.transition)) return;
-  const [, , , submits, go, LOAD, SOURCE, , send] = core;
+  const [, remember, , submits, go, LOAD, SOURCE, , send] = core;
   event.preventDefault();
-  if (!get) return void send(form, by, sends);
+  if (!get) return void send(form, by, sends, within);
   for (const [other, pending] of submits) if (other !== form && !pending.write && own.hasAttribute.call(other, "data-address")) pending.controller.abort();
   let at = "";
   const read = () => {
     submits.delete(form);
     go(at, { info: { [LOAD]: true, [SOURCE]: by ?? form } });
   };
-  send(form, by, sends, undefined, {
+  send(form, by, sends, within, {
     // An answer that is a page (not a redirect the server asks for) is read at the address.
     page(res, url) {
       // The address, its `#fragment` too, which the browser keeps for the form without JavaScript,
@@ -119,7 +137,16 @@ export function submit(event, form, by, sends, core) {
       return true;
     },
     async patch(html, signal, sent, took, _own, _asked, within) {
-      const whole = await drawWhole(core, html, /** @type {AbortSignal} */ (signal), sent, took, within);
+      // The entry left, as it is before the patch changes it: what the user typed there and had
+      // not sent (`remember`), the patch's part too, and where it was scrolled, for Back to it.
+      const leave = () => {
+        const from = navigation?.currentEntry?.key;
+        const main = document.querySelector("main");
+        if (at === location.href || !from) return;
+        if (main) remember(from, main);
+        places.set(from, [scrollX, scrollY]);
+      };
+      const whole = await drawWhole(core, html, /** @type {AbortSignal} */ (signal), sent, took, within, leave);
       signal?.throwIfAborted();
       if (whole) address(at, core);
       else read();
@@ -130,22 +157,20 @@ export function submit(event, form, by, sends, core) {
 /**
  * Puts `to` in the address bar once its patch is drawn, as the browser does for the form without
  * JavaScript: in a new history entry, none when it is the address already. What the user typed in
- * the entry left is kept for Back to it (`remember`), as for a link followed.
+ * the entry left, and where it was scrolled, was kept as the patch was about to be drawn.
  * @param {string} to @param {Core} core
  */
-function address(to, [, remember, , , , , , markCurrent]) {
+function address(to, [, , , , , , , markCurrent]) {
   if (to === location.href) return;
   const from = navigation?.currentEntry?.key;
   // Only entries at the screen's path: the entry it was sent from shows the same screen as the new one.
   const here = new URL(to).pathname === screenPath;
   if (here && from && location.pathname === screenPath) addressed.add(from);
-  const main = document.querySelector("main");
-  if (main && from) remember(from, main);
   history.pushState(null, "", to);
   if (here) addressed.add(navigation?.currentEntry?.key ?? "");
   // The entries the new one dropped (those it was ahead of) are forgotten.
   const live = new Set(navigation?.entries().map((e) => e.key));
-  for (const key of addressed) if (!live.has(key)) addressed.delete(key);
+  for (const kept of [addressed, places]) for (const key of kept.keys()) if (!live.has(key)) kept.delete(key);
   // A nav link to the new address is the current one, as a navigation marks it.
   markCurrent();
 }
@@ -153,9 +178,9 @@ function address(to, [, remember, , , , , , markCurrent]) {
 /**
  * Back or Forward, from the runtime's `navigate`: between two entries a marked form's patches drew
  * ({@link addressed}) at the screen's path, the patch again ({@link read}), the rest of the screen
- * and the focus staying. Not while a write is on its way, which the navigation cancels but which
- * may land: the patch would leave what it changed outside the part as it was. Otherwise nothing,
- * and the runtime reads the page.
+ * and the focus staying, and the scroll restored once it is drawn. Not while a write is on its way,
+ * which the navigation cancels but which may land: the patch would leave what it changed outside
+ * the part as it was. Otherwise nothing, and the runtime reads the page.
  * @param {NavigateEvent} event @param {URL} url
  * @param {{ handler: () => Promise<unknown> }} page how the runtime reads the page at `url`
  * @param {Core} core
@@ -165,7 +190,7 @@ export function traverse(event, url, page, core) {
   const submits = core[3];
   const between = addressed.has(event.destination.key) && addressed.has(navigation?.currentEntry?.key ?? "");
   if (!between || url.pathname !== screenPath || Array.from(submits.values()).some((p) => p.write)) return;
-  return { focusReset: "manual", handler: () => read(url, event.signal, page.handler, core) };
+  return { focusReset: "manual", scroll: "manual", handler: () => read(url, event, page.handler, core) };
 }
 
 /**
@@ -176,11 +201,23 @@ export function traverse(event, url, page, core) {
  * read instead, as for any other entry. The traversal's signal ends it, as a newer navigation does
  * any visit; the screen stays, so the fields outside the patch keep what the user typed (kept for
  * the entry left too, as a page read keeps it), and the patch keeps a field they are editing as
- * any patch does.
- * @param {URL} url @param {AbortSignal} signal @param {() => Promise<unknown>} visit @param {Core} core
+ * any patch does. What the user typed in the part on that entry and had not sent is put back in
+ * the part drawn for it, and the entry's scroll is restored once it is drawn ({@link places}).
+ * @param {URL} url @param {NavigateEvent} event @param {() => Promise<unknown>} visit @param {Core} core
  */
-async function read(url, signal, visit, core) {
-  const [, remember, drawn] = core;
+async function read(url, event, visit, core) {
+  const [, remember, drawn, , , , , , , typedIn, putTyped] = core;
+  const { signal, destination } = event;
+  const key = destination.key;
+  // Where the entry was scrolled, or, for one this module did not see left, where the browser keeps it.
+  const scroll = () => {
+    const at = places.get(key);
+    if (at) scrollTo(at[0], at[1]);
+    else
+      try {
+        event.scroll();
+      } catch {}
+  };
   // The page: the traversal kept focus for the patch, so focus the swap left where it was (outside
   // `<main>`) or let fall to the body (from what it took away, or before, with Tab going on from
   // there) goes where the browser puts it for a page, the document's start, which the next Tab
@@ -190,7 +227,9 @@ async function read(url, signal, visit, core) {
     await visit();
     const body = document.body;
     const now = document.activeElement;
-    if (signal.aborted || (now && now !== was && now !== body)) return;
+    if (signal.aborted) return;
+    scroll();
+    if (now && now !== was && now !== body) return;
     const made = !body.hasAttribute("tabindex");
     if (made) body.tabIndex = -1;
     body.focus({ preventScroll: true });
@@ -208,9 +247,27 @@ async function read(url, signal, visit, core) {
   if (html === null) return page();
   const left = navigation?.transition?.from.key;
   const main = document.querySelector("main");
-  if (main && left) remember(left, main);
-  const whole = await drawWhole(core, html, signal, null, undefined);
+  /** @type {(string | null)[]} */
+  let ids = [];
+  const whole = await drawWhole(core, html, signal, null, undefined, undefined, (content) => {
+    if (main && left) remember(left, main);
+    ids = Array.from(content.children, (el) => own.getAttribute.call(el, "id"));
+  });
   signal.throwIfAborted();
   if (!whole) return page();
+  const typed = typedIn.get(key);
+  if (main && typed) {
+    // Only the fields in what the patch drew: those outside it stay as the user has them now.
+    const parts = ids.map((id) => id && document.getElementById(id));
+    const isField = (/** @type {Element} */ el) => own.matches.call(el, "input, textarea, select");
+    putTyped(
+      main,
+      typed.filter(([at, , nth]) => {
+        const f = Array.from(main.querySelectorAll(at)).filter(isField)[nth];
+        return !!f && parts.some((part) => !!part && part.contains(f));
+      }),
+    );
+  }
+  scroll();
   if (navigation?.currentEntry) drawn(navigation.currentEntry.key);
 }

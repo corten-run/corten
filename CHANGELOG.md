@@ -11,10 +11,12 @@ Corten is pre-1.0, so any minor version may change the API.
   JavaScript, so a filter or scope that redraws one part survives a reload, a bookmark and a
   shared link. Back and Forward between the entries such forms made at the path of the page on
   screen read the patch again (`corten: action`, which the HTTP cache can answer) rather than the
-  page; entries at another route's address, a traversal while a write is on its way or after one
-  redirected, an answer that is not a patch and a patch the runtime cannot draw whole are read as
-  a page. Sending a marked form cancels any other one still on its way, so the last one sent is
-  the screen. `html!` refuses the mark on anything but a `<form>`, on a form without `data-patch`
+  page, putting back what was typed in the part and not sent and, once the part is drawn, where
+  the entry was scrolled; entries at another route's address, a traversal while a write is on its
+  way or after one redirected, an answer that is not a patch and a patch the runtime cannot draw
+  whole are read as a page. Sending a marked form cancels any other one still on its way, so the
+  last one sent is the screen; a GET sent while a write of the same form is on its way is sent
+  once the write's answer is drawn, and its address follows too. `html!` refuses the mark on anything but a `<form>`, on a form without `data-patch`
   and on one whose `method` is `post` or `dialog`. A link or form that carries the scope, a
   `keep_query` form included, is drawn by the patch. The runtime that does this is a module of
   its own, `corten-address`, which only a page with a marked form loads; until it has, the form is

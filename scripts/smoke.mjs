@@ -5993,6 +5993,103 @@ async function run(browser) {
           restored.forward.y === 700 && restored.asked.join() === "action ?scope=day,action ?scope=week",
         JSON.stringify(restored),
       );
+      // A field in the part that the patch takes away, typed in and not sent, comes back with the
+      // entry it was typed in: kept before the patch is drawn, and put back in the part drawn
+      // again by Back. Loaded at an address of its own (the Firefox entry drop above).
+      const panelNote = () => scope.evaluate(() => /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=panel_note]"))?.value ?? null);
+      await scope.goto(`${base}/smoke/scope?scope=all`);
+      await scope.fill("input[name=note]", "draft");
+      await scope.fill("input[name=panel_note]", "inside draft");
+      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      const takenAway = (await panelNote()) === null;
+      await scope.getByRole("link", { name: "Elsewhere", exact: true }).click();
+      await scope.waitForFunction(() => location.pathname === "/smoke/scope-elsewhere" && !document.querySelector("input[name=note]"), undefined, { timeout: 5000 }).catch(() => {});
+      const insideWeek = await traverse("back");
+      asked.length = 0;
+      const inside = { takenAway, week: insideWeek, at: await traverse("back"), note: await note(), panel: await panelNote(), asked: asked.splice(0) };
+      check(
+        "a field a data-address form's patch takes away, typed in and not sent, is put back when Back draws its entry's part again",
+        inside.takenAway && inside.week === "/smoke/scope?scope=week" && inside.at === "/smoke/scope?scope=all" && inside.note === "draft" &&
+          inside.panel === "inside draft" && inside.asked.join() === "action ?scope=all",
+        JSON.stringify(inside),
+      );
+      // Back and Forward between entries whose parts differ in height: a tall part, a short one that
+      // leaves the screen too short to stay where it was, and a tall one again. Each entry's scroll
+      // is restored once its part is drawn, not against the shorter screen being left.
+      /** Sends the form for `value`, by its Week button given that value. @param {string} value */
+      const sendFor = (value) =>
+        answered(() =>
+          scope.evaluate((value) => {
+            const week = /** @type {HTMLButtonElement} */ (document.querySelector("#smoke-scope button[value=week]"));
+            week.value = value;
+            week.form?.requestSubmit(week);
+          }, value),
+        );
+      await scope.goto(`${base}/smoke/scope?scope=long`);
+      await scope.evaluate(() => scrollTo(0, 4000));
+      const tallAt = await y();
+      await sendFor("short");
+      const shortAt = await y();
+      await sendFor("longer");
+      await scope.evaluate(() => scrollTo(0, 3000));
+      const tallAgainAt = await y();
+      asked.length = 0;
+      /** Goes back or forward, and says where it is and how far down. @param {"back" | "forward"} way */
+      const step = async (way) => ({ at: await traverse(way), y: await y() });
+      const heights = { tallAt, shortAt, tallAgainAt, steps: [await step("back"), await step("back"), await step("forward"), await step("forward")], asked: asked.splice(0) };
+      const near = (/** @type {unknown} */ a, /** @type {unknown} */ b) => typeof a === "number" && typeof b === "number" && Math.abs(a - b) <= 2;
+      const [shortBack, tallBack, shortForward, tallForward] = heights.steps;
+      check(
+        "Back and Forward between a data-address form's entries of different heights restore each entry's scroll once its part is drawn",
+        tallAt === 4000 && typeof shortAt === "number" && shortAt < 4000 && tallAgainAt === 3000 &&
+          shortBack.at === "/smoke/scope?scope=short" && near(shortBack.y, shortAt) && tallBack.at === "/smoke/scope?scope=long" && near(tallBack.y, 4000) &&
+          shortForward.at === "/smoke/scope?scope=short" && near(shortForward.y, shortAt) && tallForward.at === "/smoke/scope?scope=longer" && near(tallForward.y, 3000) &&
+          heights.asked.join() === "action ?scope=short,action ?scope=long,action ?scope=short,action ?scope=longer",
+        JSON.stringify(heights),
+      );
+      // A GET sent while a write of the same form (its Save button) is on its way is sent once the
+      // write's answer is drawn, from the form that answer drew, and as at the press: its address
+      // goes in history, in one entry, and a reload draws its scope.
+      await scope.goto(`${base}/smoke/scope`);
+      const saveAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope";
+      /** @type {() => void} */
+      let letSaveGo = () => {};
+      const saveHeld = new Promise((resolve) => (letSaveGo = () => resolve(undefined)));
+      await scope.route(saveAsked, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        await saveHeld;
+        await route.continue().catch(() => {});
+      });
+      const beforeSave = await entries();
+      const saveSent = scope.waitForRequest((r) => r.method() === "POST" && saveAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
+      /** Sends the scope form by its button for `value`. @param {string} value */
+      const press = (value) =>
+        scope.evaluate((value) => {
+          const button = /** @type {HTMLButtonElement} */ (document.querySelector(`#smoke-scope button[value=${value}]`));
+          button.form?.requestSubmit(button);
+        }, value);
+      await press("saved");
+      const saving = await saveSent;
+      await press("week");
+      asked.length = 0;
+      letSaveGo();
+      const sentAfter = await scope
+        .waitForFunction(
+          () => location.search === "?scope=week" && document.querySelector("#smoke-scope output")?.textContent === "week" && !document.querySelector("main form[aria-busy]"),
+          undefined,
+          { timeout: 5000 },
+        )
+        .then(() => true, () => false);
+      await scope.unroute(saveAsked);
+      const queued = { saving, sentAfter, at: await at(), added: (await entries()) - beforeSave, shown: await shown(), asked: asked.splice(0), reloaded: { at: "", shown: "" } };
+      await scope.reload();
+      queued.reloaded = { at: await at(), shown: (await shown()) ?? "" };
+      check(
+        "a GET a data-address form sent while its own write was on its way puts its address in history once the write's answer is drawn",
+        queued.saving && queued.sentAfter && queued.at === "/smoke/scope?scope=week" && queued.added === 1 && queued.shown === "week" &&
+          queued.asked.join() === "action ?scope=week" && queued.reloaded.at === "/smoke/scope?scope=week" && queued.reloaded.shown === "week",
+        JSON.stringify(queued),
+      );
     }
     await scope.close();
   }

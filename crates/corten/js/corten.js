@@ -2951,10 +2951,10 @@ const submits = new Map();
  * What of the runtime the address module (address.js) calls, in this order: an array, whose
  * minified build names nothing, since every page carries it. `drawn` says which entry's page
  * `<main>` shows now.
- * @typedef {[apply: typeof apply, remember: typeof remember, drawn: (key: string) => void, submits: typeof submits, go: typeof go, load: typeof LOAD, source: typeof SOURCE, markCurrent: typeof markCurrent, send: typeof send]} AddressCore
+ * @typedef {[apply: typeof apply, remember: typeof remember, drawn: (key: string) => void, submits: typeof submits, go: typeof go, load: typeof LOAD, source: typeof SOURCE, markCurrent: typeof markCurrent, send: typeof send, typedIn: typeof typedIn, putTyped: typeof putTyped]} AddressCore
  */
 /** @type {AddressCore} */
-const addressCore = [apply, remember, (key) => (drawnFor = key), submits, go, LOAD, SOURCE, markCurrent, send];
+const addressCore = [apply, remember, (key) => (drawnFor = key), submits, go, LOAD, SOURCE, markCurrent, send, typedIn, putTyped];
 
 /**
  * A form's entries as the browser sends them in a body that is not multipart, or in a GET's
@@ -2975,8 +2975,12 @@ addEventListener("submit", patchSubmit);
 // submit, and whatever sends the form, sees the key.
 addEventListener("submit", (event) => event.target instanceof HTMLFormElement && fillSubmitKeys(event.target), true);
 
-/** Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. @param {Event} event */
-function patchSubmit(event) {
+/**
+ * Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. `within` is where
+ * it was pressed, for a submit that waited for a write ({@link sendAgain}).
+ * @param {Event} event @param {Set<string>} [within]
+ */
+function patchSubmit(event, within) {
   const form = event.target;
   if (event.defaultPrevented || !(form instanceof HTMLFormElement) || !hasAttr(form, "data-patch")) return;
   const submitter = /** @type {SubmitEvent} */ (event).submitter;
@@ -2985,9 +2989,9 @@ function patchSubmit(event) {
   if (sends.method === "dialog") return;
   // A form marked `data-address` is the address module's to send, and until it has loaded the
   // browser's: the page at the address, as for any GET form.
-  if (hasAttr(form, "data-address")) return /** @type {AddressModule | undefined} */ (modules.get(ADDRESS))?.submit(event, form, submitter, sends, addressCore);
+  if (hasAttr(form, "data-address")) return /** @type {AddressModule | undefined} */ (modules.get(ADDRESS))?.submit(event, form, submitter, sends, addressCore, within);
   event.preventDefault();
-  send(form, submitter, sends);
+  send(form, submitter, sends, within);
 }
 
 /**
@@ -3015,8 +3019,7 @@ function asking(form, submitter) {
  * @param {Set<string>} [within] where it was pressed ({@link asking}): read now, unless it waited
  *   for a write's answer, which read it at the press
  * @param {import("./address.js").Answers} [address] for a GET form marked `data-address`,
- *   what the address module does with its answers: not for one that waited for a write of the same
- *   form, which is drawn as a patch and leaves the address
+ *   what the address module does with its answers
  */
 async function send(form, submitter, sends, within = asking(form, submitter), address) {
   const data = new FormData(form, submitter);
@@ -3183,7 +3186,9 @@ async function send(form, submitter, sends, within = asking(form, submitter), ad
  * id; one it removed (its row is gone) sends nothing, and so does one without an id that is no
  * longer on the page, whose values are the ones from before the answer.
  * The button is the one pressed, or the one the answer put in its place; where it was is where it
- * was pressed (`within`), not where the answer drew it.
+ * was pressed (`within`), not where the answer drew it. A form marked `data-address` is the address
+ * module's to send, as at the press, so a GET puts its address in history; one the module would
+ * leave to the browser (a navigation on its way, which drops the page this was sent from) sends nothing.
  * @param {HTMLFormElement} form @param {HTMLElement | null} submitter @param {Set<string>} [within]
  */
 function sendAgain(form, submitter, within) {
@@ -3199,7 +3204,9 @@ function sendAgain(form, submitter, within) {
             el.localName === submitter.localName &&
             ["type", "name", "value", "formaction", "formmethod", "formenctype", "formnovalidate"].every((a) => el.getAttribute(a) === submitter.getAttribute(a)),
         );
-  if (by !== undefined) send(now, by, sendsAs(now, by), within);
+  // Sent as the press was, without a submit event: one the address module takes, a GET of a marked
+  // form, puts its address in history.
+  if (by !== undefined) patchSubmit(/** @type {Event} */ (/** @type {unknown} */ ({ target: now, submitter: by, preventDefault() {} })), within);
 }
 
 /**

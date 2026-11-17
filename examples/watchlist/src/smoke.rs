@@ -62,8 +62,8 @@ pub mod url {
 
     /// A screen whose scope form says its answer is the page at the address it asks for
     /// (`data-address`, #1406): with JavaScript the address answers the scope's panel as a patch,
-    /// and without it, or on a reload, the whole screen.
-    #[route("/smoke/scope", get = scope_page)]
+    /// and without it, or on a reload, the whole screen. Its Save button posts the form here.
+    #[route("/smoke/scope", get = scope_page, post = scope_save)]
     #[derive(Default)]
     pub struct Scope {
         #[route(query)]
@@ -220,12 +220,18 @@ pub struct ScopeQuery {
 #[derive(Id)]
 struct SmokeScopeId;
 
+#[derive(Id)]
+struct SmokeScopeFormId;
+
 /// The scope's panel with its form, one patch, so the form always shows the scope the panel does.
 /// The form is marked `data-address`: once its answer is drawn, the address is the one it asked
 /// for, and Back and Forward read this patch again. A button's `formaction`, and another marked
 /// form's `action`, name a place on the page, which the address keeps; another button's is
 /// another route's. A form that carries the scope (`keep_query`) is drawn by the patch too, so it
-/// sends the scope on screen, not the one the page was drawn with.
+/// sends the scope on screen, not the one the page was drawn with. The form has an id, so a GET
+/// sent while its Save is on its way is sent from the form Save's answer draws. The first scope's
+/// panel has a field the others do not, and a scope that starts with long a panel taller than the
+/// rest of the screen.
 #[component]
 fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
     let f = ScopeQuery::FIELDS;
@@ -233,12 +239,13 @@ fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
     let at = url::Scope { q: ScopeQuery { scope: (scope != "all").then(|| scope.to_string()) } };
     html! {
         <section id={SmokeScopeId}>
-            <form method="get" action={&here} data-patch data-address>
+            <form id={SmokeScopeFormId} method="get" action={&here} data-patch data-address>
                 <button name={f.scope} value="day">"Day"</button>
                 <button name={f.scope} value="week">"Week"</button>
                 <button name={f.scope} value="month" formaction={here.at(SmokeScopeId)}>"Month"</button>
                 <button name={f.scope} value="far" formaction={url::ScopeElsewhere::default()}>"Elsewhere"</button>
                 <button name={f.scope} value="moved" formaction={url::ScopeMoved.at(SmokeScopeId)}>"Moved"</button>
+                <button name={f.scope} value="saved" formmethod="post">"Save"</button>
             </form>
             <form method="get" action={here.at(SmokeScopeId)} data-patch data-address>
                 <button name={f.scope} value="quarter">"Quarter"</button>
@@ -247,6 +254,16 @@ fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
                 {corten::form::keep_query(&at, &html! { <button>"Read this scope again"</button> })}
             </form>
             <p>"Scope: "<output>{scope}</output></p>
+            if scope == "all" {
+                <label>"Panel note "<input name="panel_note"></label>
+            }
+            if scope.starts_with("long") {
+                <ul>
+                    for i in 0..200 {
+                        <li>"Line "{i}" of a long scope."</li>
+                    }
+                </ul>
+            }
         </section>
     }
 }
@@ -279,6 +296,13 @@ async fn scope_page(req: Req, Params(at): Params<url::Scope>) -> HtmlResult {
         })
     })
     .await
+}
+
+/// The form posted (its Save button): the panel for the scope it saved, or without JavaScript the
+/// screen at that scope's address.
+async fn scope_save(req: Req) -> HtmlResult {
+    let saved = url::Scope { q: ScopeQuery { scope: Some("saved".into()) } };
+    req.patch_or(html! { <ScopePanel scope="saved" /> }, || async { req.redirect(&saved) }).await
 }
 
 /// The scope's panel at another address, or its page there.

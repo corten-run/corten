@@ -1831,12 +1831,17 @@ page, as any other entry is; so is an entry of a form whose `action` is another 
 patch drawn into this screen is not that route's page), every entry while a write the screen sent
 is on its way or after one redirected before its page came (the write may have changed more than
 the part), and every entry once the page is loaded again (a reload; a page of the same route read
-since, by a link or Back, is the same screen, and keeps them). What the user typed outside the
-part and did not send stays with the entry the form was sent from, as for a link followed.
-Sending a marked form cancels any other marked form's request still on its way, so the screen and
-the address are always the last one sent, whichever answer comes first.
+since, by a link or Back, is the same screen, and keeps them). What the user typed and did not
+send, in the part too, stays with the entry the form was sent from, as for a link followed: Back
+to it by its patch puts back what was typed in the part it draws. Back and Forward by a patch put
+the screen where it was scrolled on that entry once the part is drawn, so a part that is taller on
+one entry than on the next still opens where the user left it. Sending a marked form cancels any
+other marked form's request still on its way, so the screen and the address are always the last
+one sent, whichever answer comes first. A GET sent while a write of the same form is on its way
+(a Save button with `formmethod="post"`) waits for the write's answer, as in any `data-patch`
+form, and is then sent from the form that answer drew, its address following as at the press.
 
-The runtime's part of the mark is a module of its own, `corten-address` (2,763 bytes, 1,348 gzipped),
+The runtime's part of the mark is a module of its own, `corten-address` (3,405 bytes, 1,610 gzipped),
 which only a page that draws a marked form loads: with its head, `html!` having noted the form as
 it rendered it, or with the page or patch the runtime inserts that has one. Until it has loaded,
 or if it fails to, a marked form is sent as any GET form is, and the page at its address is read.
