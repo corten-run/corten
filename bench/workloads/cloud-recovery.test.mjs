@@ -37,6 +37,15 @@ test("unused retirement refuses bad, stale, future, wrong-host and secret-bearin
   }
 });
 
+test("unused retirement confirms delayed exact-ID absence without creating benchmark evidence", async (t) => {
+  const h = harness(t, { missingUnit: true, deleteUnconfirmed: true }); h.seed(); h.change((s) => { s.status = "preparing"; });
+  let observations = 0;
+  h.flags.hook = (binary, args) => {
+    if (binary === "doctl" && args[2] === "get" && h.deletes && ++observations === 3) h.hosts([]);
+  };
+  assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1); assert.equal(observations, 3);
+  assert.ok(h.saved().destroyedAt); assert.equal(h.saved().validation, undefined);
+});
 test("a lost absence observation never repeats DELETE and changed retirement evidence refuses", async (t) => {
   const h = harness(t, { missingUnit: true, deleteUnconfirmed: true }); h.seed(); h.change((s) => { s.status = "preparing"; });
   await assert.rejects(h.task().collect()); assert.equal(h.deletes, 1); assert.ok(h.saved().deletionIntentAt);
