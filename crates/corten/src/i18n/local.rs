@@ -716,6 +716,11 @@ mod tests {
         // began at the change, half an hour before `00:00` read as a typed time (01:00, 05:00Z).
         let toronto = Visitor::named("America/Toronto");
         assert_eq!(Day::new(1919, 3, 31).unwrap().start(&toronto), Some(ts("1919-03-31T04:30:00Z")));
+        // A millisecond before that change is still before it, though jiff looks an instant before
+        // 1970 up by its second toward zero, the change's own.
+        let change = ts("1919-03-31T04:30:00Z");
+        assert_eq!(toronto.known_offset(change - Duration::from_millis(1)), Some(-5 * 3600));
+        assert_eq!(toronto.known_offset(change), Some(-4 * 3600));
         assert_eq!(read("1919-03-31T00:00").read_in(&toronto), Some(ts("1919-03-31T05:00:00Z")));
         assert_eq!(LocalDateTime::clock(ts("2026-11-15T09:00:00Z"), &sao_paulo).unwrap().to_string(), "2026-11-15T06:00");
     }
@@ -740,7 +745,8 @@ mod tests {
             let (tz, zone) = (TimeZone::get(name).unwrap(), Visitor::named(name));
             for change in tz.following(Timestamp::MIN).take_while(|c| c.timestamp() < until) {
                 let at = change.timestamp().as_millisecond();
-                let before = i64::from(tz.to_offset(ms(at - 1)).seconds()) * 1000;
+                // A second before: jiff looks an instant before 1970 up by its second toward zero.
+                let before = i64::from(tz.to_offset(ms(at - 1000)).seconds()) * 1000;
                 let after = i64::from(change.offset().seconds()) * 1000;
                 let (first, last) = ((at + before.min(after)).div_euclid(DAY) - 1, (at + before.max(after)).div_euclid(DAY) + 1);
                 for d in first..=last {

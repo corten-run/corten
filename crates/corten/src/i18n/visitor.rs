@@ -94,7 +94,12 @@ mod zones {
 
         fn known_offset(&self, at: SystemTime) -> Option<i32> {
             let Some(zone) = &self.0 else { return Some(0) };
-            jiff::Timestamp::try_from(at).ok().map(|at| zone.to_offset(at).seconds())
+            let at = jiff::Timestamp::try_from(at).ok()?;
+            // The database changes offsets on whole seconds, and jiff looks an instant up by its
+            // second toward zero, which before 1970 is the next one: a millisecond before a change
+            // would get the offset after it. So it is asked at the second the instant is in.
+            let second = at.as_second() - i64::from(at.subsec_nanosecond() < 0);
+            jiff::Timestamp::from_second(second).ok().map(|at| zone.to_offset(at).seconds())
         }
     }
 

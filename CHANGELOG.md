@@ -87,6 +87,11 @@ Corten is pre-1.0, so any minor version may change the API.
   the clocks skip midnight is the change, even one that starts the day before (Toronto's day of
   1919-03-31 began at `00:30`) ([design Choice 59](docs/design.md#choice-local-date-time)).
 
+- `Visitor` (`req.zone()`) gives the offset before a change of the clocks up to the change itself
+  before 1970 too: jiff looks an instant up by its second toward zero, which before 1970 is the
+  next second, so the last moments before a change (`1919-03-31T04:29:59.999Z` in Toronto) were
+  read and written at the offset after it.
+
 - **Breaking (for `#![deny(warnings)]` builds):** `Day::midnight_utc` is deprecated for
   `day.start(Utc)`, the same instant, so a crate that denies warnings and calls it no longer
   builds until it changes the call.
