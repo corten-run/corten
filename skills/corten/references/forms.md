@@ -208,7 +208,26 @@ refuses the end as the handler does, though Chromium and WebKit may refuse a few
 to it that the handler holds; the message says "above"), and a stepped field stays off an end by
 starting a step inside it (`Bounds::new(0.1, 16.0).step(0.1)`), never a rule beside the `Entry`;
 a typed `qty: u32` is only for a number a
-page writes itself, since one that does not read is the error page. A value the app stores and
+page writes itself, since one that does not read is the error page. A date and time the user
+picks (`<input type="datetime-local">`) is `when: Entry<LocalDateTime>` (`corten::i18n`) beside
+`zone: FormZone` (`corten::form`): the page draws in `let zone = DrawZone::from(req.zone())`
+(`DrawZone::from(Utc)` on a `Public` page): `{zone.field(f.zone)}`, `zone.name()` by the field
+(without JavaScript it is `UTC`, and the visitor knows only if the page shows it),
+`value={zone.local(stored).map(LocalDateTime::floor_minute)}`, `min={zone.min(at)}` and
+`max={zone.max(at)}` (every instant rounded down, so a stored time in its `min`'s minute is not
+drawn before it, and the bounds drawn at the offset that keeps a value between them inside them
+where the clocks go back); the post reads
+`input.when.at(&input.zone)` (`None` for the field's message), never in `req.zone()`, which
+differs between a first page and its post (`Entry::at` takes only a `FormZone`, which is made only
+by deserializing what a client sent), and the handler's own bounds check refuses what the input
+let through, and a refused post draws again in `DrawZone::from(&input.zone)` with
+`value={&input.when}`. A form without `zone.field` compiles and its post is a 422. Never a
+`String` parsed by hand or an offset worked out with `Zone::offset`. A time the clocks skip moves
+forward by the gap and a repeated one is the earlier (Temporal's default), so an edit form reads
+`input.when.at_keeping(&input.zone, stored)`, the stored instant when the field comes back as it
+was drawn. A picked day is `Entry<Day>`, `day.start(&input.zone)` where it begins (its first
+instant there, the change where the clocks skip midnight, not `00:00` read as a typed time; a `GET` form
+carries its zone too; `day.start(req.zone())` only for a day with no form, a link's parameter). A value the app stores and
 draws back into a number field must be one its `Bounds` hold (a ported screen's `min`/`step`
 never ran under `fetcher.submit`), or the browser will not send the form; `corten dev` names
 such a control in the console, a stored 0 under "above 0" included. A helper that takes a name

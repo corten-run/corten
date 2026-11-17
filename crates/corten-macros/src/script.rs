@@ -715,24 +715,29 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         let resolved = resolve(ty);
         let named = ["Holds<", "FeedUrl<", "ScreenUrl<"].iter().any(|p| resolved.starts_with(p));
         let ty = if named { resolved } else { expand(ty) };
-        // A screen's data is the declaration `corten::types` writes for the route's data, named
-        // there or through a `@typedef` of it: a type the script declares itself (a local
-        // `@typedef {{ .. }} SetListing`) would match the Rust type by its name alone, whatever
-        // its shape. The parameter names the Rust type the declaration was written from.
-        if let (Some(inner), Param::Screen(_)) =
-            (ty.strip_prefix("ScreenUrl<").and_then(|t| t.strip_suffix('>')), param_type(&ty))
-        {
-            let inner = inner.trim();
-            let resolved = resolve(inner);
-            let imported = generated.iter().find(|(local, _)| *local == resolved).map(|(_, name)| name.clone());
-            return match generated_name(&resolved).or(imported) {
-                Some(name) => Param::Screen(name),
-                None => Param::Unreadable(format!(
-                    "ScreenUrl<{inner}>: a screen's data is the declaration corten::types writes for the route's data, import(\"../types/app\").Name, written there, imported from there (/** @import {{ Name }} from \"../types/app\" */) or named by a @typedef of it (/** @typedef {{import(\"../types/app\").Name}} Name */); a type the script declares itself is matched by its name alone, whatever its shape"
-                )),
-            };
+        let param = param_type(&ty);
+        // A feed's rows and a screen's data name the generated declaration, never a type the
+        // script declares itself: that would match the Rust type by name whatever its shape.
+        // Aliases and renamed imports name the Rust type the declaration was written from.
+        for (url, named, kind, field) in [
+            ("FeedUrl<", Param::Feed as fn(String) -> Param, "a feed's rows", "rows"),
+            ("ScreenUrl<", Param::Screen as fn(String) -> Param, "a screen's data", "data"),
+        ] {
+            if let (Some(inner), Param::Feed(_) | Param::Screen(_)) =
+                (unwrap_parens(&ty).strip_prefix(url).and_then(|t| t.strip_suffix('>')), &param)
+            {
+                let inner = inner.trim();
+                let resolved = resolve(inner);
+                let imported = generated.iter().find(|(local, _)| *local == resolved).map(|(_, name)| name.clone());
+                return match generated_name(&resolved).or(imported) {
+                    Some(name) => named(name),
+                    None => Param::Unreadable(format!(
+                        "{url}{inner}>: {kind} is the declaration corten::types writes for the route's {field}, import(\"../types/app\").Name, written there, imported from there (/** @import {{ Name }} from \"../types/app\" */) or named by a @typedef of it (/** @typedef {{import(\"../types/app\").Name}} Name */); a type the script declares itself is matched by its name alone, whatever its shape"
+                    )),
+                };
+            }
         }
-        match param_type(&ty) {
+        match param {
             Param::Any => event_of(&ty).map_or(Param::Any, Param::Event),
             other => other,
         }
@@ -2315,7 +2320,7 @@ function helper() {}
     #[test]
     fn a_feed_url_names_its_rows_by_the_rust_type_or_does_not_compile() {
         let (handlers, _) = parse(
-            "/** @param {FeedUrl<Level>} a @param {FeedUrl<import(\"../types/app\").Level>} b */\nexport function f(a, b) {}",
+            "/** @typedef {import(\"../types/app\").Level} Level */\n/** @param {FeedUrl<Level>} a @param {FeedUrl<import(\"../types/app\").Level>} b */\nexport function f(a, b) {}",
         )
         .unwrap();
         assert_eq!(handlers[0].params[0].1, Param::Feed("Level".into()));
@@ -2323,6 +2328,51 @@ function helper() {}
         for ty in ["FeedUrl<Level[]>", "FeedUrl<Level | Stock>", "FeedUrl<>"] {
             let err = (0, refusal(&format!("/** @param {{{ty}}} a */\nexport function f(a) {{}}")));
             assert!(err.1.contains("one named type"), "{ty}: {}", err.1);
+        }
+    }
+
+    #[test]
+    fn a_feed_url_refuses_a_row_not_from_the_generated_declarations() {
+        for source in [
+            "/** @typedef {{ id: string, invented: boolean }} Level */\n/** @param {FeedUrl<Level>} a */\nexport function f(a) {}",
+            "/** @typedef {import(\"./level.js\").Level} Level */\n/** @param {FeedUrl<Level>} a */\nexport function f(a) {}",
+            "/** @param {FeedUrl<Level>} a */\nexport function f(a) {}",
+            "/** @import { Level } from \"./level.js\" */\n/** @param {FeedUrl<Level>} a */\nexport function f(a) {}",
+            "/** @import { Level } from \"../mytypes/app\" */\n/** @param {FeedUrl<Level>} a */\nexport function f(a) {}",
+            "/** @import { Stock } from \"../types/app\" */\n/** @param {FeedUrl<Level>} a */\nexport function f(a) {}",
+            "/** @param {FeedUrl<import(\"./level.js\").Level>} a */\nexport function f(a) {}",
+            "/** @typedef {{ id: string }} Level */\n/** @typedef {{ feed: FeedUrl<Level> }} Following */\n/** @param {Following} a */\nexport function f(a) {}",
+        ] {
+            let why = refusal(source);
+            assert!(why.contains("the declaration corten::types writes for the route's rows"), "{source}: {why}");
+        }
+    }
+
+    #[test]
+    fn a_feed_url_resolves_generated_imports_and_aliases_to_the_rust_type() {
+        let (handlers, _) = parse(
+            "/** @import { Level, Stock as Price } from \"../types/app\" */\n/** @import { Slot } from '../../types/app.js' */\n/** @typedef {Price} Row */\n/** @typedef {Row} Shown */\n/** @typedef {FeedUrl<Shown>} Feed */\n/** @param {FeedUrl<Level>} a @param {FeedUrl<Price>} b @param {FeedUrl<Slot>} c @param {FeedUrl<Shown>} d @param {Feed} e */\nexport function f(a, b, c, d, e) {}",
+        )
+        .unwrap();
+        for (n, name) in ["Level", "Stock", "Slot", "Stock", "Stock"].into_iter().enumerate() {
+            assert_eq!(handlers[0].params[n].1, Param::Feed(name.into()), "parameter {n}");
+        }
+    }
+
+    #[test]
+    fn a_feed_url_or_screen_url_in_parentheses_still_requires_a_generated_declaration() {
+        for url in ["FeedUrl", "ScreenUrl"] {
+            let source = format!(
+                "/** @typedef {{{{ id: string }}}} Data */\n/** @param {{({url}<Data>)}} a */\nexport function f(a) {{}}",
+            );
+            let why = refusal(&source);
+            assert!(why.contains("the declaration corten::types writes"), "{source}: {why}");
+            let source = format!(
+                "/** @typedef {{import(\"../types/app\").Data}} Data */\n/** @param {{({url}<Data>)}} a */\nexport function f(a) {{}}",
+            );
+            let (handlers, _) = parse(&source).unwrap();
+            let expected = if url == "FeedUrl" { Param::Feed("Data".into()) } else { Param::Screen("Data".into()) };
+            assert_eq!(handlers[0].params[0].1, expected);
         }
     }
 

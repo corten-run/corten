@@ -356,6 +356,19 @@ fresh host/account proofs and separate exact operator approval must still bind
 the action. No archive hash, terminal observation or approval is inferred from
 this documented identity. The original migration's rules remain unchanged.
 
+The same custody-only exception also admits the exact lean `catalog-page`
+attempt measured at `2a4ceb043747b92c753becc2bbcc5def655fc53d`, round `r21`,
+host ID 620157651, token e38164eb06fc2043, name
+`corten-bench-groups-r21-e38164eb06fc2043`, tag
+`corten-bench-groups-run-e38164eb06fc2043` and that name's `.service` unit.
+It uses the same fixed catalog roots and every terminal custody fence below.
+Eligibility does not assert that this attempt has ended or grant an action:
+ordinary collection must first preserve its actual archive and evidence, then
+a fresh preview, independent review and separate exact operator approval bind
+any recovery. A live unit, missing or changed evidence, foreign ownership,
+uncertain controls or expired proof still refuse deletion. No request failure
+or upstream-headroom rejection becomes a completed target or successful baseline.
+
 ### Cancelled Mixed Wait
 
 The cancelled mixed migration is the exact r21/9f review wait described by

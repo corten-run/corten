@@ -26,18 +26,22 @@ const repairCommit = "c".repeat(40), campaign = "r21-abcdef0123456789";
 const dbeAttempt = { commit: "dbe1a34c753ee8ef4ac9927484dc3930d36f6e37", round: "r21", group: "catalog-page",
   id: "620052965", token: "39fa09440f45df00", name: "corten-bench-groups-r21-39fa09440f45df00",
   tag: "corten-bench-groups-run-39fa09440f45df00", unit: "corten-bench-groups-r21-39fa09440f45df00.service" };
+const leanAttempt = { commit: "2a4ceb043747b92c753becc2bbcc5def655fc53d", round: "r21", group: "catalog-page",
+  id: "620157651", token: "e38164eb06fc2043", name: "corten-bench-groups-r21-e38164eb06fc2043",
+  tag: "corten-bench-groups-run-e38164eb06fc2043", unit: "corten-bench-groups-r21-e38164eb06fc2043.service" };
 const canonical = (value) => JSON.stringify(value, (key, v) => v && typeof v === "object" && !Array.isArray(v)
   ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, v[k]])) : v);
 const fileTree = (bytes) => digest(Buffer.concat([Buffer.from(`f\0\0${bytes.length}\0`), bytes]));
 
 async function recoveryHarness(t, flags = {}, group = "catalog-page", measuredCommit = retirement.failedNativeCommit) {
-  if (measuredCommit === dbeAttempt.commit) Object.assign(flags, { hostId: dbeAttempt.id, token: dbeAttempt.token });
+  const exactAttempt = [dbeAttempt, leanAttempt].find((attempt) => attempt.commit === measuredCommit);
+  if (exactAttempt) Object.assign(flags, { hostId: exactAttempt.id, token: exactAttempt.token });
   const h = harness(t, flags); h.seed();
   const tokens = Object.fromEntries(groupNames.map((g, i) => [g, g === group ? h.saved().token : (i + 1).toString(16).padStart(16, "0")]));
   const fleet = fleetPlan({ round: "r21", commit: measuredCommit, token: "f".repeat(16), tokens, provider: { accountId, context }, sshKey: "42" });
   const bound = reservation({ round: "r21", commit: fleet.commit, token: tokens[group], group, fleet });
   h.change((s) => Object.assign(s, bound, { status: "running" }));
-  if (measuredCommit === dbeAttempt.commit) h.change((s) => {
+  if (exactAttempt) h.change((s) => {
     s.bootstrapReady = { sha256: digest(`${JSON.stringify(bootstrapMarker(s))}\n`), observedAt: "2026-11-16T12:00:00.000Z" };
   });
   const root = retirement.failedNativeRoots(h.saved())[1].slice("/bench/repo/".length);
@@ -56,13 +60,13 @@ async function recoveryHarness(t, flags = {}, group = "catalog-page", measuredCo
   const originalState = readFileSync(h.statePath), old = h.saved(), oldTree = treeHash(join(h.local, old.evidence));
   const native = join(h.temp, "native"); mkdirSync(native);
   writeFileSync(join(native, "do-not-run.mjs"), "throw new Error('evidence must not execute');\n");
-  if (measuredCommit === dbeAttempt.commit)
+  if (exactAttempt)
     writeFileSync(join(native, "failed-load.json"), '{"exitCode":99,"timeouts":6,"targets":[]}\n');
   const nativeBytes = readFileSync(join(native, "do-not-run.mjs")).length
-    + (measuredCommit === dbeAttempt.commit ? readFileSync(join(native, "failed-load.json")).length : 0);
+    + (exactAttempt ? readFileSync(join(native, "failed-load.json")).length : 0);
   const roots = retirement.failedNativeRoots(old).map((path, index) => index > 1 || flags.absentRoot && index === 1 ? { path, present: false }
     : { path, present: true, treeSha256: treeHash(index === 0 ? join(h.local, old.evidence, "campaign") : native),
-      nodes: index === 0 ? 5 : measuredCommit === dbeAttempt.commit ? 3 : 2, bytes: index === 0 ? 100 : nativeBytes });
+      nodes: index === 0 ? 5 : exactAttempt ? 3 : 2, bytes: index === 0 ? 100 : nativeBytes });
   for (const name of ["run.log", "host.txt", "exit-code", "results.tgz"]) {
     const bytes = name === "results.tgz" ? originalArchive : readFileSync(join(h.local, old.evidence, name));
     roots.push({ path: `/bench/${name}`, present: true, treeSha256: fileTree(bytes), nodes: 1, bytes: bytes.length });
@@ -74,7 +78,7 @@ async function recoveryHarness(t, flags = {}, group = "catalog-page", measuredCo
     ...entries.filter((e) => e.name.startsWith("campaign")).map((e) => ({ ...e, name: e.name.replace(/^campaign/, "campaign/root-0") }))];
   if (roots[1].present) {
     custodyEntries.push({ name: "campaign/root-1/" }, { name: "campaign/root-1/do-not-run.mjs", body: readFileSync(join(native, "do-not-run.mjs")) });
-    if (measuredCommit === dbeAttempt.commit)
+    if (exactAttempt)
       custodyEntries.push({ name: "campaign/root-1/failed-load.json", body: readFileSync(join(native, "failed-load.json")) });
   }
   const custodyArchive = archive(custodyEntries);
@@ -271,7 +275,7 @@ test("fleet inspection reports failed retirement without replay or qualification
 });
 
 test("operator-gated production recovery rechecks merged source and exact locked reservation before any provider operation", async (t) => {
-  for (const measuredCommit of [retirement.failedNativeCommit, dbeAttempt.commit]) for (const mode of ["valid", "changed", "unmerged", "unsettled"]) {
+  for (const measuredCommit of [retirement.failedNativeCommit, dbeAttempt.commit, leanAttempt.commit]) for (const mode of ["valid", "changed", "unmerged", "unsettled"]) {
     const r = await recoveryHarness(t, {}, "catalog-page", measuredCommit), output = [], calls = [];
     let closed = 0;
     const args = ["r21", "--state-dir", r.h.base, "--retire-failed-native"];
@@ -356,6 +360,70 @@ test("dbe retirement rejects other sources, groups, rounds and host attempts", (
   for (const change of [{ commit: "a".repeat(40) }, ...groupNames.filter((group) => group !== "catalog-page").map((group) => ({ group })), { group: undefined }, { round: "r22" },
     { id: "620052966" }, { id: undefined }, { token: "0".repeat(16) }, { name: "foreign" }, { tag: "foreign" }, { unit: "foreign.service" }])
     assert.throws(() => retirement.failedNativeRoots({ ...dbeAttempt, ...change }));
+});
+
+test("lean catalog retirement admits only its exact owned identity and existing custody roots", () => {
+  assert.equal(retirement.failedNativePolicy(leanAttempt), "r21-2a-exact-lean-catalog-custody-only-no-qualification");
+  assert.deepEqual(retirement.failedNativeRoots(leanAttempt), ["/bench/campaign", "/bench/repo/bench/catalog/results/c21"]);
+  for (const [key, value] of Object.entries(leanAttempt)) {
+    for (const changed of [undefined, value === "catalog-page" ? "json-api" : "foreign"])
+      assert.throws(() => retirement.failedNativeRoots({ ...leanAttempt, [key]: changed }), key);
+  }
+  for (const other of [dbeAttempt, { ...leanAttempt, id: "620157652" }, { ...leanAttempt, token: dbeAttempt.token }])
+    assert.throws(() => retirement.failedNativePolicy({ ...leanAttempt, ...other, commit: leanAttempt.commit }));
+});
+
+test("lean catalog retirement retains raw failure bytes and cannot authorize a baseline or repeated DELETE", async (t) => {
+  const r = await recoveryHarness(t, {}, "catalog-page", leanAttempt.commit);
+  assert.equal(await r.task({ inspect: () => assert.fail("native execution forbidden") }).retireFailedNative(), 1);
+  const saved = r.h.saved(), receipt = retirement.verifyFailedNativeRetirement(r.h.local, saved);
+  assert.equal(saved.commit, leanAttempt.commit); assert.equal(saved.fullGroupQualified, false);
+  assert.equal(saved.status, "retired"); assert.equal(saved.retirement.kind, "native-failed"); assert.ok(saved.destroyedAt);
+  for (const key of ["validation", "exitCode", "collectedAt", "evidenceOutcome"]) assert.equal(saved[key], undefined);
+  assert.deepEqual(readFileSync(join(r.h.local, "failed-native-reservation.json")), r.originalState);
+  assert.deepEqual(readFileSync(join(r.h.local, "failed-native-results.tgz")), r.custodyArchive);
+  assert.equal(saved.archiveSha256, r.old.archiveSha256); assert.equal(saved.evidenceSha256, r.old.evidenceSha256);
+  assert.equal(treeHash(join(r.h.local, saved.evidence)), r.oldTree);
+  assert.equal(readFileSync(join(r.h.local, receipt.capture.evidence, "campaign/root-1/failed-load.json"), "utf8"),
+    '{"exitCode":99,"timeouts":6,"targets":[]}\n');
+  assert.equal(r.h.deletes, 1); assert.equal(r.probes, 3); assert.equal(r.settlements, 1);
+  assert.equal(await r.task().retireFailedNative(), 1); assert.equal(r.h.deletes, 1); assert.equal(r.probes, 3);
+  assert.ok(!r.calls.some(([binary, ...args]) => binary === "ssh" && /systemctl (?:start|stop|restart)/.test(args.at(-1))));
+});
+
+test("lean catalog retirement preserves its archive, terminal and ownership refusal gates", async (t) => {
+  for (const mode of ["probeError", "badFinal", "badFence", "badDownload", "staleProbe", "account", "unsettled"]) {
+    const flags = { [mode]: true }, r = await recoveryHarness(t, flags, "catalog-page", leanAttempt.commit);
+    if (mode === "account") flags.accountId = "foreign-account";
+    await assert.rejects(r.task({ inspect: () => assert.fail("native execution forbidden") }).retireFailedNative(), undefined, mode);
+    assert.equal(r.h.deletes, mode === "unsettled" ? 1 : 0, mode);
+    assert.equal(r.h.saved().fullGroupQualified, false, mode);
+    assert.equal(treeHash(join(r.h.local, r.old.evidence)), r.oldTree, mode);
+  }
+});
+
+test("lean catalog custody preserves an explicitly absent native root without fabricating qualification", async (t) => {
+  const r = await recoveryHarness(t, { absentRoot: true }, "catalog-page", leanAttempt.commit);
+  assert.equal(await r.task().retireFailedNative(), 1);
+  const saved = r.h.saved(), receipt = retirement.verifyFailedNativeRetirement(r.h.local, saved);
+  assert.equal(receipt.capture.observation.roots[1].present, false);
+  assert.equal(saved.fullGroupQualified, false); assert.equal(saved.validation, undefined);
+  assert.equal(r.h.deletes, 1);
+});
+
+test("lean catalog retirement approval binds exact source, reservation and preserved archive without collect override", async (t) => {
+  const r = await recoveryHarness(t, {}, "catalog-page", leanAttempt.commit);
+  const options = { round: "r21", stateDir: r.h.base, retireFailedNative: true };
+  const plan = await productionPlan(options, { repo: r.h.repo, run: localGit(r) });
+  assert.equal(plan.subject.recovery.measuredCommit, leanAttempt.commit);
+  assert.equal(plan.subject.recovery.policy, "r21-2a-exact-lean-catalog-custody-only-no-qualification");
+  assert.equal(plan.subject.reservationSha256, digest(r.originalState));
+  assert.equal(plan.subject.recovery.archiveSha256, r.old.archiveSha256);
+  assert.equal(plan.subject.recovery.evidenceSha256, r.old.evidenceSha256);
+  assert.equal(r.calls.length, 0);
+  await assert.rejects(productionPlan({ round: "r21", stateDir: r.h.base, collect: true }, { repo: r.h.repo, run: localGit(r) }), /measured integrated/);
+  r.h.change((s) => { s.archiveSha256 = "a".repeat(64); });
+  assert.notEqual((await productionPlan(options, { repo: r.h.repo, run: localGit(r) })).approvalSha256, plan.approvalSha256);
 });
 
 test("dbe retirement admits only the exact catalog attempt's existing custody roots", () => {
