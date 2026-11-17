@@ -30,12 +30,14 @@
 //!   [`ClassList`].
 //! - A class the file does not have is a compile error, and so is a class of the file written as
 //!   text (`class="list"`), which would not match the scoped rule.
-//! - Every rule must start inside the component: a selector names one of the file's classes.
-//!   `h2 { .. }` alone is a compile error; `.list h2 { .. }` is fine.
+//! - Every top-level selector must require one of the file's classes.
+//!   `h2 { .. }` alone is a compile error; `.list h2 { .. }` is fine. A class in `:is()`
+//!   or `:where()` counts only if every branch requires a class; classes inside other
+//!   functions, such as `:not()` or `:has()`, are prefixed but do not count.
 //!   Element defaults, resets and fonts belong in the app's `static/style.css`.
 //! - An `@scope` rule's root and limit (CSS Cascade 6) are prefixed as any selector is:
-//!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When the root names one
-//!   of the file's classes, its rules match only inside the component, so they start anywhere
+//!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When every selector in
+//!   the root requires one of the file's classes, its rules can start anywhere
 //!   (`:scope`, `li`, `> li`); under any other root at the top of the file, such as
 //!   `@scope ([data-theme="dark"])`, each rule starts at one of the classes, as at the top.
 //! - Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks
@@ -270,6 +272,31 @@
 //! }
 //! ```
 //!
+//! A class under `:not()` does not make a rule local (`negated_list.css` has `:not(.list) p`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NegatedList() -> impl ClassList { List }
+//! ```
+//!
+//! Neither does an optional class (`optional_list.css` has `:is(.list, main) p`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn OptionalList() -> impl ClassList { List }
+//! ```
+//!
+//! Nor does a class that the matching element only has elsewhere
+//! (`related_list.css` has `main:has(.list) p`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn RelatedList() -> impl ClassList { List }
+//! ```
+//!
 //! An `@scope` rule's root and limit are prefixed as any selector is (`scoped_list.css` has
 //! `@scope (.list) to (.slot) { li { padding: 0; } }` and
 //! `@scope ([data-theme="dark"]) { .list { color: plum; } }`):
@@ -302,6 +329,15 @@
 //! fn LeakyScope() -> impl Render {
 //!     html! { <ul class={List}></ul> }
 //! }
+//! ```
+//!
+//! The same check applies to whether an `@scope` root is owned
+//! (`negated_scope.css` has `@scope (:not(.list)) { p { .. } }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NegatedScope() -> impl ClassList { List }
 //! ```
 //!
 //! Nor does an `@scope` with no root (`rootless_scope.css` has `@scope { li { .. } }`), which

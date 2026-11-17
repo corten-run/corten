@@ -41,10 +41,8 @@ const SYNTAXES: &[(&str, &str)] = &[
     ("<time>", "Time"),
 ];
 
-/// Prefixes every class in `src` with `{prefix}__`. A rule outside any at-rule (or in `@media`,
-/// `@supports`, `@container`, `@layer`) must name one of the file's classes, so a component's
-/// styles cannot reach elements it does not render; so must each rule in an `@scope` there unless
-/// the scope's root names one.
+/// Prefixes every class in `src` with `{prefix}__`. Every branch of a top-level selector or
+/// `@scope` root must require a class for the selector or root to count as component-owned.
 pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
     if let Some(line) = conflict_marker(src) {
         return Err(format!(
@@ -714,8 +712,8 @@ impl Scoper<'_> {
 
     /// An `@scope` prelude, `(.list) to (.slot)` (CSS Cascade 6: `(<scope-start>) to
     /// (<scope-end>)`, each a selector list), with the classes of its root and limit prefixed and
-    /// recorded, and with `top`, the root as written when a selector in it names none of the
-    /// file's classes. Nested in a rule or another `@scope`, the root is relative to that one's
+    /// recorded, and with `top`, the root as written when a selector in it does not require a
+    /// class of the file. Nested in a rule or an owned `@scope`, the root is relative to that one's
     /// elements. With no root, the scope is the parent of the stylesheet's owner node, the element
     /// around the page's stylesheet link, which no component owns.
     fn scope_prelude(&mut self, prelude: &str, top: bool, at: usize) -> Result<(String, Option<String>), String> {
@@ -930,7 +928,7 @@ impl Scoper<'_> {
     }
 
     /// The selector with its classes prefixed. With `check`, every selector in the list must
-    /// name a class of the file.
+    /// require a class of the file.
     fn selector(&mut self, text: &str, check: bool, at: usize) -> Result<String, String> {
         match self.prefixed(text, at)? {
             (_, Some(part)) if check => Err(self.unowned(&part, at)),
@@ -938,8 +936,9 @@ impl Scoper<'_> {
         }
     }
 
-    /// The selector with its classes prefixed, and the first selector in the list that names no
-    /// class of the file.
+    /// The selector with its classes prefixed, and the first selector in the list that does not
+    /// require a class of the file. Classes in any function are still prefixed, but only
+    /// `:is()` and `:where()` can supply ownership: all their branches must require a class.
     fn prefixed(&mut self, text: &str, at: usize) -> Result<(String, Option<String>), String> {
         let chars: Vec<char> = text.chars().collect();
         let mut out = String::with_capacity(text.len() + 16);
@@ -947,6 +946,7 @@ impl Scoper<'_> {
         let mut quote = None;
         let mut part_start = 0;
         let mut part_scoped = false;
+        let mut lists = Vec::<PositiveList>::new();
         let mut unowned = None;
         while i < chars.len() {
             let c = chars[i];
@@ -963,16 +963,53 @@ impl Scoper<'_> {
             }
             match c {
                 '"' | '\'' => quote = Some(c),
+                '\\' => {
+                    let end = escaped(&chars, i + 1).1;
+                    out.extend(&chars[i..end]);
+                    i = end;
+                    continue;
+                }
+                '/' if chars[i..].starts_with(&['/', '*', '*', '/']) => {
+                    out.push_str("/**/");
+                    i += 4;
+                    continue;
+                }
                 '[' => brackets += 1,
                 ']' => brackets = brackets.saturating_sub(1),
-                '(' => parens += 1,
-                ')' => parens = parens.saturating_sub(1),
-                ',' if brackets == 0 && parens == 0 => {
-                    if !part_scoped && unowned.is_none() {
-                        unowned = Some(chars[part_start..i].iter().collect::<String>().trim().to_string());
+                ':' if brackets == 0 && parens == lists.len() => {
+                    if chars.get(i + 1) == Some(&':') {
+                        out.push_str("::");
+                        i += 2;
+                        continue;
                     }
-                    part_start = i + 1;
-                    part_scoped = false;
+                    if let Some(open) = positive_list_open(&chars, i + 1) {
+                        lists.push(PositiveList { all: true, branch: false });
+                        parens += 1;
+                        out.extend(&chars[i..=open]);
+                        i = open + 1;
+                        continue;
+                    }
+                }
+                '(' if brackets == 0 => parens += 1,
+                ')' if brackets == 0 => {
+                    if parens == lists.len() {
+                        if let Some(list) = lists.pop() {
+                            *lists.last_mut().map_or(&mut part_scoped, |list| &mut list.branch) |= list.all && list.branch;
+                        }
+                    }
+                    parens = parens.saturating_sub(1);
+                }
+                ',' if brackets == 0 && parens == lists.len() => {
+                    if let Some(list) = lists.last_mut() {
+                        list.all &= list.branch;
+                        list.branch = false;
+                    } else {
+                        if !part_scoped && unowned.is_none() {
+                            unowned = Some(chars[part_start..i].iter().collect::<String>().trim().to_string());
+                        }
+                        part_start = i + 1;
+                        part_scoped = false;
+                    }
                 }
                 '.' if brackets == 0 && ident_start(&chars[i + 1..]) => {
                     let mut end = i + 1;
@@ -997,7 +1034,9 @@ impl Scoper<'_> {
                     if !self.classes.contains(&class) {
                         self.classes.push(class);
                     }
-                    part_scoped = true;
+                    if parens == lists.len() {
+                        *lists.last_mut().map_or(&mut part_scoped, |list| &mut list.branch) = true;
+                    }
                     i = end;
                     continue;
                 }
@@ -1012,18 +1051,52 @@ impl Scoper<'_> {
         Ok((out, unowned))
     }
 
-    /// The error for a selector that names no class of the file.
+    /// The error for a selector that does not require a class of the file.
     fn unowned(&self, part: &str, at: usize) -> String {
         match &self.scope_root {
             Some(root) => self.error(
                 at,
-                format!("`{part}` styles elements this component does not own: `@scope ({root})` can start outside the component, so start each rule in it with one of the stylesheet's classes, like `.list p`, or start the scope at one, `@scope (.list)`"),
+                format!("`{part}` styles elements this component does not own: `@scope ({root})` can start outside the component, so require a class in each rule, like `.list p`, or in each selector of the scope root, like `@scope (.list)`"),
             ),
             None => self.error(
                 at,
-                format!("`{part}` styles elements this component does not own: start the rule with one of the stylesheet's classes, like `.list {part}`"),
+                format!("`{part}` styles elements this component does not own: require one of the stylesheet's classes in every selector, like `.list {part}`"),
             ),
         }
+    }
+}
+
+struct PositiveList {
+    /// Whether all the branches before the current one require a class.
+    all: bool,
+    branch: bool,
+}
+
+/// The opening parenthesis of a matches-any pseudo-class after its colon, if present.
+fn positive_list_open(chars: &[char], mut start: usize) -> Option<usize> {
+    while chars[start..].starts_with(&['/', '*', '*', '/']) {
+        start += 4;
+    }
+    let mut end = start;
+    while let Some(&c) = chars.get(end) {
+        if c.is_ascii_alphabetic() {
+            end += 1;
+        } else if c == '\\' {
+            end = escaped(chars, end + 1).1;
+        } else {
+            break;
+        }
+    }
+    if chars.get(end) != Some(&'(') {
+        return None;
+    }
+    match &chars[start..end] {
+        ['i' | 'I', 's' | 'S'] | ['w' | 'W', 'h' | 'H', 'e' | 'E', 'r' | 'R', 'e' | 'E'] => Some(end),
+        name if name.contains(&'\\') => {
+            let name = unescape(&name.iter().collect::<String>());
+            (name.eq_ignore_ascii_case("is") || name.eq_ignore_ascii_case("where")).then_some(end)
+        }
+        _ => None,
     }
 }
 
@@ -1575,6 +1648,52 @@ mod tests {
     }
 
     #[test]
+    fn selector_lists_require_a_positive_class_in_every_branch() {
+        for selector in [
+            ":not(.list) p",
+            ":is(.list, main) p",
+            "main:has(.list) p",
+            ":where(.list, :is(.row, main)) p",
+            ":nth-child(2 of .list)",
+            ".list, :not(.row)",
+            ":is(.list, :has(.row))",
+            ":is(.list, [data-name='.row'])",
+            r"#item\.list",
+            r":is(.list, #item\,main)",
+            r":is(.list, [data-name=x\]\.row])",
+        ] {
+            let css = format!("{selector} {{ color: red }}");
+            let error = scope(&css, "t").expect_err(&css);
+            assert!(error.contains("styles elements this component does not own"), "{error}");
+        }
+        let error = scope("@scope (:not(.list)) { p { color: red } }", "t").unwrap_err();
+        assert!(error.contains("`p` styles elements this component does not own"), "{error}");
+        let error = scope("@scope (.list, :where(.row, main)) { p { color: red } }", "t").unwrap_err();
+        assert!(error.contains("`p` styles elements this component does not own"), "{error}");
+    }
+
+    #[test]
+    fn selector_functions_keep_their_classes_and_specificity() {
+        let css = r#":IS(.list, :where(.row:not(.hidden), .card:has(> .image))) > p, :is(main, aside).label { color: red }"#;
+        let sheet = scope(css, "t").unwrap();
+        assert_eq!(
+            sheet.css,
+            ":IS(.t__list, :where(.t__row:not(.t__hidden), .t__card:has(> .t__image))) > p, :is(main, aside).t__label{color:red}"
+        );
+        assert_eq!(sheet.classes, ["list", "row", "hidden", "card", "image", "label"]);
+        assert!(scope(r":\69s(.list, .row) { color: red }", "t").is_ok());
+        assert!(scope(r"#item\(.list { color: red }", "t").is_ok());
+        assert!(scope(r":is(.list, #item\,main.row) { color: red }", "t").is_ok());
+        let scope_css = "@scope (:where(.list, :is(.row, .card))) to (:not(.slot)) { p { color: red } }";
+        assert_eq!(
+            scope(scope_css, "t").unwrap().css,
+            "@scope (:where(.t__list, :is(.t__row, .t__card))) to (:not(.t__slot)){p{color:red}}"
+        );
+        let filtered = "@scope (:not(.list)) { .row { color: red } }";
+        assert_eq!(scope(filtered, "t").unwrap().css, "@scope (:not(.t__list)){.t__row{color:red}}");
+    }
+
+    #[test]
     fn a_scope_rule_s_root_and_limit_are_the_component_s_classes() {
         // CSS Cascade 6: `@scope (<scope-start>) to (<scope-end>)`, each a selector list.
         let sheet = scope("@scope (.list) to (.slot) { .title { color: red } }", "t").unwrap();
@@ -1674,8 +1793,15 @@ mod tests {
     }
 
     #[test]
-    fn the_compile_fail_scope_examples_fail_for_their_reasons() {
+    fn the_compile_fail_selector_examples_fail_for_their_reasons() {
         for (file, reason) in [
+            ("negated_list.css", "`:not(.list) p` styles elements this component does not own"),
+            ("optional_list.css", "`:is(.list, main) p` styles elements this component does not own"),
+            ("related_list.css", "`main:has(.list) p` styles elements this component does not own"),
+            (
+                "negated_scope.css",
+                "`p` styles elements this component does not own: `@scope (:not(.list))` can start outside the component",
+            ),
             (
                 "leaky_scope.css",
                 "`li` styles elements this component does not own: `@scope (main)` can start outside the component",
