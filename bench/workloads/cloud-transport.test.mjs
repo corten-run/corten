@@ -4,8 +4,34 @@ import test from "node:test";
 import { controlEnvironment, quote, shellTransport } from "./cloud-transport.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { harness } from "./cloud-fixtures.mjs";
+
+test("bootstrap seal lets a monitor challenge run before the SSH result is available", async (t) => {
+  let finish, input = "", options;
+  const id = "a".repeat(32);
+  const run = shellTransport({ repo: resolve("."), spawn() { assert.fail("blocking seal"); },
+    sealExec(_binary, _argv, opts, callback) {
+      options = opts; finish = callback;
+      const stdin = new PassThrough(); stdin.on("data", (b) => { input += b; }); return { stdin };
+    } });
+  const call = () => run("ssh", ["root@192.0.2.10", ":"], 60000, false, undefined, {
+    request: { invocation: { id }, seal: [{ id }] }, inputPrefix: "fixed:", command: "fixed guardian" });
+  const pending = call();
+  assert.ok(pending instanceof Promise); assert.equal(options.timeout, 60000);
+  assert.equal(options.maxBuffer, 16 * 1024 ** 2); assert.equal(options.shell, false);
+  assert.equal(input, "fixed:set -euo pipefail\n:\n");
+  const ack = "CORTEN_CONTROL " + id + " " + "b".repeat(64) + "\n";
+  finish(null, "", ack + "CORTEN_RESULT " + id + " 0\n"); assert.equal((await pending).status, 0);
+  for (const [err, stderr] of [[null, ack], [Object.assign(new Error("timeout"), { killed: true, signal: "SIGKILL" }), ""]]) {
+    const failed = call(); finish(err, "", stderr);
+    await assert.rejects(failed, (error) => error.controlTreeUncertain === true);
+  }
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const noClose = call(); t.mock.timers.tick(60000);
+  await assert.rejects(noClose, (error) => error.controlTreeUncertain === true);
+});
 
 test("production shell boundary uses argv, fixed provider endpoint, no HTTP retry or raw errors", () => {
   const calls = [], run = shellTransport({ repo: resolve("."), spawn: (...args) => { calls.push(args); return { status: 0, stdout: "[]", stderr: "synthetic-private-value" }; } });

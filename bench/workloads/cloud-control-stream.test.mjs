@@ -12,7 +12,7 @@ import { auditProtocol } from "./cloud-audit.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { digest } from "./cloud-local.mjs";
 
-function fixture(t) {
+function fixture(t, { autoClose = true, sealExec } = {}) {
   const local = mkdtempSync(join(tmpdir(), "corten-control-wire-")), child = new EventEmitter(), input = [], calls = [];
   let sequence = 0, ended = false;
   const close = (code = 0) => { if (!ended) { ended = true; child.emit("close", code, null); } };
@@ -21,16 +21,16 @@ function fixture(t) {
     for (const line of bytes.toString().trimEnd().split("\n")) { const frame = JSON.parse(line); input.push(frame); if (frame.kind === "close") setImmediate(close); }
     next();
   } });
-  child.stdin.on("close", () => { if (!ended) setImmediate(() => close(254)); });
+  child.stdin.on("close", () => { if (autoClose && !ended) setImmediate(() => close(254)); });
   const frame = (kind, payload, override = {}) => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1", id: registration.id,
     sequence: ++sequence, kind, payload, ...override }) + "\n");
-  const run = shellTransport({ repo: resolve("."), streamSpawn(binary, argv, options) {
+  const run = shellTransport({ repo: resolve("."), sealExec, spawn() { assert.fail("unexpected synchronous transport"); }, streamSpawn(binary, argv, options) {
     calls.push({ binary, argv, options }); setImmediate(() => { frame("registered", registration); frame("progress", { state: "active" }); }); return child;
   } });
   const ready = run("ssh", ["-o", "UserKnownHostsFile=" + join(local, "known_hosts").replaceAll("\\", "/"), "root@192.0.2.2"], 30000, false, undefined,
     { stream: true, expected: { binding, id: registration.id }, local });
   t.after(() => { close(254); assert.ok(resolve(local).startsWith(resolve(tmpdir()) + (process.platform === "win32" ? "\\" : "/"))); rmSync(local, { recursive: true }); });
-  return { local, child, input, calls, ready, frame, close };
+  return { local, child, input, calls, ready, frame, close, run };
 }
 
 test("production transport uses one fixed guardian exec, bounded journal, typed heartbeat and terminal close without remote-empty claims", async (t) => {
@@ -57,6 +57,37 @@ test("disconnect, wrong sequence and unknown input are separate intentional nega
     assert.equal(localStreamStatus(f.local).kind, "invalid"); assert.ok(existsSync(join(f.local, "monitor-local-closed.json")));
     assert.equal(JSON.parse(readFileSync(join(f.local, "monitor-invalid.json"))).remoteTerminal, false);
   }
+});
+
+test("the live stream answers a lease challenge while its seal SSH is outstanding", async (t) => {
+  let finish;
+  const f = fixture(t, { sealExec(_exe, _argv, _options, cb) { finish = cb; return { stdin: new PassThrough() }; } });
+  const { monitor } = await f.ready, id = registration.id;
+  const pending = f.run("ssh", ["root@192.0.2.2", ":"], 60000, false, undefined, {
+    command: "fixed guardian", request: { invocation: { id }, seal: [{ id }] } });
+  const challenge = { sequence: 1, nonce: "c".repeat(32) };
+  await new Promise((resolve) => setImmediate(() => { f.frame("challenge", challenge); resolve(); }));
+  assert.deepEqual(f.input.at(-1), { id, kind: "renew", payload: challenge });
+  finish(null, "", "CORTEN_CONTROL " + id + " " + "b".repeat(64) + "\nCORTEN_RESULT " + id + " 0\n");
+  assert.equal((await pending).status, 0); f.close(255); await monitor.done;
+});
+
+test("late close is actual local evidence even after the foreground lost the lease", async (t) => {
+  const f = fixture(t, { autoClose: false }), { monitor } = await f.ready;
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
+  monitor.cancel(); t.mock.timers.tick(15001);
+  await assert.rejects(monitor.done, (error) => error.controlTreeUncertain === true);
+  const path = join(f.local, "monitor-local-closed.json");
+  assert.equal(existsSync(path), false);
+  f.close(255);
+  const record = JSON.parse(readFileSync(path));
+  assert.equal(record.code, 255); assert.equal(record.signal, null);
+  assert.equal(record.remoteDrained, false); assert.equal(record.recoverAfterMs - record.closedAtMs, 30000);
+  assert.equal(localStreamStatus(f.local).kind, "invalid");
+  assert.equal(existsSync(join(f.local, "monitor-terminal.json")), false);
+  const saved = { id: registration.id, registrationSha256: digest(JSON.stringify(registration)) };
+  assert.equal(streamRecoveryReady(f.local, saved), false);
+  t.mock.timers.tick(30000); assert.equal(streamRecoveryReady(f.local, saved), true);
 });
 
 test("paused audit material and approved delivery use the same existing stream, never another process or channel", async (t) => {

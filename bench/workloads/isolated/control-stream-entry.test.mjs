@@ -17,7 +17,8 @@ mock.module("./control-admission.mjs", { exports: {
   waitControlAdmission: async (_binding, epoch) => { assert.equal(epoch, "bootstrap"); return { apparatus: registration }; },
   controlOperation: (_binding, operation) => { assert.equal(operation, "activate"); order.push("activate"); },
 } });
-mock.module("./control-stream-remote.mjs", { exports: { superviseControlStream(actual, admission, controller) {
+mock.module("./control-stream-remote.mjs", { exports: { async superviseControlStream(actual, admission, controller) {
+  await new Promise(setImmediate); // Native activation must wait for the pinned sampler's first observation.
   assert.deepEqual(actual, binding); assert.equal(admission.apparatus, registration); abort = controller;
   stream = { registration, check() { assert.equal(abort.signal.aborted, false); },
     progress(status) { order.push("progress:" + status.state); },

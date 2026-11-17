@@ -180,12 +180,14 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
       } catch { fail(); }
     });
     let stderr = 0; child.stderr.on("data", (data) => { stderr += data.length; if (stderr > 8192) fail(); });
-    child.on("close", (code, signal) => {
-      if (settled) return; clearInterval(timer); clearTimeout(timer); settled = true;
+    child.once("close", (code, signal) => {
+      const late = settled;
+      clearInterval(timer); clearTimeout(timer); settled = true;
       try {
         const closedAtMs = Date.now();
         durable(join(local, "monitor-local-closed.json"), JSON.stringify({ id: expected.id, binding: expected.binding,
           code, signal, remoteDrained: false, closedAtMs, recoverAfterMs: closedAtMs + 2 * streamLimits.leaseMs }));
+        if (late) return; // Uncertain result and closed journal stand; only add the actual local observation.
         if (!terminal || closing || code !== 0 || signal !== null || buffer.length) {
           revoke(); append({ kind: "local-closed", code, signal, remoteTerminal: false });
           readyReject(uncertain()); doneResolve({ terminal: false, remoteDrained: false, publicationRevoked: true });
@@ -193,7 +195,7 @@ export function openControlStream({ repo, argv, env, expected, local, launch = s
           durable(join(local, "monitor-terminal.json"), JSON.stringify({ binding: expected.binding, ...terminal, localClosed: true, remoteDrained: false }));
           doneResolve({ terminal: true, ...terminal, remoteDrained: false });
         }
-      } catch { doneReject(uncertain()); } finally { closeSync(fd); }
+      } catch { doneReject(uncertain()); } finally { if (!late) closeSync(fd); }
     });
     let delivered = new Set(), delivery;
     timer = setInterval(() => {
