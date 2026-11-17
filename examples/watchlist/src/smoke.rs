@@ -84,6 +84,15 @@ pub mod url {
     /// browser does without JavaScript.
     #[route("/smoke/scope-moved", get = scope_moved)]
     pub struct ScopeMoved;
+
+    /// A marked form that is the part its patch draws, with controls named after members of an
+    /// element that Back reads of the part.
+    #[route("/smoke/scope-form", get = scope_form)]
+    #[derive(Default)]
+    pub struct ScopeForm {
+        #[route(query)]
+        pub q: super::ScopeQuery,
+    }
 }
 
 /// The components the smoke's pages draw.
@@ -230,8 +239,8 @@ struct SmokeScopeFormId;
 /// another route's. A form that carries the scope (`keep_query`) is drawn by the patch too, so it
 /// sends the scope on screen, not the one the page was drawn with. The form has an id, so a GET
 /// sent while its Save is on its way is sent from the form Save's answer draws. The first scope's
-/// panel has a field the others do not, and a scope that starts with long a panel taller than the
-/// rest of the screen.
+/// panel has a field the others do not, but those whose name ends in draft, and a scope that starts
+/// with long a panel taller than the rest of the screen.
 #[component]
 fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
     let f = ScopeQuery::FIELDS;
@@ -254,7 +263,7 @@ fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
                 {corten::form::keep_query(&at, &html! { <button>"Read this scope again"</button> })}
             </form>
             <p>"Scope: "<output>{scope}</output></p>
-            if scope == "all" {
+            if scope == "all" || scope.ends_with("draft") {
                 <label>"Panel note "<input name="panel_note"></label>
             }
             if scope.starts_with("long") {
@@ -312,6 +321,44 @@ async fn scope_elsewhere(req: Req, Params(at): Params<url::ScopeElsewhere>) -> H
         req.page(html! {
             <Layout req={&req} title="Elsewhere" viewer={None} head="">
                 <ScopePanel scope={scope} />
+            </Layout>
+        })
+    })
+    .await
+}
+
+#[derive(Id)]
+struct ScopePartId;
+
+#[derive(Id)]
+struct ScopeDraftId;
+
+/// A marked form that is a part of its own, its patch the form alone. Its controls named
+/// `contains`, `matches`, `getAttribute` and `hasAttribute` are the form's members of those names,
+/// which Back's draw reads of the part it drew. The draft field has an id and no name, so it is
+/// not sent.
+#[component]
+fn ScopePart<'a>(scope: &'a str) -> impl Patch {
+    html! {
+        <form id={ScopePartId} method="get" action={url::ScopeForm::default()} data-patch data-address>
+            <button type="button" name="contains">"Contains"</button>
+            <button type="button" name="matches">"Matches"</button>
+            <button type="button" name="getAttribute">"Get attribute"</button>
+            <button type="button" name="hasAttribute">"Has attribute"</button>
+            <label>"Draft "<input id={ScopeDraftId}></label>
+            <button name={ScopeQuery::FIELDS.scope} value="week">"Week"</button>
+            <p>"Scope: "<output>{scope}</output></p>
+        </form>
+    }
+}
+
+/// The form's page, or its patch.
+async fn scope_form(req: Req, Params(at): Params<url::ScopeForm>) -> HtmlResult {
+    let scope = at.q.scope.as_deref().unwrap_or("all");
+    req.patch_or(html! { <ScopePart scope={scope} /> }, || async {
+        req.page(html! {
+            <Layout req={&req} title="Scope form" viewer={None} head="">
+                <ScopePart scope={scope} />
             </Layout>
         })
     })

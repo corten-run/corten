@@ -176,7 +176,8 @@ division: end statements with `;` and keep a division on the line it continues.
    with a marked form loads the module that does this (`corten-address`); until it has, the form
    is sent as any GET form is. Without the Navigation API the browser sends the form itself, a
    full load at its address. A GET sent while a Save (`formmethod="post"`) of the same form is on
-   its way is sent once the write's answer is drawn, and its address follows too.
+   its way is sent once the write's answer is drawn, and its address follows too; one of another
+   marked form cancels the Save's answer (the server may still apply it), as a navigation does.
 
 ## Text a script computes
 

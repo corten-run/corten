@@ -31,14 +31,25 @@ const fromHere = (url) => url !== "" && new URL(url).origin === location.origin;
  */
 let screenPath = location.pathname;
 let drawsNone = false;
+/**
+ * The key of the entry whose screen is drawn. The address moves to an entry as Back or Forward to
+ * it starts, its screen once it is drawn: a traversal a newer one supersedes before it draws
+ * leaves the screen it found, which is not its entry's.
+ */
+let shown = navigation?.currentEntry?.key;
 navigation?.addEventListener("navigate", (event) => {
   drawsNone = event.destination.sameDocument && event.navigationType !== "traverse";
-  // Where the entry left was scrolled, read before anything is drawn: Back or Forward to it by its
-  // patch puts it there again ({@link read}).
+  // Where the screen left was scrolled, read before anything is drawn: Back or Forward to its
+  // entry by its patch puts it there again ({@link read}). Only while the address is its entry's:
+  // one a traversal moved before drawing was read as that traversal began, and the browser may
+  // have scrolled the screen since (Firefox does, to the entry it went to).
   const key = navigation?.currentEntry?.key;
-  if (!drawsNone && key && addressed.has(key)) places.set(key, [scrollX, scrollY]);
+  if (!drawsNone && key && key === shown && addressed.has(key)) places.set(key, [scrollX, scrollY]);
 });
-navigation?.addEventListener("navigatesuccess", () => drawsNone || (screenPath = location.pathname));
+navigation?.addEventListener("navigatesuccess", () => {
+  shown = navigation?.currentEntry?.key;
+  drawsNone || (screenPath = location.pathname);
+});
 
 /**
  * The history entries whose part a marked form's patch drew for their address, and the entry each
@@ -99,7 +110,9 @@ const drawWhole = ([apply], html, signal, sent, took, within, before) =>
  * page, a traversal) is left to the browser too, which drops that navigation for the form's, as
  * it does without JavaScript: the runtime reads the page at the form's address in its place.
  * Another marked form's submit still on its way is dropped, as a navigation drops the page asked
- * before it, since it would draw an older choice over this one. A patch drawn whole puts the
+ * before it, since it would draw an older choice over this one: a write too, which the server may
+ * still apply, but whose answer the browser does not show once a newer form is sent, as without
+ * JavaScript. A write of this form makes this wait for it (`send`). A patch drawn whole puts the
  * address it asked for in history ({@link address}); a page, or a patch not drawn whole, has the
  * page at that address read instead, as the browser reads it for the form without JavaScript: in
  * an entry of its own (none when it is the address already), the form busy until it is drawn.
@@ -115,7 +128,7 @@ export function submit(event, form, by, sends, core, within) {
   const [, remember, , submits, go, LOAD, SOURCE, , send] = core;
   event.preventDefault();
   if (!get) return void send(form, by, sends, within);
-  for (const [other, pending] of submits) if (other !== form && !pending.write && own.hasAttribute.call(other, "data-address")) pending.controller.abort();
+  for (const [other, pending] of submits) if (other !== form && own.hasAttribute.call(other, "data-address")) pending.controller.abort();
   let at = "";
   const read = () => {
     submits.delete(form);
@@ -167,7 +180,8 @@ function address(to, [, , , , , , , markCurrent]) {
   const here = new URL(to).pathname === screenPath;
   if (here && from && location.pathname === screenPath) addressed.add(from);
   history.pushState(null, "", to);
-  if (here) addressed.add(navigation?.currentEntry?.key ?? "");
+  shown = navigation?.currentEntry?.key;
+  if (here) addressed.add(shown ?? "");
   // The entries the new one dropped (those it was ahead of) are forgotten.
   const live = new Set(navigation?.entries().map((e) => e.key));
   for (const kept of [addressed, places]) for (const key of kept.keys()) if (!live.has(key)) kept.delete(key);
@@ -245,12 +259,14 @@ async function read(url, event, visit, core) {
   const html = await res.text().catch(() => null);
   signal.throwIfAborted();
   if (html === null) return page();
-  const left = navigation?.transition?.from.key;
   const main = document.querySelector("main");
   /** @type {(string | null)[]} */
   let ids = [];
+  // What the user typed is kept for the entry whose screen this draws over ({@link shown}), not
+  // the entry the address left, which a traversal superseded before drawing left undrawn.
   const whole = await drawWhole(core, html, signal, null, undefined, undefined, (content) => {
-    if (main && left) remember(left, main);
+    if (main && shown) remember(shown, main);
+    shown = key;
     ids = Array.from(content.children, (el) => own.getAttribute.call(el, "id"));
   });
   signal.throwIfAborted();
@@ -264,7 +280,8 @@ async function read(url, event, visit, core) {
       main,
       typed.filter(([at, , nth]) => {
         const f = Array.from(main.querySelectorAll(at)).filter(isField)[nth];
-        return !!f && parts.some((part) => !!part && part.contains(f));
+        // Element's own `contains`: a part may be a form, whose controls' names shadow it.
+        return !!f && parts.some((part) => !!part && own.contains.call(part, f));
       }),
     );
   }

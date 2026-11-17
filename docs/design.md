@@ -5169,9 +5169,10 @@ rules something out.
     (its body is not read). An error status's patch (a 422's, a 5xx's) is drawn and its address
     pushed, as the browser shows an error page at the form's address. A nav link to the new
     address is marked current, as for a navigation. Sending a marked form cancels every other
-    marked form's request still on its way, as a navigation cancels a pending submit: the browser
-    loads only the last form sent, so the last one's answer is the screen and its address the one
-    entry, whichever answer comes first; one sent while a navigation is on its way (a link's page,
+    marked form's request still on its way, as a navigation cancels a pending submit, a write's
+    too (a Save button's), which the server may still apply but whose answer is not drawn: the
+    browser loads only the last form sent, so the last one's answer is the screen and its address
+    the one entry, whichever answer comes first; one sent while a navigation is on its way (a link's page,
     a traversal) is left to the browser, which drops that navigation for the form's, and the
     runtime reads the page at its address. A GET sent while a write of the same form is on its way
     (a Save button's `formmethod="post"`) waits for the write's answer, as any `data-patch`
@@ -5186,7 +5187,10 @@ rules something out.
     drawn, from where the module kept it as the entry was left: such a traversal's scroll is the
     module's (`scroll: "manual"`), since Firefox restores an intercepted traversal's scroll as
     the address changes, against the screen being left, which a shorter part can leave too short
-    to scroll back to where the entry was. A page of that
+    to scroll back to where the entry was. Both are kept under the entry whose screen is drawn,
+    not the one the address shows: a traversal that a newer one supersedes before it draws moves
+    the address and leaves the screen, so the newer one keeps that screen's typed fields and scroll
+    for its own entry, and the skipped entry keeps what was kept for it. A page of that
     route read since (a link to it, Back to an entry read as a page) is the same screen, its part
     drawn for its entry's address, so the entries stay. A form sent to another route's address
     makes no patch entry, nor do two entries at that address, since that route's patch drawn into
@@ -5264,8 +5268,8 @@ rules something out.
     answers, where a waiting submit was pressed) and the minifier's names, a character longer where
     the runtime has more of them. None of the hooks can leave, being where the runtime hands the
     module what only it sees (the submit, a submit that waited, the traversal, the answer, a page
-    or patch it inserts) or where the module calls in. The module is 3,405 bytes raw, 1,610 with
-    gzip and 1,418 with brotli, fetched once (its URL is versioned) by a page that draws a marked
+    or patch it inserts) or where the module calls in. The module is 3,439 bytes raw, 1,611 with
+    gzip and 1,423 with brotli, fetched once (its URL is versioned) by a page that draws a marked
     form, whose head carries its `<script type="module">` tag, and by no other page. A submit reads
     one attribute; a marked one cancels the other marked submits on their way, keeps what was typed
     and the scroll of the entry it leaves, pushes an entry, forgets the entries it dropped and marks
@@ -5295,7 +5299,10 @@ rules something out.
     a same-document traversal can be intercepted, in Chromium, Firefox and WebKit; the smoke's
     checks in all three; Firefox 157.0 restores an intercepted traversal's scroll as the address
     changes unless the handler takes it, which the smoke's step for entries of different heights
-    shows against `1325c854a`'s runtime); reasoned (the form's mark says which answers are the page at their
+    shows against `1325c854a`'s runtime; Firefox 157.0 also scrolls the screen to the destination
+    entry's place as such a traversal moves the address, before its patch is drawn, so a traversal
+    superseded then would leave another entry's scroll on screen, which the step for a superseded
+    traversal shows); reasoned (the form's mark says which answers are the page at their
     address, which neither the handler nor the runtime can tell; an entry of the screen read as a
     patch shows what a page read would, provided the route's patch draws all its address changes,
     which the guide asks of a marked form's route); value (an address that names what the screen
@@ -5318,7 +5325,11 @@ rules something out.
     features on a loaded machine, which passed when WebKit ran again (320 checks); 2026-11-17, the
     new steps for a GET that waited for its form's write, a field the patch takes away and entries
     of different heights against `1325c854a`'s runtime and module, served in this build's place:
-    the first two fail in all three engines and the third in Firefox; 2026-11-15, the
+    the first two fail in all three engines and the third in Firefox; 2026-11-17, the module's
+    size on `SHA_R14` against `7a064d11d`'s, and the steps for a write of another marked form, a
+    traversal superseded before it draws and a form that is its patch's part, with
+    controls named after an element's members, against `7a064d11d`'s module served in this
+    build's place: all three fail in all three engines; 2026-11-15, the
     traversals' bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4, and
     the request path's count on `307d00bca` against `c9ed56785`; 2026-11-15, the request path's
     count on `2d619cbb5` against `a3ee0c05f`.

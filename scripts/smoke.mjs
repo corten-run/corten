@@ -6158,6 +6158,209 @@ async function run(browser) {
           queued.asked.join() === "action ?scope=week" && queued.reloaded.at === "/smoke/scope?scope=week" && queued.reloaded.shown === "week",
         JSON.stringify(queued),
       );
+      /** A task, then a frame: for whatever the runtime does with an answer seen to its end. */
+      const settle = () => scope.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
+      // A write of one marked form still on its way when another marked form's GET is sent is
+      // dropped, as a navigation drops it, whichever answer comes first: the server may apply the
+      // write, but the browser shows the page of the form sent last, so the screen, the address and
+      // a reload all say the newer scope. Save is held before its headers; Quarter is drawn first,
+      // or held too and let go once Save's request has been seen to its end (a timeout fails the
+      // check).
+      /** @param {boolean} readFirst */
+      const writeThenRead = async (readFirst) => {
+        await scope.goto(`${base}/smoke/scope?scope=day`);
+        // The pointer away from the page's links, where an earlier step left it: Firefox hovers one
+        // under a still pointer as the screen changes, and its dwell prefetches the link's page.
+        await scope.mouse.move(1200, 700);
+        /** @type {() => void} */
+        let letSave = () => {};
+        const saveWaits = new Promise((resolve) => (letSave = () => resolve(undefined)));
+        /** @type {() => void} */
+        let letQuarter = () => {};
+        const quarterWaits = readFirst ? Promise.resolve() : new Promise((resolve) => (letQuarter = () => resolve(undefined)));
+        await scope.route(saveAsked, async (route) => {
+          const request = route.request();
+          const quarter = request.headers()["corten"] === "action" && new URL(request.url()).search === "?scope=quarter";
+          if (request.method() !== "POST" && !quarter) return route.fallback();
+          await (quarter ? quarterWaits : saveWaits);
+          await route.continue().catch(() => {});
+        });
+        // Save's request seen to its end: `__saveDone` once its fetch fails (cancelled) or its body
+        // has been read; these handlers run before the runtime's, put on after them.
+        await scope.evaluate(() => {
+          const fetch_ = window.fetch;
+          Object.assign(window, { __saveDone: false });
+          window.fetch = function (input, init) {
+            const sent = fetch_.call(this, input, init);
+            if (init?.method !== "POST") return sent;
+            window.fetch = fetch_;
+            sent.then(
+              (res) => {
+                const text = res.text;
+                res.text = () => text.call(res).finally(() => Object.assign(window, { __saveDone: true }));
+              },
+              () => Object.assign(window, { __saveDone: true }),
+            );
+            return sent;
+          };
+        });
+        const quarterIn = () =>
+          scope
+            .waitForFunction(
+              () => location.search === "?scope=quarter" && document.querySelector("#smoke-scope output")?.textContent === "quarter" && !document.querySelector("main form[aria-busy]"),
+              undefined,
+              { timeout: 5000 },
+            )
+            .then(() => true, () => false);
+        const before = await entries();
+        asked.length = 0;
+        const saveSent = scope.waitForRequest((r) => r.method() === "POST" && saveAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
+        await press("saved");
+        const saving = await saveSent;
+        const quarterSent = scope.waitForRequest((r) => new URL(r.url()).search === "?scope=quarter" && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+        await press("quarter");
+        const sending = await quarterSent;
+        const drawnFirst = readFirst && (await quarterIn());
+        letSave();
+        const saveDone = await scope.waitForFunction(() => /** @type {any} */ (window).__saveDone, undefined, { timeout: 5000 }).then(() => true, () => false);
+        await settle();
+        letQuarter();
+        const drawn = readFirst ? drawnFirst : await quarterIn();
+        await settle();
+        await scope.unroute(saveAsked);
+        const result = { saving, sending, drawn, saveDone, at: await whole(), added: (await entries()) - before, shown: await shown(), asked: asked.splice(0), reloaded: { at: "", shown: "" } };
+        await scope.reload();
+        result.reloaded = { at: await whole(), shown: (await shown()) ?? "" };
+        return result;
+      };
+      const quarterFirst = await writeThenRead(true);
+      const saveFirst = await writeThenRead(false);
+      const newerWins = (/** @type {Awaited<ReturnType<typeof writeThenRead>>} */ r) =>
+        r.saving && r.sending && r.drawn && r.saveDone && r.at === "/smoke/scope?scope=quarter#smoke-scope" && r.added === 1 && r.shown === "quarter" &&
+        r.asked.join() === "action ,action ?scope=quarter" && r.reloaded.at === "/smoke/scope?scope=quarter#smoke-scope" && r.reloaded.shown === "quarter";
+      check(
+        "a write of one data-address form on its way when another's GET is sent draws nothing, whichever answer comes first, and the screen, the address and a reload say the newer scope",
+        newerWins(quarterFirst) && newerWins(saveFirst),
+        JSON.stringify({ quarterFirst, saveFirst }),
+      );
+      // A traversal superseded before it draws leaves its entry's draft and scroll as they were
+      // kept: from one, to a short scope with a field in its panel (typed in, scrolled a little), to
+      // a tall one with it too (typed in, scrolled far), Back to the short one is held before its
+      // headers and Back again draws one. Once the held request has been seen to its end (a timeout
+      // fails the check), Forward draws the short one with its own draft at its own scroll, not the
+      // tall one's, and Forward again the tall one with its own. Loaded at an address of its own
+      // (the Firefox entry drop above).
+      await scope.goto(`${base}/smoke/scope?scope=one`);
+      await scope.mouse.move(1200, 700);
+      await sendFor("draft");
+      // Typed in from the page's script, which scrolls nothing: Playwright's `fill` scrolls the field
+      // into view, in Firefox after the scroll this step sets.
+      const typeIn = (/** @type {string} */ text) =>
+        scope.evaluate((text) => {
+          const field = /** @type {HTMLInputElement} */ (document.querySelector("input[name=panel_note]"));
+          field.value = text;
+          field.dispatchEvent(new Event("input", { bubbles: true }));
+        }, text);
+      await typeIn("short draft");
+      await scope.evaluate(() => scrollTo(0, 100));
+      const twoAt = await y();
+      await sendFor("longdraft");
+      await typeIn("long draft");
+      await scope.evaluate(() => scrollTo(0, 3000));
+      const threeAt = await y();
+      const twoAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=draft";
+      /** @type {() => void} */
+      let letTwo = () => {};
+      const twoWaits = new Promise((resolve) => (letTwo = () => resolve(undefined)));
+      let twoHeld = false;
+      await scope.route(twoAsked, async (route) => {
+        if (twoHeld || route.request().headers()["corten"] !== "action") return route.fallback();
+        twoHeld = true;
+        await twoWaits;
+        await route.continue().catch(() => {});
+      });
+      // The held read seen to its end: `__twoDone` once its fetch fails (aborted) or its body's
+      // read settles, these handlers running before the runtime's.
+      await scope.evaluate(() => {
+        const fetch_ = window.fetch;
+        Object.assign(window, { __twoDone: false });
+        window.fetch = function (input, init) {
+          const sent = fetch_.call(this, input, init);
+          const href = String(input instanceof Request ? input.url : input);
+          if (!href.endsWith("/smoke/scope?scope=draft") || new Headers(init?.headers).get("corten") !== "action") return sent;
+          window.fetch = fetch_;
+          sent.then(
+            (res) => {
+              const text = res.text;
+              res.text = () => text.call(res).finally(() => Object.assign(window, { __twoDone: true }));
+            },
+            () => Object.assign(window, { __twoDone: true }),
+          );
+          return sent;
+        };
+      });
+      asked.length = 0;
+      const twoSent = scope.waitForRequest((r) => twoAsked(new URL(r.url())) && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+      await scope.evaluate(() => void (/** @type {any} */ (window).navigation.back()));
+      const twoOut = await twoSent;
+      await traverse("back");
+      // WebKit settles the newer traversal's `finished` (an AbortError) before its patch is drawn.
+      const oneIn = await scope
+        .waitForFunction(() => location.search === "?scope=one" && document.querySelector("#smoke-scope output")?.textContent === "one", undefined, { timeout: 5000 })
+        .then(() => true, () => false);
+      letTwo();
+      const twoDone = await scope.waitForFunction(() => /** @type {any} */ (window).__twoDone, undefined, { timeout: 5000 }).then(() => true, () => false);
+      await settle();
+      await scope.unroute(twoAsked);
+      const skippedTwo = { at: await traverse("forward"), draft: await panelNote(), y: await y() };
+      const skippedThree = { at: await traverse("forward"), draft: await panelNote(), y: await y() };
+      const skipped = { twoAt, threeAt, twoOut, oneIn, twoDone, two: skippedTwo, three: skippedThree, asked: asked.splice(0) };
+      check(
+        "a data-address traversal superseded before it draws leaves its entry's draft and scroll as they were, and Forward draws each entry with its own",
+        twoAt === 100 && threeAt === 3000 && skipped.twoOut && skipped.oneIn && skipped.twoDone &&
+          skippedTwo.at === "/smoke/scope?scope=draft" && skippedTwo.draft === "short draft" && near(skippedTwo.y, 100) &&
+          skippedThree.at === "/smoke/scope?scope=longdraft" && skippedThree.draft === "long draft" && near(skippedThree.y, 3000) &&
+          skipped.asked.join() === "action ?scope=draft,action ?scope=one,action ?scope=draft,action ?scope=longdraft",
+        JSON.stringify(skipped),
+      );
+      // A marked form that is the part its patch draws, with controls named after members of an
+      // element (`contains` among them), the form's members of those names: what the user typed in
+      // it and did not send is put back when Back draws it again.
+      await scope.goto(`${base}/smoke/scope-form`);
+      await scope.mouse.move(1200, 700);
+      const formDraft = () => scope.evaluate(() => /** @type {HTMLInputElement | null} */ (document.getElementById("scope-draft"))?.value ?? null);
+      // Typed and sent from the page's script: Playwright's own checks of a field read its form's
+      // `getAttribute`, which a control here shadows.
+      await scope.evaluate(() => {
+        const draft = /** @type {HTMLInputElement} */ (document.getElementById("scope-draft"));
+        draft.value = "form draft";
+        draft.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      asked.length = 0;
+      await scope.evaluate(() => {
+        const week = /** @type {HTMLButtonElement} */ (document.querySelector("#scope-part button[value=week]"));
+        week.form?.requestSubmit(week);
+      });
+      const formSent = await scope
+        .waitForFunction(
+          () => location.search === "?scope=week" && document.querySelector("#scope-part output")?.textContent === "week" && !document.querySelector("main form[aria-busy]"),
+          undefined,
+          { timeout: 5000 },
+        )
+        .then(() => true, () => false);
+      const formBack = {
+        sent: formSent,
+        at: await traverse("back"),
+        shown: await scope.evaluate(() => document.querySelector("#scope-part output")?.textContent),
+        draft: await formDraft(),
+        asked: asked.splice(0),
+      };
+      check(
+        "a data-address form that is the part its patch draws, with controls named after an element's members, has what the user typed put back when Back draws it",
+        formBack.sent && formBack.at === "/smoke/scope-form" && formBack.shown === "all" && formBack.draft === "form draft" &&
+          formBack.asked.join() === "action /smoke/scope-form?scope=week,action /smoke/scope-form",
+        JSON.stringify(formBack),
+      );
     }
     await scope.close();
   }
