@@ -7176,12 +7176,14 @@ async function run(browser) {
       };
       const emptySent = await firstSent("");
       const unplacedSent = await firstSent('<section id="smoke-scope"><p>Scope: <output>part</output></p></section><section id="smoke-nowhere"></section>');
+      // The second element's place is inside the first's, which the first's draw takes away.
+      const nestedSent = await firstSent('<section id="smoke-scope"><p>Scope: <output>part</output></p></section><form id="smoke-quarter-form"></form>');
       const readWhole = (/** @type {Awaited<ReturnType<typeof firstSent>>} */ s) =>
         s.drawn && s.at === "/smoke/scope?scope=week" && s.added === 1 && s.shown === "week" && s.asked.join() === "action ?scope=week,nav ?scope=week";
       check(
-        "a data-address form's patch that is empty or has an element with no place on the page reads the page at its address",
-        readWhole(emptySent) && readWhole(unplacedSent) && (await at()) === "/smoke/scope?scope=day",
-        JSON.stringify({ emptySent, unplacedSent, at: await at() }),
+        "a data-address form's patch that is empty, has an element with no place on the page or one whose place is inside another's reads the page at its address",
+        readWhole(emptySent) && readWhole(unplacedSent) && readWhole(nestedSent) && (await at()) === "/smoke/scope?scope=day",
+        JSON.stringify({ emptySent, unplacedSent, nestedSent, at: await at() }),
       );
       // A patch of a stylesheet link alone draws nothing (the link goes to the head first), and one
       // that throws as it is drawn is not drawn whole either: the page at the address is read.
@@ -7890,20 +7892,25 @@ async function run(browser) {
         const whileHeld = asked.slice();
         const order = first === "save" ? [[saving, "#scope-editor"], [pinning, "#scope-filter"]] : [[pinning, "#scope-filter"], [saving, "#scope-editor"]];
         const drawn = [];
+        /** The requests once the first answer is drawn and the second is still held. @type {string[]} */
+        let between = [];
         for (const [held, section] of /** @type {[{ release: () => void }, string][]} */ (order)) {
           held.release();
           drawn.push(await notBusy(section));
           await settle();
+          if (drawn.length === 1) between = asked.slice();
         }
         // Scope B, if it is sent, which it is once both answers are drawn.
         const ended = (await notBusy("main")) && (await settle(), await notBusy("main"));
         await settle();
         await scope.unroute(editAsked);
         await scope.unroute(pinAsked);
-        return { saveReached, pinReached, whileHeld, drawn, ended, ...(await filterState(before)) };
+        return { saveReached, pinReached, whileHeld, between, drawn, ended, ...(await filterState(before)) };
       };
       /** @param {Awaited<ReturnType<typeof writesThenFilter>>} r */
-      const heldBoth = (r) => r.saveReached && r.pinReached && r.whileHeld.join() === "action /smoke/scope-edit,action /smoke/scope-pin" && r.drawn.every(Boolean) && r.ended;
+      const heldBoth = (r) =>
+        r.saveReached && r.pinReached && r.whileHeld.join() === "action /smoke/scope-edit,action /smoke/scope-pin" && r.drawn.every(Boolean) && r.ended &&
+        !r.between.includes("action /smoke/scope-edit?scope=b");
       /** Scope B not sent: the screen, the address and a reload are as the writes left them. @param {Awaited<ReturnType<typeof writesThenFilter>>} r @param {string} pinSaid */
       const notSent = (r, pinSaid) =>
         heldBoth(r) && !r.sentB && r.filter === "all" && r.pinSaid === pinSaid && r.at === "/smoke/scope-edit" && r.added === 0 && r.reloaded.filter === "all" &&
@@ -7973,6 +7980,191 @@ async function run(browser) {
           JSON.stringify(dropped),
         );
       }
+      // A GET waiting for its form's write is sent again in a task of its own once the write's
+      // answer is drawn. A press made before that task runs is newer: another marked form's GET
+      // (Quarter) is drawn and its address pushed, and a write of the same form (Save again) goes;
+      // either way the older GET (Week) is not sent. The page's next timer with no delay, the one
+      // the runtime sets for Week, presses the newer one as it runs, first.
+      /** @param {"quarter" | "saved"} gap the button pressed in that gap */
+      const gapAfterSave = async (gap) => {
+        await scope.goto(`${base}/smoke/scope?scope=day`);
+        await scope.mouse.move(1200, 700);
+        /** @type {() => void} */
+        let letFirst = () => {};
+        const firstGoes = new Promise((resolve) => (letFirst = () => resolve(undefined)));
+        let first = true;
+        await scope.route(saveAsked, async (route) => {
+          if (route.request().method() !== "POST") return route.fallback();
+          if (first) (first = false), await firstGoes;
+          await route.continue().catch(() => {});
+        });
+        const before = await entries();
+        const posted = scope.waitForRequest((r) => r.method() === "POST" && saveAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
+        await press("saved");
+        const writing = await posted;
+        await press("week");
+        await scope.evaluate((gap) => {
+          const set = window.setTimeout;
+          /** @type {any} */ (window).setTimeout = (/** @type {Function} */ fn, /** @type {number | undefined} */ ms, /** @type {unknown[]} */ ...rest) => {
+            if (ms !== undefined) return set(fn, ms, ...rest);
+            window.setTimeout = set;
+            return set(() => {
+              const button = /** @type {HTMLButtonElement} */ (document.querySelector(`#smoke-scope button[value=${gap}]`));
+              button.form?.requestSubmit(button);
+              Object.assign(window, { __gapped: true });
+              fn(...rest);
+            });
+          };
+        }, gap);
+        asked.length = 0;
+        letFirst();
+        const ended = await scope
+          .waitForFunction(() => /** @type {any} */ (window).__gapped === true && !document.querySelector("main form[aria-busy]"), undefined, { timeout: 5000 })
+          .then(() => true, () => false);
+        await settle();
+        await scope.waitForFunction(() => !document.querySelector("main form[aria-busy]"), undefined, { timeout: 5000 }).catch(() => {});
+        await settle();
+        await scope.unroute(saveAsked);
+        const result = { writing, ended, at: await at(), added: (await entries()) - before, shown: await shown(), asked: asked.splice(0), reloaded: { at: "", shown: "" } };
+        await scope.reload();
+        result.reloaded = { at: await at(), shown: (await shown()) ?? "" };
+        return result;
+      };
+      const gapQuarter = await gapAfterSave("quarter");
+      check(
+        "a GET of a data-address form waiting for its own write is not sent once another marked form's GET is pressed before it goes again",
+        gapQuarter.writing && gapQuarter.ended && gapQuarter.at === "/smoke/scope?scope=quarter" && gapQuarter.added === 1 && gapQuarter.shown === "quarter" &&
+          gapQuarter.asked.join() === "action ?scope=quarter" && gapQuarter.reloaded.at === "/smoke/scope?scope=quarter" && gapQuarter.reloaded.shown === "quarter",
+        JSON.stringify(gapQuarter),
+      );
+      const gapSaved = await gapAfterSave("saved");
+      check(
+        "a GET of a data-address form waiting for its own write is not sent once a newer write of the form is pressed before it goes again",
+        gapSaved.writing && gapSaved.ended && gapSaved.at === "/smoke/scope?scope=day" && gapSaved.added === 0 && gapSaved.shown === "saved" && gapSaved.asked.join() === "action " &&
+          gapSaved.reloaded.at === "/smoke/scope?scope=day" && gapSaved.reloaded.shown === "day",
+        JSON.stringify(gapSaved),
+      );
+      // A GET waiting for another marked form's write leaves a write pressed after it alone: Save is
+      // held, Scope B pressed, then the note's Note sent (held) and sent again with other values,
+      // which waits for the first. Once Save is let go, Scope B is drawn; once the first Note is,
+      // the second goes.
+      const noteAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope-note";
+      /** Sends the note's Note with `text`. @param {string} text */
+      const pressNote = (text) =>
+        scope.evaluate((text) => {
+          const field = /** @type {HTMLInputElement} */ (document.querySelector("#scope-note input[name=title]"));
+          field.value = text;
+          const button = /** @type {HTMLButtonElement} */ (document.querySelector("#scope-note button[formmethod=post]"));
+          button.form?.requestSubmit(button);
+        }, text);
+      await scope.goto(`${base}/smoke/scope-edit`);
+      await scope.mouse.move(1200, 700);
+      const beforeNotes = await entries();
+      const saveForNotes = await holdWrite(editAsked, false);
+      /** @type {() => void} */
+      let letNote = () => {};
+      const noteGoes = new Promise((resolve) => (letNote = () => resolve(undefined)));
+      let firstNote = true;
+      await scope.route(noteAsked, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        if (firstNote) (firstNote = false), await noteGoes;
+        await route.continue().catch(() => {});
+      });
+      asked.length = 0;
+      await pressSave("first");
+      const notesSaveReached = await saveForNotes.reached;
+      await pressFilter();
+      await settle();
+      const notePosted = scope.waitForRequest((r) => r.method() === "POST" && noteAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
+      await pressNote("one");
+      const noting = await notePosted;
+      await pressNote("two");
+      await settle();
+      const notesWhileHeld = asked.slice();
+      saveForNotes.release();
+      const filterDrawn = await scope
+        .waitForFunction(() => location.search === "?scope=b" && document.querySelector("#scope-filter output")?.textContent === "b", undefined, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settle();
+      const notesAfterSave = asked.slice();
+      letNote();
+      const notedTwice = await scope
+        .waitForFunction(() => document.querySelector("#scope-note [role=status]")?.textContent === "Noted two." && !document.querySelector("main form[aria-busy]"), undefined, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settle();
+      await scope.unroute(editAsked);
+      await scope.unroute(noteAsked);
+      const notes = {
+        notesSaveReached,
+        noting,
+        notesWhileHeld,
+        filterDrawn,
+        notesAfterSave,
+        notedTwice,
+        noteSaid: await scope.evaluate(() => document.querySelector("#scope-note [role=status]")?.textContent ?? ""),
+        ...(await filterState(beforeNotes)),
+      };
+      check(
+        "a GET of a data-address form waiting for another's write leaves a newer queued write of a third marked form to go",
+        notes.notesSaveReached && notes.noting && notes.notesWhileHeld.join() === "action /smoke/scope-edit,action /smoke/scope-note" && notes.filterDrawn &&
+          notes.notesAfterSave.join() === "action /smoke/scope-edit,action /smoke/scope-note,action /smoke/scope-edit?scope=b" && notes.notedTwice && notes.noteSaid === "Noted two." &&
+          notes.asked.join() === "action /smoke/scope-edit,action /smoke/scope-note,action /smoke/scope-edit?scope=b,action /smoke/scope-note" && notes.filter === "b" &&
+          notes.at === "/smoke/scope-edit?scope=b" && notes.added === 1 && notes.reloaded.filter === "b",
+        JSON.stringify(notes),
+      );
+      // A GET waiting for another marked form's write is not sent once the page has begun to be
+      // loaded again: Save reaches the server, its answer is held, Scope B is pressed, and Save is
+      // answered with a page of another shell, which the runtime loads in full.
+      await scope.goto(`${base}/smoke/scope-edit`);
+      await scope.mouse.move(1200, 700);
+      /** @type {() => void} */
+      let letShell = () => {};
+      const shellGoes = new Promise((resolve) => (letShell = () => resolve(undefined)));
+      /** @type {() => void} */
+      let shellReach = () => {};
+      const shellReached = new Promise((resolve) => (shellReach = () => resolve(true)));
+      await scope.route(editAsked, async (route) => {
+        if (route.request().method() !== "POST") return route.fallback();
+        await route.fetch();
+        shellReach();
+        await shellGoes;
+        await route
+          .fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-page": "1", "corten-shell": "another" }, body: "<!doctype html><title>Another shell</title>" })
+          .catch(() => {});
+      });
+      // What the page's script fetches, kept across the load: a request the browser drops as the
+      // page unloads is still one the runtime sent.
+      await scope.evaluate(() => {
+        const fetched = window.fetch;
+        window.fetch = (/** @type {Parameters<typeof fetch>} */ ...args) => {
+          sessionStorage.setItem("smoke-fetched", `${sessionStorage.getItem("smoke-fetched") ?? ""} ${String(args[0])}`);
+          return fetched(...args);
+        };
+      });
+      asked.length = 0;
+      await pressSave("first");
+      const shellCommitted = await Promise.race([shellReached, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
+      await pressFilter();
+      await settle();
+      const shellWhileHeld = asked.slice();
+      const loadedAgain = scope.waitForEvent("load", { timeout: 10000 }).then(() => true, () => false);
+      letShell();
+      const shellLoaded = await loadedAgain;
+      await scope.unroute(editAsked);
+      await settle();
+      const fetchedThen = await scope.evaluate(() => {
+        const list = (sessionStorage.getItem("smoke-fetched") ?? "").trim().split(" ");
+        sessionStorage.removeItem("smoke-fetched");
+        return list.map((u) => new URL(u, location.href)).map((u) => u.pathname + u.search);
+      });
+      const shellChange = { shellCommitted, shellWhileHeld, shellLoaded, fetchedThen, asked: asked.splice(0), at: await whole(), filter: await filterOf() };
+      check(
+        "a GET of a data-address form waiting for another's write is not sent once that write's answer has the page loaded again",
+        shellChange.shellCommitted === true && shellChange.shellWhileHeld.join() === "action /smoke/scope-edit" && shellChange.shellLoaded &&
+          shellChange.fetchedThen.join() === "/smoke/scope-edit" &&
+          shellChange.asked.join() === "action /smoke/scope-edit,document /smoke/scope-edit" && shellChange.at === "/smoke/scope-edit" && shellChange.filter === "all",
+        JSON.stringify(shellChange),
+      );
       // A traversal superseded before it draws leaves its entry's draft and scroll as they were
       // kept: from one, to a short scope with a field in its panel (typed in, scrolled a little), to
       // a tall one with it too (typed in, scrolled far), Back to the short one is held before its

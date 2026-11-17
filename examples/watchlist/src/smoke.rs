@@ -111,6 +111,10 @@ pub mod url {
     #[route("/smoke/scope-pin", post = scope_pin)]
     pub struct ScopePin;
 
+    /// The note's Note posts here: its answer is the note alone, saying what it noted.
+    #[route("/smoke/scope-note", post = scope_note)]
+    pub struct ScopeNote;
+
     /// Views whose holes are in a form, past one and a form's whole text, with controls outside
     /// each form, joined to it by `form=`, named `firstElementChild`, `nextElementSibling` and
     /// `textContent` (#1531).
@@ -404,6 +408,12 @@ struct ScopeFilterId;
 #[derive(Id)]
 struct ScopeFilterFormId;
 
+#[derive(Id)]
+struct ScopeNoteId;
+
+#[derive(Id)]
+struct ScopeNoteFormId;
+
 /// The title the editor posts.
 #[derive(Fields)]
 struct TitleForm {
@@ -442,7 +452,22 @@ fn ScopeFilter<'a>(scope: &'a str, said: &'a str) -> impl Patch {
     }
 }
 
-/// The screen with the editor and the filter.
+/// A third marked form, beside the editor and the filter, with a write of its own, Note, whose
+/// answer is this part alone, saying what it noted.
+#[component]
+fn ScopeNote<'a>(said: &'a str) -> impl Patch {
+    html! {
+        <section id={ScopeNoteId}>
+            <form id={ScopeNoteFormId} method="get" action={url::ScopeEdit::default()} data-patch data-address>
+                <label>"Note "<input name={TitleForm::FIELDS.title}></label>
+                <button formmethod="post" formaction={url::ScopeNote}>"Note"</button>
+            </form>
+            <p role="status">{said}</p>
+        </section>
+    }
+}
+
+/// The screen with the editor, the filter and the note.
 fn scope_edit_page(req: &Req, scope: &str, said: &str, status: StatusCode) -> HtmlResult {
     let revision = REVISION.load(Ordering::Relaxed);
     req.page_with_status(
@@ -451,6 +476,7 @@ fn scope_edit_page(req: &Req, scope: &str, said: &str, status: StatusCode) -> Ht
             <Layout req={req} title="Scope and editor" viewer={None} head="">
                 <ScopeEditor revision={revision} said={said} />
                 <ScopeFilter scope={scope} said="" />
+                <ScopeNote said="" />
             </Layout>
         },
     )
@@ -472,6 +498,16 @@ async fn scope_pin(req: Req, Form(form): Form<TitleForm>) -> HtmlResult {
         Mode::Action => req.patch_with_status(status, html! { <ScopeFilter scope="all" said={said} /> }),
         _ if status.is_success() => req.redirect(&url::ScopeEdit::default()),
         _ => scope_edit_page(&req, "all", said, status),
+    }
+}
+
+/// The note's Note: with JavaScript the note, saying what it noted; without it, a redirect to the
+/// screen.
+async fn scope_note(req: Req, Form(form): Form<TitleForm>) -> HtmlResult {
+    let said = format!("Noted {}.", form.title);
+    match req.mode {
+        Mode::Action => req.patch_with_status(StatusCode::OK, html! { <ScopeNote said={&said} /> }),
+        _ => req.redirect(&url::ScopeEdit::default()),
     }
 }
 

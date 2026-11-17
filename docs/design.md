@@ -5633,8 +5633,14 @@ rules something out.
     the runtime does not draw, none), the GET is not sent either: the user reads that answer first,
     and presses again; nor is it once a newer marked GET has been sent. A GET waiting for another
     marked form's write while a write of its own form is on its way too waits for both, and is not
-    sent if either answer would stop it, in whichever order they come; and any newer submit of its
-    form, a write too, drops it, as the newer submit is what the user asked for last. The runtime keeps, in memory, the entries such forms
+    sent if either answer would stop it, in whichever order they come. Only presses before it
+    decide: the runtime counts the presses of `data-patch` forms, a submit sent again after a
+    write's answer keeps its own, and the runtime sends it again only while its form has had no
+    newer press and the page has not begun to be left since (a reload for another shell's page, a
+    full navigation). A newer press of its form, a write too, or of another marked GET drops it, as
+    the newer press is what the user asked for last, and a write pressed after it is neither waited
+    for nor dropped. The module only decides whether such a GET goes; the runtime's own
+    `sendAgain` sends it, with those checks, and its own queue holds it behind a write of its form. The runtime keeps, in memory, the entries such forms
     made at the path of the page on screen (the document's, then that of each page a navigation
     draws), and the one each was sent from when it is at that path too, and a traversal between
     two of them reads the destination as the form did (`corten: action`, which the HTTP cache can
@@ -5718,9 +5724,11 @@ rules something out.
     did, the error the mark is there to end, where a full load costs bytes (README conflict order 1
     over 2).
 
-    What it costs, at this Choice's last build: the runtime every page loads is 317 bytes larger
-    raw (43,846 to 44,163), 169 with gzip (15,612 to 15,781) and 135 with brotli (14,100 to
-    14,235), paid once a release by every user. Each hook's share was measured by replacing its
+    What it costs, at this Choice's last build: the runtime every page loads is 404 bytes larger
+    raw (43,846 to 44,250), 206 with gzip (15,612 to 15,818) and 167 with brotli (14,100 to
+    14,267), paid once a release by every user. Of those, 87 raw, 37 gzip and 32 brotli are the
+    press count a submit that waited for a write keeps, which every `data-patch` form's waiting
+    submit uses, a marked GET's too (the hooks' shares below were measured before it). Each hook's share was measured by replacing its
     code in the minified build with what that code is without it (the hook's statement removed, or
     the call it wraps called directly) and compressing again: alone, the runtime's functions and
     state the module uses take 32 bytes of gzip, the traversal hook 20, handing the submit over 20,
@@ -5733,12 +5741,12 @@ rules something out.
     another marked form's write, added 8 bytes raw and 4 with gzip to the build it was measured
     against. None of the hooks can leave, being where the runtime hands the
     module what only it sees (the submit, a submit that waited, the traversal, the answer, a page
-    or patch it inserts) or where the module calls in. The module is 4,086 bytes raw, 1,893 with
-    gzip and 1,669 with brotli, fetched once (its URL is versioned) by a page that draws a marked
+    or patch it inserts) or where the module calls in. The module is 4,221 bytes raw, 1,961 with
+    gzip and 1,747 with brotli, fetched once (its URL is versioned) by a page that draws a marked
     form, whose head carries its `<script type="module">` tag, and by no other page. A submit reads
     one attribute; a marked write listens for its form's error, a marked GET cancels the other
     marked GETs on their way and, behind another's write, waits for its answer and its own form's
-    write's, keeps what was typed
+    write's, compares two press counts, keeps what was typed
     and the scroll of the entry it leaves, pushes an entry, forgets the entries it dropped and marks
     the current nav link, and a traversal looks the pending submits over, two keys up in a set and,
     once its patch is drawn, the typed fields of the part, and scrolls once. A traversal whose patch read is answered by anything but a patch (a

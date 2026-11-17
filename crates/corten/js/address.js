@@ -74,19 +74,21 @@ const places = new Map();
  * @type {WeakMap<object, Promise<boolean>>}
  */
 const writes = new WeakMap();
-/** The marked GET sent last: one that waits for a write goes only if it still is. */
-let latest = {};
+/** The press ({@link submit}'s `press`) of the marked GET pressed last: an older one is not sent. */
+let newest = 0;
 /**
- * The GET of each marked form (by its id, else itself) waiting for writes ({@link submit}): any
- * newer submit of the form takes it out, so it is not sent.
- * @type {Map<string | HTMLFormElement, object>}
+ * The latest marked GET's press and the writes it waits for, those of other marked forms on their
+ * way when it was pressed, with, while it waits for them, its form, button and where it was
+ * pressed. One: a newer marked GET replaces it, so a GET it outdated holds no form.
+ * @type {[at: number, waits: (Promise<boolean> | undefined)[], form?: HTMLFormElement, by?: HTMLElement | null, within?: Set<string>]}
  */
-const waiting = new Map();
+let held = [0, []];
 
 /**
  * Refuses a patch that is not the page at an address: one with no element, an element with no
  * place on the page, or one that adds to an element (`data-append`), which draws more of what is
- * there rather than the part as the address has it. The runtime calls it once the patch is parsed
+ * there rather than the part as the address has it, or two whose places are one inside the
+ * other. The runtime calls it once the patch is parsed
  * and its stylesheet links are taken out (a stylesheet alone is none), before it draws anything.
  * @param {DocumentFragment} content
  */
@@ -97,7 +99,10 @@ function check(content) {
     if (own.matches.call(el, "[data-corten-read-again], template[data-remove]")) return true;
     return !own.matches.call(el, "template[data-append]") && !!id && !!document.getElementById(id);
   };
-  if (!els.length || !els.every(placed)) throw new Error("corten: a data-address form's patch is not the page at its address");
+  // Two whose places are one inside the other: the outer one's draw takes the inner one's place away.
+  const spots = els.map((el) => document.getElementById(own.getAttribute.call(el, "id") ?? ""));
+  const nested = spots.some((a) => spots.some((b) => !!a && !!b && a !== b && Node.prototype.contains.call(a, b)));
+  if (!els.length || !els.every(placed) || nested) throw new Error("corten: a data-address form's patch is not the page at its address");
 }
 
 /**
@@ -128,13 +133,15 @@ const drawWhole = ([apply], html, signal, sent, took, within, before) =>
  * before it, since it would draw an older choice over this one. Another marked form's write still
  * on its way is not: the server may have applied it, and its answer may be the only update of
  * parts outside this form's patch, so this is sent once that answer is drawn ({@link writes}), and
- * its patch, drawn after, is the screen. A write of this form on its way then decides with the
- * others': it is not sent after any answer that would stop a submit of the write's own form waiting
- * for it (`send`: a refusal of the state, a 5xx, a redirect, an error), which the user reads
- * first, nor once another marked GET or any newer submit of this form has been sent since
- * ({@link waiting}); a submit of a write's form waiting for it is dropped, pressed before this.
- * With no other marked form's write on its way, a write of this form makes this wait for it
- * (`send`). A patch drawn whole puts the address it asked for in history ({@link address});
+ * its patch, drawn after, is the screen. It is not sent after an answer that would stop a submit of
+ * the write's own form waiting for it (`send`: a refusal of the state, a 5xx, a redirect, an error),
+ * which the user reads first; a submit of a write's form waiting for it is dropped, pressed before
+ * this. A write of this form on its way makes this wait for it first, in the runtime's queue
+ * (`send`), which drops it on such an answer too; its other writes are waited for once it comes
+ * again. Only what was pressed before this decides: `press` is its press ({@link newest}), which a
+ * submit that comes again (`sendAgain`) keeps, and the runtime sends it again only while no newer
+ * press of its form was made and the page has not begun to be left since. A newer marked GET's
+ * press drops it. A patch drawn whole puts the address it asked for in history ({@link address});
  * a page, or a patch not drawn whole, has the page at that address read instead, as the browser
  * reads it for the form without JavaScript: in an entry of its own (none when it is the address
  * already), the form busy until it is drawn. A submit that waited for a write's answer comes again,
@@ -142,15 +149,13 @@ const drawWhole = ([apply], html, signal, sent, took, within, before) =>
  * @param {Event} event @param {HTMLFormElement} form
  * @param {HTMLElement | null | undefined} by the button that sent it
  * @param {Parameters<Core[8]>[2]} sends how the form is sent @param {Core} core @param {Set<string>} [within]
+ * @param {number} [press] its press, the runtime's count
  */
-export function submit(event, form, by, sends, core, within) {
+export function submit(event, form, by, sends, core, within, press = 0) {
   const get = sends.method === "get";
   if (get && (!navigation || navigation.transition)) return;
   const [apply, remember, , submits, go, LOAD, SOURCE, , send, , , sendAgain] = core;
   event.preventDefault();
-  // Any newer submit of the form, a write too, drops a GET of it waiting for writes.
-  const key = own.getAttribute.call(form, "id") ?? form;
-  waiting.delete(key);
   if (!get) {
     const before = submits.get(form);
     /** @type {Response | undefined} */
@@ -172,22 +177,28 @@ export function submit(event, form, by, sends, core, within) {
     else off.abort();
     return;
   }
-  const mine = (latest = {});
-  /** @type {(Promise<boolean> | undefined)[]} */
-  const waits = [];
-  for (const [other, pending] of submits)
-    if (other !== form && own.hasAttribute.call(other, "data-address"))
-      if (pending.write) waits.push(writes.get(pending)), (pending.next = undefined);
-      else pending.controller.abort();
+  if (press < newest) return;
+  // Pressed now, not come again: what is on its way was pressed before it.
+  if (press > newest) {
+    newest = press;
+    /** @type {(Promise<boolean> | undefined)[]} */
+    const waits = [];
+    for (const [other, pending] of submits)
+      if (other !== form && own.hasAttribute.call(other, "data-address"))
+        if (pending.write) waits.push(writes.get(pending)), (pending.next = undefined);
+        else pending.controller.abort();
+    held = [press, waits];
+  }
+  // Queued behind the write of this form on its way, as any form's submit is: it comes again.
+  if (submits.get(form)?.write) return void send(form, by, sends, within);
+  const [, waits] = held;
   if (waits.length) {
-    // A write of this form on its way too: its answer decides with the others'.
-    const ours = submits.get(form);
-    if (ours?.write) waits.push(writes.get(ours)), (ours.next = undefined);
-    waiting.set(key, mine);
+    held = [press, waits, form, by, within];
     return void Promise.all(waits).then((ok) => {
-      if (waiting.get(key) !== mine) return;
-      waiting.delete(key);
-      if (latest === mine && ok.every(Boolean)) sendAgain(form, by ?? null);
+      if (held[0] !== press) return;
+      const [, , f, b, w] = held;
+      held = [press, []];
+      if (ok.every(Boolean)) sendAgain(/** @type {HTMLFormElement} */ (f), b ?? null, w, press);
     });
   }
   let at = "";

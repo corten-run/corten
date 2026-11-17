@@ -181,7 +181,8 @@ division: end statements with `;` and keep a division on the line it continues.
    of what it changed outside that part), unless the Save was refused for its state (409, 410), a
    5xx, a redirect or no answer, which the user reads first; with Saves of both forms on their way
    it waits for both, and either answer can stop it. A newer marked GET cancels an older one, and
-   any newer submit of the form, a Save too, drops its GET still waiting.
+   any newer press of the form, a Save too, drops its GET still waiting; a Save pressed after the
+   GET is neither waited for nor dropped.
 
 ## Text a script computes
 
