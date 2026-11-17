@@ -1273,6 +1273,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- Catalog timed-load evidence initializes its four outcome counter series once
+  per active VU and increments only the classified outcome per request. Preserve
+  exact totals and zero-valued categories with less load-generator bookkeeping;
+  request settings, checks, thresholds and qualification gates are unchanged.
+
 - Grouped benchmark collection and retirement confirm delayed provider deletion
   with bounded, exact-ID, read-only observations instead of failing on the first
   still-present response. Account checks share the deadline, and uncertainty
