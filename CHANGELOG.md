@@ -5,6 +5,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Preserve completed catalog load/request failures as versioned, replayable failed
+  app outcomes, separate from successful baselines and apparatus failures. Retain
+  all passes, raw counters, participant lifetimes and side errors; report successful
+  throughput, failed requests and drops separately without excluding healthy peers
+  ([#1556 Catalog benchmark discards failed-load metrics and cannot replay completed target outcomes](https://github.com/corten-run/corten/issues/1556)).
+
 - The watchlist smoke's check that a submit which waited for a write the network failed is not
   sent holds that write until the newer press is made, and presses both buttons in the page, where
   it failed the write after a fixed 600 ms. On a loaded machine the newer press came after the

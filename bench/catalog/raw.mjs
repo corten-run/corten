@@ -9,6 +9,8 @@ import { qualificationIdentity } from "./group.mjs";
 import { verifyRecordAttempt, verifyAttemptWindow } from "./record-attempt.mjs";
 import { summarizeSamples, memoryMiB } from "./stats.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
+import { timedRawSchema, verifyTimedPhase } from "./timed.mjs";
+import { isDeepStrictEqual } from "node:util";
 
 export const rawSchema = "catalog-saved-evidence/v2";
 export const upstreamImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
@@ -110,12 +112,17 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
 }
 
 export function replayCatalog(summary, { readJson, readText }, commit) {
-  assert.equal(summary.savedEvidence?.schema, rawSchema, "native raw evidence version missing");
+  assert.ok([rawSchema, timedRawSchema].includes(summary.savedEvidence?.schema), "native raw evidence version missing");
   assert.equal(summary.options?.group, "catalog-page", "raw group validation requires catalog-page");
   const report = inspectCatalog(summary, commit);
   const gated = summary.timingDisposition === "gated-functional";
+  const timed = summary.savedEvidence.schema === timedRawSchema && !gated;
   assert.ok(summary.timingDisposition === undefined || gated, "unknown timing disposition");
-  if (!gated) assert.ok(report.baseline, "native summary is not complete");
+  if (timed) {
+    assert.equal(report.attemptComplete, true, "timed native attempt is not complete");
+    assert.ok(Array.isArray(summary.targetFailures), "timed target dispositions missing");
+    assert.equal(summary.complete, summary.targetFailures.length === 0, "timed baseline disposition differs");
+  } else if (!gated) assert.ok(report.baseline, "native summary is not complete");
   else {
     assert.ok(Object.values(report.attemptGates).every((v) => v === true), "negative attempt identity/configuration incomplete");
     assert.equal(summary.dirty, false); assert.equal(summary.complete, false); assert.equal(summary.checksPassed, false);
@@ -135,11 +142,13 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   if (!gated || summary.tools.k6 !== undefined) verifyK6Provenance(summary.tools.k6);
   for (const name of ["upstream", "checker", ...(gated ? [] : ["k6"])]) assert.match(summary.tools?.[name]?.imageId, /^sha256:[a-f0-9]{64}$/);
   const outcomes = [];
+  const targetFailures = [];
+  const timedIds = new Set();
   let negative = false;
   let upstreamId;
   for (const [app, entry] of Object.entries(summary.apps)) {
     let failed = false;
-    if (gated) assert.deepEqual(entry.failures ?? [], []);
+    if (gated || timed) assert.ok(isDeepStrictEqual(entry.failures ?? [], []), "app apparatus failures retained");
     assert.match(entry.imageId, /^sha256:[a-f0-9]{64}$/);
     assert.ok(Number.isSafeInteger(entry.imageBytes) && entry.imageBytes > 0);
     assert.deepEqual(readJson(`image-${app}.json`), { imageId: entry.imageId, imageBytes: entry.imageBytes, commit, built: true,
@@ -188,6 +197,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
           assert.equal(instance.runId, summary.runId);
           assert.equal(instance.startedAt, containerStartedAt);
           assert.match(instance.id, /^[a-f0-9]{64}$/);
+          if (timed) { assert.ok(!timedIds.has(instance.id), "timed app container reused across runs"); timedIds.add(instance.id); }
           assert.equal(instance.quotaNanoCpus, summary.measurement.cpus.app.quota * 1e9);
           assert.equal(instance.cpuset, summary.measurement.cpus.app.cpuset ?? "");
           assert.equal(instance.memoryBytes, summary.measurement.appMemoryBytes);
@@ -195,6 +205,22 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
           let previousCounters = {};
           let previousFinishedAt = Date.parse(cold.first200At);
           for (const phase of ["warmup", ...phases]) {
+            if (timed) {
+              const observed = verifyTimedPhase(summary, { app, source, target: profile.target, phase,
+                seconds: phase === "warmup" ? summary.options.warmup : summary.options.duration, instance }, {
+                readJson: (key) => readJson(`${raw}/${key}`), readText: (key) => readText(`${raw}/${key}`),
+              }, { counters: previousCounters, finishedAt: previousFinishedAt });
+              assert.ok(isDeepStrictEqual(phase === "warmup" ? run.warmup : run.phases[phase], observed.metrics), "timed metrics differ from raw");
+              previousCounters = observed.counters; previousFinishedAt = observed.finishedAt;
+              assert.ok(!timedIds.has(observed.loadId), "timed load container reused across phases"); timedIds.add(observed.loadId);
+              upstreamId ??= observed.upstreamId; assert.equal(observed.upstreamId, upstreamId, "timed upstream identity changed");
+              if (observed.metrics.outcome === "failed") {
+                failed = true;
+                targetFailures.push({ app, source, target: profile.target, pass: run.pass, phase, failed: observed.metrics.failed,
+                  timeouts: observed.metrics.timeouts, httpErrors: observed.metrics.httpErrors, dropped: observed.metrics.dropped });
+              }
+              continue;
+            }
             const metrics = readLoad(readJson(`${raw}/${phase}.json`));
             readText(`${raw}/${phase}.log`);
             if (phase !== "warmup") {
@@ -256,6 +282,10 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
     outcomes.push({ app, outcome: failed ? "failed" : "passed" });
   }
   if (gated) assert.ok(negative, "global gate lacks replayed target violation");
+  if (timed) {
+    const ordered = (rows) => [...rows].sort((a, b) => `${a.app}/${a.source}/${a.target}/${a.pass}/${a.phase}`.localeCompare(`${b.app}/${b.source}/${b.target}/${b.pass}/${b.phase}`));
+    assert.ok(isDeepStrictEqual(ordered(summary.targetFailures), ordered(targetFailures)), "timed target failure ledger differs from raw");
+  }
   return { ...report, ...(gated ? { status: "COMPLETE ATTEMPT: functional failure; not a baseline" } : {}),
-    attemptComplete: true, outcomes, comparisonEligibleApps: gated ? [] : [...summary.group.apps] };
+    attemptComplete: true, outcomes, comparisonEligibleApps: gated ? [] : outcomes.filter((r) => r.outcome === "passed").map((r) => r.app) };
 }

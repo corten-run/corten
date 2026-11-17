@@ -93,7 +93,7 @@ Such failures remain incomplete and block timing; they do not become replayable 
 attempts or passing checks.
 
 Grouped campaigns additionally use `verify.mjs FOLDER cN FULL_COMMIT` to replay
-`catalog-saved-evidence/v2` observations without running Docker, Git or a browser.
+`catalog-saved-evidence/v2` or `catalog-saved-evidence/v3` observations without running Docker, Git or a browser.
 This schema requires the selected k6 image, platform and actual executable version;
 older evidence is not retroactively assigned that identity.
 The native producer preserves the fixture, checker receipts, native build/image
@@ -185,6 +185,59 @@ duplicate passes, unexpected apps/sources/targets or wrong identity bindings are
 only and disclose the stronger correctness gate. Ungrouped CLI defaults, summary shape and
 historical full-baseline validation remain unchanged. This integration is not a claim that a
 native group run has passed or that a dedicated-host baseline exists.
+
+### Completed timed request outcomes
+
+New group runs write `catalog-saved-evidence/v3`. This separates an observed
+load/request failure from an incomplete apparatus attempt and from a successful
+baseline. It does not diagnose the framework, event loop or underlying cause.
+The v2 replay rules remain unchanged; an old partial run cannot acquire v3 proof
+or become a new baseline by relabeling its summary or copying its raw metrics.
+
+All functional checks still pass before any timing. Warmup remains strictly
+successful. Every requested app/source/pass and fixed/64-user/256-user phase
+is retained, including phases after an observed timed request failure. No app,
+pass or unsuccessful request is filtered or retried. Request settings, CPU and
+memory budgets, duration, warmup, fixed rate and pass count are unchanged.
+
+The k6 producer adds exhaustive counters for successful responses, request
+timeouts (native error code 1050), HTTP 429/5xx responses with the expected content
+type, and invalid/unclassified responses. Unknown transport errors, other status
+codes and incorrect content types are not completed target outcomes. Counts,
+root checks, rates, completed iterations and all three threshold results must
+agree exactly. Existing full page/JSON content and browser correctness gates
+remain mandatory; timed requests still discard bodies and check status/type,
+not full response-body parity under load. A content-check failure is never
+converted through the timed-outcome path.
+
+Each phase retains `*-boundary.json` (`catalog-timed-phase/v1`): actual Docker
+command exit, independent side errors, before/after app/upstream/load identities,
+native commands, source environment, mounts, budgets and lifetime state. The
+load container must exit normally with code 0 for a passing phase or exactly 99
+for independently replayed crossed thresholds. Exit 99 alone proves nothing.
+Timeout/cancellation, OOM, restarts, unknown lifecycle, early termination,
+counter/sampler/copy errors and incomplete cleanup cannot complete an attempt.
+Side errors are preserved together even when k6 has already exited 99.
+
+Replay checks raw CPU deltas and cumulative continuity, raw/sample agreement,
+complete resource windows (no sample gap over two seconds), exact aggregates,
+immutable native images and unchanged source/cleanup provenance. App and load
+containers cannot be reused across separate runs/phases. Failed phases require
+observed load-generator CPU headroom (sampled peak below 80% of its quota);
+API-source phases additionally require upstream peak below 80% of one core.
+Only fixed-rate phases can retain drops, and they additionally require app
+average CPU at least 95% of its quota. These conservative eligibility conditions
+do not establish a causal capacity limit.
+
+An observed failure keeps native runner exit 1 and `baseline: false`, while a
+complete raw replay returns `attemptComplete: true` and the affected app's
+`outcome: "failed"`. That app is never comparison-eligible; fully passing peers
+retain their own eligibility. The saved verifier's exit 0 means a complete
+replayed attempt, not that every app passed. The strict report command still
+exits 1 for a failed baseline. Reports expose all phase/pass outcome counts and
+median [minimum, maximum] ranges, separating successful req/s from attempted
+req/s, request failures and dropped work. Campaign host/source/lifecycle gates
+remain independent and unchanged.
 
 ### Explicit catalog-page droplet
 
