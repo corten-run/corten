@@ -25,6 +25,11 @@ Corten is pre-1.0, so any minor version may change the API.
   load of the page at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
+- `serve_wrapped_with` carries a TLS handshake's value to each request as
+  `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
+  nothing to the document) and `Identify`. The existing serve paths carry no value;
+  connection limits, timeouts and shutdown still cover the handshake.
+
 - The watchlist smoke's first field change after a link now tests a same-shell page swap, with
   the field module held back, rather than racing the scripts of a full document load.
 
