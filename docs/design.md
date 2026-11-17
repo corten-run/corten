@@ -3766,7 +3766,7 @@ rules something out.
     its `get` handler's result is `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it),
     at the handler's name, and only such a route is a `PatchRoute`, the one kind of route
     `ReadAgain::from` takes. So a refactor that drops a `patch_or` fails the build. It is one
-    handler model: the same `Req` methods, `?` on any `corten::Error`, and a handler that both
+    handler model: the same request APIs, `?` on any `corten::Error`, and a handler that both
     redirects and patches (a write's) stays an `HtmlResult`; only the handler a part is read from
     names `Patches`, and there a redirect or page goes on `patch_or`'s other side, for a browser
     without JavaScript. The macro cannot read a handler's return type (it sees the handler's
