@@ -250,6 +250,10 @@ fn the_script_refunds_what_the_server_does() {
 }
 ```
 
+Node imports `refund.js` as a module only if the nearest `package.json` above it does not say
+`"type": "commonjs"` (`--input-type=module` covers the `-e` text, not the files it imports); an
+app that sets it puts a `package.json` holding `{ "type": "module" }` beside its scripts.
+
 Keep money in integer minor units on both sides, and round with the same rule: `Math.round` and
 `f64::round` differ on a negative half (`-2.5` is `-2` in JavaScript and `-3` in Rust). Writing the
 result is the formats' job, which already agree ([below](#numbers-money-and-dates-a-script-writes)).
@@ -295,12 +299,15 @@ try {
 }
 ```
 
-Run it with `node test-selection.mjs http://localhost:18484` after installing Playwright and
+Run it with `node test-selection.mjs http://localhost:3000` while the example runs (`corten dev`,
+as [its README](../../examples/seller-desk/README.md#run-it) says), after installing Playwright and
 its Chromium browser in the test environment. This runs `inventory_grid.js`, which imports both
 `corten` and `corten/views`, without replacing either module. It also checks the markup's call
 and refs, which calling the export alone would miss. Check cancellation by removing the component
-through a navigation or patch and checking that its work stops, not by supplying a different
-lifecycle in the test. [The seller-desk smoke](../../examples/seller-desk/smoke.mjs) covers selection,
+with a client-side navigation or patch, which keeps the document alive, and checking that its
+work was running before and stops after; a full page load ends every script with its document,
+so it would pass even if the handler ignored `signal`. Do not supply a different lifecycle in
+the test. [The seller-desk smoke](../../examples/seller-desk/smoke.mjs) covers selection,
 filtering and sorting this way; [the runtime smoke](../../scripts/smoke.mjs) covers connection and
 cleanup. Neither harness needs per-app implementations of Corten's modules. Browser tests run
 separately from `cargo test` and `corten check`; keep them in the app's CI too.
