@@ -5,11 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- Accept component-local `@position-try` definitions and rewrite their fallback references,
-  reading `position-try` values as CSS tokens so custom-function calls, `if()` conditions and
-  whitespace after an escape keep their meaning; match statement at-rule names
-  case-insensitively and document the complete component CSS at-rule inventory, including raw
-  bodies and global names.
+- Accept component-local `@position-try` definitions and rewrite their fallback references
+  without renaming global options or treating them as registered custom properties. Document
+  the component CSS at-rule inventory, including raw bodies and global names.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 

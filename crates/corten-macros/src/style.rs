@@ -75,15 +75,23 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
             "(--{name}) in an @media rule names a breakpoint of the token file, and --{name} is this stylesheet's @property: rename the property"
         ));
     }
-    if !s.positions.is_empty() {
-        // Work backwards so expanding a reference does not move the remaining ranges.
-        for (start, end, raw) in s.position_refs.into_iter().rev() {
-            if let Some(value) = rename_positions(raw, &s.positions, prefix) {
-                s.out.replace_range(start..end, &value);
-            }
+    let mut option_names = Vec::new();
+    let before = s.out.len();
+    for (start, end, raw) in s.position_refs {
+        // Earlier replacements may have moved this value.
+        let start = start + s.out.len() - before;
+        let mut end = end + s.out.len() - before;
+        if let Some(value) = rename_positions(raw, &s.out[start..end], &s.positions, prefix) {
+            s.out.replace_range(start..end, &value);
+            end = start + value.len();
+        }
+        // Only option tokens are exempt from property renaming; e.g. a var() lookup still works.
+        if !names.is_empty() {
+            let value = &s.out[start..end];
+            option_names.extend(position_options(value, &tokens(value), 0).into_iter().map(|(a, b)| (start + a, start + b)));
         }
     }
-    let css = rename_properties(&s.out, &names, prefix)?;
+    let css = rename_properties(&s.out, &names, prefix, &option_names)?;
     let media = media_refs(&css);
     Ok(Sheet { css, classes: s.classes, properties: s.properties, media })
 }
@@ -385,7 +393,7 @@ const LENGTHS: &[&str] = &[
 /// are `!important` too, inline after a patch and in a rule of the page's style block on a full
 /// load, and an `!important` rule of the component's with more specificity than that rule would
 /// win on a full load and lose after a patch.
-fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, String> {
+fn rename_properties(css: &str, names: &[&str], prefix: &str, option_names: &[(usize, usize)]) -> Result<String, String> {
     if names.is_empty() {
         return Ok(css.to_string());
     }
@@ -393,6 +401,7 @@ fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, 
     let ident = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_') || c >= 0x80 || c == b'\\';
     let mut out = String::with_capacity(css.len() + names.len() * (prefix.len() + 4));
     let (mut i, mut copied) = (0, 0);
+    let mut options = option_names.iter().peekable();
     while i < b.len() {
         match b[i] {
             q @ (b'"' | b'\'') => {
@@ -419,8 +428,15 @@ fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, 
                 }
             }
             b'-' if b.get(i + 1) == Some(&b'-') && (i == 0 || !ident(b[i - 1])) => {
+                while options.peek().is_some_and(|&&(_, end)| end <= i) {
+                    options.next();
+                }
+                if let Some(&&(_, end)) = options.peek().filter(|range| range.0 <= i) {
+                    i = end;
+                    continue;
+                }
                 // The whole name, escapes included: `--f\69 ll` is `--fill` to the browser.
-                let end = css_name_end(css, i + 2);
+                let end = name_end(css, i + 2, ident);
                 let written = &css[i + 2..end];
                 let name = if written.contains('\\') { unescape(written) } else { written.to_string() };
                 if names.contains(&name.as_str()) {
@@ -449,7 +465,7 @@ fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, 
 
 /// Where the identifier from `end` ends, escapes included (CSS Syntax Level 3, consume an ident
 /// sequence): a hex escape takes one whitespace after it, a CRLF counting as one.
-fn css_name_end(css: &str, mut end: usize) -> usize {
+fn name_end(css: &str, mut end: usize, ident: impl Fn(u8) -> bool) -> usize {
     let b = css.as_bytes();
     while end < b.len() {
         if b[end] == b'\\' {
@@ -466,13 +482,22 @@ fn css_name_end(css: &str, mut end: usize) -> usize {
             while end < b.len() && !css.is_char_boundary(end) {
                 end += 1;
             }
-        } else if b[end].is_ascii_alphanumeric() || matches!(b[end], b'-' | b'_') || b[end] >= 0x80 {
+        } else if ident(b[end]) {
             end += 1;
         } else {
             break;
         }
     }
     end
+}
+
+fn css_name_start(c: u8) -> bool {
+    // CSS preprocessing turns a literal NUL into U+FFFD, a name-start code point.
+    c.is_ascii_alphabetic() || matches!(c, b'_' | 0) || c >= 0x80
+}
+
+fn css_name_end(css: &str, end: usize) -> usize {
+    name_end(css, end, |c| css_name_start(c) || c.is_ascii_digit() || c == b'-')
 }
 
 /// What the position pass tells apart in a declaration's value (CSS Syntax Level 3, tokenization).
@@ -498,11 +523,10 @@ enum Tok {
 fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
     let b = css.as_bytes();
     let escape = |at: usize| b.get(at) == Some(&b'\\') && !matches!(b.get(at + 1), None | Some(b'\n' | b'\r' | b'\x0c'));
-    let name_start = |c: u8| c.is_ascii_alphabetic() || c == b'_' || c >= 0x80;
     let ident_start = |at: usize| match b.get(at) {
-        Some(b'-') => b.get(at + 1).is_some_and(|&c| name_start(c) || c == b'-') || escape(at + 1),
+        Some(b'-') => b.get(at + 1).is_some_and(|&c| css_name_start(c) || c == b'-') || escape(at + 1),
         Some(b'\\') => escape(at),
-        Some(&c) => name_start(c),
+        Some(&c) => css_name_start(c),
         None => false,
     };
     let digits = |mut at: usize| {
@@ -611,51 +635,62 @@ fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
 /// function's name (`--above()` calls a custom function), a lookup's name, an `if()` condition
 /// (`style(--above: 1)` queries a custom property), strings, URLs and whatever is inside any
 /// other function keep their names.
-fn rename_positions(raw: &str, names: &[String], prefix: &str) -> Option<String> {
-    // Read the source before squash can turn two spaces after a hex escape (or an escape
-    // followed by a comment) into just an escape terminator. Replace only the name tokens.
+fn rename_positions(raw: &str, value: &str, names: &[String], prefix: &str) -> Option<String> {
+    if names.is_empty() {
+        return None;
+    }
+    // Find names in the source, before squash can hide a separator after a hex escape.
     let toks = tokens(raw);
-    let mut renamed = Vec::new();
     let colon = toks.iter().position(|&(kind, ..)| kind == Tok::Colon)?;
-    let mut i = colon + 1;
-    while i < toks.len() {
-        // Past a `)` with no `(`, which the browser would reject, to the rest of the value.
-        i = options(raw, &toks, i, false, names, &mut renamed) + 1;
+    let base = toks[colon].2;
+    let edits: Vec<_> = position_options(raw, &toks, colon + 1)
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let written = &raw[start..end];
+            let name = unescape(written);
+            let name = names.iter().find(|n| Some(n.as_str()) == name.strip_prefix("--"))?;
+            // The last source byte of a matching name is ASCII. Preserve normalized space
+            // after it even if the source used that space to terminate a hex escape.
+            Some((start - base, start - base + written.trim_end().len() - 1, name))
+        })
+        .collect();
+    if edits.is_empty() {
+        return None;
     }
-    let mut out = String::with_capacity(raw.len() + renamed.len() * (prefix.len() + 2));
-    let start = if let Some(&(Tok::Space, _, end)) = toks.get(colon + 1) { end } else { toks[colon].2 };
-    let end = if let Some(&(Tok::Space, start, _)) = toks.last() { start } else { raw.len() };
-    let mut copied = start.min(end);
-    for (start, end, name) in renamed {
-        out.push_str(&raw[copied..start]);
-        out.push_str("--");
-        out.push_str(prefix);
-        out.push_str("__");
-        out.push_str(&name);
-        copied = end;
+    // Map just the name boundaries onto the normalized value; never emit raw value text.
+    let mut offsets = Vec::new();
+    let normalized = squash_with(&raw[base..], |from, to| offsets.push((from, to)));
+    if normalized != value {
+        return None;
     }
-    out.push_str(&raw[copied..end]);
+    let at = |raw| offsets.binary_search_by_key(&raw, |&(from, _)| from).ok().map(|i| offsets[i].1);
+    let mut out = normalized;
+    for (start, last, name) in edits.into_iter().rev() {
+        if let (Some(start), Some(last)) = (at(start), at(last)) {
+            out.replace_range(start..last + 1, &format!("--{prefix}__{name}"));
+        }
+    }
     Some(out)
+}
+
+fn position_options(css: &str, toks: &[(Tok, usize, usize)], mut i: usize) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
+    while i < toks.len() {
+        // Past an unmatched close, which the browser would reject, to the rest of the value.
+        i = options(css, toks, i, false, &mut found) + 1;
+    }
+    found
 }
 
 /// Records the options among the tokens from `i` to the end of the block they are in (or, for
 /// an `if()` branch, to its `;`), and returns where that is.
-fn options(
-    css: &str,
-    toks: &[(Tok, usize, usize)],
-    mut i: usize,
-    branch: bool,
-    names: &[String],
-    renamed: &mut Vec<(usize, usize, String)>,
-) -> usize {
+fn options(css: &str, toks: &[(Tok, usize, usize)], mut i: usize, branch: bool, found: &mut Vec<(usize, usize)>) -> usize {
     while let Some(&(kind, start, end)) = toks.get(i) {
         match kind {
             Tok::Close => return i,
             Tok::Semicolon if branch => return i,
             Tok::Ident => {
-                if let Some(name) = unescape(&css[start..end]).strip_prefix("--").filter(|name| names.iter().any(|n| n == name)) {
-                    renamed.push((start, end, name.to_string()));
-                }
+                found.push((start, end));
                 i += 1;
             }
             Tok::Function => {
@@ -665,7 +700,7 @@ fn options(
                     "var" | "env" | "attr" | "inherit" => {
                         let comma = skip(toks, i + 1, &[Tok::Comma]);
                         match toks.get(comma) {
-                            Some((Tok::Comma, ..)) => options(css, toks, comma + 1, false, names, renamed),
+                            Some((Tok::Comma, ..)) => options(css, toks, comma + 1, false, found),
                             _ => comma,
                         }
                     }
@@ -682,7 +717,7 @@ fn options(
                                 }
                                 _ => break colon,
                             }
-                            let ends = options(css, toks, colon + 1, true, names, renamed);
+                            let ends = options(css, toks, colon + 1, true, found);
                             match toks.get(ends) {
                                 Some((Tok::Semicolon, ..)) => at = ends + 1,
                                 _ => break ends,
@@ -903,9 +938,8 @@ impl Scoper<'_> {
                 continue;
             }
             if let Some(rule) = text.strip_prefix('@') {
-                let keyword = raw.strip_prefix('@').unwrap_or(rule);
-                let name = keyword[..css_name_end(keyword, 0)].to_ascii_lowercase();
-                match name.as_str() {
+                let name = rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
+                match name {
                     "custom-media" => {
                         return Err(self.error(
                             start,
@@ -923,10 +957,7 @@ impl Scoper<'_> {
                         self.out.push_str(&text);
                         self.out.push(';');
                     }
-                    // The old split stopped at `_`, non-ASCII and escapes. Do not turn an
-                    // unknown statement it let through into an error for the whole sheet.
-                    _ if matches!(rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next(), Some("layer" | "charset")) => {}
-                    _ => return Err(self.unsupported_at_rule(start, &name)),
+                    _ => return Err(self.error(start, format!("@{name} is not supported in a component's stylesheet"))),
                 }
                 continue;
             }
@@ -1389,15 +1420,20 @@ fn pseudo_element(selector: &str) -> bool {
 
 /// Comments removed and whitespace collapsed, outside strings.
 fn squash(text: &str) -> String {
+    squash_with(text, |_, _| {})
+}
+
+/// `observe` maps the source and output offsets of each emitted character outside strings.
+fn squash_with(text: &str, mut observe: impl FnMut(usize, usize)) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
+    let mut chars = text.char_indices().peekable();
     let mut space = false;
-    while let Some(c) = chars.next() {
+    while let Some((from, c)) = chars.next() {
         match c {
-            '/' if chars.peek() == Some(&'*') => {
+            '/' if chars.peek().is_some_and(|&(_, next)| next == '*') => {
                 chars.next();
                 let mut last = ' ';
-                for c in chars.by_ref() {
+                for (_, c) in chars.by_ref() {
                     if last == '*' && c == '/' {
                         break;
                     }
@@ -1411,10 +1447,10 @@ fn squash(text: &str) -> String {
                 }
                 space = false;
                 out.push(c);
-                while let Some(s) = chars.next() {
+                while let Some((_, s)) = chars.next() {
                     out.push(s);
                     if s == '\\' {
-                        if let Some(next) = chars.next() {
+                        if let Some((_, next)) = chars.next() {
                             out.push(next);
                         }
                     } else if s == c {
@@ -1428,6 +1464,7 @@ fn squash(text: &str) -> String {
                     out.push(' ');
                 }
                 space = false;
+                observe(from, out.len());
                 out.push(c);
             }
         }
@@ -1811,6 +1848,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn position_values_do_not_expose_comments_to_other_readers() {
+        let sheet = scope("@position-try --above{top:0}.a{position-try:--above /* @media (--ghost){ */;position-try-fallbacks:var(/* note */--missing), --above}", "x").unwrap();
+        assert!(sheet.media.is_empty(), "a comment did not name a breakpoint");
+        assert_eq!(
+            sheet.css,
+            "@position-try --x__above{top:0}.x__a{position-try:--x__above;position-try-fallbacks:var( --missing), --x__above}"
+        );
+    }
+
+    #[test]
+    fn registered_properties_do_not_rename_global_position_options() {
+        let css = "@property --external{syntax:'*';inherits:false}.a{position-try:--external;position-try-fallbacks:var(--external, --external), --above;width:var(--external)}";
+        let definition = "@position-try --above{top:0}";
+        for (src, local) in [(format!("{css}{definition}"), "--x__above"), (css.to_string(), "--above")] {
+            let sheet = scope(&src, "x").unwrap();
+            assert!(sheet.css.starts_with(&format!("@property --x__external{{syntax:'*';inherits:false}}.x__a{{position-try:--external;position-try-fallbacks:var(--x__external, --external), {local};width:var(--x__external)}}")), "{}", sheet.css);
+        }
+    }
+
+    #[test]
     fn position_options_are_component_local() {
         let css = ".popup { position-try-fallbacks: --below flip-inline, --global; position-try: most-width --below; position-anchor: --below; --below: 2px; width: var(--below) } @position-try --below { position-area: block-end; margin: 2px }";
         let sheet = scope(css, "menu").unwrap();
@@ -1845,19 +1902,11 @@ mod tests {
     #[test]
     fn position_references_are_whole_css_tokens() {
         // A hex escape takes one whitespace; the next one still separates the tactic.
-        for (space, separator) in [
-            ("  ", " "),
-            ("\r\n ", " "),
-            ("\t\t", "\t"),
-            ("\n\n", "\n"),
-            (" /* a */ ", "/* a */ "),
-            ("/**/", "/**/"),
-            ("/*comment*/ ", "/*comment*/ "),
-        ] {
+        for space in ["  ", "\r\n ", "\t\t", "\n\n", " /* a */ ", "/**/", "/*comment*/ "] {
             let css = format!("@position-try --above {{ top: 0 }} .a {{ position-try-fallbacks: --abov\\65{space}flip-block; position-try: most-width --abov\\65{space}flip-inline }}");
             assert_eq!(
                 scope(&css, "x").unwrap().css,
-                format!("@position-try --x__above{{top:0}}.x__a{{position-try-fallbacks:--x__above{separator}flip-block;position-try:most-width --x__above{separator}flip-inline}}"),
+                "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above flip-block;position-try:most-width --x__above flip-inline}",
                 "{space:?}"
             );
         }
@@ -1865,10 +1914,14 @@ mod tests {
             scope(".a { position-try-fallbacks: --abov\\65\r\n\tflip-block }", "x").unwrap().css,
             ".x__a{position-try-fallbacks:--abov\\65 flip-block}"
         );
+        assert_eq!(
+            scope("@position-try --above { top: 0 } .a { position-try-fallbacks: --abov\\65 , flip-block }", "x").unwrap().css,
+            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above , flip-block}"
+        );
         // A no-break space is not CSS whitespace: `--above\u{a0}flip-block` is one name.
         assert_eq!(
-            scope("@position-try --above { top: 0 } .a { position-try-fallbacks: --above\u{a0}flip-block, --abov\\65\u{a0}, --above }", "x").unwrap().css,
-            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--above\u{a0}flip-block, --abov\\65\u{a0}, --x__above}"
+            scope("@position-try --above { top: 0 } .a { position-try-fallbacks: --above\u{a0}flip-block, --abov\\65\u{a0}, --above\0, --above\u{fffd}, --above, \0--above }", "x").unwrap().css,
+            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--above flip-block, --abov\\65 , --above\0, --above\u{fffd}, --x__above, \0--above}"
         );
         // `--above()` calls a custom function, whose name is not a position option's.
         assert_eq!(
@@ -1898,8 +1951,9 @@ mod tests {
             scope("@scope (.a:is(:/* gap */:marker,.b)){.a p{color:green}}", "x").unwrap().css,
             "@scope (.x__a:is(: :marker,.x__b)){.x__a p{color:green}}"
         );
-        assert!(scope("@LAYER_other foo; .a{color:green}", "x").unwrap_err().contains("@layer_other is not supported"));
-        assert_eq!(scope("@layer_other foo; .a{color:green}", "x").unwrap().css, ".x__a{color:green}");
+        assert!(scope("@LAYER_other foo; .a{color:green}", "x").unwrap_err().contains("@LAYER is not supported"));
+        assert!(scope("@LAYER foo; .a{color:green}", "x").unwrap_err().contains("@LAYER is not supported"));
+        assert_eq!(scope("@layer_other foo; .a{color:green}", "x").unwrap().css, "@layer_other foo;.x__a{color:green}");
     }
 
     #[test]
@@ -1945,7 +1999,11 @@ mod tests {
             assert!(sheet.classes.is_empty(), "{name} contents are raw");
             assert!(sheet.css.starts_with(format!("@{name} {prelude}").trim()));
         }
-        assert_eq!(scope("@CHARSET 'utf-8'; @LAYER base, widgets;", "x").unwrap().css, "@LAYER base, widgets;");
+        assert_eq!(scope("@charset 'utf-8'; @layer base, widgets;", "x").unwrap().css, "@layer base, widgets;");
+        assert_eq!(
+            scope("@supports_other (position-area:top){.a{color:red}}", "x").unwrap().css,
+            "@supports_other (position-area:top){.x__a{color:red}}"
+        );
         for name in ["import", "IMPORT", "custom-media", "CUSTOM-MEDIA", "namespace", "document", "unknown"] {
             assert!(scope(&format!("@{name} x;"), "x").is_err(), "{name}");
         }
@@ -1959,7 +2017,7 @@ mod tests {
         for (css, prefix, why) in [
             (include_str!("../../corten/src/imported_styles.css"), "imported-styles", "does not own"),
             (include_str!("../../corten/src/custom_media_styles.css"), "custom-media-styles", "token file's breakpoints"),
-            (include_str!("../../corten/src/namespaced_styles.css"), "namespaced-styles", "does not know how"),
+            (include_str!("../../corten/src/namespaced_styles.css"), "namespaced-styles", "is not supported"),
             (include_str!("../../corten/src/document_styles.css"), "document-styles", "does not know how"),
             (include_str!("../../corten/src/unnamed_page.css"), "unnamed-page", "with no name"),
             (include_str!("../../corten/src/global_page.css"), "global-page", "start it with this component's"),

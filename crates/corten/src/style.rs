@@ -323,10 +323,10 @@
 //! #[component(css)]
 //! fn PopupStyles() -> impl ClassList { Popup }
 //! let css = PopupStyles.style.unwrap().css;
-//! assert_eq!(css, "@LAYER popups;@position-try --popup-styles__above{position-area:block-start span-inline-end}.popup-styles__popup{position-try-fallbacks:--popup-styles__above, flip-inline;position-try:most-width --popup-styles__above}");
+//! assert_eq!(css, "@layer popups;@position-try --popup-styles__above{position-area:block-start span-inline-end}.popup-styles__popup{position-try-fallbacks:--popup-styles__above, flip-inline;position-try:most-width --popup-styles__above}");
 //! ```
 //!
-//! Imported CSS is not owned or checked by the component (`imported_styles.css` has `@IMPORT`):
+//! Imported CSS is not owned or checked by the component (`imported_styles.css` has `@import`):
 //!
 //! ```compile_fail
 //! use corten::prelude::*;
@@ -1153,6 +1153,18 @@ mod tests {
         assert_eq!(custom_properties(r".a{color:\var(--missing)}"), (vec![], vec!["--missing"]));
         assert_eq!(custom_properties(r".a{color:\var(--opt,var(--fallback))}"), (vec![], vec![]));
         assert_eq!(custom_properties(r".a{--v:url(x\/*@property/**/--fake);color:var(--fake)}"), (vec!["--v"], vec!["--fake"]));
+    }
+
+    #[component(css)]
+    fn PositionComments() -> impl ClassList {
+        Popup
+    }
+
+    #[test]
+    fn position_comments_do_not_change_startup_stylesheet_checks() {
+        let style = PositionComments.style.unwrap();
+        assert!(style.media.is_empty());
+        assert_eq!(custom_properties(style.css), (vec![], vec!["--missing"]));
     }
 
     #[test]

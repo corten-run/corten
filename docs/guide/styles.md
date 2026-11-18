@@ -91,8 +91,8 @@ a size drawn from data from a custom property ([below](#values-from-data)).
 
 ## At-rules
 
-Component CSS accepts exactly these block at-rules. At-rule names are ASCII case-insensitive
-(`@MEDIA`, `@LAYER`), as in CSS; this is a scoping pass, not a full CSS validator.
+Component CSS supports the block at-rules below. Their names are ASCII case-insensitive
+(`@MEDIA`, `@LAYER`); this is a scoping pass, not a full CSS validator.
 
 | At-rules | What happens |
 |---|---|
@@ -105,17 +105,17 @@ Component CSS accepts exactly these block at-rules. At-rule names are ASCII case
 
 Raw bodies still lose comments and extra whitespace, and registered custom properties are
 renamed there too. Nested block at-rules inside them are copied raw (font feature `@styleset`,
-page margin `@top-left`, and others), not independently selector-checked. The only statement
-at-rules accepted are `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded, since
-the generated stylesheet is UTF-8). Unknown statements are refused even inside raw bodies.
-For compatibility, malformed lowercase `@layer` or `@charset` prefixes that previously
-passed through are discarded.
+page margin `@top-left`, and others), not independently selector-checked. The statement parser
+recognizes lowercase `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded,
+since the generated stylesheet is UTF-8). It refuses unknown statements even inside raw
+bodies unless it recognizes a prefix, as in `@layer_other` (copied).
 
 `@import` does not compile: imported CSS is not checked or owned by the component. Put it in
 `static/style.css`. `@custom-media` does not compile either: the token file defines breakpoints,
-and the component names them with `@media (--md)`. Every other block or statement at-rule,
-including `@namespace` and `@document`, is refused outside raw bodies: the macro does not yet
-know how to keep its selectors or names inside the component. Use the global stylesheet for it.
+and the component names them with `@media (--md)`. Unrecognized rules such as `@namespace`
+and `@document` are refused outside raw bodies; use the global stylesheet for them. Some
+unknown block at-rules with a known prefix, such as `@supports_other`, are copied with their
+bodies processed as that prefix's rule.
 An `@scope` without a root is refused because its implicit root is outside the component.
 Escaped at-rule and class names are not supported.
 
@@ -140,10 +140,13 @@ by ASCII letters, digits, `-` and `_`, without `__`, as `@property` does; refere
 escapes. An option not defined in this file stays global. The macro reads the two declarations'
 values as CSS tokens and renames an identifier only where the value takes an option: at its top
 level, in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an `if()` branch's value.
-`position-try: var(--choice, --above)` keeps the lookup `--choice` and scopes the fallback;
-`if(style(--above: 1): --above; else: flip-block)` keeps the custom property its condition
-queries and scopes the branch. A function call (`--above()`), anchor names, strings, URLs and
-anything inside another function keep their names. A name that reaches `position-try` through a
+`position-try: var(--choice, --above)` scopes the fallback but does not treat the lookup
+`--choice` as an option. A registered property with the same name does not rename an option,
+but its `var()` lookup still gets the property prefix. In
+`if(style(--above: 1): --above; else: flip-block)`, only the branch value names an option.
+Function calls (`--above()`), anchor names, strings, URLs and other functions' arguments are
+not position references. Comments and whitespace are normalized as in other declarations.
+A name that reaches `position-try` through a
 custom property's value (`--choice: --above`) is not rewritten, since the macro cannot know where
 that value goes; name the option in the declaration itself. Other raw named rules remain global
 for compatibility with references from global CSS and font files; a private name should include

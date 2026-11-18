@@ -5790,7 +5790,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
    A value borrowed from one the view owns is computed inside the markup:
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
 9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting.
-   At-rule names match ASCII case-insensitively. The accepted block at-rules are exactly:
+   The supported block at-rules are listed below; their names match ASCII case-insensitively:
 
 | At-rules | Processing |
 |---|---|
@@ -5803,15 +5803,16 @@ by design; where it is known, a limit says what would lift it or why it is so.
 
    Raw bodies still lose comments and extra whitespace and receive registered-property
    renaming; their nested block at-rules are copied raw too (for example `@styleset` and
-   `@top-left`), not independently checked against this list. Statement at-rules are only
-   `@layer` (copied) and `@charset` (discarded: the generated stylesheet is UTF-8).
+   `@top-left`), not independently checked against this list. The statement parser recognizes
+   lowercase `@layer` (copied) and `@charset` (discarded: the generated stylesheet is UTF-8).
    `@import` is refused because it loads a stylesheet the component does not own;
-   `@custom-media` is refused because tokens define breakpoints. Every other block or statement
-   at-rule, including `@namespace` and `@document`, is refused outside raw bodies because the
-   macro has no scoping rule for it; put those rules in the app's global stylesheet. Unknown
-   statements are refused inside raw bodies too. For compatibility, malformed lowercase
-   `@layer` or `@charset` prefixes that previously passed through are discarded, not treated
-   as new supported at-rules. Escaped at-rule and class names are not supported.
+   `@custom-media` is refused because tokens define breakpoints. Unrecognized rules such as
+   `@namespace` and `@document` are refused outside raw bodies; put them in the app's global
+   stylesheet. This is not a CSS validator: the macro may copy unknown block at-rules that
+   start with a known prefix, such as `@supports_other`, applying that rule's body handling.
+   Likewise, unknown statements are refused even inside raw bodies unless the statement parser
+   recognizes a prefix; for example it copies `@layer_other`. Escaped at-rule and class names
+   are not supported.
 
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
@@ -5822,10 +5823,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
    in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an `if()` branch's value. A
    lookup's name and an `if()` condition (`style(--x: 1)`) name custom properties, a dashed
    function token (`--x()`) calls a custom function, and strings, URLs, anchor names, other
-   functions' arguments and unrelated declarations are not position references. With a local
-   definition, the macro reads these declarations' source values and preserves their token
-   boundaries, including comments and escapes. A name carried in a custom property's value is
-   not rewritten.
+   functions' arguments and unrelated declarations are not position references. The macro
+   matches whole names from the source before normalizing whitespace and comments as in
+   other declarations. A registered custom property with the same name does not rename an
+   option, but its `var()` lookup still gets the property prefix. A name carried in a custom
+   property's value is not rewritten as a position option.
    [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
    gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
    components share the document tree, so prefixing prevents collisions. This does not make
