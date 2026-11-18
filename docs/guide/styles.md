@@ -89,6 +89,73 @@ dialog:where(:not([open], [popover])) { display: none !important; }
 Inline `style="..."` stays blocked by the CSP; one-off values come from the token utilities, and
 a size drawn from data from a custom property ([below](#values-from-data)).
 
+## At-rules
+
+Component CSS supports the block at-rules below. Their names are ASCII case-insensitive
+(`@MEDIA`, `@LAYER`); this is a scoping pass, not a full CSS validator.
+
+| At-rules | What happens |
+|---|---|
+| `@media`, `@supports`, `@container`, `@layer`, `@starting-style` | Rules checked and classes prefixed as in the surrounding block, including nested declarations. `@media (--md)` names a token breakpoint ([below](#breakpoints)). |
+| `@scope` | Root and limit prefixed and rules checked as in the table above; no implicit root. |
+| `@property` | Body copied without selector scoping, then required descriptors and syntax checked; registered names and their references prefixed ([values from data](#values-from-data)). Not inside a style rule. |
+| `@position-try` | Declaration body copied without selector scoping; the defined name and references in `position-try-fallbacks` and `position-try` declarations in this file prefixed. Not inside a style rule. |
+| `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied without selector checks or class prefixes. Names stay global, including font families and feature-value names; qualify a private name with the component's name yourself. |
+| `@page` | A global name starting with the component's name and `-`, written by the author, with the body copied without selector scoping ([printing](#printing)). An unnamed page or an unqualified name does not compile. |
+
+Raw bodies still lose comments and extra whitespace, and registered custom properties are
+renamed there too. Nested block at-rules inside them are copied raw (font feature `@styleset`,
+page margin `@top-left`, and others), not independently selector-checked. The statement parser
+recognizes lowercase `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded,
+since the generated stylesheet is UTF-8). It refuses unknown statements even inside raw
+bodies unless it recognizes a prefix, as in `@layer_other` (copied).
+
+`@import` does not compile: imported CSS is not checked or owned by the component. Put it in
+`static/style.css`. `@custom-media` does not compile either: the token file defines breakpoints,
+and the component names them with `@media (--md)`. Unrecognized rules such as `@namespace`
+and `@document` are refused outside raw bodies; use the global stylesheet for them. Some
+unknown block at-rules with a known prefix, such as `@supports_other`, are copied with their
+bodies processed as that prefix's rule.
+An `@scope` without a root is refused because its implicit root is outside the component.
+Escaped at-rule and class names are not supported.
+
+A popup can define a fallback beside its default position, including a corten-ui `MenuButton`
+or `ComboBox` styled by this component:
+
+```css
+/* actions.css */
+@position-try --above { position-area: block-start span-inline-end; }
+.menu [role="menu"] {
+  inset: auto;
+  position-area: block-end span-inline-end;
+  position-try-fallbacks: --above, flip-inline;
+}
+```
+
+`--above` becomes `--actions__above` in the definition and the declaration, including in the
+`position-try` shorthand and references before the definition. CSS gives these names a
+tree-wide namespace, not one per component ([design Limit 9](../design.md#limit-stylesheet-support));
+prefixing prevents two components' options from colliding. Names defined here use `--` followed
+by ASCII letters, digits, `-` and `_`, without `__`, as `@property` does; references can use CSS
+escapes. The scoping pass does not prefix options defined outside this file. The macro reads
+the two declarations' values as CSS tokens and renames an identifier only where the value takes
+an option: at its top level, in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an
+`if()` branch's value.
+`position-try: var(--choice, --above)` scopes the fallback but does not treat the lookup
+`--choice` as an option. A registered property with the same name does not rename an option,
+but its `var()` lookup still gets the property prefix. In
+`if(style(--above: 1): --above; else: flip-block)`, only the branch value names an option.
+Function calls (`--above()`), anchor names, strings, URLs and other functions' arguments are
+not position references. Comments and whitespace are normalized as in other declarations. This
+can change token boundaries in unprefixed options: `--externa\6c  flip-block` loses the extra
+space, so the browser reads one name (`--externalflip-block`) instead of a name and a tactic.
+A name that reaches `position-try` through a
+custom property's value (`--choice: --above`) is not rewritten, since the macro cannot know where
+that value goes; name the option in the declaration itself. Other raw named rules remain global
+for compatibility with references from global CSS and font files; a private name should include
+the component's name. This does not isolate anchors or change the browser's supported position
+descriptors.
+
 ## Motion
 
 Motion belongs in the component's stylesheet and script, using browser standards rather than a
