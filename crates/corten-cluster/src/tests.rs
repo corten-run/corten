@@ -199,6 +199,18 @@ async fn an_invalid_subject_prefix_is_refused_before_migration() {
     }
 }
 
+#[tokio::test]
+async fn an_over_budget_reply_inbox_is_refused_before_migration() {
+    let Some((_, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    // Nothing listens there: migrating first would fail with a connection error instead.
+    let pool = PgPoolOptions::new().connect_lazy("postgres://corten@127.0.0.1:1/none").unwrap();
+    let nats = async_nats::ConnectOptions::new().custom_inbox_prefix("r".repeat(2730)).connect(&nats).await.unwrap();
+    let started = Cluster::start(pool, nats, Items, Options::default()).await;
+    let error = started.err().expect("refused").to_string();
+    assert!(error.contains("reply inbox uses 2753 bytes"), "{error}");
+    assert!(error.contains("max_control_line=4096 allows at most 2752 bytes"), "{error}");
+}
+
 /// A pool on an isolated schema so legacy rows cannot affect the other relay tests.
 async fn schema_pool(url: &str, schema: &str) -> PgPool {
     let admin = PgPool::connect(url).await.unwrap();
@@ -259,7 +271,7 @@ async fn the_relay_drops_legacy_invalid_keys_and_delivers_good_rows_in_order() {
     let prefix = format!("{schema}{}", "p".repeat(255 - schema.len()));
     let stream_name = schema.to_uppercase();
     let options = Options { stream: stream_name.clone(), subject_prefix: prefix.clone(), ..Options::default() };
-    let nats = async_nats::ConnectOptions::new().custom_inbox_prefix("r".repeat(300)).connect(&nats).await.unwrap();
+    let nats = async_nats::ConnectOptions::new().custom_inbox_prefix("r".repeat(2729)).connect(&nats).await.unwrap();
     let cluster = Cluster::start(pool.clone(), nats.clone(), Items, options).await.unwrap();
     let js = async_nats::jetstream::new(nats);
     let mut stream = js.get_stream(&stream_name).await.unwrap();

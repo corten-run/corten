@@ -54,6 +54,10 @@ pub const MAX_FEED_KEY_BYTES: usize = 1024;
 /// The longest [`Options::subject_prefix`], in bytes.
 const MAX_PREFIX_BYTES: usize = 255;
 
+/// Reserve for `HPUB`, separators, two decimal lengths (up to 20 digits each) and CRLF.
+const PUBLISH_FRAMING_BYTES: usize = 64;
+const MAX_PUBLISH_SUBJECT_BYTES: usize = MAX_PREFIX_BYTES + 1 + MAX_FEED_KEY_BYTES;
+
 /// A feed key that breaks Corten's literal subject rules, refused by [`create_feed`] and [`begin`]
 /// before they touch the database. A key is published as `{subject_prefix}.{key}`, so it must
 /// be nonempty dot-separated tokens without whitespace, control characters (NUL included),
@@ -123,6 +127,11 @@ pub struct Options {
     /// Feed `k` is published on `{subject_prefix}.k`. A literal NATS subject, as a feed key is
     /// ([`InvalidFeedKey`]), of at most 255 bytes; [`Cluster::start`] refuses any other.
     pub subject_prefix: String,
+    /// The NATS servers' `max_control_line`, in bytes. Defaults to 4,096 because the server
+    /// does not advertise this limit. With the default, a custom inbox prefix may use at most
+    /// 2,729 bytes. To use a longer prefix, raise the limit on all NATS servers this client can
+    /// connect to and set this field to match.
+    pub max_control_line: usize,
     /// The relay lease. The active relay renews it every quarter and steps down if it cannot
     /// renew within three quarters, so after an instance dies another takes over within about
     /// `lease`, even when its connections never close (a frozen VM, a network partition).
@@ -142,6 +151,7 @@ impl Default for Options {
             instance: "corten".into(),
             stream: "CORTEN_FEEDS".into(),
             subject_prefix: "corten.feeds".into(),
+            max_control_line: 4096,
             lease: Duration::from_secs(2),
             max_age: Duration::from_secs(3600),
             duplicate_window: Duration::from_secs(120),
@@ -165,12 +175,27 @@ impl<S: Source> Clone for Cluster<S> {
 impl<S: Source> Cluster<S> {
     /// Creates the tables if needed, starts this instance's JetStream consumer (before any feed
     /// loads, so no patch falls between a load and the stream) and its relay candidate.
+    /// Refuses an invalid subject prefix or a reply inbox that exceeds [`Options::max_control_line`]'s
+    /// budget before touching Postgres.
     pub async fn start(pool: PgPool, nats: async_nats::Client, source: S, options: Options) -> Result<Self, Error> {
         if !literal(&options.subject_prefix, MAX_PREFIX_BYTES) {
             return Err(format!(
                 "corten-cluster: subject_prefix {:?} is not a literal NATS subject: nonempty dot-separated \
                  tokens without whitespace, control characters, `*` or `>`, at most {MAX_PREFIX_BYTES} bytes",
                 options.subject_prefix
+            )
+            .into());
+        }
+        // JetStream uses this shape for publish acknowledgements; measure the generated inbox
+        // so the configured prefix, separator and client-generated token are all counted.
+        let inbox_bytes = nats.new_inbox().len();
+        let max_inbox = options.max_control_line.saturating_sub(MAX_PUBLISH_SUBJECT_BYTES + PUBLISH_FRAMING_BYTES);
+        if inbox_bytes > max_inbox {
+            return Err(format!(
+                "corten-cluster: NATS reply inbox uses {inbox_bytes} bytes, but max_control_line={} \
+                 allows at most {max_inbox} bytes for the full reply inbox; shorten the custom inbox prefix \
+                 or raise both NATS and Options::max_control_line",
+                options.max_control_line
             )
             .into());
         }

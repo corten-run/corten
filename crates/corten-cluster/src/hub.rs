@@ -49,6 +49,18 @@ enum Slot<T: corten::feed::Row> {
     Ready(Feed<T>),
 }
 
+// Only validated keys get a slot; keep all miss work out of the cached lookup.
+#[cold]
+#[inline(never)]
+fn insert_loading<T: corten::feed::Row>(slots: &mut HashMap<String, Slot<T>>, key: &str) -> bool {
+    if !valid_key(key) {
+        return false;
+    }
+    let (done, _) = watch::channel(false);
+    slots.insert(key.to_string(), Slot::Loading { buffer: Vec::new(), done, current: None });
+    true
+}
+
 pub(crate) struct Hub<S: Source> {
     pool: PgPool,
     source: S,
@@ -72,7 +84,7 @@ impl<S: Source> Hub<S> {
         loop {
             enum Next {
                 Wait(watch::Receiver<bool>),
-                Load,
+                Load(bool),
             }
             let next = {
                 let mut slots = self.slots();
@@ -82,21 +94,14 @@ impl<S: Source> Hub<S> {
                         return Ok(Some(feed.clone()));
                     }
                     Some(Slot::Loading { done, .. }) => Next::Wait(done.subscribe()),
-                    None => {
-                        // Only validated keys get a slot; a cached lookup needs no recheck.
-                        if !valid_key(key) {
-                            return Ok(None);
-                        }
-                        let (done, _) = watch::channel(false);
-                        slots.insert(key.to_string(), Slot::Loading { buffer: Vec::new(), done, current: None });
-                        Next::Load
-                    }
+                    None => Next::Load(insert_loading(&mut slots, key)),
                 }
             };
             match next {
+                Next::Load(false) => return Ok(None),
                 // Its own task, so the load finishes (and its waiters get the feed) even if this
                 // request goes away first.
-                Next::Load => {
+                Next::Load(true) => {
                     let (hub, key) = (self.clone(), key.to_string());
                     return match tokio::spawn(async move { hub.load(key).await }).await {
                         Ok(loaded) => loaded,

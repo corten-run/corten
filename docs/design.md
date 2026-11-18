@@ -5598,14 +5598,17 @@ rules something out.
     cannot store NUL. UTF-8 and multiple tokens are allowed. The existing subjects and message
     IDs for valid keys do not change.
 
-    Keys are limited to 1,024 bytes and the prefix to 255. This leaves room for the reply inbox
-    and publish framing in NATS's default 4 KB control line, including for typical custom inbox
-    prefixes, and keeps the feed primary key and the outbox `(feed, seq)` entry under the
+    Keys are limited to 1,024 bytes and the subject prefix to 255. These bounds leave room
+    for a 2,729-byte custom reply inbox prefix, a dot and a 22-byte token, and 64 bytes of
+    publish framing in NATS's default 4,096-byte control line. The key fits the feed primary
+    key and the outbox `(feed, seq)` entry under the
     Postgres B-tree limit on standard 8 KB pages without depending on compression.
     `create_feed` and `begin` return `InvalidFeedKey` before doing SQL. `Cluster::feed` checks
     before loading an uncached key, returning `None` for an invalid one; only validated keys
-    get cache entries. `Cluster::start` checks the prefix before changing the database or
-    starting background work.
+    get cache entries. `Cluster::start` checks both the subject prefix and the generated reply
+    inbox before changing the database or starting background work. NATS does not advertise
+    its control-line limit, so deployments that change it set `Options::max_control_line` to
+    match the lowest server limit the client can encounter.
 
     The relay uses the same check, independent of the client or broker, for rows that an old
     version or external SQL could have queued. It marks an invalid row done with the existing
@@ -5613,8 +5616,8 @@ rules something out.
     sending the patch. The marker means done, not delivered, in this case. Ordinary pruning
     can remove the row; the app's committed data is not changed. No schema or index change is
     needed. Only acknowledged valid rows get marked done; publish and acknowledgement
-    failures (including size limits) still retry. A deployment with a lower control-line
-    limit or an unusually long reply inbox can still hit a transport failure.
+    failures (including size limits) still retry. A server with a lower control-line limit
+    than the one configured in Corten can still reject a publish.
 
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows

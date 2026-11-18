@@ -478,11 +478,17 @@ nonempty dot-separated tokens without whitespace, control characters (NUL includ
 `>`, and at most `corten_cluster::MAX_FEED_KEY_BYTES` (1,024) bytes. UTF-8 and several tokens
 (`seller.42`) work. Corten follows the documented naming rules even where the broker is
 more permissive. `Options::subject_prefix` follows the same rules, with a 255-byte limit
-checked at startup. These bounds leave room for the reply inbox and protocol framing in
-NATS's default 4 KB control line, and fit the feed and outbox B-tree indexes on standard
-8 KB Postgres pages without relying on compression. Keep the default `max_control_line`
-or higher; a smaller limit or an unusually long custom reply inbox can still cause a
-publish failure.
+checked at startup. The key also fits the feed and outbox B-tree indexes on standard
+8 KB Postgres pages without relying on compression.
+
+At NATS's default 4,096-byte [`max_control_line`](https://docs.nats.io/reference/config/max_control_line),
+a prefix set with `async_nats::ConnectOptions::custom_inbox_prefix` can be at most 2,729 bytes.
+`Cluster::start` checks the generated reply inbox, including the client's dot and 22-byte
+token, before touching Postgres. The budget reserves space for the longest supported publish
+subject and its protocol framing. Stay with the default unless you need a longer inbox prefix.
+NATS does not advertise the limit: if you change it, set `Options::max_control_line` to match
+the lowest limit on any NATS server the client can connect to. Raise both to allow a longer
+inbox prefix; this does not change the key or subject prefix limits.
 
 `create_feed` and `begin` refuse invalid keys before doing SQL. Inspect the error with
 `error.is::<corten_cluster::InvalidFeedKey>()`. `Cluster::feed` answers `None` without

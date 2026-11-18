@@ -10,9 +10,10 @@ Corten is pre-1.0, so any minor version may change the API.
   non-breaking space to follow the documented subject rules, excludes control characters, and
   caps keys at 1,024 bytes so they fit NATS publish lines and Postgres indexes. Invalid keys
   return `InvalidFeedKey` at `create_feed` and `begin`, and `None` at `Cluster::feed`.
-  Subject prefixes follow the same rules with a 255-byte limit. The relay logs and drops
-  pending rows with invalid legacy keys instead of stopping other feeds. No schema change;
-  publish and acknowledgement errors still retry.
+  Subject prefixes follow the same rules with a 255-byte limit. Startup also refuses custom
+  NATS reply inbox prefixes over 2,729 bytes at the default control-line limit. The relay
+  logs and drops pending rows with invalid legacy keys instead of stopping other feeds.
+  No schema change; publish and acknowledgement errors still retry.
 - Every `corten` command accepts `--help` and `-h`, printing its own usage and exiting
   successfully without running the command; `corten help <command>` prints the same and refuses an
   unknown command. An option given twice (`--name`, `--corten-path`, `--port`) is refused instead of
