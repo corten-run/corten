@@ -1134,12 +1134,14 @@ was modal), a `<details>` they unfolded and a shown popover, matched by id (a `<
 its place). One the user left as the server sent it takes the new markup's state, so a dialog
 the server sent open and now sends closed closes, as the browser closes one: before the patch
 replaces anything, so focus goes back to what had it before the dialog opened (to the button
-drawn in its place when the same answer draws the opener again), and its `on:toggle` and
-`on:close` handlers hear one `toggle` and one `close` on the dialog with its id the page has
-when they come (the replacement, which gets a copy of each and the old one's `returnValue`),
-nested dialogs the innermost first. The same holds for a page's part a navigation replaces and
-for the layout a write's page draws. Give such a dialog an id; one without is replaced closed,
-with no `close` event. A dialog or `<details>` the user closed opens again
+drawn in its place when the same answer draws the opener again). Nested dialogs close
+innermost first. The dialog's `on:toggle` and `on:close` hear one event each; when it is replaced,
+copies follow the actual closed replacements, stopping at removal or a redraw that opens it
+again, even when the id is reused. A replacement inherits the result once, so changes a
+handler makes to `returnValue` stay visible to the next handler. The same holds for a page
+part a navigation replaces and for the layout a write's page draws. Give a dialog an id to
+match it in a replacement. An anonymous descendant is removed without a close event unless
+the layout morph keeps it by position. A dialog or `<details>` the user closed opens again
 when a `data-patch` answer replaces it drawn `open` and the button that sent it (or, when none
 did, the focused control of the form, else the form) is outside it: pressing it is newer than
 the user's close, so a Preview button beside a dialog opens it on every press, not only the

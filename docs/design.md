@@ -5596,47 +5596,37 @@ rules something out.
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
     above, at `65ac1dc47` against `38587c414`.
 
-62. <a id="choice-patch-closes-dialog"></a>**A patch closes an open dialog it draws closed as the browser does, before replacing
-    anything, and dispatches the dialog's `toggle` and `close` again on the dialog that has its
-    id when they come.**
+62. <a id="choice-patch-closes-dialog"></a>**A patch closes an open dialog it draws closed as the
+    browser does, and carries the queued events through actual closed redraws.**
     A dialog the user left open as the server drew it, which a patch's markup draws closed, takes
     the markup's state ([Choice 52](#choice-asked-open-state)). The runtime replaced it closed:
     no `close` event, so a `<dialog on:close={..}>` handler never ran, and focus fell to the page
     instead of going back to the button that opened it
     ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
-    Such a dialog is now closed with `close()` before the patch replaces anything, so the browser
-    does what its close does: focus goes back to what had it before the dialog opened, and the
-    dialog leaves the top layer. Its `beforetoggle` comes at once, on the dialog still in the
-    page, so the document's listener hears it. Its `toggle` and `close` come in a later task,
-    once the patch has taken it off the page, where only a listener on the element itself hears
-    them; so the runtime listens once for each on that dialog and, if it is off the page by then,
-    dispatches a copy (the same kind of event, so a toggle keeps its states) on the dialog with
-    its id on the page then: the one that took its place, or the one a later patch drew in that
-    one's place before the events came (two `await patch()` in one task, a live update). One
-    removed by then hears nothing. The copy's dialog first takes the old one's `returnValue`,
-    which `close()` without a result keeps, so a handler reads the result a script gave the
-    dialog (in `beforetoggle` too), not the new element's empty one. The app's delegated handlers
-    hear one `toggle` and one `close` on the dialog the page has, with the browser's timing; the
-    copy is not trusted (`isTrusted` is false), and a listener a script put on the old element
-    hears the browser's own. The dialogs are found first, in every element the patch replaces or
-    draws (each of a patch's elements, a page's parts a navigation replaces, the layout elements
-    a write's page draws), and all of them close before any element is replaced: focus goes back
-    to the opener while it is still on the page, and when the same answer replaces the opener
-    too, replacing it carries focus to the element drawn in its place, as it carries any focus,
-    whatever the order of the answer's elements. A `beforetoggle` handler that changes the dialog
-    (removes a field) changes what the replacement then reads rather than a list being walked.
-    The one holding focus closes first, the innermost of those, then the rest from the last
-    found: nested modals each give focus back in turn, and a modal opened from inside a sibling
-    gives it back before the sibling closes. It is every patch's: a `data-patch` answer, a
-    `<corten-live>` fragment, a `ReadAgain` read and a script's `patch()`, a page's part a
-    navigation replaces, and a layout element a write's page draws, anew or in place (where the
-    dialog stays on the page and the browser's own events reach the document). It is only a dialog
-    matched by its id, or the replaced element itself (an anonymous one inside is replaced
-    closed, [Limit 2](#limit-whole-element-patches); a layout drawn in place reaches one by its
-    place, and closes it there the same way), left as the server drew it (one the user opened
-    stays open, [Choice 52](#choice-asked-open-state)), that the markup draws closed: a dialog a
-    patch removes (`data-remove`, a page swapped in) is removed, as the browser removes one, with
-    no `close` event.
+    The runtime calls `close()` while the dialog and its opener are still connected. The
+    browser leaves the top layer, returns focus, and emits `beforetoggle` on the old dialog
+    synchronously. The draw then carries that focus to the new opener if it replaces the old
+    one. The patch's ordered remove, append and replacement decisions and the layout's own
+    decisions to replace, morph by position or leave an element alone determine which existing
+    dialogs to close before drawing. A dialog removed earlier in the answer isn't closed by a
+    later redraw of its parent. The close follows focus, innermost first for nested dialogs, so
+    each modal can return focus to the one that opened it before that one closes. A
+    `beforetoggle` handler can change the old dialog before the replacement reads it.
+
+    The browser sends `toggle` and `close` in later tasks. In-place morphs keep the native
+    events. If the draw replaced the dialog, the runtime forwards a copy of each event (same
+    constructor and toggle states, `isTrusted` false) through the actual chain of closed
+    replacements. The old node's own listeners still get native events. Removal and a redraw
+    that starts a new open session break the chain, even if an id is reused. A closed
+    replacement inherits the current `returnValue` when it takes over, not when each event is
+    forwarded, so a change made in the first handler is visible to the second.
+
+    This applies to `data-patch`, `<corten-live>`, `ReadAgain`, `patch()`, a page part a
+    navigation replaces, and a layout a write's page draws. In a replacement only the root or a
+    dialog with a matching id has continuity; a layout can also keep an anonymous dialog by
+    position. A dialog that is only removed (including an anonymous descendant of a replaced
+    element, [Limit 2](#limit-whole-element-patches)) is not closed. One the user opened
+    stays open where it can be matched ([Choice 52](#choice-asked-open-state)).
 
     Not chosen: closing each dialog while walking the old element (the first attempt, in
     [Choice 52](#choice-asked-open-state)'s review), which let a `beforetoggle` handler change the tree under the walk and
@@ -5646,7 +5636,9 @@ rules something out.
     drawn in place closing outer-first, its own way; finding the opener's replacement by id after
     the close, which needs the element the dialog gives focus back to, which the platform keeps
     to itself; dispatching the copies on the first replacement only (also the first version),
-    which lost them when another patch drew the dialog again before they came; closing
+    which lost them when another patch drew the dialog again before they came; finding the
+    receiver by id at dispatch time, which confused identity with continued replacement;
+    matching layout dialogs in a separate id walk, which missed positional matches; closing
     in reverse page order alone, which fails a modal opened from inside an earlier sibling;
     keeping the old dialog in the page until its `close` event, then replacing it, which would
     end the patch a task or a frame after its answer (Chromium's `close` comes up to a frame
@@ -5656,16 +5648,15 @@ rules something out.
     (`showModal()`, then `close()`), which knows nothing of what had focus before the old one
     opened, so focus could not go back to the opener.
 
-    What it costs: the runtime is 738 bytes larger raw (43,846 to 44,584), 273 with gzip (15,612
-    to 15,885) and 226 with brotli (14,100 to 14,326), against main's `27c29d7d2`, paid once a
-    release by every user (738, 270 and 226 against `38587c414`, before main's own runtime changed). One close path for every patch and swap did not make it smaller than
-    the first version (395, 174 and 137), which closed only in a patch's replacement: the passes
-    over a whole answer, the layout's, the `returnValue` and finding the dialog by id when the
-    events come are the difference. A patch, a swap and a write's layout each run one query for
-    open dialogs (`dialog[open]`) in each element they replace or draw, and look a dialog up in
-    the new markup only when one is open as the server drew it (usually none); each it closes
-    pays two listeners and a `close()`. No markup changes, so `render_cost` cannot see it; the
-    per-patch cost is reasoned, not measured.
+    What it costs: measured on `237620f73` against main's `056964945`, 1,419 bytes raw
+    (43,846 to 45,265), 611 gzip (15,612 to 16,223), and 519 brotli (14,100 to 14,619).
+    The earlier `f31240cca` was 738, 273 and 226 bytes larger than the same baseline, but
+    identified close recipients by id and missed positional layout matches. A patch with no
+    closed dialog markup pays one incoming selector check and no second target walk. An answer
+    that can close an existing dialog walks the relevant draws before mutation, using the same
+    matching logic for the real draw. A second evaluation on that path lets the draw see what
+    an earlier fragment or synchronous handler changed. Replacement also checks for pending
+    events in the existing dialog-state walk. The per-draw work is reasoned, not measured.
 
     Stands on: platform (HTML's dialog close: `close()` fires `beforetoggle` at once, queues
     `toggle` and `close`, and, when focus is in the dialog, focuses the element that had it
@@ -5682,7 +5673,10 @@ rules something out.
     before the dialog, and of two patches in one task, the second drawing the dialog again
     before its events come, each failing with the first version's runtime and passing with this
     one, and, by a listener on the document, of nested dialogs and one replaced in a layout a
-    write's page draws in place, failing and passing the same way);
+    write's page draws in place, failing and passing the same way; the anonymous inner modal
+    restoring focus to the opener, removal before parent redraw, removal and id reuse, a
+    redraw open, and a changed result between forwarded events, all red on `f31240cca` and
+    green on `237620f73` in the same three engines);
     reasoned (the element the page has is the dialog the app's handlers are for; one listener
     each on a dialog being closed is the only way to learn when the browser's events come);
     value (a close Corten does behaves as the browser's, one `close` and focus given back,
@@ -5711,8 +5705,9 @@ rules something out.
     157.0 and WebKit 27.2 (the smoke runs WebKit without the Navigation API, which Playwright's
     WebKit loses the page with, so it skips the layout check there; run alone with it, it failed
     and passed the same way), and the runtime's size on `1a37ba222` against `38587c414`;
-    2026-11-17, the runtime's size with this change merged onto main's `27c29d7d2` against
-    `27c29d7d2`.
+    2026-11-17, runtime sizes on `f31240cca` and `237620f73` against `056964945`, and
+    the five regression checks on those two branch builds in Chromium 156.0.8078.4, Firefox
+    157.0 and WebKit 27.2 (Playwright 1.64.1, Navigation API enabled for the layout check).
 
 ## Rules
 
