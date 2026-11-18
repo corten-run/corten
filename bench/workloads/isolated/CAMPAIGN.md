@@ -8,6 +8,21 @@ skipping an entire group. Actual source/OS integration is not inferred from synt
 adapter tests. No benchmark timing was measured to test this code. Independent review,
 merged native producers/validators and the explicit unit preparation below remain required.
 
+The [owned SSH/SFTP drain contract](owned-ssh-drain.md) adds production registration,
+input hold, sealed bootstrap/audit admission and watcher-terminal proof. Actual first-host
+native qualification remains pending. Local transport exit still does not clear a remote
+session, relax a host bookend, or release an uncertain lock.
+New grouped catalog launches use one presealed CPU0-bound SSH control stream and an
+explicit foreground local-monitor lease. Routine `--collect` reads its durable local
+journal without opening remote commands/channels. Lost lease irrevocably invalidates
+and cancels native work; qualification is no longer detached from the local connection.
+Terminal stream notice/local exit is not remote-empty evidence: actual source-bound
+identity/scope disappearance and existing unit/evidence gates precede normal cleanup.
+Supervised audit delivery currently fails closed at its missing locked approval
+checkpoint, so JSON/mixed/all-group review waits remain blocked. Catalog has no audit
+wait. Legacy schemas/collection remain explicit. See the drain contract for custody,
+failed-only recovery and first-official-host qualification limits.
+
 ## Parent interface
 
 ```sh
