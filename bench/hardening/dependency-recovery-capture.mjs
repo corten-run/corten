@@ -34,6 +34,9 @@ function validateReadReceipts(samples) {
 function verifyApiEvidence(snapshots, samples, triggerAtMs, restoredAtMs, jitter) {
   assert.ok(snapshots[2].reads.slow > 0, "missing API upstream exposure during slow phase");
   const phaseBounds = [0, triggerAtMs, restoredAtMs, Infinity];
+  // An observation may arrive late, but the private trigger cannot start
+  // before baseline ends, and its full delay window must elapse before restore.
+  const earliestPhaseStart = [0, beforeMs, restoreMs];
   const intervals = snapshots.slice(1).map((current, i) => ({
     start: snapshots[i].observedAtMs - jitter, end: current.observedAtMs,
     counts: phases.map((phase) => ({ reads: current.reads[phase] - snapshots[i].reads[phase],
@@ -44,7 +47,7 @@ function verifyApiEvidence(snapshots, samples, triggerAtMs, restoredAtMs, jitter
     for (const [phase, name] of phases.entries()) {
       const minDelay = name === "slow" ? delayMs - timerToleranceMs : 0;
       for (const [i, read] of intervals.entries()) {
-        const firstRead = Math.max(startMs, read.start, phaseBounds[phase] - jitter);
+        const firstRead = Math.max(startMs, read.start, earliestPhaseStart[phase], phaseBounds[phase] - jitter);
         if (!read.counts[phase].reads || firstRead > read.end || firstRead >= phaseBounds[phase + 1]) continue;
         for (const reply of intervals.slice(i)) {
           // The completion keeps the read's phase even when it crosses a transition.

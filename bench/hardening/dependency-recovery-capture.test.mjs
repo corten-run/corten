@@ -141,6 +141,10 @@ test("a boundary-spanning success cannot combine a restored read with a slow com
   upstream.restored.responses200.restored = upstream.after.responses200.restored = 1;
   assert.equal(assembleRecovery(input).assessment.status, "unrecovered");
 
+  crossing.endMs = 11840;
+  assert.throws(() => assembleRecovery(input), /missing API upstream read\/200 pair/);
+  crossing.endMs = 12040;
+
   // Alternatively, a slow read can finish after restore and keep its read phase.
   upstream.slow.reads.slow = 0;
   upstream.restored.reads.restored = upstream.after.reads.restored = 0;
