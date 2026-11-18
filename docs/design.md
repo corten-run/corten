@@ -2719,11 +2719,19 @@ rules something out.
     [#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044).
 
     Schema definitions are cached by Rust type identity and direction, not by the printed path.
-    A derive's static would separate two versions of a dependency's type but not two instances
-    of the same generic over those types. The optional `types` feature uses `typeid` for identity
-    without a `'static` bound on borrowed types. Definition names still come from the Rust name
-    and the existing numeric suffix rule. A handler importing the wrong declaration fails
-    when the declarations are generated, not on a request.
+    A [static in a generic impl](https://doc.rust-lang.org/reference/items/static-items.html#statics--generics)
+    belongs to the declaration, not the instance: `Wrapper` over two versions of a dependency's
+    type would share both the static and the printed name. A [function address](https://doc.rust-lang.org/std/ptr/fn.fn_addr_eq.html)
+    can be shared by distinct functions or differ for the same function across codegen units.
+    Only `types` enables [`typeid`](https://github.com/dtolnay/typeid/tree/1.0.3), a dependency-free
+    crate maintained by David Tolnay, with about 220 lines in its library source. Its `of` obtains
+    the compiler's `TypeId` with free lifetimes erased via an unsafe trait-object lifetime cast
+    on zero-sized `PhantomData`, without touching borrowed data. Corten uses the result only as a
+    schema cache key, never for downcasting or as proof of type equality. Owning the same unsafe
+    implementation here would leave Corten maintaining its compiler assumptions and compatibility
+    without a stronger guarantee. Definition names still come from the Rust name and the existing
+    numeric suffix rule. A handler importing the wrong declaration fails when declarations are
+    generated, not on a request.
 
     Not chosen: the attribute, a synonym; an attribute that derives both directions, which would
     save a type that is read and written one name in its `#[derive(..)]` list
@@ -2741,11 +2749,12 @@ rules something out.
     compare a tool answer's bytes with serde's for the item, and each std type's with serde's, and
     check which outputs are parsed); reasoned (serde_json writes well-formed JSON for a `Serialize`
     that follows serde's protocol, not checked for one that does not, where a debug build's parse is
-    the net; a type asked again in one question is known by its derive's static and its `type_name`,
-    which can coincide only for one generic type over two arguments of the same printed name, with
-    the same net; a derived `ToJson` writes a tool output's schema and its bytes, and a derived
-    `FromJson` a tool input's schema and what it reads); value (one declaration per direction,
-    Values 4, 5 and 6).
+    the net; the separate `ToJson::__well_formed` check recognizes a type asked again in one
+    question by its derive's static and its `type_name`, which can coincide for one generic type
+    over two arguments of the same printed name, with the same net; a derived `ToJson` writes a
+    tool output's schema and its bytes, and a derived `FromJson` a tool input's schema and what it
+    reads); platform (Rust 1.89's `TypeId::of` requires `'static`; `typeid` 1.0.3 returns the
+    compiler identity without that bound); value (one declaration per direction, Values 4, 5 and 6).
 
     Revisit when: an example app needs, because the derives refuse its type, a hand-written `ToJson`
     with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in `impl FromJson for T {}`
@@ -2763,7 +2772,10 @@ rules something out.
     with `tool_cost` added and on `6d04bbe6`, which parses only an output that is or holds a
     hand-written `ToJson`, and the release parse's cost on `19fd761c`; 2026-11-10, which outputs are
     parsed, trees, cycles and twelve types that all hold each other included (the agent test of that
-    name), at `d4aca597`.
+    name), at `d4aca597`; 2026-11-18, Rust's static and function address rules, Rust 1.89's
+    [`TypeId::of`](https://doc.rust-lang.org/1.89.0/std/any/struct.TypeId.html#method.of), and the
+    [`typeid` 1.0.3 source](https://github.com/dtolnay/typeid/blob/1.0.3/src/lib.rs), with the
+    `same_printed_types_and_generic_instances_get_separate_definitions` regression at `6d7d2cd92`.
 
 39. <a id="choice-script-checks"></a>**Scripts are type-checked with `strict`, `noUncheckedIndexedAccess`,
     `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and

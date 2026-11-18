@@ -127,3 +127,28 @@ read schema: implement `FromJsonSchema` for it by hand (and, when it is the whol
 tool bounds on `FromJson`, add `impl corten::FromJson for T {}` beside its `Deserialize`). A
 declaration is named after the Rust type; a `#[serde(rename)]` on the type does not change its JSON,
 and does not change the name.
+
+### Naming a hand-written schema
+
+Use `Generator::define::<Self>` in a hand-written `ToJsonSchema` or `FromJsonSchema` to give it
+a definition of its own. `Types::add` and checked handler types need a named definition, not
+an inline schema. Pass `false` for a written schema or `true` for a read schema. The generator
+reserves the name before calling the closure, so a recursive field can call its schema method
+with the same generator and get a `$ref` back. Borrowed types do not need a `'static` bound.
+
+If you used the old hidden `Generator::define` helper, add `::<Self>` and remove the string
+identity argument. Keep the direction, definition name and closure:
+
+```rust,ignore
+// Before, inside ToJsonSchema::json_schema:
+generator.define(false, core::any::type_name::<Self>(), "Node", |generator| {
+    describe_node(generator)
+})
+
+// After:
+generator.define::<Self>(false, "Node", |generator| {
+    describe_node(generator)
+})
+```
+
+An implementation that returns an inline schema where it is accepted needs no change.

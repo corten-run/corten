@@ -46,7 +46,7 @@ use serde_json::{json, Map, Value};
     note = "derive ToJson on it; for another crate's type, implement ToJsonSchema for a #[serde(transparent)] newtype around it"
 )]
 pub trait ToJsonSchema {
-    /// The schema, or a `$ref` to it after adding it to `generator`'s definitions.
+    /// The schema, or a `$ref` from [`Generator::define`] with `read` set to `false`.
     fn json_schema(generator: &mut Generator) -> Value;
 
     /// The schema itself, never a `$ref`: what a `#[serde(flatten)]` field adds. Not a public API.
@@ -63,7 +63,7 @@ pub trait ToJsonSchema {
     note = "derive FromJson on it; a Fields or UrlValue type has it already (deriving FromJson beside them is E0119); for another crate's type, implement FromJsonSchema for a #[serde(transparent)] newtype around it"
 )]
 pub trait FromJsonSchema {
-    /// The schema, or a `$ref` to it after adding it to `generator`'s definitions.
+    /// The schema, or a `$ref` from [`Generator::define`] with `read` set to `true`.
     fn json_schema(generator: &mut Generator) -> Value;
 
     /// The schema itself, never a `$ref`. Not a public API.
@@ -100,8 +100,37 @@ impl Generator {
 
     /// A `$ref` to `T` as it is read (`read`) or written, made by `make` under `name` the
     /// first time. A type described on both sides in one document has two definitions
-    /// (`Name` and `Name2`). Not a public API: what the derives call.
-    #[doc(hidden)]
+    /// (`Name` and `Name2`). Call `define::<Self>` in a hand-written schema implementation.
+    /// The name is reserved before `make` runs, so a recursive field can refer back to it.
+    ///
+    /// ```
+    /// use corten::json::schema::{Generator, ToJsonSchema};
+    /// use serde_json::{json, Value};
+    ///
+    /// #[derive(serde::Serialize)]
+    /// struct Node<'a> {
+    ///     label: &'a str,
+    ///     children: Vec<Node<'a>>,
+    /// }
+    ///
+    /// impl ToJsonSchema for Node<'_> {
+    ///     fn json_schema(generator: &mut Generator) -> Value {
+    ///         generator.define::<Self>(false, "Node", |generator| json!({
+    ///             "type": "object",
+    ///             "properties": {
+    ///                 "label": <&str>::json_schema(generator),
+    ///                 "children": Vec::<Self>::json_schema(generator),
+    ///             },
+    ///             "required": ["label", "children"],
+    ///         }))
+    ///     }
+    /// }
+    ///
+    /// let schema = corten::types::Types::new().add::<Node<'_>>().json_schema();
+    /// let defs = schema["$defs"].as_object().unwrap();
+    /// assert_eq!(defs.len(), 1);
+    /// assert_eq!(defs["Node"]["properties"]["children"]["items"]["$ref"], "#/$defs/Node");
+    /// ```
     pub fn define<T: ?Sized>(&mut self, read: bool, name: &str, make: impl FnOnce(&mut Generator) -> Value) -> Value {
         let id = (read, typeid::of::<T>());
         if let Some(name) = self.by_id.get(&id) {
