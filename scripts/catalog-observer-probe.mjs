@@ -48,37 +48,55 @@ try {
   console.log(JSON.stringify({ stage, terminal: result.terminal, exit: number(result.code), cancelled: result.cancelled, forced: result.forced }));
   if (setupError) throw setupError;
   assert.ok(observer, "command observation did not start");
-  stage = "seal";
-  const seal = await observer.finish(result);
-  stage = "replay";
-  const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
-  const failures = terminal.observerFailures;
-  console.log(JSON.stringify({ stage, samples: number(terminal.samples), failures: number(failures.count),
-    first: capture(failures.first), last: capture(failures.last) }));
-  const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result });
-  assert.equal(proof.manifestSha256, seal.sha256);
-  console.log(JSON.stringify({ hostVerified: proof.status === "verified", cleanupComplete: proof.cleanupComplete }));
-  assert.ok(proof.status === "verified" && proof.cleanupComplete, "host replay did not verify");
-  stage = "cleanup";
-  assert.ok(!existsSync("/sys/fs/cgroup" + proof.context.path), "command scope still present");
-  stage = "native-checks";
-  const summary = JSON.parse(readFileSync(join(folder, "summary.json")));
-  assert.equal(summary.commit, commit); assert.equal(summary.dirty, false);
-  assert.deepEqual(summary.options.apps, ["corten"]); assert.equal(summary.options.checkOnly, true);
-  const stages = ["build/image", "checks", "app logs", "suite", "upstream logs", "tree provenance", "artifact index"];
-  console.log(JSON.stringify({ nativeExit: number(result.code), failureCount: summary.failures.length,
-    cleanupFailures: summary.cleanupFailures.length, firstFailures: summary.failures.slice(0, 8).map(f => ({
-      stage: stages.includes(f.stage) ? f.stage : "unknown",
-      source: f.source === null ? null : ["api", "fixture"].includes(f.source) ? f.source : "unknown" })) }));
-  assert.ok(result.success, "native command failed");
-  assert.equal(summary.complete, true); assert.equal(summary.checksPassed, true);
-  assert.deepEqual(summary.failures, []); assert.deepEqual(summary.cleanupFailures, []);
-  stage = "image";
-  const image = JSON.parse(readFileSync(join(folder, "image-corten.json")));
-  assert.equal(image.commit, commit); assert.equal(image.built, true);
-  assert.match(image.imageId, /^sha256:[0-9a-f]{64}$/); assert.equal(image.imageId, summary.apps.corten.imageId);
-  assert.deepEqual(Object.keys(summary.apps.corten.checks).sort(), ["api", "fixture"]);
-  console.log("Corten image built; both source checks and host replay passed. No throughput measured.");
+  // Neither independent verdict should hide the other when a cancelled native command wrote a summary.
+  const check = async action => {
+    try { await action(); return true; }
+    catch (error) {
+      console.error(JSON.stringify({ diagnostic: "failed", stage, code: codeOf(error?.code) }));
+      return false;
+    }
+  };
+  const hostOK = await check(async () => {
+    stage = "seal";
+    const seal = await observer.finish(result);
+    stage = "replay";
+    const terminal = JSON.parse(readFileSync(join(directory, "terminal.json")));
+    const failures = terminal.observerFailures;
+    console.log(JSON.stringify({ stage, samples: number(terminal.samples), failures: number(failures.count),
+      first: capture(failures.first), last: capture(failures.last) }));
+    const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result });
+    assert.equal(proof.manifestSha256, seal.sha256);
+    console.log(JSON.stringify({ hostVerified: proof.status === "verified", cleanupComplete: proof.cleanupComplete }));
+    assert.ok(proof.status === "verified" && proof.cleanupComplete, "host replay did not verify");
+    stage = "cleanup";
+    assert.ok(!existsSync("/sys/fs/cgroup" + proof.context.path), "command scope still present");
+  });
+  const nativeOK = await check(() => {
+    stage = "native-checks";
+    assert.ok(result.terminal, "cannot inspect files for an unsettled command");
+    const summary = JSON.parse(readFileSync(join(folder, "summary.json")));
+    assert.equal(summary.round, round); assert.equal(summary.workload, "catalog-v1");
+    assert.equal(summary.commit, commit); assert.equal(summary.dirty, false);
+    assert.deepEqual(summary.options.apps, ["corten"]); assert.equal(summary.options.checkOnly, true);
+    const sources = ["api", "fixture"];
+    const failedSources = sources.filter(source => summary.apps?.corten?.checks?.[source]?.failure);
+    const stages = ["build/image", "checks", "app logs", "suite", "upstream logs", "tree provenance", "artifact index"];
+    console.log(JSON.stringify({ nativeExit: number(result.code), failureCount: summary.failures.length, failedSources,
+      cleanupFailures: summary.cleanupFailures.length, firstFailures: summary.failures.slice(0, 8).map(f => ({
+        stage: stages.includes(f.stage) ? f.stage : "unknown",
+        source: f.source === null ? null : ["api", "fixture"].includes(f.source) ? f.source : "unknown" })) }));
+    assert.ok(result.success, "native command failed");
+    assert.equal(failedSources.length, 0);
+    assert.equal(summary.complete, true); assert.equal(summary.checksPassed, true);
+    assert.deepEqual(summary.failures, []); assert.deepEqual(summary.cleanupFailures, []);
+    stage = "image";
+    const image = JSON.parse(readFileSync(join(folder, "image-corten.json")));
+    assert.equal(image.commit, commit); assert.equal(image.built, true);
+    assert.match(image.imageId, /^sha256:[0-9a-f]{64}$/); assert.equal(image.imageId, summary.apps.corten.imageId);
+    assert.deepEqual(Object.keys(summary.apps.corten.checks).sort(), ["api", "fixture"]);
+  });
+  if (!hostOK || !nativeOK) process.exitCode = 1;
+  else console.log("Corten image built; both source checks and host replay passed. No throughput measured.");
 } catch (error) {
   console.error(JSON.stringify({ diagnostic: "failed", stage, code: codeOf(error?.code) }));
   process.exitCode = 1;
