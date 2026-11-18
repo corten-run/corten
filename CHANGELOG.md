@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Remove two unused workspace dependency entries and have Cargo 1.100 or later wait three days
+  before selecting newly published dependency versions for the Corten checkout, not for new apps.
+
 - The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
   `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 

@@ -71,6 +71,20 @@ The bare `npx tsc` command may select the benchmark harness's classic 5.9.3 comp
   container after `apt-get update && apt-get install -y valgrind`, and for `count.mjs` a Linux
   host with `perf`, root and cgroup v2.
 
+Use Cargo 1.100 or later when changing Rust dependencies. The checkout's `.cargo/config.toml`
+asks Cargo to pass over registry versions published less than three days ago when resolving
+dependencies. This gives a bad release time to be noticed and yanked, not a guarantee that old
+versions are safe. It does not reject versions already in `Cargo.lock`, cover versions without a
+registry publish time, or apply to `cargo install`. For an urgent fix, set
+`CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow` for that resolution only, and review the lockfile
+diff. Cargo 1.89 ignores the setting; Cargo 1.99.1 ignores it with a warning.
+
+Fix Cargo's unused dependency warnings from the stable, all-feature, all-target check below.
+Cargo 1.100's `unused_dependencies` lint does not cover dev-dependencies. These Cargo lints
+remain warnings: setting them to `deny` in the manifests would introduce warnings on the
+supported Rust floor, and `-D warnings` here applies to rustc and Clippy, not Cargo.
+Revisit `deny` when the Rust floor reaches 1.100.
+
 ## Checks
 
 Grouped benchmark replay and observer controls also run in the separate

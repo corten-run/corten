@@ -121,6 +121,11 @@ crate whose checksum crates.io stores.
 | `AGENTS.md` | the rules for an AI agent working on the app |
 | `Dockerfile` | a release build in a slim image that preloads jemalloc, which gives back memory a burst of connections took (remove its three lines to run on glibc's allocator); zstd is linked to the build image's libzstd, so the server needs `libzstd.so.1` where it runs (the slim image has it; for one without it, distroless or scratch, remove the `ZSTD_SYS_USE_PKG_CONFIG` line); the build keeps the app's compiled crates in a cache of its own, named for the app, so other apps on the same Docker host build alongside it ([Building the image](deploy.md#building-the-image)); the server runs as an unprivileged user, `USER 10001:10001` (by number, so a cluster that requires non-root containers starts it; the server writes no file, and an app whose server does gives that user a directory) |
 
+`corten new` does not set a dependency publish-age policy. Apps using Cargo 1.100 or later can
+set their own [minimum publish age](https://doc.rust-lang.org/cargo/reference/config.html#registryglobal-min-publish-age)
+in `.cargo/config.toml`; older supported Cargo versions do not enforce it, and Cargo 1.99.1
+warns about the setting.
+
 ## A whole app in one file
 
 Every route is a struct in the routes module, and its attribute names the handler for each method
