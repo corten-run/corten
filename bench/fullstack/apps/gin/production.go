@@ -34,6 +34,15 @@ func parseAuthority(value string) (allowedAuthority, error) {
 	return allowedAuthority{strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")), u.Port()}, nil
 }
 
+func setDocumentSecurityHeaders(c *gin.Context) {
+	c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+	c.Header("X-Frame-Options", "DENY")
+	c.Header("Cross-Origin-Opener-Policy", "same-origin")
+	c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+}
+
 func configureProduction(r *gin.Engine) error {
 	if os.Getenv("PROFILE") != "matched" {
 		return nil
@@ -54,12 +63,7 @@ func configureProduction(r *gin.Engine) error {
 		return err
 	}
 	r.Use(func(c *gin.Context) {
-		c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
-		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
-		c.Header("X-Frame-Options", "DENY")
-		c.Header("Cross-Origin-Opener-Policy", "same-origin")
-		c.Header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		setDocumentSecurityHeaders(c)
 		c.Header("Cache-Control", "no-store")
 		requested, err := parseAuthority(c.Request.Host)
 		allowed := false

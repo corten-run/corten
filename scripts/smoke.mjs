@@ -8,6 +8,7 @@ import zlib from "node:zlib";
 import { readFileSync } from "node:fs";
 import { stall } from "./stall.mjs";
 import { browserBug } from "./browser-bugs.mjs";
+import { checkMarkupScanner } from "./markup-scan.mjs";
 
 const base = process.argv[2] ?? "http://localhost:18480";
 const engines = { chromium, firefox, webkit };
@@ -236,12 +237,11 @@ function trusting(browser) {
     await context.addInitScript(() => {
       /** @type {{ createHTML: (html: string) => unknown } | undefined} */
       let policy;
-      try {
-        policy = /** @type {any} */ (globalThis).trustedTypes?.createPolicy("smoke", { createHTML: (/** @type {string} */ html) => html });
-      } catch {
-        // A page whose policy does not name it (another app's): the test writes no markup there.
-      }
-      Object.defineProperty(window, "__html", { value: (/** @type {string} */ html) => (policy ? policy.createHTML(html) : html) });
+      Object.defineProperty(window, "__html", { value: (/** @type {string} */ html) => {
+        // This init script also runs on redirect destinations where the test writes no markup.
+        policy ??= /** @type {any} */ (globalThis).trustedTypes?.createPolicy("smoke", { createHTML: (/** @type {string} */ html) => html });
+        return policy ? policy.createHTML(html) : html;
+      } });
     });
     return context;
   };
@@ -1046,6 +1046,55 @@ async function run(browser) {
   const live = "[data-scope=live-prices]";
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("on:connect runs the script's watch(), which subscribes to the feed", (await page.getAttribute(live, "data-status")) === "live");
+  {
+    const shared = await browser.newPage();
+    await shared.goto(`${base}/smoke/shared-refs`);
+    const owners = shared.locator('section[data-scope="shared-refs-page"]');
+    const first = owners.nth(0);
+    const second = owners.nth(1);
+    const firstPart = first.locator("#shared-ref-part-1");
+    const secondPart = second.locator('[data-scope="part-boundary"] #shared-ref-part-2');
+    const untouched = await firstPart.elementHandle();
+    const directRef = await firstPart.getAttribute("data-ref");
+    const ref = await secondPart.getAttribute("data-ref");
+    const readPart = async (/** @type {import('@playwright/test').Locator} */ owner, /** @type {string} */ expected) => {
+      const out = owner.locator("output");
+      await out.evaluate((node) => { /** @type {HTMLOutputElement} */ (node).value = ""; });
+      await owner.getByRole("button", { name: "Read part" }).click();
+      await owner.getByText(expected, { exact: true }).and(out).waitFor();
+    };
+    await readPart(first, "Original 1");
+    await readPart(second, "Original 2");
+    await second.getByRole("textbox", { name: "Check shared handler scope" }).dispatchEvent("change");
+    await second.and(shared.locator('[title="Shared handler ran"]')).waitFor();
+    check("a shared handler passed through a scoped child receives the exporting parent's root",
+      (await first.getAttribute("title")) === null && (await second.locator('[data-scope="part-boundary"]').getAttribute("title")) === null);
+    const replace = () => Promise.all([
+      shared.waitForResponse((r) => new URL(r.url()).pathname === "/smoke/shared-refs/2/replace"),
+      second.getByRole("button", { name: "Replace part" }).click(),
+    ]);
+    const [patch] = await replace();
+    const body = await patch.text();
+    await secondPart.and(second.getByText("Replacement 2", { exact: true })).waitFor();
+    await readPart(second, "Replacement 2");
+    await readPart(first, "Original 1");
+    check(
+      "a standalone patch keeps its ref across a nested scope and only replaces the targeted owner instance",
+      ref === "shared-refs-page/part" && directRef === ref && patch.headers()["corten-patch"] === "1" && body.includes(`data-ref="${ref}"`) &&
+        !body.includes("data-scope=") && (await secondPart.getAttribute("data-ref")) === ref &&
+        (await untouched.evaluate((node) => node.isConnected && node.textContent === "Original 1")),
+      body,
+    );
+    await secondPart.evaluate((node) => node.remove());
+    const diagnostic = shared.waitForEvent("console", (m) =>
+      m.type() === "error" && m.text().includes("corten: patch element <p> needs an id that exists on the page"),
+    );
+    await replace();
+    await diagnostic;
+    await readPart(first, "Original 1");
+    check("a standalone patch with a missing target reports it without inserting the part", (await shared.locator("#shared-ref-part-2").count()) === 0);
+    await shared.close();
+  }
   // `data-on` is single-quoted, so the JSON of a handler's arguments (here the feed's address and
   // the formats) goes in with its quotes as they are, and the watch above read them as written.
   {
@@ -1085,6 +1134,8 @@ async function run(browser) {
     });
     check(`a patch's top level parses as patch-parsing.json says, in ${cases.length} shapes`, !differ.length, differ.join("; "));
   }
+  const markupCases = await checkMarkupScanner(browser);
+  check(`the developer markup fixture agrees with the browser in ${markupCases} cases`, true);
   // Patches generated from a fixed seed (`patch-generated.json`, which html.rs's
   // `generated_patches_carry_the_check_s_verdict` writes with the debug check's verdict on each):
   // the shapes above composed with the tokens the check has been found to misread. The check
@@ -1804,20 +1855,26 @@ async function run(browser) {
     const imported = status === "live" && tries > 2;
     check("a script module whose first two requests fail is imported again, and its on:connect handler runs", imported, `${status}, ${tries} requests${imported ? "" : `: ${seen.join("; ")}`}`);
   }
-  // Corten's own modules retry the same way. The format module answered 503 twice (the page's
-  // module script, then the runtime's import): the on:connect handler that takes a format waits
-  // for it, through the wait after the second failure, and runs once a third request loads it.
+  // Corten's own modules retry the same way. Fail the format module until the runtime's import
+  // rejects: a browser can make multiple requests before rejecting it. Measure the wait from
+  // that failure, after which the on:connect handler that takes a format can run.
   {
     const refused = await browser.newPage();
-    /** @type {number[]} */
-    const at = [];
+    let failedAt;
+    let retriedAt;
+    let requests = 0;
     let status = null;
     try {
+      refused.on("console", (m) => {
+        if (m.type() === "error" && /^corten: script module .*\/corten-format\.js did not load/.test(m.text())) failedAt ??= performance.now();
+      });
       await refused.route(
         (url) => url.pathname.endsWith("/scripts/corten-format.js"),
         (route) => {
-          at.push(Date.now());
-          return at.length <= 2 ? route.fulfill({ status: 503, body: "Service Unavailable" }) : route.continue();
+          requests++;
+          if (failedAt === undefined) return route.fulfill({ status: 503, body: "Service Unavailable" });
+          retriedAt ??= performance.now();
+          return route.continue();
         },
       );
       await refused.goto(base);
@@ -1826,11 +1883,11 @@ async function run(browser) {
     } finally {
       await refused.close();
     }
-    const gap = at.length > 2 ? at[2] - at[1] : -1;
+    const gap = failedAt !== undefined && retriedAt !== undefined ? retriedAt - failedAt : -1;
     check(
-      "a format module answered 503 twice is asked for again after its wait, and the on:connect handler that takes a format runs",
-      status === "live" && at.length > 2 && gap >= 400,
-      `${status}, ${at.length} requests, ${gap} ms between the second and third`,
+      "a format module that failed to import is asked for again after its wait, and the on:connect handler that takes a format runs",
+      status === "live" && requests > 2 && gap >= 400,
+      `${status}, ${requests} requests, ${Math.round(gap)} ms between import failure and retry`,
     );
   }
   // A link from a page with no fields to one with them: the swapped-in page waits for the field

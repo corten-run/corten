@@ -6823,9 +6823,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
    drawn. It is not built, and the scan answers the reported case, a styled component no list
    names
    ([#980 Check at startup that a listed component's styled children are served with it, so the list check runs in every build and covers areas](https://github.com/corten-run/corten/issues/980)).
-10. <a id="limit-tested-browsers"></a>`corten-ui` is tested in Chromium, Firefox and WebKit (Playwright's builds). Its popups are placed by the design system's CSS with
-   anchor positioning (Baseline since January 2026); a browser without it shows them where
-   `popover` puts them by default, centered. Tabs are horizontal.
+10. <a id="limit-tested-browsers"></a>`corten-ui` is tested in Playwright's builds: Chromium
+    159.0.8154.6, Firefox 159.0 and WebKit 27.2 (revision 2388) in Playwright 1.65.1.
+    Its popups are placed by the design system's CSS with anchor positioning (Baseline since
+    January 2026); a browser without it shows them where `popover` puts them by default, centered.
+    Tabs are horizontal.
     Its names in the page are prefixed (`ui.combo_box.js`, `data-scope="ui-combo-box"`) through
     `[package.metadata.corten] scripts = "ui"`, so an app's own components never collide with
     them. Two of an app's own scripts with one file name are a startup error that names both.
@@ -7216,7 +7218,29 @@ by design; where it is known, a limit says what would lift it or why it is so.
     and that would not reach the case this Choice is for, fields another component draws. It lifts
     when the kind a form draws for a field is known where the call is checked.
 
-33. <a id="limit-relay-stream-order"></a>JetStream stream order is not always Corten feed
+33. <a id="limit-developer-markup-scan"></a>The developer checks for patch ids, form hints,
+    empty submit keys and `data-vars` share the
+    [HTML tokenizer's](https://html.spec.whatwg.org/multipage/parsing.html#tokenization)
+    tag, comment and text boundaries. They do not build the browser's tree. The patch id
+    check still stops at the shapes in [Limit 2](#limit-whole-element-patches). The hint
+    check recognizes SVG and MathML text (including CDATA), decodes numeric whitespace
+    references and `&Tab;` and `&NewLine;` in HTML text and textarea values, and leaves
+    script and stylesheet source, iframe fallback and inert template contents out of
+    hint text. It follows explicit closes and the SVG and MathML exits, not HTML's
+    automatic closing or reparenting of elements: `<li id=qty-hint><li>Outside` can still
+    count text after the first list item. This is the remaining case in
+    [#1620 Track known limits of the debug form-hint scan](https://github.com/corten-run/corten/issues/1620).
+    Hints and submit keys distinguish an ordinary template from a declarative shadow root
+    on an eligible document host without a root already. This is a scan of written markup:
+    it does not decode attribute values, model the accessibility tree or follow slotting,
+    script changes or custom-element registration. A patch uses a template fragment and
+    does not attach declarative shadow roots. The hint, key and patch id checks run only
+    in debug builds; the `data-vars` check runs only on full documents with development
+    mode enabled, even in a release build. It checks the scripting-on parse (including
+    templates whose contents can be copied) and, when it finds an HTML `<noscript>`, also
+    the scripting-off parse, where the fallback can contain markup.
+
+34. <a id="limit-relay-stream-order"></a>JetStream stream order is not always Corten feed
     order. Postgres commits each feed's sequence under its row lock. The relay submits
     ordinary patches in outbox-ID order, which is feed-sequence order within a generation.
 

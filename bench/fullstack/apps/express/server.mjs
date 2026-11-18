@@ -153,11 +153,21 @@ app.route("/api/marketplace/:id").get(recordJson(fetchMarketplaceRecord,
   (req) => ({ traceparent: req.get("traceparent") }))).all(recordMethod);
 app.get("/api/alerts", readAlerts);
 
+const catalogDocumentHeaders = {
+  "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Frame-Options": "DENY",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), geolocation=(), microphone=()",
+  "Cache-Control": "private, no-cache",
+};
 app.get("/catalog/:id", async (req, res) => {
   const record = await fetchCatalogRecord(req.params.id);
   if (req.timedout) return;
   if (!record) return res.sendStatus(404);
   const prefix = typeof req.query.field === "string" ? req.query.field : "";
+  if (catalogLean) res.set(catalogDocumentHeaders);
   res.render("catalog", { record, prefix, fields: record.fields.filter((f) => f.name.startsWith(prefix)) });
 });
 

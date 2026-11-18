@@ -105,7 +105,12 @@ export async function inspectNative(binding, folder) {
       result = httpAttempt(binding, report);
     } else {
       const api = group === "catalog-page" ? await import("../../catalog/verify.mjs") : await import("../../marketplace/validate.mjs");
-      const saved = await api.validateSaved({ folder, round, commit });
+      const input = { folder, round, commit };
+      if (group === "catalog-page") {
+        assert.match(binding.selection.contractSha256, /^[a-f0-9]{64}$/, "catalog contract missing from campaign selection");
+        input.expectedContractSha256 = binding.selection.contractSha256;
+      }
+      const saved = await api.validateSaved(input);
       // Bind actual effective invocation even if the saved API accepts only identity.
       const summary = JSON.parse(readRegular(join(folder, "summary.json")));
       assert.equal(summary.round, round); assert.equal(summary.commit, commit);

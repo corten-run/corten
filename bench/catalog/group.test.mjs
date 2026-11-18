@@ -12,6 +12,7 @@ import { aggregate, parseArgs, phases, sources, targets } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
 import { inspectCatalog, renderCatalog } from "./report.mjs";
+import { syntheticDocumentHeaders } from "./workers-fixture.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const inventory = Object.fromEntries(Object.entries(allApps).filter(([, app]) => app.pages !== false));
@@ -21,6 +22,7 @@ const imageId = `sha256:${"b".repeat(64)}`;
 // Synthetic evidence for validator tests, not measurements or qualification claims.
 function result() {
   const group = groupDescriptor("catalog-page");
+  const catalog = records();
   const options = parseArgs(["c1", "--group", "catalog-page"], inventory);
   const phase = { requests: 6000, rps: 100, p50: 1, p95: 2, p99: 3, failed: 0, dropped: 0,
     perCpuSecond: 110, cpuUsec: 55000000, cpuAvgPct: 99, memMaxMiB: 8, upstream: { cpuAvgPct: 50, highCpu: false } };
@@ -30,10 +32,11 @@ function result() {
   const summary = { schema: groupResultSchema, group, options, workload: "catalog-v1", round: "c1", commit: "a".repeat(40),
     dirty: false, commitAfter: "a".repeat(40), dirtyAfter: false, complete: true, checksPassed: true, failures: [], cleanupFailures: [],
     startedAt: "2026-11-07T16:00:00Z", finishedAt: "2026-11-07T22:00:00Z",
-    fixtureSha256: createHash("sha256").update(`${JSON.stringify(records())}\n`).digest("hex"),
+    fixtureSha256: createHash("sha256").update(`${JSON.stringify(catalog)}\n`).digest("hex"),
     measurement: { encoding: "identity", fixedRate: 150, cpus: { app: { quota: 1, cpuset: "0" }, load: { quota: 4, cpuset: "4-7" }, api: { quota: 2, cpuset: "2-3" } } },
     apps: Object.fromEntries(names.map((app) => [app, { imageId, checks: Object.fromEntries(sources.map((source) =>
-      [source, { ...structuredClone(check), qualification: qualificationIdentity(group, app, source, imageId) }])), runs: {} }])) };
+      [source, { ...structuredClone(check), documentHeaders: syntheticDocumentHeaders(catalog, source),
+        qualification: qualificationIdentity(group, app, source, imageId) }])), runs: {} }])) };
   for (const { app, pass, ...profile } of timingPlan(options, sources, targets)) {
     const key = `${profile.source}-${profile.target}`;
     (summary.apps[app].runs[key] ??= []).push({ pass, evidence: { app, ...profile, imageId }, complete: true,
@@ -104,6 +107,7 @@ test("complete group evidence reports only seven apps and page columns, disclosi
   assert.match(markdown, /catalog-page/);
   assert.ok(markdown.includes(contractSha256("catalog-page")));
   assert.match(markdown, /page AND JSON; JSON is not timed/);
+  assert.match(markdown, /Document header contract: `catalog-document-headers\/v1`/);
   assert.ok(markdown.includes(`After-run commit: \`${"a".repeat(40)}\`; tree dirty after run: false.`));
   assert.match(markdown, /Memory page req\/s \| HTTP page req\/s/);
   assert.doesNotMatch(markdown, /Memory JSON req\/s|HTTP JSON req\/s/);

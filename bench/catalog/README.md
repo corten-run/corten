@@ -86,8 +86,35 @@ enabled. Other Corten apps and the framework's production defaults are unchanged
 Axum/Maud uses its lean router here, not its `PROFILE=matched` middleware stack.
 Corten still uses its normal typed routes, escaped `html!` templates, document
 layout, assets and `req.page`: mandatory page security headers, cache metadata,
-error handling and other built-in stages remain framework costs. This is not
-identical middleware or a claim that all production protections have been matched.
+error handling and other built-in stages remain framework costs. All catalog-page
+contenders must now serve their HTML documents with a common header baseline:
+an enforced CSP restricting inline scripts; protection against cross-origin framing
+(CSP or X-Frame-Options); `nosniff`; a referrer policy no looser than
+`strict-origin-when-cross-origin`; same-origin opener isolation; and explicit
+permissions and cache policies. This workload draws on the
+[OWASP HTTP Headers Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html);
+the headers are a benchmark requirement, not a claim that HTTP mandates them.
+Both data sources must serve these policies on the actual HTML response.
+The correctness browser disables its HTTP cache for these visits so a
+revalidated document's 304 fields cannot be mistaken for the headers of a
+fresh 200 response. This does not change the app or the timed load generator.
+Equivalent policies need not use identical header strings or send the same number
+of bytes. This document contract adds no requirement to the JSON route and
+does not require the matched profile's compression, deadlines or other middleware.
+Earlier lean results did not check this baseline. Do not relabel them or attribute
+an earlier throughput difference to headers without a separate measurement.
+
+**Header-only control (not a group result).** On 2026-11-18, four alternating
+off/on pairs exercised the same Axum/Maud release binary on Linux/WSL2, with
+the catalog adapter from commit `af63d0eca73baa91daf8066e94491b6654b872fc`.
+Each trial made 200 warmup and 2,000 measured serial keep-alive requests to
+the same in-memory record. All returned the same HTML. Enabling just the page
+headers increased the parsed header block from 101 to 604 bytes. The paired
+increases in server-task hardware cycles per request were 15,835, 13,329,
+71,996 and 23,590 (orders off/on, on/off, off/on, on/off). This checks that
+the extra work is measurable on that binary; the spread and single-client
+setup do not tell us how much it affects throughput or the gap to Corten.
+
 An `unstaged` data route is not a substitute: its sandbox would disable the
 catalog's working form. No output cache, pre-rendered response or framework
 internal bypass is used. Both sources retain the complete page/JSON correctness
@@ -96,13 +123,15 @@ gate, browser checks, field filtering and fresh request-time rendering.
 The runner selects `PROFILE=catalog-lean` for the registry's catalog-page
 contenders in both correctness and timed containers. Other diagnostic adapters
 retain their existing profile; richer group runners keep their production or
-matched settings. This is one supported lean recipe per contender, not an
+matched settings. A new ungrouped run that includes both checked and unchecked
+adapters reports their rows separately; it is not a header-matched baseline.
+This is one supported lean recipe per contender, not an
 unbounded search across runtimes, compilers or framework internals.
 
 | Contender | Supported lean configuration |
 |---|---|
 | Corten | No optional response compression or handler/header/send timers; normal page stages and error logs remain. |
-| Axum + Maud | Existing lean router without the optional matched production middleware. |
+| Axum + Maud | Lean router with document headers on the catalog page, without the rest of the matched production middleware. |
 | ASP.NET Razor | Minimum request/response data rates unset; native Kestrel header/keepalive timers remain at their defaults after infinite timers caused early connection closure in Linux checks. Razor rendering, source failures and logging remain. |
 | Express | Production EJS view cache; no ETag generation or HTTP header/request/keepalive timers; fresh response rendering remains. |
 | FastAPI | Uvicorn access logging disabled; error logging, worker count, event loop and parser selection unchanged. |
@@ -136,10 +165,12 @@ node bench/catalog/report.mjs bench/catalog/results/c1/summary.json
 node bench/catalog/report.mjs bench/catalog/results/c1/summary.json --commit FULL_MEASURED_SHA --require-complete
 ```
 
-For an ungrouped round, the second command exits unsuccessfully unless all twenty apps,
+For a historical ungrouped round, the second command exits unsuccessfully unless all twenty apps,
 all requested 64-user passes,
 the per-app correctness evidence, canonical fixture identity, measurement configuration,
-clean-tree provenance and cleanup succeeded. Supply the full measured
+clean-tree provenance and cleanup succeeded. A new ungrouped run that mixes header
+contracts fails this strict comparison even if every app finishes; use the grouped
+catalog report for a header-matched comparison. Supply the full measured
 commit, not a branch name. Reports include phase duration, warmup, fixed rate and CPU placement,
 label partial pass counts and every app's throughput range, show Corten's CPU efficiency,
 memory and latency, and flag underutilized app CPUs or busy single-process

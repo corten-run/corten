@@ -63,9 +63,10 @@ compiler: `node node_modules/typescript7/bin/tsc -p bench/browser/jsconfig.json`
 The bare `npx tsc` command may select the benchmark harness's classic 5.9.3 compiler instead.
 
 - Rust (stable; the supported floor is 1.89). On Windows the tests run in Docker, because the host cannot link `windows-sys`.
-- Node 22 or later, for the runtime's type check, its minified build and the browser smoke
-  tests: `npm install`, then `npx playwright install chromium firefox webkit` (the core and
-  `corten-ui` smoke tests run in all three).
+- Node (use the framework CI version in [`.node-version`](.node-version)), for the runtime's
+  type check, its minified build and the browser smoke tests: `npm ci`, then
+  `npx playwright install chromium firefox webkit` (the core and `corten-ui` smoke tests run
+  in all three).
 - Docker, for the example images the smoke tests run against.
 - For measuring (Pull requests, item 2): valgrind, on Linux or in the `rust:1-bookworm`
   container after `apt-get update && apt-get install -y valgrind`, and for `count.mjs` a Linux
@@ -237,7 +238,7 @@ told of the error Chromium logs for it (the exact text
 `Failed to load resource: net::ERR_NETWORK_CHANGED`); a check that needed the resource still fails
 on its own, and what the runtime logs for a loss it recovers from is still seen.
 
-Playwright's Firefox (1.64.1) sometimes acknowledges a click tens of seconds late on a heavily
+In Playwright 1.64.1, Firefox sometimes acknowledged a click tens of seconds late on a heavily
 loaded Windows machine, with no Corten on the page: a static form reproduces it, with or without
 form validation
 ([#712 ui-gallery smoke: on a loaded Windows machine a page stops making progress for 30 s about one full run in three, with the server answering in under 210 ms](https://github.com/corten-run/corten/issues/712)).

@@ -14,6 +14,8 @@ test("catalog lean contenders follow the page registry and the runner records th
   const runner = read("./run.mjs");
   assert.ok(runner.includes("leanProfile: { name: leanProfile, apps: leanApps }"));
   assert.ok(runner.includes('leanApps.includes(app) ? ["-e", `PROFILE=${leanProfile}`] : []'));
+  assert.match(runner, /"\/results\/checks.json", \.\.\.\(leanApps.includes\(app\) \? \[app\] : \[\]\)/);
+  assert.match(read("../../.github/workflows/catalog.yml"), /node bench\/catalog\/run.mjs c1 --apps .* --build --check-only/);
   for (const path of ["../marketplace/run.mjs", "../json-api/run.mjs", "../mixed-production/run.mjs"]) {
     assert.ok(!read(path).includes("catalog-lean"), `${path}: richer workloads do not select the lean profile`);
   }
@@ -51,10 +53,14 @@ test("Drogon lean disables supported compression and keeps warning/error logging
   assert.ok(source.includes("catalog::get(id,"));
 });
 
-test("Axum remains its existing lean router, not the matched production layer stack", () => {
+test("Axum catalog-lean stays separate from the matched production layer stack", () => {
   const source = read("../fullstack/apps/axum-maud/src/main.rs");
-  assert.ok(source.includes('std::env::var("PROFILE").as_deref() == Ok("matched")'));
-  assert.ok(source.includes("if profile { matched(router) } else { router }"));
+  assert.match(source, /let matched_profile = profile.as_deref\(\) == Ok\("matched"\)/);
+  assert.match(source, /let catalog_lean = profile.as_deref\(\) == Ok\("catalog-lean"\)/);
+  assert.ok(source.includes("if matched_profile { matched(router) } else { router }"));
+  const catalogPage = source.slice(source.indexOf("async fn catalog_page("), source.indexOf("async fn catalog_json("));
+  assert.match(catalogPage, /if !catalog_lean \{\s*return page.into_response\(\);/);
+  assert.doesNotMatch(catalogPage, /TimeoutLayer|CompressionLayer|RequestBodyLimitLayer/);
 });
 
 test("saved runtime boundaries retain the profile but never unrelated image environment", () => {

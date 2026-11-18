@@ -45,6 +45,28 @@ async function serving(env, body) {
   }
 }
 
+test("the lean catalog adds document headers to HTML, not the record API", async () => {
+  const root = await mkdtemp(join(tmpdir(), "express-catalog-headers-"));
+  const file = join(root, "catalog.json");
+  try {
+    const item = { id: "record_1", title: "Record", subtitle: "", description: "", fields: [], tags: [], related: [] };
+    await writeFile(file, JSON.stringify({ record_1: item }));
+    for (const profile of ["catalog-lean", "defaults"]) {
+      await serving({ PROFILE: profile, CATALOG_SOURCE: "fixture", CATALOG_FIXTURE_PATH: file }, async (base) => {
+        const page = await fetch(base + "/catalog/record_1");
+        assert.equal(page.status, 200);
+        assert.ok((await page.text()).includes("Catalog record"));
+        assert.equal(page.headers.has("content-security-policy"), profile === "catalog-lean");
+        if (profile === "catalog-lean") assert.equal(page.headers.get("cross-origin-opener-policy"), "same-origin");
+        const json = await fetch(base + "/api/catalog/record_1");
+        assert.equal(json.status, 200);
+        assert.deepEqual(await json.json(), item);
+        assert.equal(json.headers.has("content-security-policy"), false);
+      });
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("matched HOSTS and liveness are native, bounded and independent of the record source", async () => {
   // Node's fetch replaces Host. Use an actual HTTP request for authority/forwarding probes.
   const native = (url, options = {}, body) => new Promise((resolve, reject) => {

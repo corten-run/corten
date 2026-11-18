@@ -8,7 +8,11 @@
 //! script reads (`corten/read`), a form whose fields a handler is given as its controls, and view
 //! classes (`corten/views`) whose holes are in a form, past one and a form's whole text, beside
 //! controls named after the members their paths read.
-use corten::{Error, LiveResponse, prelude::*};
+use corten::{
+    Error, LiveResponse,
+    prelude::*,
+    script::{Ref, script},
+};
 use futures_util::{StreamExt, stream};
 
 use crate::layout::Layout;
@@ -83,11 +87,30 @@ pub mod url {
     /// `textContent` (#1531).
     #[route("/smoke/views", get = views_page)]
     pub struct ViewsPage;
+
+    #[route("/smoke/shared-refs", get = shared_refs_page)]
+    pub struct SharedRefsPage;
+
+    #[route("/smoke/shared-refs/{instance}/replace", get = replace_shared_ref_part)]
+    pub struct ReplaceSharedRefPart {
+        pub instance: u32,
+    }
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] =
-    &[Quoted, ScopeProbe, StyledNote, ShipForm, Reader, FormNested, PastForm, FormText, ScopedPage];
+pub const COMPONENTS: &[corten::Component] = &[
+    Quoted,
+    ScopeProbe,
+    StyledNote,
+    ShipForm,
+    Reader,
+    FormNested,
+    PastForm,
+    FormText,
+    ScopedPage,
+    SharedRefsPage,
+    shared_ref_scope::COMPONENT,
+];
 
 #[derive(Id)]
 struct ScopedReadyId;
@@ -508,6 +531,69 @@ async fn views_page(req: Req) -> HtmlResult {
 /// One large event and then nothing: the browser must show it without more of the stream coming.
 async fn large() -> LiveResponse {
     corten::live(stream::once(async { LargeList {}.to_html() }).chain(stream::pending()))
+}
+
+#[derive(Id)]
+struct SharedRefPartId(u32);
+
+script!(mod shared_ref_scope = "shared_ref_scope.js");
+
+#[component(js)]
+fn SharedRefsPage(instance: u32, replaced: bool) -> impl Render {
+    let out = refs();
+    let part: Ref<el::HTMLParagraphElement> = refs();
+    html! {
+        <section>
+            <output ref={out}></output>
+            <button type="button" on:click={js::show_part(part, out)}>"Read part"</button>
+            <form method="get" action={url::ReplaceSharedRefPart { instance }} data-patch><button>"Replace part"</button></form>
+            if instance == 2 {
+                <PartBoundary on:change={shared_ref_scope::run(scope)}>
+                    <SharedRefPart bundle={SharedRefsPageRefs} instance={instance} replaced={replaced} />
+                </PartBoundary>
+            } else {
+                <SharedRefPart bundle={SharedRefsPageRefs} instance={instance} replaced={replaced} />
+            }
+        </section>
+    }
+}
+
+#[component]
+fn PartBoundary<'a>(on_change: Handler<'a>, children: impl Render) -> impl Render {
+    let boundary = refs();
+    html! {
+        <div ref={boundary}>
+            <input aria-label="Check shared handler scope" on:change={on_change}>
+            {children}
+        </div>
+    }
+}
+
+#[component]
+fn SharedRefPart(bundle: SharedRefsPageRefs, instance: u32, replaced: bool) -> impl Patch {
+    let status = if replaced { "Replacement" } else { "Original" };
+    html! { <p id={SharedRefPartId(instance)} ref={bundle.part()}>{status} " " {instance}</p> }
+}
+
+fn shared_refs_document(req: &Req, replaced: Option<u32>) -> HtmlResult {
+    req.page(html! {
+        <Layout req={req} title="Shared patch refs" viewer={None} head="">
+            <SharedRefsPage instance={1} replaced={replaced == Some(1)} />
+            <SharedRefsPage instance={2} replaced={replaced == Some(2)} />
+        </Layout>
+    })
+}
+
+async fn shared_refs_page(req: Req) -> HtmlResult {
+    shared_refs_document(&req, None)
+}
+
+async fn replace_shared_ref_part(req: Req, Params(at): Params<url::ReplaceSharedRefPart>) -> HtmlResult {
+    let instance = at.instance;
+    req.patch_or(SharedRefPart { bundle: SharedRefsPageRefs, instance, replaced: true }, || async {
+        shared_refs_document(&req, Some(instance))
+    })
+    .await
 }
 
 #[cfg(test)]

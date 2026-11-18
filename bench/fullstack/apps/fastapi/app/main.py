@@ -24,6 +24,17 @@ from .page_read import read_page_record
 # FastAPI's, Starlette's and uvicorn's own middleware and settings (the end of this file and the
 # Dockerfile); without it the app is as FastAPI starts it.
 PROFILE = os.environ.get("PROFILE") == "matched"
+DOCUMENT_HEADERS = {
+    "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; "
+                               "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "X-Frame-Options": "DENY",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Permissions-Policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), "
+                          "payment=(), usb=()",
+}
+CATALOG_HEADERS = {**DOCUMENT_HEADERS, "Cache-Control": "private, no-cache"} if os.environ.get("PROFILE") == "catalog-lean" else None
 # The JSON routes: in the profile GET and HEAD, as Corten's get routes (FastAPI answers HEAD only
 # where a route lists it).
 GET = ["GET", "HEAD"] if PROFILE else ["GET"]
@@ -167,7 +178,7 @@ async def catalog(request: Request, record_id: str):
         "prefix": prefix,
         "fields": [field for field in record.fields if field.name.startswith(prefix)],
         "catalog_path": lambda record_id: f"/catalog/{quote(record_id, safe='')}",
-    })
+    }, headers=CATALOG_HEADERS)
 
 
 @record_routes.api_route("/api/catalog/{record_id}", methods=GET)
@@ -217,16 +228,7 @@ if PROFILE:
         # tutorial sets a header, and a private cache policy on the pages and the JSON (the static
         # files are left as StaticFiles serves them).
         response = await call_next(request)
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; "
-            "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
-        response.headers["Permissions-Policy"] = (
-            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), "
-            "payment=(), usb=()")
+        response.headers.update(DOCUMENT_HEADERS)
         if not request.url.path.startswith("/static/"):
             response.headers.setdefault("Cache-Control", "private, no-cache")
         return response

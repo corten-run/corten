@@ -5,9 +5,57 @@ import test from "node:test";
 import { chromium } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { records } from "./fixtures.mjs";
-import { expectedArticle, expectedPageChecks } from "./contract.mjs";
+import { expectedArticle, expectedPageChecks, verifyDocumentHeaderChecks, verifyDocumentHeaders } from "./contract.mjs";
 import { catalogServer } from "./upstream.mjs";
 import { checkApp, compareStyle, intentionalDisabledPreload, isScriptPreload, referenceHtml, snapshotArticle } from "./check.mjs";
+
+const documentHeaders = {
+  "Content-Security-Policy": "style-src 'unsafe-inline'; SCRIPT-SRC 'self'; frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy": "geolocation=()",
+  "Cache-Control": "private, no-cache",
+};
+test("document floor evaluates effective header values and accepts alternate encodings", () => {
+  const path = "/catalog/record_1";
+  const verify = (changes = {}) => verifyDocumentHeaders({ path, status: 200,
+    headers: Object.entries({ "Content-Type": "text/html; charset=utf-8", ...documentHeaders, ...changes })
+      .flatMap(([name, values]) => [values].flat().filter((value) => value !== null).map((value) => ({ name: name.toLowerCase(), value })))
+      .filter(({ name }) => name !== "content-security-policy-report-only") }, path);
+  verify();
+  verify({ "Content-Security-Policy": ["OBJECT-SRC 'none'", "DeFaUlT-SrC 'self'; SCRIPT-SRC 'nonce-example'"],
+    "X-Frame-Options": " SameOrigin ", "X-Content-Type-Options": " NoSnIfF ",
+    "Referrer-Policy": ["unsafe-url", "strict-origin, unknown-policy"], "Cache-Control": "no-store",
+    "Cross-Origin-Opener-Policy": 'same-origin;report-to="diagnostics"' });
+  verify({ "Content-Security-Policy": ["script-src 'self'; frame-ancestors *", "frame-ancestors 'self'"] });
+  verify({ "Cross-Origin-Opener-Policy": 'same-origin;mode=strict; flag;note="semi;colon";report-to=?0' });
+  verify({ "Cross-Origin-Opener-Policy": 'same-origin;bin=:YWJj:;count=3;ratio=1.25' });
+  for (const [changes, error] of [
+    [{ "Content-Security-Policy": "\u00a0script-src 'self'; frame-ancestors 'none'" }, /restrict inline/],
+    [{ "Content-Security-Policy": "script-src 'self' \u00a0; frame-ancestors 'none'" }, /restrict inline/],
+    [{ "Cross-Origin-Opener-Policy": "same-origin;mode=?" }, /Cross-Origin-Opener-Policy/],
+    [{ "Cross-Origin-Opener-Policy": "same-origin;stamp=@1" }, /Cross-Origin-Opener-Policy/],
+    [{ "Cross-Origin-Opener-Policy": 'same-origin;label=%"caf%c3%a9"' }, /Cross-Origin-Opener-Policy/],
+    [{ "Cross-Origin-Opener-Policy": 'same-origin;label=%"%ff"' }, /Cross-Origin-Opener-Policy/],
+    [{ "Cross-Origin-Opener-Policy": "same-origin;bin=:a:" }, /Cross-Origin-Opener-Policy/],
+    [{ "Cross-Origin-Opener-Policy": "same-origin;mode=ok, unsafe-none" }, /Cross-Origin-Opener-Policy/],
+    [{ "Content-Type": "application/json" }, /text\/html/],
+    [{ "Content-Security-Policy": null, "Content-Security-Policy-Report-Only": documentHeaders["Content-Security-Policy"] }, /enforced Content-Security-Policy/],
+    [{ "Content-Security-Policy": "object-src 'none'; frame-ancestors 'none'" }, /enforced Content-Security-Policy/],
+    [{ "Content-Security-Policy": "script-src 'unsafe-inline'; SCRIPT-SRC 'none'" }, /restrict inline/],
+    [{ "Content-Security-Policy": "script-src 'self'; script-src-elem 'unsafe-inline'" }, /restrict inline/],
+    [{ "Content-Security-Policy": "default-src 'self'; script-src-attr 'unsafe-inline'" }, /restrict inline/],
+    [{ "Content-Security-Policy": "script-src 'self'; frame-ancestors *", "X-Frame-Options": "DENY" }, /cross-origin framing/],
+    [{ "Content-Security-Policy": "default-src 'self'", "X-Frame-Options": "ALLOW-FROM https://example.test" }, /cross-origin framing/],
+    [{ "X-Content-Type-Options": "sniff, nosniff" }, /nosniff/],
+    [{ "Referrer-Policy": "no-referrer, unsafe-url" }, /Referrer-Policy/],
+    [{ "Cross-Origin-Opener-Policy": "same-origin-allow-popups" }, /Cross-Origin-Opener-Policy/],
+    [{ "Cross-Origin-Opener-Policy": ["same-origin", "unsafe-none"] }, /Cross-Origin-Opener-Policy/],
+    [{ "Permissions-Policy": " " }, /permissions-policy/],
+    [{ "Cache-Control": null }, /cache-control/],
+  ]) assert.throws(() => verify(changes), error);
+});
 
 test("only explicit script preloads blocked with JS disabled and no actual CSP are intentional", () => {
   const failure = { javaScriptEnabled: false, resourceType: "script", errorText: "csp", scriptPreload: true, hasCsp: false };
@@ -61,6 +109,8 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
   let source = "fixture";
   let broken = false;
   let scriptUnavailable = false;
+  let omitPolicy = false;
+  let revalidations = 0;
   const app = createServer(async (req, res) => {
     const url = new URL(req.url, "http://catalog");
     if (url.pathname === "/required.js") {
@@ -79,7 +129,13 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
       record = await response.json();
     }
     if (!record) { res.writeHead(404); res.end("not found"); return; }
-    res.writeHead(200, { "Content-Type": json ? "application/json" : "text/html" });
+    const tag = `"${id}-${encodeURIComponent(url.search)}"`;
+    if (!json && req.headers["if-none-match"] === tag) {
+      revalidations++;
+      res.writeHead(304, { ...documentHeaders, ETag: tag }); res.end(); return;
+    }
+    res.writeHead(200, { "Content-Type": json ? "application/json" : "text/html", ...(json ? {} : { ETag: tag }),
+      ...(json ? {} : omitPolicy ? { "Content-Security-Policy-Report-Only": documentHeaders["Content-Security-Policy"] } : documentHeaders) });
     res.end(json ? JSON.stringify(broken ? { ...record, fields: [] } : record) :
       referenceHtml(record, url.searchParams.get("field") ?? "").replace("</head>", '<script defer src="/required.js"></script></head>'));
   });
@@ -89,14 +145,23 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
   const browser = steady(await chromium.launch());
   try {
     for (source of ["fixture", "api"]) {
-      const result = await checkApp({ base, catalog, source, upstream: upstreamBase, browser });
+      const result = await checkApp({ base, catalog, source, upstream: upstreamBase, browser, app: "express" });
       assert.equal(result.jsonRecords, 500);
       assert.equal(result.profiles.length, 8);
       assert.equal(result.pages, expectedPageChecks(catalog));
       assert.equal(result.pages, 120);
+      verifyDocumentHeaderChecks(result.documentHeaders, catalog, source);
+      assert.equal(revalidations, 0, "document observations must be fresh HTTP representations, not cache revalidations");
+      assert.equal(result.documentHeaders.length, 120 + (source === "api" ? 2 : 0));
+      assert.ok(result.documentHeaders[0].headers.some(({ name, value }) => name === "content-security-policy" && value === documentHeaders["Content-Security-Policy"]));
       if (source === "api") assert.equal(result.upstream.readsPerRequest, 1);
     }
     source = "fixture";
+    omitPolicy = true;
+    await assert.rejects(checkApp({ base, catalog, source, upstream: upstreamBase, browser, app: "express" }), /enforced Content-Security-Policy/);
+    const nonContender = await checkApp({ base, catalog, source, upstream: upstreamBase, browser, app: "nextjs" });
+    assert.equal(Object.hasOwn(nonContender, "documentHeaders"), false);
+    omitPolicy = false;
     scriptUnavailable = true;
     await assert.rejects(checkApp({ base, catalog, source, upstream: upstreamBase, browser }),
       (error) => error.actual?.includes(`${base}/required.js: HTTP 503`));

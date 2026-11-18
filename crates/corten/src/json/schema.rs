@@ -81,7 +81,7 @@ pub trait FromJsonSchema {
 
 /// The definitions the schemas of one document refer to (`$defs`), named after their Rust
 /// types; a second type of one name (two instances of a generic) is numbered, `Name2`.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Generator {
     /// By the side (`true` for what is read) and the type's id: its name.
     by_id: HashMap<(bool, &'static str), String>,
@@ -154,6 +154,10 @@ impl Generator {
     pub fn definitions(&self) -> BTreeMap<String, Value> {
         self.missing("Generator::definitions");
         self.defs.iter().filter_map(|(name, schema)| Some((name.clone(), schema.clone()?))).collect()
+    }
+
+    pub(crate) fn has_definition(&self, name: &str) -> bool {
+        self.defs.get(name).is_some_and(Option::is_some)
     }
 
     /// The definition a `$ref` names.

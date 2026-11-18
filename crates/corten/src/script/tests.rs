@@ -381,6 +381,34 @@ fn a_handler_made_by_a_parent_keeps_the_parents_scope_inside_a_child() {
     );
 }
 
+type ParentOutput = Ref<el::HTMLOutputElement, script::NoRows, script::ts::Number, script::Keyed>;
+
+#[component(js)]
+fn ExportingParent() -> impl Render {
+    let out: ParentOutput = refs();
+    let button = refs();
+    html! {
+        <div>
+            <Field on:change={shared::run(scope)} />
+            <output ref={out.with(1)} key="result"></output>
+            <button ref={button} on:click={js::show(out, scope)}></button>
+        </div>
+    }
+}
+
+#[test]
+fn a_shared_handler_made_by_an_exporting_parent_keeps_the_parents_scope_inside_a_child() {
+    assert_eq!(
+        ExportingParent {}.to_html(),
+        concat!(
+            r#"<div data-scope="exporting-parent"><label data-scope="field"><input data-ref="input" "#,
+            r#"data-on='input:field.trim($t) change:shared.run($c/exporting-parent)'></label>"#,
+            r#"<output data-ref="exporting-parent/out" data-ref-value='1' data-key="result"></output>"#,
+            r#"<button data-ref="button" data-on='click:exporting_parent.show(@out,$c)'></button></div>"#,
+        )
+    );
+}
+
 /// A component whose script keeps state, with no refs and no `scope`: still scoped, so each
 /// instance keeps its own.
 #[component(js)]

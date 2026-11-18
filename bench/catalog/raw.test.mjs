@@ -30,7 +30,7 @@ import { requestOutcome } from "./load-outcome.js";
 function fixture(passes = 1) {
   const files = new Map();
   const put = (key, value) => files.set(key, typeof value === "string" ? value : JSON.stringify(value));
-  const group = groupDescriptor("catalog-page");
+  const group = groupDescriptor("catalog-page", { historical: true });
   const options = parseArgs(["c1", "--group", "catalog-page", "--passes", String(passes), "--build"], allApps);
   const commit = "a".repeat(40), imageId = `sha256:${"b".repeat(64)}`;
   const catalog = records(), fixtureText = `${JSON.stringify(catalog)}\n`;
@@ -658,7 +658,8 @@ test("timed saved native replay composes failed apps with exit1, never exit99 or
   const f = timedFixture(fixture()), folder = mkdtempSync(join(tmpdir(), "catalog-timed-native-"));
   try {
     for (const [path, bytes] of f.files) { mkdirSync(dirname(join(folder, path)), { recursive: true }); writeFileSync(join(folder, path), bytes); }
-    const binding = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit }, selection: { apps: f.summary.group.apps },
+    const binding = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit },
+      selection: { apps: f.summary.group.apps, contractSha256: f.summary.group.contractSha256 },
       execution: { effectiveOptions: f.summary.options }, resources: { expectedCpus: f.summary.measurement.cpus }, preparation: { fixtures: [] },
       latestStable: { schema: latestStableSchema, group: "catalog-page", valid: true, status: "not-applicable", groupComparisonEligible: null } };
     const saved = validateSaved({ folder, round: f.summary.round, commit: f.commit });
@@ -736,6 +737,13 @@ test("catalog lean profile is bound to the saved runtime without relabeling hist
   const lean = structuredClone(original);
   lean.runtime.Config.Env.push(`PROFILE=${leanProfile}`);
   verifyCheckBoundary(lean, f.summary, "corten", "fixture", true);
+  const standalone = { ...f.summary, group: undefined };
+  assert.throws(() => verifyCheckBoundary(lean, standalone, "corten", "fixture", true), /command differs/);
+  const current = structuredClone(lean);
+  current.checker.Config.Cmd.push("corten");
+  current.checker.Args.push("corten");
+  verifyCheckBoundary(current, standalone, "corten", "fixture", true);
+  assert.throws(() => verifyCheckBoundary(current, f.summary, "corten", "fixture", true), /command differs/);
   for (const value of ["PROFILE=matched", "PROFILE=default"]) {
     const changed = structuredClone(lean);
     changed.runtime.Config.Env.push(value);
@@ -855,7 +863,8 @@ test("catalog saved API and isolated bridge reject source overlays and interrupt
       for (const [path, bytes] of f.files) { mkdirSync(dirname(join(folder, path)), { recursive: true }); writeFileSync(join(folder, path), bytes); }
       const saved = validateSaved({ folder, round: f.summary.round, commit: f.commit });
       assert.equal(saved.status, "invalid"); assert.equal(saved.complete, false);
-      const b = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit }, selection: { apps: f.summary.group.apps },
+      const b = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit },
+        selection: { apps: f.summary.group.apps, contractSha256: f.summary.group.contractSha256 },
         execution: { effectiveOptions: f.summary.options }, resources: { expectedCpus: f.summary.measurement.cpus } };
       const report = await inspectNative(b, folder);
       assert.equal(report.status, "invalid"); assert.equal(report.attemptComplete, false);
@@ -869,7 +878,8 @@ test("the real catalog saved API feeds the fixed isolated replay for positive an
     const folder = mkdtempSync(join(tmpdir(), "catalog-core-attempt-"));
     try {
       for (const [path, bytes] of f.files) { mkdirSync(dirname(join(folder, path)), { recursive: true }); writeFileSync(join(folder, path), bytes); }
-      const b = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit }, selection: { apps: f.summary.group.apps },
+      const b = { request: { group: "catalog-page", round: f.summary.round, commit: f.commit },
+        selection: { apps: f.summary.group.apps, contractSha256: f.summary.group.contractSha256 },
         execution: { effectiveOptions: f.summary.options }, resources: { expectedCpus: f.summary.measurement.cpus } };
       const report = await inspectNative(b, folder), failed = !!f.summary.timingDisposition;
       assert.equal(report.status, failed ? "failed" : "verified"); assert.equal(report.attemptComplete, true);

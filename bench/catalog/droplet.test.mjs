@@ -11,10 +11,12 @@ import { host, reservation, tags } from "./droplet-contract.mjs";
 import { aggregate, phases, sources, targets } from "./contract.mjs";
 import { groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
 import { records } from "./fixtures.mjs";
+import { syntheticDocumentHeaders } from "./workers-fixture.mjs";
 
 const commit = "a".repeat(40);
 // Synthetic, complete validator input. Not measurements or native/machine admission evidence.
 function summary(s) {
+  const catalog = records();
   const imageId = `sha256:${"b".repeat(64)}`;
   const phase = { requests: 6000, rps: 100, p50: 1, p95: 2, p99: 3, failed: 0, dropped: 0, perCpuSecond: 110,
     cpuUsec: 55000000, cpuAvgPct: 99, memAvgMiB: 8, memMaxMiB: 8, upstream: { cpuAvgPct: 50, highCpu: false } };
@@ -24,10 +26,11 @@ function summary(s) {
   const result = { schema: groupResultSchema, group: s.group, options: s.options, workload: "catalog-v1", round: s.round, commit: s.commit,
     dirty: false, commitAfter: s.commit, dirtyAfter: false, complete: true, checksPassed: true, failures: [], cleanupFailures: [],
     startedAt: "2026-11-12T10:00:00Z", finishedAt: "2026-11-12T16:00:00Z",
-    fixtureSha256: createHash("sha256").update(`${JSON.stringify(records())}\n`).digest("hex"),
+    fixtureSha256: createHash("sha256").update(`${JSON.stringify(catalog)}\n`).digest("hex"),
     measurement: { encoding: "identity", fixedRate: s.options.rate, cpus: s.cpus },
     apps: Object.fromEntries(s.group.apps.map((app) => [app, { imageId, checks: Object.fromEntries(sources.map((source) =>
-      [source, { ...structuredClone(check), qualification: qualificationIdentity(s.group, app, source, imageId) }])), runs: {} }])) };
+      [source, { ...structuredClone(check), documentHeaders: syntheticDocumentHeaders(catalog, source),
+        qualification: qualificationIdentity(s.group, app, source, imageId) }])), runs: {} }])) };
   for (const { app, pass, ...profile } of timingPlan(s.options, sources, targets)) {
     (result.apps[app].runs[`${profile.source}-${profile.target}`] ??= []).push({ pass, evidence: { app, ...profile, imageId }, complete: true,
       cold: { path: "/catalog/record_1", first200At: "2026-11-12T10:00:00.200Z", containerStartedAt: "2026-11-12T10:00:00.000Z",
@@ -204,6 +207,7 @@ test("failed/pre-measurement jobs download partials and confirm deletion without
 
 test("strict identity/defaults/CPU/matrix/provenance/aggregate validation rejects apparently successful summaries", async (t) => {
   for (const mutate of [
+    (s) => { delete s.apps.corten.checks.api.documentHeaders; },
     (s) => { s.round = "c3"; }, (s) => { s.commit = "c".repeat(40); }, (s) => { s.group.contractSha256 = "c".repeat(64); },
     (s) => { s.options.duration = 15; }, (s) => { s.options.apps.pop(); }, (s) => { s.measurement.cpus.app.cpuset = "0"; },
     (s) => { delete s.apps.gin; }, (s) => { s.apps.corten.runs["api-page"].pop(); },

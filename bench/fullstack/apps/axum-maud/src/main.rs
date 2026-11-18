@@ -46,18 +46,24 @@ struct App {
 
 type AppState = State<Arc<App>>;
 
+const DOCUMENT_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+const DOCUMENT_PERMISSIONS: &str =
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
+
 #[tokio::main]
 async fn main() {
     // Load the fixture (if any) before listening, like the other apps.
     catalog::source::init();
     marketplace::source::init();
     let app = Arc::new(App { items: Items::from_env(), prices: broadcast::channel(1024).0 });
-    let profile = std::env::var("PROFILE").as_deref() == Ok("matched");
+    let profile = std::env::var("PROFILE");
+    let matched_profile = profile.as_deref() == Ok("matched");
+    let catalog_lean = profile.as_deref() == Ok("catalog-lean");
     let routes = Router::new()
         .route("/", get(home))
         .route("/items/{id}", get(item_page).post(create_alert))
         .route("/api/items/{id}", get(item_json))
-        .route("/catalog/{id}", get(catalog_page))
+        .route("/catalog/{id}", get(move |id, query| catalog_page(id, query, catalog_lean)))
         .route("/api/catalog/{id}", get(catalog_json).fallback(async || record_http::problem(StatusCode::METHOD_NOT_ALLOWED)))
         .route("/marketplace/{locale}/{id}", get(marketplace_page::get).post(marketplace_page::post))
         .route(
@@ -68,13 +74,13 @@ async fn main() {
         .route("/live/publish", post(live_publish))
         .fallback(async || not_found());
     // The profile's cache policy is the pages' and the JSON's, not the static files'.
-    let routes = if profile {
+    let routes = if matched_profile {
         routes.layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache")))
     } else {
         routes
     };
     let router = routes.nest_service("/static", ServeDir::new("static")).with_state(app);
-    let router = if profile { matched(router) } else { router };
+    let router = if matched_profile { matched(router) } else { router };
     let port: u16 = std::env::var("PORT").map_or(8080, |p| p.parse().expect("PORT is a port number"));
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.expect("bind PORT");
     axum::serve(listener, router).await.expect("server");
@@ -90,18 +96,12 @@ fn matched(router: Router) -> Router {
         .layer(TimeoutLayer::with_status_code(StatusCode::SERVICE_UNAVAILABLE, Duration::from_secs(10)))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .layer(CompressionLayer::new())
-        .layer(header(
-            header::CONTENT_SECURITY_POLICY,
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
-        ))
+        .layer(header(header::CONTENT_SECURITY_POLICY, DOCUMENT_CSP))
         .layer(header(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(header(header::REFERRER_POLICY, "strict-origin-when-cross-origin"))
         .layer(header(header::X_FRAME_OPTIONS, "DENY"))
         .layer(header(HeaderName::from_static("cross-origin-opener-policy"), "same-origin"))
-        .layer(header(
-            HeaderName::from_static("permissions-policy"),
-            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
-        ))
+        .layer(header(HeaderName::from_static("permissions-policy"), DOCUMENT_PERMISSIONS))
 }
 
 async fn home(State(app): AppState) -> Markup {
@@ -114,9 +114,25 @@ struct CatalogQuery {
     field: String,
 }
 
-async fn catalog_page(Path(id): Path<String>, Query(query): Query<CatalogQuery>) -> Response {
+async fn catalog_page(Path(id): Path<String>, Query(query): Query<CatalogQuery>, catalog_lean: bool) -> Response {
     match catalog::source::get(&id).await {
-        Ok(Some(record)) => catalog_page::render(&record, &query.field).into_response(),
+        Ok(Some(record)) => {
+            let page = catalog_page::render(&record, &query.field);
+            if !catalog_lean {
+                return page.into_response();
+            }
+            let headers = [
+                (header::CONTENT_SECURITY_POLICY, DOCUMENT_CSP),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (header::REFERRER_POLICY, "strict-origin-when-cross-origin"),
+                (header::X_FRAME_OPTIONS, "DENY"),
+                (HeaderName::from_static("cross-origin-opener-policy"), "same-origin"),
+                (HeaderName::from_static("permissions-policy"), DOCUMENT_PERMISSIONS),
+                (header::CACHE_CONTROL, "private, no-cache"),
+            ]
+            .map(|(name, value)| (name, HeaderValue::from_static(value)));
+            (headers, page).into_response()
+        }
         Ok(None) => not_found(),
         Err(_) => (StatusCode::BAD_GATEWAY, "The catalog API did not answer.").into_response(),
     }
