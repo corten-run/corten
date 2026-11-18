@@ -5610,11 +5610,13 @@ rules something out.
     one. The ordered patch resolver and the layout matcher record their draw decisions once.
     The runtime collects closes from those decisions, runs them innermost first while the old
     openers are still on the page, and then applies the recorded draw. A dialog removed before
-    its parent is redrawn isn't closed. Otherwise, in a patch containing closed dialog markup,
-    a fragment cannot target the same tree as another fragment or depend on an element it
-    introduces. The runtime logs an error and refuses the draw before touching its targets.
-    If a synchronous handler changes the tree's children or ids during a close, the runtime
-    stops before applying the draw. It does not undo the close or the handler's changes.
+    its parent is redrawn isn't closed. Otherwise, in a patch whose replacements draw closed
+    dialog markup, a fragment cannot target the same tree as another fragment or depend on an
+    element it introduces. The runtime logs an error and refuses the draw before touching its
+    targets. Closed dialog markup only in appends does not trigger this planning or overlap
+    check: appending cannot close an existing dialog. If a synchronous handler changes the
+    tree's children or ids during a close, or reopens the dialog as focus returns, the runtime
+    stops before applying the draw. It does not undo a close or the handler's changes.
 
     In-place morphs get the native `beforetoggle`, `toggle` and `close`. For a replacement,
     native events target the old node; the runtime forwards only a non-bubbling `close`
@@ -5642,11 +5644,15 @@ rules something out.
     A patch with no closed dialog markup checks one incoming selector and resolves and applies
     targets directly. The planner and close forwarding are a versioned module fetched only
     when an answer draws a closed dialog, alongside its handlers and stylesheets where
-    possible. The extra request on first use keeps that code off every other page.
-    On `0aa24d7` against main's `cf4671b13`, core grows from 43,846 to 44,683 bytes raw
-    (+837), 15,612 to 16,012 gzip (+400), and 14,100 to 14,444 brotli (+344). The optional
-    module is 1,826 bytes raw, 975 gzip and 851 brotli. The no-dialog draw timing did not
-    resolve a difference: alternating six Chromium batches of 2,500 draws per build
+    possible. The extra request on first use keeps that code off every other page. After
+    loading, a read or answer that no longer owns its targets stops before resolving or closing
+    them. If the module fails to load, the runtime logs once and draws the answer without
+    closing replacement targets first or forwarding their close. It does not retry the write.
+    On `3344615da` against main `231225b9a`, core grows from 43,846 to 44,669 bytes raw (+823),
+    15,612 to 16,012 gzip (+400), and 14,100 to 14,431 Brotli (+331). The optional module,
+    absent on main, is 2,017 bytes raw, 1,034 gzip and 905 Brotli. An earlier probe of
+    no-dialog draw timing (`0aa24d7` against `cf4671b13`) did not resolve a difference:
+    alternating six Chromium batches of 2,500 draws per build
     gave 94.58 to 97.66 microseconds per draw with eight paragraphs (ranges 88.32 to 109.04
     and 88.80 to 114.84) and 330.18 to 333.24 with 100 (316.76 to 366.80 and 316.32 to
     353.36). Neither build requested the module in that probe.
@@ -5655,8 +5661,9 @@ rules something out.
     without an argument, and queues a native `close` even when its target is detached before
     dispatch); measured (minified runtime and module size by Node's `zlib` defaults and the
     Watchlist smoke's close inventory, order, result, opener focus, redraw continuity,
-    structural mutation, overlap refusal and close-open-close in Chromium, Firefox and
-    WebKit); reasoned (a closed successor is the dialog the delegated handler is wired to;
+    structural mutation, overlap refusal, close-open-close, reopen on focus restoration,
+    module failure and stale read in Chromium, Firefox and WebKit); reasoned (a closed successor
+    is the dialog the delegated handler is wired to;
     observing a change to its `open` attribute distinguishes a real new session from an
     attempted open or a check of its eventual closed state);
     value (a close Corten does behaves as the browser's, one `close` and focus given back,
