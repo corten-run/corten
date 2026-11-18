@@ -97,11 +97,12 @@ and selectors the browser rejects. Rules under `@supports` conditions that `CSS.
 or under `@starting-style` also use only the old match. Unscoped rules are unchanged, including long
 selectors.
 
-The check does not evaluate the cascade. Two known limits for closed rails with declarations at
+The check does not evaluate the cascade. Three known limits for closed rails with declarations at
 `min-width: 900px` (check at 600px):
 
 - `.rail { display: flex }` and `@scope (.card) { & > * { display: grid !important } }` can suppress the warning for a rail in `.card` even though the override loses to the hiding rule.
 - `@scope (.card) { .rail:not(.gone,.pending) { display: flex } }` and `@scope (.other) { .rail { display: grid !important } }` at the same breakpoint can warn for a rail outside both roots: the `:not()` list uses the old flat match, but the override does not.
+- `@scope (.card) { :scope > .rail { display: flex } }` and `@scope (.other) { @supports (display: future-layout) { .rail { display: grid !important } } }` can suppress the warning for a rail in `.card`: the override's rejected `@supports` (or `@starting-style`) falls back to the old flat match, which ignores `.other`.
 
 This affects only the diagnostic, not which styles the browser applies. Adopted stylesheets are not inspected
 ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
