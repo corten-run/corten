@@ -5983,7 +5983,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
 9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting and `@media`, `@supports`, `@container`,
    `@layer`, `@scope`, `@keyframes` and `@font-face`; `@import`, `@scope` with no root and
-   escaped class names are not supported. Each selector must match only elements that have one
+   escaped or non-ASCII class names are not supported. Each selector must match only elements that have one
    of the file's classes or are inside one (by a descendant or child combinator; `+`, `~` and `||`
    from the class's element lead outside it), directly or through every selector of an `:is()`
    or `:where()` the browser keeps. A class inside another function only filters, though it is

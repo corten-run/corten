@@ -6,6 +6,7 @@
 //! writing in the width of each token breakpoint an `@media` rule names (`(--md)`), which only the
 //! app's token file knows.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use proc_macro::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree};
@@ -45,6 +46,8 @@ const SYNTAXES: &[(&str, &str)] = &[
 /// match only elements that have one of the file's classes or are inside one
 /// (`Scoper::prefixed`); under an `@scope` root that does not, each rule in it must.
 pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
+    let src = preprocess(src);
+    let src = src.as_ref();
     if let Some(line) = conflict_marker(src) {
         return Err(format!(
             "line {line}: a merge conflict's marker; keep what each side should between <<<<<<< and >>>>>>>, then remove the markers"
@@ -258,14 +261,18 @@ fn starts_ident(c: char) -> bool {
 
 /// `text` as CSS reads it: each line break (`\r\n`, `\r`, form feed) one `\n`, and NUL the
 /// replacement character (CSS Syntax Level 3, preprocessing the input stream).
-fn preprocess(text: &str) -> String {
-    text.replace("\r\n", "\n").replace(['\r', '\u{c}'], "\n").replace('\0', "\u{fffd}")
+fn preprocess(text: &str) -> Cow<'_, str> {
+    if text.contains(['\r', '\u{c}', '\0']) {
+        text.replace("\r\n", "\n").replace(['\r', '\u{c}'], "\n").replace('\0', "\u{fffd}").into()
+    } else {
+        text.into()
+    }
 }
 
 /// A CSS string's contents with its escapes decoded (CSS Syntax Level 3, consume a string token):
 /// `\` and a line break is nothing, and `\` before anything else is the code point it escapes.
 fn unescape(text: &str) -> String {
-    let chars: Vec<char> = preprocess(text).chars().collect();
+    let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < chars.len() {
@@ -1011,10 +1018,12 @@ impl Scoper<'_> {
         scope: Option<&str>,
         at: usize,
     ) -> Result<(String, Anchor, Option<Unowned>), String> {
-        let chars: Vec<char> = text.chars().collect();
+        let bytes = text.as_bytes();
         let mut out = String::with_capacity(text.len() + 16);
-        let (mut i, mut brackets, mut parens) = (0, 0usize, 0usize);
-        let mut quote = None;
+        let mut i = 0;
+        // Each block records its closer and whether it is inside an attribute or brace block,
+        // where class and pseudo-class syntax does not apply.
+        let mut blocks = Vec::<(u8, bool)>::new();
         let mut part_start = 0;
         // The rule's selector list, the `:is()` and `:where()` lists open in it, and for the
         // current selector, whether it has an `&` delimiter and why it might not count.
@@ -1023,71 +1032,49 @@ impl Scoper<'_> {
         let (mut has_ampersand, mut why) = (false, Why::default());
         let mut all = Anchor::ALL;
         let mut unowned = None;
-        while i < chars.len() {
-            let c = chars[i];
-            if let Some(q) = quote {
-                out.push(c);
-                if c == '\\' && i + 1 < chars.len() {
-                    out.push(chars[i + 1]);
-                    i += 1;
-                } else if c == q {
-                    quote = None;
-                }
-                i += 1;
-                continue;
-            }
+        while let Some(&b) = bytes.get(i) {
             // In a compound selector of the list or an `:is()` in it, rather than in another
             // function or an attribute selector: a combinator, or a token that starts or continues
             // a compound selector.
-            let in_list = parens == lists.last().map_or(0, |list| list.depth);
-            if brackets == 0 && in_list {
+            let depth = lists.last().map_or(0, |list| list.depth);
+            let in_list = blocks.len() == depth;
+            let opaque = blocks.last().is_some_and(|&(_, opaque)| opaque);
+            if in_list {
                 let list = lists.last_mut().unwrap_or(&mut top);
-                match c {
-                    c if c.is_whitespace() => list.space(),
-                    '>' | '+' | '~' => list.explicit_combinator(c),
-                    '|' if chars.get(i + 1) == Some(&'|') => {
+                match b {
+                    b if css_space(b) => list.space(),
+                    b'>' | b'+' | b'~' => list.explicit_combinator(char::from(b)),
+                    b'|' if bytes.get(i + 1) == Some(&b'|') => {
                         list.explicit_combinator('|');
                         out.push_str("||");
                         i += 2;
                         continue;
                     }
-                    ',' | ')' => {}
-                    '/' if chars[i..].starts_with(&['/', '*', '*', '/']) => {}
+                    b',' | b')' => {}
+                    b'/' if bytes[i..].starts_with(b"/**/") => {}
                     _ => list.token(nest, &mut why),
                 }
             }
-            match c {
-                '"' | '\'' => quote = Some(c),
-                '\\' => {
-                    let end = escaped(&chars, i + 1).1;
-                    out.extend(&chars[i..end]);
-                    i = end;
-                    continue;
-                }
-                '/' if chars[i..].starts_with(&['/', '*', '*', '/']) => {
-                    out.push_str("/**/");
-                    i += 4;
-                    continue;
-                }
-                '[' => brackets += 1,
-                ']' => brackets = brackets.saturating_sub(1),
-                '&' => {
+            let end = match b {
+                b'"' | b'\'' => string_end(bytes, i).ok_or_else(|| self.error(at, "a string is never closed"))?,
+                b'\\' => css_escape_end(bytes, i),
+                b'/' if bytes[i..].starts_with(b"/**/") => i + 4,
+                b'&' => {
                     // Even an invalid arm can suppress implicit nesting. Only a matchable
                     // nesting selector supplies an anchor.
                     has_ampersand = true;
-                    if brackets != 0 {
-                        if in_list {
-                            lists.last_mut().unwrap_or(&mut top).invalid = true;
-                        }
+                    if blocks.get(depth).is_some_and(|&(close, _)| close == b']') {
+                        lists.last_mut().unwrap_or(&mut top).invalid = true;
                     } else if in_list {
                         lists.last_mut().unwrap_or(&mut top).add(nest);
                     } else {
                         why.filtered = true;
                     }
+                    i + 1
                 }
-                ':' if brackets == 0 => {
-                    let double_colon = chars.get(i + 1) == Some(&':');
-                    if double_colon || legacy_pseudo_element(&chars, i + 1) {
+                b':' if !opaque => {
+                    let double_colon = bytes.get(i + 1) == Some(&b':');
+                    if double_colon || legacy_pseudo_element(text, i + 1) {
                         if let Some(list) = lists.last_mut().filter(|_| in_list) {
                             list.invalid = true;
                         } else if let Some(prelude) = scope {
@@ -1096,27 +1083,28 @@ impl Scoper<'_> {
                                 format!("`@scope {prelude}`: a pseudo-element cannot be a scope's root or limit; remove it or the invalid forgiving arm that contains it"),
                             ));
                         }
-                        if double_colon {
-                            out.push_str("::");
-                            i += 2;
-                            continue;
-                        }
-                    } else if let Some(open) = positive_list_open(&chars, i + 1) {
-                        parens += 1;
-                        lists.push(Branches { depth: parens, ..Branches::new() });
-                        out.extend(&chars[i..=open]);
-                        i = open + 1;
-                        continue;
+                        i + 1 + usize::from(double_colon)
+                    } else if let Some(open) = positive_list_open(text, i + 1) {
+                        blocks.push((b')', false));
+                        lists.push(Branches { depth: blocks.len(), ..Branches::new() });
+                        open + 1
+                    } else {
+                        i + 1
                     }
                 }
-                '(' if brackets == 0 => parens += 1,
-                ')' if brackets == 0 => {
-                    parens = parens.saturating_sub(1);
-                    if in_list {
+                b'(' | b'[' | b'{' => {
+                    blocks.push((block_close(b), opaque || b != b'('));
+                    i + 1
+                }
+                b')' | b']' | b'}' => {
+                    if !blocks.pop().is_some_and(|(close, _)| close == b) {
+                        return Err(self.error(at, format!("mismatched selector block: unexpected {}", char::from(b))));
+                    }
+                    if b == b')' && in_list {
                         if let Some(mut list) = lists.pop() {
                             list.next();
                             let parent = lists.last_mut().unwrap_or(&mut top);
-                            if parens == parent.depth {
+                            if blocks.len() == parent.depth {
                                 why.alternative |= list.any && !list.all.owned;
                                 parent.add(list.all);
                             } else {
@@ -1124,8 +1112,9 @@ impl Scoper<'_> {
                             }
                         }
                     }
+                    i + 1
                 }
-                ',' if brackets == 0 && in_list => {
+                b',' if in_list => {
                     if let Some(list) = lists.last_mut() {
                         list.next();
                     } else {
@@ -1133,23 +1122,26 @@ impl Scoper<'_> {
                         all = all.and(anchor);
                         if !anchor.owned && unowned.is_none() {
                             unowned =
-                                Some(Unowned { part: chars[part_start..i].iter().collect::<String>().trim().to_string(), why });
+                                Some(Unowned { part: text[part_start..i].trim_matches([' ', '\t', '\n']).to_string(), why });
                         }
                         part_start = i + 1;
                         (has_ampersand, why) = (false, Why::default());
                     }
+                    i + 1
                 }
-                '.' if brackets == 0 && ident_start(&chars[i + 1..]) => {
-                    let mut end = i + 1;
-                    while end < chars.len() && (chars[end].is_ascii_alphanumeric() || matches!(chars[end], '-' | '_')) {
-                        end += 1;
-                    }
-                    if chars.get(end) == Some(&'\\') {
+                b'.' if !opaque && css_ident_start(bytes, i + 1) => {
+                    let end = css_name_end(bytes, i + 1);
+                    let class = &text[i + 1..end];
+                    if class.contains('\\') {
                         return Err(
                             self.error(at, "escaped characters in a class name are not supported in a component's stylesheet")
                         );
                     }
-                    let class: String = chars[i + 1..end].iter().collect();
+                    if !class.is_ascii() {
+                        return Err(
+                            self.error(at, "non-ASCII characters in a class name are not supported in a component's stylesheet")
+                        );
+                    }
                     if class.contains("__") {
                         return Err(
                             self.error(at, format!(".{class}: __ separates the component's name from the class; use - or _"))
@@ -1158,9 +1150,9 @@ impl Scoper<'_> {
                     out.push('.');
                     out.push_str(self.prefix);
                     out.push_str("__");
-                    out.push_str(&class);
-                    if !self.classes.contains(&class) {
-                        self.classes.push(class);
+                    out.push_str(class);
+                    if !self.classes.iter().any(|name| name == class) {
+                        self.classes.push(class.to_string());
                     }
                     if in_list {
                         lists.last_mut().unwrap_or(&mut top).class();
@@ -1170,15 +1162,19 @@ impl Scoper<'_> {
                     i = end;
                     continue;
                 }
-                _ => {}
-            }
-            out.push(c);
-            i += 1;
+                _ if b.is_ascii() => i + 1,
+                _ => i + text[i..].chars().next().unwrap().len_utf8(),
+            };
+            out.push_str(&text[i..end]);
+            i = end;
+        }
+        if let Some(&(close, _)) = blocks.last() {
+            return Err(self.error(at, format!("unclosed selector block: expected {}", char::from(close))));
         }
         let anchor = top.end(true, !has_ampersand).unwrap_or_default();
         all = all.and(anchor);
         if !anchor.owned && unowned.is_none() {
-            unowned = Some(Unowned { part: chars[part_start..].iter().collect::<String>().trim().to_string(), why });
+            unowned = Some(Unowned { part: text[part_start..].trim_matches([' ', '\t', '\n']).to_string(), why });
         }
         Ok((out, all, unowned))
     }
@@ -1345,102 +1341,85 @@ struct Unowned {
 }
 
 /// The opening parenthesis of a matches-any pseudo-class after its colon, if present.
-fn positive_list_open(chars: &[char], mut start: usize) -> Option<usize> {
-    while chars[start..].starts_with(&['/', '*', '*', '/']) {
+fn positive_list_open(text: &str, mut start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    while bytes[start..].starts_with(b"/**/") {
         start += 4;
     }
-    let end = pseudo_ident_end(chars, start);
-    if chars.get(end) != Some(&'(') {
+    let end = css_name_end(bytes, start);
+    if bytes.get(end) != Some(&b'(') {
         return None;
     }
-    match &chars[start..end] {
-        ['i' | 'I', 's' | 'S'] | ['w' | 'W', 'h' | 'H', 'e' | 'E', 'r' | 'R', 'e' | 'E'] => Some(end),
-        name if name.contains(&'\\') => {
-            let name = unescape(&name.iter().collect::<String>());
-            (name.eq_ignore_ascii_case("is") || name.eq_ignore_ascii_case("where")).then_some(end)
-        }
-        _ => None,
-    }
-}
-
-fn pseudo_ident_end(chars: &[char], start: usize) -> usize {
-    let mut end = start;
-    while let Some(&c) = chars.get(end) {
-        if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') || !c.is_ascii() {
-            end += 1;
-        } else if c == '\\' {
-            end = escaped(chars, end + 1).1;
-        } else {
-            break;
-        }
-    }
-    end
+    let name = decoded_name(&text[start..end]);
+    (name.eq_ignore_ascii_case("is") || name.eq_ignore_ascii_case("where")).then_some(end)
 }
 
 /// The four pseudo-elements that also have a single-colon form.
-fn legacy_pseudo_element(chars: &[char], start: usize) -> bool {
-    if !matches!(chars.get(start), Some('b' | 'B' | 'a' | 'A' | 'f' | 'F' | '\\')) {
+fn legacy_pseudo_element(text: &str, start: usize) -> bool {
+    let bytes = text.as_bytes();
+    if !matches!(bytes.get(start), Some(b'b' | b'B' | b'a' | b'A' | b'f' | b'F' | b'\\')) {
         return false;
     }
-    let end = pseudo_ident_end(chars, start);
+    let end = css_name_end(bytes, start);
     // `:before(...)` is not the legacy spelling; don't infer validity from its name.
-    if chars.get(end) == Some(&'(') {
+    if bytes.get(end) == Some(&b'(') {
         return false;
     }
-    let name = &chars[start..end];
+    let name = decoded_name(&text[start..end]);
     const NAMES: [&str; 4] = ["before", "after", "first-line", "first-letter"];
-    if name.contains(&'\\') {
-        let name = unescape(&name.iter().collect::<String>());
-        return NAMES.iter().any(|n| name.eq_ignore_ascii_case(n));
-    }
-    NAMES.iter().any(|n| n.len() == name.len() && name.iter().zip(n.chars()).all(|(a, b)| a.eq_ignore_ascii_case(&b)))
+    NAMES.iter().any(|n| name.eq_ignore_ascii_case(n))
 }
 
-fn ident_start(rest: &[char]) -> bool {
-    match rest {
-        [c, ..] if c.is_ascii_alphabetic() || *c == '_' => true,
-        ['-', c, ..] => c.is_ascii_alphabetic() || *c == '_',
-        _ => false,
+fn decoded_name(name: &str) -> Cow<'_, str> {
+    if name.contains('\\') {
+        unescape(name).into()
+    } else {
+        name.into()
     }
 }
 
-/// The text inside the parentheses `text` starts with, and the text after them, outside strings
-/// and brackets: `(.a) to (.b)` is `.a` and ` to (.b)`.
+/// The text inside the first parenthesis block, and the text after it.
 fn parenthesized(text: &str) -> Option<(&str, &str)> {
     if !text.starts_with('(') {
         return None;
     }
     let b = text.as_bytes();
-    let (mut i, mut depth) = (0, 0usize);
-    while i < b.len() {
-        match b[i] {
-            q @ (b'"' | b'\'') => {
-                i += 1;
-                while i < b.len() && b[i] != q {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
+    let mut blocks = vec![b')'];
+    let mut i = 1;
+    while let Some(&byte) = b.get(i) {
+        i = match byte {
+            b'"' | b'\'' => string_end(b, i)?,
+            b'\\' => css_escape_end(b, i),
+            b'(' | b'[' | b'{' => {
+                blocks.push(block_close(byte));
+                i + 1
             }
-            b'\\' => i += 1,
-            b'(' | b'[' => depth += 1,
-            b')' | b']' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return (b[i] == b')').then(|| (&text[1..i], &text[i + 1..]));
+            b')' | b']' | b'}' => {
+                if blocks.pop()? != byte {
+                    return None;
                 }
+                if blocks.is_empty() {
+                    return Some((&text[1..i], &text[i + 1..]));
+                }
+                i + 1
             }
-            _ => {}
-        }
-        i += 1;
+            _ => i + 1,
+        };
     }
     None
 }
 
-fn css_line_end(b: u8) -> bool {
-    matches!(b, b'\n' | b'\r' | b'\x0c')
+fn block_close(open: u8) -> u8 {
+    match open {
+        b'(' => b')',
+        b'[' => b']',
+        b'{' => b'}',
+        _ => unreachable!("not a block opener"),
+    }
 }
 
 fn css_space(b: u8) -> bool {
-    matches!(b, b' ' | b'\t') || css_line_end(b)
+    matches!(b, b' ' | b'\t' | b'\n')
 }
 
 fn css_skip_space(bytes: &[u8], mut at: usize) -> usize {
@@ -1451,17 +1430,14 @@ fn css_skip_space(bytes: &[u8], mut at: usize) -> usize {
 }
 
 fn valid_css_escape(bytes: &[u8], at: usize) -> bool {
-    bytes.get(at) == Some(&b'\\') && bytes.get(at + 1).is_some_and(|&b| !css_line_end(b))
+    bytes.get(at) == Some(&b'\\') && bytes.get(at + 1).is_some_and(|&b| b != b'\n')
 }
 
-/// Consumes an escape in the original bytes, where CRLF is one CSS newline.
+/// Consumes an escape in preprocessed CSS, including its optional whitespace terminator.
 fn css_escape_end(bytes: &[u8], at: usize) -> usize {
     let start = at + 1;
     let hex = bytes[start..].iter().take(6).take_while(|b| b.is_ascii_hexdigit()).count();
     let end = start + hex;
-    if bytes.get(end..end + 2) == Some(b"\r\n") {
-        return end + 2;
-    }
     if hex != 0 {
         end + usize::from(bytes.get(end).is_some_and(|&b| css_space(b)))
     } else {
@@ -1474,7 +1450,15 @@ fn css_escape_end(bytes: &[u8], at: usize) -> usize {
 }
 
 fn css_name_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'\0' | 0x80..=0xff)
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | 0x80..=0xff)
+}
+
+fn css_ident_start(bytes: &[u8], at: usize) -> bool {
+    let name_start = |at| matches!(bytes.get(at), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_' | 0x80..=0xff));
+    name_start(at)
+        || valid_css_escape(bytes, at)
+        || (bytes.get(at) == Some(&b'-')
+            && (name_start(at + 1) || bytes.get(at + 1) == Some(&b'-') || valid_css_escape(bytes, at + 1)))
 }
 
 fn css_name_end(bytes: &[u8], mut at: usize) -> usize {
@@ -1497,7 +1481,7 @@ fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
     while let Some(&b) = bytes.get(at) {
         match b {
             b if b == bytes[start] => return Some(at + 1),
-            b if css_line_end(b) => break,
+            b'\n' => break,
             b'\\' => at = css_escape_end(bytes, at),
             _ => at += 1,
         }
@@ -2331,7 +2315,7 @@ mod tests {
             for escape in ["\\", "\\61"] {
                 let attr = format!("[data-value='a{escape}{line_end},p']");
                 let css = format!(".list{attr} {{ outline-style:solid }}");
-                assert_eq!(scope(&css, "x").unwrap().css, format!(".x__list{attr}{{outline-style:solid}}"));
+                assert_eq!(scope(&css, "x").unwrap().css, format!(".x__list[data-value='a{escape}\n,p']{{outline-style:solid}}"));
             }
         }
         for value in [r"url(/a[};/*,b\).svg)", r"\75 rl(/a[};,b.svg)", "URL(  '/a,).svg')"] {
@@ -2355,6 +2339,44 @@ mod tests {
     }
 
     #[test]
+    fn selector_hex_escapes_consume_one_css_line_break() {
+        for line_end in ["\n", "\r", "\r\n", "\x0c"] {
+            let css = format!(".list:\\65{line_end}mpty + p {{ outline-style:solid }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains("styles elements this component does not own"), "{css:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn escaped_matches_any_functions_keep_their_anchor_across_css_line_breaks() {
+        for line_end in ["\n", "\r", "\r\n", "\x0c"] {
+            let css = format!(":i\\73{line_end}(.list) {{ outline-style:solid }}");
+            assert_eq!(scope(&css, "x").unwrap().css, ":i\\73\n(.x__list){outline-style:solid}");
+        }
+    }
+
+    #[test]
+    fn selector_blocks_must_close_in_order() {
+        for selector in [":is([x=&(], .list) ], p)", ":not(&) :is(.list[x=(], .list) ], p)"] {
+            let css = format!(".list {{ {selector} {{ outline-style:solid }} }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains("mismatched selector block"), "{css}: {error}");
+        }
+    }
+
+    #[test]
+    fn non_ascii_selector_characters_are_name_characters_not_spaces() {
+        for class in [".list\u{a0}", ".\u{a0}list", ".-\u{a0}list"] {
+            let css = format!(".list {class} {{ outline-style:solid }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains("non-ASCII characters in a class name"), "{css:?}: {error}");
+        }
+        let css = ":is(.list, em + \u{a0} + p) { outline-style:solid }";
+        let error = scope(css, "x").unwrap_err();
+        assert!(error.contains("styles elements this component does not own"), "{css:?}: {error}");
+    }
+
+    #[test]
     fn the_compile_fail_selector_examples_fail_for_their_reasons() {
         for (file, reason) in [
             ("negated_list.css", "`:not(.list) p` styles elements this component does not own"),
@@ -2366,6 +2388,10 @@ mod tests {
             ("malformed_selector_url.css", "a malformed unquoted url()"),
             ("malformed_selector_ff.css", "a string is never closed"),
             ("malformed_selector_cr.css", "a string is never closed"),
+            ("escaped_sibling.css", "styles elements this component does not own"),
+            ("crossed_selector_blocks.css", "mismatched selector block"),
+            ("crossed_selector_after_not.css", "mismatched selector block"),
+            ("non_ascii_class.css", "non-ASCII characters in a class name"),
             (
                 "invalid_scope_ampersand.css",
                 "`p` styles elements this component does not own: `@scope (:is(main, [foo=&]))` can start outside the component",

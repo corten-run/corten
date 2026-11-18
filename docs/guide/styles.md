@@ -46,9 +46,11 @@ compiles, but `+` and `~` from the class's own element lead beside it, so `.list
 not. A [matches-any function](https://www.w3.org/TR/selectors-4/#matches-pseudo) (`:is()` or
 `:where()`) counts when every matchable selector in it does. The check ignores some invalid arms,
 such as an empty arm, a pseudo-element arm, or one with a leading, trailing or doubled
-combinator. It does not remove those arms from the emitted list. Malformed strings and
-unquoted `url()` tokens in selectors are compile errors, even in a forgiving arm: the
-compiler does not guess where an arm ends. Remove the arm or correct the token.
+combinator. It does not remove those arms from the emitted list. Malformed strings,
+unquoted `url()` tokens and mismatched block delimiters in selectors are compile errors, even
+in a forgiving arm: the compiler does not guess where an arm ends. Remove the arm or correct
+the token. Component class names use ASCII without escapes; a nonbreaking space is part of a
+CSS name, not a separator.
 `:is(.list, .grid) p`, `:is(.list,) p` and `.list:has(img) p` compile; `:is(.list, main) p`,
 `:not(.list) p` and `main:has(.list) p` do not. Classes inside other functions are still
 prefixed, but only filter. A nested selector is checked where its `&` stands, so

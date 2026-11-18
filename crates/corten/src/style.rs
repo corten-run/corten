@@ -411,6 +411,39 @@
 //! fn MalformedSelectorCr() -> impl ClassList { List }
 //! ```
 //!
+//! A line break can end a hex escape without becoming a descendant combinator. In
+//! `escaped_sibling.css` a carriage return ends the escape in `.list:empty + p`, which
+//! would style a sibling outside the component:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn EscapedSibling() -> impl ClassList { List }
+//! ```
+//!
+//! A closer must match the innermost open selector block, even in a forgiving arm.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CrossedSelectorBlocks() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CrossedSelectorAfterNot() -> impl ClassList { List }
+//! ```
+//!
+//! A nonbreaking space is part of a CSS name, not a combinator. Component class names
+//! cannot contain it or other non-ASCII characters.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NonAsciiClass() -> impl ClassList { List }
+//! ```
+//!
 //! An inner scope under an unowned outer scope cannot take its proof from an intervening
 //! style rule. Browsers can resolve the inner root through the outer scope instead, whether
 //! the root uses an explicit `&` or implicit nesting.
