@@ -14,7 +14,6 @@ use std::{
 };
 
 use corten::{
-    Mode,
     feed::{Feed, FeedResponse, Row, Since},
     http::StatusCode,
     prelude::*,
@@ -318,8 +317,8 @@ async fn save(req: Req, State(builder): State<Builder>, Form(input): Form<DeckIn
         }
         Outcome::Stale { version, unsure } => (Answer::Stale { version: *version, unsure: *unsure }, StatusCode::CONFLICT),
     };
-    if req.mode == Mode::Action {
-        return req.patch_with_status(status, SaveNote { answer: &answer });
+    if let Some(action) = req.action() {
+        return action.patch_with_status(status, SaveNote { answer: &answer });
     }
     let view = DeckQuery { q: input.q, sort: input.sort };
     match outcome {

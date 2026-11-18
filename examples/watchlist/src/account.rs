@@ -358,9 +358,9 @@ pub(crate) async fn avatar(
         Ok::<_, UploadError>(picture)
     };
     // A refusal is the status line with JavaScript, the account page with it without.
-    let refuse = |status, text| match req.mode {
-        Mode::Action => req.patch_with_status(status, AvatarResult { text }),
-        _ => account_page(&req, &viewer, Said::Picture(text), status),
+    let refuse = |status, text| match req.action() {
+        Some(action) => action.patch_with_status(status, AvatarResult { text }),
+        None => account_page(&req, &viewer, Said::Picture(text), status),
     };
     let (name, kind, bytes) = match read.await {
         Ok(Ok(picture)) => picture,
@@ -398,9 +398,9 @@ pub(crate) async fn rename(
     let name = form.name.trim();
     if name.is_empty() || name.chars().count() > NAME_MAX {
         let text = "Choose a name of 1 to 40 characters.";
-        return match req.mode {
-            Mode::Action => req.patch_with_status(StatusCode::UNPROCESSABLE_ENTITY, NameResult { text }),
-            _ => account_page(&req, &viewer, Said::Name(text), StatusCode::UNPROCESSABLE_ENTITY),
+        return match req.action() {
+            Some(action) => action.patch_with_status(StatusCode::UNPROCESSABLE_ENTITY, NameResult { text }),
+            None => account_page(&req, &viewer, Said::Name(text), StatusCode::UNPROCESSABLE_ENTITY),
         };
     }
     sessions.set_name(&viewer.session, name);

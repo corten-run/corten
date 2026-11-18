@@ -1717,7 +1717,10 @@ rules something out.
     their own type through another type and through `Rule<u8>`, the `compile_fail,E0391` doctests at
     `1e0bcd58`; 2026-11-16, rustc's E0391 naming `SHAPE` for a row written as `self::Step`, after
     preserving path punctuation, the `compile_fail,E0391` doctest at `4f83d633` (focused form
-    doctests with `--show-output`, 61 passed, one ignored).
+    doctests with `--show-output`, 61 passed, one ignored); 2026-11-17, serde_derive 1.0.229's
+    `check_transparent` and `check_from_and_try_from` against the `FromJson` compile errors in
+    `crates/corten/src/json.rs`; 2026-11-18, serde_derive 1.0.229's conversion argument diagnostics
+    against the compile errors in `crates/corten/tests/handler_message.rs`.
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
@@ -3097,10 +3100,12 @@ rules something out.
     and a `patches` route could not answer a part that needs a read of its own without building
     a patch it would not send
     ([#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
-    The page side takes any `HtmlResult`, so a `req.patch` there compiles and a full load would
-    get a fragment, which a debug build answers with a 500 saying so
-    ([Choice 58](#choice-plain-request-patch)), the gap `patch_or`'s other side has
-    ([#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)).
+    The part closure receives the checked `Action` and builds its patch with `action.patch`
+    or `action.patch_with_status`; the page closure receives no builder. The result keeps the
+    sealed patch-answer kinds, `AnyAnswer` or `Patches`, never a data screen. This closes the
+    unchecked page-side construction gap shared with `patch_or`
+    ([Choice 58](#choice-plain-request-patch)), without changing the runtime's read or the
+    page's fallback. Deliberate mode overrides and raw responses still meet the debug check.
     Tags with the same `data-from` in one page or patch are read once, so two parts one read
     draws share it and its patch replaces both; each then waits for the slowest of what that read
     does, so independent slow parts take a query field each, one address each. A page in a
@@ -3742,7 +3747,7 @@ rules something out.
     a handler at `/items/{slug}/save` drew the `/items` area's dialog unstyled, while the debug
     check passed because it read the handler's path
     ([#1366 A patch answered by another area's handler draws that area's components unstyled: the runtime's patch loads no section stylesheet and check_rendered reads the handler's path](https://github.com/corten-run/corten/issues/1366)).
-    Now `Req::patch` (and a refused form's patch) ends with the links of the handler's path, after
+    Now `Action::patch` (and a refused form's patch) ends with the links of the handler's path, after
     the patch's elements, and `apply()` loads those the document lacks with the patch's modules,
     through the function a navigation uses (`stylesOf`). A patch whose first element is a `<col>`
     loses them, since the runtime's parse then keeps only `<col>`s and `<template>`s, which a debug
@@ -4051,18 +4056,18 @@ rules something out.
     nothing to apply, so the part stops updating with an error in the console and no build or test
     failing. A handler's result now carries what the runtime's read can get, as a second parameter
     of `HtmlResponse` beside `For` ([Choice 27](#choice-caller-types)): `AnyAnswer` (a page, a
-    patch or a redirect, what `HtmlResult` is) or `Patches`, which only `req.patch`,
-    `req.patch_with_status`, `req.patch_or`, `req.patch_or_with`, `req.invalid` and
+    patch or a redirect, what `HtmlResult` is) or `Patches`, which only `action.patch`,
+    `action.patch_with_status`, `req.patch_or`, `req.patch_or_with`, `req.invalid` and
     `req.invalid_with` make (the last four a patch in `Mode::Action` and their caller's page or
     redirect otherwise, `patch_or_with` taking the patch's side as a closure too, so a part with a
-    read of its own runs it only for the read, [Choice 44](#choice-slow-part-link); the first two a
-    patch whatever the mode, which a debug build refuses to a browser's plain request,
+    read of its own runs it only for the read, [Choice 44](#choice-slow-part-link); the first two
+    require the borrowed builder from `req.action()`, which checks that effective mode,
     [Choice 58](#choice-plain-request-patch)), since `HtmlResponse`'s
     constructor is the crate's own. A route says `patches` in its routes module; the module checks
     its `get` handler's result is `HtmlResult<Patches>` (or `Public<..>` or `NoStore<..>` of it),
     at the handler's name, and only such a route is a `PatchRoute`, the one kind of route
     `ReadAgain::from` takes. So a refactor that drops a `patch_or` fails the build. It is one
-    handler model: the same `Req` methods, `?` on any `corten::Error`, and a handler that both
+    handler model: the same request APIs, `?` on any `corten::Error`, and a handler that both
     redirects and patches (a write's) stays an `HtmlResult`; only the handler a part is read from
     names `Patches`, and there a redirect or page goes on `patch_or`'s other side, for a browser
     without JavaScript. The macro cannot read a handler's return type (it sees the handler's
@@ -4133,7 +4138,7 @@ rules something out.
     The cost to every app is that the
     patch-making methods have one more type parameter, which a handler's return type fixes; a
     closure handler whose result nothing fixes, or a call that names `For` with a turbofish,
-    names it too (`req.patch::<ForOne, AnyAnswer>`). A `data-patch` form takes any route, as
+    names it too (`action.patch::<ForOne, AnyAnswer>`). A `data-patch` form takes any route, as
     before: one whose handler answers its page gets that page swapped in, a working form that
     sends and draws the whole page, and the [requests guide](guide/requests-and-forms.md#request-modes)
     says so. Not chosen: a debug build answering 500, or `dev.js` saying so on the page, when a
@@ -5322,54 +5327,59 @@ rules something out.
     element's `form=` among them, which the field module of `037bb827b` fails in each), and
     `corten dev`'s reports, on `98e7ca184`.
 
-58. <a id="choice-plain-request-patch"></a>**A patch answering a browser's plain request is a debug build's 500 for now; a compile error
-    needs a new way to make a patch, which is its own change.** `req.patch` and
-    `req.patch_with_status` answer whatever request reached the handler. The runtime's
-    `data-patch` fetch (`corten: action`) applies the fragment; a browser that asked by itself (a
-    form without JavaScript, a link, a reload) shows it as the whole document, with no layout,
-    stylesheets or navigation, and every test that sends the runtime's request passes. A debug
-    build now answers that request, a browser's (`text/html`) `Mode::Document` request the runtime
-    did not fetch and whose fetch metadata, where the browser sends it, says it is a top-level
-    navigation (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`), the same test the check
-    for a page at a path with no `GET` makes, which now reads the fetch metadata too
-    ([#1340 The app corten new writes posts its form to /greet, an address with no GET: without JavaScript the page is drawn there and a reload posts again, where the guide says a page and its form share one URL](https://github.com/corten-run/corten/issues/1340)), but for any method, with a 500 that names the method
-    and the route (its pattern from `#[corten::routes]`, else the request's path) and says to
-    answer with `req.patch_or` or check `req.mode == Mode::Action` first. It reads the
-    `corten-patch` header every patch-making method sets, after the handler and the app's own steps
-    and beside the other debug checks in `page_or_error`, and carries the handler's `Set-Cookie` and
-    `Clear-Site-Data` to the error as that check does. A release build compiles none of it: the
-    request's method is cloned for the message only under `debug_assertions`, and the release path
-    is the one it was (measured below).
+58. <a id="choice-plain-request-patch"></a>**Building a patch directly requires a checked
+    Action; a debug check still catches overrides and raw responses to a browser's plain
+    request.** `Req::action() -> Option<Action<'_>>` returns
+    `Some` only in the current effective `Mode::Action`. Only its opaque borrowed `Action`
+    has `patch` and `patch_with_status`; the unchecked `Req` methods are removed.
+    `patch_or`, `invalid` and `invalid_with` keep their mode-selecting contracts and check
+    internally. `patch_or_with` passes the checked `Action<'r>` to its part closure
+    (`FnOnce(Action<'r>) -> PartFut`), not its page closure, and keeps both sides lazy. It
+    shares the sealed `PatchingKind` bound with `patch_or`. This follows `invalid_with`'s
+    `FormPatch` precedent without a new response
+    kind, wire format or dependency. `Action` consumes itself, has no public constructor or
+    `Clone`/`Copy`, and its borrow prevents writing the request's mode while it still has a
+    subsequent use. Compile-fail doctests pin these guarantees, the removed methods, and that an
+    app can neither construct an `HtmlResponse` nor recast a page's kind to `Patches`. The builder
+    is `corten::Action`, left out of the prelude: `route::Action` already names a post's address,
+    and an app that glob-imports `route` with the prelude would get an ambiguous name.
+    The sealed `PatchingKind` still permits `AnyAnswer` and `Patches`, not `Screen<T>`;
+    `Public` and `NoStore` keep their inference. Patch content, live SSE fragments and feed
+    protocol values are not HTTP patch answers and need no token.
 
-    A handler's return type cannot carry it: what a handler answers is decided by `req.mode`, a
-    value of the request, and one handler answers both modes, so its type cannot be "patch" or
-    "page". [Choice 50](#choice-patch-routes) gave the type what it can carry, that a patch is
-    among the answers (`HtmlResult<Patches>`), which a plain request may still get from a handler
-    that checks nothing
-    ([#1342 A handler's type does not say whether it can answer a patch, so ReadAgain::from takes a route that only answers its page and the runtime finds out when it runs](https://github.com/corten-run/corten/issues/1342)).
-    What can carry it is how a patch is made: `req.action() -> Option<Action<'_>>`, `Some` only in
-    `Mode::Action`, whose `Action::patch` and `Action::patch_with_status` would be the only way to
-    make a patch besides `patch_or`, `invalid` and `invalid_with`, as `req.invalid_with` already
-    hands its form side a `FormPatch` only in that mode; `req.patch` and `req.patch_with_status`
-    would go. Weighed in the order the README gives for a conflict: correctness (1) is the same either way once the
-    mistake is found, but a debug check finds it only where a test or a developer sends the plain
-    request, and a compile error finds it in every build; performance at the user's end (2) is the
-    same, since this check is not compiled in a release build and the token would be a borrow of
-    `Req` (reasoned, not measured); compile-time safety and one way to do things (3) favor the
-    token: an unchecked patch would not compile (Values 4), and it leaves one way to answer a
-    patch on a checked path where today there are two, `patch_or` or a hand check of
-    `req.mode == Mode::Action` before `req.patch` (Values 5). So the compile error is the better
-    answer, and this check gives up Values 4 until it lands. It is not this change because it
-    removes two public methods every handler that checks by hand calls (the deck builder's, the
-    watchlist's, the guides' and the agent skill's), and has questions of its own: how a
-    `patches` route's handler that checks by hand gives its page side the `Patches` kind, which
-    `patch_or` does itself, and whether `req.action()` reads a `req.mode` the handler wrote, which
-    [Choice 50](#choice-patch-routes) keeps as the app's override. That is a breaking change to the handler API, proposed
-    in [#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532); this check
-    is the stopgap until then. Also not chosen: `dev.js` saying so on the page, which sees nothing when no JavaScript runs,
-    the one case this is about; and checking only a `POST`, as the #1340 check does: a `GET` route
-    whose handler answers only a patch (a dialog's form, a part read again by the runtime) is drawn
-    bare by a link or a reload the same way.
+    The check reads the app's writable `req.mode`, including a deliberate override, as
+    [Choice 50](#choice-patch-routes) requires. It proves a typed patch was built on a checked
+    path, not that the original wire request asked for one, nor that every possible response
+    is a typed patch. A boolean mode test alone cannot refine Rust's `Req`; binding the
+    capability makes the unchecked builder unavailable in every build. `patch_or` remains
+    the ordinary two-mode answer and constructs its patch before making its future, so a
+    view of non-Send references does not make the handler future non-Send. A `patches`
+    route's fallback kind conversion stays private to the mode-selecting combinators.
+    This is the breaking construction change in
+    [#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532).
+
+    Keep the debug check at the response boundary. The runtime's `data-patch` fetch
+    (`corten: action`) applies the fragment; a browser that asked by itself shows it as the
+    whole document, without layout, stylesheets or navigation. The check uses the original
+    request, before an app override: an HTML `Mode::Document` request not fetched by the
+    runtime, whose fetch metadata where present says top-level navigation (`navigate` to
+    `document`), gets a 500 if the final response has `corten-patch`. This catches explicit
+    mode overrides, raw marked responses and replacements through `DerefMut` after app steps.
+    It names the method and route pattern (or raw path), recommends `patch_or` or `action`,
+    and preserves `Set-Cookie` and `Clear-Site-Data`. No guard or diagnostic method clone is
+    compiled into release builds. A relay remains exempt: its upstream owns the contract.
+    Tests retain both the mode-override and raw-response cases, in debug and release.
+
+    Weighed in README order: correctness favors rejecting unchecked typed construction in
+    every build rather than only in plain-request tests; performance adds only a borrowed
+    token to the existing mode check, with the small instruction differences measured below;
+    compile-time safety and one way to do
+    things favor the capability over a second unchecked route to the same answer. The
+    framework owns this mode-dependent rendering contract, not the handler's domain writes
+    or its choice of fallback. Do not require Action for low-level HTTP or live feeds, or
+    pretend the type proves an unmodified final response. Not chosen: a public kind cast,
+    deprecating but retaining unchecked builders, a second mode enum, or a dev.js-only warning
+    that cannot run without JavaScript.
 
     What it does not see: a request whose fetch metadata says it is not a top-level navigation (a
     page's own `fetch` that asks for HTML, an `<iframe>`'s load), whose answer is not shown as the
@@ -5387,6 +5397,35 @@ rules something out.
     another address (a phone on the LAN) gets none, and both checks take a page's own `fetch` that
     asks for `text/html` there for a navigation: a false 500, which opening the app over HTTPS or
     at `localhost` avoids.
+
+    For the checked construction, release callgrind 3.19.0 with rustc 1.99.1 and jemalloc
+    counted main `bbd9d7432` against this change merged with it, `abbdf9831`: each built alone
+    (`--all-features --lib`, the release profile), three alternating rounds of 1,200 less 200
+    requests, divided by 1,000. Medians (ranges), instructions per request:
+
+    | Answer | Before | Checked Action |
+    |---|---|---|
+    | `patch_or`, `AnyAnswer`, Action | 17,984.501 (17,984.469-17,984.576) | 17,988.603 (17,988.477-17,988.605) |
+    | `patch_or`, `Patches`, Action | 17,984.590 (17,984.494-17,984.607) | 17,988.405 (17,987.066-17,988.497) |
+    | `patch_or`, `AnyAnswer`, Document | 18,403.771 (18,403.722-18,403.805) | 18,403.761 (18,403.724-18,403.777) |
+    | `patch_or`, `Patches`, Document | 18,403.770 (18,403.708-18,403.797) | 18,403.604 (18,402.128-18,403.693) |
+    | Direct small component, Action | 17,539.291 (17,539.284-17,539.291) | 17,549.334 (17,549.306-17,549.428) |
+    | `patch_or_with`, slow part read | 17,770.887 (17,770.815-17,770.894) | 17,770.835 (17,770.775-17,770.885) |
+
+    The page side and the lazy read are unchanged. The `patch_or` Action case counts about four
+    more (0.02%) and the direct patch about ten more (0.06%); a per-function comparison of the
+    first round's profiles places both. All four of `patch_or`'s are in the benchmark, not the
+    request path: the test's check after each response, `headers.contains_key("corten-patch")`,
+    makes one `memcmp` call a request in both builds, which takes 22 instructions instead of 18,
+    while the framework's own header lookups on that route count what they did. Eight of the
+    direct route's ten are on the request path, in `Mode::asked`'s two header lookups a request:
+    the same number of `memcmp` calls, each 22 instructions instead of 18, though the same
+    function on the `patch_or` route of the same binary counts what it did before. The other two
+    are in the direct handler itself, its mode check, which the unchecked baseline did not make.
+    `Action::patch` counts what the baseline's unchecked builder did and nothing calls `memcmp`
+    more often. Why those calls take glibc's longer path was not traced; `memcmp`'s cost depends on where the
+    compared bytes lie, which a rebuild can move (reasoned). The token is a borrow and allocates
+    nothing.
 
     Stands on: platform (a browser shows an HTML response to a navigation or a form submit as the
     document, whatever its markup); platform (the
@@ -5410,7 +5449,7 @@ rules something out.
     500; a header Corten's worker added to say which it was would be a format of Corten's own for
     one worker's case, and an app's own worker would still pass on navigations unmarked); reasoned (every
     patch-making method sets `corten-patch` through one constructor, `html_response`, and the app cannot make an `HtmlResponse` but
-    through `Req`);
+    through the request APIs);
     measured (callgrind, release, instructions per request through a route's `patch_or` in
     process, 1,200 requests less 200 over 1,000, with the `#[ignore]` test
     `what_a_patch_or_request_costs` in `crates/corten/src/tests.rs`, alternate runs, the median
@@ -5430,13 +5469,14 @@ rules something out.
     tests in it can move what the optimizer inlines and lays out (reasoned; which functions moved
     was not traced); an app's binary has no `tests.rs`.
     The counted page asks for no HTML, which in a release build reaches the
-    same code, since the check and the method it clones are not compiled there); value (Values 3, a
+    same code, since the check and the method it clones are not compiled there);
+    measured (the checked-construction comparison above, `abbdf9831` against `bbd9d7432`,
+    its medians, ranges and the per-function profile comparison); value (Values 3, a
     form works without JavaScript; Values 9, the developer sees it in a test).
 
-    Revisit when: [#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)
-    lands, when an unchecked patch does not compile and this check is kept only for answers built
-    outside those methods, or removed, or is declined, when this Choice says why the debug check
-    is enough; or an app needs a fragment answered to a top-level navigation on purpose, which
+    Revisit when: `req.mode` ceases to be an application override, or the low-level response
+    escape paths change, when the remaining debug check's coverage should be reconsidered;
+    or an app needs a fragment answered to a top-level navigation on purpose, which
     would need a way to say so; or the runtime stops marking its own
     requests with the `corten` header ([Choice 11](#choice-corten-request-header)), on which "the
     runtime did not fetch it" stands; or a browser changes the fetch metadata it sends (a
@@ -5455,7 +5495,11 @@ rules something out.
     HTTP at a LAN address, against the Fetch Metadata Working Draft of 21 September 2026;
     2026-11-16, the fetch metadata of navigations a service worker answers from navigation preload
     and passes on with `fetch(event.request)`, probed in Chromium 156 and WebKit 27.2 (Firefox was
-    not run).
+    not run); 2026-11-17, the checked Action's six compile-fail doctests, positive example,
+    four-mode/GET/await/status test and release wire-guard regressions, and a callgrind
+    comparison then, on `b77577301` against `2292cd604`; 2026-11-17, the checked Action,
+    `patch_or_with` part token and the callgrind comparison above, on `abbdf9831` against
+    `bbd9d7432`.
 
 59. <a id="choice-local-date-time"></a>**A date and time a visitor enters is a time on their clock, `LocalDateTime`, read in the
     zone its form was drawn in, which the form carries back (`DrawZone` draws it, `FormZone` is
@@ -5852,6 +5896,58 @@ rules something out.
     Last checked: 2026-11-17, Towncrier 26.9.0, Changesets 3.0.3, Keep a Changelog 1.1.0,
     and Corten's release procedure at `231225b9a`.
 
+63. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys use literal NATS subjects, not encoded names; the
+    relay skips rows with invalid legacy keys.** Corten requires nonempty dot-separated tokens
+    without whitespace, control characters, `*` or `>`. This is stricter than the broker: it may
+    accept an embedded `*` or a non-breaking space, but the documented naming rules reserve
+    wildcards and exclude whitespace. Control characters are not useful in names, and Postgres
+    cannot store NUL. UTF-8 and multiple tokens are allowed. The existing subjects and message
+    IDs for valid keys do not change.
+
+    Keys are limited to 1,024 bytes and the subject prefix to 255. These bounds leave room
+    for a 2,729-byte custom reply inbox prefix, a dot and a 22-byte token, and 64 bytes of
+    publish framing in NATS's default 4,096-byte control line. The key fits the feed primary
+    key and the outbox `(feed, seq)` entry under the
+    Postgres B-tree limit on standard 8 KB pages without depending on compression.
+    `create_feed` and `begin` return `InvalidFeedKey` before doing SQL. `Cluster::feed` checks
+    before loading an uncached key, returning `None` for an invalid one; only validated keys
+    get cache entries. `Cluster::start` checks both the subject prefix and the generated reply
+    inbox before changing the database or starting background work. NATS does not advertise
+    its control-line limit, so deployments that change it set `Options::max_control_line` to
+    match the lowest server limit the client can encounter.
+
+    The relay uses the same check, independent of the client or broker, for rows that an old
+    version or external SQL could have queued. It marks an invalid row done with the existing
+    `published_at` marker, logs the row ID and key at error level, and continues without
+    sending the patch. The marker means done, not delivered, in this case. Ordinary pruning
+    can remove the row; the app's committed data is not changed. No schema or index change is
+    needed. Only acknowledged valid rows get marked done; publish and acknowledgement
+    failures (including size limits) still retry. A server with a lower control-line limit
+    than the one configured in Corten can still reject a publish.
+
+    Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
+    restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
+    no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
+    in place. Using `Subject::is_valid` would copy the key and accept whitespace outside the
+    framing bytes.
+
+    Stands on: platform (the [NATS subject rules](https://docs.nats.io/nats-concepts/subjects)
+    exclude whitespace and reserve wildcards for subscriptions, the
+    [NATS server configuration](https://docs.nats.io/reference/config/) defaults to a 4 KB
+    control line, and [Postgres B-tree entries](https://www.postgresql.org/docs/16/btree-intro.html)
+    fit only about a third of a page); reasoned (a key that fails the same pure check at
+    every retry cannot be repaired by retrying, and marking it done also removes it from the
+    existing pending index); value (correctness and reliability first, early failure and a
+    small surface: README Values 4 and 6).
+
+    Revisit when: an app needs arbitrary text as a cluster key, the NATS server's default
+    control line or documented grammar changes, or deployments need automatic recovery for
+    previously accepted keys.
+
+    Last checked: 2026-11-17, NATS subject and configuration documentation and async-nats 0.52.0
+    source reviewed, and the pre-fix store and relay read at `056964945`.
+
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -6053,16 +6149,62 @@ by design; where it is known, a limit says what would lift it or why it is so.
 8. <a id="limit-views-render-once"></a>`html!` views render once and own what they capture; read from `req` before building the view.
    A value borrowed from one the view owns is computed inside the markup:
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
-9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting and `@media`, `@supports`, `@container`,
-   `@layer`, `@scope`, `@keyframes` and `@font-face`; `@import`, `@scope` with no root and
-   escaped class names are not supported. At the top of the file, an `@scope` rule's root names
+9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting.
+   The supported block at-rules are listed below; their names match ASCII case-insensitively:
+
+| At-rules | Processing |
+|---|---|
+| `@media`, `@supports`, `@container`, `@layer`, `@starting-style` | Rules checked and classes prefixed as at the surrounding level; declarations in a nested rule stay declarations. Token breakpoints in `@media` are resolved at app startup. |
+| `@scope` | Root and limit selectors checked and prefixed; rules checked as described below. |
+| `@property` | Body copied raw, then required descriptors and supported syntax checked; registered names and references prefixed to the component. Not allowed inside a style rule. |
+| `@position-try` | Declaration body copied raw; its dashed-ident name and matching references in `position-try-fallbacks` and `position-try` declarations in this file prefixed to the component, even before the definition. Not allowed inside a style rule. |
+| `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied raw, without selector checks or class prefixes. Their names (animation, font family, counter style, palette and feature-value names) remain global: use component-qualified names when private. |
+| `@page` | Name must start with the component's name and `-` (written by the author); body copied raw, including margin at-rules. The name remains global. An unnamed page or a name without that prefix is refused. |
+
+   Raw bodies still lose comments and extra whitespace and receive registered-property
+   renaming; their nested block at-rules are copied raw too (for example `@styleset` and
+   `@top-left`), not independently checked against this list. The statement parser recognizes
+   lowercase `@layer` (copied) and `@charset` (discarded: the generated stylesheet is UTF-8).
+   `@import` is refused because it loads a stylesheet the component does not own;
+   `@custom-media` is refused because tokens define breakpoints. Unrecognized rules such as
+   `@namespace` and `@document` are refused outside raw bodies; put them in the app's global
+   stylesheet. This is not a CSS validator: the macro may copy unknown block at-rules that
+   start with a known prefix, such as `@supports_other`, applying that rule's body handling.
+   Likewise, unknown statements are refused even inside raw bodies unless the statement parser
+   recognizes a prefix; for example it copies `@layer_other`. Escaped at-rule and class names
+   are not supported.
+
+   A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
+   digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
+   CSS escapes. The scoping pass prefixes only names defined in this file. The values of
+   `position-try` and `position-try-fallbacks` are read as
+   [CSS Syntax](https://www.w3.org/TR/css-syntax-3/#tokenization) tokens, and only an ident
+   token equal to a local name is renamed, where the value takes an option: at its top level,
+   in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an `if()` branch's value. A
+   lookup's name and an `if()` condition (`style(--x: 1)`) name custom properties, a dashed
+   function token (`--x()`) calls a custom function, and strings, URLs, anchor names, other
+   functions' arguments and unrelated declarations are not position references. The macro
+   matches whole names from the source before normalizing whitespace and comments as in
+   other declarations. That normalization can change token boundaries in unprefixed options:
+   `--externa\6c  flip-block` loses the extra space and becomes one name (`--externalflip-block`).
+   A registered custom property with the same name does not rename an option, but its `var()`
+   lookup still gets the property prefix. A name carried in a custom property's value is not
+   rewritten as a position option.
+   [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
+   gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
+   components share the document tree, so prefixing prevents collisions. This does not make
+   anchors component-local. The older raw global namespaces stay global rather than silently
+   renaming names that apps can already share through global CSS or font files; revisit that
+   policy when an app needs checked private names for them.
+
+   An `@scope` with no root is refused because its implicit root is outside the component.
+   At the top of the file, an `@scope` rule's root names
    one of its classes, or else each rule in the body must start at one, as at the top. A root
    nested in a rule, or in an `@scope` whose root names one of the file's classes, is relative to
    that one's elements and is not checked; one nested in any other `@scope` is checked as at the top.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's
    root.
-   Keyframe names are not scoped, so an area's keyframes share one namespace with the rest.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
    item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
    and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file

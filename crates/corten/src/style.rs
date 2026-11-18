@@ -316,6 +316,95 @@
 //! }
 //! ```
 //!
+//! Named position options are local too (`popup_styles.css`):
+//!
+//! ```
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn PopupStyles() -> impl ClassList { Popup }
+//! let css = PopupStyles.style.unwrap().css;
+//! assert_eq!(css, "@layer popups;@position-try --popup-styles__above{position-area:block-start span-inline-end}.popup-styles__popup{position-try-fallbacks:--popup-styles__above, flip-inline;position-try:most-width --popup-styles__above}");
+//! ```
+//!
+//! Imported CSS is not owned or checked by the component (`imported_styles.css` has `@import`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn ImportedStyles() -> impl ClassList { () }
+//! ```
+//!
+//! Breakpoints come from tokens, not `@custom-media` (`custom_media_styles.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CustomMediaStyles() -> impl ClassList { () }
+//! ```
+//!
+//! Unknown statement at-rules, such as `@namespace` (`namespaced_styles.css`), have no scoping rule:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NamespacedStyles() -> impl ClassList { () }
+//! ```
+//!
+//! Nor do unknown block at-rules, such as `@document` (`document_styles.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn DocumentStyles() -> impl ClassList { () }
+//! ```
+//!
+//! An unnamed `@page` affects every printed page (`unnamed_page.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn UnnamedPage() -> impl ClassList { () }
+//! ```
+//!
+//! A global page name must start with this component's name and `-` (`global_page.css` does not):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn GlobalPage() -> impl ClassList { () }
+//! ```
+//!
+//! A browser ignores name-defining `@property` and `@position-try` rules inside style rules
+//! (`nested_property.css` and `nested_position.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NestedProperty() -> impl ClassList { () }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NestedPosition() -> impl ClassList { () }
+//! ```
+//!
+//! A position option needs a dashed name (`invalid_position.css` lacks `--`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn InvalidPosition() -> impl ClassList { () }
+//! ```
+//!
+//! `__` is reserved for the component prefix (`reserved_position.css` uses it in a name):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn ReservedPosition() -> impl ClassList { () }
+//! ```
+//!
 //! Nor does a stylesheet with a merge conflict's markers left in it (`conflicted_list.css`, as
 //! `corten ui add --merge` or git leaves one), whose `.row` rule a browser would drop:
 //!
@@ -1060,6 +1149,27 @@ mod tests {
     }
 
     #[test]
+    fn an_escaped_var_still_checks_required_reads_and_skips_fallbacks() {
+        assert_eq!(custom_properties(r".a{color:\var(--missing)}"), (vec![], vec!["--missing"]));
+        assert_eq!(custom_properties(r".a{color:\var(--opt,var(--fallback))}"), (vec![], vec![]));
+        assert_eq!(custom_properties(r".a{--v:url(x\/*@property/**/--fake);color:var(--fake)}"), (vec!["--v"], vec!["--fake"]));
+    }
+
+    #[component(css)]
+    fn PositionComments() -> impl Render {
+        html! { <p class={Popup}></p> }
+    }
+
+    #[test]
+    fn position_comments_do_not_change_startup_stylesheet_checks() {
+        let html = html! { <PositionComments /> }.to_html();
+        assert_eq!(html, r#"<p class="position-comments__popup"></p>"#);
+        let style = PositionComments.style.unwrap();
+        assert!(style.media.is_empty());
+        assert_eq!(custom_properties(style.css), (vec![], vec!["--missing"]));
+    }
+
+    #[test]
     fn tokens_are_typed_scales_and_utilities_are_classes_per_breakpoint() {
         assert_eq!(Space::_4.var(), "var(--space-4)");
         assert_eq!(theme::Color::Accent.value(), "#6b3fd4");
@@ -1392,15 +1502,20 @@ mod tests {
         use tower::ServiceExt;
 
         async fn badge(req: crate::Req) -> crate::HtmlResult {
-            req.patch(BadgeNote {})
+            req.action().ok_or_else(crate::Error::not_found)?.patch(BadgeNote {})
         }
         async fn refused(req: crate::Req) -> crate::HtmlResult {
             let mut errors = crate::Errors::new();
             errors.refuse(crate::Refusal::Conflict, "The badge moved on.");
-            req.invalid_with(&errors, |form| async move { form.draw(BadgeNote {}) }, || async { req.patch(BadgeNote {}) }).await
+            req.invalid_with(
+                &errors,
+                |form| async move { form.draw(BadgeNote {}) },
+                || async { req.redirect(&crate::Local::parse("/").unwrap()) },
+            )
+            .await
         }
         async fn plain(req: crate::Req) -> crate::HtmlResult {
-            req.patch(PlainNote {})
+            req.action().ok_or_else(crate::Error::not_found)?.patch(PlainNote {})
         }
         let app = |dev: bool| {
             App::new(Routes::from(Table::new().route("/note", get(plain)).route("/stray", get(badge))))
