@@ -5927,7 +5927,10 @@ rules something out.
     reason (another write, a reload). A page the app's or an area's
     middleware makes with `Req` in the route's place is filled as the middleware answers, under the
     request's deadline and before the error page, from the head that `Req` was taken with, as the
-    route's own page is. That head is kept on the request's `Signal` (a `Req` stays the size it was
+    route's own page is. Middleware can take `Req` from a retained head after the route answers
+    and replace its response. Only the forwarded request's extensions tell `Req` not to copy the
+    head at a typed endpoint, where a page-capable route takes its own copy and a patch-only
+    route needs none. A head retained by middleware is kept on the request's `Signal` (a `Req` stays the size it was
     on `main`), which the head's extensions hold in turn, so it is let go when the write is answered
     or its future dropped unanswered (the client gone, a middleware's timeout). Publication checks
     the closed mark under the slot lock, so a detached extraction cannot recreate the cycle after

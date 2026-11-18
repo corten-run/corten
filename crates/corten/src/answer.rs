@@ -2587,18 +2587,18 @@ where
         // Known here, as a constant: a route that answers patches alone
         // (`HtmlResult<Patches>`), JSON or text keeps none. A `GET` or `HEAD` looks no further.
         let page = O::PAGE && !Self::ACTION_PATCHES && !self.shared;
-        let late = crate::layout::reaches_late_route(&req);
+        let late = crate::layout::reaches_late_route(&mut req);
         // Each answer is made where it is returned: made first and then moved into its variant, the
         // handler's future (which holds the request) was copied twice more on every request
         // (callgrind, a whole `GET`).
-        match late.filter(|_| page) {
+        if late && page {
             // Boxed, so every other request's future stays the size it was.
-            Some(signal) => futures_util::future::Either::Right(Box::pin(crate::layout::fill_after(
-                crate::layout::at_late_route(&req, signal),
+            futures_util::future::Either::Right(Box::pin(crate::layout::fill_after(
+                crate::layout::at_late_route(&req),
                 futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>),
-            ))
-                as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>),
-            None => futures_util::future::Either::Left(futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>)),
+            )) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
+        } else {
+            futures_util::future::Either::Left(futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>))
         }
     }
 }

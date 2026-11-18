@@ -149,19 +149,18 @@ struct Inner {
     body_limit: usize,
     /// A write's whole-page decision ([`WHOLE`]), or a request to recheck after middleware
     /// ([`RECHECK_WHOLE`]). When the app has layout reads, it is filled after it answers (#1370):
-    /// [`LATE`] before its route is reached, [`HEAD_KEPT`] once it is (and, if its answer can be a page,
-    /// has kept the request's head for it: [`crate::layout::at_late_route`]). A byte, in the
+    /// [`LATE`] marks eligibility and [`EARLY_CLOSED`] stops new head captures at cleanup. A byte, in the
     /// padding beside the others; its deadline is not kept here (`crate::layout::LateUntil`), as
     /// any more would make every request's signal a larger allocation.
     late: AtomicU8,
 }
 
 /// [`Inner::late`]: a write eligible for late fill, so a whole page the app's or an area's
-/// middleware makes with `Req` before the route carries the head it was made with.
+/// middleware makes with `Req` carries the head it was made with.
 const LATE: u8 = 1;
-/// [`Inner::late`]: its route is reached, and kept the head if it needs one.
-const HEAD_KEPT: u8 = 2;
-/// [`Inner::late`], beside the others: a `Req` taken before its route kept a head on the signal
+/// [`Inner::late`]: the slot cannot accept more heads, even from a detached extractor.
+const EARLY_CLOSED: u8 = 2;
+/// [`Inner::late`], beside the others: a `Req` kept a head on the signal
 /// ([`EarlyHeads`]), to be let go when the write is answered.
 const EARLY_KEPT: u8 = 4;
 /// [`Inner::late`]: the runtime draws its own page whole, with or without layout reads.
@@ -269,26 +268,23 @@ impl Signal {
         }
     }
 
-    /// Late fill is still available at the typed route. The handler can choose to render a
+    /// Late fill is available. The handler can choose to render a
     /// whole page regardless of the mode and preference it receives.
-    pub(crate) fn fills_late_at_route(&self) -> bool {
-        let flags = self.0.late.load(Ordering::Relaxed);
-        flags & (LATE | HEAD_KEPT) == LATE
+    pub(crate) fn fills_late(&self) -> bool {
+        self.0.late.load(Ordering::Relaxed) & LATE != 0
     }
 
-    /// Its route is reached, and keeps the head for a page it may answer with
-    /// ([`crate::layout::at_late_route`]), or the head a page was made with is kept to fill it: a
-    /// `Req` taken after this keeps none.
-    pub(crate) fn keep_head(&self) {
-        self.0.late.fetch_or(HEAD_KEPT, Ordering::Relaxed);
+    /// A late write whose cleanup has not yet closed the slot.
+    pub(crate) fn accepts_early_heads(&self) -> bool {
+        self.0.late.load(Ordering::Relaxed) & (LATE | EARLY_CLOSED) == LATE
     }
 
-    /// Keeps a head copied by `Req` before the route, returning its number (from 1). Cloning
+    /// Keeps a head copied by `Req`, returning its number (from 1). Cloning
     /// extensions can run app code, so the copy is made before the lock and the mark is checked
     /// again here. If release follows this mark, it has to take the lock to remove the slot.
     pub(crate) fn keep_early_head(&self, head: http::request::Parts) -> u8 {
         let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if self.0.late.fetch_or(EARLY_KEPT, Ordering::Relaxed) & HEAD_KEPT != 0 {
+        if self.0.late.fetch_or(EARLY_KEPT, Ordering::Relaxed) & EARLY_CLOSED != 0 {
             return 0;
         }
         let slot = match found.iter().position(|kept| kept.is::<EarlyHeads>()) {
@@ -315,7 +311,7 @@ impl Signal {
 
     /// Closes the slot before releasing the heads (which hold this signal in turn).
     pub(crate) fn release_early_heads(&self) {
-        if self.0.late.fetch_or(HEAD_KEPT, Ordering::Relaxed) & EARLY_KEPT != 0 {
+        if self.0.late.fetch_or(EARLY_CLOSED, Ordering::Relaxed) & EARLY_KEPT != 0 {
             let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             self.0.late.fetch_and(!EARLY_KEPT, Ordering::Relaxed);
             if let Some(at) = found.iter().position(|kept| kept.is::<EarlyHeads>()) {
@@ -324,13 +320,6 @@ impl Signal {
                 drop(heads);
             }
         }
-    }
-
-    /// A write eligible for late fill: `Some(true)` once the head is kept ([`Signal::keep_head`]),
-    /// `Some(false)` before, `None` for any other request.
-    pub(crate) fn late_write(&self) -> Option<bool> {
-        let late = self.0.late.load(Ordering::Relaxed);
-        (late & LATE != 0).then_some(late & HEAD_KEPT != 0)
     }
 
     /// Whether the signal has aborted: a cheap check for a loop on a blocking thread.

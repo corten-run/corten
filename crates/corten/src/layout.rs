@@ -534,15 +534,15 @@ pub(crate) async fn fill_after(
     here.fill(res).await
 }
 
-/// On a page with places made with a `Req` the app's or an area's middleware took before a write's
-/// route, for a write whose own page is filled after it answers: the request's head as it was then
+/// On a page with places made with a `Req` the app's or an area's middleware took for a write
+/// whose own page is filled after it answers: the request's head as it was then
 /// ([`fill_made_early`]).
 #[derive(Clone)]
 pub(crate) struct EarlyHead(pub(crate) Arc<Parts>);
 
 /// A page with places that no route filled, for a write the runtime sent in an app with layout
-/// reads: one the app's or an area's middleware made with `Req` before the route (a sign-in page
-/// in its place, a refusal drawn as a page), or a route given by hand made. Its reads start now,
+/// reads: one the app's or an area's middleware made with `Req` (a sign-in page in the route's
+/// place, a refusal drawn as a page), or a route given by hand made. Its reads start now,
 /// from the head that `Req` was taken with ([`EarlyHead`]), as a plain write's page made there
 /// starts them from the head its `Req` kept ([`StartHere::extracted`]). One from a route whose
 /// answer type says it is no page, or that is `Public`, starts none.
@@ -569,29 +569,27 @@ pub(crate) async fn fill_made_early(shared: Arc<crate::page::Shared>, mut res: R
 #[derive(Clone, Copy)]
 pub(crate) struct NotAPageAnswer;
 
-/// Marks a typed route reached for a write eligible for late fill. A `Req` its handler takes keeps
-/// no early head: a page-capable route takes its own snapshot; other routes need none.
+/// Only on the request passed to a typed endpoint, not on the head middleware may still hold.
+/// A page-capable endpoint takes its own snapshot; other endpoints need none.
+#[derive(Clone, Copy)]
+pub(crate) struct LateRoute;
+
+/// Marks a typed route reached for a write eligible for late fill.
 #[inline]
-pub(crate) fn reaches_late_route(req: &crate::http::Request) -> Option<&crate::Signal> {
+pub(crate) fn reaches_late_route(req: &mut crate::http::Request) -> bool {
     if matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
-        return None;
+        return false;
     }
-    let signal = req.extensions().get::<crate::Signal>()?;
-    if !signal.fills_late_at_route() {
-        return None;
-    }
-    signal.keep_head();
-    Some(signal)
+    let extensions = req.extensions_mut();
+    extensions.get::<crate::Signal>().is_some_and(crate::Signal::fills_late) && extensions.insert(LateRoute).is_none()
 }
 
 /// Keep the route's request head before calling a handler that may consume it and answer with
 /// a page. Nothing reads beside the handler, whose reads must see what it wrote.
 #[inline(never)]
-pub(crate) fn at_late_route(
-    req: &crate::http::Request,
-    signal: &crate::Signal,
-) -> (Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts) {
-    let shared = signal.shared().expect("late writes belong to an app").clone();
+pub(crate) fn at_late_route(req: &crate::http::Request) -> (Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts) {
+    let shared =
+        req.extensions().get::<crate::Signal>().and_then(crate::Signal::shared).expect("late writes belong to an app").clone();
     let until = LateUntil::of(req.extensions());
     // Copied field by field from the request in place, rather than taken apart, cloned and put
     // back: a read is given the whole head (`LayoutRead::start` takes `&Parts`, and an app's read

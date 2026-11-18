@@ -1037,9 +1037,8 @@ pub struct Req {
     /// Layout reads are available if the handler draws a whole page. The handler can still
     /// change `mode`; fragments never fill their places.
     fills: bool,
-    /// For a write the runtime sent whose own page is filled after it answers, taken where no route
-    /// kept the head for it (the app's or an area's middleware before the route, a route given by
-    /// hand): the request's head as it was then, which a page this makes carries, so its reads
+    /// For a write the runtime sent whose own page is filled after it answers, taken by middleware
+    /// or a raw route: the request's head as it was then, which a page this makes carries, so its reads
     /// start from it (`layout::fill_made_early`). Its number among the heads kept on the request's
     /// signal ([`crate::Signal::keep_early_head`]), 0 for none: a byte in the padding, where the head itself made
     /// every `Req` 8 bytes larger, which every request that takes one paid in a copy.
@@ -1222,10 +1221,13 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
         // page's GET.
         let mut req =
             Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD);
-        // Taken where no route kept the head of a write whose own page is filled after it answers
-        // (middleware before the route, a route given by hand): a page made with it is filled from
-        // this head, as a page route's is from the one it kept (#1370).
-        if req.fills && req.write && req.signal.late_write() == Some(false) {
+        // Middleware or a raw route can draw a page from the head it took, including after a
+        // typed route answered a forwarded request. The typed endpoint handles its own head.
+        if req.fills
+            && req.write
+            && req.signal.accepts_early_heads()
+            && parts.extensions.get::<crate::layout::LateRoute>().is_none()
+        {
             req.early = req.signal.keep_early_head(parts.clone());
         }
         Ok(req)
@@ -1265,7 +1267,7 @@ impl Req {
             whole_action,
             fetched,
             fills: !shared.layout_reads.is_empty()
-                && (extensions.get::<crate::layout::StartHere>().is_some() || (write && signal.late_write().is_some())),
+                && (extensions.get::<crate::layout::StartHere>().is_some() || (write && signal.fills_late())),
             early: 0,
             shared,
             signal,

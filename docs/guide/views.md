@@ -458,8 +458,10 @@ arriving, the failure counts again when it is shown, whether that body arrived o
 A partial draw can still replace `<main>` and
 page-owned layout elements; it does not redraw the rest of the layout. Browsers without the
 Navigation API reload for `ReadAgain`. A page the app's or an area's middleware makes with `Req` in the
-route's place (a sign-in page) is filled the same way, from the request's head as it had it,
-within the request's deadline, and a failure to fill it gets the error page. A `GET` form's page
+route's place (a sign-in page) is filled the same way, from the request's head as it had it.
+This also works when middleware takes `Req` from a head it retained and replaces the response
+after the route returns. The fill stays within the request's deadline, and a failure to fill it
+gets the error page. A `GET` form's page
 (a search) still answers `<main>` alone, as a navigation's does, since a `GET` changes nothing the
 layout shows. Such an answer
 costs the layout's markup and its reads; a page that differs from the one on screen in more than

@@ -113,8 +113,8 @@ is the one thing that needs one, so it takes only a route that says `patches`. A
 handler answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) may return
 `HtmlResult<Patches>` too: in an app with layout reads a typed `HtmlResult` route keeps a copy of
 the request's head on every preferred submit, in case it answers a page. `HtmlResult<Patches>`
-skips that route's copy, not the copy made by middleware taking `Req` before the route or by a raw
-`Table` handler taking `Req`.
+skips that route's copy, not the copy made by a raw `Table` handler or by middleware taking
+`Req` from its own request head, even after the route answers.
 
 Controls may be named `parentElement`, `parentNode`, `id`, `elements` or other DOM members. A
 control, in the form or joined to it by `form=`, is the form's member of its name, so Corten reads

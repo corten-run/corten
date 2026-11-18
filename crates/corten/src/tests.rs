@@ -16255,6 +16255,47 @@ mod layout_reads {
     }
 
     #[tokio::test]
+    async fn middleware_replaces_a_generic_patch_with_a_whole_page() {
+        middleware_replaces_a_patch("/any-patch").await;
+    }
+
+    #[tokio::test]
+    async fn middleware_replaces_a_typed_patch_with_a_whole_page() {
+        middleware_replaces_a_patch("/patches-only").await;
+    }
+
+    async fn middleware_replaces_a_patch(uri: &str) {
+        struct ReplacesPatch;
+
+        impl crate::Middleware for ReplacesPatch {
+            async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+                use crate::extract::FromRequestParts;
+                let (mut original, body) = req.into_parts();
+                let mut forwarded = original.clone();
+                forwarded.headers.remove("prefer");
+                let patch = next.run(Request::from_parts(forwarded, body)).await;
+                assert_eq!(patch.status(), StatusCode::OK);
+                assert!(patch.headers().contains_key("corten-patch") && !patch.headers().contains_key("x-draws-whole"));
+                let req = Req::from_request_parts(&mut original, &()).await.unwrap();
+                refused(&req, "replacement").into_response()
+            }
+        }
+
+        let count = CartCount::default();
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), ReplacesPatch))
+            .router();
+        let (status, headers, body) = call_with(router, "POST", uri, Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && !headers.contains_key("corten-patch"), "{headers:?}");
+        assert!(body.contains("<main><p>replacement</p></main>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "{body}");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+    }
+
+    #[tokio::test]
     async fn a_patch_only_write_without_middleware_does_not_negotiate_a_whole_answer() {
         let count = CartCount::default();
         let app = App::new(shop_url::router());
