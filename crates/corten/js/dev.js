@@ -130,6 +130,8 @@ function resolved(selector, parent, scoped) {
 const skipped = new Set();
 
 /** @typedef {{ selector: string, written: string, display: string, condition: string | null, important: boolean, scoped: boolean }} Display */
+/** @typedef {{ root: string, standalone: string, outer: Scope | null, limited: boolean }} Scope */
+/** @typedef {{ selector: string, plain: string, scope: Scope | null }} Override */
 
 /**
  * Read each display rule once, then match only the candidate dialogs and popovers.
@@ -137,68 +139,94 @@ const skipped = new Set();
 function displays() {
   /** @type {Display[]} */
   const found = [];
-  /** @type {string[]} */
+  /** @type {Override[]} */
   const possibleOverrides = [];
   /**
    * @param {CSSRuleList} rules
    * @param {string | null} condition
    * @param {string | null} selector
    * @param {string | null} written
-   * @param {boolean} scoped
-   * @param {boolean} limited
+   * @param {Scope | null} scope
    */
-  const walk = (rules, condition, selector, written, scoped, limited) => {
+  const walk = (rules, condition, selector, written, scope) => {
     for (const rule of rules) {
       if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule) {
         const start = rule.start;
-        const root = !start || (!scoped && selector !== null) || (selector === null && start.match(SCOPE_REF))
+        const standalone = start && !start.match(SCOPE_REF) ? start : "";
+        const root = !start || (!scope && selector !== null) || (selector === null && !standalone)
           ? "" : resolved(start, selector, true);
-        walk(rule.cssRules, condition, root, start || "@scope", true, limited || !!rule.end);
+        walk(rule.cssRules, condition, root, start || "@scope", { root, standalone, outer: scope, limited: !!scope?.limited || !!rule.end });
         continue;
       }
       const styled = rule instanceof CSSStyleRule;
       const style = styled || (globalThis.CSSNestedDeclarations && rule instanceof CSSNestedDeclarations) ? rule.style : null;
       const asWritten = styled ? rule.selectorText : written;
-      const own = styled ? resolved(asWritten ?? "", selector, scoped) : selector;
-      if (style?.display && asWritten) {
+      const own = styled ? resolved(asWritten ?? "", selector, !!scope) : selector;
+      if (style?.display && asWritten && own !== null) {
         const display = style.display;
         const important = style.getPropertyPriority("display") === "important";
-        if (own && !limited) found.push({ selector: own, written: asWritten, display, condition, important, scoped });
-        else if (own !== null) {
-          if (important && display !== "none") {
-            // Ignore a limit, not its root. Without a resolved selector, only a plain selector
-            // can rule out a candidate.
-            possibleOverrides.push(own || (asWritten.length <= MAX_SELECTOR && !unsupported(asWritten) && !asWritten.match(SCOPE_REF) && !/(^|,)\s*>/.test(asWritten) ? asWritten : ""));
-          }
-          if (!skipped.has(asWritten)) {
-            skipped.add(asWritten);
-            console.warn(`corten: skipped \`${asWritten}\`: cannot compose its selector for the closed dialog and popover check`);
-          }
+        const skip = !own || scope?.limited;
+        if (important && display !== "none") {
+          const plain = !own && asWritten.length <= MAX_SELECTOR && !unsupported(asWritten) && !asWritten.match(SCOPE_REF) && !/(^|,)\s*>/.test(asWritten) ? asWritten : "";
+          possibleOverrides.push({ selector: own, plain, scope });
+        } else if (!skip) {
+          found.push({ selector: own, written: asWritten, display, condition, important, scoped: !!scope });
+        }
+        if (skip && !skipped.has(asWritten)) {
+          skipped.add(asWritten);
+          console.warn(`corten: skipped \`${asWritten}\`: cannot compose its selector for the closed dialog and popover check`);
         }
       }
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
       // A width (or a container's size) is a breakpoint; @supports is not, and passes its own on.
       const query = rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
-      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), scoped && styled ? "" : own, asWritten, scoped, limited);
+      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), scope && styled ? "" : own, asWritten, scope);
     }
   };
   for (const sheet of document.styleSheets) {
     try {
-      walk(sheet.cssRules, null, null, null, false, false);
+      walk(sheet.cssRules, null, null, null, null);
     } catch {}
   }
   return { found, possibleOverrides };
 }
 
-/** @param {Element} el @param {string} selector @param {boolean} [fallback] */
-const matching = (el, selector, fallback = false) => {
+/** @param {Element} el @param {string} selector */
+const matching = (el, selector) => {
   try {
     return own.matches.call(el, selector);
   } catch {
-    return fallback;
+    return null;
   }
 };
+
+/** Keep every known root when a selector cannot be composed or read. Ignore scope limits.
+ * @param {Element} el @param {Scope} scope
+ */
+function inside(el, scope) {
+  let matched = false;
+  for (let bound = /** @type {Scope | null} */ (scope); bound; bound = bound.outer) {
+    try {
+      // A composed root already includes the outer roots.
+      if (bound.root) return !!own.closest.call(el, bound.root);
+    } catch {}
+    if (!bound.standalone || bound.standalone === bound.root) continue;
+    try {
+      const root = own.closest.call(el, bound.standalone);
+      if (!root) return false;
+      el = root;
+      matched = true;
+    } catch {}
+  }
+  return matched;
+}
+
+/** @param {Element} el @param {Override} rule */
+function couldOverride(el, { selector, plain, scope }) {
+  const match = selector ? matching(el, selector) : null;
+  return match ?? ((!plain || matching(el, plain) !== false) && (scope ? inside(el, scope) : !selector));
+}
 
 /**
  * Warns of each closed dialog or popover in or at `root` that components.css keeps hidden while a
@@ -223,7 +251,7 @@ function inPlace(root) {
     // browser's own, which an app's rule outranks.
     if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
     const drawn = applies.find((r) => r.condition && r.display !== "none");
-    if (!drawn || applies.some((r) => r.important && r.display !== "none") || possibleOverrides.some((s) => !s || matching(el, s, true))) continue;
+    if (!drawn || possibleOverrides.some((r) => couldOverride(el, r))) continue;
     reported.add(el);
     const dialog = el instanceof HTMLDialogElement && !own.hasAttribute.call(el, "popover");
     const kind = dialog ? "dialog" : "popover";

@@ -31,6 +31,7 @@ try {
   // in document order, so the last control's says every one before it is in.
   const drawn = await browser.newPage({ viewport: { width: 600, height: 800 } });
   let skippedShapes = false;
+  let fallbackChild = "";
   /** @type {string[]} */
   const errors = [];
   /** @type {string[]} */
@@ -84,6 +85,7 @@ try {
       '<div class="overridePanel"><dialog id="insideOverride" class="overrideRail"></dialog></div><dialog id="outsideOverride" class="overrideRail"></dialog>',
       '<div class="panel"><dialog id="closedInsidePanel"></dialog></div><dialog id="closedOutsidePanel"></dialog>',
       '<div class="card"><div id="skipCardBody" class="card-body"></div><div class="slot"></div></div>',
+      fallbackChild ? '<div class="card"><dialog id="insideFallback" class="rail card-body" data-state="READY"><span class="flag"></span></dialog><div class="slot"></div></div>' : '',
       '<dialog class="filters"></dialog>',
       '<dialog id="lastrail" class="rail"></dialog>',
     ].join("");
@@ -115,6 +117,7 @@ try {
         "@media (min-width: 900px) { .overrideRail { display: flex; } @scope (.overridePanel) to (.stop) { .overrideRail { display: flex !important; } } }",
         "@scope (.panel) { @media (min-width: 1px) { dialog:not([open]) { display: flex; outline-style: solid; } } }",
         ".filters { @media (min-width: 900px) { & { display: flex; } } }",
+        fallbackChild ? `@scope (.card) to (.slot) { @media (min-width: 900px) { ${fallbackChild} { display: grid !important; content: ""; } } }` : "",
         ...(skippedShapes ? [
           "@scope (.card) to (.slot) { :scope > .card-body { display: grid !important; } :scope dialog { display: none !important; } }",
           "@scope (.identity) { @media (min-width: 1px) { :scope > :scope { display: flex; outline-style: solid; } } }",
@@ -249,6 +252,29 @@ try {
   check("nested implicit roots are skipped in every engine, including where WebKit applies them", await skippedImplicit && implicitLooks === (engine === "webkit" ? "solid" : "none") && !warnedOnSkip("implicitNested") && notes(":scope .implicitOuter > #implicitNested") === 1, implicitLooks);
   check("multiple scope references are skipped rather than matched to different roots", !warnedOnSkip("differentRoots") && notes(":scope > :scope") === 1);
   check("top-level explicit :scope roots are skipped", !warnedOnSkip("explicitScopeRoot") && notes(".explicitScopeRoot") === 1 && await drawn.locator("#explicitScopeRoot").evaluate((el) => getComputedStyle(el).outlineStyle) === "solid");
+  skippedShapes = false;
+  const attrFlag = await drawn.evaluate(() => CSS.supports("selector([data-state=READY s])")) ? '[data-state="READY" s]' : '[data-state="ready" i]';
+  for (const [name, suffix] of [
+    ["a :not() list", ":not(.gone,.pending)"],
+    [":has()", ":has(> .flag)"],
+    ["a complex :is() argument", ":is(.card > .card-body)"],
+    [`an attribute flag (${attrFlag})`, attrFlag],
+    ["a pseudo-element", "::before"],
+  ]) {
+    fallbackChild = ":scope > .card-body" + suffix;
+    warnings.length = 0;
+    const note = drawn.waitForEvent("console", { predicate: (m) => m.text().startsWith("corten: skipped `:scope > .card-body"), timeout: 10000 }).then(() => true, () => false);
+    await drawn.reload();
+    const inside = drawn.locator("#insideFallback");
+    const noted = await note;
+    const narrow = await inside.evaluate((el) => getComputedStyle(el).display);
+    const outsideWarns = warnedOnSkip("rail");
+    const insideQuiet = !warnedOnSkip("insideFallback");
+    await drawn.setViewportSize({ width: 1000, height: 800 });
+    const wide = await inside.evaluate((el, pseudo) => getComputedStyle(el, pseudo).display, suffix === "::before" ? suffix : null);
+    await drawn.setViewportSize({ width: 600, height: 800 });
+    check(`limited scope with ${name} withholds only the inside rail warning`, noted && narrow === "none" && wide === "grid" && outsideWarns && insideQuiet, `${narrow},${wide}; outside warns ${outsideWarns}, inside quiet ${insideQuiet}`);
+  }
   await drawn.close();
   // Count work, not elapsed time: rule reads, fixture matches, and queries (including their results).
   // Time from the start of the closed-element check to its last fixture match.
@@ -264,7 +290,7 @@ try {
       if (m.type() === "warning" && m.text().startsWith("corten: skipped ")) skipped.push(m.text());
     });
     await many.addInitScript(() => {
-      const counter = { reads: 0, matches: 0, queries: 0, results: 0, first: 0, last: 0 };
+      const counter = { reads: 0, matches: 0, queries: 0, results: 0, first: 0, last: 0, rejected: 0 };
       Object.assign(window, { dialogWork: counter });
       const selectorText = Object.getOwnPropertyDescriptor(CSSStyleRule.prototype, "selectorText");
       Object.defineProperty(CSSStyleRule.prototype, "selectorText", {
@@ -278,12 +304,21 @@ try {
       const matches = Element.prototype.matches;
       Element.prototype.matches = function (selector) {
         if (!counter.first && selector.startsWith("dialog:not([open],[popover])")) counter.first = performance.now();
+        if (selector.startsWith(":is(") && selector.endsWith(".workRejectedLeaf")) {
+          counter.rejected++;
+          throw new DOMException("fixture rejects the composed child", "SyntaxError");
+        }
         const result = matches.call(this, selector);
         if (selector.includes(".work") || this.classList.contains("workScope") && selector.includes(":scope")) {
           counter.last = performance.now();
           counter.matches++;
         }
         return result;
+      };
+      const closest = Element.prototype.closest;
+      Element.prototype.closest = function (selector) {
+        if (selector.startsWith(":is(") && selector.endsWith(".workRejectedRoot")) throw new DOMException("fixture rejects the composed root", "SyntaxError");
+        return closest.call(this, selector);
       };
       /** @type {(this: Element | Document, selector: string) => NodeListOf<Element>} */
       function query(selector) {
@@ -317,14 +352,14 @@ try {
       });
     }
     const completed = await done;
-    const { reads, matches, queries, results, first, last: end, looks, drawn } = await many.evaluate((count) => ({
-      ...(/** @type {{reads: number, matches: number, queries: number, results: number, first: number, last: number}} */ (/** @type {any} */ (window)).dialogWork),
+    const { reads, matches, queries, results, first, last: end, looks, drawn, rejected } = await many.evaluate((count) => ({
+      ...(/** @type {{reads: number, matches: number, queries: number, results: number, first: number, last: number, rejected: number}} */ (/** @type {any} */ (window)).dialogWork),
       looks: Array.from({ length: count }, (_, i) => document.getElementById(`work${i}`)).every((el) => el !== null && getComputedStyle(el).outlineStyle === "solid"),
       drawn: getComputedStyle(/** @type {Element} */ (document.getElementById("work0"))).outlineStyle === "solid",
     }), count);
     await many.close();
     const span = first && end >= first ? end - first : Infinity;
-    return { reads, matches, queries, results, completed, warned, skipped, drawn, span, ok: completed && warned.length === count && looks, detail: `${warned.length} warnings, native styles ${looks}, ${skipped.length} skipped, ${reads} rule reads, ${matches} matches, ${queries} queries, ${results} results, ${span.toFixed(1)} ms` };
+    return { reads, matches, queries, results, completed, warned, skipped, drawn, span, rejected, ok: completed && warned.length === count && looks, detail: `${warned.length} warnings, native styles ${looks}, ${skipped.length} skipped, ${reads} rule reads, ${matches} matches, ${queries} queries, ${results} results, ${span.toFixed(1)} ms` };
   }
   const scopedRule = "@media (min-width: 1px) { .workDialog { display: flex; outline-style: solid; } }";
   const dialog = (/** @type {number} */ i) => `<dialog class="workDialog" id="work${i}"></dialog>`;
@@ -349,8 +384,21 @@ try {
   check("a direct-child limit at depth 320 skips the rule without matching its normal display as an override", limit.completed && limit.drawn && !limit.warned.includes("work0") && limit.matches === 2 && limit.skipped.length === 1 && limit.span < 1000, limit.detail);
   const wide = await dialogWork('<div class="a">'.repeat(18) + dialog(0) + '</div>'.repeat(18) + endDialog, "@scope (.a, .b) {".repeat(18) + scopedRule + "}".repeat(18) + markerRule, 1, false, "workEnd");
   check("18 nested two-member scope roots stop at the selector cap", wide.completed && wide.drawn && !wide.warned.includes("work0") && wide.matches === 2 && wide.skipped.length === 1 && wide.span < 1000, wide.detail);
-  const overlongOverride = await dialogWork('<div class="a">'.repeat(18) + dialog(0) + '</div>'.repeat(18) + endDialog, scopedRule + "@scope (.a, .b) {".repeat(18) + "@media (min-width: 9999px) { .workDialog { display: flex !important; } }" + "}".repeat(18) + markerRule, 1, false, "workEnd");
-  check("an over-long composition withholds a warning only for a candidate its plain selector could style", overlongOverride.completed && overlongOverride.drawn && !overlongOverride.warned.includes("work0") && overlongOverride.matches === 6 && overlongOverride.skipped.length === 1, overlongOverride.detail);
+  const overlongOverride = await dialogWork('<div class="a">'.repeat(18) + dialog(0) + '</div>'.repeat(18) + dialog(1) + endDialog, scopedRule + "@scope (.a, .b) {".repeat(18) + "@media (min-width: 9999px) { .workDialog { display: flex !important; } }" + "}".repeat(18) + markerRule, 2, false, "workEnd");
+  check("an over-long composition keeps the scope bound even for the same plain selector outside it", overlongOverride.ok && overlongOverride.warned.join(",") === "work1,workEnd" && overlongOverride.matches === 9 && overlongOverride.skipped.length === 1, overlongOverride.detail);
+  const inner = (/** @type {number} */ i) => `<div class="workInner workRejectedRoot"><span class="flag"></span>${dialog(i)}</div>`;
+  const nestedMarkup = `<div class="workOuter">${inner(0)}${dialog(1)}</div>${inner(2)}${endDialog}`;
+  const importantDisplay = (/** @type {string} */ child) => `@media (min-width: 9999px) { ${child} { display: grid !important; } }`;
+  const nestedLimit = await dialogWork(nestedMarkup, scopedRule + `@scope (.workOuter) { @scope (.workInner:has(.flag)) to (.stop) { ${importantDisplay(":scope > .workDialog:not(.gone,.pending)")} } }` + markerRule, 3, false, "workEnd");
+  check("a skipped nested scope keeps both its standalone root and its outer root", nestedLimit.ok && nestedLimit.warned.join(",") === "work1,work2,workEnd" && nestedLimit.skipped.length === 1, nestedLimit.detail);
+  const nestedDeclarations = await dialogWork(nestedMarkup, scopedRule + "@scope (.workOuter) { .workDialog { @media (min-width: 9999px) { display: grid !important; } } }" + markerRule, 3, false, "workEnd");
+  check("skipped declarations in a scoped style rule keep the scope bound", nestedDeclarations.completed && nestedDeclarations.drawn && nestedDeclarations.warned.join(",") === "work2,workEnd" && nestedDeclarations.skipped.length === 1, nestedDeclarations.detail);
+  for (const limit of ["", " to (.stop)"]) {
+    const parsed = await dialogWork(nestedMarkup.replaceAll('class="workDialog"', 'class="workDialog workRejectedLeaf"'), scopedRule + `@scope (.workOuter) { @scope (.workInner.workRejectedRoot)${limit} { ${importantDisplay(":scope > .workDialog.workRejectedLeaf")} } }` + markerRule, 3, false, "workEnd");
+    check(`native selector parse failures keep outer and inner bounds (${limit ? "limited" : "unlimited"})`, parsed.ok && parsed.warned.join(",") === "work1,work2,workEnd" && parsed.rejected === 4, `${parsed.detail}, ${parsed.rejected} rejected child matches`);
+  }
+  const unknownRoot = await dialogWork(dialog(0) + endDialog, scopedRule + `@scope (:scope) { ${importantDisplay(":scope .workDialog:not(.gone,.pending)")} }` + markerRule, 2, false, "workEnd");
+  check("a skipped rule without a matchable scope root cannot withhold a warning", unknownRoot.completed && unknownRoot.drawn && unknownRoot.warned.join(",") === "work0,workEnd" && unknownRoot.skipped.length === 1, unknownRoot.detail);
   const repeated = await dialogWork(scopeRoot + dialog(0) + "</div>" + endDialog, ".workScope { " + "&:is(&) { ".repeat(16) + scopedRule.replace(".workDialog", "& .workDialog") + "}".repeat(17) + markerRule, 1, false, "workEnd");
   check("expanding ordinary nesting stops at the selector cap without silencing an unrelated warning", repeated.completed && repeated.drawn && repeated.warned.join(",") === "workEnd" && repeated.matches === 2 && repeated.skipped.length === 1, repeated.detail);
   const flatScopes = await dialogWork(scopeRoot + dialog(0) + "</div>" + (scopeRoot + "</div>").repeat(count - 1), `@scope (.workScope) { @media (min-width: 1px) { ${Array.from({ length: 64 }, (_, i) => `.workDialog, .workOther${i} { display: flex; outline-style: solid; }`).join("")} } }`, 1);
