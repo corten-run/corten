@@ -509,6 +509,15 @@ async fn advertise_payload(
     let mut advertised: serde_json::Value = serde_json::from_str(info.strip_prefix("INFO ").unwrap()).unwrap();
     advertised["max_payload"] = max_payload.into();
     client.write_all(format!("INFO {advertised}\r\n").as_bytes()).await.unwrap();
+
+    // Keep the advertised limit stale: protocol 0 does not receive asynchronous INFO updates.
+    // Read only CONNECT, leaving the rest for the proxy to forward.
+    let mut line = String::new();
+    BufReader::with_capacity(1, client).read_line(&mut line).await.unwrap();
+    let mut connect: serde_json::Value = serde_json::from_str(line.strip_prefix("CONNECT ").unwrap()).unwrap();
+    connect["protocol"] = 0.into();
+    server.write_all(format!("CONNECT {connect}\r\n").as_bytes()).await.unwrap();
+
     server
 }
 
