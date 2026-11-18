@@ -7,7 +7,11 @@
 //! script reads (`corten/read`), a form whose fields a handler is given as its controls, and view
 //! classes (`corten/views`) whose holes are in a form, past one and a form's whole text, beside
 //! controls named after the members their paths read.
-use corten::{Error, LiveResponse, prelude::*, script::Ref};
+use corten::{
+    Error, LiveResponse,
+    prelude::*,
+    script::{Ref, script},
+};
 use futures_util::{StreamExt, stream};
 
 use crate::layout::Layout;
@@ -81,8 +85,19 @@ pub mod url {
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] =
-    &[Quoted, ScopeProbe, StyledNote, ShipForm, Reader, FormNested, PastForm, FormText, ScopedPage, SharedRefsPage];
+pub const COMPONENTS: &[corten::Component] = &[
+    Quoted,
+    ScopeProbe,
+    StyledNote,
+    ShipForm,
+    Reader,
+    FormNested,
+    PastForm,
+    FormText,
+    ScopedPage,
+    SharedRefsPage,
+    shared_ref_scope::COMPONENT,
+];
 
 #[derive(Id)]
 struct ScopedReadyId;
@@ -466,6 +481,8 @@ async fn large() -> LiveResponse {
 #[derive(Id)]
 struct SharedRefPartId(u32);
 
+script!(mod shared_ref_scope = "shared_ref_scope.js");
+
 #[component(js)]
 fn SharedRefsPage(instance: u32, replaced: bool) -> impl Render {
     let out = refs();
@@ -476,7 +493,7 @@ fn SharedRefsPage(instance: u32, replaced: bool) -> impl Render {
             <button type="button" on:click={js::show_part(part, out)}>"Read part"</button>
             <form method="get" action={url::ReplaceSharedRefPart { instance }} data-patch><button>"Replace part"</button></form>
             if instance == 2 {
-                <PartBoundary>
+                <PartBoundary on:change={shared_ref_scope::run(scope)}>
                     <SharedRefPart bundle={SharedRefsPageRefs} instance={instance} replaced={replaced} />
                 </PartBoundary>
             } else {
@@ -487,15 +504,20 @@ fn SharedRefsPage(instance: u32, replaced: bool) -> impl Render {
 }
 
 #[component]
-fn PartBoundary(children: impl Render) -> impl Render {
+fn PartBoundary<'a>(on_change: Handler<'a>, children: impl Render) -> impl Render {
     let boundary = refs();
-    html! { <div ref={boundary}>{children}</div> }
+    html! {
+        <div ref={boundary}>
+            <input aria-label="Check shared handler scope" on:change={on_change}>
+            {children}
+        </div>
+    }
 }
 
 #[component]
 fn SharedRefPart(bundle: SharedRefsPageRefs, instance: u32, replaced: bool) -> impl Patch {
     let status = if replaced { "Replacement" } else { "Original" };
-    html! { <p id={SharedRefPartId(instance)} ref={bundle.part}>{status} " " {instance}</p> }
+    html! { <p id={SharedRefPartId(instance)} ref={bundle.part()}>{status} " " {instance}</p> }
 }
 
 fn shared_refs_document(req: &Req, replaced: Option<u32>) -> HtmlResult {

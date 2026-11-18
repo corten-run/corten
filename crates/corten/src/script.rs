@@ -1820,7 +1820,7 @@ pub trait DomEvent {
 /// every element with a `key={..}`, [`NoKey`] when on none.
 ///
 /// To write a ref in a standalone patch, declare it at the top of its `#[component(js)]` owner
-/// with `let name: Ref<El> = refs();`. The macro makes a `ComponentNameRefs` bundle with a field
+/// with `let name: Ref<El> = refs();`. The macro makes a `ComponentNameRefs` bundle with a getter
 /// for each such declaration. Pass that value to the part from both the owner and the patch
 /// handler. Both renders write the owner-qualified name. The part must be under the owner's
 /// root, and its patch ID must identify the instance, not just the component type.
@@ -1847,7 +1847,7 @@ pub trait DomEvent {
 ///
 /// #[component]
 /// fn Part(bundle: CountBadgeRefs) -> impl Patch {
-///     html! { <output id={ResultId} ref={bundle.out}></output> }
+///     html! { <output id={ResultId} ref={bundle.out()}></output> }
 /// }
 ///
 /// # fn main() {
@@ -1855,9 +1855,58 @@ pub trait DomEvent {
 /// let _ = Part { bundle: ModeSwitchRefs }; // Same ref name and element type, but the wrong owner.
 /// # }
 /// ```
+///
+/// A bundle has no fields you can initialize or assign to, even with a ref of the same type:
+///
+/// ```compile_fail,E0560
+/// # use corten::{prelude::*, script::Ref};
+/// # #[component(js)]
+/// # fn CountBadge() -> impl Render {
+/// #     let out: Ref<el::HTMLOutputElement> = refs();
+/// #     html! { <output ref={out}></output> }
+/// # }
+/// # #[component(js)]
+/// # fn ModeSwitch() -> impl Render {
+/// #     let out: Ref<el::HTMLOutputElement> = refs();
+/// #     html! { <output ref={out}></output> }
+/// # }
+/// let _ = CountBadgeRefs { out: ModeSwitchRefs.out() };
+/// ```
+///
+/// ```compile_fail,E0615
+/// # use corten::{prelude::*, script::Ref};
+/// # #[component(js)]
+/// # fn CountBadge() -> impl Render {
+/// #     let out: Ref<el::HTMLOutputElement> = refs();
+/// #     html! { <output ref={out}></output> }
+/// # }
+/// # #[component(js)]
+/// # fn ModeSwitch() -> impl Render {
+/// #     let out: Ref<el::HTMLOutputElement> = refs();
+/// #     html! { <output ref={out}></output> }
+/// # }
+/// let mut bundle = CountBadgeRefs;
+/// bundle.out = ModeSwitchRefs.out();
+/// ```
+///
+/// An exported ref cannot share its name with another ref declaration in the owner:
+///
+/// ```compile_fail
+/// use corten::{prelude::*, script::Ref};
+///
+/// #[component(js)]
+/// fn CountBadge() -> impl Render {
+///     let out: Ref<el::HTMLOutputElement> = refs();
+///     let exported = out;
+///     let out = refs();
+///     html! { <div><output ref={exported}></output><button ref={out}></button></div> }
+/// }
+/// # fn main() {}
+/// ```
 pub struct Ref<T = el::HTMLElement, V = NoRows, W = NoValue, K = NoKey> {
     scope: &'static str,
     name: &'static str,
+    exported: bool,
     kind: PhantomData<fn() -> (T, V)>,
     value: PhantomData<fn() -> (W, K)>,
 }
@@ -2096,7 +2145,7 @@ impl<T, V, W, K> Ref<T, V, W, K> {
     /// # }
     /// ```
     pub const fn closest(self) -> Closest<T> {
-        Closest(Ref { scope: self.scope, name: self.name, kind: PhantomData, value: PhantomData })
+        Closest(Ref { scope: self.scope, name: self.name, exported: self.exported, kind: PhantomData, value: PhantomData })
     }
 
     /// This ref, put on an element with a value for its script: `ref={row.with(cents)}`. A
@@ -3221,7 +3270,7 @@ pub mod __private {
     /// Marks the component whose markup renders while `f` runs.
     #[inline]
     pub fn scoped<T>(scope: &'static str, f: impl FnOnce() -> T) -> T {
-        scoped_at::<false, _>(scope, None, f)
+        scoped_at(scope, None, f)
     }
 
     /// [`scoped`] for a component's render into `out`, which `f` is given: debug builds count the
@@ -3231,14 +3280,7 @@ pub mod __private {
     #[inline]
     pub fn scoped_into<T>(scope: &'static str, out: &mut String, f: impl FnOnce(&mut String) -> T) -> T {
         let into = buffer(out);
-        scoped_at::<false, _>(scope, Some(into), || f(out))
-    }
-
-    /// An owner that exports refs writes qualified names, just as the standalone patch does.
-    #[inline]
-    pub fn scoped_with_exported_refs<T>(scope: &'static str, out: &mut String, f: impl FnOnce(&mut String) -> T) -> T {
-        let into = buffer(out);
-        scoped_at::<true, _>(scope, Some(into), || f(out))
+        scoped_at(scope, Some(into), || f(out))
     }
 
     /// The string `out` by its address, which debug builds compare and release builds ignore.
@@ -3248,7 +3290,7 @@ pub mod __private {
     }
 
     #[inline]
-    fn scoped_at<const QUALIFIED: bool, T>(scope: &'static str, _into: Option<usize>, f: impl FnOnce() -> T) -> T {
+    fn scoped_at<T>(scope: &'static str, _into: Option<usize>, f: impl FnOnce() -> T) -> T {
         struct Restore(Option<&'static str>);
         impl Drop for Restore {
             fn drop(&mut self) {
@@ -3259,14 +3301,20 @@ pub mod __private {
         }
         #[cfg(debug_assertions)]
         keys::enter(scope, _into);
-        let _restore = Restore(SCOPE.with(|s| s.replace(if QUALIFIED { None } else { Some(scope) })));
+        let _restore = Restore(SCOPE.with(|s| s.replace(Some(scope))));
         f()
     }
 
     /// `let (rows, rest) = refs();`: each name, made by `#[component]`.
     #[inline]
     pub const fn new_ref<T, V, W, K>(scope: &'static str, name: &'static str) -> Ref<T, V, W, K> {
-        Ref { scope, name, kind: PhantomData, value: PhantomData }
+        Ref { scope, name, exported: false, kind: PhantomData, value: PhantomData }
+    }
+
+    /// A bundle getter makes the same ref for page and patch, qualified only in `data-ref`.
+    #[inline]
+    pub const fn new_exported_ref<T, V, W, K>(scope: &'static str, name: &'static str) -> Ref<T, V, W, K> {
+        Ref { exported: true, ..new_ref(scope, name) }
     }
 
     /// A ref of another component's markup is written with its component: `offer-list/rows`.
@@ -3293,7 +3341,7 @@ pub mod __private {
     #[inline]
     fn data_ref<T, V, W, K: KeyKind>(r: &Ref<T, V, W, K>, out: &mut String) {
         out.push_str(" data-ref=\"");
-        qualified(out, r.scope, SCOPE.with(Cell::get));
+        qualified(out, r.scope, if r.exported { None } else { current_scope() });
         out.push_str(r.name);
         out.push('"');
         K::written(r.scope, r.name);

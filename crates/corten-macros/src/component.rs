@@ -325,7 +325,6 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
         None => (None, None),
     };
     let (body, has_refs, exported_refs) = refs(&body, &scope_name, &name, &vis, script.is_some())?;
-    let scope_render = if exported_refs.is_empty() { "scoped_into" } else { "scoped_with_exported_refs" };
     // A script that keeps state (`keep`) keeps it on the component's root, one per instance.
     // In a part (`js = Owner`), the `scope` its owner's handlers take is the owner's root, so they
     // do not make the part a root; any other handler's `scope` does, as in any component.
@@ -527,7 +526,7 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
     let render_fn = if returns_patch { "::corten::view::__private::render_patch" } else { "::corten::view::Render::render" };
     let draw = if scoped {
         q(
-            &format!("::corten::script::__private::{scope_render}(__A1, __corten_component_out, |__corten_component_out| {render_fn}(&__A0, __corten_component_out));"),
+            &format!("::corten::script::__private::scoped_into(__A1, __corten_component_out, |__corten_component_out| {render_fn}(&__A0, __corten_component_out));"),
             &[TokenTree::Group(body).into(), literal(&scope_name)],
         )
     } else {
@@ -557,7 +556,7 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
         let draw = if scoped {
             q(
                 &format!(
-                    "::corten::script::__private::{scope_render}(__A1, __corten_component_out, |__corten_component_out| {draw});"
+                    "::corten::script::__private::scoped_into(__A1, __corten_component_out, |__corten_component_out| {draw});"
                 ),
                 &[TokenTree::Group(doc_body).into(), literal(&scope_name)],
             )
@@ -645,9 +644,17 @@ fn refs(
     let tokens: Vec<TokenTree> = body.stream().into_iter().collect();
     let mut out: Vec<TokenTree> = Vec::with_capacity(tokens.len());
     let mut found = false;
-    let mut fields = TokenStream::new();
-    let mut values = TokenStream::new();
+    let mut getters = TokenStream::new();
     let bundle = || TokenTree::Ident(Ident::new(&format!("{component}Refs"), component.span())).into();
+    let visibility = stream(vis.iter().cloned());
+    let mut seen = std::collections::BTreeMap::new();
+    let mut record = |n: &Ident, exported| {
+        let name = ref_name(n)?;
+        if seen.insert(name.clone(), exported).is_some_and(|was_exported| was_exported || exported) {
+            return err(n.span(), format!("duplicate ref `{name}`: an exported ref's name must be unique in its component"));
+        }
+        Ok(name)
+    };
     let mut i = 0;
     while i < tokens.len() {
         let is_refs_call = |at: usize| {
@@ -668,23 +675,23 @@ fn refs(
                 if !own_script {
                     return err(n.span(), "only the owner of a script (#[component(js)]) can export a ref");
                 }
-                let name = ref_name(n)?;
+                let name = record(n, true)?;
                 let ident = TokenTree::Ident(n.clone());
-                fields.extend(q(
-                    "#[doc = __A3] __A0 __A1: __A2,",
+                getters.extend(q(
+                    "#[doc = __A3] #[inline] __A0 const fn __A1(self) -> __A2 {
+                        ::corten::script::__private::new_exported_ref(__A4, __A5)
+                    }",
                     &[
-                        stream(vis.iter().cloned()),
+                        visibility.clone(),
                         ident.clone().into(),
                         stream(tokens[i + 3..eq].iter().cloned()),
                         literal(&format!(" The `{name}` ref of `{component}`.")),
+                        literal(scope),
+                        literal(&name),
                     ],
                 ));
-                values.extend(q(
-                    "__A0: ::corten::script::__private::new_ref(__A1, __A2),",
-                    &[ident.clone().into(), literal(scope), literal(&name)],
-                ));
                 out.extend(tokens[i..=eq].iter().cloned());
-                out.extend(q("__A0.__A1", &[bundle(), ident.into()]));
+                out.extend(q("__A0.__A1()", &[bundle(), ident.into()]));
                 found = true;
                 i = eq + 3;
                 continue;
@@ -706,8 +713,8 @@ fn refs(
                 }
                 other => return err(other.span(), "refs() names plain variables: let (rows, rest) = refs();"),
             };
-            let make = |n: &Ident| {
-                let name = ref_name(n)?;
+            let mut make = |n: &Ident| {
+                let name = record(n, false)?;
                 Ok::<_, Error>(q(
                     "::corten::script::__private::new_ref::<_, _, _, _>(__A0, __A1)",
                     &[literal(scope), literal(&name)],
@@ -735,14 +742,14 @@ fn refs(
         out.push(tokens[i].clone());
         i += 1;
     }
-    let items = if fields.is_empty() {
+    let items = if getters.is_empty() {
         TokenStream::new()
     } else {
         let doc = format!(" The exported refs of `{component}`, for parts rendered inside it.");
         q(
-            "#[doc = __A0] #[derive(Clone, Copy)] __A1 struct __A2 { __A3 }
-             #[doc = __A0] #[allow(non_upper_case_globals)] __A1 const __A2: __A2 = __A2 { __A4 };",
-            &[literal(&doc), stream(vis.iter().cloned()), bundle(), fields, values],
+            "#[doc = __A0] #[derive(Clone, Copy)] __A1 struct __A2;
+             impl __A2 { __A3 }",
+            &[literal(&doc), visibility, bundle(), getters],
         )
     };
     let mut copy = Group::new(Delimiter::Brace, stream(out));

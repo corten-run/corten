@@ -590,9 +590,10 @@ fn AccountChooser<'a>(accounts: &'a [Account]) -> impl Render {
 **Refs in a standalone part.** When a part is drawn in the page and also sent alone, the
 component that owns the script can export a ref for it. Give the ref a concrete
 `corten::script::Ref<El>` type in its `refs()` declaration. This makes a
-`ComponentNameRefs` bundle with an ordinary `Ref` field for each such declaration. A part that takes
-`InventoryRefs` cannot be passed another component's bundle, even if both declare a ref of the
-same name and element type.
+`ComponentNameRefs` bundle with a getter returning an ordinary `Ref` for each such declaration.
+The bundle has no writable fields. A part that takes `InventoryRefs` cannot be passed or filled
+with another component's refs, even if both declare a ref of the same name and element type.
+An exported ref cannot share its name with another ref declaration in the owner.
 
 ```rust,ignore
 use corten::{prelude::*, script::Ref};
@@ -614,7 +615,7 @@ fn Inventory(instance: u32, set: &str) -> impl Render {
 #[component]
 fn SetPicker(bundle: InventoryRefs, instance: u32, set: &str) -> impl Patch {
     html! {
-        <select id={SetPickerId(instance)} aria-label="Set" ref={bundle.picker}>
+        <select id={SetPickerId(instance)} aria-label="Set" ref={bundle.picker()}>
             <option>{set}</option>
         </select>
     }
@@ -623,12 +624,12 @@ fn SetPicker(bundle: InventoryRefs, instance: u32, set: &str) -> impl Patch {
 
 The handler is still a plain exported function (`focus_picker(picker)`, with
 `@param {HTMLSelectElement} picker`). The patch handler renders
-`SetPicker { bundle: InventoryRefs, instance, set }` too. An owner that exports refs writes
-qualified names, so the part writes the same `data-ref` both ways. The part has no scope or
-script of its own. The bundle identifies the owner type, not an instance. Keep the target under
-the intended owner's root and use an instance-specific ID, such as `SetPickerId(instance)`,
-when the owner appears more than once on a page. Refs that don't need exporting keep the
-inferred `let name = refs();` form.
+`SetPicker { bundle: InventoryRefs, instance, set }` too. An exported ref writes its
+owner-qualified name in the element's `data-ref`, so the part writes the same name both ways.
+The part has no scope or script of its own. The bundle identifies the owner type, not an
+instance. Keep the target under the intended owner's root and use an instance-specific ID, such
+as `SetPickerId(instance)`, when the owner appears more than once on a page. Refs that don't need
+exporting keep the inferred `let name = refs();` form.
 
 A patch (with `action` from `req.action()`) removes rows as well as replacing them: `action.patch(html! { for id in &done { {Remove(RowId(id))} } })`
 (`corten::view::Remove`, a `<template id data-remove>` the runtime applies), and adds them with

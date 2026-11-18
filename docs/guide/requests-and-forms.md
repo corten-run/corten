@@ -1257,7 +1257,8 @@ element).
 If a part writes the enclosing component's refs, give it the component's typed
 [`ComponentNameRefs` bundle](scripts.md#lists-and-larger-components) in both renders:
 `<SetPicker bundle={InventoryRefs} instance={instance} set={set} />` on the page and
-`action.patch(SetPicker { bundle: InventoryRefs, instance, set })` in the handler. The bundle
+`action.patch(SetPicker { bundle: InventoryRefs, instance, set })` in the handler. The part uses
+the bundle's getter, `ref={bundle.picker()}`, in its markup. The bundle
 identifies the owner type, not an instance. A patch targets a document-wide ID, so when an
 owner appears more than once, give each part an instance-specific `#[derive(Id)]` ID such as
 `SetPickerId(instance)`. Keep that target under the intended owner so its script can resolve

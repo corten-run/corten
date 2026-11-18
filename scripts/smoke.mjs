@@ -1065,6 +1065,10 @@ async function run(browser) {
     };
     await readPart(first, "Original 1");
     await readPart(second, "Original 2");
+    await second.getByRole("textbox", { name: "Check shared handler scope" }).dispatchEvent("change");
+    await second.and(shared.locator('[title="Shared handler ran"]')).waitFor();
+    check("a shared handler passed through a scoped child receives the exporting parent's root",
+      (await first.getAttribute("title")) === null && (await second.locator('[data-scope="part-boundary"]').getAttribute("title")) === null);
     const replace = () => Promise.all([
       shared.waitForResponse((r) => new URL(r.url()).pathname === "/smoke/shared-refs/2/replace"),
       second.getByRole("button", { name: "Replace part" }).click(),
