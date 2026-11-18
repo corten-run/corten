@@ -1895,14 +1895,12 @@ async function run(browser) {
       const stream = `${base}/dialog-draw-live`;
       let releaseLive = () => {};
       let releaseNav = () => {};
-      let asked = () => {};
       const liveHeld = new Promise((resolve) => { releaseLive = () => resolve(undefined); });
       const navHeld = new Promise((resolve) => { releaseNav = () => resolve(undefined); });
-      const navStarted = new Promise((resolve) => { asked = () => resolve(undefined); });
       /** @param {import("@playwright/test").Route} route */
       const holdLive = async (route) => { await liveHeld; await route.continue(); };
       /** @param {import("@playwright/test").Route} route */
-      const holdNav = async (route) => { asked(); await navHeld; await route.continue(); };
+      const holdNav = async (route) => { await navHeld; await route.continue(); };
       if (live) {
         await draws.route(stream, holdLive);
         await draws.route(to, holdNav);
@@ -1932,17 +1930,18 @@ async function run(browser) {
         await draws.locator("#draw-outer:modal").waitFor();
         if (reuse) await draws.evaluate(() => document.dispatchEvent(new Event("reuse-ids")));
         else {
-          const arrived = draws.waitForURL(to);
-          await draws.getByRole("link", { name: "Next page" }).click({ noWaitAfter: live });
+          const next = draws.getByRole("link", { name: "Next page" });
           if (live) {
-            await navStarted;
+            await Promise.all([draws.waitForRequest(to), next.click({ noWaitAfter: true })]);
             releaseLive();
-            await draws.locator('#draw-area[data-stage="updated"]').waitFor({ state: "attached" });
-            const events = await draws.locator("output").evaluate((el) => /** @type {HTMLOutputElement} */ (el).value);
+            // Playwright's WebKit waits for the pending navigation before resolving locators.
+            // Read the live patch in the current document before letting that navigation finish.
+            await draws.waitForFunction(() => document.querySelector('#draw-area[data-stage="updated"]'));
+            const events = await draws.evaluate(() => document.querySelector("output")?.value);
             check("a live patch delivers one close while navigation is pending", events === outer, events);
             releaseNav();
-          }
-          await arrived;
+          } else await next.click();
+          await draws.waitForURL(to);
         }
         await draws.locator('#draw-area[data-stage="initial"]').waitFor({ state: "attached" });
         const after = await draws.evaluate(() => ({
