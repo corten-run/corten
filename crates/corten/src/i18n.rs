@@ -482,7 +482,9 @@ impl<'de, M: Messages> serde::Deserialize<'de> for Locale<M> {
 pub fn negotiate(locales: &[&str], accept_language: Option<&str>) -> usize {
     let listed = |tag: &str| locales.iter().position(|l| l.eq_ignore_ascii_case(tag));
     let mut best: Option<(u16, usize)> = None;
-    for part in accept_language.unwrap_or("").split(',') {
+    let header = accept_language.unwrap_or("");
+    for range in crate::http::list_items(header.as_bytes()) {
+        let part = &header[range];
         let (tag, q) = match part.split_once(';') {
             Some((tag, params)) => (tag.trim(), crate::http::weight(params.as_bytes())),
             None => (part.trim(), Some(1000)),
@@ -2015,6 +2017,20 @@ mod tests {
             [r#"fr;q=0.8;note="a;q=0;b", de;q=0.5"#, r#"fr;note="a\";q=0;b";q=0.8, de;q=0.5"#, r#"fr;note="a\\";q=0.8, de;q=0.5"#]
         {
             assert_eq!(locales[negotiate(&locales, Some(header))], "fr", "{header}");
+        }
+    }
+
+    #[test]
+    fn negotiation_reads_weights_after_a_quoted_comma_in_language_parameters() {
+        let locales = ["en", "fr", "de"];
+        for (header, expected) in [
+            (r#"fr;note="a,b";q=0.8, de;q=0.9"#, "de"),
+            (r#"fr;note="a,b";q=0.8, de;q=0.5"#, "fr"),
+            (r#"fr;q=0.8;note="a,b";q=0.9, de;q=0.5"#, "de"),
+            (r#"fr;note="a\",b";q=0.4, de;q=0.5"#, "de"),
+            (r#"fr;note="a,\\";q=0, de;q=0.5"#, "de"),
+        ] {
+            assert_eq!(locales[negotiate(&locales, Some(header))], expected, "{header}");
         }
     }
 

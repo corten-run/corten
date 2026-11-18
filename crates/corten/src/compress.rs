@@ -118,7 +118,9 @@ pub(crate) fn accepted(headers: &HeaderMap, offered: &[Coding]) -> Option<Coding
 /// Read as bytes, and a q-value parsed only where an item has one: every request reads this header.
 fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
     for value in headers.get_all(header::ACCEPT_ENCODING) {
-        for item in value.as_bytes().split(|&b| b == b',') {
+        let header = value.as_bytes();
+        for range in crate::http::list_items(header) {
+            let item = &header[range];
             let (name, params) = match item.iter().position(|&b| b == b';') {
                 Some(at) => (&item[..at], Some(&item[at + 1..])),
                 None => (item, None),
@@ -762,6 +764,22 @@ mod tests {
             let headers = accept(header);
             assert_eq!(accepted(&headers, &all), Some(Coding::Zstd), "{header}");
             assert_eq!(negotiate(&headers).streamed(), Some(Coding::Zstd), "{header}");
+        }
+    }
+
+    #[test]
+    fn negotiation_reads_weights_after_a_quoted_comma_in_coding_parameters() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for (header, expected) in [
+            (r#"zstd;note="a,b";q=0.8, gzip;q=0.9"#, Coding::Gzip),
+            (r#"zstd;note="a,b";q=0.8, gzip;q=0.5"#, Coding::Zstd),
+            (r#"zstd;q=0.8;note="a,b";q=0.9, gzip;q=0.5"#, Coding::Gzip),
+            (r#"zstd;note="a\",b";q=0.4, gzip;q=0.5"#, Coding::Gzip),
+            (r#"zstd;note="a,\\";q=0, gzip;q=0.5"#, Coding::Gzip),
+        ] {
+            let headers = accept(header);
+            assert_eq!(accepted(&headers, &all), Some(expected), "{header}");
+            assert_eq!(negotiate(&headers).streamed(), Some(expected), "{header}");
         }
     }
 

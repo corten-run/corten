@@ -931,7 +931,8 @@ before it (a route that says `unstaged` goes through none;
 1. Compression is negotiated (`Accept-Encoding`); it is applied last. Weights use RFC 9110's
    qvalue grammar (0 to 1, at most three decimals), as `Accept-Language` does. A coding with
    a malformed or repeated weight is ignored rather than given the default weight of 1.
-   Weight-like text inside another parameter's quoted value is not a repeated weight.
+   A comma inside another parameter's quoted value does not start a new coding, and
+   weight-like text inside that value is not a repeated weight.
    Only space and tab may surround the weight's `;`, and no whitespace may touch its `=`.
    A coding with no weight still has weight 1.
 2. A write another site sent is refused (`Failure::CrossSite`). A browser's gets the error page,

@@ -30,6 +30,36 @@ pub use crate::body::{Body, BodyDataStream};
 pub use crate::handler::Request;
 pub use crate::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
 
+/// Byte ranges of list items, split on commas outside quoted strings.
+pub(crate) fn list_items(header: &[u8]) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+    let has_quotes = memchr::memchr(b'"', header).is_some();
+    let mut start = Some(0);
+    std::iter::from_fn(move || {
+        let from = start?;
+        let rest = &header[from..];
+        let comma = if has_quotes { unquoted_comma(rest) } else { memchr::memchr(b',', rest) };
+        let end = comma.map_or(header.len(), |at| from + at);
+        start = comma.map(|_| end + 1);
+        Some(from..end)
+    })
+}
+
+fn unquoted_comma(item: &[u8]) -> Option<usize> {
+    let mut quoted = false;
+    let mut bytes = item.iter().enumerate();
+    while let Some((at, &byte)) = bytes.next() {
+        match byte {
+            b'"' => quoted = !quoted,
+            b'\\' if quoted => {
+                bytes.next();
+            }
+            b',' if !quoted => return Some(at),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// RFC 9110 section 12.4.2's qvalue, in thousandths, without rounding or float syntax.
 pub(crate) fn qvalue(value: &[u8]) -> Option<u16> {
     let (&whole, rest) = value.split_first()?;
