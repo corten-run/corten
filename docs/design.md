@@ -6072,9 +6072,12 @@ rules something out.
     and replace its response. Only the forwarded request's extensions tell `Req` not to copy the
     head at a typed endpoint, where a page-capable route takes its own copy and a patch-only
     route needs none. Each dispatch that stages late fill resets that mark, so a write forwarded to
-    another router can still start its layout reads. The mark and optional deadline share one
-    request extension; the signal still closes head publication independently. A head retained by
-    middleware is kept on the request's `Signal` (a `Req` stays the size it was
+    another router can still start its layout reads. It keeps the earlier of its own deadline and
+    the active enclosing deadline; having no deadline of its own does not remove that cap.
+    The mark and a weak reference to the optional deadline share one request extension. A retained
+    head cannot keep the deadline alive after its dispatch ends, and the signal closes head
+    publication independently. A head retained by middleware is kept on the request's `Signal`
+    (a `Req` stays the size it was
     on `main`), which the head's extensions hold in turn, so it is let go when the write is answered
     or its future dropped unanswered (the client gone, a middleware's timeout). Publication checks
     the closed mark under the slot lock, so a detached extraction cannot recreate the cycle after
@@ -6193,12 +6196,11 @@ rules something out.
     (15,612 to 16,074 at zlib's default level, against `main` at `27c29d7d2`), numbering the
     writes a layout draws and which of them failed in view.
 
-    Reusing the deadline extension avoids a second entry on staged writes with a deadline.
-    The no-read paths neither install nor mutate it, and the staged mutation stays out of line.
-    The new no-read counts remove part of the last increase; the comparison does not isolate
-    which code generation changes account for that difference. Compared with the previously
-    measured main fixture below, the remaining no-read costs are about 106, 116, 176 and 469
-    instructions per request, respectively (0.55%, 0.66%, 0.97% and 2.58%). The generic route
+    The route mark shares the late-fill extension; a staged dispatch allocates a deadline owner
+    only if it has an effective deadline. The no-read paths neither install nor mutate the
+    extension. Fresh paired measurement against main `7385556a3` found 115.73, 123.04, 186.01 and
+    475.04 more instructions per request on the no-read document GET, navigation GET, direct
+    typed patch and generic patch, respectively (0.61%, 0.70%, 1.03% and 2.61%). The generic route
     still has to negotiate: it can answer a whole page even in an app without reads. That is
     not an attribution of its entire measured cost to negotiation. The remaining overhead and
     the 496 more gzip bytes on pages that load core are accepted so the same handler's own-page
@@ -6235,7 +6237,20 @@ rules something out.
     historical: it compared the generic and typed patches in
     `what_a_write_answering_in_an_action_costs`, not a standalone head copy.
 
-    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc and Rust 1.99.1,
+    Last checked: 2026-11-18, measured against main `7385556a3` at `7433a596f` with the same
+    `write_request_cost` fixture on both (release, all features, Rust 1.99.1, Callgrind 3.19.0 and
+    jemalloc, three alternating 1,200-minus-200 pairs divided by 1,000). The fixture uses the
+    checked action patch builder on both sides. No-read median instructions per request [range],
+    main to head, then the paired median increase [range]: document GET 19,045.51
+    [19,045.47 to 19,046.96] to 19,162.47 [19,161.20 to 19,162.48], +115.73 [115.51 to 116.97].
+    Navigation GET 17,680.38 [17,678.96 to 17,680.46] to 17,803.45 [17,803.41 to 17,803.48],
+    +123.04 [123.02 to 124.49]. Direct typed patch 18,141.72 [18,141.72 to 18,141.76] to 18,327.73
+    [18,327.72 to 18,327.76], +186.01 [185.96 to 186.04]. Generic patch 18,168.72
+    [18,167.42 to 18,168.73] to 18,643.73 [18,643.73 to 18,643.76], +475.04 [475.01 to 476.31].
+    The paused-clock fallback test returned 503 on `ebc0efcbf`. At `7433a596f` it returns
+    200 and omits the slow read when the inner router has no deadline or has the earlier
+    deadline. A retained request head cannot give a new dispatch a finished dispatch's deadline.
+    The preceding check used release Callgrind 3.19.0 with jemalloc and Rust 1.99.1,
     `cc81e15bb` against `a6665d11a` before merging main, with the same `write_request_cost`
     fixture and three alternating 1,200-minus-200 pairs. No-read median instructions per request
     [range], before to after: document GET 19,174.47 [19,173.03 to 19,174.50] to 19,158.51
