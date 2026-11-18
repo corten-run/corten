@@ -256,7 +256,8 @@ fn preprocess(text: &str) -> Cow<'_, str> {
 /// value must not depend on a font or a container. The browser ignores a rule whose initial
 /// value does not parse as its syntax, so markup would set a property nothing registered.
 fn initial_fits(kind: &str, value: &str) -> bool {
-    if !matches!(lexer(value).next(), Some((Tok::Number | Tok::Dimension | Tok::Percentage, 0, end)) if end == value.len()) {
+    let Some((token @ (Tok::Number | Tok::Dimension | Tok::Percentage), 0, end)) = lexer(value).next() else { return false };
+    if end != value.len() {
         return false;
     }
     let at = number_end(value.as_bytes(), 0);
@@ -269,9 +270,9 @@ fn initial_fits(kind: &str, value: &str) -> bool {
     match kind {
         "Number" => unit.is_empty(),
         "Integer" => unit.is_empty() && number.fract() == 0.0 && !value.contains(['.', 'e', 'E']),
-        "Percentage" => unit == "%",
+        "Percentage" => token == Tok::Percentage,
         "Length" => LENGTHS.contains(&unit.as_str()) || (unit.is_empty() && number == 0.0),
-        "LengthPercentage" => unit == "%" || LENGTHS.contains(&unit.as_str()) || (unit.is_empty() && number == 0.0),
+        "LengthPercentage" => token == Tok::Percentage || LENGTHS.contains(&unit.as_str()) || (unit.is_empty() && number == 0.0),
         "Angle" => matches!(unit.as_str(), "deg" | "grad" | "rad" | "turn"),
         "Time" => matches!(unit.as_str(), "s" | "ms"),
         _ => true,

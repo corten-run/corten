@@ -741,7 +741,16 @@
 //! }
 //! ```
 //!
-//! and another component cannot set a component's property:
+//! An escaped percent sign is a dimension unit, not a percentage token
+//! (`escaped_percent.css` gives `--fill` an `initial-value: 10\%`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn EscapedPercent() -> impl ClassList { Meter }
+//! ```
+//!
+//! Another component cannot set a component's property:
 //!
 //! ```compile_fail,E0425
 //! use corten::prelude::*;

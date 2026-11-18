@@ -6749,7 +6749,16 @@ by design; where it is known, a limit says what would lift it or why it is so.
    consume later components. Static CSS is checked as UTF-8, with one leading BOM removed
    at decoding, not treated as whitespace elsewhere. Startup checks literal `var()` reads
    in declaration values (including declarations directly in `@scope` and in recognized
-   `@page` margin rules) and operands in recognized `@container` size conditions. It does not
+   page-margin at-rules with no prelude) and operands in recognized `@container` size features.
+   Bare declarations inside a grouping rule directly under `@scope` are not checked:
+   Chromium drops them, though Firefox and WebKit keep them. Chromium also drops `.b` in
+   `@media all { --ink: red; .b { color: var(--ink) } }` directly under `@scope`. The scanner does
+   not reproduce that selector error recovery.
+   Put those declarations inside a style rule within the group for all three browsers.
+   The scanner checks operands only when a size feature occupies the name slot of a colon
+   or range comparison, not when it merely appears in an opaque condition. The scanner does
+   not parse the operand's value grammar: it checks the read in `(width > flag var(--x))`,
+   for example, even though browsers retain that condition without matching it. It does not
    check style or scroll-state query preludes or arbitrary at-rule conditions. It skips the
    whole lookup if it has a fallback, including `var({--x}, var(--fallback))`.
    Blocks in a custom-property value and the invalid `ident: { ... }` form do not declare

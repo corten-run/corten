@@ -32,10 +32,26 @@ export async function checkCssScanner(browser) {
         }
         return Array.from(sheet.cssRules, rule);
       }
-      function constructed(css, scoped) {
+      function constructed(css, scoped, containerColor) {
         const sheet = new CSSStyleSheet();
         sheet.replaceSync(css);
-        return read(sheet, scoped);
+        const rules = read(sheet, scoped);
+        if (!containerColor) return rules;
+        // General-enclosed conditions can survive in CSSOM without ever matching.
+        const base = new CSSStyleSheet();
+        base.replaceSync('@property --unused { syntax: "<length>"; inherits: false; initial-value: 10px }');
+        const container = document.createElement("div");
+        container.style.cssText = "container-type:size; width:60px; height:60px; color:black";
+        const child = container.appendChild(document.createElement("div"));
+        child.className = scoped ? "x__b" : "b";
+        document.body.append(container);
+        document.adoptedStyleSheets = [base, sheet];
+        try {
+          return { rules, color: getComputedStyle(child).color };
+        } finally {
+          document.adoptedStyleSheets = [];
+          container.remove();
+        }
       }
       async function externalSheet(css) {
         const link = document.createElement("link");
@@ -55,17 +71,22 @@ export async function checkCssScanner(browser) {
         }
       }
       const results = [];
-      for (const { css, scoped, external } of cases) {
-        results.push([external ? await externalSheet(css) : constructed(css), scoped === undefined ? null : constructed(scoped, true)]);
+      for (const { css, scoped, external, containerColor } of cases) {
+        results.push([
+          external ? await externalSheet(css) : constructed(css, false, containerColor),
+          scoped === undefined ? null : constructed(scoped, true, containerColor),
+        ]);
       }
       return results;
     }, cases);
     for (let i = 0; i < cases.length; i++) {
-      const { name, browser: expected, browserScoped } = cases[i];
+      const { name, browser: expected, browserScoped, containerColor } = cases[i];
       const [raw, scoped] = readings[i];
-      const reading = (value) => Array.isArray(value) ? value : value[engine] ?? value.default;
-      deepStrictEqual(raw, reading(expected), `${engine}: source: ${name}`);
-      if (scoped !== null) deepStrictEqual(scoped, reading(browserScoped ?? expected), `${engine}: scoped: ${name}`);
+      const reading = (value) => Array.isArray(value) || typeof value === "string" ? value : value[engine] ?? value.default;
+      const colors = { black: "rgb(0, 0, 0)", red: "rgb(255, 0, 0)" };
+      const expectedReading = (value) => containerColor ? { rules: reading(value), color: colors[reading(containerColor)] } : reading(value);
+      deepStrictEqual(raw, expectedReading(expected), `${engine}: source: ${name}`);
+      if (scoped !== null) deepStrictEqual(scoped, expectedReading(browserScoped ?? expected), `${engine}: scoped: ${name}`);
     }
     return cases.length;
   } finally {

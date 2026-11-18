@@ -164,6 +164,8 @@ impl<'a> Scan<'a, '_> {
                             // initial-value cannot read a custom property: it is independent.
                             None
                         } else {
+                            // Only declarations directly in @scope have its implicit style context.
+                            let group_context = if context == Scope { Rules } else { context };
                             match name.as_ref() {
                                 "scope" if matches!(context, Rules | Scope) => Some(Scope),
                                 "scope" if context == Style => Some(Style),
@@ -171,12 +173,14 @@ impl<'a> Scan<'a, '_> {
                                     if self.check_reads {
                                         self.container_reads(i + 1, stop);
                                     }
-                                    Some(context)
+                                    Some(group_context)
                                 }
-                                "media" | "supports" | "layer" | "starting-style" | "document" | "-moz-document" => Some(context),
+                                "media" | "supports" | "layer" | "starting-style" | "document" | "-moz-document" => {
+                                    Some(group_context)
+                                }
                                 "keyframes" | "-webkit-keyframes" => Some(Rules),
                                 "page" => Some(Page),
-                                name if context == Page && page_margin(name) => Some(Descriptors),
+                                name if context == Page && stop == i + 1 && page_margin(name) => Some(Descriptors),
                                 "font-face" | "counter-style" | "font-palette-values" | "position-try" => Some(Descriptors),
                                 // An unknown at-rule is not a declaration list.
                                 _ => None,
@@ -234,31 +238,65 @@ impl<'a> Scan<'a, '_> {
     }
 
     fn size_feature(&self, start: usize, end: usize) -> bool {
-        let mut i = start;
-        let mut after_comparison = false;
+        let colon = start + 1 < end && self.kind(start + 1) == Some(Kind::Colon);
+        let mut operand = if colon { start + 2 } else { start };
+        let mut i = operand;
+        let mut first = None;
+        let mut chained = false;
         while i < end {
             match self.tokens[i].0 {
-                Kind::Ident if i == start || after_comparison => {
-                    let name = decoded_name(self.spelling(i)).to_ascii_lowercase();
-                    let name = name.strip_prefix("min-").or_else(|| name.strip_prefix("max-")).unwrap_or(&name);
-                    if matches!(name, "width" | "height" | "inline-size" | "block-size" | "aspect-ratio" | "orientation")
-                        && (after_comparison || matches!(self.kind(i + 1), Some(Kind::Colon | Kind::Delim(b'<' | b'=' | b'>'))))
-                    {
-                        return true;
+                Kind::Colon | Kind::Semicolon => return false,
+                Kind::Delim(op @ (b'<' | b'=' | b'>')) => {
+                    if colon || i == operand || chained {
+                        return false;
                     }
-                }
-                Kind::Delim(b'<' | b'=' | b'>') => {
-                    after_comparison = true;
-                    i += 1;
+                    if let Some((_, previous)) = first {
+                        if op == b'=' || op != previous || i != operand + 1 || !self.size_name(operand, false) {
+                            return false;
+                        }
+                        chained = true;
+                    } else {
+                        first = Some((i, op));
+                    }
+                    let mut next = i + 1;
+                    if op != b'=' && next < end && self.kind(next) == Some(Kind::Delim(b'=')) {
+                        let gap = &self.css[self.tokens[i].2..self.tokens[next].1];
+                        if lexer(gap).any(|(kind, ..)| kind == Kind::Space) {
+                            return false;
+                        }
+                        next += 1;
+                    }
+                    operand = next;
+                    i = next;
                     continue;
                 }
                 Kind::Function | Kind::Open => i = self.ends[i].min(end),
                 _ => {}
             }
-            after_comparison = false;
             i += 1;
         }
-        false
+        if operand >= end {
+            return false;
+        }
+        if colon {
+            self.size_name(start, true)
+        } else if let Some((at, _)) = first {
+            chained || (at == start + 1 && self.size_name(start, false)) || (end == operand + 1 && self.size_name(operand, false))
+        } else {
+            false
+        }
+    }
+
+    fn size_name(&self, i: usize, colon: bool) -> bool {
+        if self.kind(i) != Some(Kind::Ident) {
+            return false;
+        }
+        let name = decoded_name(self.spelling(i)).to_ascii_lowercase();
+        if colon && name == "orientation" {
+            return true;
+        }
+        let name = if colon { name.strip_prefix("min-").or_else(|| name.strip_prefix("max-")).unwrap_or(&name) } else { &name };
+        matches!(name, "width" | "height" | "inline-size" | "block-size" | "aspect-ratio")
     }
 
     fn valid_value(&self, start: usize, stop: usize) -> bool {
