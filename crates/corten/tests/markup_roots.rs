@@ -458,7 +458,45 @@ fn a_document_refuses_no_nested_form_after_what_it_does_not_show() {
     }
 }
 
-/// A `<script>` or `<style>` writes its literal text as is, so `</script>` in it ends the element
+#[test]
+fn foreign_script_and_style_literals_are_escaped() {
+    let markup = html! {
+        <div>
+            <svg>
+                <style>"a <g></g> &lt; &&"</style>
+                <script type="text/plain">"a <g></g> &lt; &&"</script>
+            </svg>
+            <math>
+                <style>"a <g></g> &lt; &&"</style>
+                <script type="text/plain">"a <g></g> &lt; &&"</script>
+            </math>
+        </div>
+    };
+    assert_eq!(
+        markup.to_html(),
+        concat!(
+            r#"<div><svg><style>a &lt;g>&lt;/g> &amp;lt; &amp;&amp;</style><script type="text/plain">a &lt;g>&lt;/g> &amp;lt; &amp;&amp;</script></svg>"#,
+            r#"<math><style>a &lt;g>&lt;/g> &amp;lt; &amp;&amp;</style><script type="text/plain">a &lt;g>&lt;/g> &amp;lt; &amp;&amp;</script></math></div>"#,
+        )
+    );
+    // A top-level <svg> may be SVG's or MathML's. Its <style> is foreign either way.
+    assert_eq!(html! { <svg><style>"&lt;"</style></svg> }.to_html(), "<svg><style>&amp;lt;</style></svg>");
+}
+
+#[test]
+fn html_and_unknown_script_and_style_literals_stay_raw() {
+    assert_eq!(
+        html! { <div><svg><foreignObject><style>"a <g></g> &lt; &&"</style></foreignObject></svg></div> }.to_html(),
+        "<div><svg><foreignObject><style>a <g></g> &lt; &&</style></foreignObject></svg></div>"
+    );
+    assert_eq!(
+        html! { <div><math><mtext><script type="text/plain">"a <g></g> &lt; &&"</script></mtext></math></div> }.to_html(),
+        r#"<div><math><mtext><script type="text/plain">a <g></g> &lt; &&</script></mtext></math></div>"#
+    );
+    assert_eq!(html! { <style>"a <g></g> &lt; &&"</style> }.to_html(), "<style>a <g></g> &lt; &&</style>");
+}
+
+/// An HTML `<script>` or `<style>` writes its literal text as is, so `</script>` in it ends the element
 /// where the text says, and the text may open a template, as `raw` may.
 #[component]
 fn ScriptTemplateForms() -> impl Document {

@@ -493,6 +493,17 @@ async function parsesAsHtmlMeans(browser) {
         !!document.querySelector("svg > style > g") &&
         !!document.querySelector("svg > textarea > g"),
     ],
+    // The same serialized literals as foreign_script_and_style_literals_are_escaped in markup_roots.rs.
+    ...["svg", "math"].flatMap((root) =>
+      ["style", "script"].map((tag) => /** @type {[string, string, () => boolean]} */ ([
+        `escaped <${tag}> text in <${root}> is kept literally`,
+        `<${root}><${tag}${tag === "script" ? ' type="text/plain"' : ""}>a &lt;g>&lt;/g> &amp;lt; &amp;&amp;</${tag}></${root}>`,
+        () => {
+          const element = document.body.firstElementChild?.firstElementChild;
+          return element?.textContent === "a <g></g> &lt; &&" && element.children.length === 0;
+        },
+      ])),
+    ),
     [
       "an element in a <title> in an <mi> is text (refused by html!)",
       `<p><math><mi><title><b>x</b></title></mi></math></p>`,

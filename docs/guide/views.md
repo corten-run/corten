@@ -18,7 +18,7 @@ render of that component reserves that size once (a 1-byte render right after a 
 | Write | Means |
 |---|---|
 | `"Price"` | text (source whitespace between tags is never output) |
-| `{expr}` | an expression, escaped: anything that implements `Render` (strings, numbers, `Option`, other views) or else `Display`. `raw(html)` prints trusted HTML; markup a view rendered ahead goes in `req.rendered(view)` (a `corten::Rendered`) instead, which keeps the sizes and scripts its render noted. Not inside `<script>` or `<style>`, which do not read escaped text back: there it does not compile |
+| `{expr}` | an expression, escaped: anything that implements `Render` (strings, numbers, `Option`, other views) or else `Display`. `raw(html)` prints trusted HTML; markup a view rendered ahead goes in `req.rendered(view)` (a `corten::Rendered`) instead, which keeps the sizes and scripts its render noted. Not inside `<script>` or `<style>`: their text must be literal |
 | `href={url::Item { id: &id }}`, `aria-label={("Remove ", &item.name)}` | an attribute: a link is a route, and a tuple prints its parts without building a string. A path in the app written as text (`href="/items"`, `action="/watch"`) does not compile ([below](#typed-links-and-messages)) |
 | `hidden={flag}`, `class={maybe}` | `bool` prints the bare name or nothing; `None` leaves the attribute out |
 | `<input {..e.aria(field)}>` | spreads `Attrs` |
@@ -42,8 +42,8 @@ the markup shows how the browser parses it. An element inside one whose content 
 `<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`) would show as text: put it beside
 the element, or write text meant to show tags as a string (`"<b>"`). One inside a `<script>` or
 a `<style>` belongs in a `#[component(js)]` or the component's CSS file (a data block,
-`<script type="text/x-template">`, writes its content as a string literal, which a `<script>`
-writes as is), and a `<plaintext>`, which makes the rest of the page text, is a `<pre>`. An
+`<script type="text/x-template">`, writes its content as a string literal, which an HTML
+`<script>` writes as is), and a `<plaintext>`, which makes the rest of the page text, is a `<pre>`. An
 element the HTML standard's rules for
 foreign content take out of an `<svg>` or a `<math>` (`<b>`, `<div>`, `<p>`, `<span>`,
 `<table>` and the others it lists, and a `<font>` with `color`, `face` or `size`), written
@@ -54,12 +54,16 @@ shows HTML under an element that is HTML's wherever it lands (a `<div>`, a `<p>`
 `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and `<title>`, and in a `<math>`'s `<mi>`,
 `<mo>`, `<mn>`, `<ms>` and `<mtext>` (but in a `<mglyph>` or `<malignmark>` there) and an `<annotation-xml>` whose first `encoding` is `text/html`
 or `application/xhtml+xml`; inside an `<svg>` or a `<math>`, outside those, a `<textarea>`,
-`<title>` or `<style>` is an element of the drawing or the formula and holds elements. At the top
+`<title>` or `<style>` is an element of the drawing or the formula and holds elements.
+Where the markup shows a `<style>` or `<script>` is foreign content, `html!` escapes `<` and `&`
+in its literal text at compile time so the browser keeps them as text, rather than reading tags
+or character references. Where it shows HTML (including in HTML integration points), or
+does not show the context, these literals are written as is. At the top
 of a component's markup (its parent may write it into an `<svg>`), among a component's
 children (they go where the component writes them), anywhere after an expression or a
 component, `<Corten />` included (what it writes may open or close an `<svg>` or a
 `<textarea>`, or leave a script open, whose text a later literal tag is part of), after a
-`<script>` or `<style>` whose text holds a `<` (written as is, `</script>` in it ends the
+`<script>` or `<style>` whose text holds a `<` written as is (`</script>` in it ends the
 element and may open anything after it, `<!--<script>` keeps it open past its end tag) and in an `<annotation-xml>` whose
 `encoding` an expression or a spread may write first, it does not show, and nothing here is
 refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an
@@ -88,7 +92,7 @@ component's scope. A refusal rests only on the literal markup of the same `html!
 two elements, followed through control-flow bodies and fragments. A component, with or without
 children (`<Corten />` too: `html!` knows a component only by its name), and an expression,
 `raw` among them, may write any element, or close one, or leave a script open, and so may a
-`<script>` or `<style>` whose literal text holds a `<`, so after one no nesting or parsing
+`<script>` or `<style>` whose literal text holds a `<` that is written as is, so after one no nesting or parsing
 refusal in the same `html!` acts, whatever later literal elements show (a duplicate attribute
 and a hand-written `data-key`, which need no context, are still refused):
 `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`

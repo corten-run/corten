@@ -329,7 +329,7 @@ use std::{
 /// the two elements, followed through control flow. What the markup does not show may write
 /// anything: an expression (`raw` among them), a component, with or without children
 /// (`<Corten />` too: the macro knows it only by its name, which a component of the app's may
-/// share), and a `<script>` or `<style>` whose literal text holds a `<`, which `html!` writes as
+/// share), and a `<script>` or `<style>` whose literal text holds a `<` that `html!` writes as
 /// is. What it writes may close the open elements, open others, or leave a browser reading a
 /// script's text past any later literal end tag (`<!--<script>` does), so no nesting refusal acts
 /// after it in the same `html!`, whatever it shows: `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
@@ -551,6 +551,13 @@ use std::{
 /// let _ = html! { <svg><g><font color="red">"Total"</font></g></svg> };
 /// ```
 ///
+/// Escaped text in a foreign `<style>` cannot change how the tags after it are parsed:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <svg><style>"<g>"</style><p>"Total"</p></svg> };
+/// ```
+///
 /// ```compile_fail
 /// use corten::prelude::*;
 /// let _ = html! { <p><math><mrow><div>"x"</div></mrow></math></p> };
@@ -576,8 +583,11 @@ use std::{
 ///
 /// Text and expressions in a `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
 /// `<noframes>` compile, written escaped (which a `<textarea>` and a `<title>` read back). In a
-/// `<script>` or a `<style>` text is written as is and an expression does not compile, so a data
-/// block (`<script type="text/x-template">`) gives its markup as a string literal. What an
+/// `<script>` or a `<style>` an expression does not compile, so a data block
+/// (`<script type="text/x-template">`) gives its markup as a string literal. Its text is written
+/// as is in HTML and where the parsing context is unknown. In a known foreign context, `html!`
+/// escapes `<` and `&` in those literals so the browser reads the literal text, not tags or
+/// character references. What an
 /// `<svg>` holds compiles too: its `<textarea>` and `<style>` are SVG's elements, whose
 /// children are elements, and its `<title>` holds HTML; so does a `<math>`'s, outside its text
 /// integration points, a `<title>` in a `<mglyph>` or `<malignmark>` there, and an

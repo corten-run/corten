@@ -14,14 +14,13 @@ use crate::tokens::{
 
 /// Elements that never have children or a closing tag.
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
-/// Elements whose text is not HTML (written as is, never escaped).
+/// Elements that use raw text in HTML. The parser pre-escapes their literals in known foreign content.
 const RAW_TEXT: &[&str] = &["script", "style"];
 
-/// Whether `name` is a `<script>` or `<style>` (`RAW_TEXT`, as `Gen` writes it) holding literal
-/// text with a `<` in it. `Gen` writes that text as is, so it may end its holder (`</script>`),
-/// keep a script open past its end tag (`<!--<script>`) or, in an `<svg>` or a `<math>`, open
-/// an element, and what follows it is not shown by the markup, as after `raw`. A `<` split
-/// across adjacent literals is in one of them.
+/// Whether `name` is a `<script>` or `<style>` holding a literal `<` that will be written as is.
+/// It may end its holder (`</script>`), keep a script open past its end tag (`<!--<script>`)
+/// or, in foreign content the macro could not see, open an element. What follows it is not
+/// shown by the markup, as after `raw`.
 fn writes_tags(name: &str, children: &[Node]) -> bool {
     RAW_TEXT.contains(&name) && children.iter().any(|child| matches!(child, Node::Text(text) if text.contains('<')))
 }
@@ -1234,7 +1233,7 @@ struct Cursor {
     text_only: Option<String>,
     /// How a browser parses the content here, as far as this markup shows.
     parsing: Parsing,
-    /// Inside a `<script>` or a `<style>`, whose text `Gen` writes as is (`writes_tags`).
+    /// Inside a `<script>` or a `<style>`, whose text `Gen` writes as prepared here.
     raw_text: bool,
     /// How many nodes the markup does not show come before this point (`nesting::holds_unseen`).
     /// After one a browser may be reading text that no later literal end tag ends (a `<script>`
@@ -1333,14 +1332,22 @@ impl Cursor {
                 };
                 return err(span, format!("unexpected closing tag </{name}>{hint}"));
             }
-            let node = self.node()?;
+            let mut node = self.node()?;
             // An element's own content is followed as it is read (`tag`).
             if !matches!(node, Node::Element { .. }) && nesting::holds_unseen(std::slice::from_ref(&node)) {
                 self.unseen();
             }
-            // Text a `<script>` or `<style>` writes as is may end it or open an element.
-            if self.raw_text && matches!(&node, Node::Text(text) if text.contains('<')) {
-                self.unseen();
+            if let (true, Node::Text(text)) = (self.raw_text, &mut node) {
+                if matches!(self.parsing, Parsing::Svg | Parsing::Math | Parsing::AnnotationXml | Parsing::Foreign) {
+                    // Gen writes these bytes as is. In foreign content the browser reads
+                    // character references and tags, so encode the two text delimiters here.
+                    if text.contains(['&', '<']) {
+                        *text = text.replace('&', "&amp;").replace('<', "&lt;");
+                    }
+                } else if text.contains('<') {
+                    // A raw '<' may end the element or leave it open past its closing tag.
+                    self.unseen();
+                }
             }
             nodes.push(node);
         }
@@ -2827,9 +2834,8 @@ impl Gen {
     }
 }
 
-/// Inside `<script>` and `<style>` only literal text: the browser reads their text as it is, so
-/// an expression there, written escaped as HTML, would not read back as what it was (JSON with
-/// `&quot;` is not JSON), and written as it is it could end the element.
+/// Inside `<script>` and `<style>` only literal text: in HTML an escaped expression would not
+/// read back as what it was (JSON with `&quot;` is not JSON), and unescaped it could end the element.
 fn check_raw_text(nodes: &[Node], inside: Option<&str>) -> Result<(), Error> {
     for node in nodes {
         let span = match node {
