@@ -7078,7 +7078,7 @@ async function run(browser) {
       letAGo();
       await scope.waitForFunction(() => !document.getElementById("smoke-scope-queue")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).catch(() => {});
       await scope.waitForFunction(() => /** @type {any} */ (window).__fetched.length >= 3, undefined, { timeout: 5000 }).catch(() => {});
-      await settle();
+      await scope.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
       const sent = await scope.evaluate(() => /** @type {any} */ (window).__fetched);
       await scope.unroute(queue);
       check(
