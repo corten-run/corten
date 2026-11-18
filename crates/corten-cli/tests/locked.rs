@@ -40,6 +40,13 @@ impl Drop for Fixture {
     }
 }
 
+/// A lock refusal is reported as the setup step's timed failure and stops the check there.
+fn stopped_at_setup(stderr: &str) {
+    assert!(stderr.lines().any(|line| line == "corten check: script type setup"), "{stderr}");
+    assert!(stderr.lines().any(|line| line.starts_with("corten check: script type setup failed after ")), "{stderr}");
+    assert!(!stderr.contains("corten check: corten fmt --check"), "a step ran after the refusal: {stderr}");
+}
+
 fn success(output: Output) {
     assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
 }
@@ -64,6 +71,7 @@ fn refuses_changed_lock(workspace: bool) {
     let missing = fixture.check(&dir);
     assert!(!missing.status.success());
     assert!(String::from_utf8_lossy(&missing.stderr).contains("--locked"));
+    stopped_at_setup(&String::from_utf8_lossy(&missing.stderr));
     assert!(!lock.exists());
     success(fixture.cargo(&dir, &["generate-lockfile", "--offline"]));
     let before = std::fs::read(&lock).unwrap();
@@ -81,6 +89,7 @@ fn refuses_changed_lock(workspace: bool) {
     let error = String::from_utf8_lossy(&stale.stderr);
     assert!(error.contains("--locked") && error.contains("cargo build") && error.contains("corten dev"), "{error}");
     assert!(error.contains("commit Cargo.lock"), "{error}");
+    stopped_at_setup(&error);
     assert_eq!(std::fs::read(&lock).unwrap(), before, "the check must not repair the lock");
     success(fixture.cargo(&dir, &["build", "--offline"]));
     assert_ne!(std::fs::read(&lock).unwrap(), before);
