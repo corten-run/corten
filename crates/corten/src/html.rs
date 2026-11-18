@@ -237,7 +237,10 @@ pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
         }
         match bytes[at + 1] {
             b'/' => {
-                i = end_tag(html, at).1;
+                let rest = &bytes[at + 2..];
+                // A `>` can be quoted only after an `=`. Ordinary end tags need no attribute scan.
+                let stop = rest.iter().position(|&c| c == b'>' || c == b'=')?;
+                i = if rest[stop] == b'>' { at + 2 + stop + 1 } else { end_tag(html, at).1 };
                 continue;
             }
             b'!' | b'?' => {
