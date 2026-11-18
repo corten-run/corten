@@ -1,6 +1,8 @@
+use std::borrow::Cow;
+
 use corten::{
     prelude::*,
-    view::{escape_into, AttrValue, Attrs, Id},
+    view::{Attrs, Id},
 };
 
 /// One option of a [`ComboBox`]: a value of the type the form's field reads, its label, and
@@ -35,8 +37,8 @@ pub struct Choice<'a, V, S = &'a str> {
     pub value: V,
     /// What the user reads and types to find it.
     pub label: &'a str,
-    /// Other words that find it, each matched as the label is. A term is one line: it is written
-    /// in one attribute, a line each, so a line break in a term splits it in two.
+    /// Other words that find it, each matched as the label is. A line break in a term splits it
+    /// in two.
     pub terms: &'a [S],
 }
 
@@ -55,21 +57,14 @@ impl<'a, V: Copy, S> Choice<'a, V, S> {
     }
 }
 
-/// A choice's terms as one `data-terms` attribute, a line each, or nothing when there are none.
-struct Terms<'a, S>(&'a [S]);
-
-impl<S: AsRef<str>> AttrValue for Terms<'_, S> {
-    fn write_attr(&self, name: &str, out: &mut String) {
-        let Some((first, rest)) = self.0.split_first() else { return };
-        out.push_str(name);
-        out.push_str("=\"");
-        escape_into(first.as_ref(), out);
-        for term in rest {
-            out.push('\n');
-            escape_into(term.as_ref(), out);
-        }
-        out.push('"');
+fn term_lines<'a, S: AsRef<str>>(first: &'a str, rest: &[S]) -> Cow<'a, str> {
+    let mut lines = Cow::Borrowed(first);
+    for term in rest {
+        let lines = lines.to_mut();
+        lines.push('\n');
+        lines.push_str(term.as_ref());
     }
+    lines
 }
 
 /// A combobox's field and options. Start from [`Picker::new`] and set what differs:
@@ -212,7 +207,7 @@ impl<'a, I: Id, V, S> Picker<'a, I, V, S> {
 /// let field = Picker { value: Some(Color::Sand), ..Picker::new(ColorId, Order::FIELDS.color, "Choose a color", "No matches", &COLORS) };
 /// let html = ComboBox { field: &field }.to_html();
 /// assert!(html.contains(r#"<select data-ref="select" id="ui-color" name="color""#));
-/// assert!(html.contains(r#"<option value="sand" selected data-terms="tan">Desert Sand</option>"#));
+/// assert!(html.contains(r#"<option data-ref="terms" data-ref-value='"tan"' value="sand" selected>Desert Sand</option>"#));
 /// assert!(html.contains(r#"role="combobox""#) && html.contains(r#"value="Desert Sand""#));
 /// ```
 #[component(js)]
@@ -220,10 +215,10 @@ pub fn ComboBox<'a, I: Id, V: Copy + PartialEq + std::fmt::Display, S: AsRef<str
     field: &'a Picker<'a, I, V, S>,
 ) -> impl Render {
     let f = field;
-    let (select, input, popup, list, empty) = refs();
+    let (select, input, popup, list, empty, terms) = refs();
     let shown = f.value.and_then(|v| f.options.iter().find(|o| o.value == v)).map(|o| o.label);
     html! {
-        <div on:connect={js::connect(scope, select, input, popup, list, empty, signal)}>
+        <div on:connect={js::connect(scope, select, input, popup, list, empty, terms, signal)}>
             <select
                 ref={select}
                 id={&f.id}
@@ -235,7 +230,12 @@ pub fn ComboBox<'a, I: Id, V: Copy + PartialEq + std::fmt::Display, S: AsRef<str
             >
                 <option value="">{f.placeholder}</option>
                 for o in f.options {
-                    <option value={o.value} selected={f.value == Some(o.value)} data-terms={Terms(o.terms)}>{o.label}</option>
+                    if let Some((first, rest)) = o.terms.split_first() {
+                        let lines = term_lines(first.as_ref(), rest);
+                        <option ref={terms.with(lines)} value={o.value} selected={f.value == Some(o.value)}>{o.label}</option>
+                    } else {
+                        <option value={o.value} selected={f.value == Some(o.value)}>{o.label}</option>
+                    }
                 }
             </select>
             <input

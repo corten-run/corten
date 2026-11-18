@@ -77,7 +77,7 @@ fn a_choice_posts_its_value_as_written_in_a_url_and_carries_its_terms() {
     let html = ComboBox { field: &field }.to_html();
     assert!(html.contains(r#"<option value="3">Pokemon</option>"#), "no terms, no attribute: {html}");
     assert!(
-        html.contains("<option value=\"42\" selected data-terms=\"4\n004/102\n&quot;&lt;&amp;&gt;\">Magic</option>"),
+        html.contains(r#"<option data-ref="terms" data-ref-value='"4\u000a004/102\u000a\"&lt;&amp;&gt;"' value="42" selected>Magic</option>"#),
         "a line per term, escaped: {html}"
     );
     assert!(html.contains(r#"value="Magic""#), "the input shows the selected label: {html}");
@@ -94,7 +94,10 @@ fn terms_computed_per_row_are_borrowed_where_they_are() {
     let options: Vec<_> = cards.iter().map(|c| Choice::new(c.id, &c.label).terms(&c.terms)).collect();
     let field = Picker::new(LineId, Form::FIELDS.line, "Choose", "None", &options);
     let html = ComboBox { field: &field }.to_html();
-    assert!(html.contains("<option value=\"4\" data-terms=\"4/102\n004/102\">Charizard</option>"), "{html}");
+    assert!(
+        html.contains(r#"<option data-ref="terms" data-ref-value='"4/102\u000a004/102"' value="4">Charizard</option>"#),
+        "{html}"
+    );
 }
 
 #[test]
@@ -104,7 +107,7 @@ fn the_combo_box_value_is_a_native_select_and_the_input_waits_for_the_script() {
     let html = ComboBox { field: &field }.to_html();
     assert!(
         html.starts_with(
-            r#"<div data-scope="ui-combo-box" data-on='connect:ui.combo_box.connect($c,@select,@input,@popup,@list,@empty,$s)'>"#
+            r#"<div data-scope="ui-combo-box" data-on='connect:ui.combo_box.connect($c,@select,@input,@popup,@list,@empty,=terms,$s)'>"#
         ),
         "{html}"
     );

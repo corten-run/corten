@@ -20,10 +20,45 @@
 //! | [`dialog::modal`] | a `<dialog>` the server draws `open` (a refused form) is modal: focus in it, the page behind inert | the dialog is open, not modal |
 //! | [`dialog::modalClosedBy`] | the same for a dialog the address opens (`?selected=it_1`), and a close request (Escape) goes to its close link's address | the dialog is open, and the link closes it |
 //! | [`dialog::failed`] | a `data-patch` submit in a dialog that got no answer (`corten:error`) is said in the dialog, by its own text, shown in a `role="alert"` region, not by the `Toaster` the dialog covers | the browser's error page |
-//! | [`rows::sort`] | a table's rows sorted in place by the column whose header link was clicked (the kit's `SortHeader`), by each cell's `data-sort` or text, in the page's language | the link: the page the server sorts |
+//! | [`rows::sort`], [`rows::sortByNumber`], [`rows::sortByText`] | a table's rows sorted in place by the column whose header link was clicked (the kit's `SortHeader`), by each cell's ref value, machine value or text | the link: the page the server sorts |
 //! | [`ordered::send`], [`ordered::link`] | a form (`on:submit`) or link (`on:connect`) elsewhere whose route reads a sorted table's order sends the order on screen (named by [`sorted`]) | the order the page was drawn with, which is the one on screen |
 //!
 //! Each is tested in Chromium, Firefox and WebKit (`examples/ui-gallery/smoke.mjs`).
+//!
+//! The sort handlers that take a ref check both the tag and the type of its value. A text ref
+//! cannot stand in for a numeric ref:
+//!
+//! ```compile_fail,E0271
+//! use corten::prelude::*;
+//! use corten_ui::rows;
+//!
+//! #[component]
+//! fn Prices() -> impl Render {
+//!     let cell = refs();
+//!     html! {
+//!         <table on:click={rows::sortByNumber(event, target, cell)}>
+//!             <tbody><tr><td ref={cell.with("1200")}>"$12"</td></tr></tbody>
+//!         </table>
+//!     }
+//! }
+//! ```
+//!
+//! A text ref on a row instead of a cell cannot stand in for the cell's ref:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//! use corten_ui::rows;
+//!
+//! #[component]
+//! fn Dates() -> impl Render {
+//!     let cell = refs();
+//!     html! {
+//!         <table on:click={rows::sortByText(event, target, cell)}>
+//!             <tbody><tr ref={cell.with("2026-10-30")}><td>"Oct 30"</td></tr></tbody>
+//!         </table>
+//!     }
+//! }
+//! ```
 //!
 //! Use the platform for everything else: `<dialog>` with `command="show-modal"` for dialogs and
 //! alert dialogs (with [`dialog::modal`] on one the server can draw open), `popover` for popovers and toggletips (`popovertarget`: shown on a click or
