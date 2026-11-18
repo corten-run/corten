@@ -137,7 +137,8 @@
 //! ```
 //!
 //! Neither do the attributes serde's derive refuses: a unit struct's `default` or `transparent`,
-//! and `rename_all_fields` on a struct:
+//! `transparent` on an enum or with a conversion attribute, `from` with `try_from`, and
+//! `rename_all_fields` on a struct:
 //!
 //! ```compile_fail
 //! #[derive(Default, corten::FromJson)]
@@ -153,8 +154,49 @@
 //!
 //! ```compile_fail
 //! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! enum Marker { Present }
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent, into = "u64")]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(from = "u64")]
+//! #[serde(transparent)]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent, try_from = "u64")]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(try_from = "u64", from = "u64")]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
 //! #[serde(rename_all_fields = "camelCase")]
 //! struct Price { amount: f64 }
+//! ```
+//!
+//! On its own, `into` only affects serialization, so `FromJson` still reads the type normally:
+//!
+//! ```
+//! #[derive(corten::FromJson)]
+//! #[serde(into = "u64")]
+//! struct Cents(u64);
+//!
+//! assert_eq!(corten::json::from_str::<Cents>("42").unwrap().0, 42);
 //! ```
 //!
 //! A `transparent` struct is read as its one field that is neither skipped, defaulted nor a

@@ -26,6 +26,12 @@ checked on the other side.
 Untyped rows are `unknown`, not `any`. The full table, and what is not checked, is
 in [Surfaces](../architecture.md#types-across-seams).
 
+`FromJson` rejects `#[serde(transparent)]` on enums and unit structs, or together with
+`from`, `try_from` or `into`, as serde's `Deserialize` derive does. It also reports
+`from` and `try_from` together as a conflict, rather than as an unsupported attribute.
+A conversion attribute needs a string literal. An empty value, a suffix on the string
+or a missing comma is diagnosed before conflicts are checked.
+
 ## Checking handler calls
 
 Nothing is generated between markup and script: the call is checked against the script itself.
