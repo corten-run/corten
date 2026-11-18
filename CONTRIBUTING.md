@@ -319,8 +319,13 @@ establish a general ranking.
    `main`, so a commit of the pull request's own passes there; a pull request that cites one is
    merged with a merge commit, which keeps it on `main`'s history, or pushes an evidence tag for
    it first, since a squash or rebase merge leaves it out.
-3. Update the guide in `docs/guide/` that describes the behavior, and add a line to
-   `CHANGELOG.md` under Unreleased.
+3. Update the guide in `docs/guide/` that describes the behavior, and add one Markdown bullet
+   in `changelog.d/<id>.md` instead of editing `CHANGELOG.md`. Use the issue number or a unique
+   branch slug (lowercase letters, digits and hyphens); add a suffix if several changes share
+   an issue. Start the entry with `- `, indent wrapped lines by at least two spaces without
+   inserting blank lines, and use `**Breaking:**` in the bullet where it applies. Use full URLs
+   for links to repository files so they still work after the note moves. `npm run check`
+   validates the fragments.
 4. Commit messages say what changed and why, in plain sentences.
 5. The description says what changed and why, the checks run and their results, and the
    measurements from 2. It merges after its [review](#review).

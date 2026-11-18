@@ -58,10 +58,12 @@ publication. Coordinate disclosure with the fixed release so users know what to 
    `bench/nodelay/app`. `cargo metadata --manifest-path <app>/Cargo.toml` rewrites an app's
    lockfile. Update `crates/corten/tests/openapi.json` (the test that checks it rewrites it) and
    the README's Status where the version shown there changes.
-3. Rename `## Unreleased` in `CHANGELOG.md` to `## X.Y.Z (YYYY-MM-DD)` and start a new empty
-   `## Unreleased` above it. Check the versioned section is nonempty and contains any upgrade
-   instructions. Get the preparation pull request independently reviewed and merge after its
-   required checks pass.
+3. Run `node scripts/changelog.mjs release X.Y.Z YYYY-MM-DD` with the release version and date.
+   It puts the fragments in filename order ahead of any entries already under `## Unreleased`,
+   moves those notes under the version heading, and leaves a new empty `## Unreleased` above
+   it. Review the changelog diff and include the fragment deletions in the preparation pull
+   request. Check the versioned section contains any upgrade instructions. Get the preparation
+   pull request independently reviewed and merge after its required checks pass.
 4. Record the resulting commit SHA on `main`. Confirm the release gates against that exact
    commit, including green CI on it and the workspace publish dry run in the checks. A check on
    the pull request head or a later tip is not a check on this candidate. If the candidate
@@ -76,13 +78,13 @@ branch for one patch, not a maintained release branch.
 2. Create a branch for the new patch version `X.Y.Z` from `vX.Y.W`, the tag of the newest
    published release (the latest patch of the newest minor version), and push it:
    `git switch -c patch/X.Y.Z vX.Y.W` and `git push origin patch/X.Y.Z`.
-3. Open the release-preparation pull request against that branch. It carries the fix,
-   cherry-picked from `main` (`git cherry-pick -x <fix-commit>`), steps 2 and 3 above for the
-   files the patch tree has (a lockfile or example added on `main` since the tag is not added),
-   with the fix's own `CHANGELOG.md` line under `## Unreleased` before step 3 above renames it (the
-   tag's `Unreleased` is empty, and Release refuses an empty section; take only the fix's line,
-   not `main`'s other unshipped notes),
-   `main`'s `SECURITY.md` (the tag's may name an older supported version), and `main`'s current
+3. Open the release-preparation pull request against that branch. Cherry-pick the fix from
+   `main` (`git cherry-pick -x <fix-commit>`) and apply steps 2 and 3 above to the files the patch
+   tree has (a lockfile or example added on `main` since the tag is not added). For step 3, put
+   only the fix's own note in `changelog.d/`, even if it was inline on `main`. If the tag
+   predates the fragment script, put that note under `## Unreleased` in `CHANGELOG.md` instead,
+   rename the heading to `## X.Y.Z (YYYY-MM-DD)`, and put a new empty `## Unreleased` above it.
+   Also carry `main`'s `SECURITY.md` (the tag's may name an older supported version) and its current
    `.github/workflows/release.yml` and the scripts it runs. GitHub runs the workflow as the
    tagged commit has it, so an older tag's workflow would publish without the attestation and
    checksum gates the [verification](#verify-what-users-received) below expects.
@@ -102,7 +104,8 @@ branch for one patch, not a maintained release branch.
    newer minor shipped meanwhile, patch from its tag instead. Prepare one release at a time, so a
    patch and a minor are never tagged in parallel. Then [publish](#publish) that SHA.
 5. After the release, add its versioned `CHANGELOG.md` section to `main` in a pull request, so
-   `main`'s changelog records every published version.
+   `main`'s changelog records every published version. Remove the fix's pending entry from
+   `changelog.d/` (or from `## Unreleased` if it was an inline entry) so it is not released twice.
 
 ## Publish
 
