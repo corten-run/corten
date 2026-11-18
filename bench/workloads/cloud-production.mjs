@@ -63,7 +63,7 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
     const saved = controllerState(JSON.parse(bytes), options.round);
     if (options.unusedBootstrapKnownHosts !== undefined) {
-      assert.ok(unusedBootstrap(saved), "not an unacknowledged first SSH no-op");
+      assert.ok(unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op");
       if (saved.commit !== head) await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
       const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
       assert.ok(key.length, "verified host key required");

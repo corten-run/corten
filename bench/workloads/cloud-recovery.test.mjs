@@ -33,10 +33,11 @@ test("an allocated but never provisioned supervised host can be retired only wit
     await assert.rejects(h.launch().launch(), /create completion/);
     assert.equal(h.saved().control.monitor.phase, "pending");
     assert.equal(h.saved().status, "preparing"); assert.equal(h.saved().control.ledger.length, 0);
-    if (!valid) { await assert.rejects(h.task().collect()); assert.equal(h.deletes, 0); continue; }
-    assert.equal(await h.task().collect(), 1); assert.equal(h.saved().retirement.kind, "unused");
+    await assert.rejects(h.task().collect(), /approved pinned observation/);
+    if (!valid) { await assert.rejects(h.pinnedUnused().collect()); assert.equal(h.deletes, 0); continue; }
+    assert.equal(await h.pinnedUnused().collect(), 1); assert.equal(h.saved().retirement.kind, "unused");
     assert.ok(h.saved().destroyedAt); assert.equal(h.saved().validation, undefined);
-    assert.equal(await h.task().collect(), 1); assert.equal(h.deletes, 1);
+    assert.equal(await h.pinnedUnused().collect(), 1); assert.equal(h.deletes, 1);
   }
 });
 
@@ -46,7 +47,7 @@ test("unused recovery never takes over an operation lock or ignores monitor evid
     await assert.rejects(h.launch().launch(), /create completion/);
     writeFileSync(join(h.local, name), "preserve", { flag: "wx" });
     const calls = h.calls.length;
-    await assert.rejects(h.task().collect());
+    await assert.rejects(h.pinnedUnused().collect());
     assert.equal(h.calls.length, calls); assert.equal(h.deletes, 0);
     assert.equal(readFileSync(join(h.local, name), "utf8"), "preserve");
   }

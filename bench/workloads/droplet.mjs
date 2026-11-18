@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, ownedDroplet, reservation, tags, terminalUnit, validateFleet } from "./cloud-contract.mjs";
@@ -13,7 +13,7 @@ import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript,
-  verifyFailedNativeCustody, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
+  verifyFailedNativeCustody, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint } from "./cloud-transport.mjs";
 
@@ -314,8 +314,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const verifyRetirementRecord = (bytes, kind) => {
     const setup = kind === "setup-failed";
     const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
-    const expected = setup ? setupEvidence(raw, state, terminalSetupScript(state, setupExit(), state.control ? record.observation.control.requests.length - 1 : undefined), setupExit(), record.startedAtMs, record.finishedAtMs, local)
-      : unusedEvidence(raw, state, unusedHostScript(state), record.startedAtMs, record.finishedAtMs);
+    if (!setup) return verifyUnusedEvidence(record, state);
+    const expected = setupEvidence(raw, state, terminalSetupScript(state, setupExit(), state.control ? record.observation.control.requests.length - 1 : undefined), setupExit(), record.startedAtMs, record.finishedAtMs, local);
     assert.deepEqual(record, expected, "retirement evidence differs");
   };
   const verifyRetirement = () => {
@@ -362,22 +362,35 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const retireUnused = async () => {
     assert.equal(state.status, "preparing", "only a never-started allocation can be retired as unused");
-    const script = unusedHostScript(state), startedAtMs = Date.now();
-    let raw;
-    if (options.unusedBootstrapKnownHosts === undefined) raw = (await ssh(script, 30000)).stdout;
-    else {
-      const path = options.unusedBootstrapKnownHosts, verifyKey = () =>
-        assert.equal(digest(regular(path, 1024 * 1024)), unusedBootstrapApproval.knownHostsSha256, "approved host-key file changed");
-      assert.ok(unusedBootstrap(state)); await own(); verifyKey();
-      const pinned = ["-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no",
-        "-o", `UserKnownHostsFile=${process.platform === "win32" ? path.replaceAll("\\", "/") : path}`];
-      // The absence of the old guardian is part of the proof. Do not install a
-      // new one or convert the original missing acknowledgement into a receipt.
-      raw = (await execute("ssh", [...pinned, ...sshLimits, `root@${state.ip}`, script], 30000)).stdout;
-      verifyKey();
+    const bootstrap = options.unusedBootstrapKnownHosts !== undefined, script = unusedHostScript(state, { bootstrap });
+    let raw, startedAtMs, knownHostsSha256;
+    if (!bootstrap) {
+      assert.ok(!state.control?.monitor || state.control.ledger.length > 0, "unused bootstrap requires an approved pinned observation");
+      startedAtMs = Date.now(); raw = (await ssh(script, 30000)).stdout;
+    } else {
+      await own();
+      const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
+      knownHostsSha256 = digest(key);
+      assert.equal(knownHostsSha256, unusedBootstrapApproval.knownHostsSha256, "approved host-key file changed");
+      const dir = mkdtempSync(join(local, ".unused-host-key-")), path = join(dir, "known_hosts"), identity = lstatSync(dir);
+      try {
+        durable(path, key);
+        const pinned = ["-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no",
+          "-o", `UserKnownHostsFile=${process.platform === "win32" ? path.replaceAll("\\", "/") : path}`];
+        // Do not install a guardian or turn a missing acknowledgement into a receipt.
+        startedAtMs = Date.now();
+        raw = (await execute("ssh", [...pinned, ...sshLimits, `root@${state.ip}`, script], 30000)).stdout;
+        assert.equal(digest(regular(path, 1024 * 1024)), knownHostsSha256, "private host-key snapshot changed");
+      } finally {
+        physical(dir);
+        const current = lstatSync(dir);
+        assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
+        if (lstatSync(path, { throwIfNoEntry: false })) unlinkSync(path);
+        rmdirSync(dir);
+      }
     }
     const finishedAtMs = Date.now();
-    const evidence = unusedEvidence(raw, state, script, startedAtMs, finishedAtMs);
+    const evidence = unusedEvidence(raw, state, script, startedAtMs, finishedAtMs, knownHostsSha256);
     return retire("unused", evidence, finishedAtMs);
   };
   const retireFailedSetup = async () => {
@@ -553,6 +566,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       return locked(async () => {
         if (unusedCandidate) assert.ok(neverProvisioned(state), "unused allocation changed; preserve host");
+        assert.ok(!(state.status === "preparing" && state.control?.monitor?.phase === "pending"
+          && state.control.ledger.length === 0), "unused bootstrap requires an approved pinned observation");
         assert.equal(!!state.preBootstrapTerminal, setupCandidate, "pre-bootstrap reservation changed; preserve host");
         if (setupCandidate) assert.ok(beforeRegistration(state), "ambiguous pre-bootstrap custody; preserve host");
         if (state.status === "retired") {

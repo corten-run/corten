@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -182,7 +182,7 @@ test("typed proof rejects wrong nonce/sequence/grammar/version and unexpected ex
   });
 });
 
-test("allocated failed account read settles before unlock, fresh ordinary collect retires once with exact404", { timeout: 15000 }, async (t) => {
+test("allocated failed account read settles before unlock, fresh pinned collect retires once with exact404", { timeout: 15000 }, async (t) => {
   const h = harness(t), a = await api(t, "invalid-json", h), workers = []; let approval;
   let locksAtWorkerExit;
   const deps = { ...settlementControl(t, h), repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
@@ -206,7 +206,8 @@ test("allocated failed account read settles before unlock, fresh ordinary collec
   assert.equal(existsSync(join(h.local, "operation.lock")), false); assert.equal(existsSync(join(h.base, ".groups-launch.lock")), false);
   assert.equal(a.calls.filter((v) => v.method === "POST").length, 1); assert.equal(a.calls.filter((v) => v.method === "DELETE").length, 0);
   assert.equal(h.calls.some((row) => row[0] === "scp" || row[0] === "ssh" && row.at(-1).startsWith("systemctl start")), false);
-  const collect = ["r21", "--state-dir", h.base, "--collect"];
+  const key = join(h.temp, "synthetic-verified-host-key"); writeFileSync(key, "synthetic operator-verified host key\n");
+  const collect = ["r21", "--state-dir", h.base, "--collect", "--unused-bootstrap-known-hosts", key];
   await productionMain([...collect, "--print-approval"], deps);
   assert.equal(await productionMain([...collect, "--approve-reviewed-merged-ready", approval], deps), 1);
   assert.equal(h.saved().status, "retired"); assert.equal(h.saved().retirement.kind, "unused"); assert.ok(h.saved().destroyedAt);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { existsSync, readFileSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
@@ -92,6 +92,10 @@ function unusedBootstrapAttempt(t, flags = {}, script = "true") {
       monitor: { schema: "benchmark-supervised-control/v1", id: "f".repeat(32), phase: "pending" } };
     s.control.ledger.push({ request: controlRequest(s, "ssh", [`root@${s.ip}`, script], 30000, "bootstrap"), localTerminal: false });
   });
+  return pinnedCollect(p);
+}
+
+function pinnedCollect(p) {
   const key = join(p.h.temp, "verified-host-key"), args = [...p.args(), "--unused-bootstrap-known-hosts", key];
   writeFileSync(key, "synthetic operator-verified host key\n");
   async function approve() {
@@ -124,7 +128,7 @@ test("approved old-source retirement preserves the missing first SSH receipt and
 test("first SSH recovery does not take over custody, replay mutations or use stale or foreign proofs", async (t) => {
   for (const mode of ["operation.lock", ".groups-launch.lock", "monitor-registration.json", "mutation", "unmerged", "key", "foreign", "ambiguous-proof", "lost-delete"]) {
     const p = unusedBootstrapAttempt(t, mode === "lost-delete" ? { deleteLost: true } : {}, mode === "mutation" ? "mkdir /bench" : "true");
-    if (mode === "mutation") { await assert.rejects(p.approve(), /not an unacknowledged first SSH no-op/); continue; }
+    if (mode === "mutation") { await assert.rejects(p.approve(), /only an unacknowledged first SSH no-op/); continue; }
     const args = await p.approve(), before = readFileSync(p.h.statePath);
     let custody;
     if (mode.endsWith(".lock") || mode.endsWith(".json")) {
@@ -147,6 +151,65 @@ test("first SSH recovery does not take over custody, replay mutations or use sta
     assert.equal(p.h.deletes, 0); assert.deepEqual(readFileSync(p.h.statePath), before);
     if (custody) assert.equal(readFileSync(custody, "utf8"), "historical custody");
     assert.equal(p.calls.filter(([binary]) => binary === "ssh").length, mode === "ambiguous-proof" ? 1 : 0);
+  }
+});
+
+test("after readiness exhaustion, refused pinned SSH leaves the empty ledger recoverable", async (t) => {
+  const p = pinnedCollect(productionHarness(t, { noSsh: true })), spawn = p.deps.spawn;
+  let proofReachable = false;
+  p.deps.spawn = (binary, argv, options) => {
+    if (binary === "ssh" && options.input.includes("benchmark-unused-host/v1") && !proofReachable)
+      return { status: 255, stdout: "", stderr: "" };
+    return spawn(binary, argv, options);
+  };
+  const launchArgs = p.args("--detach");
+  await productionMain([...launchArgs, "--print-approval"], p.deps);
+  await assert.rejects(productionMain([...launchArgs, "--approve-reviewed-merged-ready", p.stdout.at(-1).approvalSha256], p.deps), /SSH unavailable/);
+  assert.equal(p.h.creates, 1); assert.equal(p.calls.filter(([binary]) => binary === "ssh").length, 24);
+  const before = readFileSync(p.h.statePath);
+  assert.deepEqual(p.h.saved().control.ledger, []);
+  await productionMain([...p.args(), "--print-approval"], p.deps);
+  await assert.rejects(productionMain([...p.args(), "--approve-reviewed-merged-ready", p.stdout.at(-1).approvalSha256], p.deps),
+    /approved pinned observation/);
+  assert.equal(p.calls.filter(([binary]) => binary === "ssh").length, 24);
+  const approved = await p.approve();
+  await assert.rejects(productionMain(approved, p.deps), /control process failed/);
+  assert.deepEqual(readFileSync(p.h.statePath), before); assert.equal(p.h.deletes, 0);
+  assert.deepEqual(readdirSync(p.h.local), ["state.json"], "settled observation must leave neither lock nor snapshot");
+  proofReachable = true;
+  assert.equal(await productionMain(approved, p.deps), 1);
+  assert.deepEqual(p.h.saved().control.ledger, []);
+  assert.ok(p.h.saved().destroyedAt); assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 1);
+});
+
+test("SSH uses only the private snapshot of the exact approved host-key bytes", async (t) => {
+  for (const tamper of [false, true]) {
+    const p = unusedBootstrapAttempt(t), approved = await p.approve(), spawn = p.deps.spawn, bytes = readFileSync(p.key);
+    let snapshot;
+    p.deps.spawn = (binary, argv, options) => {
+      if (binary === "ssh") {
+        snapshot = argv.find((arg) => arg.startsWith('UserKnownHostsFile="')).slice('UserKnownHostsFile="'.length, -1);
+        assert.notEqual(resolve(snapshot), p.key);
+        writeFileSync(p.key, "transient unrelated bytes after locked approval");
+        try {
+          assert.deepEqual(readFileSync(snapshot), bytes);
+          if (tamper) writeFileSync(snapshot, "changed snapshot");
+          return spawn(binary, argv, options);
+        } finally { writeFileSync(p.key, bytes); }
+      }
+      return spawn(binary, argv, options);
+    };
+    if (tamper) {
+      await assert.rejects(productionMain(approved, p.deps), /private host-key snapshot changed/);
+      assert.equal(p.h.deletes, 0); assert.equal(p.h.saved().deletionIntentAt, undefined);
+    } else {
+      assert.equal(await productionMain(approved, p.deps), 1);
+      assert.equal(p.h.deletes, 1);
+      const receipt = JSON.parse(readFileSync(join(p.h.local, "unused-host.json")));
+      assert.equal(receipt.knownHostsSha256, digest(bytes));
+    }
+    assert.ok(snapshot); assert.ok(!existsSync(snapshot));
+    assert.ok(readdirSync(p.h.local).every((name) => !name.startsWith(".unused-host-key-")));
   }
 });
 

@@ -166,6 +166,12 @@ export function harness(t, flags = {}) {
       return controller({ round: "r21", stateDir: base, collect: true, ...options }, { run, repo, sleep: async () => {}, interrupted: () => flags.cancelled,
         inspect: async (input) => { inspections++; assert.deepEqual(input, { folder: join(local, this.saved().evidence, "campaign"), round: "r21", commit }); return report(); }, ...deps });
     },
+    pinnedUnused(deps = {}) {
+      const key = join(temp, "synthetic-verified-host-key"), bytes = "synthetic operator-verified host key\n";
+      writeFileSync(key, bytes);
+      return this.task({ ...deps, unusedBootstrapApproval: { reservationSha256: digest(readFileSync(statePath)),
+        knownHostsSha256: digest(bytes) } }, { unusedBootstrapKnownHosts: key });
+    },
     launch(deps = {}) { return this.task(deps, { collect: undefined, detach: true, commit, sshKey: "42", accountId, context }); },
   };
 }

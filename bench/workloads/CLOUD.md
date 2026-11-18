@@ -326,9 +326,12 @@ as current permission or repeats a saved deletion intent.
 
 For [#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618),
 use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`.
-It accepts only `preparing` with a bound host, a pending unregistered monitor, and the sole
-unacknowledged sequence-zero, 30-second bootstrap SSH `true` request with no seal.
-It never acknowledges or retries that request. Ordinary `--collect` still refuses it.
+It accepts only `preparing` with a bound host, a pending unregistered monitor and no seal.
+The ledger must be empty (including after readiness exhaustion) or contain only the
+unacknowledged sequence-zero, 30-second bootstrap SSH `true` request. Ordinary
+`--collect` refuses these cases before sending SSH. The pinned probe never adds,
+acknowledges or retries a ledger request. A settled SSH refusal leaves the reservation
+unchanged, so the operator can try the read-only proof again when SSH is available.
 
 The original local controller, provider worker, SSH and their descendants must be
 affirmatively accounted for and gone. No elapsed timeout, absent PID or saved state
@@ -337,14 +340,16 @@ or takes over an old lock. Only after that local proof may the operator archive 
 release the exclusive child and fleet locks under the existing custody policy. Keep
 the proof and original lock bytes outside the fleet and child state roots. Separately verify the SSH
 host key against the exact provider/metadata identity and supply a local OpenSSH
-`known_hosts` file for that key; the controller does not populate it or fall back to
-global host keys. `--print-approval` binds the exact saved reservation, verified-key
+`known_hosts` file for that key; the controller passes a private snapshot of the
+approved bytes to SSH and never falls back to global host keys. The unused retirement
+receipt retains the key digest, not the key file. `--print-approval` binds the exact saved reservation, verified-key
 bytes, old measured commit and new controller commit. Supplying the exact approval
 attests to both operator checks above; it is not a way to clear retained locks.
 
 Execution rechecks the saved account, host and IP and requires a **fresh** pinned SSH
 unused proof, also proving no `/bench`, unit file, guardian storage, control watcher
-or benchmark process. It uses an observation-only command without installing a
+or benchmark process. Systemd must report an exact zero monotonic start timestamp;
+the formatted wall-clock timestamp is not used. It uses an observation-only command without installing a
 guardian. Ambiguous, active or foreign custody is preserved. As with other unused
 retirement, confirm deletion with an exact-ID 404; after a recorded intent a new
 approval can only verify the saved receipt and check absence. The original fleet
