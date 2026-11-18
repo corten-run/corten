@@ -888,6 +888,9 @@ impl Scoper<'_> {
                 format!("an @page with no name sets every page the app prints: name it, @page {own}slip, or put it in the app's stylesheet"),
             ));
         }
+        if !name.is_ascii() {
+            return Err(self.error(at, format!("the page name `{}` contains a non-ASCII character", name.escape_default())));
+        }
         if !name.starts_with(&own) {
             return Err(
                 self.error(at, format!("a page's name is the whole app's: start it with this component's, @page {own}{name}"))
@@ -2407,7 +2410,7 @@ mod tests {
         }
         let css = "@page \u{a0}x-slip { size: A4 }";
         let error = scope(css, "x").unwrap_err();
-        assert!(error.contains("start it with this component's"), "{css:?}: {error}");
+        assert!(error.contains("the page name `\\u{a0}x-slip` contains a non-ASCII character"), "{css:?}: {error}");
 
         let css = "@scope (\u{a0} .list) to (.slot \u{a0}) { p { outline-style:solid } }";
         assert_eq!(scope(css, "x").unwrap().css, "@scope (\u{a0} .x__list) to (.x__slot \u{a0}){p{outline-style:solid}}");
