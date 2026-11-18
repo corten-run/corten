@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as local from "../cloud-local.mjs";
 import { mixedWait, mixedCancelScript, verifyMixedCancellation } from "../cloud-cancellation.mjs";
-import { fleetPlan, host, reservation, tags } from "../cloud-contract.mjs";
-import { groupNames } from "../registry.mjs";
+import { tags } from "../cloud-contract.mjs";
 import { mixedIntentRoot } from "../cloud-retirement.mjs";
+import { mixedState } from "./mixed-cancel-state.mjs";
 const keyBytes = "SYNTHETIC known_hosts DATA, no real key\n";
 const originalControls = JSON.parse(readFileSync(new URL("./mixed-original-controls.json", import.meta.url))).files;
 const originalHashes = Object.fromEntries(Object.entries(originalControls).map(([name, bytes]) => [name, local.digest(bytes)]));
@@ -26,11 +26,7 @@ function fixture(t, flags = {}) {
   const root = mkdtempSync(join(tmpdir(), "mixed-controller-")), repo = join(root, "repo"), base = join(root, "state"), folder = join(base, "groups-r21");
   mkdirSync(repo); mkdirSync(base); mkdirSync(folder);
   t.after(() => { assert.ok(root.startsWith(join(tmpdir(), "mixed-controller-"))); rmSync(root, { recursive: true, force: true }); });
-  const provider = { accountId: mixedWait.accountId, context: mixedWait.context };
-  const tokens = Object.fromEntries(groupNames.map((g, i) => [g, g === mixedWait.group ? mixedWait.token : String(i + 1).padStart(16, "0")]));
-  const fleet = fleetPlan({ round: "r21", commit: mixedWait.commit, token: "f".repeat(16), tokens, provider, sshKey: "42" });
-  const state = { ...reservation({ round: "r21", commit: mixedWait.commit, token: mixedWait.token, group: mixedWait.group, fleet }),
-    status: "running", id: mixedWait.id, ip: mixedWait.ip, provider, fullGroupQualified: false, createIntentAt: new Date().toISOString() };
+  const state = mixedState();
   const statePath = join(folder, "state.json"); writeFileSync(statePath, JSON.stringify(state)); writeFileSync(join(folder, "known_hosts"), keyBytes);
   const saved = () => JSON.parse(readFileSync(statePath));
   const calls = [], counts = { signals: 0, units: 0, deletes: 0, downloads: 0, accounts: 0 };
@@ -45,8 +41,8 @@ function fixture(t, flags = {}) {
       if (argv[2] === "get") {
         assert.equal(argv[3], mixedWait.id);
         if (flags.changeState) writeFileSync(statePath, `${readFileSync(statePath)}\n`);
-        return good(JSON.stringify([{ id: Number(state.id), name: state.name, tags: [...tags, state.tag], size_slug: host.size,
-          region: { slug: host.region }, networks: { v4: [{ type: "public", ip_address: state.ip }] } }]));
+        return good(JSON.stringify([{ id: Number(state.id), name: state.name, tags: [...tags, state.tag], size_slug: "c-8",
+          region: { slug: flags.region ?? "sfo2" }, networks: { v4: [{ type: "public", ip_address: state.ip }] } }]));
       }
       if (argv[2] === "delete") { counts.deletes++; assert.fail("synthetic wait proof cannot delete"); }
     }
@@ -86,6 +82,16 @@ test("actual caller/callee join durably reserves one intent before the exact sig
   assert.equal(f.counts.units, 1); assert.equal(f.counts.downloads, 0); assert.equal(f.counts.deletes, 0);
   assert.ok(!f.calls.slice(before).some(([b, argv]) => b === "ssh" && /(?:pack.sh|CORTEN_MIXED_CANCEL)/.test(argv.at(-1))));
   assert.equal(f.saved().fullGroupQualified, false); assert.equal(f.saved().validation, undefined); assert.equal(f.saved().auditIntents, undefined);
+});
+test("sfo3 response for the historical mixed host is refused before SSH", async (t) => {
+  const f = fixture(t, { region: "sfo3" }), path = join(f.folder, "state.json"), before = readFileSync(path);
+  await assert.rejects(f.task().cancelMixedWait(), { actual: "sfo3", expected: "sfo2" });
+  assert.deepEqual(f.calls.map(([binary, argv]) => [binary, argv[0] === "account" ? "account" : argv[2]]),
+    [["doctl", "account"], ["doctl", "get"], ["doctl", "account"]]);
+  assert.equal(f.counts.signals, 0); assert.equal(f.counts.deletes, 0);
+  for (const name of ["mixed-cancel-reservation.json", "mixed-cancel-intent.json", "mixed-cancel-signal.json", "operation.lock"])
+    assert.ok(!existsSync(join(f.folder, name)));
+  assert.deepEqual(readFileSync(path), before);
 });
 for (const mode of ["lost", "refused", "badAck", "changeAfterSignal"]) test(`${mode} retains single-attempt intent and lock without retry or DELETE`, async (t) => {
   const f = fixture(t, { [mode]: true }); await assert.rejects(f.task().cancelMixedWait());

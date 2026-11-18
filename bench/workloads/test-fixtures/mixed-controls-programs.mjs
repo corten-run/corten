@@ -12,16 +12,11 @@ if (future) registerHooks({ load(url, context, next) {
   }
   return result;
 } });
-const { mixedWait, mixedCancelProgram, mixedCancelScript } = await import("../cloud-cancellation.mjs");
+const { mixedCancelProgram, mixedCancelScript } = await import("../cloud-cancellation.mjs");
 const { failedNativeScript } = await import("../cloud-retirement.mjs");
-const { fleetPlan, reservation } = await import("../cloud-contract.mjs");
-const { groupNames } = await import("../registry.mjs");
+const { mixedState } = await import("./mixed-cancel-state.mjs");
 const { remoteFiles } = await import("../cloud-remote.mjs");
-const provider = { accountId: mixedWait.accountId, context: mixedWait.context };
-const tokens = Object.fromEntries(groupNames.map((g, i) => [g, g === mixedWait.group ? mixedWait.token : String(i + 1).padStart(16, "0")]));
-const fleet = fleetPlan({ round: "r21", commit: mixedWait.commit, token: "f".repeat(16), tokens, provider, sshKey: "42" });
-const state = { ...reservation({ round: "r21", commit: mixedWait.commit, token: mixedWait.token, group: mixedWait.group, fleet }),
-  status: "running", id: mixedWait.id, ip: mixedWait.ip, provider, fullGroupQualified: false };
+const state = mixedState();
 const cancelProgram = mixedCancelProgram(state), cancelScript = mixedCancelScript(state);
 state.mixedCancellation = { controllerCommit: "c".repeat(40), intentSha256: "a".repeat(64), reservationSha256: "b".repeat(64) };
 const custodyScript = failedNativeScript(state);
