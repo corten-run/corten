@@ -9,6 +9,7 @@
 mod assets;
 mod comments;
 mod component;
+mod css_syntax;
 mod derive;
 mod deserialize;
 mod dom;
@@ -144,6 +145,19 @@ pub fn messages(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn __all_locales(_: TokenStream) -> TokenStream {
     messages::all_locales()
+}
+
+/// Internal to corten: compile the same tokenizer from the published macro crate,
+/// without relying on a sibling directory or adding a crate dependency.
+#[doc(hidden)]
+#[proc_macro]
+pub fn __css_syntax(input: TokenStream) -> TokenStream {
+    if input.is_empty() {
+        include_str!("css_syntax.rs").parse().expect("CSS tokenizer source")
+    } else {
+        assert_eq!(input.to_string(), "cases");
+        style::scanner_cases()
+    }
 }
 
 /// Field names of a form input struct as constants: `Input::FIELDS.email` is the

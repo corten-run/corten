@@ -12,12 +12,15 @@ use std::path::{Path, PathBuf};
 
 use proc_macro::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree};
 
+use crate::css_syntax::{closer, decode, decoded_name, lexer, literal_lookup, number_end, Kind as Tok, Token};
 use crate::tokens::{err, is_ident, is_punct, literal, q, string_value, Error};
+
+type MediaRefs = Vec<(usize, String)>;
 
 /// A component's stylesheet, scoped.
 #[derive(Debug)]
 pub struct Sheet {
-    /// The CSS with every class prefixed, comments and extra whitespace removed.
+    /// The CSS with every class prefixed and trivia compacted.
     pub css: String,
     /// The classes, as written in the file, first use first.
     pub classes: Vec<String>,
@@ -28,7 +31,68 @@ pub struct Sheet {
     /// Each breakpoint an `@media` rule names (`@media not (--sm)`): where its `(--sm)` starts in
     /// `css`, and the name (`sm`). The app's token file says how wide each is, so it is resolved
     /// when the app starts.
-    pub media: Vec<(usize, String)>,
+    pub media: MediaRefs,
+}
+
+struct ScanCase(Vec<(String, crate::json::Value)>);
+
+impl ScanCase {
+    fn all() -> Vec<Self> {
+        use crate::json::Value;
+        let Value::Array(cases) = crate::json::parse(include_str!("css-scan-cases.json")).unwrap() else { unreachable!() };
+        cases
+            .into_iter()
+            .map(|case| match case {
+                Value::Object(case) => Self(case),
+                _ => unreachable!(),
+            })
+            .collect()
+    }
+
+    fn field(&self, key: &str) -> Option<&crate::json::Value> {
+        self.0.iter().find(|(name, _)| name == key).map(|(_, value)| value)
+    }
+
+    fn string(&self, key: &str) -> Option<&str> {
+        match self.field(key)? {
+            crate::json::Value::String(value) => Some(value),
+            _ => panic!("{key} is not a string"),
+        }
+    }
+
+    fn strings(&self, key: &str) -> Option<Vec<&str>> {
+        use crate::json::Value;
+        let Value::Array(values) = self.field(key)? else { panic!("{key} is not an array") };
+        Some(
+            values
+                .iter()
+                .map(|value| match value {
+                    Value::String(value) => value.as_str(),
+                    _ => panic!("{key} is not an array of strings"),
+                })
+                .collect(),
+        )
+    }
+}
+
+/// Project the fixture into Rust without a JSON dependency in the startup scanner's tests.
+pub(super) fn scanner_cases() -> TokenStream {
+    use std::fmt::Write;
+    let mut rust = String::from("&[");
+    for case in ScanCase::all() {
+        let name = case.string("name").unwrap();
+        let css = case.string("css").unwrap();
+        let declared = case.strings("declared").unwrap();
+        let needed = case.strings("needed").unwrap();
+        write!(rust, "({name:?}, {css:?}, &{declared:?}, &{needed:?}),").unwrap();
+        if let Some(css) = case.string("scoped") {
+            let declared = case.strings("scopedDeclared").unwrap_or(declared);
+            let needed = case.strings("scopedNeeded").unwrap_or(needed);
+            write!(rust, "({name:?}, {css:?}, &{declared:?}, &{needed:?}),").unwrap();
+        }
+    }
+    rust.push(']');
+    rust.parse().expect("CSS scanner fixture")
 }
 
 /// The Rust type (in `corten::style::syntax`) of each `@property` syntax markup can set: a
@@ -73,46 +137,17 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
     };
     s.block(Ctx::Top, Some(Anchor::default()), true)?;
     let names: Vec<&str> = s.properties.iter().map(|(name, _)| name.as_str()).collect();
-    if let Some(name) = s.media.iter().find(|m| names.contains(&m.as_str())) {
+    if let Some((_, name)) = s.media.iter().find(|(_, name)| names.contains(&name.as_str())) {
         return Err(format!(
             "(--{name}) in an @media rule names a breakpoint of the token file, and --{name} is this stylesheet's @property: rename the property"
         ));
     }
-    let css = if names.is_empty() && s.positions.is_empty() { s.out } else { s.rewrite_names(&names)? };
-    let media = media_refs(&css);
-    Ok(Sheet { css, classes: s.classes, properties: s.properties, media })
-}
-
-/// Where each `(--name)` of an `@media` prelude starts in scoped CSS, as [`Scoper`] writes them:
-/// at-rule preludes in one piece, no comments, strings left alone.
-fn media_refs(css: &str) -> Vec<(usize, String)> {
-    let b = css.as_bytes();
-    let mut refs = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        match b[i] {
-            q @ (b'"' | b'\'') => {
-                i += 1;
-                while i < b.len() && b[i] != q {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-                i += 1;
-            }
-            b'@' if b.get(i + 1..i + 6).is_some_and(|n| n.eq_ignore_ascii_case(b"media")) => {
-                let end = css[i..].find('{').map_or(b.len(), |at| i + at);
-                let mut at = i;
-                while let Some(found) = css[at..end].find("(--") {
-                    let start = at + found;
-                    let close = css[start..end].find(')').map_or(end, |c| start + c);
-                    refs.push((start, css[start + 3..close].to_string()));
-                    at = close;
-                }
-                i = end;
-            }
-            _ => i += 1,
-        }
+    if !names.is_empty() || !s.positions.is_empty() {
+        let (css, media) = s.rewrite_names(&names)?;
+        s.out = css;
+        s.media = media;
     }
-    refs
+    Ok(Sheet { css: s.out, classes: s.classes, properties: s.properties, media: s.media })
 }
 
 /// The line of the first merge conflict marker in `src` (`<<<<<<<`, `|||||||`, `=======` or
@@ -120,45 +155,26 @@ fn media_refs(css: &str) -> Vec<(usize, String)> {
 /// rule that starts so, and a browser drops the rule after one, so a merge left unfinished
 /// (`corten ui add --merge`, git) would otherwise build and lose a rule.
 fn conflict_marker(src: &str) -> Option<usize> {
-    let bytes = src.as_bytes();
-    let (mut i, mut line, mut quote, mut comment) = (0, 1, None::<u8>, false);
-    while i < bytes.len() {
-        if !comment && quote.is_none() && (i == 0 || bytes[i - 1] == b'\n') {
-            let rest = &bytes[i..];
-            let marker = b"<|=>".iter().any(|&c| rest.len() >= 7 && rest[..7].iter().all(|&b| b == c));
-            if marker && matches!(rest.get(7), None | Some(b' ' | b'\n' | b'\r')) {
-                return Some(line);
-            }
+    let mut tokens = lexer(src).peekable();
+    for (line, (start, rest)) in src
+        .split_inclusive('\n')
+        .scan(0, |start, line| {
+            let at = *start;
+            *start += line.len();
+            Some((at, line.as_bytes()))
+        })
+        .enumerate()
+    {
+        let marker = b"<|=>".iter().any(|&c| rest.len() >= 7 && rest[..7].iter().all(|&b| b == c));
+        if !marker || !matches!(rest.get(7), None | Some(b' ' | b'\n' | b'\r')) {
+            continue;
         }
-        let b = bytes[i];
-        if comment {
-            if b == b'*' && bytes.get(i + 1) == Some(&b'/') {
-                comment = false;
-                i += 1;
-            }
-        } else if let Some(q) = quote {
-            if b == b'\\' {
-                // An escaped line end continues the string: `\\\r\n` as one.
-                if bytes.get(i + 1) == Some(&b'\r') && bytes.get(i + 2) == Some(&b'\n') {
-                    i += 1;
-                }
-                if bytes.get(i + 1) == Some(&b'\n') {
-                    line += 1;
-                }
-                i += 1;
-            } else if b == q || b == b'\n' {
-                quote = None;
-            }
-        } else if b == b'/' && bytes.get(i + 1) == Some(&b'*') {
-            comment = true;
-            i += 1;
-        } else if b == b'"' || b == b'\'' {
-            quote = Some(b);
+        while tokens.peek().is_some_and(|&(_, _, end)| end <= start) {
+            tokens.next();
         }
-        if b == b'\n' {
-            line += 1;
+        if tokens.peek().is_some_and(|&(_, at, _)| at == start) {
+            return Some(line + 1);
         }
-        i += 1;
     }
     None
 }
@@ -188,82 +204,40 @@ fn syntax_valid(syntax: &str) -> bool {
         "transform-list",
         "url",
     ];
-    let space = |c: &char| matches!(c, ' ' | '\t' | '\n');
-    let chars: Vec<char> = preprocess(syntax).chars().collect();
-    let (mut start, mut end) = (0, chars.len());
-    while start < end && space(&chars[start]) {
-        start += 1;
+    let mut tokens = lexer(syntax).filter(|&(kind, ..)| kind != Tok::Space).peekable();
+    if tokens.next_if(|&(kind, ..)| kind == Tok::Delim(b'*')).is_some() {
+        return tokens.next().is_none();
     }
-    while end > start && space(&chars[end - 1]) {
-        end -= 1;
-    }
-    let chars = &chars[start..end];
-    if chars.is_empty() {
-        return false;
-    }
-    if chars == ['*'] {
-        return true;
-    }
-    let mut i = 0;
     loop {
-        while chars.get(i).is_some_and(space) {
-            i += 1;
-        }
-        match chars.get(i) {
-            Some('<') => {
-                let Some(len) = chars[i..].iter().position(|&c| c == '>') else { return false };
-                let name: String = chars[i + 1..i + len].iter().collect();
-                if !TYPES.contains(&name.as_str()) {
+        let allow_multiplier = match tokens.next() {
+            Some((Tok::Delim(b'<'), _, start)) => {
+                let Some((Tok::Ident, at, end)) = tokens.next() else { return false };
+                let name = &syntax[at..end];
+                if start != at || !TYPES.contains(&name) || !matches!(tokens.next(), Some((Tok::Delim(b'>'), at, _)) if at == end)
+                {
                     return false;
                 }
-                i += len + 1;
-                if name != "transform-list" && matches!(chars.get(i), Some('+' | '#')) {
-                    i += 1;
-                }
+                (name != "transform-list").then_some(end + 1)
             }
-            Some(&c) if starts_ident(c) || (c == '\\' && chars.get(i + 1) != Some(&'\n')) => {
-                let mut name = String::new();
-                loop {
-                    match chars.get(i) {
-                        Some(&c) if starts_ident(c) || c.is_ascii_digit() || c == '-' => {
-                            name.push(c);
-                            i += 1;
-                        }
-                        Some('\\') if chars.get(i + 1) != Some(&'\n') => {
-                            let (c, next) = escaped(chars, i + 1);
-                            name.push(c);
-                            i = next;
-                        }
-                        _ => break,
-                    }
-                }
+            Some((Tok::Ident, start, end)) if !syntax[start..].starts_with('-') => {
+                let name = decoded_name(&syntax[start..end]);
                 if ["initial", "inherit", "unset", "revert", "revert-layer", "default"]
                     .iter()
                     .any(|k| name.eq_ignore_ascii_case(k))
                 {
                     return false;
                 }
-                if matches!(chars.get(i), Some('+' | '#')) {
-                    i += 1;
-                }
+                Some(end)
             }
             _ => return false,
-        }
-        while chars.get(i).is_some_and(space) {
-            i += 1;
-        }
-        match chars.get(i) {
+        };
+        tokens.next_if(|&(kind, start, _)| allow_multiplier == Some(start) && matches!(kind, Tok::Delim(b'+' | b'#')));
+        match tokens.next() {
             None => return true,
-            Some('|') => i += 1,
-            Some(_) => return false,
+            Some((Tok::Delim(b'|'), ..)) => {}
+            _ => return false,
         }
     }
-}
-
-/// Whether `c` starts an identifier: a letter, `_` or a non-ASCII character (CSS Syntax Level 3,
-/// ident-start code point).
-fn starts_ident(c: char) -> bool {
-    c.is_ascii_alphabetic() || c == '_' || !c.is_ascii()
 }
 
 /// `text` as CSS reads it: each line break (`\r\n`, `\r`, form feed) one `\n`, and NUL the
@@ -276,86 +250,21 @@ fn preprocess(text: &str) -> Cow<'_, str> {
     }
 }
 
-/// A CSS string's contents with its escapes decoded (CSS Syntax Level 3, consume a string token):
-/// `\` and a line break is nothing, and `\` before anything else is the code point it escapes.
-fn unescape(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-    while i < chars.len() {
-        match (chars[i], chars.get(i + 1)) {
-            ('\\', None) => i += 1,
-            ('\\', Some('\n')) => i += 2,
-            ('\\', Some(_)) => {
-                let (c, next) = escaped(&chars, i + 1);
-                out.push(c);
-                i = next;
-            }
-            (c, _) => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    out
-}
-
-/// The code point the escape whose `\` is just before `at` stands for, and where the escape
-/// ends (CSS Syntax Level 3, consume an escaped code point): one to six hex digits and one
-/// whitespace after them, the replacement character for zero, a surrogate or past U+10FFFF, or
-/// else the next character itself.
-fn escaped(chars: &[char], at: usize) -> (char, usize) {
-    let hex = chars[at..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).count();
-    if hex == 0 {
-        return match chars.get(at) {
-            Some(&c) => (c, at + 1),
-            None => ('\u{fffd}', at),
-        };
-    }
-    let value = chars[at..at + hex].iter().fold(0u32, |value, c| value * 16 + c.to_digit(16).unwrap_or(0));
-    let end = at + hex + usize::from(matches!(chars.get(at + hex), Some(' ' | '\t' | '\n')));
-    (if value == 0 { '\u{fffd}' } else { char::from_u32(value).unwrap_or('\u{fffd}') }, end)
-}
-
 /// Whether `value`, an `initial-value`, is one of `kind` (a type of `SYNTAXES`): a number with a
 /// unit the syntax allows (`0` alone for a length), and for a length one of `LENGTHS`, as an initial
 /// value must not depend on a font or a container. The browser ignores a rule whose initial
 /// value does not parse as its syntax, so markup would set a property nothing registered.
 fn initial_fits(kind: &str, value: &str) -> bool {
-    // The number: a sign, digits and a point, and an exponent only when digits follow its `e`
-    // (`1em` is one em, `2e3` two thousand).
-    // CSS's number token: digits, or digits around a point with at least one after it (`.5`, not `1.`).
-    let b = value.as_bytes();
-    let digits = |mut i: usize| {
-        while b.get(i).is_some_and(u8::is_ascii_digit) {
-            i += 1;
-        }
-        i
-    };
-    let start = usize::from(matches!(b.first(), Some(b'+' | b'-')));
-    let mut at = digits(start);
-    if b.get(at) == Some(&b'.') {
-        let after = digits(at + 1);
-        if after == at + 1 {
-            return false;
-        }
-        at = after;
-    }
-    if at == start {
+    if !matches!(lexer(value).next(), Some((Tok::Number | Tok::Dimension | Tok::Percentage, 0, end)) if end == value.len()) {
         return false;
     }
-    if matches!(b.get(at), Some(b'e' | b'E')) {
-        let sign = usize::from(matches!(b.get(at + 1), Some(b'+' | b'-')));
-        if b.get(at + 1 + sign).is_some_and(u8::is_ascii_digit) {
-            at = digits(at + 1 + sign);
-        }
-    }
+    let at = number_end(value.as_bytes(), 0);
     let (number, unit) = value.split_at(at);
     let Ok(number) = number.parse::<f64>() else { return false };
     if !number.is_finite() {
         return false;
     }
-    let unit = unit.to_ascii_lowercase();
+    let unit = decoded_name(unit).to_ascii_lowercase();
     match kind {
         "Number" => unit.is_empty(),
         "Integer" => unit.is_empty() && number.fract() == 0.0 && !value.contains(['.', 'e', 'E']),
@@ -376,113 +285,8 @@ const LENGTHS: &[&str] = &[
     "svmax", "lvw", "lvh", "lvi", "lvb", "lvmin", "lvmax", "dvw", "dvh", "dvi", "dvb", "dvmin", "dvmax",
 ];
 
-/// What the name passes tell apart (CSS Syntax Level 3, tokenization).
-#[derive(Clone, Copy, PartialEq)]
-enum Tok {
-    /// An identifier: `--above`, `flip-block`.
-    Ident,
-    /// A function's name with its `(`: `var(`, `--above(`.
-    Function,
-    /// `(`, `[` or `{`.
-    Open,
-    /// `)`, `]` or `}`.
-    Close,
-    Comma,
-    Colon,
-    Semicolon,
-    Space,
-    /// A comment, a string, a URL, a number, a hash, an at-keyword or a delimiter.
-    Other,
-}
-
-/// The tokens of `css`, each with where it starts and ends.
-fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
-    let b = css.as_bytes();
-    let digits = |mut at: usize| {
-        while b.get(at).is_some_and(u8::is_ascii_digit) {
-            at += 1;
-        }
-        at
-    };
-    let number_start = |at: usize| {
-        let at = at + usize::from(matches!(b.get(at), Some(b'+' | b'-')));
-        b.get(at).is_some_and(u8::is_ascii_digit) || (b.get(at) == Some(&b'.') && b.get(at + 1).is_some_and(u8::is_ascii_digit))
-    };
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i < b.len() {
-        let start = i;
-        let kind = match b[i] {
-            c if css_space(c) => {
-                i = css_skip_space(b, i);
-                Tok::Space
-            }
-            b'"' | b'\'' => {
-                i = string_end(b, i).unwrap_or(b.len());
-                Tok::Other
-            }
-            b'/' if b.get(i + 1) == Some(&b'*') => {
-                i = css[i + 2..].find("*/").map_or(b.len(), |end| i + end + 4);
-                Tok::Other
-            }
-            // A number and its unit: `1px` is not the identifier `px`.
-            _ if number_start(i) => {
-                i = digits(i + usize::from(matches!(b[i], b'+' | b'-')));
-                if b.get(i) == Some(&b'.') && b.get(i + 1).is_some_and(u8::is_ascii_digit) {
-                    i = digits(i + 1);
-                }
-                if matches!(b.get(i), Some(b'e' | b'E')) {
-                    let sign = usize::from(matches!(b.get(i + 1), Some(b'+' | b'-')));
-                    if b.get(i + 1 + sign).is_some_and(u8::is_ascii_digit) {
-                        i = digits(i + 1 + sign);
-                    }
-                }
-                if css_ident_start(b, i) {
-                    i = css_name_end(b, i);
-                } else if b.get(i) == Some(&b'%') {
-                    i += 1;
-                }
-                Tok::Other
-            }
-            _ if css_ident_start(b, i) => {
-                i = css_name_end(b, i);
-                if b.get(i) != Some(&b'(') {
-                    Tok::Ident
-                } else {
-                    let url = decoded_name(&css[start..i]).eq_ignore_ascii_case("url");
-                    i += 1;
-                    let at = css_skip_space(b, i);
-                    if url && !matches!(b.get(at), Some(b'"' | b'\'')) {
-                        // An unquoted URL is one token to its `)`: `url(--above.svg)`.
-                        i = url_end(b, at).unwrap_or(b.len());
-                        Tok::Other
-                    } else {
-                        Tok::Function
-                    }
-                }
-            }
-            b'#' | b'@' => {
-                i = css_name_end(b, i + 1);
-                Tok::Other
-            }
-            c => {
-                i += css[i..].chars().next().map_or(1, char::len_utf8);
-                match c {
-                    b'(' | b'[' | b'{' => Tok::Open,
-                    b')' | b']' | b'}' => Tok::Close,
-                    b',' => Tok::Comma,
-                    b':' => Tok::Colon,
-                    b';' => Tok::Semicolon,
-                    _ => Tok::Other,
-                }
-            }
-        };
-        while i < b.len() && !css.is_char_boundary(i) {
-            i += 1;
-        }
-        out.push((kind, start, i.min(b.len())));
-    }
-    out
+fn tokens(css: &str) -> Vec<Token> {
+    lexer(css).filter(|&(kind, ..)| !kind.trivia()).collect()
 }
 
 enum Rewrite {
@@ -495,8 +299,7 @@ enum Rewrite {
 
 /// Write only references that take a property name, not every ident with the same spelling.
 fn rename_properties(css: &str, rewrite: &Rewrite, names: &[&str], prefix: &str, out: &mut String) -> Result<(), String> {
-    let mut toks = tokens(css);
-    toks.retain(|&(kind, ..)| kind != Tok::Space);
+    let toks = tokens(css);
     let mut refs = Vec::new();
     match rewrite {
         Rewrite::Registration => ident_ref(&toks, 1, &mut refs),
@@ -519,8 +322,8 @@ fn rename_properties(css: &str, rewrite: &Rewrite, names: &[&str], prefix: &str,
         // on a full load (a page style block) but lose to it after a patch (inline).
         if start == 0
             && matches!(rewrite, Rewrite::Declaration(_))
-            && matches!(toks.as_slice(), [.., (Tok::Other, bang, after), (Tok::Ident, word, end)]
-                if &css[*bang..*after] == "!" && decoded_name(&css[*word..*end]).eq_ignore_ascii_case("important"))
+            && matches!(toks.as_slice(), [.., (Tok::Delim(b'!'), ..), (Tok::Ident, word, end)]
+                if decoded_name(&css[*word..*end]).eq_ignore_ascii_case("important"))
         {
             return Err(format!(
                 "--{name}: !important on a property markup sets would beat markup's value on a full load and lose to it after a patch; set it from markup (style={{..}}) or without !important"
@@ -590,9 +393,7 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
     let kind = |i: usize| toks.get(i).map(|&(kind, ..)| kind);
     let spelling = |i: usize| toks.get(i).map(|&(_, start, end)| &css[start..end]);
     let arg_end = |i| matches!(spelling(i), Some("," | ")"));
-    let comparison = |i: usize| {
-        toks.get(i).is_some_and(|&(kind, start, end)| kind == Tok::Other && matches!(&css[start..end], "<" | ">" | "="))
-    };
+    let comparison = |i: usize| matches!(kind(i), Some(Tok::Delim(b'<' | b'>' | b'=')));
     // A plain style feature or supports declaration has a name before its colon. Its value
     // follows declaration rules, not query rules (e.g. the value in style(--state: --t)).
     let feature = |i, mode, refs: &mut Vec<_>| {
@@ -621,10 +422,8 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
                     _ if substitutions => match ARBITRARY_SUBSTITUTIONS.iter().find(|(function, _)| *function == name) {
                         Some((_, SubstitutionResult::AfterFirst { property_lookup })) => {
                             if *property_lookup {
-                                if arg_end(i + 2) {
-                                    ident_ref(toks, i + 1, refs);
-                                } else if spelling(i + 1) == Some("{") && spelling(i + 3) == Some("}") && arg_end(i + 4) {
-                                    ident_ref(toks, i + 2, refs);
+                                if let Some((name, _)) = literal_lookup(toks, css, i + 1).filter(|&(_, end)| arg_end(end)) {
+                                    ident_ref(toks, name, refs);
                                 }
                             }
                             // The first argument is a lookup or key, not part of the result.
@@ -740,7 +539,7 @@ fn options(css: &str, toks: &[(Tok, usize, usize)], mut i: usize, branch: bool, 
                 i += 1;
             }
             Tok::Function => {
-                let function = unescape(&css[start..end - 1]).to_ascii_lowercase();
+                let function = decoded_name(&css[start..end - 1]).to_ascii_lowercase();
                 i = match function.as_str() {
                     // A lookup's name, then a fallback that can be an option.
                     "var" | "env" | "attr" | "inherit" => {
@@ -824,16 +623,18 @@ struct Scoper<'a> {
     /// Output chunks that can name a local property or option before its definition.
     rewrites: Vec<(Range<usize>, Rewrite)>,
     /// The breakpoints its `@media` rules name, without the `--`.
-    media: Vec<String>,
+    media: MediaRefs,
     prefix: &'a str,
     /// The enclosing unowned `@scope` root, whose rules must prove ownership themselves.
     scope_root: Option<String>,
 }
 
 impl Scoper<'_> {
-    fn rewrite_names(&self, names: &[&str]) -> Result<String, String> {
+    fn rewrite_names(&self, names: &[&str]) -> Result<(String, MediaRefs), String> {
         let mut css = String::with_capacity(self.out.len());
         let mut copied = 0;
+        let mut offsets = Vec::with_capacity(self.media.len());
+        let mut media = self.media.iter().peekable();
         for (range, rewrite) in &self.rewrites {
             let mut chunk = Cow::Borrowed(&self.out[range.clone()]);
             if let Rewrite::Declaration(Some(source)) = rewrite {
@@ -846,6 +647,9 @@ impl Scoper<'_> {
                     chunk = Cow::Owned(format!("{property}:{value}"));
                 }
             }
+            while let Some((at, name)) = media.next_if(|(at, _)| *at < range.start) {
+                offsets.push((css.len() + at - copied, name.clone()));
+            }
             css.push_str(&self.out[copied..range.start]);
             if !names.is_empty() {
                 rename_properties(&chunk, rewrite, names, self.prefix, &mut css)?;
@@ -854,8 +658,9 @@ impl Scoper<'_> {
             }
             copied = range.end;
         }
+        offsets.extend(media.map(|(at, name)| (css.len() + at - copied, name.clone())));
         css.push_str(&self.out[copied..]);
-        Ok(css)
+        Ok((css, offsets))
     }
 
     fn error(&self, at: usize, message: impl std::fmt::Display) -> String {
@@ -891,7 +696,7 @@ impl Scoper<'_> {
             let Chunk { end, text, url, joined_comment } = self.chunk()?;
             let source = start..self.i;
             if end == Some(b'{') {
-                if starts_custom_property(&self.text[source.clone()]) {
+                if starts_custom_property(&text) {
                     return Err(self.error(
                         start,
                         "a custom property whose value holds a { } block at its outer level is not supported in a component stylesheet yet (#1602); put that declaration in the app's stylesheet (static/style.css)",
@@ -903,13 +708,19 @@ impl Scoper<'_> {
                 let mut inner_nest = nest;
                 let mut position_name = None;
                 let mut rewrite = None;
-                let inner = if let Some(rule) = text.strip_prefix('@') {
+                let mut media = false;
+                let mut property_prelude = None;
+                let inner = if text.starts_with('@') {
                     // At-rule names are case-insensitive in CSS: `@MEDIA` is `@media`.
-                    let (name, prelude) = self.at_rule(rule, start)?;
+                    let (name, prelude) = self.at_rule(&text, start)?;
                     let name = name.to_ascii_lowercase();
                     if ctx != Ctx::Raw {
+                        media = name == "media";
                         rewrite = match name.as_str() {
-                            "property" => Some(Rewrite::Registration),
+                            "property" => {
+                                property_prelude = Some(prelude);
+                                Some(Rewrite::Registration)
+                            }
                             "container" => Some(Rewrite::Container),
                             "supports" => Some(Rewrite::Supports),
                             _ => None,
@@ -926,7 +737,7 @@ impl Scoper<'_> {
                             return Err(self.error(start, "@property registers a property for the whole page: put it at the top of the stylesheet, outside any rule"))
                         }
                         (_, "position-try") => {
-                            let written = &prelude[css_skip_space(prelude.as_bytes(), 0)..];
+                            let written = trim_leading_trivia(prelude);
                             let Some(name) = written.strip_prefix("--").filter(|name| !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))) else {
                                 return Err(self.error(start, "@position-try: a name starts with -- and has letters, digits, - and _"));
                             };
@@ -977,7 +788,6 @@ impl Scoper<'_> {
                     inner_nest = None;
                 }
                 let output_start = self.out.len();
-                let media = ctx != Ctx::Raw && text.get(..6).is_some_and(|at| at.eq_ignore_ascii_case("@media"));
                 if let Some(prelude) = scope_rule {
                     self.out.push_str(&prelude);
                 } else if media {
@@ -996,7 +806,6 @@ impl Scoper<'_> {
                     inner_nest = nest.map(|_| anchor);
                     self.out.push_str(&selector);
                 }
-                let property = matches!(rewrite, Some(Rewrite::Registration));
                 if let Some(rewrite) = rewrite {
                     self.rewrites.push((output_start..self.out.len(), rewrite));
                 }
@@ -1007,8 +816,8 @@ impl Scoper<'_> {
                 if let Some(outer) = outer_root {
                     self.scope_root = outer;
                 }
-                if property {
-                    self.property(&text["@property".len()..], body, start)?;
+                if let Some(prelude) = property_prelude {
+                    self.property(prelude, body, start)?;
                 }
                 self.close();
                 continue;
@@ -1019,8 +828,8 @@ impl Scoper<'_> {
             if text.is_empty() {
                 continue;
             }
-            if let Some(rule) = text.strip_prefix('@') {
-                let (name, _) = self.at_rule(rule, start)?;
+            if text.starts_with('@') {
+                let (name, _) = self.at_rule(&text, start)?;
                 match name {
                     "custom-media" => {
                         return Err(self.error(
@@ -1077,42 +886,62 @@ impl Scoper<'_> {
     /// Media Queries 5) written `(--md)` and recorded; the app resolves them when it starts.
     fn custom_media(&mut self, prelude: &str, at: usize) -> Result<String, String> {
         let mut out = String::with_capacity(prelude.len());
-        let mut rest = prelude;
-        while let Some(open) = rest.find('(') {
-            out.push_str(&rest[..=open]);
-            rest = &rest[open + 1..];
-            let inner = rest.trim_start();
-            let Some(name) = inner.strip_prefix("--") else { continue };
-            let len = name.bytes().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_')).count();
-            let after = name[len..].trim_start();
-            if len == 0 || !after.starts_with(')') {
-                return Err(self.error(
-                    at,
-                    format!("{prelude}: a breakpoint is named alone in its parentheses, `(--md)`, with lowercase letters, digits and -, starting with a letter"),
-                ));
+        let mut copied = 0;
+        let mut tokens = lexer(prelude).filter(|&(kind, ..)| !kind.trivia());
+        let mut blocks = Vec::new();
+        while let Some((kind, start, end)) = tokens.next() {
+            let spelling = &prelude[start..end];
+            if kind == Tok::Close {
+                blocks.pop();
+            } else if let Some(close) = closer(kind, spelling) {
+                let opaque = blocks.last().copied().unwrap_or(false);
+                blocks.push(opaque || kind == Tok::Function || close != b')');
+                if opaque || spelling != "(" {
+                    continue;
+                }
+                let mut rest = tokens.clone();
+                let Some((Tok::Ident, name_start, name_end)) = rest.next() else { continue };
+                let written = &prelude[name_start..name_end];
+                if !decoded_name(written).starts_with("--") {
+                    continue;
+                }
+                let name = written.strip_prefix("--").unwrap_or("");
+                let Some((Tok::Close, close_start, close_end)) = rest.next() else {
+                    return Err(self.breakpoint_usage(prelude, at));
+                };
+                if name.is_empty() || &prelude[close_start..close_end] != ")" {
+                    return Err(self.breakpoint_usage(prelude, at));
+                }
+                let made = name.starts_with(|c: char| c.is_ascii_lowercase())
+                    && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+                    && !name.ends_with('-');
+                if !made {
+                    return Err(self.error(
+                        at,
+                        format!(
+                            "(--{name}): a token file's breakpoint is named with lowercase letters, digits and -, starting with a letter, so no token file makes this one"
+                        ),
+                    ));
+                }
+                out.push_str(&prelude[copied..start]);
+                self.media.push((self.out.len() + out.len(), name.to_string()));
+                out.push_str("(--");
+                out.push_str(name);
+                out.push(')');
+                copied = close_end;
+                tokens = rest;
+                blocks.pop();
             }
-            let name = &name[..len];
-            let made = name.starts_with(|c: char| c.is_ascii_lowercase())
-                && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-                && !name.ends_with('-');
-            if !made {
-                return Err(self.error(
-                    at,
-                    format!(
-                        "(--{name}): a token file's breakpoint is named with lowercase letters, digits and -, starting with a letter, so no token file makes this one"
-                    ),
-                ));
-            }
-            if !self.media.iter().any(|m| m == name) {
-                self.media.push(name.to_string());
-            }
-            out.push_str("--");
-            out.push_str(name);
-            out.push(')');
-            rest = &after[1..];
         }
-        out.push_str(rest);
+        out.push_str(&prelude[copied..]);
         Ok(out)
+    }
+
+    fn breakpoint_usage(&self, prelude: &str, at: usize) -> String {
+        self.error(
+            at,
+            format!("{prelude}: a breakpoint is named alone in its parentheses, `(--md)`, with lowercase letters, digits and -, starting with a letter"),
+        )
     }
 
     /// An `@scope` prelude, `(.list) to (.slot)` (CSS Cascade 6: `(<scope-start>) to
@@ -1166,7 +995,7 @@ impl Scoper<'_> {
     /// and the type of its syntax when markup can set it. The browser ignores a rule that lacks
     /// `syntax`, `inherits`, or (for any syntax but `*`) `initial-value`, so each is required.
     fn property(&mut self, prelude: &str, body: usize, at: usize) -> Result<(), String> {
-        let prelude = prelude.trim();
+        let prelude = trim_leading_trivia(prelude);
         let name = prelude
             .strip_prefix("--")
             .filter(|name| !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_')));
@@ -1183,13 +1012,25 @@ impl Scoper<'_> {
             return Err(self.error(at, format!("@property --{name} is registered twice")));
         }
         let (mut syntax, mut inherits, mut initial) = (None, false, None);
-        for declaration in self.out[body..].split(';') {
+        let descriptors = &self.out[body..];
+        let mut i = 0;
+        while i < descriptors.len() {
+            let start = i;
+            let Chunk { end, .. } = scan_chunk(descriptors, &mut i).expect("validated block");
+            let declaration = &descriptors[start..i];
+            if end == Some(b'{') {
+                i += block_end(&descriptors[i..]).expect("validated nested block");
+                continue;
+            }
+            if end == Some(b';') {
+                i += 1;
+            }
             let declaration = split_declaration(declaration).map(|(name, value)| (name.to_ascii_lowercase(), value));
             match declaration.as_ref().map(|(name, value)| (name.as_str(), *value)) {
                 Some(("syntax", value)) => {
-                    let quoted = value.len() >= 2
-                        && matches!(value.as_bytes()[0], b'"' | b'\'')
-                        && value.as_bytes()[value.len() - 1] == value.as_bytes()[0];
+                    let quoted = matches!(
+                        lexer(value).next(), Some((Tok::String { closed: true }, 0, end)) if end == value.len()
+                    );
                     if !quoted {
                         return Err(self.error(
                             at,
@@ -1198,12 +1039,12 @@ impl Scoper<'_> {
                             ),
                         ));
                     }
-                    syntax = Some(unescape(&value[1..value.len() - 1]).trim_matches([' ', '\t', '\n']).to_string());
+                    syntax = Some(decode(&value[1..value.len() - 1], true));
                 }
                 Some(("inherits", value)) if value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false") => {
                     inherits = true
                 }
-                Some(("initial-value", value)) => initial = Some(value.trim().to_string()),
+                Some(("initial-value", value)) => initial = Some(value),
                 _ => {}
             }
         }
@@ -1212,7 +1053,7 @@ impl Scoper<'_> {
                 return Err(self.error(at, format!("@property --{name}: syntax: \"{written}\" is not a syntax the browser reads (\"*\", \"<length>\", \"<color>+\", \"auto | <length>\")")));
             }
         }
-        let Some(syntax) = syntax else {
+        let Some(syntax) = syntax.as_deref().map(|text| text.trim_matches([' ', '\t', '\n'])) else {
             return Err(self.error(
                 at,
                 format!(
@@ -1230,7 +1071,7 @@ impl Scoper<'_> {
             return Err(self.error(at, format!("@property --{name} needs an initial-value; the browser ignores it without one")));
         }
         let kind = SYNTAXES.iter().find(|(written, _)| *written == syntax).map(|(_, kind)| *kind);
-        if let (Some(_), Some(value)) = (kind, &initial) {
+        if let (Some(kind), Some(value)) = (kind, initial) {
             // A math function's grammar and types are the browser's, and it drops the rule when one
             // does not fit (`calc(1px 2px)`, `calc(1px * 2px)`); checking them is a CSS math parser
             // per syntax, so the initial value is written as one value, which the macro can check.
@@ -1242,8 +1083,6 @@ impl Scoper<'_> {
                     ),
                 ));
             }
-        }
-        if let (Some(kind), Some(value)) = (kind, &initial) {
             if !initial_fits(kind, value) {
                 return Err(self.error(
                     at,
@@ -1259,8 +1098,11 @@ impl Scoper<'_> {
     /// names its own after itself, and one with no name, which sets every page the app prints,
     /// belongs in the app's stylesheet.
     fn check_page(&self, prelude: &str, at: usize) -> Result<(), String> {
-        let start = css_skip_space(prelude.as_bytes(), 0);
-        let name = &prelude[start..css_name_end(prelude.as_bytes(), start)];
+        let prelude = trim_leading_trivia(prelude);
+        let name = match lexer(prelude).next() {
+            Some((Tok::Ident, _, end)) => &prelude[..end],
+            _ => "",
+        };
         let own = format!("{}-", self.prefix);
         if name.is_empty() {
             return Err(self.error(
@@ -1280,7 +1122,10 @@ impl Scoper<'_> {
     }
 
     fn at_rule<'r>(&self, rule: &'r str, at: usize) -> Result<(&'r str, &'r str), String> {
-        let (name, prelude) = rule.split_at(css_name_end(rule.as_bytes(), 0));
+        let Some((Tok::AtKeyword, _, end)) = lexer(rule).next() else {
+            return Err(self.unsupported_at_rule(at, ""));
+        };
+        let (name, prelude) = rule[1..].split_at(end - 1);
         if !name.is_ascii() {
             return Err(self.error(at, format!("the at-rule name `@{}` contains a non-ASCII character", name.escape_default())));
         }
@@ -1288,19 +1133,8 @@ impl Scoper<'_> {
     }
 
     fn skip_space(&mut self) {
-        loop {
-            while self.bytes.get(self.i).is_some_and(|b| b.is_ascii_whitespace()) {
-                self.i += 1;
-            }
-            if self.bytes[self.i.min(self.bytes.len())..].starts_with(b"/*") {
-                match self.text[self.i + 2..].find("*/") {
-                    Some(end) => self.i += end + 4,
-                    None => self.i = self.bytes.len(),
-                }
-                continue;
-            }
-            return;
-        }
+        let rest = &self.text[self.i..];
+        self.i += rest.len() - trim_leading_trivia(rest).len();
     }
 
     /// Reads to the next structural delimiter, removing comments and folding whitespace
@@ -1354,9 +1188,7 @@ impl Scoper<'_> {
         scope: Option<&str>,
         at: usize,
     ) -> Result<(String, Anchor, Option<Unowned>), String> {
-        let bytes = text.as_bytes();
         let mut out = String::with_capacity(text.len() + 16);
-        let mut i = 0;
         // Each block records its closer and whether it is inside an attribute or brace block,
         // where class and pseudo-class syntax does not apply.
         let mut blocks = Vec::<(u8, bool)>::new();
@@ -1368,34 +1200,29 @@ impl Scoper<'_> {
         let (mut has_ampersand, mut why) = (false, Why::default());
         let mut all = Anchor::ALL;
         let mut unowned = None;
-        while let Some(&b) = bytes.get(i) {
-            // In a compound selector of the list or an `:is()` in it, rather than in another
-            // function or an attribute selector: a combinator, or a token that starts or continues
-            // a compound selector.
+        let mut tokens = lexer(text).peekable();
+        while let Some((kind, start, end)) = tokens.next() {
+            let spelling = &text[start..end];
             let depth = lists.last().map_or(0, |list| list.depth);
             let in_list = blocks.len() == depth;
             let opaque = blocks.last().is_some_and(|&(_, opaque)| opaque);
             if in_list {
                 let list = lists.last_mut().unwrap_or(&mut top);
-                match b {
-                    b if css_space(b) => list.space(),
-                    b'>' | b'+' | b'~' => list.explicit_combinator(char::from(b)),
-                    b'|' if bytes.get(i + 1) == Some(&b'|') => {
+                match kind {
+                    Tok::Space => list.space(),
+                    Tok::Delim(b @ (b'>' | b'+' | b'~')) => list.explicit_combinator(char::from(b)),
+                    Tok::Delim(b'|') if matches!(tokens.peek(), Some((Tok::Delim(b'|'), at, _)) if *at == end) => {
                         list.explicit_combinator('|');
                         out.push_str("||");
-                        i += 2;
+                        tokens.next();
                         continue;
                     }
-                    b',' | b')' => {}
-                    b'/' if bytes[i..].starts_with(b"/**/") => {}
+                    Tok::Comma | Tok::Close | Tok::Comment { .. } => {}
                     _ => list.token(nest, &mut why),
                 }
             }
-            let end = match b {
-                b'"' | b'\'' => string_end(bytes, i).ok_or_else(|| self.error(at, "a string is never closed"))?,
-                b'\\' => css_escape_end(bytes, i),
-                b'/' if bytes[i..].starts_with(b"/**/") => i + 4,
-                b'&' => {
+            match kind {
+                Tok::Delim(b'&') => {
                     // Even an invalid arm can suppress implicit nesting. Only a matchable
                     // nesting selector supplies an anchor.
                     has_ampersand = true;
@@ -1406,11 +1233,13 @@ impl Scoper<'_> {
                     } else {
                         why.filtered = true;
                     }
-                    i + 1
                 }
-                b':' if !opaque => {
-                    let double_colon = bytes.get(i + 1) == Some(&b':');
-                    if double_colon || legacy_pseudo_element(text, i + 1) {
+                Tok::Colon if !opaque => {
+                    let mut next = tokens.clone();
+                    let after = next.find(|&(kind, ..)| !matches!(kind, Tok::Comment { .. }));
+                    let double_colon = after.filter(|&(kind, ..)| kind == Tok::Colon);
+                    let legacy = matches!(after, Some((Tok::Ident, start, end)) if legacy_pseudo_element(&text[start..end]));
+                    if double_colon.is_some() || legacy {
                         if let Some(list) = lists.last_mut().filter(|_| in_list) {
                             list.invalid = true;
                         } else if let Some(prelude) = scope {
@@ -1419,20 +1248,28 @@ impl Scoper<'_> {
                                 format!("`@scope {prelude}`: a pseudo-element cannot be a scope's root or limit; remove it or the invalid forgiving arm that contains it"),
                             ));
                         }
-                        i + 1 + usize::from(double_colon)
-                    } else if let Some(open) = positive_list_open(text, i + 1) {
-                        blocks.push((b')', false));
-                        lists.push(Branches { depth: blocks.len(), ..Branches::new() });
-                        open + 1
-                    } else {
-                        i + 1
+                        if let Some((_, _, finish)) = double_colon {
+                            out.push_str(&text[start..finish]);
+                            tokens = next;
+                            continue;
+                        }
+                    } else if let Some((Tok::Function, word, end)) = after {
+                        let name = decoded_name(&text[word..end - 1]);
+                        if name.eq_ignore_ascii_case("is") || name.eq_ignore_ascii_case("where") {
+                            blocks.push((b')', false));
+                            lists.push(Branches { depth: blocks.len(), ..Branches::new() });
+                            out.push_str(&text[start..end]);
+                            tokens = next;
+                            continue;
+                        }
                     }
                 }
-                b'(' | b'[' | b'{' => {
-                    blocks.push((block_close(b), opaque || b != b'('));
-                    i + 1
+                Tok::Function | Tok::Open => {
+                    let close = closer(kind, spelling).unwrap();
+                    blocks.push((close, opaque || close != b')'));
                 }
-                b')' | b']' | b'}' => {
+                Tok::Close => {
+                    let b = spelling.as_bytes()[0];
                     if !blocks.pop().is_some_and(|(close, _)| close == b) {
                         return Err(self.error(at, format!("mismatched selector block: unexpected {}", char::from(b))));
                     }
@@ -1448,9 +1285,8 @@ impl Scoper<'_> {
                             }
                         }
                     }
-                    i + 1
                 }
-                b',' if in_list => {
+                Tok::Comma if in_list => {
                     if let Some(list) = lists.last_mut() {
                         list.next();
                     } else {
@@ -1458,51 +1294,49 @@ impl Scoper<'_> {
                         all = all.and(anchor);
                         if !anchor.owned && unowned.is_none() {
                             unowned =
-                                Some(Unowned { part: text[part_start..i].trim_matches([' ', '\t', '\n']).to_string(), why });
+                                Some(Unowned { part: text[part_start..start].trim_matches([' ', '\t', '\n']).to_string(), why });
                         }
-                        part_start = i + 1;
+                        part_start = end;
                         (has_ampersand, why) = (false, Why::default());
                     }
-                    i + 1
                 }
-                b'.' if !opaque && css_ident_start(bytes, i + 1) => {
-                    let end = css_name_end(bytes, i + 1);
-                    let class = &text[i + 1..end];
-                    if class.contains('\\') {
-                        return Err(
-                            self.error(at, "escaped characters in a class name are not supported in a component's stylesheet")
-                        );
+                Tok::Delim(b'.') if !opaque => {
+                    if let Some(&(Tok::Ident, start, end)) = tokens.peek() {
+                        let class = &text[start..end];
+                        if class.contains('\\') {
+                            return Err(self
+                                .error(at, "escaped characters in a class name are not supported in a component's stylesheet"));
+                        }
+                        if !class.is_ascii() {
+                            return Err(self.error(
+                                at,
+                                "non-ASCII characters in a class name are not supported in a component's stylesheet",
+                            ));
+                        }
+                        if class.contains("__") {
+                            return Err(
+                                self.error(at, format!(".{class}: __ separates the component's name from the class; use - or _"))
+                            );
+                        }
+                        out.push('.');
+                        out.push_str(self.prefix);
+                        out.push_str("__");
+                        out.push_str(class);
+                        if !self.classes.iter().any(|name| name == class) {
+                            self.classes.push(class.to_string());
+                        }
+                        if in_list {
+                            lists.last_mut().unwrap_or(&mut top).class();
+                        } else {
+                            why.filtered = true;
+                        }
+                        tokens.next();
+                        continue;
                     }
-                    if !class.is_ascii() {
-                        return Err(
-                            self.error(at, "non-ASCII characters in a class name are not supported in a component's stylesheet")
-                        );
-                    }
-                    if class.contains("__") {
-                        return Err(
-                            self.error(at, format!(".{class}: __ separates the component's name from the class; use - or _"))
-                        );
-                    }
-                    out.push('.');
-                    out.push_str(self.prefix);
-                    out.push_str("__");
-                    out.push_str(class);
-                    if !self.classes.iter().any(|name| name == class) {
-                        self.classes.push(class.to_string());
-                    }
-                    if in_list {
-                        lists.last_mut().unwrap_or(&mut top).class();
-                    } else {
-                        why.filtered = true;
-                    }
-                    i = end;
-                    continue;
                 }
-                _ if b.is_ascii() => i + 1,
-                _ => i + text[i..].chars().next().unwrap().len_utf8(),
-            };
-            out.push_str(&text[i..end]);
-            i = end;
+                _ => {}
+            }
+            out.push_str(spelling);
         }
         if let Some(&(close, _)) = blocks.last() {
             return Err(self.error(at, format!("unclosed selector block: expected {}", char::from(close))));
@@ -1677,159 +1511,71 @@ struct Unowned {
 }
 
 /// The opening parenthesis of a matches-any pseudo-class after its colon, if present.
-fn positive_list_open(text: &str, mut start: usize) -> Option<usize> {
-    let bytes = text.as_bytes();
-    while bytes[start..].starts_with(b"/**/") {
-        start += 4;
-    }
-    let end = css_name_end(bytes, start);
-    if bytes.get(end) != Some(&b'(') {
-        return None;
-    }
-    let name = decoded_name(&text[start..end]);
-    (name.eq_ignore_ascii_case("is") || name.eq_ignore_ascii_case("where")).then_some(end)
-}
-
-/// The four pseudo-elements that also have a single-colon form.
-fn legacy_pseudo_element(text: &str, start: usize) -> bool {
-    let bytes = text.as_bytes();
-    if !matches!(bytes.get(start), Some(b'b' | b'B' | b'a' | b'A' | b'f' | b'F' | b'\\')) {
-        return false;
-    }
-    let end = css_name_end(bytes, start);
-    // `:before(...)` is not the legacy spelling; don't infer validity from its name.
-    if bytes.get(end) == Some(&b'(') {
-        return false;
-    }
-    let name = decoded_name(&text[start..end]);
-    const NAMES: [&str; 4] = ["before", "after", "first-line", "first-letter"];
-    NAMES.iter().any(|n| name.eq_ignore_ascii_case(n))
-}
-
-fn decoded_name(name: &str) -> Cow<'_, str> {
-    if name.contains('\\') {
-        unescape(name).into()
-    } else {
-        name.into()
-    }
-}
-
-/// The text inside the first parenthesis block, trimmed of whitespace outside tokens, and the
+/// The text inside the first parenthesis block, trimmed of trivia outside tokens, and the
 /// text after it.
 fn parenthesized(text: &str) -> Option<(&str, &str)> {
-    if !text.starts_with('(') {
+    let mut tokens = lexer(text);
+    if !matches!(tokens.next(), Some((Tok::Open, 0, 1))) || !text.starts_with('(') {
         return None;
     }
-    let b = text.as_bytes();
     let mut blocks = vec![b')'];
-    let start = css_skip_space(b, 1);
-    let (mut i, mut end) = (start, start);
-    while let Some(&byte) = b.get(i) {
-        i = match byte {
-            b if css_space(b) => {
-                i += 1;
-                continue;
+    let (mut first, mut last) = (None, 1);
+    for (kind, start, end) in tokens {
+        if let Some(close) = closer(kind, &text[start..end]) {
+            blocks.push(close);
+        } else if kind == Tok::Close {
+            if blocks.pop()? != text.as_bytes()[start] {
+                return None;
             }
-            b'"' | b'\'' => string_end(b, i)?,
-            b'\\' => css_escape_end(b, i),
-            b'(' | b'[' | b'{' => {
-                blocks.push(block_close(byte));
-                i + 1
+            if blocks.is_empty() {
+                return Some((&text[first.unwrap_or(last)..last], &text[end..]));
             }
-            b')' | b']' | b'}' => {
-                if blocks.pop()? != byte {
-                    return None;
-                }
-                if blocks.is_empty() {
-                    return Some((&text[start..end], &text[i + 1..]));
-                }
-                i + 1
-            }
-            _ => i + 1,
-        };
-        end = i;
+        }
+        if !kind.trivia() {
+            first.get_or_insert(start);
+            last = end;
+        }
     }
     None
 }
 
-fn block_close(open: u8) -> u8 {
-    match open {
-        b'(' => b')',
-        b'[' => b']',
-        b'{' => b'}',
-        _ => unreachable!("not a block opener"),
-    }
-}
-
-fn css_space(b: u8) -> bool {
-    matches!(b, b' ' | b'\t' | b'\n')
-}
-
-fn css_skip_space(bytes: &[u8], mut at: usize) -> usize {
-    while bytes.get(at).is_some_and(|&b| css_space(b)) {
-        at += 1;
-    }
-    at
-}
-
-fn valid_css_escape(bytes: &[u8], at: usize) -> bool {
-    bytes.get(at) == Some(&b'\\') && bytes.get(at + 1).is_some_and(|&b| b != b'\n')
-}
-
-/// Consumes an escape in preprocessed CSS, including its optional whitespace terminator.
-fn css_escape_end(bytes: &[u8], at: usize) -> usize {
-    let start = at + 1;
-    let hex = bytes[start..].iter().take(6).take_while(|b| b.is_ascii_hexdigit()).count();
-    let end = start + hex;
-    if hex != 0 {
-        end + usize::from(bytes.get(end).is_some_and(|&b| css_space(b)))
-    } else {
-        let mut end = (start + 1).min(bytes.len());
-        while bytes.get(end).is_some_and(|b| b & 0xc0 == 0x80) {
-            end += 1;
-        }
-        end
-    }
-}
-
-fn css_name_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | 0x80..=0xff)
-}
-
-fn css_ident_start(bytes: &[u8], at: usize) -> bool {
-    let name_start = |at| matches!(bytes.get(at), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_' | 0x80..=0xff));
-    name_start(at)
-        || valid_css_escape(bytes, at)
-        || (bytes.get(at) == Some(&b'-')
-            && (name_start(at + 1) || bytes.get(at + 1) == Some(&b'-') || valid_css_escape(bytes, at + 1)))
-}
-
-fn css_name_end(bytes: &[u8], mut at: usize) -> usize {
-    while let Some(&b) = bytes.get(at) {
-        if css_name_byte(b) {
-            at += 1;
-        } else if valid_css_escape(bytes, at) {
-            at = css_escape_end(bytes, at);
-        } else {
-            break;
+fn block_end(text: &str) -> Option<usize> {
+    let mut blocks = Vec::new();
+    for (kind, start, end) in lexer(text) {
+        if let Some(close) = closer(kind, &text[start..end]) {
+            blocks.push(close);
+        } else if kind == Tok::Close {
+            if blocks.pop()? != text.as_bytes()[start] {
+                return None;
+            }
+            if blocks.is_empty() {
+                return Some(end);
+            }
         }
     }
-    at
+    None
 }
 
-/// The prelude starts with a custom property's ident followed by a colon.
+fn legacy_pseudo_element(name: &str) -> bool {
+    let name = decoded_name(name);
+    ["before", "after", "first-line", "first-letter"].iter().any(|n| name.eq_ignore_ascii_case(n))
+}
+
+fn trim_leading_trivia(text: &str) -> &str {
+    lexer(text).find(|&(kind, ..)| !kind.trivia()).map_or("", |(_, start, _)| &text[start..])
+}
+
+/// The prelude starts with an ident and a colon, not a delimiter or a function.
+fn declaration_head(text: &str) -> Option<(usize, usize, usize)> {
+    let mut tokens = lexer(text).filter(|&(kind, ..)| !kind.trivia());
+    let (Tok::Ident, start, end) = tokens.next()? else { return None };
+    let (Tok::Colon, _, after) = tokens.next()? else { return None };
+    Some((start, end, after))
+}
+
 fn starts_custom_property(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    let end = css_name_end(bytes, 0);
-    if !decoded_name(&text[..end]).strip_prefix("--").is_some_and(|name| !name.is_empty()) {
-        return false;
-    }
-    let mut at = css_skip_space(bytes, end);
-    while let Some(comment) = text[at..].strip_prefix("/*") {
-        let Some(close) = comment.find("*/") else { return false };
-        at = css_skip_space(bytes, at + close + 4);
-    }
-    bytes.get(at) == Some(&b':')
+    declaration_head(text)
+        .is_some_and(|(start, end, _)| decoded_name(&text[start..end]).strip_prefix("--").is_some_and(|name| !name.is_empty()))
 }
 
 struct Chunk {
@@ -1839,124 +1585,81 @@ struct Chunk {
     joined_comment: Option<usize>,
 }
 
-/// Reads and normalizes one chunk of preprocessed CSS, advancing `i` to its delimiter.
-/// Only whitespace outside tokens is folded or discarded.
+/// Reads one chunk up to a rule or declaration delimiter. Each opener has its own closer:
+/// CSS would consume the rest of the file for some mismatches, including the next component.
 fn scan_chunk(src: &str, i: &mut usize) -> Result<Chunk, (usize, &'static str)> {
-    let bytes = src.as_bytes();
-    let mut depth = 0usize;
+    let from = *i;
+    let mut blocks = Vec::new();
     let mut text = String::new();
     let mut space = false;
     let mut pending_comment = None;
     let mut joined_comment = None;
     let mut url = None;
-    while let Some(&b) = bytes.get(*i) {
-        let start = *i;
-        *i = match b {
-            b'{' | b';' | b'}' if depth == 0 => return Ok(Chunk { end: Some(b), text, url, joined_comment }),
-            b if css_space(b) => {
+    let mut prev = None;
+    for (kind, start, end) in lexer(&src[from..]) {
+        let spelling = &src[from + start..from + end];
+        *i = from + start;
+        match kind {
+            Tok::Space => {
                 space = true;
-                *i += 1;
                 continue;
             }
-            b'/' if bytes.get(start + 1) == Some(&b'*') => {
-                pending_comment.get_or_insert(start);
-                *i = src[start + 2..].find("*/").map_or(bytes.len(), |end| start + end + 4);
+            Tok::Comment { .. } => {
+                pending_comment.get_or_insert(*i);
                 continue;
             }
-            b'"' | b'\'' => string_end(bytes, start).ok_or((start, "a string is never closed"))?,
-            b'#' | b'@' => css_name_end(bytes, start + 1),
-            b'<' if bytes[start..].starts_with(b"<!--") => start + 4,
-            b'-' if bytes[start..].starts_with(b"-->") => start + 3,
-            b if css_name_byte(b) || valid_css_escape(bytes, start) => {
-                let end = css_name_end(bytes, start);
-                if bytes.get(end) == Some(&b'(') && decoded_name(&src[start..end]).eq_ignore_ascii_case("url") {
-                    let value = css_skip_space(bytes, end + 1);
-                    if matches!(bytes.get(value), Some(b'"' | b'\'')) {
-                        end // A quoted `url()` is a function followed by a string, not a URL token.
-                    } else {
-                        url.get_or_insert(start);
-                        url_end(bytes, value).ok_or((
-                            start,
-                            "a malformed unquoted url() has no reliable boundary here: quote its value or remove it",
-                        ))?
-                    }
-                } else {
-                    end
-                }
+            Tok::Url { closed: true } => {
+                url.get_or_insert(*i);
             }
-            b'\\' => return Err((start, "a backslash outside a string must escape a character, not a line break")),
-            b'(' | b'[' => {
-                depth += 1;
-                start + 1
+            Tok::BadUrl | Tok::Url { closed: false } => {
+                return Err((*i, "a malformed unquoted url() has no reliable boundary here: quote its value or remove it"));
             }
-            b')' | b']' => {
-                depth = depth.saturating_sub(1);
-                start + 1
+            Tok::BadString | Tok::String { closed: false } => return Err((*i, "a string is never closed")),
+            Tok::Delim(b'\\') => {
+                return Err((*i, "a backslash outside a string must escape a character, not a line break"));
             }
-            _ if b.is_ascii() => start + 1,
-            _ => start + src[start..].chars().next().unwrap().len_utf8(),
-        };
+            _ => {}
+        }
+        let b = spelling.as_bytes()[0];
+        if blocks.is_empty() && matches!((kind, b), (Tok::Open, b'{') | (Tok::Close, b'}') | (Tok::Semicolon, _)) {
+            return Ok(Chunk { end: Some(b), text, url, joined_comment });
+        }
+        if let Some(close) = closer(kind, spelling) {
+            blocks.push(close);
+        } else if kind == Tok::Close && blocks.pop() != Some(b) {
+            return Err((*i, "mismatched selector block or declaration value: delimiters must close in order"));
+        }
         let comment = pending_comment.take();
         if !text.is_empty() {
-            if !space && joined_comment.is_none() {
-                joined_comment = comment;
-            }
-            if space || comment.is_some() {
+            if space {
                 text.push(' ');
+            } else if let Some(at) = comment {
+                // Keep a token separator without inventing descendant whitespace or attaching
+                // the following token to a hex escape. The selector policy still refuses joined
+                // comments, except between the two colons of a pseudo-element.
+                text.push_str("/**/");
+                if joined_comment.is_none() && !(prev == Some(Tok::Colon) && kind == Tok::Colon) {
+                    joined_comment = Some(at);
+                }
             }
         }
         space = false;
-        text.push_str(&src[start..*i]);
+        prev = Some(kind);
+        text.push_str(spelling);
+    }
+    *i = src.len();
+    if !blocks.is_empty() {
+        return Err((*i, "a block is never closed: add its matching delimiter"));
     }
     Ok(Chunk { end: None, text, url, joined_comment })
 }
 
-/// CSS Syntax Level 3's string-token boundaries. An unescaped newline makes a bad
-/// string token; do not recover by reading across it to a later quote.
-fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut at = start + 1;
-    while let Some(&b) = bytes.get(at) {
-        match b {
-            b if b == bytes[start] => return Some(at + 1),
-            b'\n' => break,
-            b'\\' => at = css_escape_end(bytes, at),
-            _ => at += 1,
-        }
-    }
-    None
-}
-
-/// CSS Syntax Level 3's unquoted URL token. Refuse a bad URL instead of recovering:
-/// a quote in it is not the beginning of a string and cannot hide another arm.
-fn url_end(bytes: &[u8], mut at: usize) -> Option<usize> {
-    while let Some(&b) = bytes.get(at) {
-        match b {
-            b')' => return Some(at + 1),
-            b if css_space(b) => {
-                let end = css_skip_space(bytes, at);
-                return (bytes.get(end) == Some(&b')')).then_some(end + 1);
-            }
-            b'"' | b'\'' | b'(' | 1..=8 | 11 | 14..=31 | 127 => break,
-            b'\\' if valid_css_escape(bytes, at) => at = css_escape_end(bytes, at),
-            b'\\' => break,
-            _ => at += 1,
-        }
-    }
-    None
-}
-
 fn split_declaration(text: &str) -> Option<(&str, &str)> {
-    let space = [' ', '\t', '\n'];
-    let text = text.trim_start_matches(space);
-    let end = css_name_end(text.as_bytes(), 0);
-    let name = &text[..end];
-    let value = text[css_skip_space(text.as_bytes(), end)..].strip_prefix(':')?;
-    // scan_chunk already drops trailing whitespace tokens, but a trailing space may be part
-    // of an escape. Only drop the separator it can leave just after the colon.
-    (!name.is_empty()
-        && (name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
-            || decoded_name(name).strip_prefix("--").is_some_and(|name| !name.is_empty())))
-    .then(|| (name, value.trim_start_matches(space)))
+    let (start, end, after) = declaration_head(text)?;
+    let name = &text[start..end];
+    (name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+        || decoded_name(name).strip_prefix("--").is_some_and(|name| !name.is_empty()))
+    .then(|| (name, trim_leading_trivia(&text[after..])))
 }
 
 /// The constant for a class: `alert-message` is `AlertMessage`.
@@ -2329,12 +2032,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn css_scanner_fixture_agrees_with_the_macro() {
+        for case in ScanCase::all() {
+            let name = case.string("name").unwrap();
+            let result = scope(case.string("css").unwrap(), "x");
+            match (case.string("scoped"), case.string("refuse")) {
+                (Some(expected), None) => assert_eq!(result.map(|sheet| sheet.css).as_deref(), Ok(expected), "{name}"),
+                (None, Some(expected)) => {
+                    let error = result.unwrap_err();
+                    assert!(error.contains(expected), "{name}: {error}");
+                }
+                _ => panic!("{name}: specify scoped output or a refusal, not both"),
+            }
+        }
+    }
+
+    #[test]
+    fn tokenizer_reports_css_tokens_and_source_spans() {
+        let css = "@a #123 -.5e+2% +1.3e-2px 2e url(a/*b) u\\72l( 'z') < !-- --> /* x */ 'a\r\nb( [ { : ; , } ] )";
+        let significant: Vec<_> =
+            lexer(css).filter(|&(kind, ..)| kind != Tok::Space).map(|(kind, start, end)| (kind, &css[start..end])).collect();
+        use Tok::*;
+        assert_eq!(
+            significant,
+            [
+                (AtKeyword, "@a"),
+                (Hash, "#123"),
+                (Percentage, "-.5e+2%"),
+                (Dimension, "+1.3e-2px"),
+                (Dimension, "2e"),
+                (Url { closed: true }, "url(a/*b)"),
+                (Function, "u\\72l("),
+                (String { closed: true }, "'z'"),
+                (Close, ")"),
+                (Delim(b'<'), "<"),
+                (Delim(b'!'), "!"),
+                (Ident, "--"),
+                (Cdc, "-->"),
+                (Comment { closed: true }, "/* x */"),
+                (BadString, "'a"),
+                (Function, "b("),
+                (Open, "["),
+                (Open, "{"),
+                (Colon, ":"),
+                (Semicolon, ";"),
+                (Comma, ","),
+                (Close, "}"),
+                (Close, "]"),
+                (Close, ")"),
+            ]
+        );
+        for (css, expected) in [
+            ("<!--", Cdo),
+            ("url(x y\\)z)", BadUrl),
+            ("url(a", Url { closed: false }),
+            ("\"x", String { closed: false }),
+            ("1e2", Number),
+            ("#.", Delim(b'#')),
+            ("@1", Delim(b'@')),
+        ] {
+            assert_eq!(lexer(css).next().unwrap().0, expected, "{css}");
+        }
+        assert_eq!(decoded_name("--w\\69\r\ndth"), "--width");
+        assert_eq!(decoded_name("\\d800 \0\\"), "\u{fffd}\u{fffd}\u{fffd}");
+    }
+
+    #[test]
     fn position_values_do_not_expose_comments_to_other_readers() {
         let sheet = scope("@position-try --above{top:0}.a{position-try:--above /* @media (--ghost){ */;position-try-fallbacks:var(/* note */--missing), --above}", "x").unwrap();
         assert!(sheet.media.is_empty(), "a comment did not name a breakpoint");
         assert_eq!(
             sheet.css,
-            "@position-try --x__above{top:0}.x__a{position-try:--x__above;position-try-fallbacks:var( --missing), --x__above}"
+            "@position-try --x__above{top:0}.x__a{position-try:--x__above;position-try-fallbacks:var(/**/--missing), --x__above}"
         );
     }
 
@@ -2385,9 +2154,10 @@ mod tests {
         // A hex escape takes one whitespace; the next one still separates the tactic.
         for space in ["  ", "\r\n ", "\t\t", "\n\n", " /* a */ ", "/**/", "/*comment*/ "] {
             let css = format!("@position-try --above {{ top: 0 }} .a {{ position-try-fallbacks: --abov\\65{space}flip-block; position-try: most-width --abov\\65{space}flip-inline }}");
+            let gap = if space == "/**/" { "/**/" } else { " " };
             assert_eq!(
                 scope(&css, "x").unwrap().css,
-                "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above flip-block;position-try:most-width --x__above flip-inline}",
+                format!("@position-try --x__above{{top:0}}.x__a{{position-try-fallbacks:--x__above{gap}flip-block;position-try:most-width --x__above{gap}flip-inline}}"),
                 "{space:?}"
             );
         }
@@ -2470,7 +2240,7 @@ mod tests {
         }
         assert_eq!(
             scope(r#"/*start*/.a[title="a/**/b"]/*end*/{--value:a/**/b}"#, "x").unwrap().css,
-            r#".x__a[title="a/**/b"]{--value:a b}"#
+            r#".x__a[title="a/**/b"]{--value:a/**/b}"#
         );
     }
 

@@ -336,7 +336,9 @@ rules something out.
    typed number with a unit (`style={FILL.pct(42.0)}`): a full page carries them in one style
    block allowed by its hash (one header source, no nonce, so a cached page stays the same bytes,
    where a hash per style attribute would be one header source per value), and the runtime sets
-   a patch's through the CSSOM, since a document keeps the policy it loaded with.
+   a patch's through the CSSOM, since a document keeps the policy it loaded with. The compiler
+   and startup check use one dependency-free CSS Syntax Level 3 tokenizer; policy and the
+   boundaries of the checks are in [Limit 9](#limit-stylesheet-support).
 
    Stands on: bet (a CSS file per component and the typed token utilities are quick enough for the
    one-off values utility classes are good at, spacing and direction per breakpoint, so apps do not
@@ -348,8 +350,10 @@ rules something out.
    token utilities, putting spacing, layout and type in views rather than in component files; or a
    CSP can allow values set from markup without a header source for each.
 
-   Last checked: 2026-11-06, the CSP refusing an inline `style=` and `@property` registering a type,
-   probed in Chromium 156, Firefox 157 and WebKit 27.2.
+   Last checked: 2026-11-18, CSS rule, declaration and priority boundaries in the shared
+   stylesheet fixture against constructed sheets in Chromium 159, Firefox 159 and WebKit 27.2.
+   The CSP refusing an inline `style=` and `@property` registering a type were probed on
+   2026-11-06 in Chromium 156, Firefox 157 and WebKit 27.2.
 
 7. <a id="choice-whole-pages"></a>**A page is sent whole, not streamed in parts.** Streaming a slow section later in the same
    response sends the status and headers before that section exists, so a failure in it can no
@@ -6720,7 +6724,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
 | `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied raw, without selector checks or class prefixes. Their names (animation, font family, counter style, palette and feature-value names) remain global: use component-qualified names when private. |
 | `@page` | Name must start with the component's name and `-` (written by the author); body copied raw, including margin at-rules. The name remains global. An unnamed page or a name without that prefix is refused. |
 
-   Raw bodies still lose comments and extra whitespace, and references to registered custom
+   Raw bodies still compact trivia, and references to registered custom
    properties are renamed there too. Their nested block at-rules are copied raw (for example
    `@styleset` and `@top-left`), not independently checked against this list. The statement parser recognizes
    lowercase `@layer` (copied) and `@charset` (discarded: the generated stylesheet is UTF-8).
@@ -6730,6 +6734,17 @@ by design; where it is known, a limit says what would lift it or why it is so.
     stylesheet. At-rule names must match whole names, not prefixes: `@supports_other` and
     `@layer_other` are not supported. Unknown statements are refused even inside raw bodies.
     Escaped or non-ASCII at-rule and class names are not supported.
+
+   The macro and startup custom-property check share [CSS Syntax Level 3
+   tokenization](https://www.w3.org/TR/css-syntax-3/#tokenization). URL tokens are opaque,
+   even with escaped names, and comments between tokens are not spaces. The macro refuses
+   mismatched block delimiters, bad strings and bad URLs instead of letting browser recovery
+   consume later components. Startup checks literal `var()` reads in declaration values,
+   skipping the whole lookup if it has a fallback, including `var({--x}, var(--fallback))`.
+   Blocks in a value do not declare properties. The check does not validate descriptor
+   values in a global stylesheet or infer whether a selector matches; for example, a global
+   `@property --x { syntax: "<length>"; inherits: false; initial-value: red }` is counted
+   structurally even though a browser drops that registration.
 
    A registered custom property's name is prefixed only where it names that property: in its
    registration, declaration names, `var()` and `inherit()` lookups (also inside container
@@ -6781,8 +6796,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     must pass on its own. An inner root under an unowned scope supplies proof for its body only
     if it requires a class on its element or an ancestor: neither explicit `&` nor implicit
     nesting can borrow proof from a style rule there. An owned scope bounds its nested scopes.
-    The check reads selectors without a CSS parser, so it is conservative: a selector it
-    cannot show is owned does not compile.
+    The check does not implement the full selector grammar, so a selector it cannot show
+    is owned does not compile. For instance, it does not infer that the `:not(::before)`
+    arm of `@scope (:is(.list, :not(::before)))` cannot match; remove that arm. It recognizes
+    direct pseudo-element arms, including `:/**/:before`.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's
     root by naming that component's class. A limit does not supply proof of ownership.

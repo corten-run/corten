@@ -1081,7 +1081,7 @@ fn undeclared_properties(
 ) -> io::Result<()> {
     use std::collections::HashSet;
     let declared = |css: &str, into: &mut HashSet<String>| {
-        into.extend(crate::style::custom_properties(css).0.into_iter().map(str::to_string));
+        into.extend(crate::style::custom_properties(css).0.into_iter().map(std::borrow::Cow::into_owned));
     };
     let mut everywhere = HashSet::new();
     for (_, body) in sources.iter().filter(|(url, _)| url.ends_with(".css")) {
@@ -1109,11 +1109,11 @@ fn undeclared_properties(
     for (at, _, names) in sheets {
         for (name, style) in names.iter().filter_map(|n| styles.iter().find(|(s, _)| s == n)) {
             for property in crate::style::custom_properties(style.css).1 {
-                if everywhere.contains(property) {
+                if everywhere.contains(property.as_ref()) {
                     continue;
                 }
                 let lacking: Vec<&str> =
-                    at.iter().filter(|i| !in_area[**i - 1].contains(property)).map(|i| sections[i - 1].0).collect();
+                    at.iter().filter(|i| !in_area[**i - 1].contains(property.as_ref())).map(|i| sections[i - 1].0).collect();
                 let line = if at.is_empty() {
                     format!("{} ({name}) reads var({property}), which no stylesheet declares", style.file)
                 } else if !lacking.is_empty() {
