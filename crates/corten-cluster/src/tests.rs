@@ -1123,7 +1123,7 @@ async fn a_broker_disconnect_can_reorder_a_feed_but_the_follower_recovers() {
     wait_pending(&pool, 0).await;
     assert_eq!(stream.info().await.unwrap().state.messages, 4, "no extra messages within the dedup window");
     expect_reload(&mut messages, &feed_subject, &rows[2]).await;
-    eventually("the loaded follower to catch up", || follower.seq() == 3).await;
+    eventually("the feed to be ready at sequence 3", || hub.stats().iter().any(|(key, seq, _)| key == "feed" && *seq == 3)).await;
     assert_eq!(follower.read(|rows| rows["a"].n), 3);
     assert!(logs.0.lock().unwrap().iter().any(|log| log.contains("gap in the feed's patches: reloading it")));
 
