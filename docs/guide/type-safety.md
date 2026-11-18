@@ -27,7 +27,8 @@ Untyped rows are `unknown`, not `any`. The full table, and what is not checked, 
 in [Surfaces](../architecture.md#types-across-seams).
 
 `FromJson` rejects `#[serde(transparent)]` on enums and unit structs, or together with
-`from`, `try_from` or `into`, as serde's `Deserialize` derive does.
+`from`, `try_from` or `into`, as serde's `Deserialize` derive does. It also reports
+`from` and `try_from` together as a conflict, rather than as an unsupported attribute.
 
 ## Checking handler calls
 

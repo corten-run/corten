@@ -189,6 +189,16 @@
 //! struct Price { amount: f64 }
 //! ```
 //!
+//! On its own, `into` only affects serialization, so `FromJson` still reads the type normally:
+//!
+//! ```
+//! #[derive(corten::FromJson)]
+//! #[serde(into = "u64")]
+//! struct Cents(u64);
+//!
+//! assert_eq!(corten::json::from_str::<Cents>("42").unwrap().0, 42);
+//! ```
+//!
 //! A `transparent` struct is read as its one field that is neither skipped, defaulted nor a
 //! `PhantomData`, as serde's derive picks it (by the type's path: `PhantomData<T>` by any path,
 //! but not a `&PhantomData<T>` or another type holding one), and each other field is its

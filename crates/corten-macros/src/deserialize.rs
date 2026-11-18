@@ -185,6 +185,10 @@ impl Container {
 /// serde_derive's `check_transparent` and `check_from_and_try_from`, before unsupported
 /// attributes are rejected individually. Read all the arguments so order and grouping do not matter.
 fn check_from_json_container(args: &[Arg], is_enum: bool) -> Result<(), Error> {
+    // Check the attribute form, not the Rust type inside the string.
+    for arg in args.iter().filter(|arg| matches!(arg.key.as_str(), "from" | "try_from" | "into")) {
+        string_arg("FromJson", arg)?;
+    }
     let find = |key| args.iter().find(|arg| arg.key == key);
     if let Some(transparent) = find("transparent") {
         for key in ["from", "try_from", "into"] {

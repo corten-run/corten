@@ -6,7 +6,8 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - `#[derive(FromJson)]` rejects `#[serde(transparent)]` combined with `from`, `try_from`
-  or `into`, using serde's compile error messages.
+  or `into`, using serde's compile error messages. It also reports `from` and `try_from`
+  together as a conflict instead of an unsupported attribute.
 
 - Every `corten` command accepts `--help` and `-h`, printing its own usage and exiting
   successfully without running the command; `corten help <command>` prints the same and refuses an
