@@ -5959,7 +5959,8 @@ rules something out.
     and Corten's release procedure at `231225b9a`.
 
 63. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys use literal NATS subjects, not encoded names; the
-    relay skips rows with invalid legacy keys.** Corten requires nonempty dot-separated tokens
+    relay drops invalid legacy keys and publishes reload markers for size refusals.**
+    Corten requires nonempty dot-separated tokens
     without whitespace, control characters, `*` or `>`. This is stricter than the broker: it may
     accept an embedded `*` or a non-breaking space, but the documented naming rules reserve
     wildcards and exclude whitespace. Control characters are not useful in names, and Postgres
@@ -5982,32 +5983,89 @@ rules something out.
     version or external SQL could have queued. It marks an invalid row done with the existing
     `published_at` marker, logs the row ID and key at error level, and continues without
     sending the patch. The marker means done, not delivered, in this case. Ordinary pruning
-    can remove the row; the app's committed data is not changed. No schema or index change is
-    needed. Only acknowledged valid rows get marked done; publish and acknowledgement
-    failures (including size limits) still retry. A server with a lower control-line limit
-    than the one configured in Corten can still reject a publish.
+    can remove the row; the app's committed data is not changed. A server with a lower
+    control-line limit than the one configured in Corten can still reject a publish.
+
+    JetStream's `10054` acknowledgement and the client's `MaxPayloadExceeded` before
+    sending both identify one refused publish. Neither requires giving up notification
+    delivery, even when the connection's limit is stale and the broker would accept the
+    patch. The relay sends an empty message on the patch's subject with its `Feed-Generation`
+    and `Nats-Msg-Id`, and a `Corten-Reload` header containing the decimal feed sequence.
+    NATS provides headers and deduplication but no feed invalidation signal; the single
+    cluster-only header carries that signal without changing the feed's patch or SSE format.
+    A same-generation marker at or below the follower's loaded sequence is redundant;
+    otherwise it reloads from Postgres, including when the marker arrives during a load.
+    An old follower drops a same-generation marker as invalid JSON and can stay stale until
+    a gap or other reload. Other generations still use the existing generation mismatch path.
+
+    The relay sends markers after the batch's patch attempts, so a later patch may already
+    have revealed the gap. It marks acknowledged rows done in one batch, even when another
+    row's marker cannot be sent or acknowledged. Marker sends and acknowledgements share a
+    deadline of half the lease from its last renewal, leaving time to retire acknowledged rows.
+    The failed row stays pending and takes one slot on a retry; a full batch with nothing to
+    retire can stall the queue. The broker and stream limits must fit the longest key plus up
+    to 135 bytes of marker headers. Within
+    JetStream's configured deduplication window, the shared ID deduplicates retries of either
+    the original patch or its marker. A duplicate acknowledgement retires the row but does
+    not identify which representation was first accepted; outside the window both can be
+    stored. The application write remains committed and the outbox body stays available
+    for replay and inspection until ordinary pruning.
+
+    Postgres commits each feed's sequence under that feed's row lock, and followers detect
+    gaps by that sequence, not across feeds by outbox ID. A broker's connection-wide
+    `Maximum Payload Violation` and disconnect identify no publish; the relay handles
+    that as an ordinary unacknowledged failure. Because the batch is sent before it is
+    acknowledged, a later same-feed patch can reach JetStream on the new connection
+    before the failed patch
+    ([#1633 A relay batch interrupted by a broker disconnect can store a feed's later patches before the one that failed](https://github.com/corten-run/corten/issues/1633)).
+    The relay never forces a client reconnect.
 
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
     no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
     in place. Using `Subject::is_valid` would copy the key and accept whitespace outside the
-    framing bytes.
+    framing bytes. Dropping a refused notification leaves a loaded feed stale if no later
+    patch arrives; retrying the same oversized body can keep the feed stale and block
+    the relay's ordinary pending scan. A per-feed hold adds an index to every append and
+    can make selecting work for unrelated feeds slow. A separate queue would not put a
+    patch back in its original stream position. Refreshing a shared client to confirm its
+    cached limit disrupts followers and other publishers, and a fresh connection's limit
+    would still not be an acknowledgement.
 
     Stands on: platform (the [NATS subject rules](https://docs.nats.io/nats-concepts/subjects)
     exclude whitespace and reserve wildcards for subscriptions, the
     [NATS server configuration](https://docs.nats.io/reference/config/) defaults to a 4 KB
-    control line, and [Postgres B-tree entries](https://www.postgresql.org/docs/16/btree-intro.html)
-    fit only about a third of a page); reasoned (a key that fails the same pure check at
-    every retry cannot be repaired by retrying, and marking it done also removes it from the
-    existing pending index); value (correctness and reliability first, early failure and a
+    control line, [JetStream message deduplication](https://docs.nats.io/learn/jetstream/publishing#avoiding-duplicate-writes)
+    uses a configured window, and [Postgres B-tree entries](https://www.postgresql.org/docs/16/btree-intro.html)
+    fit only about a third of a page;
+    [JetStream's size check](https://github.com/nats-io/nats-server/blob/v2.15.2/server/stream.go#L6663-L6674)
+    returns `10054` on that publish; the
+    [NATS broker](https://github.com/nats-io/nats-server/blob/v2.15.2/server/client.go#L2617-L2621)
+    sends a connection error without a subject or reply ID, and
+    [async-nats 0.52](https://docs.rs/crate/async-nats/0.52.0/source/src/connector.rs)
+    caches the limit from its handshake and its
+    [publish queue](https://docs.rs/crate/async-nats/0.52.0/source/src/lib.rs) survives reconnect);
+    reasoned (retrying cannot repair a key that fails a pure check; the compact marker fits
+    limits that refuse larger patches, provided they can carry the headers; the durable
+    app state does not depend on the delta being sent, and followers can reload it even
+    without a later patch); value (correctness and reliability first, early failure and a
     small surface: README Values 4 and 6).
 
     Revisit when: an app needs arbitrary text as a cluster key, the NATS server's default
-    control line or documented grammar changes, or deployments need automatic recovery for
-    previously accepted keys.
+    control line or documented grammar changes, clients can identify an individual broker
+    refusal or reliably refresh the cached limit without reconnecting, JetStream provides a
+    standard invalidation signal, supported limits cannot carry the marker, or deployments need every
+    delta delivered, immediate recovery on old followers, or ordering across a mid-batch disconnect.
 
-    Last checked: 2026-11-17, NATS subject and configuration documentation and async-nats 0.52.0
-    source reviewed, and the pre-fix store and relay read at `056964945`.
+    Last checked: 2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
+    NATS 2.15.2 with async-nats 0.52.0: both refusals publish markers while retaining the
+    patch in Postgres. Ready and loading followers reload a refused tail, then apply the
+    next patch normally, while a cold follower reads the committed state. A refused marker does
+    not stop unrelated rows crossing a batch boundary. With one marker acknowledgement
+    withheld, the acknowledged rows retire first. A retry retires the remaining row once
+    acknowledgements resume. The longest marker overhead measured 135 bytes. Retries
+    deduplicate in both orders without reconnecting;
+    2026-11-17 at `056964945`, subject rules and control-line configuration.
 
 64. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
     on the server.** HTML has no exclusive number bound. For both `f32` and `f64`, emit the
