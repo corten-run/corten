@@ -908,6 +908,67 @@ async function run(browser) {
     beforeReset.condition === "nm" && beforeReset.marked.join() === "Near Mint" && afterReset.condition === "" && afterReset.marked.length === 0,
     JSON.stringify({ beforeReset, afterReset }),
   );
+  {
+    const shadow = await browser.newPage();
+    try {
+      // Put the controls in the server-drawn form before its widgets connect.
+      await shadow.route(`${base}/`, async (route) => {
+        const response = await route.fetch();
+        const body = (await response.text()).replace(
+          /<form\b(?=[^>]*\bmethod="post")(?=[^>]*\baction="\/")[^>]*>/,
+          '$&<input type="hidden" name="addEventListener"><input type="hidden" name="elements">',
+        );
+        await route.fulfill({ response, body });
+      });
+      const errors = [];
+      shadow.on("pageerror", (error) => errors.push(error.message));
+      await shadow.goto(`${base}/`);
+      const combo = shadow.locator('[data-scope=ui-combo-box] [role="combobox"]');
+      const connected = await combo.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
+      if (connected) {
+        await combo.fill("Near Mint");
+        await combo.press("Enter");
+      }
+      const states = await shadow.evaluate(async () => {
+        const form = document.querySelector('form[method="post"][action="/"]');
+        const named = ["addEventListener", "elements"].every((name) => form[name] instanceof HTMLInputElement);
+        const floor = form.querySelector("#floor");
+        const offer = form.querySelector('input[name="pricing"]:not([checked])');
+        const us = form.querySelector('input[type="checkbox"][checked]');
+        const qty = form.querySelector("#qty");
+        const fewer = qty.closest("[data-scope=ui-number-field]").querySelector("button");
+        const select = form.querySelector("[data-scope=ui-combo-box] select");
+        const marked = () => select.parentElement.querySelector('[role="option"][aria-selected="true"]')?.textContent ?? "";
+        const conditional = () => [floor.matches(":disabled"), floor.required];
+        const initial = conditional();
+        offer.click();
+        us.click();
+        qty.value = "2";
+        qty.dispatchEvent(new Event("input", { bubbles: true }));
+        const state = () => ({
+          floor: conditional(), ship: [us.checked, us.validationMessage], qty: [qty.value, fewer.disabled],
+          combo: [select.value, marked()],
+        });
+        const before = state();
+        HTMLFormElement.prototype.reset.call(form);
+        await new Promise((resolve) => setTimeout(resolve));
+        return { initial, before, after: state(), named };
+      });
+      const { initial, before, after } = states;
+      const detail = JSON.stringify({ ...states, errors });
+      check("RequiredWhen: controls named elements and addEventListener do not break connect, change or reset",
+        initial.join() === "true,false" && before.floor.join() === "false,true" && after.floor.join() === "true,false", detail);
+      check("CheckboxGroup: a control named addEventListener does not break reset",
+        before.ship.join() === "false,Choose where you ship." && after.ship.join() === "true,", detail);
+      check("NumberField: a control named addEventListener does not break reset",
+        before.qty.join() === "2,false" && after.qty.join() === "1,true", detail);
+      check("ComboBox: a control named addEventListener does not break connect or reset",
+        connected && before.combo.join() === "nm,Near Mint" && after.combo.join() === ",", detail);
+      check("the form's named controls shadow its members without widget exceptions", states.named && errors.length === 0, detail);
+    } finally {
+      await shadow.context().close();
+    }
+  }
 
   // TabGroup
   const tab = (name) => page.getByRole("tab", { name });
@@ -1688,6 +1749,23 @@ async function run(browser) {
   await page.keyboard.press("Escape");
   await expanded("false");
   await trigger.click();
+  await expanded("true");
+  const menuErrors = errors.length;
+  await page.getByRole("menuitem", { name: "Archive" }).evaluate((button) => {
+    const form = button.closest("form");
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = "closest";
+    form.append(field);
+    // A click on the form itself (not on its button) should leave the menu open.
+    form.click();
+    field.remove();
+  });
+  check("MenuButton: clicking a form with a control named closest leaves the menu open without throwing",
+    (await trigger.getAttribute("aria-expanded")) === "true" && errors.length === menuErrors, errors.slice(menuErrors).join(" | "));
+  await page.keyboard.press("Escape");
+  await expanded("false");
+  await trigger.click();
   await page.getByRole("menuitem", { name: "Archive" }).click();
   await page.waitForFunction(() => document.querySelector("#menu-result")?.textContent === "Archived.");
   check("a form item posts and patches", true);
@@ -1792,14 +1870,23 @@ async function run(browser) {
   await page.mouse.move(0, 0);
   await page.waitForTimeout(2600);
   check("the failed text stays past the toaster's seconds", await toast.isVisible());
-  // The next submit takes it away, and a second failure is said again, as a new message.
-  await page.evaluate(() => ((/** @type {any} */ (document.querySelector("#ui-toast"))).__first = 1));
-  const gone = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector("#ui-toast")).hidden)), { once: true })));
-  await save.click();
+  // The next submit takes it away even if a control shadows the form's getAttribute.
+  const gone = await save.evaluate((button) => {
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = "getAttribute";
+    button.closest("form").append(field);
+    const first = document.querySelector("#ui-toast");
+    first.__first = 1;
+    button.click();
+    const hidden = first.hidden;
+    field.remove();
+    return hidden;
+  });
   const again = await page
-    .waitForFunction(() => { const m = /** @type {any} */ (document.querySelector("#ui-toast")); return !m.hidden && m.__first !== 1 && m.textContent.startsWith("That did not go through"); }, null, { timeout: 5000 })
+    .waitForFunction(() => { const m = document.querySelector("#ui-toast"); return !m.hidden && m.__first !== 1 && m.textContent.startsWith("That did not go through"); }, null, { timeout: 5000 })
     .then(() => true, () => false);
-  check("the next submit takes the failed text away, and a second failure says it again", (await gone) === true && again);
+  check("Toaster: the next submit takes the failed text away with a control named getAttribute, then another failure says it again", gone && again);
   // The page changing its own address (a tab's replaceState, a link to a place on it) keeps it.
   await page.evaluate(() => {
     history.replaceState(history.state, "", `${location.pathname}${location.search}`);
@@ -1913,13 +2000,14 @@ async function run(browser) {
       ["drop-inner", outer, "draw-opener"],
       ["mutate", inner, "draw-opener"],
       ["remove", "", "draw-opener"],
+      ["shadow-opener", outer, "draw-opener"],
       ["reopen", "", "change"],
       ["replace-opener", outer, "draw-opener"],
       ["link", outer, "draw-opener"],
       ["native", "draw-outer:native:target;", "draw-opener"],
       ["strip-open", "", ""],
     ]) {
-      const url = `${base}/dialog-draw/${mode === "native" || mode === "strip-open" ? "post" : mode}`;
+      const url = `${base}/dialog-draw/${mode === "shadow-opener" ? "replace-opener" : ["native", "strip-open"].includes(mode) ? "post" : mode}`;
       const incoming = mode === "live" ? `${base}/dialog-draw-live` : url;
       const held = mode === "live" || mode === "read";
       let release = () => {};
@@ -1930,8 +2018,23 @@ async function run(browser) {
         await route.continue();
       };
       if (held) await draws.route(incoming, delay);
+      const shadowOpener = (target) => target.pathname === new URL(url).pathname;
+      const asForm = async (route) => {
+        const response = await route.fetch();
+        const body = (await response.text()).replace(
+          /<button id="draw-opener"([^>]*)>([^<]*)<\/button>/,
+          '<form id="draw-opener" tabindex="-1"><input type="hidden" name="localName"><input type="hidden" name="focus"><button$1>$2</button></form>',
+        );
+        await route.fulfill({ response, body });
+      };
+      if (mode === "shadow-opener") await draws.route(shadowOpener, asForm);
       await draws.goto(url);
-      await draws.locator("#draw-opener").press("Enter");
+      if (mode === "shadow-opener") {
+        await draws.locator("#draw-opener").evaluate((form) => {
+          HTMLElement.prototype.focus.call(form);
+          form.querySelector("button").click();
+        });
+      } else await draws.locator("#draw-opener").press("Enter");
       await draws.waitForFunction((count) => document.querySelectorAll("dialog:modal").length === count,
         ["nested", "drop-inner", "mutate"].includes(mode) ? 2 : 1);
       if (held) release();
@@ -1957,10 +2060,11 @@ async function run(browser) {
         `A server-drawn modal's ${mode} redraw closes, reopens or removes it as drawn`,
         after.events === want && after.modal === (mode === "reopen" ? "draw-outer" : undefined)
           && after.outer === !["remove", "mutate"].includes(mode) && (mode === "strip-open" || after.focus === focus)
-          && (mode !== "replace-opener" || after.opener === "Replacement opener"),
+          && (!["replace-opener", "shadow-opener"].includes(mode) || after.opener === "Replacement opener"),
         JSON.stringify(after),
       );
       if (held) await draws.unroute(incoming, delay);
+      if (mode === "shadow-opener") await draws.unroute(shadowOpener, asForm);
       if (mode === "reopen") {
         await draws.getByRole("button", { name: "Close redrawn dialog" }).click();
         await draws.locator("#draw-outer:not([open])").waitFor({ state: "attached" });
@@ -2570,6 +2674,23 @@ async function run(browser) {
   }
   await clip.waitForFunction(() => document.querySelector('[data-scope=ui-copy-button] [aria-live]')?.textContent === "Copy", null, { timeout: 5000 }).catch(() => {});
   check("then its label again", (await said.textContent()) === "Copy", await said.textContent());
+  await clip.evaluate(() => {
+    const sku = document.querySelector("#sku");
+    const form = document.createElement("form");
+    form.id = sku.id;
+    form.textContent = "form SKU";
+    const field = document.createElement("input");
+    field.type = "hidden";
+    field.name = "textContent";
+    form.append(field);
+    sku.removeAttribute("id");
+    sku.parentElement.after(form);
+    Object.defineProperty(navigator.clipboard, "writeText", { value: async (text) => { window.copiedFormText = text; } });
+  });
+  await copyButton.click();
+  await copies.filter({ hasText: "2" }).waitFor({ timeout: 5000 }).catch(() => {});
+  check("CopyButton: a form with a control named textContent still copies the form's text",
+    await copies.textContent() === "2" && await clip.evaluate(() => window.copiedFormText) === "form SKU");
   await clip.context().close();
   // Removal cancels even a write that has not answered yet. Returning the same button starts
   // a new lifetime; the previous click must not publish into it or start a new label timer.
@@ -2670,6 +2791,23 @@ async function run(browser) {
     await tips.goto(`${base}/`);
     await tips.waitForFunction(() => document.querySelector("[data-scope=ui-combo-box] input")?.checkVisibility(), null, { timeout: 5000 }).catch(() => {});
     const native = await tips.evaluate(() => "interestForElement" in HTMLButtonElement.prototype);
+    if (!native) {
+      const hoverErrors = await tips.locator('form[method="post"][action="/"]').evaluate((form) => {
+        const field = document.createElement("input");
+        field.type = "hidden";
+        field.name = "closest";
+        form.append(field);
+        const errors = [];
+        const failed = (event) => errors.push(event.message);
+        window.addEventListener("error", failed);
+        form.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+        window.removeEventListener("error", failed);
+        field.remove();
+        return errors;
+      });
+      check("Tooltip: a pointer over a form with a control named closest does not throw",
+        hoverErrors.length === 0, hoverErrors.join(" | "));
+    }
     const orders = tips.getByRole("link", { name: "Open the orders", exact: true });
     const lastSale = tips.getByRole("link", { name: "Last sale", exact: true });
     const described = await lastSale.evaluate((a) => document.getElementById(a.getAttribute("aria-describedby") ?? "")?.textContent);

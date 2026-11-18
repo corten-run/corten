@@ -102,7 +102,7 @@ export function step(event, menu) {
  * @param {MouseEvent} event @param {HTMLButtonElement} trigger @param {HTMLDivElement} menu
  */
 export function used(event, trigger, menu) {
-  const item = event.target instanceof Element && event.target.closest(ITEM);
+  const item = event.target instanceof Element && Element.prototype.closest.call(event.target, ITEM);
   if (!item || !menu.contains(item)) return;
   const target = item.getAttribute("commandfor");
   const dialog = target && document.getElementById(target);

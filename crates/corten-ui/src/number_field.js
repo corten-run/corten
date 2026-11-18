@@ -22,7 +22,8 @@ const held = () => keep(() => ({ timer: 0, pressed: /** @type {Map<number, HTMLB
 export function connect(decrease, input, increase, signal) {
   sync(decrease, input, increase);
   // `reset` comes before the form puts its values back.
-  input.form?.addEventListener("reset", () => setTimeout(() => sync(decrease, input, increase)), { signal });
+  const form = input.form;
+  if (form) EventTarget.prototype.addEventListener.call(form, "reset", () => setTimeout(() => sync(decrease, input, increase)), { signal });
   const s = held();
   /** @param {Event} event */
   const release = (event) => {

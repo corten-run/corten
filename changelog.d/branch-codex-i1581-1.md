@@ -1,0 +1,1 @@
+- Keep Corten UI widgets working when a form control is named after a DOM member such as `addEventListener`, `elements` or `getAttribute`.

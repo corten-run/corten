@@ -28,7 +28,8 @@ export function connect(root, select, input, popup, list, empty, terms, signal) 
     const b = box(root);
     if (b) mark(b);
   };
-  select.form?.addEventListener("reset", () => setTimeout(reset), { signal });
+  const form = select.form;
+  if (form) EventTarget.prototype.addEventListener.call(form, "reset", () => setTimeout(reset), { signal });
   if (boxes.has(root)) return; // back after a move: already built
   /** @type {Box} */
   const b = { select, input, popup, list, empty, all: [], words: [], shown: [], active: -1 };

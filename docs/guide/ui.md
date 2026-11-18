@@ -38,6 +38,10 @@ holding the text the form sent, so a refused entry is shown back as typed, read 
 `t.parse_money(&input.price, USD)` in the page's locale into `Minor` units ([Views](views.md)).
 ui-gallery's listing has both.
 
+Controls can be named `addEventListener`, `elements`, `getAttribute` or other DOM members without
+breaking the widgets. Their scripts read forms through the platform's prototypes, just as
+[app scripts that read forms](requests-and-forms.md#request-modes) must.
+
 `MenuButton`'s items are its children, each the element the page would write with
 `role="menuitem"`, so a menu holds whatever a row's actions need:
 

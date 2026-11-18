@@ -80,7 +80,7 @@ function closed(event) {
  * @param {EventTarget | null} target
  */
 function controlOf(target) {
-  const control = target instanceof Element ? target.closest(CONTROL) : null;
+  const control = target instanceof Element ? Element.prototype.closest.call(target, CONTROL) : null;
   if (!(control instanceof HTMLElement)) return null;
   const tip = document.getElementById(control.getAttribute("interestfor") ?? "");
   return tip && tips.has(tip) ? { tip, control } : null;
