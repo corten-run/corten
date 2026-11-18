@@ -495,10 +495,10 @@ inbox prefix; this does not change the key or subject prefix limits.
 querying Postgres, and the snapshot and live routes answer 404.
 
 The relay logs and drops pending rows with invalid keys from an older version or external
-SQL, then publishes the remaining rows in order within each feed. Look on `corten::feed`
+SQL, then keeps publishing the remaining rows. Look on `corten::feed`
 for the outbox row ID and key. The relay uses the existing `published_at` marker to take
 the skipped row out of the queue; it did not deliver that patch. Ordinary pruning can remove
-it. There is no schema migration. An older instance holding the relay lease can still stall on a bad row
+it. An older instance holding the relay lease can still stall on a bad row
 until a new relay takes over ([Choice 63](../design.md#choice-cluster-feed-subjects)).
 
 To replace an invalid key, write a new feed with a valid key using the app's current
@@ -516,17 +516,28 @@ these cases:
   stream's `MaxMsgSize` or make future patches smaller. The relay will not resend the
   retired patch to JetStream.
 - A refusal from the client's cached `max_payload` logs a warning, `outbox feed held`.
-  The row stays pending, and only later patches on the same feed wait behind it. The relay
-  tries again after a five-second backoff. Raise `max_payload` on every eligible broker
-  if needed; the client refreshes its cached limit when it reconnects. An operator may
-  need to restart the client or its instance to pick up the change. The cluster never
-  reconnects the supplied client on its own. To skip the patch instead, stop the relay
-  candidates before deleting the logged pending row from `corten_outbox`, so no retry can
-  race the deletion. Deleting the row leaves a gap and does not undo the app write.
+  The row and later patches on that feed stay pending (`published_at IS NULL` in
+  `corten_outbox`), and loaded views can stay stale while `relay_active()` is true.
+  The relay checks again after a five-second backoff, but a stale limit holds that feed
+  indefinitely until the client reconnects, even after the broker limit is raised.
+  Alert on repeated warnings for the same row. Raise `max_payload` on every eligible
+  broker if needed, then reconnect the relay's NATS client or restart its instance so
+  the client learns the new limit. Corten never forces a reconnect. To skip the patch
+  instead, stop the relay candidates before deleting the logged pending row, so no
+  retry can race the deletion. Deleting the row leaves a gap and does not undo the app write.
 - A broker can close the connection if it receives a publish over its actual `max_payload`.
   Its protocol error names no row, so the relay cannot use it to drop a patch on a shared
   connection. An unacknowledged publish follows the ordinary retry path (`relay standing by`
-  on failure). If the client's refreshed limit refuses the row locally, only that feed waits.
+  on failure). A disconnect can interrupt other feeds and other users of the shared client.
+  The relay sends a batch before waiting for its acknowledgements, so JetStream can store
+  later patches from the same feed ahead of a failed one when the broker disconnects mid-batch
+  ([#1633 A relay batch interrupted by a broker disconnect can store a feed's later patches before the one that failed](https://github.com/corten-run/corten/issues/1633)).
+  With uniform broker limits, if the refreshed client refuses the row locally, only that
+  feed waits on the recovered connection.
+
+The relay's startup migration adds a partial index on pending `(feed, id)` entries.
+While a feed is held, the relay uses it to seek past that feed's backlog. The ordinary
+pending scan still uses the ID index when no feed is held.
 
 The drop and hold logs include the outbox row ID, feed key, patch body size (not the
 headers), and reason. After a row is dropped or deleted, the next deliverable patch on

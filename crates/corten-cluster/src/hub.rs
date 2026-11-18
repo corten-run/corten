@@ -502,14 +502,14 @@ pub(crate) async fn unload_idle<S: Source>(hub: Arc<Hub<S>>, after: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use corten::feed::{patch_json, Change, Feed, Row};
     use serde::{Deserialize, Serialize};
     use sqlx::{postgres::PgPoolOptions, PgConnection};
 
     use super::{Hub, Message};
-    use crate::{Error, Options, Source};
+    use crate::{tests::Capture, Error, Options, Source};
 
     #[derive(Clone, Debug, Serialize, Deserialize, Row)]
     struct Item {
@@ -529,34 +529,6 @@ mod tests {
         }
     }
 
-    /// Each event as "LEVEL target field=value ..", in the order they came.
-    struct Capture(Arc<Mutex<Vec<String>>>);
-
-    impl tracing::Subscriber for Capture {
-        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-        fn event(&self, event: &tracing::Event<'_>) {
-            struct Fields(String);
-            impl tracing::field::Visit for Fields {
-                fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                    use std::fmt::Write;
-                    let _ = write!(self.0, " {}={value:?}", field.name());
-                }
-            }
-            let mut fields = Fields(format!("{} {}", event.metadata().level(), event.metadata().target()));
-            event.record(&mut fields);
-            self.0.lock().unwrap().push(fields.0);
-        }
-        fn enter(&self, _: &tracing::span::Id) {}
-        fn exit(&self, _: &tracing::span::Id) {}
-    }
-
     #[tokio::test]
     async fn a_gap_and_a_dropped_patch_are_warnings_the_apps_subscriber_sees_with_the_feed() {
         // Never connected: applying a patch reads nothing from Postgres.
@@ -566,13 +538,12 @@ mod tests {
         let item = Item { id: "i".into(), n: 1 };
         let skips = Message { generation: "g1".into(), json: patch_json(12, &[Change::Upsert { id: "i", value: &item }]) };
         let broken = Message { generation: "g1".into(), json: "{\"seq\":11}".into() };
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let (gap, dropped) = tracing::subscriber::with_default(Capture(seen.clone()), || {
-            (hub.apply(&feed, "k1", &skips), hub.apply(&feed, "k1", &broken))
-        });
+        let seen = Capture::default();
+        let (gap, dropped) =
+            tracing::subscriber::with_default(seen.clone(), || (hub.apply(&feed, "k1", &skips), hub.apply(&feed, "k1", &broken)));
         assert!(!gap, "a gap reloads the feed");
         assert!(dropped, "an invalid patch is dropped and the feed goes on");
-        let seen = seen.lock().unwrap();
+        let seen = seen.0.lock().unwrap();
         assert_eq!(seen.len(), 2, "{seen:?}");
         assert!(seen[0].starts_with("WARN corten::feed"), "{}", seen[0]);
         for field in ["instance=a1", "feed=k1", "have=10", "got=12"] {

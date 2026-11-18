@@ -2,13 +2,16 @@
 //! changes the app's rows, takes the feed's next sequence number and stores the patch in the
 //! outbox in one transaction, so a patch exists if and only if its change committed.
 
-use std::time::Duration;
+use std::{sync::LazyLock, time::Duration};
 
 use corten::feed::{Change, Row};
 use serde::Serialize;
 use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 
 use crate::{check_key, now_ms, Error, Source};
+
+/// Outbox rows published per round trip.
+pub(crate) const BATCH: i64 = 256;
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS corten_feeds (
@@ -27,6 +30,7 @@ CREATE TABLE IF NOT EXISTS corten_outbox (
     UNIQUE (feed, seq)
 );
 CREATE INDEX IF NOT EXISTS corten_outbox_pending ON corten_outbox (id) WHERE published_at IS NULL;
+CREATE INDEX IF NOT EXISTS corten_outbox_pending_feed ON corten_outbox (feed, id) WHERE published_at IS NULL;
 CREATE TABLE IF NOT EXISTS corten_idempotency (
     key text PRIMARY KEY,
     feed text NOT NULL,
@@ -227,22 +231,52 @@ pub(crate) struct Pending {
     pub body: String,
 }
 
-pub(crate) async fn pending(pool: &PgPool, limit: i64, excluded: &[&str]) -> Result<Vec<Pending>, Error> {
-    let query = if excluded.is_empty() {
-        sqlx::query_as(
-            "SELECT id, feed, generation, seq, body FROM corten_outbox WHERE published_at IS NULL ORDER BY id LIMIT $1",
-        )
-        .bind(limit)
-    } else {
-        sqlx::query_as(
-            "SELECT id, feed, generation, seq, body FROM corten_outbox
-             WHERE published_at IS NULL AND feed <> ALL($2) ORDER BY id LIMIT $1",
-        )
-        .bind(limit)
-        .bind(excluded)
-    };
-    let rows: Vec<(i64, String, String, i64, String)> = query.fetch_all(pool).await?;
-    Ok(rows.into_iter().map(|(id, feed, generation, seq, body)| Pending { id, feed, generation, seq, body }).collect())
+pub(crate) async fn pending(pool: &PgPool, limit: i64) -> Result<Vec<Pending>, Error> {
+    Ok(sqlx::query_as(
+        "SELECT id, feed, generation, seq, body FROM corten_outbox WHERE published_at IS NULL ORDER BY id LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+// Seek to the next distinct pending feed, not through the rows of the previous feed. Only
+// eligible feeds supply candidates, and only the final batch needs bodies. Literal limits
+// keep the work visible to Postgres even once it uses a generic prepared plan.
+static PENDING_EXCLUDING: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "WITH RECURSIVE feeds(feed) AS (
+             (SELECT feed FROM corten_outbox WHERE published_at IS NULL ORDER BY feed LIMIT 1)
+             UNION ALL
+             SELECT next.feed FROM feeds CROSS JOIN LATERAL (
+                 SELECT feed FROM corten_outbox
+                 WHERE published_at IS NULL AND feed > feeds.feed ORDER BY feed LIMIT 1
+             ) AS next
+         ), batch AS (
+             SELECT candidate.id FROM feeds CROSS JOIN LATERAL (
+                 SELECT id FROM corten_outbox
+                 WHERE published_at IS NULL AND feed = feeds.feed ORDER BY id LIMIT {BATCH}
+             ) AS candidate
+             WHERE feeds.feed <> ALL($1)
+             ORDER BY candidate.id LIMIT {BATCH}
+         )
+         SELECT batch.id, row.feed, row.generation, row.seq, row.body
+         FROM batch CROSS JOIN LATERAL (
+             SELECT feed, generation, seq, body FROM corten_outbox WHERE id = batch.id LIMIT 1
+         ) AS row
+         ORDER BY batch.id"
+    )
+});
+
+pub(crate) async fn pending_excluding(pool: &PgPool, excluded: &[&str]) -> Result<Vec<Pending>, Error> {
+    Ok(sqlx::query_as(PENDING_EXCLUDING.as_str()).bind(excluded).fetch_all(pool).await?)
+}
+
+impl sqlx::FromRow<'_, sqlx::postgres::PgRow> for Pending {
+    fn from_row(row: &sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        let (id, feed, generation, seq, body) = sqlx::FromRow::from_row(row)?;
+        Ok(Self { id, feed, generation, seq, body })
+    }
 }
 
 /// Retires acknowledged rows or rows the relay skips permanently. True if any were still pending.

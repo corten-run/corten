@@ -5842,9 +5842,8 @@ rules something out.
     version or external SQL could have queued. It marks an invalid row done with the existing
     `published_at` marker, logs the row ID and key at error level, and continues without
     sending the patch. The marker means done, not delivered, in this case. Ordinary pruning
-    can remove the row; the app's committed data is not changed. No schema or index change is
-    needed. A server with a lower control-line limit than the one configured in Corten
-    can still reject a publish.
+    can remove the row; the app's committed data is not changed. A server with a lower
+    control-line limit than the one configured in Corten can still reject a publish.
 
     The relay also uses the done marker for JetStream's `10054` acknowledgement, which
     refers to the refused publish. A size limit can change; retirement is not a claim that
@@ -5853,11 +5852,20 @@ rules something out.
     JetStream, and a loaded follower can stay stale if no later patch arrives.
 
     A cached client-side refusal leaves the oldest refused row and later rows of that feed
-    pending, with a per-feed backoff. The relay still selects eligible rows oldest first.
+    pending, with a per-feed backoff. Retrying the local check does not refresh a stale limit:
+    that feed stays held until the client reconnects or the row is removed. Startup migration
+    adds a partial pending `(feed, id)` index. With holds, the relay seeks between distinct
+    pending feeds, reads at most a batch of IDs from each eligible feed, and takes the
+    oldest eligible batch without walking the held feed's backlog. Without holds,
+    the ordinary ordered scan of the pending ID index is unchanged.
     Postgres commits each feed's sequence under that feed's row lock, and followers detect
     gaps by that sequence, not across feeds by outbox ID. A broker's connection-wide
     `Maximum Payload Violation` and disconnect identify no publish; the relay handles
-    that as an ordinary unacknowledged failure. It never forces a client reconnect.
+    that as an ordinary unacknowledged failure. Because the batch is sent before it is
+    acknowledged, a later same-feed patch can reach JetStream on the new connection
+    before the failed patch
+    ([#1633 A relay batch interrupted by a broker disconnect can store a feed's later patches before the one that failed](https://github.com/corten-run/corten/issues/1633)).
+    The relay never forces a client reconnect.
 
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
@@ -5879,20 +5887,24 @@ rules something out.
     [NATS broker](https://github.com/nats-io/nats-server/blob/v2.15.2/server/client.go#L2617-L2621)
     sends a connection error without a subject or reply ID, and
     [async-nats 0.52](https://docs.rs/crate/async-nats/0.52.0/source/src/connector.rs)
-    caches the limit from its handshake); reasoned (retrying cannot repair a key that fails
-    a pure check; the done marker removes a skipped row from the existing pending index;
-    holding a feed at its oldest refused row preserves the sequence that its followers
-    use); value (correctness and reliability first, early failure and a small surface:
+    caches the limit from its handshake and its
+    [publish queue](https://docs.rs/crate/async-nats/0.52.0/source/src/lib.rs) survives reconnect);
+    reasoned (steady-state recovery relies on the same payload limit on all eligible brokers;
+    retrying cannot repair a key that fails a pure check; the done marker removes a skipped row from the pending indexes;
+    a cached refusal on a connected client holds the refused row without sending its
+    successors); value (correctness and reliability first, early failure and a small surface:
     README Values 4 and 6).
 
     Revisit when: an app needs arbitrary text as a cluster key, the NATS server's default
     control line or documented grammar changes, clients can identify an individual broker
     refusal or refresh the cached limit without reconnecting, or deployments need atomic
-    delivery order across feeds or automatic recovery for dropped patches.
+    delivery order across feeds, ordering across a mid-batch disconnect, or automatic
+    recovery from an indefinite hold or a dropped patch.
 
     Last checked: 2026-11-18, the `corten-cluster` integration tests on NATS 2.15.2 with
-    async-nats 0.52.0: JetStream's size refusal and follower reload, and a broker reload from
-    4,096 to 16,384 bytes with a 2.25-second subsequent handshake. Subject rules and
+    async-nats 0.52.0: JetStream's size refusal and follower reload, and a stale cached
+    limit held across retries with a 2.25-second subsequent handshake. The pending-index
+    plan was checked on Postgres 16.13 with 250,000 held rows. Subject rules and
     control-line configuration checked 2026-11-17 at `056964945`.
 
 

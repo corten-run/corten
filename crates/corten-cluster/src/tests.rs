@@ -3,7 +3,10 @@
 //! CONTRIBUTING.md for the containers. Each test uses its own feed keys, so they can share a database,
 //! but the relay lease is one row, so run them with `--test-threads=1`.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use async_nats::jetstream::{
     self,
@@ -24,6 +27,35 @@ use tokio::{
 use corten::feed::Change;
 
 use super::*;
+
+/// Each feed event as "LEVEL target field=value ..", in the order they came.
+#[derive(Clone, Default)]
+pub(super) struct Capture(pub(super) Arc<Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for Capture {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target() == "corten::feed"
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Fields(String);
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                use std::fmt::Write;
+                let _ = write!(self.0, " {}={value:?}", field.name());
+            }
+        }
+        let mut fields = Fields(format!("{} {}", event.metadata().level(), event.metadata().target()));
+        event.record(&mut fields);
+        self.0.lock().unwrap().push(fields.0);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
 
 #[test]
 fn nats_header_line_breaks_do_not_panic() {
@@ -235,6 +267,59 @@ async fn schema_pool(url: &str, schema: &str) -> PgPool {
     PgPoolOptions::new().max_connections(8).connect_with(options).await.unwrap()
 }
 
+#[tokio::test]
+async fn pending_batches_seek_past_held_feeds_after_an_upgrade() {
+    let Some((db, _)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("held_backlog_");
+    let pool = schema_pool(&db, &schema).await;
+    migrate(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "DROP INDEX corten_outbox_pending_feed;
+         INSERT INTO corten_outbox (feed, generation, seq, body)
+         SELECT 'held', 'g', n, 'held body' FROM generate_series(1, 250000) AS n;
+         INSERT INTO corten_outbox (feed, generation, seq, body) VALUES ('another_held', 'g', 1, 'held body');",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Upgrade an already populated outbox; even legacy rows without feed metadata are visible.
+    migrate(&pool).await.unwrap();
+    let excluded = ["held", "another_held"];
+    assert!(store::pending_excluding(&pool, &excluded).await.unwrap().is_empty());
+    let mut late = pool.begin().await.unwrap();
+    sqlx::query("INSERT INTO corten_outbox (feed, generation, seq, body) VALUES ('late', 'g', 1, 'late body')")
+        .execute(&mut *late)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO corten_outbox (feed, generation, seq, body)
+         SELECT CASE WHEN n % 2 = 0 THEN 'z' ELSE 'b' END, 'g', n, n::text
+         FROM generate_series(1, $1) AS series(n) ORDER BY series.n",
+    )
+    .bind(store::BATCH)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let batch = store::pending_excluding(&pool, &excluded).await.unwrap();
+    assert_eq!(batch.len() as i64, store::BATCH);
+    for (n, row) in (1..).zip(&batch) {
+        assert_eq!(row.feed, if n % 2 == 0 { "z" } else { "b" });
+        assert_eq!((row.seq, row.body.as_str()), (n, n.to_string().as_str()));
+    }
+    late.commit().await.unwrap();
+    let next = store::pending_excluding(&pool, &excluded).await.unwrap();
+    assert_eq!(next.len(), batch.len());
+    assert_eq!(next[0].feed, "late");
+    assert!(next[0].id < batch[0].id);
+    let mut delivered: Vec<_> = batch.iter().map(|row| row.id).collect();
+    delivered.push(next[0].id);
+    assert!(store::mark_published(&pool, &delivered).await.unwrap());
+    assert!(store::pending_excluding(&pool, &excluded).await.unwrap().is_empty());
+    assert_eq!(store::pending(&pool, 2).await.unwrap()[0].feed, "held");
+    let admin = PgPool::connect(&db).await.unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
+}
+
 /// Deterministic, low-compressibility ASCII for exercising the real B-tree indexes.
 fn long_key(len: usize) -> String {
     let alphabet = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -305,7 +390,7 @@ async fn the_relay_drops_legacy_invalid_keys_and_delivers_good_rows_in_order() {
     }
 
     let end = Instant::now() + Duration::from_secs(10);
-    while !store::pending(&pool, 10, &[]).await.unwrap().is_empty() {
+    while !store::pending(&pool, 10).await.unwrap().is_empty() {
         assert!(Instant::now() < end, "outbox rows not marked done");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -318,10 +403,13 @@ async fn the_relay_drops_legacy_invalid_keys_and_delivers_good_rows_in_order() {
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
+// Single-threaded so the relay task runs with the test's tracing subscriber.
+#[tokio::test]
 async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     const STREAM_LIMIT: i32 = 512;
+    let logs = Capture::default();
+    let _capture = tracing::subscriber::set_default(logs.clone());
     let schema = key("size_limit_");
     let pool = schema_pool(&db, &schema).await;
     migrate(&pool).await.unwrap();
@@ -365,7 +453,9 @@ async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
     );
     assert_eq!(write.commit(&[change]).await.unwrap().seq, Some(2));
     assert_eq!(set(&pool, "large", 3, None).await.seq, Some(3));
-    assert_eq!(wait_pending(&pool, 3).await.iter().map(|row| row.seq).collect::<Vec<_>>(), [1, 2, 3]);
+    let pending = wait_pending(&pool, 3).await;
+    assert_eq!(pending.iter().map(|row| row.seq).collect::<Vec<_>>(), [1, 2, 3]);
+    let refused_id = pending[1].id;
     store::release(&mut gate).await.unwrap();
 
     let mut messages = stream_messages(&stream).await;
@@ -377,6 +467,8 @@ async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
     assert_eq!((state.first_sequence, state.last_sequence, state.messages), (1, 2, 2));
     eventually("the follower to reload at patch 3", || followed.seq() == 3).await;
     assert_eq!(followed.read(|rows| (rows["a"].n, rows[&item.id].n)), (3, 2));
+    let dropped = format!(r#"ERROR corten::feed message=dropped outbox row instance=corten id={refused_id} feed="large" "#);
+    assert!(logs.0.lock().unwrap().iter().any(|line| line.starts_with(&dropped)));
 
     delete_test_stream_and_schema(&db, &js, &stream_name, &schema).await;
 }
@@ -418,9 +510,12 @@ async fn payload_proxy(listener: TcpListener, upstream: async_nats::ServerAddr, 
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
+// Single-threaded so the relay task runs with the test's tracing subscriber.
+#[tokio::test]
 async fn the_relay_holds_only_the_refused_feed_until_the_cached_limit_refreshes() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let logs = Capture::default();
+    let _capture = tracing::subscriber::set_default(logs.clone());
     let schema = key("cached_limit_");
     let pool = schema_pool(&db, &schema).await;
     migrate(&pool).await.unwrap();
@@ -442,43 +537,60 @@ async fn the_relay_holds_only_the_refused_feed_until_the_cached_limit_refreshes(
     let publisher = async_nats::ConnectOptions::new().ignore_discovered_servers().connect(proxy_addr).await.unwrap();
     assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
 
+    test_items(&pool).await;
+    new_feed(&pool, "large").await;
+    new_feed(&pool, "small").await;
+    let mut gate = pool.acquire().await.unwrap().detach();
+    assert!(take(&mut gate, "test", Duration::from_secs(30)).await);
+    let options = Options { stream: stream_name.clone(), subject_prefix: schema.clone(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), publisher.clone(), Items, options).await.unwrap();
+    let large_follower = cluster.feed("large").await.unwrap().unwrap();
+    let small_follower = cluster.feed("small").await.unwrap().unwrap();
+    assert_eq!((large_follower.seq(), small_follower.seq()), (0, 0));
+
+    assert_eq!(set(&pool, "large", 1, None).await.seq, Some(1));
+    let item = Item { id: "x".repeat(LOW_PAYLOAD), n: 2 };
+    let Begin::New(mut write) = begin(&pool, "large", None).await.unwrap() else { unreachable!() };
+    sqlx::query("INSERT INTO test_items VALUES ('large', $1, $2)")
+        .bind(&item.id)
+        .bind(item.n)
+        .execute(write.conn())
+        .await
+        .unwrap();
+    assert_eq!(write.commit(&[Change::Upsert { id: &item.id, value: &item }]).await.unwrap().seq, Some(2));
     let mut tx = pool.begin().await.unwrap();
-    assert!(create_feed(&mut tx, "large").await.unwrap());
-    assert!(create_feed(&mut tx, "small").await.unwrap());
-    let last_seq = relay::BATCH + 2;
+    let last_seq = store::BATCH + 2;
     sqlx::query(
-        "INSERT INTO corten_outbox (feed, generation, seq, body)
-         SELECT key, generation, n, json_build_object('seq', n, 'changes', '[]'::json, 'padding',
-             CASE WHEN n = 2 THEN repeat('x', $2) ELSE '' END)::text
-         FROM corten_feeds CROSS JOIN generate_series(1, $1) AS n WHERE key = 'large' ORDER BY n",
+        "WITH tip AS (UPDATE corten_feeds SET seq = $1 WHERE key = 'large' RETURNING key, generation)
+         INSERT INTO corten_outbox (feed, generation, seq, body)
+         SELECT key, generation, n, json_build_object('seq', n, 'changes', '[]'::json)::text
+         FROM tip CROSS JOIN generate_series(3, $1) AS n ORDER BY n",
     )
     .bind(last_seq)
-    .bind(2 * LOW_PAYLOAD as i32)
-    .execute(&mut *tx)
-    .await
-    .unwrap();
-    // The other feed is beyond a batch full of held rows.
-    sqlx::query(
-        "INSERT INTO corten_outbox (feed, generation, seq, body)
-         SELECT key, generation, 1, '{\"seq\":1,\"changes\":[]}' FROM corten_feeds WHERE key = 'small'",
-    )
     .execute(&mut *tx)
     .await
     .unwrap();
     tx.commit().await.unwrap();
-
-    let options = Options { stream: stream_name.clone(), subject_prefix: schema.clone(), ..Options::default() };
-    let _cluster = Cluster::start(pool.clone(), publisher.clone(), Items, options).await.unwrap();
+    // The other feed is beyond a batch full of held rows.
+    assert_eq!(set(&pool, "small", 1, None).await.seq, Some(1));
+    store::release(&mut gate).await.unwrap();
     let mut messages = stream_messages(&stream).await;
     let large = format!("{schema}.large");
+    let small = format!("{schema}.small");
     expect_patch(&mut messages, &large, 1, 1).await;
-    expect_patch(&mut messages, &format!("{schema}.small"), 2, 1).await;
+    expect_patch(&mut messages, &small, 2, 1).await;
     let pending = wait_pending(&pool, (last_seq - 1) as usize).await;
     assert!(pending.iter().all(|row| row.feed == "large"));
-    assert_eq!(pending.iter().map(|row| row.seq).collect::<Vec<_>>(), (2..=last_seq).collect::<Vec<_>>());
-    assert_eq!(stream.info().await.unwrap().state.messages, 2);
-    assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 1);
+    let refused_id = pending[0].id;
+    let held = format!("WARN corten::feed message=outbox feed held instance=corten id={refused_id} feed=large ");
+    let holds = || logs.0.lock().unwrap().iter().filter(|line| line.starts_with(&held)).count();
+    assert!(holds() >= 1, "no warning for the refused row");
 
+    let last_seq = last_seq + 1;
+    assert_eq!(set(&pool, "large", last_seq, None).await.seq, Some(last_seq as u64));
+    assert_eq!(set(&pool, "small", 2, None).await.seq, Some(2));
+    expect_patch(&mut messages, &small, 3, 2).await;
+    eventually("the two loaded followers at patches 1 and 2", || large_follower.seq() == 1 && small_follower.seq() == 2).await;
     // With a broker started at LOW_PAYLOAD, an integration runner can reload its config
     // here. A new client observes the increase; the test publisher still has the old INFO.
     if observer.max_payload() == LOW_PAYLOAD {
@@ -491,12 +603,28 @@ async fn the_relay_holds_only_the_refused_feed_until_the_cached_limit_refreshes(
         .expect("the broker did not raise max_payload");
         assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
     }
+    let holds_before = holds();
+    for count in holds_before + 1..=holds_before + 2 {
+        eventually("another warning for the same held row", || holds() >= count).await;
+        let still_pending = wait_pending(&pool, (last_seq - 1) as usize).await;
+        assert_eq!(still_pending[0].id, refused_id);
+        assert!(still_pending.iter().all(|row| row.feed == "large"));
+        assert_eq!(still_pending.iter().map(|row| row.seq).collect::<Vec<_>>(), (2..=last_seq).collect::<Vec<_>>());
+        assert_eq!((large_follower.seq(), small_follower.seq()), (1, 2));
+        assert_eq!(large_follower.read(|rows| (rows["a"].n, rows.contains_key(&item.id))), (1, false));
+        assert_eq!(small_follower.read(|rows| rows["a"].n), 2);
+        assert_eq!(stream.info().await.unwrap().state.messages, 3);
+        assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 1);
+    }
+    assert!(!logs.0.lock().unwrap().iter().any(|line| line.contains("gap in the feed's patches")));
     disconnect.send(()).unwrap();
     for seq in 2..=last_seq {
-        expect_patch(&mut messages, &large, (seq + 1) as u64, seq).await;
+        expect_patch(&mut messages, &large, (seq + 2) as u64, seq).await;
     }
     wait_pending(&pool, 0).await;
-    assert_eq!(stream.info().await.unwrap().state.messages, (last_seq + 1) as u64);
+    assert_eq!(stream.info().await.unwrap().state.messages, (last_seq + 2) as u64);
+    eventually("the held follower to reach the write made during the hold", || large_follower.seq() == last_seq as u64).await;
+    assert_eq!(large_follower.read(|rows| (rows["a"].n, rows[&item.id].n)), (last_seq, 2));
     assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 2, "only the test disconnected the publisher");
     delete_test_stream_and_schema(&db, &js, &stream_name, &schema).await;
     proxy.abort();
@@ -526,7 +654,7 @@ async fn expect_patch(messages: &mut Ordered, subject: &str, stream_seq: u64, fe
 async fn wait_pending(pool: &PgPool, count: usize) -> Vec<store::Pending> {
     let end = Instant::now() + Duration::from_secs(10);
     loop {
-        let pending = store::pending(pool, count as i64 + 1, &[]).await.unwrap();
+        let pending = store::pending(pool, count as i64 + 1).await.unwrap();
         if pending.len() == count {
             return pending;
         }
@@ -572,13 +700,13 @@ async fn the_relay_retries_an_acknowledgement_error_that_is_not_a_size_refusal()
     for _ in 0..2 {
         tokio::time::timeout(Duration::from_secs(10), attempts.next()).await.expect("relay did not retry").unwrap();
     }
-    assert_eq!(store::pending(&pool, 10, &[]).await.unwrap().len(), 1);
+    assert_eq!(store::pending(&pool, 10).await.unwrap().len(), 1);
     assert_eq!(stream.info().await.unwrap().state.messages, 1);
 
     config.max_messages = 2;
     js.update_stream(config).await.unwrap();
     let end = Instant::now() + Duration::from_secs(10);
-    while !store::pending(&pool, 10, &[]).await.unwrap().is_empty() {
+    while !store::pending(&pool, 10).await.unwrap().is_empty() {
         assert!(Instant::now() < end, "the pending patch was not delivered after the stream limit increased");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }

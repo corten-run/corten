@@ -1,4 +1,5 @@
-//! Outbox relay: publishes committed patches to JetStream in order within each feed. Every instance runs a
+//! Outbox relay: sends committed patches to JetStream in order within each feed, but a broker
+//! disconnect mid-batch can let queued publishes overtake a failed one. Every instance runs a
 //! candidate; the one holding the lease (store::lease) publishes. A valid patch is marked done
 //! only after JetStream acknowledged it. A relay that dies or loses its lease in between leaves it to
 //! the next one, which publishes it again, and JetStream drops the copy by its message id. Two
@@ -25,10 +26,11 @@ use async_nats::{
 };
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
-use crate::{store, valid_key, Error, Options};
+use crate::{
+    store::{self, BATCH},
+    valid_key, Error, Options,
+};
 
-/// Outbox rows published per round trip.
-pub(super) const BATCH: i64 = 256;
 const PAYLOAD_BACKOFF: Duration = Duration::from_secs(5);
 
 pub(crate) fn subject(options: &Options, feed: &str) -> String {
@@ -136,8 +138,12 @@ async fn drain(
         }
         let now = Instant::now();
         held_feeds.retain(|_, retry_at| *retry_at > now);
-        let excluded: Vec<&str> = held_feeds.keys().map(String::as_str).collect();
-        let rows = store::pending(pool, BATCH, &excluded).await?;
+        let rows = if held_feeds.is_empty() {
+            store::pending(pool, BATCH).await?
+        } else {
+            let excluded: Vec<&str> = held_feeds.keys().map(String::as_str).collect();
+            store::pending_excluding(pool, &excluded).await?
+        };
         if rows.is_empty() {
             return Ok(());
         }
