@@ -204,7 +204,7 @@ Pending entries are in [changelog.d/](changelog.d/).
   `<script>` or `<template>`; Chromium and WebKit let a leading `<title>`, `<base>`,
   `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the rest is read, so a table
   row, cell or other table part beside another element was dropped (or a `<table>` or `<form>`
-  after a row taken apart) with only a console error about the next element. `req.patch`,
+  after a row taken apart) with only a console error about the next element. `action.patch`,
   `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
   fragment panics, naming the element lost and the one that came first, so an app's own
   debug-build tests that draw such a patch now fail; a patch with a token the check does not read
