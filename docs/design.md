@@ -5821,12 +5821,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
    lookup's name and an `if()` condition (`style(--x: 1)`) name custom properties, a dashed
    function token (`--x()`) calls a custom function, and strings, URLs, anchor names, other
    functions' arguments and unrelated declarations are not position references. A hex escape's
-   terminating whitespace is kept apart from the whitespace after it, which still separates
-   tokens, and only CSS whitespace counts. A name carried in a custom property's value is not
-   rewritten. Throughout the stylesheet a removed comment keeps the tokens it separated without
-   becoming whitespace: it is dropped where nothing would join (`#\62/**/.c` stays the compound
-   `#b.c`), written `/**/` where two tokens would (`--abov\65/**/flip-block`), a space after an
-   at-keyword, whose prelude ignores it, and `/*` inside an unquoted `url(..)` is part of the URL.
+   terminating whitespace is kept apart from the whitespace or comment after it, which still
+   separates tokens, and only CSS whitespace counts. A name carried in a custom property's value
+   is not rewritten.
    [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
    gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
    components share the document tree, so prefixing prevents collisions. This does not make
