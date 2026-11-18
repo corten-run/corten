@@ -935,8 +935,8 @@ async function run(browser) {
   check("the server draws the default choice and only its parts", (await period("Month").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $11.95 this month.|Sold 14 this month.", await showing());
   check("only the chosen option is in the tab order", (await page.$$eval('[role="radio"]', (r) => r.map((x) => /** @type {HTMLElement} */ (x).tabIndex).join())) === "-1,0");
 
-  // corten_ui::rows::sort: the month's sales sort in place by the header clicked, each cell by its
-  // data-sort (a price in cents) or its text, the other way on a second click, with no request.
+  // The month's sales sort in place by the header clicked, by a numeric or text ref value when
+  // given, otherwise by the cell's text. The second click reverses the order, with no request.
   const sales = page.locator("table", { has: page.locator("caption", { hasText: "This month's last sales" }) });
   const sortedBy = async () => ({
     buyers: (await sales.locator("tbody td:nth-child(2)").allTextContents()).join("|"),
@@ -960,7 +960,7 @@ async function run(browser) {
     { buyers: "Grace Hopper|Alan Turing|Ada Lovelace", sort: "ascending,,,," },
   ];
   check(
-    "a sort header sorts the rows in place (data-sort, then text), the other way on a second click, and moves aria-sort, with no request",
+    "a sort header sorts in place by ref value or cell text, reverses on a second click, and moves aria-sort, with no request",
     JSON.stringify(sortOrders) === JSON.stringify(sortWant) && sortRequests === 0,
     `${JSON.stringify(sortOrders)} ${sortRequests} request(s)`,
   );
@@ -1388,11 +1388,12 @@ async function run(browser) {
   await sales.getByRole("link", { name: "Buyer" }).click();
   const tied = await sales.evaluate((table) => {
     const prices = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td));
-    const was = prices.map((td) => td.dataset.sort ?? "");
-    for (const td of prices) td.dataset.sort = "5";
+    const attr = "data-ref-value";
+    const was = prices.map((td) => td.getAttribute(attr) ?? "");
+    for (const td of prices) td.setAttribute(attr, "5");
     /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a")).click();
     const order = [...table.querySelectorAll("tbody td:nth-child(2)")].map((td) => td.textContent).join("|");
-    for (const td of table.querySelectorAll("tbody td:last-child")) /** @type {HTMLElement} */ (td).dataset.sort = was[prices.indexOf(/** @type {HTMLElement} */ (td))];
+    prices.forEach((td, i) => td.setAttribute(attr, was[i]));
     return order;
   });
   check("tied rows sort in the order the page drew them, not the last click's", tied === "Grace Hopper|Alan Turing|Ada Lovelace", tied);
@@ -1414,8 +1415,11 @@ async function run(browser) {
   // click with a modifier key is the link's.
   const sortEdges = await sales.evaluate((table) => {
     const prices = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td));
-    const was = prices.map((td) => td.dataset.sort ?? "");
-    ["-2", "", "-10"].forEach((v, i) => (prices[i].dataset.sort = v));
+    const attr = "data-ref-value";
+    const was = prices.map((td) => td.getAttribute(attr) ?? "");
+    const blank = [...prices[1].childNodes];
+    prices[1].replaceChildren();
+    ["-2", "null", "-10"].forEach((v, i) => prices[i].setAttribute(attr, v));
     const link = /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a"));
     // Whether the handler stopped each click, read after it ran; the link is never followed.
     /** @type {boolean[]} */
@@ -1425,8 +1429,9 @@ async function run(browser) {
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     window.removeEventListener("click", after);
-    const order = [...table.querySelectorAll("tbody td:last-child")].map((td) => /** @type {HTMLElement} */ (td).dataset.sort).join("|");
-    prices.forEach((td, i) => (td.dataset.sort = was[i]));
+    const order = [...table.querySelectorAll("tbody td:last-child")].map((td) => JSON.parse(td.getAttribute(attr) ?? "null")).join("|");
+    prices.forEach((td, i) => td.setAttribute(attr, was[i]));
+    prices[1].replaceChildren(...blank);
     return { stopped: stopped.join(), order };
   });
   check(
@@ -1434,13 +1439,24 @@ async function run(browser) {
     sortEdges.stopped === "false,true" && sortEdges.order === "-10|-2|",
     JSON.stringify(sortEdges),
   );
-  // Without data-sort, a cell's one <data value> or <time datetime> is what it sorts by (a date as an
+  await page.goto(unsorted);
+  const dateValueOrder = await sales.evaluate((table) => {
+    const rows = [...table.tBodies[0].rows];
+    const labels = rows.map((row) => [...row.cells[0].childNodes]);
+    // Sold starts ascending. Descending display text would leave the rows in the drawn order.
+    rows.forEach((row, i) => (row.cells[0].textContent = ["Zulu", "Mike", "Alpha"][i]));
+    /** @type {HTMLAnchorElement} */ (table.querySelector("thead th:first-child a")).click();
+    rows.forEach((row, i) => row.cells[0].replaceChildren(...labels[i]));
+    return [...table.tBodies[0].rows].map((row) => row.cells[1].textContent).join("|");
+  });
+  check("a text ref value sorts the cell rather than its displayed text", dateValueOrder === "Ada Lovelace|Alan Turing|Grace Hopper", dateValueOrder);
+  await page.goto(unsorted);
+  // Without a ref value, a cell's one <data value> or <time datetime> is what it sorts by (a date as an
   // instant), not the text the reader sees.
   const sortMachine = await sales.evaluate((table) => {
     const body = table.tBodies[0];
     const rows = [...body.rows];
-    const cells = rows.map((row) => /** @type {HTMLElement} */ (row.cells[row.cells.length - 1]));
-    const was = cells.map((td) => /** @type {const} */ ([[...td.childNodes], td.dataset.sort]));
+    const cells = rows.map((row) => row.cells[row.cells.length - 1]);
     const link = /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a"));
     const header = /** @type {HTMLElement} */ (link.closest("th"));
     const heads = [.../** @type {HTMLTableSectionElement} */ (table.tHead).rows[0].cells];
@@ -1448,14 +1464,27 @@ async function run(browser) {
     const stop = (/** @type {Event} */ e) => e.preventDefault();
     window.addEventListener("click", stop);
     // Built with the DOM: the page requires Trusted Types for HTML.
-    const run = (/** @type {[string, string, string][]} */ parts) => {
-      cells.forEach((td, i) => {
-        const [tag, value, text] = parts[i];
-        delete td.dataset.sort;
-        const part = document.createElement(tag);
-        part.setAttribute(tag === "time" ? "datetime" : "value", value);
-        part.textContent = text;
-        td.replaceChildren(part);
+    let current = cells;
+    const run = (/** @type {[string | null, string, string, string?][]} */ parts) => {
+      current = current.map((old, i) => {
+        const [tag, value, text, refValue] = parts[i];
+        const td = /** @type {HTMLTableCellElement} */ (cells[i].cloneNode(false));
+        if (refValue !== undefined) {
+          td.setAttribute("data-ref-value", refValue);
+        } else {
+          td.removeAttribute("data-ref");
+          td.removeAttribute("data-ref-value");
+        }
+        if (tag) {
+          const part = document.createElement(tag);
+          part.setAttribute(tag === "time" ? "datetime" : "value", value);
+          part.textContent = text;
+          td.replaceChildren(part);
+        } else {
+          td.textContent = text;
+        }
+        old.replaceWith(td);
+        return td;
       });
       header.removeAttribute("aria-sort");
       link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -1473,24 +1502,28 @@ async function run(browser) {
       ["time", "2025-12-25T01:00:00Z", "Dec 25, 1 AM UTC"],
       ["time", "2025-12-01", "Dec 1"],
     ]);
+    // Only the last cell has a ref. Its zero beats both its machine value and its text.
+    const mixed = run([
+      ["data", "10", "-20"],
+      [null, "", "5"],
+      ["data", "100", "200", "0"],
+    ]);
     window.removeEventListener("click", stop);
-    cells.forEach((td, i) => {
-      td.replaceChildren(...was[i][0]);
-      if (was[i][1] !== undefined) td.dataset.sort = was[i][1];
-    });
+    current.forEach((td, i) => td.replaceWith(cells[i]));
     for (const row of rows) body.append(row);
     heads.forEach((th, i) => {
       const aria = arias[i];
       if (aria) th.setAttribute("aria-sort", aria);
       else th.removeAttribute("aria-sort");
     });
-    return { data, times };
+    return { data, times, mixed };
   });
   check(
     "a cell's <data value> and <time datetime> are what it sorts by, not its text",
     sortMachine.data === "twelve ten|twelve fifty|eighty" && sortMachine.times === "Dec 1|Dec 25, 1 AM UTC|Dec 24, 11 PM EST",
     JSON.stringify(sortMachine),
   );
+  check("a zero ref wins over machine value and text, and cells without refs use machine value or text", sortMachine.mixed === "200|5|-20", sortMachine.mixed);
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
   // choice with the chosen one raised, the number field's parts at the controls' height in a row,
   // and the group's fieldset without the browser's border.

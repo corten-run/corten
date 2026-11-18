@@ -130,9 +130,8 @@ division: end statements with `;` and keep a division on the line it continues.
    `Map<HTMLTableRowElement, number>` parameter (`string` for text, `boolean` for a `bool`), read
    as `Array.from(rows).sort(([, a], [, b]) => a - b)`. Rows may share a value and keep their
    key. Never write a `data-*` attribute for a script to read through `dataset` (text on both
-   sides, checked by nothing); `data-*` is for CSS and the runtime. The one exception is an
-   attribute a corten-ui handler that predates ref values documents (`rows::sort`'s `data-sort`,
-   below). A child component that puts the parent's ref on its row takes it as
+   sides, checked by nothing); `data-*` is for CSS and the runtime. A child component that puts
+   the parent's ref on its row takes it as
    `Ref<el::HTMLTableRowElement, NoRows, ts::Number>`.
 5. A value borrowed from one the view owns: compute it inside `html!` with `let`. A view lent
    to a prop or a call (`action={&html! { .. }}`, `{keep_query(&at, &html! { .. })}`) borrows what it uses, so read the same local in it and
@@ -403,11 +402,12 @@ opens and a link closes (`?selected=..`) gets `dialog::modalClosedBy(target, clo
 the link as the `close` ref, so a close request (Escape) goes to its address. A table whose page
 has all its rows sorts in place, also when other routes read its order (no round trip; the UI guide
 has the measurement), with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
-`SortHeader` and `data-no-prefetch` on the `<thead>`, the server writing `data-sort` (a price in
-cents, a date; the attribute `rows::sort` documents, the exception to never writing `data-*` for a
-script) on a cell whose text is not its order (or a `<time datetime>` or `<data value>` in it), and
-the header's `ascending` and `descending` the pages the server sorts each way and `first`
-the way a first click sorts (`Sort::Descending` for a column read newest first; the script puts
+`SortHeader` and `data-no-prefetch` on the `<thead>`. When a cell's text is not its order, put a
+`<time datetime>` or `<data value>` in it, or write `ref={cell.with(value)}` on the cell and
+give that ref to `rows::sortByNumber(event, target, cell)` for numbers or
+`rows::sortByText(event, target, cell)` for text. The header's `ascending` and `descending` link
+to the pages the server sorts each way, and `first` is the direction of the first click
+(`Sort::Descending` for a column read newest first; the script puts
 the order shown in the address, so a reload and a `ReadAgain` keep it, and in the next read of a
 part around the table read again by `ReadAgain::from`, whose route reads the sort from one
 `#[route(query)]` set it shares with the page's route and writes it into its next `from`, and
