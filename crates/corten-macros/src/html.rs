@@ -6,6 +6,8 @@
 
 use proc_macro::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 
+mod nesting;
+
 use crate::tokens::{
     compile_error, err, escape, is_ident, is_punct, literal, literal_text, parens, q, stream, string_value, Error,
 };
@@ -14,6 +16,15 @@ use crate::tokens::{
 const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
 /// Elements whose text is not HTML (written as is, never escaped).
 const RAW_TEXT: &[&str] = &["script", "style"];
+
+/// Whether `name` is a `<script>` or `<style>` (`RAW_TEXT`, as `Gen` writes it) holding literal
+/// text with a `<` in it. `Gen` writes that text as is, so it may end its holder (`</script>`),
+/// keep a script open past its end tag (`<!--<script>`) or, in an `<svg>` or a `<math>`, open
+/// an element, and what follows it is not shown by the markup, as after `raw`. A `<` split
+/// across adjacent literals is in one of them.
+fn writes_tags(name: &str, children: &[Node]) -> bool {
+    RAW_TEXT.contains(&name) && children.iter().any(|child| matches!(child, Node::Text(text) if text.contains('<')))
+}
 /// The other elements whose content a browser parsing HTML reads as text (the HTML standard's
 /// RCDATA and RAWTEXT elements, `<noscript>` aside, which `<template>`'s handling covers): an
 /// element written in one is text to the browser, so `html!` refuses it there where the markup
@@ -39,6 +50,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             mark_scope(&mut nodes, scope)?;
         }
         check_raw_text(&nodes, None)?;
+        nesting::check(&nodes)?;
         check_pages(&nodes)?;
         if could_patch(&nodes) {
             check_patch_top(&nodes)?;
@@ -253,8 +265,11 @@ fn scope_marker(input: TokenStream) -> (Option<String>, TokenStream) {
 /// Puts `data-scope="name"` on the one root element.
 fn mark_scope(nodes: &mut [Node], scope: &str) -> Result<(), Error> {
     let mut roots = nodes.iter_mut().filter(|n| !matches!(n, Node::Let(_)));
-    match (roots.next(), roots.next()) {
-        (Some(Node::Element { attrs, .. }), None) => {
+    let first = roots.next();
+    let doctype = matches!(&first, Some(Node::Markup(text)) if text == "<!DOCTYPE html>");
+    let root = if doctype { roots.next() } else { first };
+    match (root, roots.next()) {
+        (Some(Node::Element { name, attrs, .. }), None) if !doctype || name == "html" => {
             attrs.insert(0, Attr::Static("data-scope".into(), scope.into()));
             Ok(())
         }
@@ -1059,8 +1074,15 @@ enum Parsing {
     /// As MathML, but an `<svg>` is SVG's: straight in an `<annotation-xml>` whose first
     /// `encoding` is not an HTML one, or that has none. Refuses as `Math` does.
     AnnotationXml,
+    /// As SVG or as MathML, which the markup does not show: in a literal `<svg>` or `<math>`
+    /// written where how the browser parses is not known (a `<math>` in an `<svg>` is SVG's, an
+    /// `<svg>` straight in a `<math>` MathML's). An element a browser takes out of foreign
+    /// content is refused here as in either, and what an element that is an integration point in
+    /// either holds is not known.
+    Foreign,
     /// Not known: at the top of an `html!` (a component's markup lands where its parent writes
     /// it, in an `<svg>` perhaps), among a component's children, which go where it writes them,
+    /// after an expression or a component (what it writes may open an `<svg>` or close one),
     /// and in an `<annotation-xml>` where an expression or a spread comes before the first written
     /// `encoding` (either may write the first); one after it changes nothing.
     Unknown,
@@ -1116,6 +1138,13 @@ fn parsing_within(outer: Parsing, name: &str, attrs: &[Attr]) -> Parsing {
         Parsing::AnnotationXml => parsing_within(Parsing::Math, name, attrs),
         Parsing::MathText if is("mglyph") || is("malignmark") => Parsing::Math,
         Parsing::MathText => parsing_within(Parsing::Html, name, attrs),
+        // An integration point of either namespace holds what the markup does not show; every
+        // other element, an `<svg>` or a `<math>` too, is foreign in both.
+        Parsing::Foreign if SVG_HTML_POINTS.iter().chain(MATH_HTML_POINTS).any(|point| is(point)) || is("annotation-xml") => {
+            Parsing::Unknown
+        }
+        Parsing::Foreign => Parsing::Foreign,
+        Parsing::Unknown if is("svg") || is("math") => Parsing::Foreign,
         _ if is("svg") => Parsing::Svg,
         _ if is("math") => Parsing::Math,
         Parsing::Html => Parsing::Html,
@@ -1137,6 +1166,17 @@ fn as_html(parsing: Parsing) -> bool {
 /// which it is, it is not taken for text.
 fn reads_as_text(parsing: Parsing, name: &str) -> bool {
     as_html(parsing) && RAW_TEXT.iter().chain(TEXT_ONLY).any(|t| name.eq_ignore_ascii_case(t))
+}
+
+/// Whether what `name` holds, in content parsed as `parsing`, may be text a browser does not read
+/// as tags, though the markup does not show it is: a `<noscript>` anywhere (text with scripting
+/// on, markup without it), and, where the markup does not show the element is HTML's
+/// (`Parsing::Unknown`), the elements a browser parsing HTML reads as text (`RAW_TEXT`,
+/// `TEXT_ONLY`, `<plaintext>`), which in an `<svg>` or a `<math>` hold elements. Nothing a
+/// refusal rests on is read in one: what it holds is unseen.
+fn may_read_as_text(parsing: Parsing, name: &str) -> bool {
+    let is = |n: &str| name.eq_ignore_ascii_case(n);
+    is("noscript") || (parsing == Parsing::Unknown && (is("plaintext") || RAW_TEXT.iter().chain(TEXT_ONLY).any(|t| is(t))))
 }
 
 /// Why the element `name` does not compile here: inside `holder`, whose content a browser reads
@@ -1175,6 +1215,9 @@ fn foreign_breakout(parsing: Parsing, name: &str, attrs: &[Attr]) -> Option<Stri
         Parsing::AnnotationXml => Some(format!(
             "<{name}> is HTML's, and an <annotation-xml> whose first encoding is not an HTML one (or that has none) holds MathML, so a browser that meets it there closes the MathML elements around it, the <math> too unless one of them is an <mi>, <mo>, <mn>, <ms> or <mtext>: give the <annotation-xml> encoding=\"text/html\" as its first encoding, or put the HTML in an <mtext>"
         )),
+        Parsing::Foreign => Some(format!(
+            "<{name}> is HTML's, and a browser that meets it in an <svg> or a <math> closes the foreign elements around it, so it and what follows land outside them: put HTML in an <svg> inside a <foreignObject>, and in a <math> inside an <mtext>"
+        )),
         _ => None,
     }
 }
@@ -1191,6 +1234,13 @@ struct Cursor {
     text_only: Option<String>,
     /// How a browser parses the content here, as far as this markup shows.
     parsing: Parsing,
+    /// Inside a `<script>` or a `<style>`, whose text `Gen` writes as is (`writes_tags`).
+    raw_text: bool,
+    /// How many nodes the markup does not show come before this point (`nesting::holds_unseen`).
+    /// After one a browser may be reading text that no later literal end tag ends (a `<script>`
+    /// whose text holds `<!--<script>`, a `<plaintext>`, a comment), so from there to the end of
+    /// the `html!` no literal element shows how it is parsed or that it holds text.
+    opaque: usize,
 }
 
 impl Cursor {
@@ -1202,6 +1252,8 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
+            raw_text: false,
+            opaque: 0,
         }
     }
 
@@ -1213,13 +1265,31 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
+            raw_text: false,
+            opaque: 0,
         }
     }
 
+    /// Past an expression, a component or a block holding one: what it writes may close the
+    /// element whose content is read as text, open an `<svg>` or an integration point, or leave
+    /// a browser reading text, so the markup shows none of them again (`tag`).
+    fn unseen(&mut self) {
+        self.opaque += 1;
+        self.parsing = Parsing::Unknown;
+        self.text_only = None;
+    }
+
     /// The body of a `for`, `if` or `match` here, inside an `<svg>` or an element read as text
-    /// when this is.
+    /// when this is, and after what the markup does not show when this is.
     fn inner(&self, group: &Group) -> Self {
-        Cursor { aria_svg: self.aria_svg, text_only: self.text_only.clone(), parsing: self.parsing, ..Cursor::of(group) }
+        Cursor {
+            aria_svg: self.aria_svg,
+            text_only: self.text_only.clone(),
+            parsing: self.parsing,
+            raw_text: self.raw_text,
+            opaque: self.opaque,
+            ..Cursor::of(group)
+        }
     }
 
     fn peek(&self) -> Option<&TokenTree> {
@@ -1263,7 +1333,16 @@ impl Cursor {
                 };
                 return err(span, format!("unexpected closing tag </{name}>{hint}"));
             }
-            nodes.push(self.node()?);
+            let node = self.node()?;
+            // An element's own content is followed as it is read (`tag`).
+            if !matches!(node, Node::Element { .. }) && nesting::holds_unseen(std::slice::from_ref(&node)) {
+                self.unseen();
+            }
+            // Text a `<script>` or `<style>` writes as is may end it or open an element.
+            if self.raw_text && matches!(&node, Node::Text(text) if text.contains('<')) {
+                self.unseen();
+            }
+            nodes.push(node);
         }
         Ok(nodes)
     }
@@ -1382,6 +1461,7 @@ impl Cursor {
         }
         let mut attrs = Vec::new();
         let mut props = Vec::new();
+        let mut names = std::collections::HashSet::new();
         let self_closing = loop {
             let span = self.span();
             match self.peek().cloned() {
@@ -1443,13 +1523,12 @@ impl Cursor {
                     props.push((stream([TokenTree::Ident(field)]), value));
                 }
                 Some(TokenTree::Ident(_)) => {
-                    let mut name = self.attr_name()?;
-                    // `key={item.id}` names an element in a keyed ref (a handler's `Map`).
-                    if name == "key" {
-                        name = "data-key".into();
+                    let name = self.attr_name()?;
+                    let lower = name.to_ascii_lowercase();
+                    if lower == "data-key" {
+                        return err(span, "data-key is printed by Corten: write key={item.id} to give a keyed ref its key");
                     }
                     // HTML attribute names are case-insensitive: `data-Vars` is `data-vars`.
-                    let lower = name.to_ascii_lowercase();
                     if lower == "data-nav" || lower == "data-nav-group" {
                         return err(span, format!("{name} is printed by Corten: write <a {{..req.nav(&url::News)}}> (or req.nav_section, or a link of req.nav_of), which writes href, data-nav, data-nav-group and aria-current from one mention of the route"));
                     }
@@ -1470,11 +1549,9 @@ impl Cursor {
                     }
                     // `page`: an element of a document's layout that is the page's (a section's
                     // nav), which a navigation sends with `<main>`'s children.
-                    if name == "page" && !is_punct(self.peek(), '=') {
-                        attrs.push(Attr::Page(span));
-                        continue;
-                    }
-                    if name == "ref" || name.starts_with("on:") {
+                    let attr = if name == "page" && !is_punct(self.peek(), '=') {
+                        Attr::Page(span)
+                    } else if name == "ref" || name.starts_with("on:") {
                         let braced = is_punct(self.peek(), '=')
                             && matches!(self.peek2(), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace);
                         if !braced {
@@ -1485,7 +1562,7 @@ impl Cursor {
                         }
                         self.next();
                         let (_, expr) = self.value(false)?;
-                        attrs.push(match name.strip_prefix("on:") {
+                        match name.strip_prefix("on:") {
                             Some(event) => {
                                 // `on:document:keydown`: the element's handler for an event anywhere on
                                 // the page, printed `document.keydown` (the last `:` before the module
@@ -1542,38 +1619,57 @@ impl Cursor {
                                     Attr::Ref(expr, None)
                                 }
                             }
-                        });
-                        continue;
-                    }
-                    if is_punct(self.peek(), '=') {
-                        self.next();
-                        let value_span = self.span();
-                        match self.value(false)? {
-                            (Some(text), _) => {
-                                if let Some(path) = local_path(&lower, &text) {
-                                    return err(value_span, refused_path(&name, path));
-                                }
-                                attrs.push(Attr::Static(name, text))
-                            }
-                            (None, expr) => {
-                                if let Some(text) = braced_text(&expr) {
+                        }
+                    } else {
+                        // `key={item.id}` names an element in a keyed ref (a handler's `Map`).
+                        let emitted = if name == "key" { "data-key".into() } else { name.clone() };
+                        if is_punct(self.peek(), '=') {
+                            self.next();
+                            let value_span = self.span();
+                            match self.value(false)? {
+                                (Some(text), _) => {
                                     if let Some(path) = local_path(&lower, &text) {
                                         return err(value_span, refused_path(&name, path));
                                     }
+                                    Attr::Static(emitted, text)
                                 }
-                                // One `data-vars` per element: a browser keeps the first of two.
-                                if name == "style" && attrs.iter().any(|a| matches!(a, Attr::Expr(n, _) if n == "style")) {
-                                    return err(
-                                        span,
-                                        "one style={..} per element: give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}",
-                                    );
+                                (None, expr) => {
+                                    if let Some(text) = braced_text(&expr) {
+                                        if let Some(path) = local_path(&lower, &text) {
+                                            return err(value_span, refused_path(&name, path));
+                                        }
+                                    }
+                                    Attr::Expr(emitted, expr)
                                 }
-                                attrs.push(Attr::Expr(name, expr))
                             }
+                        } else {
+                            Attr::Bare(emitted)
                         }
-                    } else {
-                        attrs.push(Attr::Bare(name));
+                    };
+                    let emitted = match &attr {
+                        Attr::Ref(..) => Some("data-ref".into()),
+                        Attr::Page(_) => Some("data-corten-page".into()),
+                        // `style={FILL.pct(42.0)}` is written as data-vars, so a literal style beside it is another attribute.
+                        Attr::Expr(name, _) if name == "style" => Some("data-vars".into()),
+                        Attr::Bare(name) | Attr::Static(name, _) | Attr::Expr(name, _) => Some(name.to_ascii_lowercase()),
+                        // Handler calls share one generated data-on attribute, including repeated events.
+                        Attr::On(..) => None,
+                        Attr::Spread(_) => unreachable!(),
+                    };
+                    if let Some(emitted) = emitted.filter(|emitted| !names.insert(emitted.clone())) {
+                        let instead = if emitted == "data-vars" {
+                            "give it a tuple, style={(FILL.pct(42.0), GAP.px(4.0))}"
+                        } else {
+                            "write the attribute once, combining its values in one expression if needed"
+                        };
+                        return err(
+                            span,
+                            format!(
+                                "attribute {name} is written twice on this element: {instead}; a browser keeps only the first"
+                            ),
+                        );
                     }
+                    attrs.push(attr);
                 }
                 _ => return err(span, format!("expected an attribute, > or /> in <{name}>")),
             }
@@ -1599,19 +1695,46 @@ impl Cursor {
         } else {
             let outer = self.aria_svg;
             self.aria_svg = within_aria_svg(outer, &name);
-            // A component's children go where it writes them, which this markup does not see.
-            let holder = (!component && reads_as_text(self.parsing, &name)).then(|| name.clone());
+            // A component's children go where it writes them, after what it writes first, which
+            // this markup does not see. After what it does not see, a literal element shows
+            // neither how its content is parsed nor that it is read as text: a browser may still
+            // be reading a script's text there.
+            if component {
+                self.unseen();
+            }
+            // What a `<noscript>` holds, or an element read as text where the markup does not show
+            // it is HTML's, may be text: none of it shows how anything is parsed.
+            let hidden = !component && may_read_as_text(self.parsing, &name);
+            if hidden {
+                self.opaque += 1;
+            }
+            let shown = self.opaque == 0;
+            let holder = (shown && reads_as_text(self.parsing, &name)).then(|| name.clone());
             let outer_text = std::mem::replace(&mut self.text_only, holder);
-            let inner = if component { Parsing::Unknown } else { parsing_within(self.parsing, &name, &attrs) };
+            let inner = if shown { parsing_within(self.parsing, &name, &attrs) } else { Parsing::Unknown };
             let outer_parsing = std::mem::replace(&mut self.parsing, inner);
+            let outer_raw = std::mem::replace(&mut self.raw_text, !component && RAW_TEXT.contains(&name.as_str()));
+            let seen = self.opaque;
             let children = self.nodes(Some(&name));
             self.aria_svg = outer;
             self.text_only = outer_text;
             self.parsing = outer_parsing;
+            self.raw_text = outer_raw;
+            if self.opaque != seen {
+                self.unseen();
+            }
+            if hidden {
+                self.opaque -= 1;
+            }
             let children = children?;
             self.closing(&name, open)?;
             Some(children)
         };
+        // A `<plaintext>` HTML's makes the rest of the page text, so after one (where it is not
+        // refused, the markup does not show it is HTML's) nothing shows how anything is parsed.
+        if !component && name.eq_ignore_ascii_case("plaintext") {
+            self.unseen();
+        }
         if component {
             return Ok(Node::Component { path, props, children });
         }
@@ -1908,7 +2031,13 @@ const PARSE_REFUSALS: &str = "https://github.com/corten-run/corten/blob/main/doc
 /// what the patch began with or where the view is written, which a component's markup does not show
 /// (after a first `<tr>`, a `<p>` and a `<tr>` after it are both kept, and an `<svg>` keeps a
 /// `<form>` of fields after a `<tr>`), so it is left to the debug check in `Action::patch` and
-/// `corten::live`, which finds it when it is sent.
+/// `corten::live`, which finds it when it is sent. Like every refusal of `html!`, each rests only
+/// on the markup between the two elements: an expression, a component, or a `<script>` or
+/// `<style>` whose text holds a `<` (`writes_tags`) before the lost element's start tag (in the
+/// first element, between the two, or in a later element that holds the lost one, before it) may
+/// write unbalanced markup (`raw("<table>")` keeps a later row in its table), so after one nothing
+/// is refused and the debug check is left to find it. What a lost top-level element holds does
+/// not save it: the parse has lost it at its start tag.
 fn check_patch_top(nodes: &[Node]) -> Result<(), Error> {
     match patch_top(nodes, TopRead::Open) {
         Ok(_) => Ok(()),
@@ -1922,23 +2051,23 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
     for node in nodes {
         match node {
             Node::Text(_) | Node::Markup(_) | Node::Let(_) => {}
-            Node::Expr(_) | Node::Component { .. } => {
-                if read == TopRead::Open {
-                    read = TopRead::Unknown;
-                }
-            }
+            // What it writes may open or close any element, so nothing after it is known.
+            Node::Expr(_) | Node::Component { .. } => read = TopRead::Unknown,
             // A body that runs reads from where the block is; one that may not leaves what
-            // follows to an element the markup cannot name.
+            // follows to an element the markup cannot name, and one with an expression or a
+            // component in it to markup it does not show.
             Node::Block { bodies, .. } => {
                 for body in bodies {
                     patch_top(body, read)?;
                 }
-                if read == TopRead::Open {
+                if read == TopRead::Open || bodies.iter().any(|body| nesting::holds_unseen(body)) {
                     read = TopRead::Unknown;
                 }
             }
             Node::Element { name, attrs, children } => {
                 let is = |list: &[&str]| list.iter().any(|t| name.eq_ignore_ascii_case(t));
+                // A `<script>` or `<style>` whose text may write tags is as unseen as what it holds.
+                let unseen = nesting::holds_unseen(std::slice::from_ref(node));
                 match read {
                     TopRead::Open if is(TEMPLATE_HEAD) => {}
                     TopRead::Open if is(&["table"]) => read = TopRead::Table,
@@ -1974,12 +2103,19 @@ fn patch_top(nodes: &[Node], mut read: TopRead) -> Result<TopRead, (&[Attr], Str
                         ));
                     }
                     TopRead::Part(part) if !is(TABLE_PARTS) && !is(TEMPLATE_HEAD) => {
-                        if let Some(why) = lost_after_part(name, attrs, children, false) {
-                            let first = TABLE_PARTS[part];
-                            return Err((attrs, why.message(name, first)));
+                        // The lost element is in this one, so what this one holds is between them.
+                        if !unseen {
+                            if let Some(why) = lost_after_part(name, attrs, children, false) {
+                                let first = TABLE_PARTS[part];
+                                return Err((attrs, why.message(name, first)));
+                            }
                         }
                     }
                     TopRead::Table | TopRead::Col | TopRead::Part(_) => {}
+                }
+                // What an expression or a component in it writes may leave an element open.
+                if unseen {
+                    read = TopRead::Unknown;
                 }
             }
         }
@@ -2044,10 +2180,15 @@ fn lost_after_part(name: &str, attrs: &[Attr], children: &[Node], around: bool) 
 }
 
 /// Whether `lost_after_part` reads into the element `name`: not a `<template>`, a new foreign
-/// content root (an `<svg>` or a `<math>`) or an SVG or MathML integration point.
+/// content root (an `<svg>` or a `<math>`), an SVG or MathML integration point, or an element
+/// whose content a browser parsing HTML may read as text (`may_read_as_text`: the check does not
+/// know the namespace, and as HTML's what it holds is text, which is kept).
 fn read_after_part(name: &str) -> bool {
     let is = |list: &[&str]| list.iter().any(|t| name.eq_ignore_ascii_case(t));
-    !is(&["template", "svg", "math", "annotation-xml"]) && !is(SVG_HTML_POINTS) && !is(MATH_HTML_POINTS)
+    !is(&["template", "svg", "math", "annotation-xml"])
+        && !is(SVG_HTML_POINTS)
+        && !is(MATH_HTML_POINTS)
+        && !may_read_as_text(Parsing::Unknown, name)
 }
 
 /// Whether an element HTML's wherever it lands is among `nodes` or in them, read as
@@ -2958,7 +3099,8 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 mod tests {
     use super::{
         breaks_out, foreign_breakout, local_path, parsing_within, patch_top, reads_as_text, refused_path, text_only_element,
-        Attr, Node, Parsing, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TABLE_PARTS, TEMPLATE_HEAD, TEXT_ONLY,
+        Attr, Node, Parsing, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, SVG_HTML_POINTS, TABLE_PARTS, TEMPLATE_HEAD,
+        TEXT_ONLY,
     };
     use proc_macro::TokenStream;
 
@@ -2967,7 +3109,7 @@ mod tests {
     /// not show which (the top of a component's markup, its children).
     #[test]
     fn an_element_is_read_as_text_only_where_the_markup_shows_html() {
-        let svg = parsing_within(Parsing::Unknown, "svg", &[]);
+        let svg = parsing_within(Parsing::Html, "svg", &[]);
         assert_eq!(svg, Parsing::Svg);
         for point in ["foreignObject", "desc", "title"] {
             assert_eq!(parsing_within(svg, point, &[]), Parsing::Html, "{point}");
@@ -3022,6 +3164,29 @@ mod tests {
         assert_eq!(parsing_within(Parsing::Html, "svg", &[]), Parsing::Svg);
         assert_eq!(parsing_within(Parsing::Svg, "svg", &[]), Parsing::Svg);
 
+        // Where the markup does not show how it is parsed, an <svg> or a <math> is foreign, but
+        // which namespace is not known: a <math> in an <svg> is SVG's, an <svg> straight in a
+        // <math> MathML's. So neither's integration points show HTML, and a <textarea> under
+        // them is not taken for text; an element taken out of either is still refused.
+        for root in ["svg", "math"] {
+            let foreign = parsing_within(Parsing::Unknown, root, &[]);
+            assert_eq!(foreign, Parsing::Foreign, "{root}");
+            for point in SVG_HTML_POINTS.iter().chain(MATH_HTML_POINTS).chain(&["annotation-xml"]) {
+                assert_eq!(parsing_within(foreign, point, &[]), Parsing::Unknown, "{root} {point}");
+                assert!(!reads_as_text(parsing_within(foreign, point, &[]), "textarea"), "{root} {point}");
+            }
+            for name in ["g", "mrow", "svg", "math", "textarea", "style", "template"] {
+                assert_eq!(parsing_within(foreign, name, &[]), Parsing::Foreign, "{root} {name}");
+                assert!(!reads_as_text(foreign, name), "{root} {name}");
+            }
+            for name in BREAKOUT {
+                let why = foreign_breakout(foreign, name, &[]).expect("refused");
+                assert!(why.contains("<foreignObject>") && why.contains("<mtext>"), "{why}");
+            }
+            assert!(foreign_breakout(foreign, "font", &[]).is_none());
+            assert!(text_only_element(None, foreign, "plaintext").is_none());
+        }
+
         let color = [Attr::Static("color".into(), "red".into())];
         assert!(breaks_out("font", &color));
         assert!(breaks_out("FONT", &[Attr::Bare("SIZE".into())]));
@@ -3036,7 +3201,7 @@ mod tests {
     /// `<math>` is MathML's.
     #[test]
     fn a_math_holds_html_at_its_text_integration_points() {
-        let math = parsing_within(Parsing::Unknown, "math", &[]);
+        let math = parsing_within(Parsing::Html, "math", &[]);
         assert_eq!(math, Parsing::Math);
         for point in MATH_HTML_POINTS {
             let text = parsing_within(math, point, &[]);
@@ -3226,11 +3391,50 @@ mod tests {
             // what an expression, a component or a block writes first
             &[expr(), el("table", vec![]), el("tr", vec![])],
             &[Node::Block { head: Vec::new(), bodies: vec![vec![]], arms: false }, el("col", vec![]), el("p", vec![])],
+            // an expression or a component between the two, in the first, or in a later element
+            // that holds the lost one, before it, which may leave an element open (`raw("<table>")`)
+            &[el("table", vec![]), expr(), el("tr", vec![])],
+            &[el("table", vec![expr()]), el("tr", vec![])],
+            &[
+                el("col", vec![]),
+                Node::Component { path: TokenStream::new(), props: Vec::new(), children: None },
+                el("p", vec![]),
+            ],
+            &[el("tr", vec![]), Node::Block { head: Vec::new(), bodies: vec![vec![expr()]], arms: false }, el("table", vec![])],
+            &[el("tr", vec![]), el("div", vec![expr(), el("table", vec![])])],
+            &[el("td", vec![]), el("form", vec![el("div", vec![expr(), el("input", vec![])])])],
+            // a <script> or <style> whose text `html!` writes as is, which may open a <table> or
+            // a <template> (`</script><template>`), there too
+            &[el("tr", vec![]), el("script", vec![Node::Text("</script><template>".into())]), el("table", vec![])],
+            &[el("table", vec![]), el("style", vec![Node::Text("</style><template>".into())]), el("tr", vec![])],
+            &[
+                el("tr", vec![]),
+                el(
+                    "div",
+                    vec![
+                        el("script", vec![Node::Text("<".into()), Node::Text("/script><template>".into())]),
+                        el("table", vec![]),
+                    ],
+                ),
+            ],
         ];
         for nodes in kept {
             assert_eq!(lost(nodes), None);
         }
+        // Unseen output stops a refusal only before the lost element's start tag: after a first
+        // row, an expression in a later <div> before its <table> may open a template around it,
+        // but one inside the <table> comes after the tag the parse has already dropped, as one
+        // in a row after a first <table> comes after the row's.
+        assert_eq!(lost(&[el("tr", vec![]), el("div", vec![expr(), el("table", vec![])])]), None);
+        let why = lost(&[el("tr", vec![]), el("table", vec![expr()])]).expect("refused");
+        assert!(why.starts_with("send the <table> in a patch of its own: a patch that begins with a <tr>"), "{why}");
+        let why = lost(&[el("table", vec![]), el("tr", vec![expr()])]).expect("refused");
+        assert!(why.starts_with("send the <tr> inside the <table>"), "{why}");
+        let script = || el("script", vec![Node::Text("</script>".into())]);
+        let why = lost(&[el("tr", vec![]), el("table", vec![script()])]).expect("refused");
+        assert!(why.starts_with("send the <table> in a patch of its own"), "{why}");
     }
+
     #[test]
     fn an_element_a_browser_takes_out_of_foreign_content_is_refused_only_straight_in_it() {
         for name in BREAKOUT {

@@ -265,19 +265,196 @@ use std::{
 /// relative path (`items/7`, `?page=2`) and a URL inside another attribute's text
 /// (`<meta http-equiv="refresh" content="0; url=/items">`). Write a route there too.
 ///
+/// A literal HTML attribute name may be written only once per element, case-insensitively,
+/// including names whose values are expressions. A spread's names are not known here and are
+/// not checked. Handler calls (`on:..`) share one generated attribute and still combine:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <input name="first" NAME={"second"}> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <input disabled disabled> };
+/// ```
+///
+/// Pseudo-attributes are compared by their generated names: `ref` writes `data-ref`, bare
+/// `page` writes `data-corten-page`, and `key` writes `data-key`. Repeating one is still a
+/// duplicate:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <my-widget Key="first" KEY="second"></my-widget> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <my-widget key="first" key="second"></my-widget> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn Marked() -> impl Render {
+///     let node = refs();
+///     html! { <div ref={node} ref={node}></div> }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct NavId;
+/// let _ = html! {
+///     <html><head><title>"Page"</title><Corten /></head>
+///         <body><nav page page id={NavId}></nav><main></main></body></html>
+/// };
+/// ```
+///
+/// `data-key` is printed by Corten: give a keyed ref its key with `key={..}` instead:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn Row() -> impl Render {
+///     let row = refs();
+///     html! { <div ref={row} data-key="first"></div> }
+/// }
+/// ```
+///
+/// Literal nesting that makes the browser close or discard an open HTML element is refused.
+/// Put the elements beside one another, or use a container that can hold them (`<div>` rather
+/// than `<p>` for a block). A refusal rests only on literal markup of the same `html!` between
+/// the two elements, followed through control flow. What the markup does not show may write
+/// anything: an expression (`raw` among them), a component, with or without children
+/// (`<Corten />` too: the macro knows it only by its name, which a component of the app's may
+/// share), and a `<script>` or `<style>` whose literal text holds a `<`, which `html!` writes as
+/// is. What it writes may close the open elements, open others, or leave a browser reading a
+/// script's text past any later literal end tag (`<!--<script>` does), so no nesting refusal acts
+/// after it in the same `html!`, whatever it shows: `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
+/// compiles, as browsers keep it. Nor does a literal `<svg>` or `<math>` show its namespace where
+/// the markup does not (a `<math>` an `<svg>` holds is SVG's), so its integration points do not
+/// show HTML there, nor is what an element HTML reads as text holds read there (`<iframe>`,
+/// `<textarea>`, `<style>` ..: as HTML's it is text), nor what a `<noscript>` holds anywhere. A
+/// `<template>`'s content and an `<svg>`'s or a `<math>`'s start with nothing open, so an `<a>`
+/// in a `<foreignObject>` inside another `<a>` compiles, as browsers keep it. Every refusal
+/// assumes `html!` output, a component's included, is drawn where a browser reads tags: writing a
+/// component into script or style text a caller left open (after `raw("<script>")`) is not
+/// supported, since a script's text comes from a string, not markup. These do not compile:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn Summary() -> impl Render {
+///     let detail = refs();
+///     html! { <p><div ref={detail}>"Detail"</div></p> }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <p><span>if true { <section>"Detail"</section> }</span></p> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <ul><li><span><li>"Next"</li></span></li></ul> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <dl><dt><dd>"Definition"</dd></dt></dl> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><a href="#one"><span><a href="#two">"Two"</a></span></a></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><button><span><button>"Again"</button></span></button></div> };
+/// ```
+///
+/// A nested `<form>` is not refused: a browser ignores one only outside every `<template>`, which
+/// no markup shows. A fragment's caller may write it into one, and a document's body follows
+/// `<Corten />`, which the check does not see.
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <h1><h2>"Heading"</h2></h1> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><nobr><span><nobr>"Text"</nobr></span></nobr></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><input></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><select aria-label="Nested"></select></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><option><option>"Next"</option></option></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><optgroup label="One"><optgroup label="Two"></optgroup></optgroup></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><select aria-label="Choice"><option>"Choice"<hr></option></select></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><ruby>"Base"<rt><rt>"Reading"</rt></rt></ruby></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><ruby><rtc><rb>"Base"</rb></rtc></ruby></div> };
+/// ```
+///
+/// The doctype is not a second root of a scoped document, but another element still is:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[component]
+/// fn BadDocument() -> impl Document {
+///     let lead = refs();
+///     html! {
+///         <!DOCTYPE html>
+///         <html><head><title>"Page"</title><Corten /></head><body><main><p ref={lead}>"Lead"</p></main></body></html>
+///         <div>"Outside the root"</div>
+///     }
+/// }
+/// ```
+///
 /// Three kinds of markup a browser parses differently from how it is written do not compile, where
-/// the markup shows how the browser parses it: an element inside one whose content a browser reads
-/// as text, a `<plaintext>`, and an element a browser takes out of an `<svg>` or a `<math>`
-/// (and a patch's top level a browser loses, under [`Patch`]).
-/// HTML a browser rearranges inside HTML (a `<div>` in a `<p>`, an `<a>` in an `<a>`, a
-/// `<form>` in a `<form>`, an `<li>` in an `<li>`, a `<div>` straight in a `<table>`)
-/// still compiles. An element written inside one whose content a browser parsing HTML reads as
+/// the markup shows how the browser parses it, before anything it does not show (above): an
+/// element inside one whose content a browser reads as text, a `<plaintext>`, and an element a
+/// browser takes out of an `<svg>` or a `<math>` (and a patch's top level a browser loses, under
+/// [`Patch`]).
+/// Table foster parenting (a `<div>` straight in a `<table>`) is not checked here.
+/// An element written inside one whose content a browser parsing HTML reads as
 /// text would show its tags as text, or put them in a field's value, rather than make an element.
 /// Those are `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`, `<xmp>`, `<noembed>`
 /// and `<noframes>`, and `<plaintext>` itself does not compile (it makes the rest of the page
 /// text, its end tag included). That holds under an element that is HTML's wherever it lands (a
-/// `<div>`, a `<p>`, a document's `<head>`), in an `<svg>`'s `<foreignObject>`, `<desc>` and
-/// `<title>`, which hold HTML, a `<title>` nested in an `<svg>`'s `<title>` included, and in a
+/// `<div>`, a `<p>`, a document's `<head>`), in the `<foreignObject>`, `<desc>` and `<title>` of
+/// an `<svg>` such an element holds, which hold HTML, a `<title>` nested in an `<svg>`'s
+/// `<title>` included, and in a
 /// `<math>`'s `<mi>`, `<mo>`, `<mn>`, `<ms>` and `<mtext>` (but for a `<mglyph>` or a
 /// `<malignmark>` in them, which stay MathML's) and an `<annotation-xml>` whose first `encoding`
 /// is `text/html` or `application/xhtml+xml`, which hold HTML too:
@@ -299,17 +476,17 @@ use std::{
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <svg><desc><title><span>"Chart"</span></title></desc></svg> };
+/// let _ = html! { <div><svg><desc><title><span>"Chart"</span></title></desc></svg></div> };
 /// ```
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <svg><title><title><span>"Chart"</span></title></title></svg> };
+/// let _ = html! { <div><svg><title><title><span>"Chart"</span></title></title></svg></div> };
 /// ```
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
-/// let _ = html! { <svg><foreignObject><textarea name="note"><b>"Draft"</b></textarea></foreignObject></svg> };
+/// let _ = html! { <div><svg><foreignObject><textarea name="note"><b>"Draft"</b></textarea></foreignObject></svg></div> };
 /// ```
 ///
 /// ```compile_fail
@@ -407,8 +584,12 @@ use std::{
 /// `<annotation-xml>`'s whose first `encoding` is not an HTML one (or that has none), which holds
 /// MathML and where an `<svg>` is SVG's. Where the markup does not show how it is parsed, at the
 /// top of a component's markup (whose parent may write it into an `<svg>`), among a component's
-/// children (which go where it writes them) and in an `<annotation-xml>` whose `encoding` an
-/// expression or a spread may write first, none of this is refused, so a component that draws
+/// children (which go where it writes them), after an expression or a component (which may open
+/// or close an `<svg>`, or the element read as text), in the integration points of an `<svg>` or
+/// a `<math>` written there (a `<math>` an `<svg>` holds is SVG's, and its `<mtext>` holds no
+/// HTML) and in an `<annotation-xml>` whose `encoding` an expression or a spread may write first,
+/// none of this is refused, but for an element taken out of foreign content written straight into
+/// a literal `<svg>` or `<math>`, which is foreign wherever it lands; so a component that draws
 /// an SVG fragment without its `<svg>` compiles:
 ///
 /// ```
@@ -472,7 +653,7 @@ use std::{
 ///             <math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>
 ///             <math><svg><g></g></svg></math>
 ///             <math><annotation-xml encoding="text/html"><b>"x"</b></annotation-xml></math>
-///             <math><annotation-xml encoding="TEXT/HTML" encoding="x"><b>"x"</b></annotation-xml></math>
+///             <math><annotation-xml encoding="TEXT/HTML"><b>"x"</b></annotation-xml></math>
 ///             <math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>"x"</b></foreignObject></svg></annotation-xml></math>
 ///             <math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>
 ///             <math><annotation-xml encoding={encoding}><title><mrow></mrow></title></annotation-xml></math>
@@ -490,7 +671,7 @@ use std::{
 ///             r#"<math><mi><malignmark><title><mrow></mrow></title></malignmark></mi></math>"#,
 ///             r#"<math><svg><g></g></svg></math>"#,
 ///             r#"<math><annotation-xml encoding="text/html"><b>x</b></annotation-xml></math>"#,
-///             r#"<math><annotation-xml encoding="TEXT/HTML" encoding="x"><b>x</b></annotation-xml></math>"#,
+///             r#"<math><annotation-xml encoding="TEXT/HTML"><b>x</b></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title><svg><foreignObject><b>x</b></foreignObject></svg></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml><title><mrow></mrow></title><svg><g></g></svg></annotation-xml></math>"#,
 ///             r#"<math><annotation-xml encoding="application/mathml+xml"><title><mrow></mrow></title></annotation-xml></math>"#,
@@ -1410,6 +1591,47 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// #[derive(Id)]
 /// struct ChartId;
 /// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={ChartId}><svg><form><g></g></form></svg></div> };
+/// ```
+///
+/// Like every refusal of `html!`, these rest only on the markup between the two elements: what an
+/// expression, a component, or a `<script>` or `<style>` whose text holds a `<` writes may leave
+/// an element open, as `raw("<table>")` keeps the row after it in its table, so with such output
+/// before the lost element's start tag (in the first element, between the two, or in a later
+/// element that holds the lost one, before it) the shape compiles and the debug check reads what
+/// is sent:
+///
+/// ```
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct TotalsId;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// let opened = corten::raw("<table>");
+/// let patch = html! { <table id={TotalsId}></table> {opened} <tr id={RowId(7)}><td>"7"</td></tr> };
+/// assert_eq!(patch.to_html(), r#"<table id="totals"></table><table><tr id="row-7"><td>7</td></tr>"#);
+/// ```
+///
+/// ```
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct SummaryId;
+/// let opened = corten::raw("<template>");
+/// let patch = html! { <tr id={RowId(7)}><td>"7"</td></tr> <div id={SummaryId}>{opened}<table></table></div> };
+/// assert_eq!(patch.to_html(), r#"<tr id="row-7"><td>7</td></tr><div id="summary"><template><table></table></div>"#);
+/// ```
+///
+/// What a lost top-level element holds does not save it, since the parse loses it at its start tag:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct RowId(u32);
+/// #[derive(Id)]
+/// struct SummaryId;
+/// let text = "Totals";
+/// let _ = html! { <tr id={RowId(7)}><td>"7"</td></tr> <table id={SummaryId}>{text}</table> };
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a patch",
