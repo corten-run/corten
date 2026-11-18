@@ -60,7 +60,8 @@ Usage:
   corten ui diff [name]..
                    How each copied component differs from this command's kit: whether you
                    edited it, whether the kit changed it since, and the lines. Writes nothing.
-  corten help      This text.
+  corten help [<command>]
+                   This text, or one command's usage (as corten <command> --help).
   corten --version The version, and the commit the command was built from. dev, fmt and
                    check say when the app's Cargo.lock pins another corten, and how to
                    install the matching command; so does ui, and ui add and
@@ -258,11 +259,14 @@ fn cargo(args: &[&str]) -> Result<(), String> {
     if status.success() { Ok(()) } else { Err(format!("cargo {} failed", args.join(" "))) }
 }
 
-/// The value after `flag` in `args`, if present.
+/// The value after `flag` in `args`, if present. A flag given twice is refused, so the value a
+/// command runs with is the one [`asks_help`] reads past (`--name a --name --help` is not help).
 fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String> {
-    match args.iter().position(|a| a == flag) {
-        Some(i) => args.get(i + 1).map(|v| Some(v.as_str())).ok_or_else(|| format!("{flag} needs a value")),
-        None => Ok(None),
+    let mut at = args.iter().enumerate().filter(|(_, a)| *a == flag).map(|(i, _)| i);
+    match (at.next(), at.next()) {
+        (Some(_), Some(_)) => Err(format!("{flag} is given more than once")),
+        (Some(i), None) => args.get(i + 1).map(|v| Some(v.as_str())).ok_or_else(|| format!("{flag} needs a value")),
+        (None, _) => Ok(None),
     }
 }
 

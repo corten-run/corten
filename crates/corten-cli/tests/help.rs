@@ -84,3 +84,21 @@ fn help_names_a_command_as_its_own_help_does() {
         assert!(!out.status.success(), "help {} succeeded", command.join(" "));
     }
 }
+
+#[test]
+fn a_repeated_option_is_refused_and_writes_nothing() {
+    // The scan for help reads `--help` here as the second `--name`'s value, so `new` must not run
+    // with the first one and write the app.
+    let root = std::env::temp_dir().join(format!("corten-repeated-option-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_corten"))
+        .args(["new", "shop", "--name", "storefront", "--name", "--help"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let changed = std::fs::read_dir(&root).unwrap().next().is_some();
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8(out.stderr).unwrap().contains("--name is given more than once"));
+    assert!(!changed, "a refused new wrote files");
+}
