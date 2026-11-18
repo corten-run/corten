@@ -230,6 +230,51 @@ try {
     });
     await page.route(base + "/dialog-fixture.css", (route) => route.fulfill({ contentType: "text/css", body: css }));
   }
+  const adopted = await browser.newPage({ viewport: { width: 600, height: 800 } });
+  try {
+    /** @type {string[]} */
+    const warned = [];
+    adopted.on("console", (m) => {
+      if (m.type() === "warning" && m.text().startsWith("corten: adopted")) warned.push(m.text().split(" ")[1] ?? "");
+    });
+    await adopted.addInitScript(() => {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(`
+        @scope (.outer) { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } }
+        @scope { @media (min-width: 1px) { #adoptedImplicit { display: flex; outline-style: solid } } }
+        @scope (.nest) { @scope { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } } }
+        @scope (.limited) to (.stop) { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } }
+        @media (min-width: 900px) { #adoptedWide, #adoptedOverride { display: flex } }
+        @media (min-width: 1px) { .parentOnly { display: flex } }
+        @scope { @media (min-width: 900px) { #adoptedOverride { display: grid !important } } }
+        @scope { #adoptedOverride { outline-style: solid } }
+      `);
+      document.adoptedStyleSheets.push(sheet);
+    });
+    await dialogFixture(adopted,
+      '<div class="outer"><dialog id="adoptedExplicit"></dialog></div><dialog id="adoptedOutside"></dialog>' +
+      '<dialog id="adoptedImplicit"></dialog><div class="nest"><dialog id="adoptedNested"></dialog></div>' +
+      '<div class="limited"><dialog id="adoptedInsideLimit"></dialog><div class="stop"><dialog id="adoptedPastLimit"></dialog></div></div>' +
+      '<div class="parentOnly"><dialog id="adoptedChild"></dialog></div>' +
+      '<dialog id="adoptedWide"></dialog><dialog id="adoptedOverride"></dialog><dialog id="fixtureEnd"></dialog>',
+      "@media (min-width: 1px) { #fixtureEnd { display: flex } }");
+    const done = adopted.waitForEvent("console", { predicate: (m) => m.text().startsWith("corten: fixtureEnd "), timeout: 10000 }).then(() => true, () => false);
+    await adopted.goto(base + "/");
+    const completed = await done;
+    const states = await adopted.locator('dialog[id^="adopted"]').evaluateAll((els) => els.map((el) => {
+      const { display, outlineStyle } = getComputedStyle(el);
+      return { id: el.id, display, styled: outlineStyle === "solid" };
+    }));
+    const styled = states.filter((e) => e.styled).map((e) => e.id);
+    const expected = states.filter(({ id, styled }) => id === "adoptedOverride" ? !styled : id === "adoptedWide" || styled).map((e) => e.id);
+    const restored = await adopted.evaluate(() => document.adoptedStyleSheets.length === 1);
+    check("adopted sheets warn at breakpoints, including implicit scopes only where the browser applies them",
+      completed && restored && states.every((e) => e.display === "none") && styled.includes("adoptedExplicit") && styled.includes("adoptedInsideLimit") &&
+      !styled.includes("adoptedOutside") && !styled.includes("adoptedPastLimit") &&
+      warned.join(",") === expected.join(","), `styled: ${styled}; warnings: ${warned}; expected: ${expected}`);
+  } finally {
+    await adopted.close();
+  }
   /**
    * The expected IDs are the warnings from main, also replayed from the Git blob when supplied.
    * Compare full messages in that mode to check the legacy suggestion as well as warn/no warn.

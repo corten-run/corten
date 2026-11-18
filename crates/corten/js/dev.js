@@ -136,6 +136,12 @@ const resolved = (selector, parent) => {
 
 /** @typedef {{ selector: string, written: string }} Selector */
 /** @typedef {Selector & { display: string, condition: string | null, important: boolean, scope?: Selector }} Display */
+/** @typedef {Omit<Display, "selector" | "scope"> & { marker: string }} AdoptedDisplay */
+/** @param {CSSRule} rule */
+const breakpoint = (rule) => (rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule))
+  ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim()
+  : null;
+
 // Read display rules again on each check, since a dev server's stylesheets can change.
 function displays() {
   /** @type {Display[]} */
@@ -182,14 +188,77 @@ function displays() {
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
       // @media and @container mark breakpoints, whether currently active or not.
-      const query = rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
-      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), own, asWritten, scoped);
+      walk(inner, condition ?? breakpoint(rule), own, asWritten, scoped);
     }
   };
   for (const sheet of document.styleSheets) {
     try {
       walk(sheet.cssRules, null, null, null);
     } catch {}
+  }
+  return found;
+}
+
+// An adopted sheet has no owner element; engines differ on how its implicit scopes match.
+// Ask the engine with a sheet containing only the selector tree and non-inherited markers.
+/** @param {Element[]} closed */
+function adoptedMatches(closed) {
+  const sheets = document.adoptedStyleSheets;
+  /** @type {Map<Element, AdoptedDisplay[]>} */
+  const found = new Map();
+  if (!sheets?.length || !globalThis.CSSPropertyRule) return found;
+  /** @type {AdoptedDisplay[]} */
+  const displays = [];
+  const prefix = `--corten-dev-${Math.random().toString(36).slice(2)}-`;
+  /** @param {CSSRuleList} rules @param {string | null} condition @param {string} written @returns {string} */
+  const walk = (rules, condition, written) => {
+    let css = "";
+    for (const rule of rules) {
+      let prelude = "@media all";
+      let name = written;
+      if (rule instanceof CSSStyleRule) {
+        prelude = name = rule.selectorText;
+      } else if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule) {
+        prelude = "@scope" + (rule.start === null ? "" : ` (${rule.start})`) + (rule.end === null ? "" : ` to (${rule.end})`);
+        name = rule.start ?? ":scope";
+      } else if (globalThis.CSSNestedDeclarations && rule instanceof CSSNestedDeclarations) {
+        prelude = "";
+      } else if (!(rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule) ||
+          (globalThis.CSSLayerBlockRule && rule instanceof CSSLayerBlockRule) || (rule instanceof CSSSupportsRule && CSS.supports(rule.conditionText)))) {
+        continue;
+      }
+      const style = /** @type {CSSStyleRule} */ (rule).style;
+      let body = "";
+      if (style?.display) {
+        const marker = `${prefix}${displays.length}`;
+        displays.push({ written: name, condition, display: style.display, important: style.getPropertyPriority("display") === "important", marker });
+        body = `${marker}: match;`;
+      }
+      const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
+      if (inner) body += walk(inner, condition ?? breakpoint(rule), name);
+      if (body) css += prelude ? `${prelude} { ${body} }` : body;
+    }
+    return css;
+  };
+  let css = "";
+  for (const sheet of sheets) {
+    if (!sheet.disabled && ![...sheet.cssRules].some((r) => r.type === CSSRule.NAMESPACE_RULE)) css += walk(sheet.cssRules, null, "");
+  }
+  if (!css) return found;
+  const probe = new CSSStyleSheet();
+  probe.replaceSync(displays.map(({ marker }) => `@property ${marker} { syntax: "*"; inherits: false; }`).join("") + css);
+  try {
+    sheets.push(probe);
+  } catch {
+    return found;
+  }
+  try {
+    for (const el of closed) {
+      const style = getComputedStyle(el);
+      found.set(el, displays.filter(({ marker }) => style.getPropertyValue(marker) === "match"));
+    }
+  } finally {
+    sheets.pop();
   }
   return found;
 }
@@ -221,16 +290,18 @@ function scopedMatches(el, rules) {
 /** Warn about a closed dialog or popover kept hidden despite a breakpoint display. @param {Element} root */
 function inPlace(root) {
   // One the app hides with `hidden` is meant to be hidden, whatever its rules say.
-  const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !own.hasAttribute.call(el, "hidden"));
+  const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !own.hasAttribute.call(el, "hidden") && getComputedStyle(el).display === "none");
   if (!closed.length) return;
   const rules = displays();
   const scoped = rules.some((r) => r.scope);
+  const adopted = adoptedMatches(closed);
   for (const el of closed) {
-    if (getComputedStyle(el).display !== "none") continue;
-    const applies = scoped ? scopedMatches(el, rules) : rules.filter((r) => matching(el, r.selector));
+    const linked = scoped ? scopedMatches(el, rules) : rules.filter((r) => matching(el, r.selector));
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
-    if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
+    if (!linked.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
+    const native = adopted.get(el);
+    const applies = native?.length ? [...linked, ...native] : linked;
     // In .card, a breakpoint .rail display can go unwarned if `@scope (.card) { & > * { display:grid !important } }` matches but loses.
     // A .card scope's .rail:not(.gone,.pending) display can warn outside .card and .other despite a .other scope's .rail !important.
     const drawn = applies.find((r) => r.condition && r.display !== "none");
@@ -239,7 +310,7 @@ function inPlace(root) {
     const dialog = el instanceof HTMLDialogElement && !own.hasAttribute.call(el, "popover");
     const kind = dialog ? "dialog" : "popover";
     const message = `corten: ${labelOf(el)} is a closed ${kind} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed.`;
-    if ("composed" in drawn) {
+    if ("composed" in drawn || "marker" in drawn) {
       console.warn(message, el);
       continue;
     }

@@ -168,8 +168,13 @@ The check does not evaluate the cascade. Three known limits for closed rails wit
 - `@scope (.card) { .rail:not(.gone,.pending) { display: flex } }` and `@scope (.other) { .rail { display: grid !important } }` at the same breakpoint can warn for a rail outside both roots: the `:not()` list uses the old flat match, but the override does not.
 - `@scope (.card) { :scope > .rail { display: flex } }` and `@scope (.other) { @supports (display: future-layout) { .rail { display: grid !important } } }` can suppress the warning for a rail in `.card`: the override's rejected `@supports` (or `@starting-style`) falls back to the old flat match, which ignores `.other`.
 
-This affects only the diagnostic, not which styles the browser applies. Adopted stylesheets are not inspected
-([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
+The check also reads the document's adopted stylesheets. It asks the browser which selectors
+match by temporarily adopting a copy of their selector and scope rules with inert markers
+instead of the original declarations. This keeps implicit scope roots and `to` limits as the
+browser uses them, while checking media and container queries even when they are inactive.
+It skips disabled or namespaced adopted sheets, rules in unsupported `@supports` or
+`@starting-style` blocks, and styles inside shadow roots. This affects only the diagnostic,
+not which styles the browser applies.
 When only areas have stylesheets, each area's file starts with these rules. An app with no
 component stylesheet has neither file, so if its `static/style.css` gives a hidden element, a
 popover or a dialog a `display` (styling corten-ui's parts there, say), it adds them itself:
