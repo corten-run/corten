@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import { existsSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { accountId, commit, context, harness, syntheticDelivery, syntheticProviderRequest } from "./cloud-fixtures.mjs";
@@ -182,8 +182,48 @@ test("after readiness exhaustion, refused pinned SSH leaves the empty ledger rec
   assert.ok(p.h.saved().destroyedAt); assert.equal(p.h.creates, 1); assert.equal(p.h.deletes, 1);
 });
 
+test("pinned retirement shares one local deadline across proof delivery and account preflight", async (t) => {
+  for (const [providerDelay, afterIntent] of [[34000, false], [35000, false], [45000, true]]) {
+    const p = unusedBootstrapAttempt(t), approved = await p.approve(), spawn = p.deps.spawn, request = p.deps.providerRequest;
+    const start = Date.now();
+    let now = start, proofDelivered = false, delayed = false, dispatchedExpiry;
+    // Only the synthetic SSH and provider advance time. The guest observes
+    // unusedness before the 25-second delivery delay.
+    p.deps.spawn = (binary, argv, options) => {
+      const result = spawn(binary, argv, options);
+      if (binary === "ssh") { now += 25000; proofDelivered = true; }
+      return result;
+    };
+    p.deps.providerRequest = (args) => {
+      if (!delayed && proofDelivered && args.path === "/v2/account" && !!p.h.saved().deletionIntentAt === afterIntent) {
+        delayed = true; now += providerDelay;
+      }
+      if (args.method === "DELETE") dispatchedExpiry = args.deleteProofExpiresAtMs;
+      return request(args);
+    };
+    t.mock.method(Date, "now", () => now);
+    try {
+      if (providerDelay === 34000) {
+        assert.equal(await productionMain(approved, p.deps), 1);
+        assert.equal(p.h.deletes, 1); assert.equal(dispatchedExpiry, start + 60000);
+      } else {
+        await assert.rejects(productionMain(approved, p.deps), /retirement proof expired/);
+        assert.equal(p.h.deletes, 0); assert.equal(!!p.h.saved().deletionIntentAt, afterIntent);
+        assert.equal(existsSync(join(p.h.local, "unused-host.json")), afterIntent);
+        if (afterIntent) {
+          p.h.hosts([]);
+          assert.equal(await productionMain(await p.approve(), p.deps), 1);
+          assert.equal(p.h.deletes, 0, "after intent only exact absence is checked");
+          assert.equal(p.calls.filter(([binary]) => binary === "ssh").length, 1);
+        }
+      }
+      assert.ok(proofDelivered && delayed);
+    } finally { t.mock.restoreAll(); }
+  }
+});
+
 test("SSH uses only the private snapshot of the exact approved host-key bytes", async (t) => {
-  for (const tamper of [false, true]) {
+  for (const mode of ["none", "key", "extra", "uncertain"]) {
     const p = unusedBootstrapAttempt(t), approved = await p.approve(), spawn = p.deps.spawn, bytes = readFileSync(p.key);
     let snapshot;
     p.deps.spawn = (binary, argv, options) => {
@@ -193,24 +233,54 @@ test("SSH uses only the private snapshot of the exact approved host-key bytes", 
         writeFileSync(p.key, "transient unrelated bytes after locked approval");
         try {
           assert.deepEqual(readFileSync(snapshot), bytes);
-          if (tamper) writeFileSync(snapshot, "changed snapshot");
+          if (mode === "key") writeFileSync(snapshot, "changed snapshot");
+          if (mode === "extra") writeFileSync(join(dirname(snapshot), "unknown"), "unidentified sibling");
+          if (mode === "uncertain") return { status: null, signal: "SIGTERM" };
           return spawn(binary, argv, options);
         } finally { writeFileSync(p.key, bytes); }
       }
       return spawn(binary, argv, options);
     };
-    if (tamper) {
-      await assert.rejects(productionMain(approved, p.deps), /private host-key snapshot changed/);
+    if (mode !== "none") {
+      await assert.rejects(productionMain(approved, p.deps), /private host-key snapshot changed|unexpected private host-key artifacts|control tree uncertain/);
       assert.equal(p.h.deletes, 0); assert.equal(p.h.saved().deletionIntentAt, undefined);
+      if (mode === "key") assert.equal(readFileSync(snapshot, "utf8"), "changed snapshot");
+      if (mode === "extra") assert.equal(readFileSync(join(dirname(snapshot), "unknown"), "utf8"), "unidentified sibling");
+      if (mode === "uncertain") {
+        assert.deepEqual(readFileSync(snapshot), bytes);
+        assert.ok(existsSync(join(p.h.local, "operation.lock")));
+        await assert.rejects(productionMain(approved, p.deps), /EEXIST/);
+      }
     } else {
       assert.equal(await productionMain(approved, p.deps), 1);
       assert.equal(p.h.deletes, 1);
       const receipt = JSON.parse(readFileSync(join(p.h.local, "unused-host.json")));
       assert.equal(receipt.knownHostsSha256, digest(bytes));
     }
-    assert.ok(snapshot); assert.ok(!existsSync(snapshot));
+    assert.ok(snapshot); assert.equal(existsSync(snapshot), mode !== "none");
+    assert.equal(dirname(dirname(resolve(snapshot))), p.h.base);
     assert.ok(readdirSync(p.h.local).every((name) => !name.startsWith(".unused-host-key-")));
   }
+});
+
+test("pinned collection neither adopts abandoned scratch nor clears unknown reservation artifacts", async (t) => {
+  const p = unusedBootstrapAttempt(t), approved = await p.approve(), state = readFileSync(p.h.statePath);
+  const orphan = mkdtempSync(join(p.h.base, ".unused-host-key-"));
+  const orphanKey = join(orphan, "known_hosts");
+  writeFileSync(orphanKey, "abandoned snapshot bytes", { flag: "wx" });
+  const old = join(p.h.local, ".unused-host-key-AbC123"), oldKey = join(old, "known_hosts");
+  mkdirSync(old); writeFileSync(oldKey, "unidentified reservation artifact", { flag: "wx" });
+  await assert.rejects(productionMain(approved, p.deps), /unexpected local bootstrap custody/);
+  assert.equal(readFileSync(oldKey, "utf8"), "unidentified reservation artifact");
+  assert.deepEqual(readFileSync(p.h.statePath), state);
+  assert.ok(p.calls.every(([binary]) => binary === "git")); assert.equal(p.h.deletes, 0);
+  // Model an operator archiving this independently identified fixture after
+  // settling the original process tree. The collector must not do so itself.
+  renameSync(old, join(p.h.temp, "archived-legacy-snapshot"));
+  assert.equal(await productionMain(approved, p.deps), 1);
+  assert.equal(p.h.deletes, 1);
+  assert.equal(readFileSync(orphanKey, "utf8"), "abandoned snapshot bytes");
+  assert.equal(readFileSync(join(p.h.temp, "archived-legacy-snapshot", "known_hosts"), "utf8"), "unidentified reservation artifact");
 });
 
 async function supervisedAudit(t, group, flags = {}) {

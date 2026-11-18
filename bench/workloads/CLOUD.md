@@ -342,7 +342,14 @@ the proof and original lock bytes outside the fleet and child state roots. Separ
 host key against the exact provider/metadata identity and supply a local OpenSSH
 `known_hosts` file for that key; the controller passes a private snapshot of the
 approved bytes to SSH and never falls back to global host keys. The unused retirement
-receipt retains the key digest, not the key file. `--print-approval` binds the exact saved reservation, verified-key
+receipt retains the key digest, not the key file. The snapshot lives in a private
+temporary directory beside the reservation, under the private child state root.
+A hard stop or uncertain local process closure can leave it there; later
+collectors neither adopt nor sweep old snapshots. If an older collector left a
+snapshot inside the reservation, collection refuses it. After proving the old
+process tree is gone, archive only an independently identified artifact with the
+original custody evidence; leave unidentified entries in place.
+`--print-approval` binds the exact saved reservation, verified-key
 bytes, old measured commit and new controller commit. Supplying the exact approval
 attests to both operator checks above; it is not a way to clear retained locks.
 
@@ -350,7 +357,10 @@ Execution rechecks the saved account, host and IP and requires a **fresh** pinne
 unused proof, also proving no `/bench`, unit file, guardian storage, control watcher
 or benchmark process. Systemd must report an exact zero monotonic start timestamp;
 the formatted wall-clock timestamp is not used. It uses an observation-only command without installing a
-guardian. Ambiguous, active or foreign custody is preserved. As with other unused
+guardian. The pinned DELETE deadline is 60 seconds from the local start of the
+SSH proof, including response delivery and provider preflight. Expiry before intent
+does not consume the intent; expiry after intent still forbids another DELETE.
+Ambiguous, active or foreign custody is preserved. As with other unused
 retirement, confirm deletion with an exact-ID 404; after a recorded intent a new
 approval can only verify the saved receipt and check absence. The original fleet
 intent and all sibling admissions stay unchanged. The repaired child controller must

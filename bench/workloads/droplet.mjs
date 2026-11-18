@@ -334,9 +334,16 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       || /^unused-host\.interrupted-[a-f0-9]{64}\.json$/.test(name)), "unexpected local bootstrap custody; preserve host");
   };
   const retire = async (kind, evidence, finishedAtMs) => {
+    const pinned = options.unusedBootstrapKnownHosts !== undefined;
+    const deleteProofExpiresAtMs = pinned ? evidence.startedAtMs + 60000 : undefined;
+    const requireFreshProof = () => {
+      const current = Date.now();
+      assert.ok(current >= finishedAtMs && (pinned ? current < deleteProofExpiresAtMs : current - finishedAtMs <= 60000),
+        "retirement proof expired before deletion");
+    };
     await own(); check();
-    if (options.unusedBootstrapKnownHosts !== undefined) requireUnusedBootstrapCustody();
-    assert.ok(Date.now() >= finishedAtMs && Date.now() - finishedAtMs <= 60000, "retirement proof expired before deletion");
+    if (pinned) requireUnusedBootstrapCustody();
+    requireFreshProof();
     const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
     assert.ok(Buffer.byteLength(bytes) <= (state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096), "bounded retirement record required");
     const path = join(local, retirementFile(kind));
@@ -353,10 +360,10 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       unlinkSync(path); syncDirectory(local);
     }
     durable(path, bytes);
+    if (pinned) requireFreshProof();
     Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
     verifyRetirement();
-    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false,
-      options.unusedBootstrapKnownHosts === undefined ? undefined : finishedAtMs + 60000);
+    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
     await confirmDeleted();
     state.destroyedAt = new Date().toISOString(); save(); return 1;
   };
@@ -372,9 +379,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
       knownHostsSha256 = digest(key);
       assert.equal(knownHostsSha256, unusedBootstrapApproval.knownHostsSha256, "approved host-key file changed");
-      const dir = mkdtempSync(join(local, ".unused-host-key-")), path = join(dir, "known_hosts"), identity = lstatSync(dir);
+      // Stay under the private state root, but outside the durable reservation.
+      const dir = mkdtempSync(join(base, ".unused-host-key-")), path = join(dir, "known_hosts"), identity = lstatSync(dir, { bigint: true });
+      let fileIdentity;
       try {
         durable(path, key);
+        fileIdentity = lstatSync(path, { bigint: true });
         const pinned = ["-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no",
           "-o", `UserKnownHostsFile=${process.platform === "win32" ? path.replaceAll("\\", "/") : path}`];
         // Do not install a guardian or turn a missing acknowledgement into a receipt.
@@ -382,11 +392,20 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
         raw = (await execute("ssh", [...pinned, ...sshLimits, `root@${state.ip}`, script], 30000)).stdout;
         assert.equal(digest(regular(path, 1024 * 1024)), knownHostsSha256, "private host-key snapshot changed");
       } finally {
-        physical(dir);
-        const current = lstatSync(dir);
-        assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
-        if (lstatSync(path, { throwIfNoEntry: false })) unlinkSync(path);
-        rmdirSync(dir);
+        if (!preserveOperationLock) {
+          physical(dir);
+          const current = lstatSync(dir, { bigint: true });
+          assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
+          const files = readdirSync(dir);
+          if (files.length) {
+            assert.deepEqual(files, ["known_hosts"], "unexpected private host-key artifacts; preserve");
+            const file = lstatSync(path, { bigint: true });
+            assert.ok(fileIdentity && file.dev === fileIdentity.dev && file.ino === fileIdentity.ino
+              && digest(regular(path, 1024 * 1024)) === knownHostsSha256, "private host-key snapshot changed; preserve");
+            unlinkSync(path);
+          }
+          rmdirSync(dir);
+        }
       }
     }
     const finishedAtMs = Date.now();
