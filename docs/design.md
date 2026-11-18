@@ -3015,9 +3015,10 @@ rules something out.
     1.27.0's `SUPPORT.md` and `SIGNING.md`, read 2026-11-13).
     That evidence does not make an npm initializer's extra channel or lifecycle any smaller.
 
-    The name is held all the same, as [Releasing](../CONTRIBUTING.md#releasing) holds `corten` on
-    crates.io should it come free ("take it only so no one else can"): `npm create corten` runs
-    whatever `create-corten` holds, so with the name open anyone could make it run their code.
+    The name is held all the same, as the [release runbook](../RELEASING.md#publishing-and-ownership)
+    says to hold `corten` on crates.io should it come free ("take it only so no one else can"):
+    `npm create corten` runs whatever `create-corten` holds, so with the name open anyone could
+    make it run their code.
     `create-corten` is a placeholder, published once by hand, with no dependencies or install
     scripts, that creates nothing: it prints the three steps (install Rust, `cargo install
     corten-cli`, `corten new <name>`) and a link to the getting-started guide, and exits with

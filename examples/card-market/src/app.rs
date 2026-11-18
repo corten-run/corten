@@ -1033,7 +1033,8 @@ mod tests {
 
     /// What an agent's `items.get` call costs, for callgrind: `TOOL_CALLS` calls through `/mcp`,
     /// one item after another from the fixture, each with the `MCP-Protocol-Version` a client sends
-    /// after `initialize`, and answered with the item as written by its `ToJson`. Build with
+    /// after `initialize` among a client's usual twelve header lines (three of them non-standard),
+    /// and answered with the item as written by its `ToJson`. Build with
     /// `cargo test --release -p card-market --no-run`, then run the binary
     /// twice, `CORTEN_FIXTURE=/path/items.json TOOL_CALLS=200` and `=1200`, under
     /// `valgrind --tool=callgrind <test binary> --ignored --exact app::tests::tool_cost`: the
@@ -1045,22 +1046,36 @@ mod tests {
         use http_body_util::BodyExt;
         use tower::ServiceExt;
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
-        let source = Source::fixture(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let json = std::fs::read_to_string(path).unwrap();
+        let source = Source::fixture(&json).unwrap();
         let router = super::app_with(source, Keys { partners: Partners::parse(""), agents: "t" }, WRITES_PER_MINUTE).router();
         let calls: usize = std::env::var("TOOL_CALLS").expect("TOOL_CALLS").parse().unwrap();
-        let bodies: Vec<String> = (1..=500)
-            .map(|n| {
-                json!({ "jsonrpc": "2.0", "id": n, "method": "tools/call", "params": { "name": "items.get", "arguments": { "id": format!("item_{n}") } } })
+        // Each item the fixture holds, so any fixture answers every call with its item.
+        let items: std::collections::BTreeMap<String, &serde_json::value::RawValue> = serde_json::from_str(&json).unwrap();
+        let bodies: Vec<String> = items
+            .keys()
+            .enumerate()
+            .map(|(n, id)| {
+                json!({ "jsonrpc": "2.0", "id": n, "method": "tools/call", "params": { "name": "items.get", "arguments": { "id": id } } })
                     .to_string()
             })
             .collect();
         let mut bytes = 0;
+        let started = Instant::now();
         for body in bodies.iter().cycle().take(calls) {
             let req = Request::post(mcp::Mcp::PATH)
                 .header("content-type", "application/json")
                 .header("accept", "application/json, text/event-stream")
                 .header("authorization", "Bearer t")
                 .header("mcp-protocol-version", corten::agent::PROTOCOL_VERSIONS[0])
+                .header("host", "localhost:3000")
+                .header("origin", "http://localhost:3000")
+                .header("user-agent", "mcp-client/1.0")
+                .header("accept-language", "en-US,en;q=0.9")
+                .header("accept-encoding", "identity")
+                .header("cache-control", "no-cache")
+                .header("x-request-id", "0123456789abcdef")
+                .header("x-client-name", "inventory-client")
                 .body(Body::from(body.clone()))
                 .unwrap();
             let res = router.clone().oneshot(req).await.unwrap();
@@ -1071,7 +1086,7 @@ mod tests {
             assert!(body.ends_with(br#","isError":false}}"#), "{}", String::from_utf8_lossy(&body));
             bytes += body.len();
         }
-        println!("{calls} calls, {} bytes avg", bytes / calls);
+        println!("{calls} calls, {} bytes avg, {:?} total", bytes / calls, started.elapsed());
     }
 
     #[tokio::test]
