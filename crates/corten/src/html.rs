@@ -97,11 +97,16 @@ impl Tag<'_> {
         self.attrs.iter().find(|(attr, _)| attr.eq_ignore_ascii_case(name)).map(|(_, value)| *value)
     }
 
-    /// Whether the element has text other than whitespace, skipping nested raw-text elements.
+    /// Whether the element has non-whitespace text, including a nested HTML textarea's value.
     #[cfg(debug_assertions)]
     pub(crate) fn has_text(&self, html: &str) -> bool {
         let mut at = self.end;
         let mut depth = 1;
+        // Track open tags only within SVG or MathML, including their HTML integration points.
+        let mut open: Vec<(&str, Within)> = Vec::new();
+        if let Some((true, within)) = placed(Within::Html, self) {
+            open.push((&self.name, within));
+        }
         while let Some(found) = html[at..].find('<') {
             let lt = at + found;
             if !html[at..lt].trim().is_empty() || lone_lt(html.as_bytes(), lt) {
@@ -114,20 +119,41 @@ impl Tag<'_> {
                     if depth == 0 {
                         return false;
                     }
+                    if let Some(index) = name.and_then(|name| open.iter().rposition(|(tag, _)| name.eq_ignore_ascii_case(tag))) {
+                        open.truncate(index);
+                    }
                     at = end;
                 }
                 b'!' | b'?' => at = declaration_end(html, lt),
                 _ => {
                     let (name, end, self_closing) = read_tag(html, lt + 1, |_, _| {});
                     at = (end + 1).min(html.len());
-                    if let Some(&raw) = RAW_TEXT.iter().find(|raw| name.eq_ignore_ascii_case(raw)) {
+                    let parent = open.last().map_or(Within::Html, |&(_, within)| within);
+                    let (foreign, within) =
+                        if parent == Within::Html && !name.eq_ignore_ascii_case("svg") && !name.eq_ignore_ascii_case("math") {
+                            (false, Within::Html)
+                        } else {
+                            placed(parent, &start_tag(html, lt)).unwrap_or((false, Within::Html))
+                        };
+                    if let Some(&raw) = RAW_TEXT.iter().find(|raw| !foreign && name.eq_ignore_ascii_case(raw)) {
                         let close = if raw == "script" { script_end(html, at) } else { raw_text_end(html, at, raw) };
+                        if raw == "textarea" && !html[at..close].trim().is_empty() {
+                            return true;
+                        }
                         if close == html.len() {
                             return false;
                         }
                         at = end_tag(html, close).1;
                     } else {
                         depth += usize::from(!self_closing && name.eq_ignore_ascii_case(&self.name));
+                        let opens = if foreign {
+                            !self_closing
+                        } else {
+                            !open.is_empty() && !VOID.iter().any(|void| name.eq_ignore_ascii_case(void))
+                        };
+                        if opens {
+                            open.push((name, within));
+                        }
                     }
                 }
             }

@@ -2759,6 +2759,40 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
+    fn a_hint_can_be_the_initial_value_of_a_textarea() {
+        let hints = ["qty-hint".to_string()];
+        for value in ["Visible hint", "<!--not a comment"] {
+            let html = format!("<input id=qty><div id=qty-hint><textarea readonly>{value}</textarea></div>");
+            assert_eq!(unnamed_hint(&html, &hints, true), Some("qty-hint"), "{value}");
+        }
+        let html = "<input id=qty><div id=qty-hint><textarea readonly> \n </textarea></div>";
+        assert_eq!(unnamed_hint(html, &hints, true), None);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_can_follow_a_self_closing_foreign_title() {
+        let hints = ["qty-hint".to_string()];
+        for foreign in ["svg", "math"] {
+            let html = format!("<input id=qty><div id=qty-hint><{foreign}><title /></{foreign}>Visible hint</div>");
+            assert_eq!(unnamed_hint(&html, &hints, true), Some("qty-hint"), "{foreign}");
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_can_follow_html_raw_text_in_an_integration_point() {
+        let hints = ["qty-hint".to_string()];
+        for (foreign, point) in [("svg", "foreignObject"), ("math", "mtext")] {
+            let html = format!(
+                "<input id=qty><div id=qty-hint><{foreign}><{point}><style><!--not a comment</style></{point}></{foreign}>Visible hint</div>"
+            );
+            assert_eq!(unnamed_hint(&html, &hints, true), Some("qty-hint"), "{point}");
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
     fn a_hint_can_follow_comment_like_text_in_title_and_raw_text() {
         let hints = ["qty-hint".to_string()];
         let found = [
