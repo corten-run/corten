@@ -4786,11 +4786,6 @@ async function run(browser) {
     "a page whose handlers take no form field does not load the field module",
     !(await page.evaluate(() => performance.getEntriesByType("resource").some((e) => e.name.includes("/corten-field.js")))),
   );
-  // Nor the address module: it draws no form marked data-address.
-  check(
-    "a page with no data-address form does not load the address module",
-    !(await page.evaluate(() => performance.getEntriesByType("resource").some((e) => e.name.includes("/corten-address.js")))),
-  );
   // A visitor's header has no account link (the sign-in button is in its place), so the page gets one.
   await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-account" href="/account">Account</a>')));
   const entriesBefore = await page.evaluate(entriesWhileRecordingAddresses);
@@ -6727,11 +6722,10 @@ async function run(browser) {
     await noScript.close();
   }
   // A GET data-patch form marked data-address (#1406): its answer is the page at the address it
-  // asked for, so the address follows once the patch is drawn, not at the click, in a new history
-  // entry (none when it is the address already). Back and Forward between those entries read the
-  // patch again (`corten: action`), not the page, and the rest of the screen stays; an answer that
-  // is not a patch (a 500, a redirect) is read as a page. A reload draws the address's scope, and
-  // a form without the mark leaves the address.
+  // asked for, so the address goes in history as its patch is drawn, in a new entry (none when it
+  // is the address already), and only an answer that draws does so. Back and Forward read the page
+  // at an entry's address, as for any entry, and a reload draws the address's scope; a form without
+  // the mark leaves the address. Its submits are queued as any data-patch form's are.
   {
     const scope = await browser.newPage();
     scope.on("pageerror", (e) => errors.push(`scope: ${e.message}`));
@@ -6749,19 +6743,15 @@ async function run(browser) {
         if (url.pathname.startsWith("/smoke/scope"))
           asked.push(`${r.headers()["corten"] ?? "document"} ${url.pathname === "/smoke/scope" ? "" : url.pathname}${url.search}`);
       });
-      const at = () => scope.evaluate(() => location.pathname + location.search);
+      const at = () => scope.evaluate(() => location.pathname + location.search + location.hash);
       const shown = () => scope.evaluate(() => document.querySelector("#smoke-scope output")?.textContent);
-      const entries = () => scope.evaluate(() => /** @type {any} */ (window).navigation.entries().length);
-      /** The focused element: a button by its text, a link by its address, else its name. */
-      const focused = () =>
+      const index = () => scope.evaluate(() => /** @type {any} */ (window).navigation.currentEntry.index);
+      /** The address of the entry ahead of the current one, if any. */
+      const ahead = () =>
         scope.evaluate(() => {
-          const el = document.activeElement;
-          return el?.localName === "button" ? el.textContent?.trim() : el?.localName === "a" ? `a ${el.getAttribute("href")}` : el?.localName;
+          const nav = /** @type {any} */ (window).navigation;
+          return nav.entries()[nav.currentEntry.index + 1]?.url ?? "";
         });
-      // Where Tab goes first on the page as loaded: where it goes after focus is reset to the start.
-      await scope.keyboard.press("Tab");
-      const firstTab = await focused();
-      await scope.evaluate(() => /** @type {HTMLElement | null} */ (document.activeElement)?.blur());
       /**
        * Does `act`, then waits until its submit's answer is drawn (the panel a new element) and the
        * submit has ended, and says whether it was.
@@ -6781,12 +6771,18 @@ async function run(browser) {
           )
           .then(() => true, () => false);
       };
+      /** Presses the scope button `name`, and waits for its answer to be drawn. @param {string} name */
+      const press = (name) => answered(() => scope.getByRole("button", { name, exact: true }).click());
       /** Goes back or forward, and says where the page is once the traversal has finished. @param {"back" | "forward"} way */
       const traverse = (way) =>
-        scope.evaluate((way) => /** @type {any} */ (window).navigation[way]().finished.then(() => location.pathname + location.search, (/** @type {unknown} */ e) => String(e)), way);
+        scope.evaluate((way) => /** @type {any} */ (window).navigation[way]().finished.then(() => location.pathname + location.search + location.hash, (/** @type {unknown} */ e) => String(e)), way);
+      /** A task, then a frame: whatever the runtime does with an answer it has read is done. */
+      const settle = () => scope.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
       // The answer's headers are in and its body held: the address is the page's until the answer
-      // is drawn, which it is when the address is pushed.
-      const first = await entries();
+      // is drawn. It is the answer's by the time anything else can run after the draw: a mutation
+      // observer of the panel the patch put in reads it, and presses Day from there, whose answer
+      // makes an entry after Week's.
+      const first = await index();
       let during = { reading: false, at: "", shown: "" };
       const drawn = await answered(async () => {
         await scope.evaluate(() => {
@@ -6794,7 +6790,7 @@ async function run(browser) {
           /** @type {(value?: unknown) => void} */
           let release = () => {};
           const held = new Promise((resolve) => (release = resolve));
-          Object.assign(window, { __release: release, __reading: false, __atPush: null });
+          Object.assign(window, { __release: release, __reading: false, __atPush: null, __seenAt: null });
           Response.prototype.text = function () {
             if (!this.headers.has("corten-patch")) return text.call(this);
             Response.prototype.text = text;
@@ -6807,18 +6803,34 @@ async function run(browser) {
             Object.assign(window, { __atPush: document.querySelector("#smoke-scope output")?.textContent });
             return push.apply(this, args);
           };
+          const panel = document.getElementById("smoke-scope");
+          const seen = new MutationObserver(() => {
+            const now = document.getElementById("smoke-scope");
+            if (now === panel) return;
+            seen.disconnect();
+            Object.assign(window, { __seenAt: location.search });
+            const day = /** @type {HTMLButtonElement} */ (now?.querySelector('button[value="day"]'));
+            day.form?.requestSubmit(day);
+          });
+          seen.observe(/** @type {Element} */ (document.querySelector("main")), { childList: true, subtree: true });
         });
         await scope.getByRole("button", { name: "Week", exact: true }).click();
         const reading = await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).then(() => true, () => false);
         during = { reading, at: await at(), shown: (await shown()) ?? "" };
         await scope.evaluate(() => /** @type {any} */ (window).__release());
       });
-      const atPush = await scope.evaluate(() => /** @type {any} */ (window).__atPush);
-      const pushed = { during, drawn, atPush, at: await at(), added: (await entries()) - first, shown: await shown() };
+      await scope.waitForFunction(() => location.search === "?scope=day" && document.querySelector("#smoke-scope output")?.textContent === "day", undefined, { timeout: 5000 }).catch(() => {});
+      const marks = await scope.evaluate(() => ({ atPush: /** @type {any} */ (window).__atPush, seenAt: /** @type {any} */ (window).__seenAt }));
+      const before = await scope.evaluate(() => {
+        const nav = /** @type {any} */ (window).navigation;
+        return nav.entries()[nav.currentEntry.index - 1]?.url ?? "";
+      });
+      const pushed = { during, drawn, ...marks, at: await at(), added: (await index()) - first, shown: await shown(), before };
       check(
-        "a data-address form's patch puts the address it asked for in a new history entry once it is drawn, not when its answer arrives",
+        "a data-address form's patch puts the address it asked for in a new history entry as it is drawn, before anything else runs, not when its answer arrives",
         pushed.during.reading && pushed.during.at === "/smoke/scope" && pushed.during.shown === "all" && pushed.drawn && pushed.atPush === "week" &&
-          pushed.at === "/smoke/scope?scope=week" && pushed.added === 1 && pushed.shown === "week",
+          pushed.seenAt === "?scope=week" && pushed.at === "/smoke/scope?scope=day" && pushed.added === 2 && pushed.shown === "day" &&
+          pushed.before.endsWith("/smoke/scope?scope=week"),
         JSON.stringify(pushed),
       );
       // A form the patch draws that keeps the address's query (`keep_query`) sends the scope on
@@ -6830,134 +6842,35 @@ async function run(browser) {
         sent.search = new URLSearchParams(/** @type {any} */ (new FormData(form))).toString();
         return sent.pathname + sent.search;
       });
-      check("a form a data-address form's patch draws, which keeps the address's query, sends the scope on screen", carried === "/smoke/scope?scope=week", carried);
-      // Back and Forward: the patch again, the rest of the screen kept, and focus on a control in
-      // it too.
-      await scope.evaluate(() => Object.assign(window, { __rest: document.querySelector("main ol") }));
-      await scope.getByRole("button", { name: "Year, in place", exact: true }).focus();
+      check("a form a data-address form's patch draws, which keeps the address's query, sends the scope on screen", carried === "/smoke/scope?scope=day", carried);
+      // Back and Forward read the page at the entry's address (`corten: nav`), as for any entry.
       asked.length = 0;
-      const back = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0), focus: await focused() };
-      const forward = { at: await traverse("forward"), shown: await shown(), asked: asked.splice(0), focus: await focused() };
-      const kept = await scope.evaluate(() => document.querySelector("main ol") === /** @type {any} */ (window).__rest);
+      const steps = [];
+      for (const way of /** @type {const} */ (["back", "back", "forward"])) steps.push({ at: await traverse(way), shown: await shown(), asked: asked.splice(0).join() });
       check(
-        "Back and Forward between a data-address form's entries read its patch again (corten: action), not the page",
-        back.at === "/smoke/scope" && back.shown === "all" && back.asked.join() === "action " && back.focus === "Year, in place" &&
-          forward.at === "/smoke/scope?scope=week" && forward.shown === "week" && forward.asked.join() === "action ?scope=week" && forward.focus === "Year, in place" && kept,
-        JSON.stringify({ back, forward, kept }),
-      );
-      // A traversal superseded while its patch read is on its way (before its headers, then while
-      // its body is read) draws nothing and reads no page: from Day, Back to Week is held, Back
-      // again to the first entry draws its scope, and Week's answer, let go, does not replace it.
-      /** @param {"headers" | "body"} phase */
-      const superseded = async (phase) => {
-        await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
-        const start = { at: await at(), shown: await shown() };
-        const own = (/** @type {URL} */ url) => url.pathname === "/smoke/scope";
-        /** @type {() => void} */
-        let release = () => {};
-        const held = new Promise((resolve) => (release = () => resolve(undefined)));
-        let first = true;
-        if (phase === "headers")
-          await scope.route(own, async (route) => {
-            if (!first || route.request().headers()["corten"] !== "action") return route.continue();
-            first = false;
-            await held;
-            await route.continue().catch(() => {});
-          });
-        // The old traversal's patch read, seen to its end: `__done` once its fetch fails (aborted)
-        // or its body's read settles. Handlers put on the fetch here run before the runtime's,
-        // which are put on after, so once a task has run past `__done` the runtime has done with the
-        // answer all it does without waiting on something else (a draw needs nothing more here). In
-        // the body phase the body's read is held until let go.
-        await scope.evaluate((holdBody) => {
-          const fetch_ = window.fetch;
-          /** @type {(value?: unknown) => void} */
-          let letGo = () => {};
-          const waiting = holdBody ? new Promise((resolve) => (letGo = resolve)) : Promise.resolve();
-          Object.assign(window, { __release: letGo, __reading: false, __done: false });
-          window.fetch = function (input, init) {
-            const sent = fetch_.call(this, input, init);
-            const href = String(input instanceof Request ? input.url : input);
-            if (!href.endsWith("/smoke/scope?scope=week") || new Headers(init?.headers).get("corten") !== "action") return sent;
-            window.fetch = fetch_;
-            sent.then(
-              (res) => {
-                const text = res.text;
-                res.text = () => {
-                  Object.assign(window, { __reading: true });
-                  return waiting.then(async () => {
-                    try {
-                      return await text.call(res);
-                    } finally {
-                      Object.assign(window, { __done: true });
-                    }
-                  });
-                };
-              },
-              () => Object.assign(window, { __done: true }),
-            );
-            return sent;
-          };
-        }, phase === "body");
-        asked.length = 0;
-        const sent = scope.waitForRequest((r) => own(new URL(r.url())) && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
-        await scope.evaluate(() => void (/** @type {any} */ (window).navigation.back()));
-        const out =
-          phase === "headers" ? await sent : await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).then(() => true, () => false);
-        await traverse("back");
-        // WebKit settles the newer traversal's `finished` (an AbortError) before its patch is drawn:
-        // the screen is read once it has drawn, or after 5 s.
-        await scope
-          .waitForFunction(() => document.querySelector("#smoke-scope output")?.textContent === "all", undefined, { timeout: 5000 })
-          .catch(() => {});
-        const landed = { at: await at(), shown: await shown() };
-        // The old answer let go, and seen through (a timeout fails the check), then a task and a
-        // frame for whatever the runtime does with it.
-        if (phase === "headers") release();
-        else await scope.evaluate(() => /** @type {any} */ (window).__release());
-        const done = await scope.waitForFunction(() => /** @type {any} */ (window).__done, undefined, { timeout: 5000 }).then(() => true, () => false);
-        await scope.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
-        if (phase === "headers") await scope.unroute(own);
-        const result = { out, done, start, landed, after: { at: await at(), shown: await shown() }, asked: asked.splice(0) };
-        // Forward to Week, where the checks below start.
-        await traverse("forward");
-        return result;
-      };
-      const early = await superseded("headers");
-      const reading = await superseded("body");
-      // Judged by where the screen ends, not by the newer traversal's `finished`: WebKit 27.2 rejects
-      // it with an AbortError too when it supersedes another traversal, with no runtime on the page,
-      // though it lands.
-      const stays = (/** @type {Awaited<ReturnType<typeof superseded>>} */ s) =>
-        s.out && s.done && s.start.at === "/smoke/scope?scope=day" && s.start.shown === "day" &&
-        s.landed.at === "/smoke/scope" && s.landed.shown === "all" && s.after.at === "/smoke/scope" && s.after.shown === "all" &&
-        s.asked.join() === "action ?scope=week,action ";
-      check(
-        "a data-address traversal superseded before its patch's headers or during its body draws nothing and reads no page, and the newer one draws",
-        stays(early) && stays(reading) && (await at()) === "/smoke/scope?scope=week",
-        JSON.stringify({ early, reading, at: await at() }),
+        "Back and Forward between a data-address form's entries read the page at each address",
+        steps[0].at === "/smoke/scope?scope=week" && steps[0].shown === "week" && steps[0].asked === "nav ?scope=week" &&
+          steps[1].at === "/smoke/scope" && steps[1].shown === "all" && steps[1].asked === "nav " &&
+          steps[2].at === "/smoke/scope?scope=week" && steps[2].shown === "week" && steps[2].asked === "nav ?scope=week",
+        JSON.stringify(steps),
       );
       // The same address again: its answer is asked and drawn, and no new entry is made (the entry
-      // stays the current one, and Day, ahead of it since the checks above, stays ahead).
-      const before = await entries();
-      const entry = () =>
-        scope.evaluate(() => {
-          const nav = /** @type {any} */ (window).navigation;
-          return { key: nav.currentEntry.key, index: nav.currentEntry.index, ahead: nav.entries()[nav.currentEntry.index + 1]?.url ?? "" };
-        });
-      const was = await entry();
+      // stays the current one, and Day, ahead of it, stays ahead).
+      const entry = () => scope.evaluate(() => /** @type {any} */ (window).navigation.currentEntry.key);
+      const was = { key: await entry(), ahead: await ahead() };
       asked.length = 0;
-      const again = await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-      const same = { drawn: again, asked: asked.splice(0), at: await at(), added: (await entries()) - before, shown: await shown(), was, now: await entry() };
+      const again = await press("Week");
+      const same = { drawn: again, asked: asked.splice(0), at: await at(), shown: await shown(), was, now: { key: await entry(), ahead: await ahead() } };
       check(
         "a data-address form's answer for the address it is at adds no history entry",
-        same.drawn && same.asked.join() === "action ?scope=week" && same.at === "/smoke/scope?scope=week" && same.added === 0 && same.shown === "week" &&
-          same.now.key === same.was.key && same.now.index === same.was.index && same.was.ahead.endsWith("/smoke/scope?scope=day") && same.now.ahead === same.was.ahead,
+        same.drawn && same.asked.join() === "action ?scope=week" && same.at === "/smoke/scope?scope=week" && same.shown === "week" &&
+          same.now.key === same.was.key && same.was.ahead.endsWith("/smoke/scope?scope=day") && same.now.ahead === same.was.ahead,
         JSON.stringify(same),
       );
       // A GET data-patch form without the mark draws its answer and leaves the address.
-      const year = await answered(() => scope.getByRole("button", { name: "Year, in place", exact: true }).click());
-      const unmarked = { drawn: year, at: await at(), added: (await entries()) - before, shown: await shown() };
+      const beforeYear = await index();
+      const year = await press("Year, in place");
+      const unmarked = { drawn: year, at: await at(), added: (await index()) - beforeYear, shown: await shown() };
       check(
         "a GET data-patch form without data-address leaves the address",
         unmarked.drawn && unmarked.at === "/smoke/scope?scope=week" && unmarked.added === 0 && unmarked.shown === "year",
@@ -6968,246 +6881,61 @@ async function run(browser) {
       await scope.reload();
       const reloaded = { shown: await shown(), asked: asked.splice(0) };
       check("a reload of a data-address form's address draws the page for it", reloaded.shown === "week" && reloaded.asked.join() === "document ?scope=week", JSON.stringify(reloaded));
-      // Back to an entry whose patch read answers with no patch is read as a page: a 500, then a
-      // redirect (`corten-location`, as Corten answers one to the runtime).
-      /**
-       * Sends the form as `button`, goes back to the entry it was sent from with the patch read of
-       * `url` answered by `answer`, and says what was asked and drawn. `claim`: the page read draws
-       * takes focus for its unmarked form's button as its content is put in `<main>`, as a page's
-       * own script may.
-       * @param {string} button @param {string} search
-       * @param {import("@playwright/test").RouteFulfillOptions | "abort"} answer `abort`: the request fails as a dropped network fails it
-       * @param {boolean} [claim] @param {"header" | "blurred" | "main"} [start] where focus is
-       *   before the traversal: the header's link, the body after the link (Tab would go on from
-       *   it), or a control in `<main>`, which the page read takes away
-       */
-      const backFrom = async (button, search, answer, claim = false, start = "header") => {
-        await answered(() => scope.getByRole("button", { name: button, exact: true }).click());
-        const from = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === search;
-        await scope.route(from, (route) =>
-          route.request().headers()["corten"] !== "action" ? route.continue() : answer === "abort" ? route.abort("failed") : route.fulfill(answer),
-        );
-        asked.length = 0;
-        // Focus outside the part, which a page read leaves at the document's start, as Back to any
-        // other page does.
-        if (start === "main") await scope.getByRole("button", { name: "Year, in place", exact: true }).focus();
-        else await scope.focus("header a");
-        if (start === "blurred") await scope.evaluate(() => /** @type {HTMLElement} */ (document.activeElement).blur());
-        if (claim)
-          await scope.evaluate(() => {
-            const panel = document.getElementById("smoke-scope");
-            const seen = new MutationObserver(() => {
-              if (document.getElementById("smoke-scope") === panel) return;
-              seen.disconnect();
-              /** @type {HTMLElement | null} */ (document.querySelector("main form:not(#smoke-scope form) button"))?.focus();
-            });
-            seen.observe(/** @type {Element} */ (document.querySelector("main")), { childList: true, subtree: true });
-          });
-        const went = await traverse("back");
-        await scope.unroute(from);
-        const focus = await focused();
-        // The next Tab: from the document's start, as on the page loaded.
-        await scope.keyboard.press("Tab");
-        return { at: went, shown: await shown(), asked: asked.splice(0), focus, tab: await focused() };
-      };
-      const failed = await backFrom("Day", "?scope=week", { status: 500, headers: { "content-type": "text/html; charset=utf-8" }, body: "<p>Failed</p>" });
-      check(
-        "Back to a data-address form's entry whose patch read fails reads the page instead",
-        failed.at === "/smoke/scope?scope=week" && failed.shown === "week" && failed.asked.join() === "action ?scope=week,nav ?scope=week" && failed.focus === "body" && failed.tab === firstTab,
-        JSON.stringify({ failed, firstTab }),
-      );
-      // The page read above began the screen again: the form's next entry is the first of it.
-      await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
-      // Focus left the header's link before this one: Tab starts at the document's start after it.
-      const moved = await backFrom("Week", "?scope=day", { status: 204, headers: { "corten-location": "/smoke/quoted" } }, false, "blurred");
-      check(
-        "Back to a data-address form's entry whose patch read redirects reads the page instead",
-        moved.at === "/smoke/scope?scope=day" && moved.shown === "day" && moved.asked.join() === "action ?scope=day,nav ?scope=day" && moved.focus === "body" && moved.tab === firstTab,
-        JSON.stringify({ moved, firstTab }),
-      );
-      // A handler that answers the form with its page, not a patch: the page at the address is
-      // read, as the browser reads it for the form without JavaScript, by a navigation there (a
-      // second request, its answer's body not read), in an entry of its own that starts at the
-      // top, and Back from it reads a page at the scroll it left. (Firefox restores an entry's
-      // scroll as the traversal commits, before its page is drawn, so the page answered is as long
-      // as the one left.)
-      const paged = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=week";
-      await scope.route(paged, async (route) => {
-        const headers = route.request().headers();
-        if (headers["corten"] !== "action") return route.continue();
-        await route.fulfill({ response: await route.fetch({ headers: { ...headers, corten: "nav", "accept-encoding": "identity" } }) });
+      // A submit a newer one of the form drops changes no address: Day's request is held before its
+      // headers, Month is pressed and drawn, and Day's request, let go, is seen to its end (its
+      // fetch fails, or its body is read: a timeout fails the check) and draws nothing. Month's
+      // `formaction` names a place on the page, which the address keeps, as the browser keeps it
+      // for the form without JavaScript.
+      const day = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=day";
+      /** @type {() => void} */
+      let letDayGo = () => {};
+      const dayHeld = new Promise((resolve) => (letDayGo = () => resolve(undefined)));
+      await scope.route(day, async (route) => {
+        if (route.request().headers()["corten"] !== "action") return route.continue();
+        await dayHeld;
+        await route.continue().catch(() => {});
       });
-      const index = () => scope.evaluate(() => /** @type {any} */ (window).navigation.currentEntry.index);
-      const from = await index();
-      // Clicked by script: Playwright's click scrolls the button into view first.
-      const scrolled = await scope.evaluate(() => {
-        scrollTo(0, 1500);
-        return scrollY;
-      });
-      asked.length = 0;
-      await answered(() => scope.evaluate(() => /** @type {HTMLElement} */ (document.querySelector("#smoke-scope button[value=week]")).click()));
-      await scope.unroute(paged);
-      const page = { at: await at(), added: (await index()) - from, shown: await shown(), scrolled, y: await scope.evaluate(() => scrollY), asked: asked.splice(0) };
-      const pageBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0), y: 0 };
-      pageBack.y = await scope.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(scrollY))));
-      check(
-        "a data-address form answered with a page reads the page at its address in an entry of its own, and Back from it reads a page at the scroll it left",
-        page.at === "/smoke/scope?scope=week" && page.added === 1 && page.shown === "week" && page.scrolled === 1500 && page.y === 0 &&
-          page.asked.join() === "action ?scope=week,nav ?scope=week" &&
-          pageBack.at === "/smoke/scope?scope=day" && pageBack.shown === "day" && pageBack.asked.join() === "nav ?scope=day" && Math.abs(pageBack.y - 1500) <= 2,
-        JSON.stringify({ page, pageBack }),
-      );
-      // An error status is no entry's patch, even one that carries a patch: the page is read. Focus
-      // was on a control in `<main>`, which the read takes away: Tab starts at the document's start.
-      const refused = await backFrom(
-        "Week",
-        "?scope=day",
-        {
-          status: 500,
-          headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
-          body: '<section id="smoke-scope"><p>Scope: <output>refused</output></p></section>',
-        },
-        false,
-        "main",
-      );
-      check(
-        "Back to a data-address form's entry whose patch read is a 500 with a patch reads the page instead",
-        refused.at === "/smoke/scope?scope=day" && refused.shown === "day" && refused.asked.join() === "action ?scope=day,nav ?scope=day" && refused.focus === "body" && refused.tab === firstTab,
-        JSON.stringify({ refused, firstTab }),
-      );
-      // A page that gives a control focus as it is drawn keeps it: only focus the read left where it
-      // was goes to the document's start.
-      const claimed = await backFrom("Week", "?scope=day", { status: 500, headers: { "content-type": "text/html; charset=utf-8" }, body: "<p>Failed</p>" }, true);
-      check(
-        "Back to a data-address form's entry read as a page leaves focus the page gave a control as it was drawn",
-        claimed.at === "/smoke/scope?scope=day" && claimed.shown === "day" && claimed.asked.join() === "action ?scope=day,nav ?scope=day" && claimed.focus === "Year, in place",
-        JSON.stringify(claimed),
-      );
-      // A patch whose body is cut off after its headers: the page is read. The body's read is made
-      // to fail once, as a dropped connection fails it.
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
+      // Day's request seen to its end: `__done` once its fetch fails or its body has been read;
+      // these handlers run before the runtime's, put on after them.
       await scope.evaluate(() => {
-        const text = Response.prototype.text;
-        Response.prototype.text = function () {
-          if (!this.headers.has("corten-patch")) return text.call(this);
-          Response.prototype.text = text;
-          return Promise.reject(new TypeError("cut off"));
+        const fetch_ = window.fetch;
+        Object.assign(window, { __done: false });
+        window.fetch = function (input, init) {
+          const sent = fetch_.call(this, input, init);
+          const href = String(input instanceof Request ? input.url : input);
+          if (!href.endsWith("/smoke/scope?scope=day") || new Headers(init?.headers).get("corten") !== "action") return sent;
+          window.fetch = fetch_;
+          sent.then(
+            (res) => {
+              const text = res.text;
+              res.text = () => text.call(res).finally(() => Object.assign(window, { __done: true }));
+            },
+            () => Object.assign(window, { __done: true }),
+          );
+          return sent;
         };
       });
+      const beforeDrop = await index();
       asked.length = 0;
-      const cut = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
+      const daySent = scope.waitForRequest((r) => day(new URL(r.url())) && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
+      await scope.getByRole("button", { name: "Day", exact: true }).click();
+      const dayOut = await daySent;
+      const month = await press("Month");
+      const monthAt = { at: await at(), shown: await shown() };
+      letDayGo();
+      const dayDone = await scope.waitForFunction(() => /** @type {any} */ (window).__done, undefined, { timeout: 5000 }).then(() => true, () => false);
+      await settle();
+      await scope.unroute(day);
+      const dropped = { dayOut, month, monthAt, dayDone, at: await at(), shown: await shown(), added: (await index()) - beforeDrop, asked: asked.splice(0) };
       check(
-        "Back to a data-address form's entry whose patch body is cut off reads the page instead",
-        cut.at === "/smoke/scope?scope=day" && cut.shown === "day" && cut.asked.join() === "action ?scope=day,nav ?scope=day",
-        JSON.stringify(cut),
+        "a data-address form's submit dropped by a newer one of the form changes no address, and the newer one's address keeps its formaction's #fragment",
+        dropped.dayOut && dropped.month && dropped.dayDone && dropped.monthAt.at === "/smoke/scope?scope=month#smoke-scope" && dropped.monthAt.shown === "month" &&
+          dropped.at === "/smoke/scope?scope=month#smoke-scope" && dropped.shown === "month" && dropped.added === 1 &&
+          dropped.asked.join() === "action ?scope=day,action ?scope=month",
+        JSON.stringify(dropped),
       );
-      // No answer at all (the network failed the request): the page is read.
-      const dropped = await backFrom("Week", "?scope=day", "abort");
-      check(
-        "Back to a data-address form's entry whose patch read gets no answer reads the page instead",
-        dropped.at === "/smoke/scope?scope=day" && dropped.shown === "day" && dropped.asked.join() === "action ?scope=day,nav ?scope=day" && dropped.focus === "body" && dropped.tab === firstTab,
-        JSON.stringify({ dropped, firstTab }),
-      );
-      // A patch with an element that has no place on the page is not drawn whole: the part it did
-      // draw is another entry's, and the page is read. So is an empty patch, which draws nothing.
-      const unplaced = await backFrom("Week", "?scope=day", {
-        status: 200,
-        headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
-        body: '<section id="smoke-scope"><p>Scope: <output>part</output></p></section><section id="smoke-nowhere"></section>',
-      });
-      check(
-        "Back to a data-address form's entry whose patch has an element with no place on the page reads the page instead",
-        unplaced.at === "/smoke/scope?scope=day" && unplaced.shown === "day" && unplaced.asked.join() === "action ?scope=day,nav ?scope=day" && unplaced.focus === "body" && unplaced.tab === firstTab,
-        JSON.stringify({ unplaced, firstTab }),
-      );
-      const empty = await backFrom("Week", "?scope=day", { status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: "" });
-      check(
-        "Back to a data-address form's entry whose patch is empty reads the page instead",
-        empty.at === "/smoke/scope?scope=day" && empty.shown === "day" && empty.asked.join() === "action ?scope=day,nav ?scope=day" && empty.focus === "body" && empty.tab === firstTab,
-        JSON.stringify({ empty, firstTab }),
-      );
-      // A patch whose drawing throws: the page is read. Parsing the patch's markup is made to throw
-      // once.
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-      await scope.evaluate(() => {
-        const proto = HTMLTemplateElement.prototype;
-        Object.defineProperty(proto, "innerHTML", {
-          configurable: true,
-          set() {
-            delete (/** @type {any} */ (proto)).innerHTML;
-            Object.assign(window, { __threw: true });
-            throw new TypeError("not drawn");
-          },
-        });
-      });
-      asked.length = 0;
-      const threw = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0), threw: await scope.evaluate(() => /** @type {any} */ (window).__threw === true) };
-      check(
-        "Back to a data-address form's entry whose patch throws as it is drawn reads the page instead",
-        threw.threw && threw.at === "/smoke/scope?scope=day" && threw.shown === "day" && threw.asked.join() === "action ?scope=day,nav ?scope=day",
-        JSON.stringify(threw),
-      );
-      // A form's own patch not drawn whole (empty, or with an element that has no place on the
-      // page): the page at the address it asked for is read, in an entry of its own, as the browser
-      // loads it for the form without JavaScript.
-      /**
-       * @param {string | null} body the patch the form is answered with; null: the server's
-       * @param {() => Promise<unknown>} [before] done before the form is sent
-       */
-      const firstSent = async (body, before) => {
-        const week = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=week";
-        if (body !== null)
-          await scope.route(week, (route) =>
-            route.request().headers()["corten"] === "action"
-              ? route.fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body })
-              : route.continue(),
-          );
-        await before?.();
-        const from = await index();
-        asked.length = 0;
-        const drawn = await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-        if (body !== null) await scope.unroute(week);
-        // The page read draws the scope after the patch drew what it could.
-        await scope.waitForFunction(() => document.querySelector("#smoke-scope output")?.textContent === "week", undefined, { timeout: 5000 }).catch(() => {});
-        const result = { drawn, at: await at(), added: (await index()) - from, shown: await shown(), asked: asked.splice(0) };
-        // Back to Day, where the next one starts.
-        await traverse("back");
-        return result;
-      };
-      const emptySent = await firstSent("");
-      const unplacedSent = await firstSent('<section id="smoke-scope"><p>Scope: <output>part</output></p></section><section id="smoke-nowhere"></section>');
-      // The second element's place is inside the first's, which the first's draw takes away.
-      const nestedSent = await firstSent('<section id="smoke-scope"><p>Scope: <output>part</output></p></section><form id="smoke-quarter-form"></form>');
-      const readWhole = (/** @type {Awaited<ReturnType<typeof firstSent>>} */ s) =>
-        s.drawn && s.at === "/smoke/scope?scope=week" && s.added === 1 && s.shown === "week" && s.asked.join() === "action ?scope=week,nav ?scope=week";
-      check(
-        "a data-address form's patch that is empty, has an element with no place on the page or one whose place is inside another's reads the page at its address",
-        readWhole(emptySent) && readWhole(unplacedSent) && readWhole(nestedSent) && (await at()) === "/smoke/scope?scope=day",
-        JSON.stringify({ emptySent, unplacedSent, nestedSent, at: await at() }),
-      );
-      // A patch of a stylesheet link alone draws nothing (the link goes to the head first), and one
-      // that throws as it is drawn is not drawn whole either: the page at the address is read.
-      const styleSent = await firstSent('<link rel="stylesheet" data-corten-style href="/smoke/none.css">');
-      const throwSent = await firstSent(null, () =>
-        scope.evaluate(() => {
-          const proto = HTMLTemplateElement.prototype;
-          Object.defineProperty(proto, "innerHTML", {
-            configurable: true,
-            set() {
-              delete (/** @type {any} */ (proto)).innerHTML;
-              throw new TypeError("not drawn");
-            },
-          });
-        }),
-      );
-      check(
-        "a data-address form's patch of a stylesheet alone, or one that throws as it is drawn, reads the page at its address",
-        readWhole(styleSent) && readWhole(throwSent) && (await at()) === "/smoke/scope?scope=day",
-        JSON.stringify({ styleSent, throwSent, at: await at() }),
-      );
-      // A submit still on its way when Back is pressed is dropped: Back's entry is drawn, and the
+      // A submit still on its way when Back is pressed is dropped: Back's entry is read, and the
       // form's answer, let go after it, draws nothing and puts no address in history.
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
       await scope.evaluate(() => {
         const text = Response.prototype.text;
         /** @type {(value?: unknown) => void} */
@@ -7228,1115 +6956,141 @@ async function run(browser) {
         };
       });
       asked.length = 0;
-      await scope.getByRole("button", { name: "Month", exact: true }).click();
-      const heldMonth = await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).then(() => true, () => false);
+      await scope.getByRole("button", { name: "Day", exact: true }).click();
+      const heldDay = await scope.waitForFunction(() => /** @type {any} */ (window).__reading, undefined, { timeout: 5000 }).then(() => true, () => false);
       const leftFor = await traverse("back");
-      await scope.waitForFunction(() => document.querySelector("#smoke-scope output")?.textContent === "day", undefined, { timeout: 5000 }).catch(() => {});
       await scope.evaluate(() => /** @type {any} */ (window).__release());
       const seen = await scope.waitForFunction(() => /** @type {any} */ (window).__read, undefined, { timeout: 5000 }).then(() => true, () => false);
-      await scope.waitForTimeout(100);
-      const abandoned = {
-        heldMonth,
-        seen,
-        leftFor,
-        at: await scope.evaluate(() => location.pathname + location.search + location.hash),
-        shown: await shown(),
-        asked: asked.splice(0),
-        ahead: await scope.evaluate(() => {
-          const nav = /** @type {any} */ (window).navigation;
-          return nav.entries()[nav.currentEntry.index + 1]?.url ?? "";
-        }),
-      };
+      await settle();
+      const abandoned = { heldDay, seen, leftFor, at: await at(), shown: await shown(), asked: asked.splice(0), ahead: await ahead() };
       check(
         "a data-address form's submit on its way when Back is pressed draws nothing and puts no address in history",
-        abandoned.heldMonth && abandoned.seen && abandoned.at === "/smoke/scope?scope=day" && abandoned.shown === "day" &&
-          abandoned.asked.join() === "action ?scope=month,action ?scope=day" && abandoned.ahead.endsWith("/smoke/scope?scope=week"),
+        abandoned.heldDay && abandoned.seen && abandoned.at === "/smoke/scope?scope=week" && abandoned.shown === "week" &&
+          abandoned.asked.join() === "action ?scope=day,nav ?scope=week" && abandoned.ahead.endsWith("/smoke/scope?scope=month#smoke-scope"),
         JSON.stringify(abandoned),
-      );
-      // A patch that adds to an element (`data-append`) is no address's page: Back to an entry
-      // answered with one reads the page, and draws none of it.
-      await scope.evaluate(() => {
-        Object.assign(window, { __appended: false });
-        new MutationObserver(() => document.getElementById("smoke-appended") && Object.assign(window, { __appended: true })).observe(document.body, { childList: true, subtree: true });
-      });
-      const appended = await backFrom("Week", "?scope=day", {
-        status: 200,
-        headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
-        body: '<template id="smoke-scope" data-append><p id="smoke-appended">More</p></template>',
-      });
-      const drewAppend = await scope.evaluate(() => /** @type {any} */ (window).__appended);
-      check(
-        "Back to a data-address form's entry answered with a patch that appends reads the page and draws none of it",
-        !drewAppend && appended.at === "/smoke/scope?scope=day" && appended.shown === "day" && appended.asked.join() === "action ?scope=day,nav ?scope=day",
-        JSON.stringify({ appended, drewAppend }),
-      );
-      // A marked form sent to another route's address: the address is that one, its nav link the
-      // current one, and Back reads the screen's page, since a patch of that route is not the
-      // screen's own (the entry it was sent from is not one of its patches').
-      const current = () => scope.evaluate(() => Array.from(document.querySelectorAll("main nav a[aria-current=page]"), (a) => a.getAttribute("href")).join());
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-      const wasCurrent = await current();
-      asked.length = 0;
-      await answered(() => scope.getByRole("button", { name: "Elsewhere", exact: true }).click());
-      const away = { at: await at(), shown: await shown(), asked: asked.splice(0), current: await current() };
-      const awayBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0), current: await current() };
-      check(
-        "a data-address form sent to another route's address marks its nav link current, and Back from it reads the page",
-        wasCurrent === "/smoke/scope" && away.at === "/smoke/scope-elsewhere?scope=far" && away.shown === "far" && away.asked.join() === "action /smoke/scope-elsewhere?scope=far" &&
-          away.current === "/smoke/scope-elsewhere" && awayBack.at === "/smoke/scope?scope=week" && awayBack.shown === "week" &&
-          awayBack.asked.join() === "nav ?scope=week" && awayBack.current === "/smoke/scope",
-        JSON.stringify({ wasCurrent, away, awayBack }),
       );
       // A redirect (3xx) of the form's request, the server's own (`/smoke/scope-moved` answers a
       // 303 to the day's scope): the address is where it went, with the `#fragment` of the form's
       // `formaction`, which the redirect's `Location` does not name. The request `fetch` follows
       // the redirect with is judged by its answer, a patch: Chromium does not tell Playwright the
-      // headers it was sent with.
+      // headers it was sent with. Back reads the page it came from.
       const beforeMove = await index();
       asked.length = 0;
       const dayAnswer = scope
         .waitForResponse((r) => new URL(r.url()).pathname === "/smoke/scope" && new URL(r.url()).search === "?scope=day", { timeout: 5000 })
         .then((r) => "corten-patch" in r.headers(), () => false);
-      await answered(() => scope.getByRole("button", { name: "Moved", exact: true }).click());
-      const redirected = {
-        at: await scope.evaluate(() => location.pathname + location.search + location.hash),
-        added: (await index()) - beforeMove,
-        shown: await shown(),
-        patch: await dayAnswer,
-        asked: asked.splice(0),
-      };
+      await press("Moved");
+      const redirected = { at: await at(), added: (await index()) - beforeMove, shown: await shown(), patch: await dayAnswer, asked: asked.splice(0) };
       const redirectedBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
       check(
         "a data-address form's request redirected (3xx) puts the address it went to in history, with its formaction's #fragment",
         redirected.at === "/smoke/scope?scope=day#smoke-scope" && redirected.added === 1 && redirected.shown === "day" && redirected.patch &&
           redirected.asked.length === 2 && redirected.asked[0] === "action /smoke/scope-moved?scope=moved" && redirected.asked[1].endsWith(" ?scope=day") &&
-          redirectedBack.at === "/smoke/scope?scope=week" && redirectedBack.shown === "week" && redirectedBack.asked.join() === "action ?scope=week",
+          redirectedBack.at === "/smoke/scope?scope=week" && redirectedBack.shown === "week" && redirectedBack.asked.join() === "nav ?scope=week",
         JSON.stringify({ redirected, redirectedBack }),
       );
-      // A `#fragment` of the form's `formaction` or `action` stays in the address, as the browser
-      // keeps it for the form without JavaScript; Back between them reads the patch.
-      const whole = () => scope.evaluate(() => location.pathname + location.search + location.hash);
-      await answered(() => scope.getByRole("button", { name: "Month", exact: true }).click());
-      const month = { at: await whole(), shown: await shown() };
-      await answered(() => scope.getByRole("button", { name: "Quarter", exact: true }).click());
-      const quarter = { at: await whole(), shown: await shown() };
-      asked.length = 0;
-      await traverse("back");
-      const placeBack = { at: await whole(), shown: await shown(), asked: asked.splice(0) };
-      check(
-        "a data-address form's address keeps the #fragment of its formaction or action",
-        month.at === "/smoke/scope?scope=month#smoke-scope" && month.shown === "month" &&
-          quarter.at === "/smoke/scope?scope=quarter#smoke-scope" && quarter.shown === "quarter" &&
-          placeBack.at === "/smoke/scope?scope=month#smoke-scope" && placeBack.shown === "month" && placeBack.asked.join() === "action ?scope=month",
-        JSON.stringify({ month, quarter, placeBack }),
-      );
-      // Two marked forms, one sent after the other: the later one's answer is the screen and its
-      // address the one entry, as the browser loads only the last form sent without JavaScript.
-      // Week's request is held before its headers, Quarter's is sent and drawn first, and Week's
-      // answer, let go and seen to its end (a timeout fails the check), draws nothing.
-      await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
-      const weekAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=week";
-      /** @type {() => void} */
-      let letWeekGo = () => {};
-      const weekHeld = new Promise((resolve) => (letWeekGo = () => resolve(undefined)));
-      await scope.route(weekAsked, async (route) => {
-        if (route.request().headers()["corten"] !== "action") return route.continue();
-        await weekHeld;
-        await route.continue().catch(() => {});
-      });
-      // Week's request seen to its end: `__done` once its fetch fails (cancelled) or its body has
-      // been read; these handlers run before the runtime's, put on after them.
-      await scope.evaluate(() => {
-        const fetch_ = window.fetch;
-        Object.assign(window, { __done: false });
-        window.fetch = function (input, init) {
-          const sent = fetch_.call(this, input, init);
-          const href = String(input instanceof Request ? input.url : input);
-          if (!href.endsWith("/smoke/scope?scope=week") || new Headers(init?.headers).get("corten") !== "action") return sent;
-          window.fetch = fetch_;
-          sent.then(
-            (res) => {
-              const text = res.text;
-              res.text = () => text.call(res).finally(() => Object.assign(window, { __done: true }));
-            },
-            () => Object.assign(window, { __done: true }),
-          );
-          return sent;
-        };
-      });
-      const beforeRace = await index();
-      asked.length = 0;
-      const weekSent = scope.waitForRequest((r) => weekAsked(new URL(r.url())) && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
-      await scope.getByRole("button", { name: "Week", exact: true }).click();
-      const raced = await weekSent;
-      const quarterDrawn = await answered(() => scope.getByRole("button", { name: "Quarter", exact: true }).click());
-      letWeekGo();
-      const weekDone = await scope.waitForFunction(() => /** @type {any} */ (window).__done, undefined, { timeout: 5000 }).then(() => true, () => false);
-      await scope.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
-      await scope.unroute(weekAsked);
-      const race = { raced, quarterDrawn, weekDone, at: await whole(), added: (await index()) - beforeRace, shown: await shown(), asked: asked.splice(0) };
-      check(
-        "of two data-address forms sent one after the other, the later one's answer is the screen and its address the one entry, though the earlier one's comes after it",
-        race.raced && race.quarterDrawn && race.weekDone && race.at === "/smoke/scope?scope=quarter#smoke-scope" && race.added === 1 && race.shown === "quarter" &&
-          race.asked.join() === "action ?scope=week,action ?scope=quarter",
-        JSON.stringify(race),
-      );
-      // A write on its way when Back is pressed, which may still land: Back between two of the
-      // form's entries reads the page, not the patch, so what the write changed outside the part
-      // is drawn.
-      await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-      const writeAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/styled";
-      /** @type {() => void} */
-      let letWriteGo = () => {};
-      const writeHeld = new Promise((resolve) => (letWriteGo = () => resolve(undefined)));
-      await scope.route(writeAsked, async (route) => {
-        await writeHeld;
-        await route.continue().catch(() => {});
-      });
-      /** Puts a form that writes in `<main>`, in place of one put there before. */
-      const writeForm = () =>
-        scope.evaluate(() => {
-          document.getElementById("scope-write")?.remove();
-          document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<form id="scope-write" method="post" action="/smoke/styled" data-patch><button>Save</button></form>'));
-        });
-      await writeForm();
-      const writeSent = scope.waitForRequest((r) => writeAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      await scope.click("#scope-write button");
-      const writing = await writeSent;
-      asked.length = 0;
-      const afterWrite = { writing, at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
-      letWriteGo();
-      await scope.unroute(writeAsked);
-      check(
-        "Back between a data-address form's entries while a write is on its way reads the page, not the patch",
-        afterWrite.writing && afterWrite.at === "/smoke/scope?scope=day" && afterWrite.shown === "day" && afterWrite.asked.join() === "nav ?scope=day",
-        JSON.stringify(afterWrite),
-      );
-      // A write redirected whose page has not come yet (stale): the form's entries made since read
-      // the whole page (`corten: page`), so the write's change is drawn. The write's page is held,
-      // and left by a script's `replaceState` (a marked form sent while it is on its way would be
-      // the browser's navigation, which reads the page whole); then the form is sent twice.
-      const quotedAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/quoted";
-      /** @type {() => void} */
-      let letQuotedGo = () => {};
-      const quotedHeld = new Promise((resolve) => (letQuotedGo = () => resolve(undefined)));
-      await scope.route(quotedAsked, async (route) => {
-        await quotedHeld;
-        await route.continue().catch(() => {});
-      });
-      await scope.route(writeAsked, (route) => route.fulfill({ status: 204, headers: { "corten-location": "/smoke/quoted" } }));
-      await writeForm();
-      const quotedSent = scope.waitForRequest((r) => quotedAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      await scope.click("#scope-write button");
-      const redirecting = await quotedSent;
-      const left = await scope.evaluate(() => {
-        const nav = /** @type {any} */ (window).navigation;
-        const going = nav.transition?.finished.then(() => "finished", () => "aborted");
-        history.replaceState(history.state, "", location.href);
-        return going ?? "none";
-      });
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-      await answered(() => scope.getByRole("button", { name: "Day", exact: true }).click());
-      asked.length = 0;
-      const staleBack = { redirecting, left, at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
-      letQuotedGo();
-      await scope.unroute(writeAsked);
-      await scope.unroute(quotedAsked);
-      check(
-        "Back between a data-address form's entries after a write redirected, before its page came, reads the page, not the patch",
-        staleBack.redirecting && staleBack.left === "aborted" && staleBack.at === "/smoke/scope?scope=week" && staleBack.shown === "week" && staleBack.asked.join() === "page ?scope=week",
-        JSON.stringify(staleBack),
-      );
-      // Two entries a marked form made at another route's address: the screen is this route's
-      // page, which a patch of that route is not, so Back between them reads the page.
-      await answered(() => scope.getByRole("button", { name: "Elsewhere", exact: true }).click());
-      await scope.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#smoke-scope button[value=far]")).setAttribute("value", "farther"));
-      await answered(() => scope.getByRole("button", { name: "Elsewhere", exact: true }).click());
-      const farAt = await at();
-      asked.length = 0;
-      const farBack = { farAt, at: await traverse("back"), shown: await shown(), asked: asked.splice(0) };
-      check(
-        "Back between two entries a data-address form made at another route's address reads the page, not the patch",
-        farBack.farAt === "/smoke/scope-elsewhere?scope=farther" && farBack.at === "/smoke/scope-elsewhere?scope=far" && farBack.shown === "far" &&
-          farBack.asked.join() === "nav /smoke/scope-elsewhere?scope=far",
-        JSON.stringify(farBack),
-      );
-      // A marked form sent while a link's page is on its way: the browser drops that navigation for
-      // the form's, as without JavaScript, and the runtime reads the page at the form's address in
-      // its place. The link's request is held, and seen to its end once let go.
-      await scope.goto(`${base}/smoke/scope`);
-      const linkAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope-elsewhere";
-      /** @type {() => void} */
-      let letLinkGo = () => {};
-      const linkHeld = new Promise((resolve) => (letLinkGo = () => resolve(undefined)));
-      /** @type {() => void} */
-      let linkEnded = () => {};
-      const linkDone = new Promise((resolve) => (linkEnded = () => resolve(undefined)));
-      await scope.route(linkAsked, async (route) => {
-        try {
-          await linkHeld;
-          await route.continue();
-        } catch {
-          // Dropped by the browser before it was let go.
-        } finally {
-          linkEnded();
-        }
-      });
-      const linkSent = scope.waitForRequest((r) => linkAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      // Clicked from a script: Playwright's click waits for the navigation it starts, held here.
-      await scope.evaluate(() => /** @type {HTMLAnchorElement} */ (document.querySelector("nav a[href='/smoke/scope-elsewhere']")).click());
-      const linkWent = await linkSent;
-      asked.length = 0;
-      // Sent from a script too: Playwright's click waits for the link's navigation to finish first.
-      await scope.evaluate(() => {
-        const week = /** @type {HTMLButtonElement} */ (document.querySelector("#smoke-scope button[value=week]"));
-        week.form?.requestSubmit(week);
-      });
-      const formRead = await scope
-        .waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-scope output")?.textContent === "week", undefined, { timeout: 5000 })
-        .then(() => true, () => false);
-      letLinkGo();
-      const linkEndedInTime = await Promise.race([linkDone.then(() => true), new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      await scope.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(undefined))));
-      await scope.unroute(linkAsked);
-      const overtaken = { linkWent, formRead, linkEndedInTime, at: await at(), shown: await shown(), asked: asked.splice(0) };
-      check(
-        "a data-address form sent while a link's page is on its way reads the page at its address in that navigation's place",
-        overtaken.linkWent && overtaken.formRead && overtaken.linkEndedInTime && overtaken.at === "/smoke/scope?scope=week" && overtaken.shown === "week" &&
-          overtaken.asked.join() === "nav ?scope=week",
-        JSON.stringify(overtaken),
-      );
-      // What the user typed outside the part and did not send stays with the entry the form was
-      // sent from, as the browser keeps it for the form without JavaScript: typed, the form sent,
-      // a link followed, then Back twice; and typed, the form sent, then Back while a write is on
-      // its way, which reads the page.
-      const note = () => scope.evaluate(() => /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=note]"))?.value ?? null);
-      await scope.goto(`${base}/smoke/scope`);
-      await scope.fill("input[name=note]", "draft");
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-      await scope.getByRole("link", { name: "Elsewhere", exact: true }).click();
-      await scope.waitForFunction(() => location.pathname === "/smoke/scope-elsewhere" && !document.querySelector("input[name=note]"), undefined, { timeout: 5000 }).catch(() => {});
-      const linkedWeek = { at: await traverse("back"), note: await note() };
-      const linked = { week: linkedWeek, at: await traverse("back"), note: await note() };
-      await scope.goto(`${base}/smoke/scope`);
-      await scope.fill("input[name=note]", "draft");
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-      /** @type {() => void} */
-      let letNoteWriteGo = () => {};
-      const noteWriteHeld = new Promise((resolve) => (letNoteWriteGo = () => resolve(undefined)));
-      await scope.route(writeAsked, async (route) => {
-        await noteWriteHeld;
-        await route.continue().catch(() => {});
-      });
-      await writeForm();
-      const noteWriteSent = scope.waitForRequest((r) => writeAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      await scope.click("#scope-write button");
-      asked.length = 0;
-      const written = { writing: await noteWriteSent, at: await traverse("back"), note: await note(), asked: asked.splice(0) };
-      letNoteWriteGo();
-      await scope.unroute(writeAsked);
-      check(
-        "what the user typed and did not send is put back for the entry a data-address form was sent from",
-        linked.week.at === "/smoke/scope?scope=week" && linked.week.note === "draft" && linked.at === "/smoke/scope" && linked.note === "draft" &&
-          written.writing && written.at === "/smoke/scope" && written.note === "draft" && written.asked.join() === "nav ",
-        JSON.stringify({ linked, written }),
-      );
-      // Back and Forward between the form's entries put the user where they were on each, as the
-      // browser does for the pages: the patch is drawn, then the entry's scroll restored. Loaded at
-      // an address the tab's last entry is not: Firefox drops the entry ahead of one of two document
-      // entries at the same address when Back to it is intercepted, whatever intercepts it.
-      await scope.goto(`${base}/smoke/scope?scope=day`);
-      const y = () => scope.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => resolve(Math.round(scrollY)))));
-      await scope.evaluate(() => scrollTo(0, 1500));
-      // Sent from a script: a click would scroll the button into view first.
-      await answered(() =>
-        scope.evaluate(() => {
-          const week = /** @type {HTMLButtonElement} */ (document.querySelector("#smoke-scope button[value=week]"));
-          week.form?.requestSubmit(week);
-        }),
-      );
-      const afterSend = await y();
-      await scope.evaluate(() => scrollTo(0, 700));
-      asked.length = 0;
-      const restored = { afterSend, back: { at: await traverse("back"), y: await y() }, forward: { at: await traverse("forward"), y: await y() }, asked: asked.splice(0) };
-      check(
-        "Back and Forward between a data-address form's entries restore each entry's scroll",
-        restored.afterSend === 1500 && restored.back.at === "/smoke/scope?scope=day" && restored.back.y === 1500 && restored.forward.at === "/smoke/scope?scope=week" &&
-          restored.forward.y === 700 && restored.asked.join() === "action ?scope=day,action ?scope=week",
-        JSON.stringify(restored),
-      );
-      // A field in the part that the patch takes away, typed in and not sent, comes back with the
-      // entry it was typed in: kept before the patch is drawn, and put back in the part drawn
-      // again by Back. Loaded at an address of its own (the Firefox entry drop above).
-      const panelNote = () => scope.evaluate(() => /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=panel_note]"))?.value ?? null);
-      await scope.goto(`${base}/smoke/scope?scope=all`);
-      await scope.fill("input[name=note]", "draft");
-      await scope.fill("input[name=panel_note]", "inside draft");
-      await answered(() => scope.getByRole("button", { name: "Week", exact: true }).click());
-      const takenAway = (await panelNote()) === null;
-      await scope.getByRole("link", { name: "Elsewhere", exact: true }).click();
-      await scope.waitForFunction(() => location.pathname === "/smoke/scope-elsewhere" && !document.querySelector("input[name=note]"), undefined, { timeout: 5000 }).catch(() => {});
-      // The pointer off the link it clicked, which Back draws under it again: a link hovered there
-      // as the screen changes is prefetched, a request the step's list would show.
-      await scope.mouse.move(1200, 700);
-      const insideWeek = await traverse("back");
-      asked.length = 0;
-      const inside = { takenAway, week: insideWeek, at: await traverse("back"), note: await note(), panel: await panelNote(), asked: asked.splice(0) };
-      check(
-        "a field a data-address form's patch takes away, typed in and not sent, is put back when Back draws its entry's part again",
-        inside.takenAway && inside.week === "/smoke/scope?scope=week" && inside.at === "/smoke/scope?scope=all" && inside.note === "draft" &&
-          inside.panel === "inside draft" && inside.asked.join() === "action ?scope=all",
-        JSON.stringify(inside),
-      );
-      // Back and Forward between entries whose parts differ in height: a tall part, a short one that
-      // leaves the screen too short to stay where it was, and a tall one again. Each entry's scroll
-      // is restored once its part is drawn, not against the shorter screen being left.
-      /** Sends the form for `value`, by its Week button given that value. @param {string} value */
-      const sendFor = (value) =>
-        answered(() =>
-          scope.evaluate((value) => {
-            const week = /** @type {HTMLButtonElement} */ (document.querySelector("#smoke-scope button[value=week]"));
-            week.value = value;
-            week.form?.requestSubmit(week);
-          }, value),
-        );
-      await scope.goto(`${base}/smoke/scope?scope=long`);
-      await scope.evaluate(() => scrollTo(0, 4000));
-      const tallAt = await y();
-      await sendFor("short");
-      const shortAt = await y();
-      await sendFor("longer");
-      await scope.evaluate(() => scrollTo(0, 3000));
-      const tallAgainAt = await y();
-      asked.length = 0;
-      /** Goes back or forward, and says where it is and how far down. @param {"back" | "forward"} way */
-      const step = async (way) => ({ at: await traverse(way), y: await y() });
-      const heights = { tallAt, shortAt, tallAgainAt, steps: [await step("back"), await step("back"), await step("forward"), await step("forward")], asked: asked.splice(0) };
-      const near = (/** @type {unknown} */ a, /** @type {unknown} */ b) => typeof a === "number" && typeof b === "number" && Math.abs(a - b) <= 2;
-      const [shortBack, tallBack, shortForward, tallForward] = heights.steps;
-      check(
-        "Back and Forward between a data-address form's entries of different heights restore each entry's scroll once its part is drawn",
-        tallAt === 4000 && typeof shortAt === "number" && shortAt < 4000 && tallAgainAt === 3000 &&
-          shortBack.at === "/smoke/scope?scope=short" && near(shortBack.y, shortAt) && tallBack.at === "/smoke/scope?scope=long" && near(tallBack.y, 4000) &&
-          shortForward.at === "/smoke/scope?scope=short" && near(shortForward.y, shortAt) && tallForward.at === "/smoke/scope?scope=longer" && near(tallForward.y, 3000) &&
-          heights.asked.join() === "action ?scope=short,action ?scope=long,action ?scope=short,action ?scope=longer",
-        JSON.stringify(heights),
-      );
-      // A GET sent while a write of the same form (its Save button) is on its way is sent once the
-      // write's answer is drawn, from the form that answer drew, and as at the press: its address
-      // goes in history, in one entry, and a reload draws its scope.
-      await scope.goto(`${base}/smoke/scope`);
-      const saveAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope";
+      // A GET pressed while a write of the same form (its Save button) is on its way waits for the
+      // write's answer, as any data-patch form's submit does, and is then sent from the form that
+      // answer drew: its address goes in history, in one entry. The write puts none there.
+      const saving = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "";
       /** @type {() => void} */
       let letSaveGo = () => {};
       const saveHeld = new Promise((resolve) => (letSaveGo = () => resolve(undefined)));
-      await scope.route(saveAsked, async (route) => {
-        if (route.request().method() !== "POST") return route.fallback();
+      await scope.route(saving, async (route) => {
+        if (route.request().method() !== "POST") return route.continue();
         await saveHeld;
         await route.continue().catch(() => {});
       });
-      const beforeSave = await entries();
-      const saveSent = scope.waitForRequest((r) => r.method() === "POST" && saveAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      /** Sends the scope form by its button for `value`. @param {string} value */
-      const press = (value) =>
-        scope.evaluate((value) => {
-          const button = /** @type {HTMLButtonElement} */ (document.querySelector(`#smoke-scope button[value=${value}]`));
-          button.form?.requestSubmit(button);
-        }, value);
-      await press("saved");
-      const saving = await saveSent;
-      await press("week");
+      const beforeSave = await index();
       asked.length = 0;
+      const saveSent = scope.waitForRequest((r) => saving(new URL(r.url())) && r.method() === "POST", { timeout: 5000 }).then(() => true, () => false);
+      await scope.getByRole("button", { name: "Save", exact: true }).click();
+      const saveOut = await saveSent;
+      await scope.getByRole("button", { name: "Day", exact: true }).click();
+      const waited = asked.slice();
       letSaveGo();
-      const sentAfter = await scope
-        .waitForFunction(
-          () => location.search === "?scope=week" && document.querySelector("#smoke-scope output")?.textContent === "week" && !document.querySelector("main form[aria-busy]"),
-          undefined,
-          { timeout: 5000 },
-        )
-        .then(() => true, () => false);
-      await scope.unroute(saveAsked);
-      const queued = { saving, sentAfter, at: await at(), added: (await entries()) - beforeSave, shown: await shown(), asked: asked.splice(0), reloaded: { at: "", shown: "" } };
-      await scope.reload();
-      queued.reloaded = { at: await at(), shown: (await shown()) ?? "" };
+      await scope.waitForFunction(() => location.search === "?scope=day" && document.querySelector("#smoke-scope output")?.textContent === "day", undefined, { timeout: 5000 }).catch(() => {});
+      await scope.unroute(saving);
+      const queued = { saveOut, waited, at: await at(), shown: await shown(), added: (await index()) - beforeSave, asked: asked.splice(0) };
       check(
-        "a GET a data-address form sent while its own write was on its way puts its address in history once the write's answer is drawn",
-        queued.saving && queued.sentAfter && queued.at === "/smoke/scope?scope=week" && queued.added === 1 && queued.shown === "week" &&
-          queued.asked.join() === "action ?scope=week" && queued.reloaded.at === "/smoke/scope?scope=week" && queued.reloaded.shown === "week",
+        "a data-address form's GET pressed while its write is on its way is sent once the write's answer is drawn, and puts its address in history",
+        queued.saveOut && queued.waited.join() === "action " && queued.at === "/smoke/scope?scope=day" && queued.shown === "day" && queued.added === 1 &&
+          queued.asked.join() === "action ,action ?scope=day",
         JSON.stringify(queued),
       );
-      /** A task, then a frame: for whatever the runtime does with an answer seen to its end. */
-      const settle = () => scope.evaluate(() => new Promise((resolve) => setTimeout(() => requestAnimationFrame(() => resolve(undefined)))));
-      // A write of one marked form still on its way when another marked form's GET is sent is not
-      // dropped: the server may have applied it. The GET is sent once the write's answer is drawn,
-      // and its patch, drawn after, is the screen, so the screen, the address and a reload all say
-      // the newer scope. Save is held before its headers; Quarter is pressed while it is, and is not
-      // asked for until Save is let go.
-      await scope.goto(`${base}/smoke/scope?scope=day`);
-      // The pointer away from the page's links, where an earlier step left it: Firefox hovers one
-      // under a still pointer as the screen changes, and its dwell prefetches the link's page.
-      await scope.mouse.move(1200, 700);
-      /** @type {() => void} */
-      let letSave = () => {};
-      const saveWaits = new Promise((resolve) => (letSave = () => resolve(undefined)));
-      await scope.route(saveAsked, async (route) => {
-        if (route.request().method() !== "POST") return route.fallback();
-        await saveWaits;
-        await route.continue().catch(() => {});
-      });
-      const beforeWrite = await entries();
+      // A marked form sent to another route's address: the address is that one, its nav link the
+      // current one, and Back reads the screen's page.
+      const current = () => scope.evaluate(() => Array.from(document.querySelectorAll("main nav a[aria-current=page]"), (a) => a.getAttribute("href")).join());
+      const wasCurrent = await current();
       asked.length = 0;
-      const savePosted = scope.waitForRequest((r) => r.method() === "POST" && saveAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      await press("saved");
-      const posting = await savePosted;
-      await press("quarter");
-      await settle();
-      const whileHeld = asked.slice();
-      letSave();
-      const quarterAfter = await scope
-        .waitForFunction(
-          () => location.search === "?scope=quarter" && document.querySelector("#smoke-scope output")?.textContent === "quarter" && !document.querySelector("main form[aria-busy]"),
-          undefined,
-          { timeout: 5000 },
-        )
-        .then(() => true, () => false);
-      await settle();
-      await scope.unroute(saveAsked);
-      const behindWrite = { posting, whileHeld, quarterAfter, at: await whole(), added: (await entries()) - beforeWrite, shown: await shown(), asked: asked.splice(0), reloaded: { at: "", shown: "" } };
-      await scope.reload();
-      behindWrite.reloaded = { at: await whole(), shown: (await shown()) ?? "" };
+      await press("Elsewhere");
+      const away = { at: await at(), shown: await shown(), asked: asked.splice(0), current: await current() };
+      const awayBack = { at: await traverse("back"), shown: await shown(), asked: asked.splice(0), current: await current() };
       check(
-        "a GET of one data-address form sent while another's write is on its way is sent once the write's answer is drawn, and the screen, the address and a reload say the newer scope",
-        behindWrite.posting && behindWrite.whileHeld.join() === "action " && behindWrite.quarterAfter && behindWrite.at === "/smoke/scope?scope=quarter#smoke-scope" && behindWrite.added === 1 &&
-          behindWrite.shown === "quarter" && behindWrite.asked.join() === "action ,action ?scope=quarter" && behindWrite.reloaded.at === "/smoke/scope?scope=quarter#smoke-scope" &&
-          behindWrite.reloaded.shown === "quarter",
-        JSON.stringify(behindWrite),
+        "a data-address form sent to another route's address marks its nav link current, and Back from it reads the page",
+        wasCurrent === "/smoke/scope" && away.at === "/smoke/scope-elsewhere?scope=far" && away.shown === "far" && away.asked.join() === "action /smoke/scope-elsewhere?scope=far" &&
+          away.current === "/smoke/scope-elsewhere" && awayBack.at === "/smoke/scope?scope=day" && awayBack.shown === "day" &&
+          awayBack.asked.join() === "nav ?scope=day" && awayBack.current === "/smoke/scope",
+        JSON.stringify({ wasCurrent, away, awayBack }),
       );
-      // The write's answer may be the only update of parts outside the newer form's patch: an editor
-      // beside a filter, each a marked form. The editor's Save reaches the server, which answers it
-      // (saving its title, or refusing it), and the answer is held; the filter's Scope B is pressed
-      // while it is. Once the answer is let go, the editor shows it. After a save or a refusal of
-      // the input (422), Scope B is drawn and its address pushed; after a refusal of the state (409),
-      // which the user reads first, it is not sent, as a submit waiting for a write of its own form.
-      const editAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope-edit";
-      /** Saves `title` in the editor, holds its answer, presses Scope B, and lets the answer go. @param {string} title */
-      const editThenFilter = async (title) => {
-        await scope.goto(`${base}/smoke/scope-edit`);
-        await scope.mouse.move(1200, 700);
-        const revision = () => scope.evaluate(() => Number(document.querySelector("#scope-editor output")?.textContent));
-        const said = () => scope.evaluate(() => document.querySelector("#scope-editor [role=status]")?.textContent ?? "");
-        const filter = () => scope.evaluate(() => document.querySelector("#scope-filter output")?.textContent ?? "");
-        const before = { revision: await revision(), entries: await entries() };
-        /** @type {() => void} */
-        let letAnswer = () => {};
-        const answerWaits = new Promise((resolve) => (letAnswer = () => resolve(undefined)));
-        /** @type {() => void} */
-        let reached = () => {};
-        const answeredThere = new Promise((resolve) => (reached = () => resolve(true)));
-        await scope.route(editAsked, async (route) => {
-          if (route.request().method() !== "POST") return route.fallback();
-          // To the server, which applies the write, then held before the browser has its answer.
-          const response = await route.fetch();
-          reached();
-          await answerWaits;
-          await route.fulfill({ response }).catch(() => {});
-        });
-        await scope.fill("#scope-editor input[name=title]", title);
-        asked.length = 0;
-        await scope.getByRole("button", { name: "Save title", exact: true }).click();
-        const committed = await Promise.race([answeredThere, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-        await scope.getByRole("button", { name: "Scope B", exact: true }).click();
-        await settle();
-        const whileHeld = asked.slice();
-        letAnswer();
-        const idle = () =>
-          scope
-            .waitForFunction(() => document.querySelector("#scope-editor [role=status]")?.textContent !== "" && !document.querySelector("main form[aria-busy]"), undefined, {
-              timeout: 5000,
-            })
-            .then(() => true, () => false);
-        // The editor's answer drawn, then Scope B's, if it is sent, which it is in the same task.
-        const ended = (await idle()) && (await settle(), await idle());
-        await settle();
-        await scope.unroute(editAsked);
-        const result = {
-          committed,
-          whileHeld,
-          ended,
-          revision: (await revision()) - before.revision,
-          said: await said(),
-          filter: await filter(),
-          at: await whole(),
-          added: (await entries()) - before.entries,
-          asked: asked.splice(0),
-          reloaded: { revision: 0, filter: "", at: "" },
-        };
-        await scope.reload();
-        result.reloaded = { revision: (await revision()) - before.revision, filter: await filter(), at: await whole() };
-        return result;
-      };
-      const edited = await editThenFilter("first");
-      check(
-        "a data-address form's write answered while another's GET waits draws its own part, then the GET's, and both parts, the address and a reload agree",
-        edited.committed && edited.whileHeld.join() === "action /smoke/scope-edit" && edited.ended && edited.revision === 1 && edited.said === "Saved." &&
-          edited.filter === "b" && edited.at === "/smoke/scope-edit?scope=b" && edited.added === 1 &&
-          edited.asked.join() === "action /smoke/scope-edit,action /smoke/scope-edit?scope=b" && edited.reloaded.revision === 1 && edited.reloaded.filter === "b" &&
-          edited.reloaded.at === "/smoke/scope-edit?scope=b",
-        JSON.stringify(edited),
-      );
-      const refusedInput = await editThenFilter("");
-      check(
-        "a data-address form's write refused for its input (422) while another's GET waits shows its error, then the GET's part and address",
-        refusedInput.committed && refusedInput.whileHeld.join() === "action /smoke/scope-edit" && refusedInput.ended && refusedInput.revision === 0 &&
-          refusedInput.said === "Title is required." && refusedInput.filter === "b" && refusedInput.at === "/smoke/scope-edit?scope=b" && refusedInput.added === 1 &&
-          refusedInput.asked.join() === "action /smoke/scope-edit,action /smoke/scope-edit?scope=b" && refusedInput.reloaded.filter === "b",
-        JSON.stringify(refusedInput),
-      );
-      const refusedState = await editThenFilter("stale");
-      check(
-        "a data-address form's write refused for its state (409) while another's GET waits shows the refusal, and the GET is not sent",
-        refusedState.committed && refusedState.whileHeld.join() === "action /smoke/scope-edit" && refusedState.ended && refusedState.revision === 0 &&
-          refusedState.said === "Someone saved first." && refusedState.filter === "all" && refusedState.at === "/smoke/scope-edit" && refusedState.added === 0 &&
-          refusedState.asked.join() === "action /smoke/scope-edit" && refusedState.reloaded.filter === "all" && refusedState.reloaded.at === "/smoke/scope-edit",
-        JSON.stringify(refusedState),
-      );
-      // A GET of a marked form sent while its own write and another marked form's are both on their
-      // way is sent only if every one of those writes' answers would let it go: the filter's Pin
-      // and the editor's Save are each held (Save reaches the server; Pin too, unless it fails), then
-      // Scope B is pressed, and the two answers are let go in either order. After two saves it is
-      // sent and its address pushed; after Pin's refusal (409) or failure, or Save's failure, in
-      // either order, it is not, and the screen keeps what the writes said.
-      const pinAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope-pin";
-      const filterOf = () => scope.evaluate(() => document.querySelector("#scope-filter output")?.textContent ?? "");
-      const filterSaid = () => scope.evaluate(() => document.querySelector("#scope-filter [role=status]")?.textContent ?? "");
-      const editorSaid = () => scope.evaluate(() => document.querySelector("#scope-editor [role=status]")?.textContent ?? "");
-      /**
-       * Holds the next POST to `asked`'s address: to the server and its answer held, or, to `fail`,
-       * held and then failed, with nothing sent.
-       * @param {(url: URL) => boolean} asked @param {boolean} fail
-       */
-      const holdWrite = async (asked, fail) => {
-        /** @type {() => void} */
-        let release = () => {};
-        const goes = new Promise((resolve) => (release = () => resolve(undefined)));
-        /** @type {() => void} */
-        let reach = () => {};
-        const reached = new Promise((resolve) => (reach = () => resolve(true)));
-        await scope.route(asked, async (route) => {
-          if (route.request().method() !== "POST") return route.fallback();
-          if (fail) {
-            reach();
-            await goes;
-            return route.abort("failed").catch(() => {});
-          }
-          const response = await route.fetch();
-          reach();
-          await goes;
-          await route.fulfill({ response }).catch(() => {});
-        });
-        return { reached: Promise.race([reached, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]), release };
-      };
-      /** Whether `section`'s form is no longer busy (a timeout is false). @param {string} section */
-      const notBusy = (section) =>
-        scope.waitForFunction((section) => !document.querySelector(`${section} form[aria-busy]`), section, { timeout: 5000 }).then(() => true, () => false);
-      /** Sends the filter by Scope B, or by Pin with `pin` as its title. @param {string} [pin] */
-      const pressFilter = (pin) =>
-        scope.evaluate((pin) => {
-          const button = /** @type {HTMLButtonElement} */ (document.querySelector(pin === undefined ? "#scope-filter button[value=b]" : "#scope-filter button[formmethod=post]"));
-          if (pin !== undefined) button.value = pin;
-          button.form?.requestSubmit(button);
-        }, pin);
-      /** Sends the editor's Save with `title`. @param {string} title */
-      const pressSave = async (title) => {
-        await scope.fill("#scope-editor input[name=title]", title);
-        await scope.evaluate(() => {
-          const button = /** @type {HTMLButtonElement} */ (document.querySelector("#scope-editor button[formmethod=post]"));
-          button.form?.requestSubmit(button);
-        });
-      };
-      /** The screen, the address, the entries added and whether Scope B was asked for, then after a reload. @param {number} before */
-      const filterState = async (before) => {
-        const result = {
-          filter: await filterOf(),
-          pinSaid: await filterSaid(),
-          saveSaid: await editorSaid(),
-          at: await whole(),
-          added: (await entries()) - before,
-          sentB: asked.includes("action /smoke/scope-edit?scope=b"),
-          asked: asked.splice(0),
-          reloaded: { filter: "", at: "" },
-        };
-        await scope.reload();
-        result.reloaded = { filter: await filterOf(), at: await whole() };
-        return result;
-      };
-      /**
-       * Save (`save`, or a failure) and Pin (`pin`, or a failure) held, Scope B pressed, then the
-       * answers let go, `first`'s first.
-       * @param {{ save: string, pin: string, first: "save" | "pin" }} c
-       */
-      const writesThenFilter = async ({ save, pin, first }) => {
-        await scope.goto(`${base}/smoke/scope-edit`);
-        await scope.mouse.move(1200, 700);
-        const before = await entries();
-        const saving = await holdWrite(editAsked, save === "fail");
-        const pinning = await holdWrite(pinAsked, pin === "fail");
-        asked.length = 0;
-        await pressSave(save === "fail" ? "first" : save);
-        const saveReached = await saving.reached;
-        await pressFilter(pin === "fail" ? "pin" : pin);
-        const pinReached = await pinning.reached;
-        await pressFilter();
-        await settle();
-        const whileHeld = asked.slice();
-        const order = first === "save" ? [[saving, "#scope-editor"], [pinning, "#scope-filter"]] : [[pinning, "#scope-filter"], [saving, "#scope-editor"]];
-        const drawn = [];
-        /** The requests once the first answer is drawn and the second is still held. @type {string[]} */
-        let between = [];
-        for (const [held, section] of /** @type {[{ release: () => void }, string][]} */ (order)) {
-          held.release();
-          drawn.push(await notBusy(section));
-          await settle();
-          if (drawn.length === 1) between = asked.slice();
-        }
-        // Scope B, if it is sent, which it is once both answers are drawn.
-        const ended = (await notBusy("main")) && (await settle(), await notBusy("main"));
-        await settle();
-        await scope.unroute(editAsked);
-        await scope.unroute(pinAsked);
-        return { saveReached, pinReached, whileHeld, between, drawn, ended, ...(await filterState(before)) };
-      };
-      /** @param {Awaited<ReturnType<typeof writesThenFilter>>} r */
-      const heldBoth = (r) =>
-        r.saveReached && r.pinReached && r.whileHeld.join() === "action /smoke/scope-edit,action /smoke/scope-pin" && r.drawn.every(Boolean) && r.ended &&
-        !r.between.includes("action /smoke/scope-edit?scope=b");
-      /** Scope B not sent: the screen, the address and a reload are as the writes left them. @param {Awaited<ReturnType<typeof writesThenFilter>>} r @param {string} pinSaid */
-      const notSent = (r, pinSaid) =>
-        heldBoth(r) && !r.sentB && r.filter === "all" && r.pinSaid === pinSaid && r.at === "/smoke/scope-edit" && r.added === 0 && r.reloaded.filter === "all" &&
-        r.reloaded.at === "/smoke/scope-edit";
-      for (const first of /** @type {const} */ (["pin", "save"])) {
-        const bothSaved = await writesThenFilter({ save: "first", pin: "pin", first });
-        check(
-          `a data-address form's GET sent while its own write and another's are on their way is sent once both are saved (${first} answered first)`,
-          heldBoth(bothSaved) && bothSaved.sentB && bothSaved.filter === "b" && bothSaved.saveSaid === "Saved." && bothSaved.at === "/smoke/scope-edit?scope=b" &&
-            bothSaved.added === 1 && bothSaved.reloaded.filter === "b" && bothSaved.reloaded.at === "/smoke/scope-edit?scope=b",
-          JSON.stringify(bothSaved),
-        );
-        const ownRefused = await writesThenFilter({ save: "first", pin: "stale", first });
-        check(
-          `a data-address form's GET is not sent after its own write's refusal (409), with another's saved (${first} answered first), and the refusal stays`,
-          notSent(ownRefused, "Someone pinned first.") && ownRefused.saveSaid === "Saved.",
-          JSON.stringify(ownRefused),
-        );
-        const ownFailed = await writesThenFilter({ save: "first", pin: "fail", first });
-        check(
-          `a data-address form's GET is not sent after its own write fails, with another's saved (${first} answered first)`,
-          notSent(ownFailed, "") && ownFailed.saveSaid === "Saved.",
-          JSON.stringify(ownFailed),
-        );
-        const otherFailed = await writesThenFilter({ save: "fail", pin: "pin", first });
-        check(
-          `a data-address form's GET is not sent after another's write fails, with its own saved (${first} answered first)`,
-          notSent(otherFailed, "Pinned.") && otherFailed.saveSaid === "",
-          JSON.stringify(otherFailed),
-        );
-      }
-      // A newer submit of the form, a write too, drops its GET waiting for another's write: Save is
-      // held, Scope B pressed, then Pin pressed and answered. Once Save's answer is let go (saved,
-      // refused or failed), Scope B is not sent, and Pin's answer is the screen.
-      /** @param {string} save Save's title, or "fail" */
-      const newerDrops = async (save) => {
-        await scope.goto(`${base}/smoke/scope-edit`);
-        await scope.mouse.move(1200, 700);
-        const before = await entries();
-        const saving = await holdWrite(editAsked, save === "fail");
-        asked.length = 0;
-        await pressSave(save === "fail" ? "first" : save);
-        const saveReached = await saving.reached;
-        await pressFilter();
-        await settle();
-        await pressFilter("pin");
-        const pinned = await scope
-          .waitForFunction(() => document.querySelector("#scope-filter [role=status]")?.textContent === "Pinned." && !document.querySelector("#scope-filter form[aria-busy]"), undefined, {
-            timeout: 5000,
-          })
-          .then(() => true, () => false);
-        await settle();
-        const whileHeld = asked.slice();
-        saving.release();
-        const ended = (await notBusy("main")) && (await settle(), await notBusy("main"));
-        await settle();
-        await scope.unroute(editAsked);
-        return { saveReached, pinned, whileHeld, ended, ...(await filterState(before)) };
-      };
-      for (const [save, saveSaid] of [["first", "Saved."], ["stale", "Someone saved first."], ["fail", ""]]) {
-        const dropped = await newerDrops(save);
-        check(
-          `a data-address form's GET waiting for another's write is dropped by a newer write of its own form (the other's answer: ${save === "fail" ? "a failure" : saveSaid})`,
-          dropped.saveReached && dropped.pinned && dropped.whileHeld.join() === "action /smoke/scope-edit,action /smoke/scope-pin" && dropped.ended && !dropped.sentB &&
-            dropped.filter === "all" && dropped.pinSaid === "Pinned." && dropped.saveSaid === saveSaid && dropped.at === "/smoke/scope-edit" && dropped.added === 0 &&
-            dropped.reloaded.filter === "all" && dropped.reloaded.at === "/smoke/scope-edit",
-          JSON.stringify(dropped),
-        );
-      }
-      // A GET waiting for its form's write is sent again in a task of its own once the write's
-      // answer is drawn. A press made before that task runs is newer: another marked form's GET
-      // (Quarter) is drawn and its address pushed, and a write of the same form (Save again) goes;
-      // either way the older GET (Week) is not sent. The page's next timer with no delay, the one
-      // the runtime sets for Week, presses the newer one as it runs, first.
-      /** @param {"quarter" | "saved"} gap the button pressed in that gap */
-      const gapAfterSave = async (gap) => {
-        await scope.goto(`${base}/smoke/scope?scope=day`);
-        await scope.mouse.move(1200, 700);
-        /** @type {() => void} */
-        let letFirst = () => {};
-        const firstGoes = new Promise((resolve) => (letFirst = () => resolve(undefined)));
-        let first = true;
-        await scope.route(saveAsked, async (route) => {
-          if (route.request().method() !== "POST") return route.fallback();
-          if (first) (first = false), await firstGoes;
-          await route.continue().catch(() => {});
-        });
-        const before = await entries();
-        const posted = scope.waitForRequest((r) => r.method() === "POST" && saveAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-        await press("saved");
-        const writing = await posted;
-        await press("week");
-        await scope.evaluate((gap) => {
-          const set = window.setTimeout;
-          /** @type {any} */ (window).setTimeout = (/** @type {Function} */ fn, /** @type {number | undefined} */ ms, /** @type {unknown[]} */ ...rest) => {
-            if (ms !== undefined) return set(fn, ms, ...rest);
-            window.setTimeout = set;
-            return set(() => {
-              const button = /** @type {HTMLButtonElement} */ (document.querySelector(`#smoke-scope button[value=${gap}]`));
-              button.form?.requestSubmit(button);
-              Object.assign(window, { __gapped: true });
-              fn(...rest);
-            });
-          };
-        }, gap);
-        asked.length = 0;
-        letFirst();
-        const ended = await scope
-          .waitForFunction(() => /** @type {any} */ (window).__gapped === true && !document.querySelector("main form[aria-busy]"), undefined, { timeout: 5000 })
-          .then(() => true, () => false);
-        await settle();
-        await scope.waitForFunction(() => !document.querySelector("main form[aria-busy]"), undefined, { timeout: 5000 }).catch(() => {});
-        await settle();
-        await scope.unroute(saveAsked);
-        const result = { writing, ended, at: await at(), added: (await entries()) - before, shown: await shown(), asked: asked.splice(0), reloaded: { at: "", shown: "" } };
-        await scope.reload();
-        result.reloaded = { at: await at(), shown: (await shown()) ?? "" };
-        return result;
-      };
-      const gapQuarter = await gapAfterSave("quarter");
-      check(
-        "a GET of a data-address form waiting for its own write is not sent once another marked form's GET is pressed before it goes again",
-        gapQuarter.writing && gapQuarter.ended && gapQuarter.at === "/smoke/scope?scope=quarter" && gapQuarter.added === 1 && gapQuarter.shown === "quarter" &&
-          gapQuarter.asked.join() === "action ?scope=quarter" && gapQuarter.reloaded.at === "/smoke/scope?scope=quarter" && gapQuarter.reloaded.shown === "quarter",
-        JSON.stringify(gapQuarter),
-      );
-      const gapSaved = await gapAfterSave("saved");
-      check(
-        "a GET of a data-address form waiting for its own write is not sent once a newer write of the form is pressed before it goes again",
-        gapSaved.writing && gapSaved.ended && gapSaved.at === "/smoke/scope?scope=day" && gapSaved.added === 0 && gapSaved.shown === "saved" && gapSaved.asked.join() === "action " &&
-          gapSaved.reloaded.at === "/smoke/scope?scope=day" && gapSaved.reloaded.shown === "day",
-        JSON.stringify(gapSaved),
-      );
-      // A GET waiting for another marked form's write leaves a write pressed after it alone: Save is
-      // held, Scope B pressed, then the note's Note sent (held) and sent again with other values,
-      // which waits for the first. Once Save is let go, Scope B is drawn; once the first Note is,
-      // the second goes.
-      const noteAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope-note";
-      /** Sends the note's Note with `text`. @param {string} text */
-      const pressNote = (text) =>
-        scope.evaluate((text) => {
-          const field = /** @type {HTMLInputElement} */ (document.querySelector("#scope-note input[name=title]"));
-          field.value = text;
-          const button = /** @type {HTMLButtonElement} */ (document.querySelector("#scope-note button[formmethod=post]"));
-          button.form?.requestSubmit(button);
-        }, text);
-      await scope.goto(`${base}/smoke/scope-edit`);
-      await scope.mouse.move(1200, 700);
-      const beforeNotes = await entries();
-      const saveForNotes = await holdWrite(editAsked, false);
+    }
+    // A form without the mark keeps the queue it had: a write that waits for another of the form
+    // is still sent after a GET the form sends in between. Post A is held, Post B pressed (it
+    // waits for A), A answered 204, and the moment A's busy mark is cleared a script sends the
+    // form's Read (a GET): A, Read and B all go, in that order.
+    {
+      const queue = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && (url.search === "" || url.search === "?scope=read");
+      /** @type {string[]} */
+      const sent = [];
       /** @type {() => void} */
-      let letNote = () => {};
-      const noteGoes = new Promise((resolve) => (letNote = () => resolve(undefined)));
-      let firstNote = true;
-      await scope.route(noteAsked, async (route) => {
-        if (route.request().method() !== "POST") return route.fallback();
-        if (firstNote) (firstNote = false), await noteGoes;
-        await route.continue().catch(() => {});
+      let letAGo = () => {};
+      const aHeld = new Promise((resolve) => (letAGo = () => resolve(undefined)));
+      await scope.route(queue, async (route) => {
+        const req = route.request();
+        if (req.headers()["corten"] !== "action") return route.continue();
+        const what = `${req.method()} ${req.method() === "GET" ? new URL(req.url()).search : req.postData()}`;
+        sent.push(what);
+        if (what === "POST scope=a") await aHeld;
+        await route.fulfill({ status: 204 }).catch(() => {});
       });
-      asked.length = 0;
-      await pressSave("first");
-      const notesSaveReached = await saveForNotes.reached;
-      await pressFilter();
-      await settle();
-      const notePosted = scope.waitForRequest((r) => r.method() === "POST" && noteAsked(new URL(r.url())), { timeout: 5000 }).then(() => true, () => false);
-      await pressNote("one");
-      const noting = await notePosted;
-      await pressNote("two");
-      await settle();
-      const notesWhileHeld = asked.slice();
-      saveForNotes.release();
-      const filterDrawn = await scope
-        .waitForFunction(() => location.search === "?scope=b" && document.querySelector("#scope-filter output")?.textContent === "b", undefined, { timeout: 5000 })
-        .then(() => true, () => false);
-      await settle();
-      const notesAfterSave = asked.slice();
-      letNote();
-      const notedTwice = await scope
-        .waitForFunction(() => document.querySelector("#scope-note [role=status]")?.textContent === "Noted two." && !document.querySelector("main form[aria-busy]"), undefined, { timeout: 5000 })
-        .then(() => true, () => false);
-      await settle();
-      await scope.unroute(editAsked);
-      await scope.unroute(noteAsked);
-      const notes = {
-        notesSaveReached,
-        noting,
-        notesWhileHeld,
-        filterDrawn,
-        notesAfterSave,
-        notedTwice,
-        noteSaid: await scope.evaluate(() => document.querySelector("#scope-note [role=status]")?.textContent ?? ""),
-        ...(await filterState(beforeNotes)),
-      };
-      check(
-        "a GET of a data-address form waiting for another's write leaves a newer queued write of a third marked form to go",
-        notes.notesSaveReached && notes.noting && notes.notesWhileHeld.join() === "action /smoke/scope-edit,action /smoke/scope-note" && notes.filterDrawn &&
-          notes.notesAfterSave.join() === "action /smoke/scope-edit,action /smoke/scope-note,action /smoke/scope-edit?scope=b" && notes.notedTwice && notes.noteSaid === "Noted two." &&
-          notes.asked.join() === "action /smoke/scope-edit,action /smoke/scope-note,action /smoke/scope-edit?scope=b,action /smoke/scope-note" && notes.filter === "b" &&
-          notes.at === "/smoke/scope-edit?scope=b" && notes.added === 1 && notes.reloaded.filter === "b",
-        JSON.stringify(notes),
-      );
-      // A GET waiting for another marked form's write is not sent once the page has begun to be
-      // loaded again: Save reaches the server, its answer is held, Scope B is pressed, and Save is
-      // answered with a page of another shell, which the runtime loads in full.
-      await scope.goto(`${base}/smoke/scope-edit`);
-      await scope.mouse.move(1200, 700);
-      /** @type {() => void} */
-      let letShell = () => {};
-      const shellGoes = new Promise((resolve) => (letShell = () => resolve(undefined)));
-      /** @type {() => void} */
-      let shellReach = () => {};
-      const shellReached = new Promise((resolve) => (shellReach = () => resolve(true)));
-      await scope.route(editAsked, async (route) => {
-        if (route.request().method() !== "POST") return route.fallback();
-        await route.fetch();
-        shellReach();
-        await shellGoes;
-        await route
-          .fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-page": "1", "corten-shell": "another" }, body: "<!doctype html><title>Another shell</title>" })
-          .catch(() => {});
-      });
-      // What the page's script fetches, kept across the load: a request the browser drops as the
-      // page unloads is still one the runtime sent.
       await scope.evaluate(() => {
-        const fetched = window.fetch;
-        window.fetch = (/** @type {Parameters<typeof fetch>} */ ...args) => {
-          sessionStorage.setItem("smoke-fetched", `${sessionStorage.getItem("smoke-fetched") ?? ""} ${String(args[0])}`);
-          return fetched(...args);
-        };
+        const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-scope-queue"));
+        const read = /** @type {HTMLButtonElement} */ (form.querySelector('button[value="read"]'));
+        let busy = false;
+        const seen = new MutationObserver(() => {
+          if (form.hasAttribute("aria-busy")) return void (busy = true);
+          if (!busy) return;
+          seen.disconnect();
+          form.requestSubmit(read);
+        });
+        seen.observe(form, { attributes: true, attributeFilter: ["aria-busy"] });
       });
-      asked.length = 0;
-      await pressSave("first");
-      const shellCommitted = await Promise.race([shellReached, new Promise((resolve) => setTimeout(() => resolve(false), 5000))]);
-      await pressFilter();
+      await scope.getByRole("button", { name: "Post A", exact: true }).click();
+      await scope.waitForFunction(() => document.getElementById("smoke-scope-queue")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).catch(() => {});
+      await scope.getByRole("button", { name: "Post B", exact: true }).click();
+      letAGo();
+      await scope.waitForFunction(() => !document.getElementById("smoke-scope-queue")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).catch(() => {});
+      const ended = Date.now() + 5000;
+      while (sent.length < 3 && Date.now() < ended) await scope.waitForTimeout(50);
       await settle();
-      const shellWhileHeld = asked.slice();
-      const loadedAgain = scope.waitForEvent("load", { timeout: 10000 }).then(() => true, () => false);
-      letShell();
-      const shellLoaded = await loadedAgain;
-      await scope.unroute(editAsked);
-      await settle();
-      const fetchedThen = await scope.evaluate(() => {
-        const list = (sessionStorage.getItem("smoke-fetched") ?? "").trim().split(" ");
-        sessionStorage.removeItem("smoke-fetched");
-        return list.map((u) => new URL(u, location.href)).map((u) => u.pathname + u.search);
-      });
-      const shellChange = { shellCommitted, shellWhileHeld, shellLoaded, fetchedThen, asked: asked.splice(0), at: await whole(), filter: await filterOf() };
+      await scope.unroute(queue);
       check(
-        "a GET of a data-address form waiting for another's write is not sent once that write's answer has the page loaded again",
-        shellChange.shellCommitted === true && shellChange.shellWhileHeld.join() === "action /smoke/scope-edit" && shellChange.shellLoaded &&
-          shellChange.fetchedThen.join() === "/smoke/scope-edit" &&
-          shellChange.asked.join() === "action /smoke/scope-edit,document /smoke/scope-edit" && shellChange.at === "/smoke/scope-edit" && shellChange.filter === "all",
-        JSON.stringify(shellChange),
-      );
-      // A traversal superseded before it draws leaves its entry's draft and scroll as they were
-      // kept: from one, to a short scope with a field in its panel (typed in, scrolled a little), to
-      // a tall one with it too (typed in, scrolled far), Back to the short one is held before its
-      // headers and Back again draws one. Once the held request has been seen to its end (a timeout
-      // fails the check), Forward draws the short one with its own draft at its own scroll, not the
-      // tall one's, and Forward again the tall one with its own. Loaded at an address of its own
-      // (the Firefox entry drop above).
-      await scope.goto(`${base}/smoke/scope?scope=one`);
-      await scope.mouse.move(1200, 700);
-      await sendFor("draft");
-      // Typed in from the page's script, which scrolls nothing: Playwright's `fill` scrolls the field
-      // into view, in Firefox after the scroll this step sets.
-      const typeIn = (/** @type {string} */ text) =>
-        scope.evaluate((text) => {
-          const field = /** @type {HTMLInputElement} */ (document.querySelector("input[name=panel_note]"));
-          field.value = text;
-          field.dispatchEvent(new Event("input", { bubbles: true }));
-        }, text);
-      await typeIn("short draft");
-      await scope.evaluate(() => scrollTo(0, 100));
-      const twoAt = await y();
-      await sendFor("longdraft");
-      await typeIn("long draft");
-      await scope.evaluate(() => scrollTo(0, 3000));
-      const threeAt = await y();
-      const twoAsked = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && url.search === "?scope=draft";
-      /** @type {() => void} */
-      let letTwo = () => {};
-      const twoWaits = new Promise((resolve) => (letTwo = () => resolve(undefined)));
-      let twoHeld = false;
-      await scope.route(twoAsked, async (route) => {
-        if (twoHeld || route.request().headers()["corten"] !== "action") return route.fallback();
-        twoHeld = true;
-        await twoWaits;
-        await route.continue().catch(() => {});
-      });
-      // The held read seen to its end: `__twoDone` once its fetch fails (aborted) or its body's
-      // read settles, these handlers running before the runtime's.
-      await scope.evaluate(() => {
-        const fetch_ = window.fetch;
-        Object.assign(window, { __twoDone: false });
-        window.fetch = function (input, init) {
-          const sent = fetch_.call(this, input, init);
-          const href = String(input instanceof Request ? input.url : input);
-          if (!href.endsWith("/smoke/scope?scope=draft") || new Headers(init?.headers).get("corten") !== "action") return sent;
-          window.fetch = fetch_;
-          sent.then(
-            (res) => {
-              const text = res.text;
-              res.text = () => text.call(res).finally(() => Object.assign(window, { __twoDone: true }));
-            },
-            () => Object.assign(window, { __twoDone: true }),
-          );
-          return sent;
-        };
-      });
-      asked.length = 0;
-      const twoSent = scope.waitForRequest((r) => twoAsked(new URL(r.url())) && r.headers()["corten"] === "action", { timeout: 5000 }).then(() => true, () => false);
-      await scope.evaluate(() => void (/** @type {any} */ (window).navigation.back()));
-      const twoOut = await twoSent;
-      await traverse("back");
-      // WebKit settles the newer traversal's `finished` (an AbortError) before its patch is drawn.
-      const oneIn = await scope
-        .waitForFunction(() => location.search === "?scope=one" && document.querySelector("#smoke-scope output")?.textContent === "one", undefined, { timeout: 5000 })
-        .then(() => true, () => false);
-      letTwo();
-      const twoDone = await scope.waitForFunction(() => /** @type {any} */ (window).__twoDone, undefined, { timeout: 5000 }).then(() => true, () => false);
-      await settle();
-      await scope.unroute(twoAsked);
-      const skippedTwo = { at: await traverse("forward"), draft: await panelNote(), y: await y() };
-      const skippedThree = { at: await traverse("forward"), draft: await panelNote(), y: await y() };
-      const skipped = { twoAt, threeAt, twoOut, oneIn, twoDone, two: skippedTwo, three: skippedThree, asked: asked.splice(0) };
-      check(
-        "a data-address traversal superseded before it draws leaves its entry's draft and scroll as they were, and Forward draws each entry with its own",
-        twoAt === 100 && threeAt === 3000 && skipped.twoOut && skipped.oneIn && skipped.twoDone &&
-          skippedTwo.at === "/smoke/scope?scope=draft" && skippedTwo.draft === "short draft" && near(skippedTwo.y, 100) &&
-          skippedThree.at === "/smoke/scope?scope=longdraft" && skippedThree.draft === "long draft" && near(skippedThree.y, 3000) &&
-          skipped.asked.join() === "action ?scope=draft,action ?scope=one,action ?scope=draft,action ?scope=longdraft",
-        JSON.stringify(skipped),
-      );
-      // A marked form that is the part its patch draws, with controls named after members of an
-      // element (`contains` among them), the form's members of those names: what the user typed in
-      // it and did not send is put back when Back draws it again.
-      await scope.goto(`${base}/smoke/scope-form`);
-      await scope.mouse.move(1200, 700);
-      const formDraft = () => scope.evaluate(() => /** @type {HTMLInputElement | null} */ (document.getElementById("scope-draft"))?.value ?? null);
-      // Typed and sent from the page's script: Playwright's own checks of a field read its form's
-      // `getAttribute`, which a control here shadows.
-      await scope.evaluate(() => {
-        const draft = /** @type {HTMLInputElement} */ (document.getElementById("scope-draft"));
-        draft.value = "form draft";
-        draft.dispatchEvent(new Event("input", { bubbles: true }));
-      });
-      asked.length = 0;
-      await scope.evaluate(() => {
-        const week = /** @type {HTMLButtonElement} */ (document.querySelector("#scope-part button[value=week]"));
-        week.form?.requestSubmit(week);
-      });
-      const formSent = await scope
-        .waitForFunction(
-          () => location.search === "?scope=week" && document.querySelector("#scope-part output")?.textContent === "week" && !document.querySelector("main form[aria-busy]"),
-          undefined,
-          { timeout: 5000 },
-        )
-        .then(() => true, () => false);
-      const formBack = {
-        sent: formSent,
-        at: await traverse("back"),
-        shown: await scope.evaluate(() => document.querySelector("#scope-part output")?.textContent),
-        draft: await formDraft(),
-        asked: asked.splice(0),
-      };
-      check(
-        "a data-address form that is the part its patch draws, with controls named after an element's members, has what the user typed put back when Back draws it",
-        formBack.sent && formBack.at === "/smoke/scope-form" && formBack.shown === "all" && formBack.draft === "form draft" &&
-          formBack.asked.join() === "action /smoke/scope-form?scope=week,action /smoke/scope-form",
-        JSON.stringify(formBack),
+        "a data-patch form's write waiting for another is still sent after a GET the form sends in between",
+        sent.join() === "POST scope=a,GET ?scope=read,POST scope=b",
+        JSON.stringify(sent),
       );
     }
     await scope.close();
   }
-  // The address module comes with a page the runtime swaps in that draws a marked form, and the
-  // form is the module's from its first submit. Where the module does not load, the form is sent
-  // as any GET form is: the page at its address is read.
+  // Without JavaScript the browser sends a data-address form itself: the page at its address.
   {
-    const swapped = await browser.newPage();
-    swapped.on("pageerror", (e) => errors.push(`swapped scope: ${e.message}`));
-    // A page of the same shell with no marked form (one with another shell is loaded in full).
-    await swapped.goto(`${base}/smoke/quoted`);
-    if (!(await swapped.evaluate(() => "navigation" in window))) skip("a page swapped in with a data-address form loads the address module", "no Navigation API");
-    else {
-      /** @type {string[]} */
-      const asked = [];
-      swapped.on("request", (r) => {
-        const url = new URL(r.url());
-        if (url.pathname === "/smoke/scope") asked.push(`${r.headers()["corten"] ?? "document"} ${url.search}`);
-      });
-      const loads = () => swapped.evaluate(() => performance.getEntriesByType("resource").filter((e) => e.name.includes("/corten-address.js")).length);
-      const before = await loads();
-      await swapped.evaluate(() => /** @type {any} */ (window).navigation.navigate("/smoke/scope").finished);
-      const after = await loads();
-      asked.length = 0;
-      await swapped.getByRole("button", { name: "Week", exact: true }).click();
-      await swapped.waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-scope output")?.textContent === "week", undefined, { timeout: 5000 }).catch(() => {});
-      const sent = { before, after, at: await swapped.evaluate(() => location.pathname + location.search), asked: asked.splice(0) };
-      check(
-        "a page swapped in with a data-address form loads the address module, and its first submit is the module's",
-        sent.before === 0 && sent.after === 1 && sent.at === "/smoke/scope?scope=week" && sent.asked.join() === "action ?scope=week",
-        JSON.stringify(sent),
-      );
-    }
-    await swapped.close();
-    const unloaded = await browser.newPage();
-    unloaded.on("pageerror", (e) => errors.push(`unloaded scope: ${e.message}`));
-    await unloaded.route((url) => url.pathname.endsWith("/corten-address.js"), (route) => route.abort("connectionrefused"));
-    /** @type {string[]} */
-    const asked = [];
-    unloaded.on("request", (r) => {
-      const url = new URL(r.url());
-      if (url.pathname === "/smoke/scope") asked.push(`${r.headers()["corten"] ?? "document"} ${url.search}`);
-    });
-    await unloaded.goto(`${base}/smoke/scope`);
-    asked.length = 0;
-    await unloaded.getByRole("button", { name: "Week", exact: true }).click();
-    await unloaded.waitForFunction(() => location.search === "?scope=week" && document.querySelector("#smoke-scope output")?.textContent === "week", undefined, { timeout: 5000 }).catch(() => {});
-    const read = { at: await unloaded.evaluate(() => location.pathname + location.search), shown: await unloaded.evaluate(() => document.querySelector("#smoke-scope output")?.textContent), asked: asked.splice(0) };
-    check(
-      "a data-address form whose module did not load is sent as any GET form is, reading the page at its address",
-      read.at === "/smoke/scope?scope=week" && read.shown === "week" && read.asked.length === 1 && !read.asked[0].startsWith("action"),
-      JSON.stringify(read),
-    );
-    await unloaded.close();
+    const noScript = await browser.newContext({ javaScriptEnabled: false });
+    const bare = await noScript.newPage();
+    await bare.goto(`${base}/smoke/scope`);
+    await Promise.all([bare.waitForNavigation({ timeout: 5000 }).catch(() => {}), bare.getByRole("button", { name: "Week", exact: true }).click()]);
+    const sent = await bare.evaluate(() => ({ at: location.pathname + location.search, shown: document.querySelector("#smoke-scope output")?.textContent }));
+    check("without JavaScript a data-address form loads the page at its address", sent.at === "/smoke/scope?scope=week" && sent.shown === "week", JSON.stringify(sent));
+    await noScript.close();
   }
   // Without the Navigation API, which Back to its address needs, the browser sends a data-address
   // form itself: a full load of the page at that address, as without JavaScript

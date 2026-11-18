@@ -1462,54 +1462,6 @@ async fn a_page_loads_the_field_module_only_when_its_handlers_take_a_field() {
     assert!(source.contains("given") && source.contains(r#"name: "corten-field""#), "{source}");
 }
 
-/// What puts a `data-address` form's address in history is a module of its own: a page that draws
-/// such a form loads it as a module script, and a page that draws none does not. It needs no
-/// component script of the app's.
-#[tokio::test]
-async fn a_page_loads_the_address_module_only_when_it_draws_a_data_address_form() {
-    use crate::body::Body;
-    use crate::router::{get, Table};
-    use http::Request;
-    use http_body_util::BodyExt;
-    use tower::ServiceExt;
-
-    let fetch = |app: crate::Router, uri: String| async move {
-        let res = app.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
-        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
-    };
-    let routes = Table::new()
-        .route(
-            "/scope",
-            get(|req: crate::Req| async move {
-                let form = html! { <form method="get" data-patch data-address><button>"Week"</button></form> };
-                crate::tests::TestPage::test_page(&req, "Scope", form)
-            }),
-        )
-        .route(
-            "/plain",
-            get(|req: crate::Req| async move {
-                crate::tests::TestPage::test_page(
-                    &req,
-                    "Plain",
-                    html! { <form method="get" data-patch><button>"Week"</button></form> },
-                )
-            }),
-        );
-    let app = || crate::App::new(Routes::from(routes.clone())).components(&[Badge]).router();
-    let scope = fetch(app(), "/scope".into()).await;
-    let address = scope
-        .split(r#"<script type="module" src=""#)
-        .skip(1)
-        .map(|s| s.split('"').next().unwrap())
-        .find(|s| s.ends_with("/scripts/corten-address.js"))
-        .map(str::to_string)
-        .expect("the address module is a module script of the page");
-    let plain = fetch(app(), "/plain".into()).await;
-    assert!(!plain.contains("corten-address"), "{plain}");
-    let source = fetch(app(), address).await;
-    assert!(source.contains("traverse") && source.contains(r#"name: "corten-address""#), "{source}");
-}
-
 script::script!(mod relayed = "relay.js");
 script::script!(mod chained = "chain.js");
 

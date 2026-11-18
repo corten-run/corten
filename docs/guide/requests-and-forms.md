@@ -118,8 +118,6 @@ way (the element is not busy again until something marks it). A write is never c
 short that way: a button pressed while it is on its way is marked beside it and sends once its
 answer is drawn, when that answer took the write or refused only its input (a 2xx or a 422);
 after any other (a 409, a 5xx, a failed network, another page) its mark goes and it is not sent.
-Nor is it sent when the form was pressed again before it went, or the page began to be loaded again
-after it was pressed: the newer press is what the user asked for last.
 Showing which control is working is then CSS
 alone, in the component's stylesheet:
 
@@ -2076,54 +2074,24 @@ a list whose length must survive a reload puts it in the address with a link ins
 A filter or scope whose answer is one part of the screen (a panel's period, a chart's range) can
 be a GET `data-patch` form too, so a change reads only what that part shows, not the rest of the
 screen. Mark it `data-address` as well, and its answer is the page at the address it asked for:
-once the patch is drawn, that address is in the address bar, in a new history entry (none when it
+as the patch is drawn, that address goes in the address bar, in a new history entry (none when it
 is the address already), as the browser leaves it after the same form without JavaScript, a
 `#fragment` of its `action` or `formaction` included. A reload, a bookmark and a shared link then
-reach what the screen shows, and a form that posts without an `action` sends to it. A patch the
-runtime cannot draw whole (an empty one, one with an element that has no place on the page, or
-one that adds to an element) draws nothing and is followed by a read of the page at that address,
-as the browser loads it, and so is an answer that is a page (a second request). Back and Forward
-between the entries such forms made on the screen at the screen's
-path, and the one the first was sent from, read the entry's address as the form did
-(`corten: action`, which the browser's HTTP cache can
-answer) and draw its patch, leaving the rest of the screen as it is. An answer that is not a 2xx
-patch (a page, a redirect, an error, none) or a patch the runtime cannot draw whole is read as a
-page, as any other entry is; so is an entry of a form whose `action` is another route's (its
-patch drawn into this screen is not that route's page), every entry while a write the screen sent
-is on its way or after one redirected before its page came (the write may have changed more than
-the part), and every entry once the page is loaded again (a reload; a page of the same route read
-since, by a link or Back, is the same screen, and keeps them). What the user typed and did not
-send, in the part too, stays with the entry the form was sent from, as for a link followed: Back
-to it by its patch puts back what was typed in the part it draws. Back and Forward by a patch put
-the screen where it was scrolled on that entry once the part is drawn, so a part that is taller on
-one entry than on the next still opens where the user left it; Back pressed again before a part is
-drawn keeps each entry's own. Sending a marked form cancels any other marked form's GET still on
-its way, so the screen and the address are always the last one sent, whichever answer comes
-first. A GET sent while a write is on its way (a Save button with `formmethod="post"`) waits for
-the write's answer, as in any `data-patch` form, and is then sent from the form as that answer
-left it, its address following as at the press. That holds for a Save of another marked form too,
-which is not cancelled: the server may have applied it, and its answer may be the only update of
-what it changed outside the GET's part (an editor beside a filter), so it is drawn first and the
-GET's part after it, the screen being the last one sent. After a Save refused for the state it
-was made against (409, 410), a 5xx, a redirect, an answer the runtime does not draw or none, the
-GET is not sent: the user reads that answer first, and presses again. A 422 shows its errors and
-the GET goes. A GET waiting for another form's Save while a Save of its own form is on its way too
-waits for both, and goes only if neither answer stops it, whichever comes first. Only what was
-pressed before the GET counts: a newer press of its form (a Save too) or of another marked form's
-GET drops it, and it does not wait for, or drop, a Save pressed after it. Nor does it go once the
-page has begun to be loaded again (a Save answered with another shell's page).
-
-The runtime's part of the mark is a module of its own, `corten-address` (4,221 bytes, 1,961 gzipped),
-which only a page that draws a marked form loads: with its head, `html!` having noted the form as
-it rendered it, or with the page or patch the runtime inserts that has one. Until it has loaded,
-or if it fails to, a marked form is sent as any GET form is, and the page at its address is read.
+reach what the screen shows, and a form that posts without an `action` sends to it. Only an
+answer drawn as a patch moves the address: one a newer submit of the form, a navigation or Back
+drops before it draws leaves it, and so does one that draws nothing (a 204). Back and Forward
+read the page at each address, as for any entry. In every other way the form is a `data-patch`
+form like any other: an answer that is a page is drawn in place and leaves the address, and a GET
+pressed while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer,
+then goes, its address following as its patch is drawn. Two marked forms are not ordered against
+each other: their answers are drawn as they come, and the address is the last one drawn.
 
 Which mark a filter takes depends on what its change redraws. One that changes most of what the
-page shows (a list's results) is a navigation, `data-keep-place`: each change and each Back read
-the page, which is what changes. One that redraws one part of a screen whose rest costs more to
-read (a panel's period beside a long report) is `data-patch data-address`: a change and Back
-between its entries read only the part. `data-keep-place` falls short there: it reads the whole
-page for each change and each Back, where the part is all that changes.
+page shows (a list's results) is a navigation, `data-keep-place`: each change reads the page,
+which is what changes. One that redraws one part of a screen whose rest costs more to read (a
+panel's period beside a long report) is `data-patch data-address`: a change reads only the part.
+`data-keep-place` falls short there: it reads the whole page for each change, where the part is
+all that changes. Back reads the page with either.
 
 ```rust,ignore
 #[component]
@@ -2141,18 +2109,16 @@ fn ScopePanel<'a>(scope: Scope, rows: &'a [Sale]) -> impl Patch {
 }
 ```
 
-The handler answers both with `req.patch_or`, the panel with JavaScript and the page otherwise.
-Back asks it at every address the forms put in the address bar and at the one they were sent from,
+The handler answers both with `req.patch_or`, the panel with JavaScript and the page otherwise,
 so the patch draws everything an address changes: the part, and the form with it, whose controls
 then show the scope the part does, except a field the user changed and did not send, which keeps
 what they typed as in any patch ([Limit 2](../design.md#limit-whole-element-patches)). A route
-whose patch adds to the page (`view::Append`, Load more's) is not one to mark: the runtime does
-not draw such a patch for a marked form and reads the page at the address instead, so a marked
-Load more would load a page each time. The page's other links and forms keep the address they
-were drawn with, a form that keeps the address's query (`keep_query`) included: its hidden inputs
-are the query of the route it was drawn with, and do not follow the address. A link or form that
-should carry the scope is drawn by the same patch, `keep_query` too, so it sends the scope on
-screen.
+whose patch adds to the page (`view::Append`, Load more's) is not one to mark: its address would
+reload to fewer rows than the screen shows. The page's other links and forms keep the address
+they were drawn with, a form that keeps the address's query (`keep_query`) included: its hidden
+inputs are the query of the route it was drawn with, and do not follow the address. A link or
+form that should carry the scope is drawn by the same patch, `keep_query` too, so it sends the
+scope on screen.
 The mark needs the Navigation API
 ([Limit 1](../design.md#limit-navigation-api)); without it the browser sends the form itself and
 loads the page at its address, as without JavaScript. `html!` refuses `data-address` on anything

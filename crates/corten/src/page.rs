@@ -1733,17 +1733,9 @@ impl Req {
     #[cold]
     #[inline(never)]
     fn check_modules(&self, modules: &[&'static str]) -> Result<()> {
-        // A part's reads are served beside the runtime. An app with no static files and no
-        // components serves no assets, the address module's either: its `data-address` forms are
-        // sent by the browser, as without JavaScript.
-        let served = |name: &&str| {
-            *name == crate::script::PART_MODULE
-                || match &self.shared.assets {
-                    Some(assets) => assets.module_tag(name).is_some(),
-                    None => *name == crate::script::ADDRESS_MODULE,
-                }
-        };
-        match modules.iter().find(|name| !served(name)) {
+        match modules.iter().find(|name| {
+            **name != crate::script::PART_MODULE && !self.shared.assets.as_ref().is_some_and(|a| a.module_tag(name).is_some())
+        }) {
             Some(name) => Err(self.unserved(unserved_module(name))),
             None => Ok(()),
         }
@@ -2361,9 +2353,9 @@ impl Req {
     ///
     /// A GET form marked `data-address` as well says that its answer is the page at the address it
     /// asked for (a filter or scope that draws only its part): once the patch is drawn, the runtime
-    /// puts that address in the address bar, as the browser does for the form without JavaScript,
-    /// and Back and Forward between the addresses it put there ask this handler for the patch
-    /// again (`docs/guide/requests-and-forms.md`, Filters and lists that grow).
+    /// puts that address in history, as the browser does for the form without JavaScript, so a
+    /// reload, a link to it, and Back and Forward read the page at that address
+    /// (`docs/guide/requests-and-forms.md`, Filters and lists that grow).
     ///
     /// ```
     /// use corten::prelude::*;

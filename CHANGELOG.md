@@ -6,33 +6,20 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - A GET `data-patch` form marked `data-address` says its answer is the page at the address it
-  asked for: once the patch is drawn, the runtime puts that address in the address bar, in a new
+  asked for: as its patch is drawn, the runtime puts that address in the address bar, in a new
   history entry (none when it is the address already), as the browser does for the form without
   JavaScript, so a filter or scope that redraws one part survives a reload, a bookmark and a
-  shared link. Back and Forward between the entries such forms made at the path of the page on
-  screen read the patch again (`corten: action`, which the HTTP cache can answer) rather than the
-  page, putting back what was typed in the part and not sent and, once the part is drawn, where
-  the entry was scrolled; entries at another route's address, a traversal while a write is on its
-  way or after one redirected, an answer that is not a patch and a patch the runtime cannot draw
-  whole are read as a page. Sending a marked form cancels any other marked GET still on its way,
-  so the last one sent is the screen. A GET sent while a write is on its way, of the same form or
-  another marked one, is sent once the write's answer is drawn (the write's answer may be the
-  only update of what it changed outside the GET's part), and its address follows too; not after
-  a refusal of the write's state (409, 410), a 5xx, a redirect or no answer, which the user reads
-  first; one waiting for writes of its own form and another waits for every one of them, and a
-  newer press of its form (a write too) or of another marked GET drops it, while a write pressed
-  after it is neither waited for nor dropped. `html!` refuses the mark on anything but a
-  `<form>`, on a form without `data-patch` and on one whose `method` is `post` or `dialog`. A link
-  or form that carries the scope, a `keep_query` form included, is drawn by the patch. The runtime
-  that does this is a module of its own, `corten-address`, which only a page with a marked form
-  loads; until it has, the form is sent as any GET form is. Without the Navigation API the browser
-  sends the form itself, a full load of the page at its address
+  shared link. Only an answer drawn as a patch moves the address; one dropped before it draws (a
+  newer submit of the form, a navigation, Back) leaves it. Back and Forward read the page at each
+  address, as for any entry. Otherwise the form is any `data-patch` form: a page answer is drawn
+  in place, and its submits are queued against writes as before. `html!` refuses the mark on
+  anything but a `<form>`, on a form without `data-patch` and on one whose `method` is `post` or
+  `dialog`. Without the Navigation API the browser sends the form itself, a full load of the page
+  at its address
   ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
 
-- A submit of a `data-patch` form that waited for a write's answer is no longer sent when the
-  form was pressed again in the moment between that answer being drawn and the submit going, nor
-  once the page has begun to be loaded again after it was pressed: the runtime counts presses, and
-  a waiting submit keeps its own.
+- Document script testing without runtime stubs: import-free shared logic in Node, including
+  Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.

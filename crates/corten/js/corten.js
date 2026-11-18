@@ -118,12 +118,6 @@ const UPLOAD = "corten-upload";
 /** The runtime's event on such a form, a `ProgressEvent`. */
 const PROGRESS = "corten:progress";
 
-// A GET `data-patch` form marked `data-address`, whose answer is the page at the address it asked
-// for, and Back and Forward between the history entries it made (address.js): a module of its own
-// that only a page with such a form loads, with its scripts or with the markup that brings one. The
-// browser sends the form until it has loaded, as without JavaScript.
-const ADDRESS = "corten-address";
-
 /** Script modules by name, once imported. @type {Map<string, Record<string, unknown>>} */
 const modules = new Map();
 /** @type {Map<string, Promise<unknown>>} */
@@ -1016,7 +1010,6 @@ function modulesOf(node) {
   const pending = [];
   if (node instanceof Element && hasAttr(node, "data-on")) for (const b of bindings(node)) pending.push(loadFor(b));
   for (const el of Array.from(queryAll(node, "[data-on]"))) for (const b of bindings(el)) pending.push(loadFor(b));
-  if (queryOne(node, "[data-address]")) pending.push(load(ADDRESS));
   for (const template of /** @type {HTMLTemplateElement[]} */ (Array.from(queryAll(node, "template")))) pending.push(modulesOf(template.content));
   return Promise.all(pending);
 }
@@ -1061,16 +1054,15 @@ export function patch(html, signal) {
  * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
  *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
  *   it replaces takes ({@link opened})
- * @param {(content: DocumentFragment) => void} [check] called once the patch is parsed and its
- *   stylesheet links are taken out, before anything is drawn: what it throws draws nothing
+ * @param {() => void} [done] called once the patch is drawn, in the same task, before anything
+ *   else can run: a `data-address` form's answer puts its address in history there ({@link send})
  */
-async function apply(html, signal, sent, took, own, asked, within, check) {
+async function apply(html, signal, sent, took, own, asked, within, done) {
   const content = parse(html, own);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
   if (signal?.aborted) return;
-  check?.(content);
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
@@ -1103,10 +1095,11 @@ async function apply(html, signal, sent, took, own, asked, within, check) {
       put.push(el);
     }
   }
+  done?.();
   // The server marked a nav link in the patch against the request that made it (a form's action),
-  // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
-  // only looks through what it put.
-  if (navs || put.some(holdsNav)) markCurrent();
+  // not this page: mark it as a navigation would. Only then, or once the address changed: a patch
+  // without one (a ticker's) only looks through what it put.
+  if (done || navs || put.some(holdsNav)) markCurrent();
   for (const el of put) setVars(el);
   if (again) {
     const beside = asked?.isConnected ? asked : partTagBeside(put);
@@ -2611,11 +2604,7 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   if (place === undefined) {
     // Back and forward: the browser puts the user back where they were on that entry.
     if (event.navigationType === "traverse") {
-      const page = { handler: () => visit(url, event.signal, redirected, false, undefined, undefined, stale) };
-      // Between entries a `data-address` form's patches drew, the address module draws the patch
-      // again, or reads the page with `page`; not after a write redirected whose page has not come
-      // (`stale`).
-      event.intercept((!stale && /** @type {AddressModule | undefined} */ (modules.get(ADDRESS))?.traverse(event, url, page, addressCore)) || page);
+      event.intercept({ handler: () => visit(url, event.signal, redirected, false, undefined, undefined, stale) });
       return;
     }
     // A new page starts at its `#id`, else at the top. Scrolled here, not left to the browser:
@@ -2945,17 +2934,10 @@ function named(el, name) {
   return `${localNameOf(el)}[name="${CSS.escape(name)}"]${choice}`;
 }
 /**
- * The presses of `data-patch` forms, counted: each submit's place among them, which one sent again
- * after a write's answer keeps ({@link sendAgain}).
- */
-let presses = 0;
-/** Each form's latest press. @type {WeakMap<HTMLFormElement, number>} */
-const pressed = new WeakMap();
-/**
- * The press count when the page last began to be left (the runtime reloads it, or the browser
- * hides it for a full navigation): a submit that waited for a write is sent only if it was pressed
- * since. Not a flag, so a reload the user cancels (an app's `beforeunload` prompt) drops only the
- * submits pressed before it, not every later one.
+ * How many times the page began to be left (the runtime reloads it, or the browser hides it for a
+ * full navigation): a submit that waited for a write is sent only if the count is the one it had
+ * when the write went out. A count, not a flag, so a reload the user cancels (an app's
+ * `beforeunload` prompt) drops only the submits waiting then, not every later one.
  */
 let left = 0;
 /**
@@ -2965,7 +2947,7 @@ let left = 0;
  * @param {Notice} [notice]
  */
 function reload(notice = null) {
-  left = presses;
+  left += 1;
   if (notice && !notice.has("r")) {
     try {
       sessionStorage.setItem(NOTICE, JSON.stringify([location.pathname, notice.get("m"), Date.now() + 60000]));
@@ -2975,7 +2957,7 @@ function reload(notice = null) {
   }
   location.reload();
 }
-addEventListener("pagehide", () => (left = presses));
+addEventListener("pagehide", () => (left += 1));
 
 /**
  * The pending submit of each `data-patch` form. The same submit again while it is pending (a
@@ -2990,16 +2972,6 @@ addEventListener("pagehide", () => (left = presses));
  * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, nextWithin?: Set<string>, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
-
-/** @typedef {typeof import("./address.js")} AddressModule */
-/**
- * What of the runtime the address module (address.js) calls, in this order: an array, whose
- * minified build names nothing, since every page carries it. `drawn` says which entry's page
- * `<main>` shows now.
- * @typedef {[apply: typeof apply, remember: typeof remember, drawn: (key: string) => void, submits: typeof submits, go: typeof go, load: typeof LOAD, source: typeof SOURCE, markCurrent: typeof markCurrent, send: typeof send, typedIn: typeof typedIn, putTyped: typeof putTyped, sendAgain: typeof sendAgain]} AddressCore
- */
-/** @type {AddressCore} */
-const addressCore = [apply, remember, (key) => (drawnFor = key), submits, go, LOAD, SOURCE, markCurrent, send, typedIn, putTyped, sendAgain];
 
 /**
  * A form's entries as the browser sends them in a body that is not multipart, or in a GET's
@@ -3020,25 +2992,18 @@ addEventListener("submit", patchSubmit);
 // submit, and whatever sends the form, sees the key.
 addEventListener("submit", (event) => event.target instanceof HTMLFormElement && fillSubmitKeys(event.target), true);
 
-/**
- * Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. `within` is where
- * it was pressed and `at` its press ({@link presses}), for a submit that waited for a write
- * ({@link sendAgain}).
- * @param {Event} event @param {Set<string>} [within] @param {number} [at]
- */
-function patchSubmit(event, within, at = ++presses) {
+/** Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. @param {Event} event */
+function patchSubmit(event) {
   const form = event.target;
   if (event.defaultPrevented || !(form instanceof HTMLFormElement) || !hasAttr(form, "data-patch")) return;
   const submitter = /** @type {SubmitEvent} */ (event).submitter;
   const sends = sendsAs(form, submitter);
-  // A dialog's form closes the dialog and sends nothing: the browser's to do.
-  if (sends.method === "dialog") return;
-  pressed.set(form, at);
-  // A form marked `data-address` is the address module's to send, and until it has loaded the
-  // browser's: the page at the address, as for any GET form.
-  if (hasAttr(form, "data-address")) return /** @type {AddressModule | undefined} */ (modules.get(ADDRESS))?.submit(event, form, submitter, sends, addressCore, within, at);
+  // A dialog's form closes the dialog and sends nothing: the browser's to do. So is a form marked
+  // `data-address` without the Navigation API, which Back to the address it puts in history needs
+  // (the runtime answers no `popstate`): the page at its address, as without JavaScript.
+  if (sends.method === "dialog" || (!navigation && hasAttr(form, "data-address"))) return;
   event.preventDefault();
-  send(form, submitter, sends, within);
+  send(form, submitter, sends);
 }
 
 /**
@@ -3067,13 +3032,15 @@ function asking(form, submitter) {
  * @param {HTMLFormElement} form @param {HTMLElement | null | undefined} submitter @param {ReturnType<typeof sendsAs>} sends
  * @param {Set<string>} [within] where it was pressed ({@link asking}): read now, unless it waited
  *   for a write's answer, which read it at the press
- * @param {import("./address.js").Answers} [address] for a GET form marked `data-address`,
- *   what the address module does with its answers
  */
-async function send(form, submitter, sends, within = asking(form, submitter), address) {
+async function send(form, submitter, sends, within = asking(form, submitter)) {
   const data = new FormData(form, submitter);
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
+  // A GET form marked `data-address`: its answer is the page at the address it asked for, sent
+  // from this page (`swapped`).
+  const addressed = method === "GET" && hasAttr(form, "data-address");
+  const page = swapped;
   const entries = sentEntries(data);
   const fields = new URLSearchParams(entries);
   // A file by its size and time too: another file of the same name is a new submit.
@@ -3104,6 +3071,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), ad
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
   const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), nextWithin: /** @type {Set<string> | undefined} */ (undefined), mine, busy, by: submitter };
+  const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
   const init = { method, headers: { corten: "action" }, signal };
@@ -3148,8 +3116,6 @@ async function send(form, submitter, sends, within = asking(form, submitter), ad
     // Only the submit still in flight for the form renews its key: a newer one of the same form
     // (which aborted this one) went with this key, and its answer is still to come.
     const renew = () => res.status < 500 && submits.get(form)?.controller === controller && renewSubmitKeys(form);
-    // A marked form answered with a page: the module reads the page at its address.
-    if (address?.page(res, url)) return;
     const location_ = res.headers.get("corten-location");
     if (location_) {
       renew();
@@ -3172,7 +3138,14 @@ async function send(form, submitter, sends, within = asking(form, submitter), ad
       const body = await res.text();
       renew();
       signal.throwIfAborted();
-      if (res.headers.has("corten-patch")) await (address?.patch ?? apply)(body, signal, sent, res.ok, undefined, undefined, within);
+      // A marked form's patch puts the address it asked for in history as it is drawn, as the
+      // browser does for the form without JavaScript: a new entry, none when it is the address
+      // already, and none once another page was swapped in since it was sent. Its `#fragment`
+      // too, which `res.url` never has. Not an answer that draws no patch (a page is drawn in
+      // place, as for any `data-patch` form), nor one dropped.
+      const to = res.url + url.hash;
+      const done = addressed ? () => page === swapped && to !== location.href && history.pushState(null, "", to) : undefined;
+      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, undefined, undefined, within, done);
       else {
         const notice = noticeOf(res);
         await swapPage(body, signal, false, notice);
@@ -3222,8 +3195,7 @@ async function send(form, submitter, sends, within = asking(form, submitter), ad
       submits.delete(form);
       // In a task of its own, after the answer is drawn; not into a page being left.
       const { next, nextWithin } = pending;
-      const at = /** @type {number} */ (pressed.get(form));
-      if (next !== undefined && !signal.aborted) setTimeout(() => sendAgain(form, next, nextWithin, at));
+      if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next, nextWithin));
     }
   }
 }
@@ -3235,19 +3207,13 @@ async function send(form, submitter, sends, within = asking(form, submitter), ad
  * id; one it removed (its row is gone) sends nothing, and so does one without an id that is no
  * longer on the page, whose values are the ones from before the answer.
  * The button is the one pressed, or the one the answer put in its place; where it was is where it
- * was pressed (`within`), not where the answer drew it. A form marked `data-address` is the address
- * module's to send, as at the press, so a GET puts its address in history; one the module would
- * leave to the browser (a navigation on its way, which drops the page this was sent from) sends nothing.
- * Nor is it sent once the page began to be left after its press (`at`), or after a newer press of
- * the form, which is what the user asked for last: the address module sends a GET that waited for
- * other forms' writes through here too.
- * @param {HTMLFormElement} form @param {HTMLElement | null} submitter @param {Set<string> | undefined} within
- * @param {number} at
+ * was pressed (`within`), not where the answer drew it.
+ * @param {HTMLFormElement} form @param {HTMLElement | null} submitter @param {Set<string>} [within]
  */
-function sendAgain(form, submitter, within, at) {
+function sendAgain(form, submitter, within) {
   const id = idOf(form);
   const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
-  if (at <= left || !(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch") || [form, now].some((f) => (pressed.get(f) ?? 0) > at)) return;
+  if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
   const all = /** @type {HTMLElement[]} */ (Array.from(formProperty(now, "elements")));
   const by =
     !submitter || all.includes(submitter)
@@ -3257,9 +3223,7 @@ function sendAgain(form, submitter, within, at) {
             localNameOf(el) === localNameOf(submitter) &&
             ["type", "name", "value", "formaction", "formmethod", "formenctype", "formnovalidate"].every((a) => el.getAttribute(a) === submitter.getAttribute(a)),
         );
-  // Sent as the press was, without a submit event: one the address module takes, a GET of a marked
-  // form, puts its address in history.
-  if (by !== undefined) patchSubmit(/** @type {Event} */ (/** @type {unknown} */ ({ target: now, submitter: by, preventDefault() {} })), within, at);
+  if (by !== undefined) send(now, by, sendsAs(now, by), within);
 }
 
 /**

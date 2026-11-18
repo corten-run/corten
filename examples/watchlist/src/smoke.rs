@@ -5,8 +5,7 @@
 //! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
 //! `<details>` drawn closed that a form outside each asks for again, a screen whose data a
 //! script reads (`corten/read`), a screen whose scope form's answer is the page at the address
-//! it asks for (`data-address`), with an editor beside a filter of that kind, a form whose fields
-//! a handler is given as its controls, and view classes (`corten/views`) whose holes are in a
+//! it asks for (`data-address`), a form whose fields a handler is given as its controls, and view classes (`corten/views`) whose holes are in a
 //! form, past one and a form's whole text, beside controls named after the members their paths
 //! read.
 use corten::{
@@ -15,7 +14,6 @@ use corten::{
     prelude::*,
 };
 use futures_util::{StreamExt, stream};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::layout::Layout;
 
@@ -75,7 +73,7 @@ pub mod url {
     }
 
     /// The scope's panel at another address than the screen's: a marked form sent there puts
-    /// that address in history, and Back from it reads the screen's page, not a patch.
+    /// that address in history.
     #[route("/smoke/scope-elsewhere", get = scope_elsewhere)]
     #[derive(Default)]
     pub struct ScopeElsewhere {
@@ -88,32 +86,6 @@ pub mod url {
     /// browser does without JavaScript.
     #[route("/smoke/scope-moved", get = scope_moved)]
     pub struct ScopeMoved;
-
-    /// A marked form that is the part its patch draws, with controls named after members of an
-    /// element that Back reads of the part.
-    #[route("/smoke/scope-form", get = scope_form)]
-    #[derive(Default)]
-    pub struct ScopeForm {
-        #[route(query)]
-        pub q: super::ScopeQuery,
-    }
-
-    /// A screen with an editor beside a scope filter, each a marked form: the editor's Save posts
-    /// its title here, and its answer draws the editor alone, outside the filter's part.
-    #[route("/smoke/scope-edit", get = scope_edit, post = scope_edit_save)]
-    #[derive(Default)]
-    pub struct ScopeEdit {
-        #[route(query)]
-        pub q: super::ScopeQuery,
-    }
-
-    /// The filter's Pin posts here: its answer is the filter alone, saying whether it was pinned.
-    #[route("/smoke/scope-pin", post = scope_pin)]
-    pub struct ScopePin;
-
-    /// The note's Note posts here: its answer is the note alone, saying what it noted.
-    #[route("/smoke/scope-note", post = scope_note)]
-    pub struct ScopeNote;
 
     /// Views whose holes are in a form, past one and a form's whole text, with controls outside
     /// each form, joined to it by `form=`, named `firstElementChild`, `nextElementSibling` and
@@ -260,17 +232,14 @@ struct SmokeScopeId;
 struct SmokeScopeFormId;
 
 #[derive(Id)]
-struct SmokeQuarterFormId;
+struct SmokeScopeQueueId;
 
 /// The scope's panel with its form, one patch, so the form always shows the scope the panel does.
-/// The form is marked `data-address`: once its answer is drawn, the address is the one it asked
-/// for, and Back and Forward read this patch again. A button's `formaction`, and another marked
-/// form's `action`, name a place on the page, which the address keeps; another button's is
+/// The form is marked `data-address`: as its answer is drawn, the address is the one it asked for.
+/// A button's `formaction` names a place on the page, which the address keeps; another button's is
 /// another route's. A form that carries the scope (`keep_query`) is drawn by the patch too, so it
-/// sends the scope on screen, not the one the page was drawn with. The marked forms have ids, so a
-/// GET sent while Save is on its way is sent from the form Save's answer draws. The first scope's
-/// panel has a field the others do not, but those whose name ends in draft, and a scope that starts
-/// with long a panel taller than the rest of the screen.
+/// sends the scope on screen, not the one the page was drawn with. The marked form has an id, so a
+/// GET sent while Save is on its way is sent from the form Save's answer draws.
 #[component]
 fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
     let f = ScopeQuery::FIELDS;
@@ -286,42 +255,34 @@ fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
                 <button name={f.scope} value="moved" formaction={url::ScopeMoved.at(SmokeScopeId)}>"Moved"</button>
                 <button name={f.scope} value="saved" formmethod="post">"Save"</button>
             </form>
-            <form id={SmokeQuarterFormId} method="get" action={here.at(SmokeScopeId)} data-patch data-address>
-                <button name={f.scope} value="quarter">"Quarter"</button>
-            </form>
             <form method="get" action={&here}>
                 {corten::form::keep_query(&at, &html! { <button>"Read this scope again"</button> })}
             </form>
             <p>"Scope: "<output>{scope}</output></p>
-            if scope == "all" || scope.ends_with("draft") {
-                <label>"Panel note "<input name="panel_note"></label>
-            }
-            if scope.starts_with("long") {
-                <ul>
-                    for i in 0..200 {
-                        <li>"Line "{i}" of a long scope."</li>
-                    }
-                </ul>
-            }
         </section>
     }
 }
 
 /// The screen: the panel, a form without the mark that draws the panel for another scope and
-/// leaves the address, a note the user may type in and not send, and the rest of the screen, which
-/// a change of scope does not draw again.
+/// leaves the address, a form without it whose writes queue as any `data-patch` form's do, and the
+/// rest of the screen, which a change of scope does not draw again.
 async fn scope_page(req: Req, Params(at): Params<url::Scope>) -> HtmlResult {
     let scope = at.q.scope.as_deref().unwrap_or("all");
     let (here, elsewhere) = (url::Scope::default(), url::ScopeElsewhere::default());
     let (here_link, elsewhere_link) = (req.nav(&here), req.nav(&elsewhere));
+    let f = ScopeQuery::FIELDS;
     req.patch_or(html! { <ScopePanel scope={scope} /> }, || async {
         req.page(html! {
             <Layout req={&req} title="Scope" viewer={None} head="">
                 <ScopePanel scope={scope} />
                 <form method="get" action={url::Scope::default()} data-patch>
-                    <button name={ScopeQuery::FIELDS.scope} value="year">"Year, in place"</button>
+                    <button name={f.scope} value="year">"Year, in place"</button>
                 </form>
-                <label>"Note "<input name="note"></label>
+                <form id={SmokeScopeQueueId} method="post" action={url::Scope::default()} data-patch>
+                    <button name={f.scope} value="a">"Post A"</button>
+                    <button name={f.scope} value="b">"Post B"</button>
+                    <button name={f.scope} value="read" formmethod="get">"Read"</button>
+                </form>
                 <nav>
                     <a {..here_link}>"Scope"</a>
                     <a {..elsewhere_link}>"Elsewhere"</a>
@@ -355,182 +316,6 @@ async fn scope_elsewhere(req: Req, Params(at): Params<url::ScopeElsewhere>) -> H
         })
     })
     .await
-}
-
-#[derive(Id)]
-struct ScopePartId;
-
-#[derive(Id)]
-struct ScopeDraftId;
-
-/// A marked form that is a part of its own, its patch the form alone. Its controls named
-/// `contains`, `matches`, `getAttribute` and `hasAttribute` are the form's members of those names,
-/// which Back's draw reads of the part it drew. The draft field has an id and no name, so it is
-/// not sent.
-#[component]
-fn ScopePart<'a>(scope: &'a str) -> impl Patch {
-    html! {
-        <form id={ScopePartId} method="get" action={url::ScopeForm::default()} data-patch data-address>
-            <button type="button" name="contains">"Contains"</button>
-            <button type="button" name="matches">"Matches"</button>
-            <button type="button" name="getAttribute">"Get attribute"</button>
-            <button type="button" name="hasAttribute">"Has attribute"</button>
-            <label>"Draft "<input id={ScopeDraftId}></label>
-            <button name={ScopeQuery::FIELDS.scope} value="week">"Week"</button>
-            <p>"Scope: "<output>{scope}</output></p>
-        </form>
-    }
-}
-
-/// The form's page, or its patch.
-async fn scope_form(req: Req, Params(at): Params<url::ScopeForm>) -> HtmlResult {
-    let scope = at.q.scope.as_deref().unwrap_or("all");
-    req.patch_or(html! { <ScopePart scope={scope} /> }, || async {
-        req.page(html! {
-            <Layout req={&req} title="Scope form" viewer={None} head="">
-                <ScopePart scope={scope} />
-            </Layout>
-        })
-    })
-    .await
-}
-
-/// The editor's revision, counted by each title it saves: one count for the app, which the
-/// browser test's engines run against one after another.
-static REVISION: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Id)]
-struct ScopeEditorId;
-
-#[derive(Id)]
-struct ScopeFilterId;
-
-#[derive(Id)]
-struct ScopeFilterFormId;
-
-#[derive(Id)]
-struct ScopeNoteId;
-
-#[derive(Id)]
-struct ScopeNoteFormId;
-
-/// The title the editor posts.
-#[derive(Fields)]
-struct TitleForm {
-    title: String,
-}
-
-/// The editor: a marked form whose Save posts its title, the revision saved, and what the last
-/// Save said. Its answer is the editor alone, a part outside the filter's.
-#[component]
-fn ScopeEditor<'a>(revision: u64, said: &'a str) -> impl Patch {
-    html! {
-        <section id={ScopeEditorId}>
-            <form method="get" action={url::ScopeEdit::default()} data-patch data-address>
-                <label>"Title "<input name={TitleForm::FIELDS.title}></label>
-                <button formmethod="post">"Save title"</button>
-            </form>
-            <p>"Revision "<output>{revision}</output></p>
-            <p role="status">{said}</p>
-        </section>
-    }
-}
-
-/// The filter: a marked form whose answer is its part, the scope it shows, with a write of its
-/// own, Pin, whose answer is the filter too, and what Pin last said.
-#[component]
-fn ScopeFilter<'a>(scope: &'a str, said: &'a str) -> impl Patch {
-    html! {
-        <section id={ScopeFilterId}>
-            <form id={ScopeFilterFormId} method="get" action={url::ScopeEdit::default()} data-patch data-address>
-                <button name={ScopeQuery::FIELDS.scope} value="b">"Scope B"</button>
-                <button name={TitleForm::FIELDS.title} value="pin" formmethod="post" formaction={url::ScopePin}>"Pin"</button>
-            </form>
-            <p>"Scope: "<output>{scope}</output></p>
-            <p role="status">{said}</p>
-        </section>
-    }
-}
-
-/// A third marked form, beside the editor and the filter, with a write of its own, Note, whose
-/// answer is this part alone, saying what it noted.
-#[component]
-fn ScopeNote<'a>(said: &'a str) -> impl Patch {
-    html! {
-        <section id={ScopeNoteId}>
-            <form id={ScopeNoteFormId} method="get" action={url::ScopeEdit::default()} data-patch data-address>
-                <label>"Note "<input name={TitleForm::FIELDS.title}></label>
-                <button formmethod="post" formaction={url::ScopeNote}>"Note"</button>
-            </form>
-            <p role="status">{said}</p>
-        </section>
-    }
-}
-
-/// The screen with the editor, the filter and the note.
-fn scope_edit_page(req: &Req, scope: &str, said: &str, status: StatusCode) -> HtmlResult {
-    let revision = REVISION.load(Ordering::Relaxed);
-    req.page_with_status(
-        status,
-        html! {
-            <Layout req={req} title="Scope and editor" viewer={None} head="">
-                <ScopeEditor revision={revision} said={said} />
-                <ScopeFilter scope={scope} said="" />
-                <ScopeNote said="" />
-            </Layout>
-        },
-    )
-}
-
-/// The filter's part for its scope, or the screen.
-async fn scope_edit(req: Req, Params(at): Params<url::ScopeEdit>) -> HtmlResult {
-    let scope = at.q.scope.as_deref().unwrap_or("all");
-    req.patch_or(html! { <ScopeFilter scope={scope} said="" /> }, || async { scope_edit_page(&req, scope, "", StatusCode::OK) })
-        .await
-}
-
-/// The filter's Pin: `stale` is refused with a 409, any other pinned. With JavaScript the answer
-/// is the filter, at the first scope; without it, the screen, or after a pin a redirect to it.
-async fn scope_pin(req: Req, Form(form): Form<TitleForm>) -> HtmlResult {
-    let (status, said) =
-        if form.title == "stale" { (StatusCode::CONFLICT, "Someone pinned first.") } else { (StatusCode::OK, "Pinned.") };
-    match req.mode {
-        Mode::Action => req.patch_with_status(status, html! { <ScopeFilter scope="all" said={said} /> }),
-        _ if status.is_success() => req.redirect(&url::ScopeEdit::default()),
-        _ => scope_edit_page(&req, "all", said, status),
-    }
-}
-
-/// The note's Note: with JavaScript the note, saying what it noted; without it, a redirect to the
-/// screen.
-async fn scope_note(req: Req, Form(form): Form<TitleForm>) -> HtmlResult {
-    let said = format!("Noted {}.", form.title);
-    match req.mode {
-        Mode::Action => req.patch_with_status(StatusCode::OK, html! { <ScopeNote said={&said} /> }),
-        _ => req.redirect(&url::ScopeEdit::default()),
-    }
-}
-
-/// The editor's Save: a title left empty is refused with a 422, and `stale` with a 409, as a
-/// version check refuses a write made against what another saved since; any other is saved and
-/// counted. With JavaScript the answer is the editor; without it, the screen, or after a save a
-/// redirect to it.
-async fn scope_edit_save(req: Req, Form(form): Form<TitleForm>) -> HtmlResult {
-    let (status, said) = match form.title.trim() {
-        "" => (StatusCode::UNPROCESSABLE_ENTITY, "Title is required."),
-        "stale" => (StatusCode::CONFLICT, "Someone saved first."),
-        _ => {
-            REVISION.fetch_add(1, Ordering::Relaxed);
-            (StatusCode::OK, "Saved.")
-        }
-    };
-    match req.mode {
-        Mode::Action => {
-            req.patch_with_status(status, html! { <ScopeEditor revision={REVISION.load(Ordering::Relaxed)} said={said} /> })
-        }
-        _ if status.is_success() => req.redirect(&url::ScopeEdit::default()),
-        _ => scope_edit_page(&req, "all", said, status),
-    }
 }
 
 /// The day's scope, by Corten's redirect, which [`MovedBy303`] answers in its place.

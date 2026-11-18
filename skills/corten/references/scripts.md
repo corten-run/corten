@@ -162,27 +162,17 @@ division: end statements with `;` and keep a division on the line it continues.
    button so the form works without a script. There is no attribute for this: it is an exported
    function, in one `script!` module when several screens use it.
    A filter or scope whose answer is one part of the screen is a GET `data-patch` form marked
-   `data-address`, its route answering with `req.patch_or(part, page)`: once the patch is drawn,
-   the address is the one it asked for (a new history entry), and Back and Forward between those
-   entries at the screen's path read the patch again, putting back each entry's unsent fields and
-   scroll (a form whose `action` is another route's
-   gets page reads on Back, and so does any entry while a write is on its way or after one
-   redirected). Pick `data-keep-place` when the change redraws most of the page (a list's
-   results), `data-address` when it redraws one part of a screen whose rest is costly to read.
-   The patch draws everything the address changes, the form
-   included, and any link or form that carries the scope (a `keep_query` form's hidden inputs keep
-   the query it was drawn with); never mark a form whose patch appends (Load more), and never call
-   `history.pushState` for it yourself (Back to such an entry reads the whole page). Only a page
-   with a marked form loads the module that does this (`corten-address`); until it has, the form
-   is sent as any GET form is. Without the Navigation API the browser sends the form itself, a
-   full load at its address. A GET sent while a Save (`formmethod="post"`) of the same form is on
-   its way is sent once the write's answer is drawn, and its address follows too; so is one of
-   another marked form, whose patch is then drawn last (the Save's answer may be the only update
-   of what it changed outside that part), unless the Save was refused for its state (409, 410), a
-   5xx, a redirect or no answer, which the user reads first; with Saves of both forms on their way
-   it waits for both, and either answer can stop it. A newer marked GET cancels an older one, and
-   any newer press of the form, a Save too, drops its GET still waiting; a Save pressed after the
-   GET is neither waited for nor dropped.
+   `data-address`, its route answering with `req.patch_or(part, page)`: as the patch is drawn,
+   the address is the one it asked for (a new history entry); an answer dropped before it draws,
+   or a page answer, leaves the address. Back and Forward read the page at each address. Pick
+   `data-keep-place` when the change redraws most of the page (a list's results), `data-address`
+   when it redraws one part of a screen whose rest is costly to read. The patch draws everything
+   the address changes, the form included, and any link or form that carries the scope (a
+   `keep_query` form's hidden inputs keep the query it was drawn with); never mark a form whose
+   patch appends (Load more), and never call `history.pushState` for it yourself. Its submits
+   queue as any `data-patch` form's: a GET pressed while a Save (`formmethod="post"`) is on its
+   way goes once the Save's answer is drawn. Without the Navigation API the browser sends the form
+   itself, a full load at its address.
 
 ## Text a script computes
 
