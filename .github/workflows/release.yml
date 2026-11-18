@@ -1,4 +1,4 @@
-# Publishes a release when a tag vX.Y.Z is pushed (CONTRIBUTING.md, Releasing): the checks, the
+# Publishes a release when a tag vX.Y.Z is pushed (RELEASING.md, Publish): the checks, the
 # corten binary for each platform, their build provenance and its verification, every crate on
 # crates.io, then a GitHub release with the binaries, their SHA256SUMS and the CHANGELOG.md
 # section for the version as its notes (attached as a file, and linked from the notes, when it is
@@ -159,10 +159,10 @@ jobs:
       id-token: write
     env:
       # Only a release that publishes a crate for the first time needs an API token (crates.io
-      # allows trusted publishing for crates already published; CONTRIBUTING.md, "Before a release
+      # allows trusted publishing for crates already published; RELEASING.md, "Before a release
       # that adds a crate"). Delete the secret after it. A crate that accepts trusted publishing
       # only refuses the token, so that release first allows token publishing on the crates
-      # already published (step 3 there).
+      # already published (step 2 there).
       HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
