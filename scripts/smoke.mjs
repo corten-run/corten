@@ -9122,13 +9122,15 @@ async function run(browser) {
     const errorsAtRefusal = errors.length;
     await page.fill("input[name=above]", "1.234");
     const belowFold = await page.locator(save).evaluate((button) => {
+      const submit = /** @type {HTMLButtonElement} */ (button);
       const field = document.querySelector("input[name=above]");
       const spacer = document.createElement("div");
       spacer.style.height = "200vh";
       field?.closest("form")?.before(spacer);
+      submit.focus({ preventScroll: true });
       scrollTo(0, 0);
       const below = !!field && field.getBoundingClientRect().top >= innerHeight;
-      /** @type {HTMLButtonElement} */ (button).click();
+      submit.click();
       return below;
     });
     await page.waitForSelector('input[name=above][aria-invalid="true"]', { timeout: 5000 }).catch(() => {});
