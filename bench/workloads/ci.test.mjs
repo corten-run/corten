@@ -19,6 +19,7 @@ test("Evidence scopes the full diff on pull requests and main without fail-open 
   assert.equal(scope.if, undefined);
   assert.equal(scope["continue-on-error"], undefined);
   assert.equal(scope.outputs.run, "${{ steps.scope.outputs.run }}");
+  assert.equal(scope.outputs.kernel, "${{ steps.scope.outputs.kernel }}");
   const selector = scope.steps.find((step) => step.id === "scope");
   assert.equal(selector.run, "node scripts/benchmark-scope.mjs evidence");
   assert.equal(selector.env.PUSH_BEFORE, "${{ github.event.before }}");
@@ -71,7 +72,7 @@ test("real Linux controls have a required host job and cannot pass through fixtu
   const job = workflow.jobs.kernel;
   assert.equal(job["runs-on"], "ubuntu-24.04");
   assert.equal(job.needs, "scope");
-  assert.equal(job.if, "needs.scope.outputs.run == 'true'");
+  assert.equal(job.if, "needs.scope.outputs.kernel == 'true'");
   assert.equal(job["continue-on-error"], undefined);
   const step = job.steps.find((s) => s.run?.includes("scripts/benchmark-kernel-ci.sh"));
   assert.equal(step.if, undefined);

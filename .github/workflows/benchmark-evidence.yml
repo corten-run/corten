@@ -21,6 +21,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       run: ${{ steps.scope.outputs.run }}
+      kernel: ${{ steps.scope.outputs.kernel }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -72,7 +73,7 @@ jobs:
 
   kernel:
     needs: scope
-    if: needs.scope.outputs.run == 'true'
+    if: needs.scope.outputs.kernel == 'true'
     name: benchmark evidence (native Linux)
     runs-on: ubuntu-24.04
     timeout-minutes: 10

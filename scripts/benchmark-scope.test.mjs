@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parse } from "yaml";
 import { sourceRoots } from "../bench/workloads/isolated/contract.mjs";
-import { eventPaths, selectEvidence, selectScope } from "./benchmark-scope.mjs";
+import { eventPaths, selectEvidence, selectKernel, selectScope } from "./benchmark-scope.mjs";
 
 const root = new URL("../", import.meta.url);
 const workflow = parse(readFileSync(new URL(".github/workflows/catalog.yml", root), "utf8"));
@@ -30,6 +30,8 @@ for (const [name, paths, apps, json] of [
   ["workflow edit", [".github/workflows/catalog.yml"], allApps, true],
   ["docs only", ["docs/design.md", "CHANGELOG.md"], [], false],
   ["JSON-only app", ["bench/fullstack/apps/aspnet-aot/Program.cs"], [], true],
+  ["unknown app directory", ["bench/fullstack/apps/newapp/catalog.test.mjs"], allApps, true],
+  ["file directly in the apps directory", ["bench/fullstack/apps/express"], allApps, true],
   ["main push or manual dispatch", undefined, allApps, true],
 ]) {
   test(name, () => assert.deepEqual(selectScope(allApps, paths), { apps, json }));
@@ -73,13 +75,30 @@ test("every local module used by the Catalog harness starts the harness", async 
   }
 });
 
-test("FastAPI parity selects itself for the local drivers in its native checks", async () => {
-  const step = workflow.jobs.parity.steps.find(step => step.if === "matrix.app == 'fastapi'");
-  const entries = [...step.run.matchAll(/^node (bench\/\S+\.mjs) /gm)].map(([, path]) => path);
-  assert.ok(entries.length > 0);
-  for (const input of await localImports(entries)) {
-    assert.ok(selectScope(allApps, [input]).apps.includes("fastapi"), "FastAPI input not selected: " + input);
+function parityEntries(app) {
+  return [...new Set(workflow.jobs.parity.steps.flatMap(({ if: condition, run }) => {
+    if (!run) return [];
+    const command = run.replaceAll("${{ matrix.app }}", app);
+    const entries = [...command.matchAll(/(?:^|\s)(bench\/[^\s]+\.mjs)(?=\s|$)/g)].map(([, path]) => path);
+    if (!entries.length || !condition) return entries;
+    const single = /^matrix\.app == '([^']+)'$/.exec(condition);
+    if (single) return single[1] === app ? entries : [];
+    const multiple = /^contains\(fromJSON\('([^']+)'\), matrix\.app\)$/.exec(condition);
+    assert.ok(multiple, "trace new parity condition: " + condition);
+    return JSON.parse(multiple[1]).includes(app) ? entries : [];
+  }))];
+}
+
+test("every local module used by Catalog parity selects each consuming matrix app", async () => {
+  const missing = [];
+  for (const app of allApps) {
+    const entries = parityEntries(app);
+    assert.ok(entries.length > 0, "no parity entries for " + app);
+    for (const input of await localImports(entries)) {
+      if (!selectScope(allApps, [input]).apps.includes(app)) missing.push(`${app}: ${input}`);
+    }
   }
+  assert.deepEqual(missing, [], "unselected Catalog parity inputs");
 });
 
 test("Evidence covers every real source-custody root and its descendants", () => {
@@ -94,8 +113,19 @@ test("Evidence covers every real source-custody root and its descendants", () =>
   assert.equal(selectEvidence(undefined), true);
 });
 
+test("native kernel controls run for fixture and tooling inputs, not portable source custody alone", () => {
+  for (const path of ["bench/workloads/isolated/bootstrap.mjs", "scripts/benchmark-kernel-ci.sh",
+    ".github/workflows/benchmark-evidence.yml", "package-lock.json"]) {
+    assert.equal(selectKernel([path]), true, path);
+  }
+  for (const path of ["crates/corten/src/lib.rs", "Cargo.toml", "Cargo.lock", "docs/design.md"]) {
+    assert.equal(selectKernel([path]), false, path);
+  }
+  assert.equal(selectKernel(undefined), true);
+});
+
 function fixture(t) {
-  const cwd = mkdtempSync(join(tmpdir(), "corten-catalog-scope-"));
+  const cwd = mkdtempSync(join(tmpdir(), "corten-benchmark-scope-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const git = (...args) => execFileSync("git", [
     "-c", "core.autocrlf=false", "-c", "user.name=Catalog Fixture", "-c", "user.email=fixture@example.invalid",
@@ -144,7 +174,7 @@ test("PR diff excludes base-only changes and includes both sides of an app renam
   const output = join(cwd, "output");
   const env = { ...process.env, ...event, GITHUB_OUTPUT: output, PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS };
   for (const job of ["catalog", "evidence"]) execFileSync(process.execPath, [script, job], { cwd, env });
-  assert.equal(readFileSync(output, "utf8"), 'apps=["nextjs","rails"]\njson=false\nrun=true\n');
+  assert.equal(readFileSync(output, "utf8"), 'apps=["nextjs","rails"]\njson=false\nrun=true\nkernel=true\n');
 });
 
 test("a base-side rename scopes the edited file where parity actually tests it", t => {
@@ -183,8 +213,11 @@ test("PR and multi-commit push diffs see inputs beyond the hosted path-filter li
     assert.equal(paths[301], input);
     assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
     assert.equal(selectEvidence(paths), true);
+    assert.equal(selectKernel(paths), true);
   }
   for (const before of ["0".repeat(40), "a".repeat(40)]) {
-    assert.equal(selectEvidence(eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd)), true);
+    const paths = eventPaths({ ...events[1], PUSH_BEFORE: before }, cwd);
+    assert.equal(selectEvidence(paths), true);
+    assert.equal(selectKernel(paths), true);
   }
 });

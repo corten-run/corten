@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 const tooling = ["package.json", "package-lock.json", ".dockerignore", ".gitattributes", ".gitignore",
-  "scripts/benchmark-scope.mjs", "scripts/catalog-scope.test.mjs", "scripts/steady.mjs"];
+  "scripts/benchmark-scope.mjs", "scripts/benchmark-scope.test.mjs", "scripts/steady.mjs"];
 const rustInputs = ["Cargo.toml", "Cargo.lock", ".cargo", "rust-toolchain", "rust-toolchain.toml", "crates"];
 const catalogShared = [...tooling, ".github/workflows/catalog.yml", "bench/load-tool.mjs",
   "bench/catalog", "bench/client-heavy", "bench/fullstack-browser", "bench/hardening",
@@ -11,9 +11,10 @@ const catalogShared = [...tooling, ".github/workflows/catalog.yml", "bench/load-
   // The catalog and marketplace checkers read these for every app.
   "bench/fullstack/apps/axum-maud/static/style.css", "bench/fullstack/apps/axum-maud/static/components.css",
 ];
+const kernelInputs = [...tooling, ".github/workflows/benchmark-evidence.yml", "bench", "scripts"];
 // Includes the core suite's committed source-custody roots, checked against captureSources.
-const evidenceInputs = [...tooling, ...rustInputs, ".github/workflows/benchmark-evidence.yml",
-  "README.md", "CONTRIBUTING.md", "AGENTS.md", "docs", "bench", "scripts", "examples/card-market"];
+const evidenceInputs = [...kernelInputs, ...rustInputs,
+  "README.md", "CONTRIBUTING.md", "AGENTS.md", "docs", "examples/card-market"];
 const matches = (path, inputs) => inputs.some(input => path === input || path.startsWith(`${input}/`));
 
 export function selectScope(allApps, paths) {
@@ -26,7 +27,8 @@ export function selectScope(allApps, paths) {
     } else if (matches(path, catalogShared)) {
       return { apps: allApps, json: true };
     } else if (path.startsWith("bench/fullstack/apps/")) {
-      const app = path.split("/")[3];
+      const [, , , app, file] = path.split("/");
+      if (!file || (app !== "aspnet-aot" && !allApps.includes(app))) return { apps: allApps, json: true };
       if (app === "aspnet-aot") json = true;
       else selected.add(app);
       // FastAPI's native and trace checks reuse the Express driver.
@@ -44,6 +46,10 @@ export function selectScope(allApps, paths) {
 
 export function selectEvidence(paths) {
   return paths === undefined || paths.some(path => matches(path, evidenceInputs));
+}
+
+export function selectKernel(paths) {
+  return paths === undefined || paths.some(path => matches(path, kernelInputs));
 }
 
 function changedPaths(base, head, cwd) {
@@ -80,7 +86,8 @@ if (import.meta.main) {
     const { apps, json } = selectScope(JSON.parse(PARITY_APPS), paths);
     appendFileSync(GITHUB_OUTPUT, `apps=${JSON.stringify(apps)}\njson=${json}\n`);
   } else if (workflow === "evidence") {
-    appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(eventPaths(process.env))}\n`);
+    const paths = eventPaths(process.env);
+    appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(paths)}\nkernel=${selectKernel(paths)}\n`);
   } else {
     throw new Error("Expected catalog or evidence scope");
   }
