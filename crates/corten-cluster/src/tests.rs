@@ -141,6 +141,26 @@ fn feed_keys_are_literal_nats_subjects() {
     for key in bad_keys() {
         assert!(check_key(&key).unwrap_err().is::<InvalidFeedKey>(), "accepted {key:?}");
     }
+    // The byte limit, whatever the characters.
+    assert!(check_key(&"k".repeat(MAX_FEED_KEY_BYTES)).is_ok());
+    assert!(check_key(&format!("{}\u{e9}", "k".repeat(MAX_FEED_KEY_BYTES - 2))).is_ok());
+    assert!(check_key(&"k".repeat(MAX_FEED_KEY_BYTES + 1)).is_err());
+    assert!(check_key(&format!("{}\u{e9}", "k".repeat(MAX_FEED_KEY_BYTES - 1))).is_err());
+}
+
+/// The check `Cluster::feed` runs before its cached lookup, timed in release mode. It reads the
+/// key in place: no allocation.
+#[test]
+#[ignore]
+fn feed_key_check_cost() {
+    for (key, rounds) in [("sellers.42".to_string(), 10_000_000), ("s".repeat(MAX_FEED_KEY_BYTES), 100_000)] {
+        let started = Instant::now();
+        for _ in 0..rounds {
+            assert!(valid_key(std::hint::black_box(&key)));
+        }
+        let ns = started.elapsed().as_nanos() as f64 / rounds as f64;
+        println!("valid_key, {} bytes: {ns:.1} ns per check over {rounds} checks", key.len());
+    }
 }
 
 #[tokio::test]

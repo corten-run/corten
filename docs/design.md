@@ -5593,21 +5593,31 @@ rules something out.
     legacy outbox row is retained but excluded from the relay.** `create_feed` takes a string,
     not a typed key the compiler can check. It returns `InvalidFeedKey` through the crate's
     existing boxed error before issuing SQL, as does `begin`; `Cluster::feed` answers `None`,
-    since no patch can reach such a feed and its routes already answer `None` as 404. The existing
-    async-nats `Subject::is_valid` checks framing and nonempty dot-separated tokens; Corten
-    additionally refuses `*` and `>`, which NATS reserves for subscriptions. The subject prefix
-    follows the same rules and is checked at cluster startup, before migration or background
-    tasks. Valid keys keep exactly their existing subject and message id.
+    since no patch can reach such a feed and its routes already answer `None` as 404. The check
+    is the documented subject grammar: nonempty dot-separated tokens, no whitespace (Unicode
+    whitespace, not only the four framing bytes async-nats's `Subject::is_valid` refuses), no
+    `*` or `>`. Corten also refuses control characters, which no subject needs and of which NUL
+    cannot reach Postgres, and bounds the key at `MAX_FEED_KEY_BYTES` (3,584): with a prefix of
+    at most 255 bytes the subject fits the server's default `max_control_line` of 4 KB beside
+    the reply inbox and two lengths. The check reads the key in place, so `Cluster::feed`'s
+    cached lookup gains no allocation; a test holds it no wider than `Subject::is_valid`. The
+    prefix follows the same rules and is checked at cluster startup, before migration or
+    background tasks. Valid keys keep exactly their existing subject and message id.
 
     An old release or external SQL can already have stored an invalid key. The relay sets that
     outbox row's `rejected_at`, logs its id and key, and continues, including past a full batch
-    of rejected rows. It does not claim a JetStream acknowledgement by setting `published_at`,
-    delete the row, or roll back the app's committed data. Rejected rows remain available for
-    operator inspection and repair; `prune` does not remove them. The column is a nullable
-    `ADD COLUMN IF NOT EXISTS`, and the relay's query filters on it under the existing index of
-    unpublished rows, so a drain steps over rejected rows; their number grows only by rows the
-    API can no longer write. Network, permission, capacity and other publish failures remain
-    retryable: only locally proven invalid subjects are rejected.
+    of rejected rows. It rejects a row whose patch async-nats refuses before sending as larger
+    than the server's `max_payload` the same way. It does not claim a JetStream acknowledgement
+    by setting `published_at`, delete the row, or roll back the app's committed data. Rejected
+    rows remain available for operator inspection and repair; `prune` does not remove them. The
+    column is a nullable `ADD COLUMN IF NOT EXISTS`; the relay's pending index,
+    `corten_outbox_ready`, is partial on rows neither published nor rejected and replaces
+    `corten_outbox_pending`, so a drain never reads a rejected row again. A rejection applies
+    only under the key the relay read, so a repair that renames the key in one transaction cannot
+    be undone by a relay that read the old one. Network, permission, capacity, acknowledgement
+    and other publish failures remain retryable, including a server refusing a control line
+    shorter than its default: the client sees that as a closed connection, indistinguishable
+    from a network failure, so the byte bound prevents it rather than the relay classifying it.
 
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of existing subjects),
     restricting every key to an ASCII slug (NATS accepts UTF-8 and multiple tokens), retrying
@@ -5615,22 +5625,30 @@ rules something out.
     published (which would misreport delivery). Rejecting at creation alone leaves pre-upgrade
     rows able to stop the relay. No schema constraint repeats the client's subject grammar;
     external writers remain responsible for their data, and the relay isolates their mistakes.
+    Using `Subject::is_valid` itself copies the key into an owned subject on every lookup and
+    accepts whitespace the documentation refuses. Following the documentation's recommended
+    256 characters would refuse keys every default server accepts.
 
     Stands on: platform (the [NATS subject rules](https://docs.nats.io/nats-concepts/subjects)
-    reserve wildcards for subscriptions, and
+    refuse whitespace and reserve wildcards for subscriptions, the
+    [server configuration](https://docs.nats.io/reference/config/) sets `max_control_line` to
+    4 KB and `max_payload` to 1 MB by default, and
     [async-nats 0.52.0](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/src/lib.rs)
-    distinguishes protocol-safe publishing from structurally valid subjects); reasoned (a
+    checks only the framing bytes and dot structure, and refuses an oversized message before
+    sending it); reasoned (a
     deterministic invalid subject cannot recover by retrying, while a transport failure can;
     keeping rejected rows separately preserves the distinction between committed and delivered);
     value (correctness and reliability first, early failure and a small surface: README Values
     4, 6 and 9).
 
     Revisit when: an app needs arbitrary text as its cluster feed key, NATS changes its literal
-    subject rules, or operators need automatic retention or replay of rejected rows instead of
-    explicit repair. A typed cluster key would move literal validation to compile time.
+    subject rules or the default `max_control_line`, async-nats starts reporting a server's
+    control-line refusal as its own error, or operators need automatic retention or replay of
+    rejected rows instead of explicit repair. A typed cluster key would move literal validation
+    to compile time.
 
-    Last checked: 2026-11-17, NATS subject documentation and async-nats 0.52.0 source read;
-    2026-11-17, the store and relay on `39ac3e960` read before the fix.
+    Last checked: 2026-11-17, NATS subject and configuration documentation and async-nats 0.52.0
+    source read; 2026-11-17, the store and relay on `39ac3e960` read before the fix.
 
 ## Rules
 

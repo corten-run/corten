@@ -46,11 +46,19 @@ pub use store::{begin, create_feed, migrate, prune, seq, Begin, Write, Written};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
+/// The longest feed key, in bytes. A key is published as `{subject_prefix}.{key}`, and with the
+/// longest prefix (255 bytes) the subject still fits a NATS server's default `max_control_line`
+/// (4 KB) with room for the rest of the publish line (the reply inbox and two lengths).
+pub const MAX_FEED_KEY_BYTES: usize = 3584;
+
+/// The longest [`Options::subject_prefix`], in bytes.
+const MAX_PREFIX_BYTES: usize = 255;
+
 /// A feed key that is not a literal NATS subject, refused by [`create_feed`] and [`begin`]
-/// before they touch the database. A key is published as
-/// `{subject_prefix}.{key}`, so it must be nonempty dot-separated tokens without spaces, tabs,
-/// line breaks, `*` or `>`. It arrives inside [`Error`]: test for it with
-/// `error.is::<InvalidFeedKey>()`.
+/// before they touch the database. A key is published as `{subject_prefix}.{key}`, so it must
+/// be nonempty dot-separated tokens without whitespace, control characters (NUL included),
+/// `*` or `>`, and at most [`MAX_FEED_KEY_BYTES`] long. It arrives inside [`Error`]: test for
+/// it with `error.is::<InvalidFeedKey>()`.
 ///
 /// ```
 /// # async fn run(pool: sqlx::PgPool) -> Result<(), corten_cluster::Error> {
@@ -65,24 +73,33 @@ pub struct InvalidFeedKey;
 
 impl std::fmt::Display for InvalidFeedKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(
+        write!(
+            f,
             "corten-cluster: a feed key must be a literal NATS subject: nonempty dot-separated tokens \
-             without spaces, tabs, line breaks, `*` or `>`",
+             without whitespace, control characters, `*` or `>`, at most {MAX_FEED_KEY_BYTES} bytes"
         )
     }
 }
 
 impl std::error::Error for InvalidFeedKey {}
 
-/// True when `subject` names one subject a message can be published to: async-nats's structural
-/// check (nonempty tokens, no whitespace) without the `*` and `>` wildcards NATS reserves for
-/// subscriptions.
-pub(crate) fn literal(subject: &async_nats::Subject) -> bool {
-    subject.is_valid() && !subject.as_str().contains(['*', '>'])
+/// True when `name` is a literal subject of at most `max` bytes, as NATS documents subjects:
+/// nonempty `.`-separated tokens, no whitespace, and no `*` or `>` (wildcards, for subscribing
+/// only). Control characters are refused too: no subject needs one, and Postgres cannot store
+/// NUL. Stricter than async-nats's own `Subject::is_valid`, and reads `name` in place.
+fn literal(name: &str, max: usize) -> bool {
+    name.len() <= max
+        && name
+            .split('.')
+            .all(|token| !token.is_empty() && !token.chars().any(|c| c == '*' || c == '>' || c.is_whitespace() || c.is_control()))
+}
+
+pub(crate) fn valid_key(key: &str) -> bool {
+    literal(key, MAX_FEED_KEY_BYTES)
 }
 
 pub(crate) fn check_key(key: &str) -> Result<(), Error> {
-    if literal(&async_nats::Subject::from(key)) {
+    if valid_key(key) {
         Ok(())
     } else {
         Err(InvalidFeedKey.into())
@@ -106,7 +123,7 @@ pub struct Options {
     /// JetStream stream that carries the patches.
     pub stream: String,
     /// Feed `k` is published on `{subject_prefix}.k`. A literal NATS subject, as a feed key is
-    /// ([`InvalidFeedKey`]); [`Cluster::start`] refuses any other.
+    /// ([`InvalidFeedKey`]), of at most 255 bytes; [`Cluster::start`] refuses any other.
     pub subject_prefix: String,
     /// The relay lease. The active relay renews it every quarter and steps down if it cannot
     /// renew within three quarters, so after an instance dies another takes over within about
@@ -151,10 +168,10 @@ impl<S: Source> Cluster<S> {
     /// Creates the tables if needed, starts this instance's JetStream consumer (before any feed
     /// loads, so no patch falls between a load and the stream) and its relay candidate.
     pub async fn start(pool: PgPool, nats: async_nats::Client, source: S, options: Options) -> Result<Self, Error> {
-        if !literal(&async_nats::Subject::from(options.subject_prefix.as_str())) {
+        if !literal(&options.subject_prefix, MAX_PREFIX_BYTES) {
             return Err(format!(
                 "corten-cluster: subject_prefix {:?} is not a literal NATS subject: nonempty dot-separated \
-                 tokens without spaces, tabs, line breaks, `*` or `>`",
+                 tokens without whitespace, control characters, `*` or `>`, at most {MAX_PREFIX_BYTES} bytes",
                 options.subject_prefix
             )
             .into());
@@ -177,7 +194,7 @@ impl<S: Source> Cluster<S> {
     /// and a kept handle would stop receiving patches. A key that is not a literal NATS subject
     /// ([`InvalidFeedKey`]) is `None` without a query: no feed can be written under it.
     pub async fn feed(&self, key: &str) -> Result<Option<Feed<S::Row>>, Error> {
-        if check_key(key).is_err() {
+        if !valid_key(key) {
             return Ok(None);
         }
         self.hub.feed(key).await

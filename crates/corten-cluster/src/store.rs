@@ -26,10 +26,14 @@ CREATE TABLE IF NOT EXISTS corten_outbox (
     published_at timestamptz,
     UNIQUE (feed, seq)
 );
-CREATE INDEX IF NOT EXISTS corten_outbox_pending ON corten_outbox (id) WHERE published_at IS NULL;
--- Set by the relay on a row it can never publish (a feed key that is not a NATS subject, written
--- before keys were checked or by other SQL). Kept for repair; the relay skips it and prune keeps it.
+-- Set by the relay on a row the server can never accept (a feed key that is not a NATS subject,
+-- written before keys were checked or by other SQL, or a patch over max_payload). Kept for
+-- repair; the relay skips it and prune keeps it.
 ALTER TABLE corten_outbox ADD COLUMN IF NOT EXISTS rejected_at timestamptz;
+-- The relay's queue: rows neither published nor rejected, so rejected rows cost a drain nothing.
+-- Replaces corten_outbox_pending (WHERE published_at IS NULL), which kept them in the scan.
+CREATE INDEX IF NOT EXISTS corten_outbox_ready ON corten_outbox (id) WHERE published_at IS NULL AND rejected_at IS NULL;
+DROP INDEX IF EXISTS corten_outbox_pending;
 CREATE TABLE IF NOT EXISTS corten_idempotency (
     key text PRIMARY KEY,
     feed text NOT NULL,
@@ -246,14 +250,19 @@ pub(crate) async fn mark_published(pool: &PgPool, ids: &[i64]) -> Result<(), Err
     Ok(())
 }
 
-/// Marks an outbox row the relay can never publish. True when this call rejected it (so two
-/// overlapping relays log it once).
-pub(crate) async fn reject(pool: &PgPool, id: i64) -> Result<bool, Error> {
-    let rejected = sqlx::query("UPDATE corten_outbox SET rejected_at = clock_timestamp() WHERE id = $1 AND rejected_at IS NULL")
-        .bind(id)
-        .execute(pool)
-        .await?
-        .rows_affected();
+/// Marks an outbox row the relay can never publish, as it read the row: a row renamed since
+/// (a repair) is left alone. True when this call rejected it (so two overlapping relays log it
+/// once).
+pub(crate) async fn reject(pool: &PgPool, id: i64, feed: &str) -> Result<bool, Error> {
+    let rejected = sqlx::query(
+        "UPDATE corten_outbox SET rejected_at = clock_timestamp()
+          WHERE id = $1 AND feed = $2 AND published_at IS NULL AND rejected_at IS NULL",
+    )
+    .bind(id)
+    .bind(feed)
+    .execute(pool)
+    .await?
+    .rows_affected();
     Ok(rejected == 1)
 }
 

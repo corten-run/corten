@@ -5,9 +5,11 @@
 //! relays briefly overlapping is therefore harmless: each publishes the pending rows in order, and
 //! the copies are dropped.
 //!
-//! A row whose feed key is not a literal NATS subject (written before keys were checked, or by
-//! other SQL) can never be published. The relay marks it rejected, logs it once and goes on, so
-//! one such row cannot hold back every other feed.
+//! A row the server can never accept, whatever the relay retries, is rejected instead: its feed
+//! key is not a literal NATS subject that fits the control line (written before keys were
+//! checked, or by other SQL), or the client refused it as larger than the server's `max_payload`.
+//! The relay marks it rejected, logs it once and goes on, so one such row cannot hold back every
+//! other feed. Every other publish or acknowledgement failure ends the batch and is retried.
 
 use std::{
     sync::{
@@ -17,16 +19,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use async_nats::{jetstream, HeaderMap, Subject};
+use async_nats::{
+    jetstream::{self, context::PublishErrorKind},
+    HeaderMap, Subject,
+};
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
-use crate::{literal, store, Error, Options};
+use crate::{store, valid_key, Error, Options, MAX_FEED_KEY_BYTES};
 
 /// Outbox rows published per round trip.
 const BATCH: i64 = 256;
 
-/// Feed `feed`'s subject. The prefix was checked at startup, so it is a literal subject exactly
-/// when the key is one.
+/// Feed `feed`'s subject. The prefix was checked at startup, so with a valid key it is a literal
+/// subject that fits a default server's control line.
 pub(crate) fn subject(options: &Options, feed: &str) -> Subject {
     Subject::from(format!("{}.{feed}", options.subject_prefix))
 }
@@ -119,18 +124,24 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
         let mut acks = Vec::with_capacity(rows.len());
         let mut sent = Vec::with_capacity(rows.len());
         for row in &rows {
-            let subject = subject(options, &row.feed);
-            if !literal(&subject) {
-                if store::reject(pool, row.id).await? {
-                    tracing::warn!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
-                        "outbox row rejected: its feed key is not a literal NATS subject; it stays unpublished until repaired");
-                }
+            if !valid_key(&row.feed) {
+                let why = format!("its feed key is not a literal NATS subject of at most {MAX_FEED_KEY_BYTES} bytes");
+                reject(pool, options, row, &why).await?;
                 continue;
             }
             let mut headers = HeaderMap::new();
             headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
             headers.insert("Feed-Generation", row.generation.as_str());
-            acks.push(js.publish_with_headers(subject, headers, row.body.clone().into()).await?);
+            let ack = match js.publish_with_headers(subject(options, &row.feed), headers, row.body.clone().into()).await {
+                Ok(ack) => ack,
+                // Checked before sending, against the server's own limit: retrying cannot pass.
+                Err(e) if e.kind() == PublishErrorKind::MaxPayloadExceeded => {
+                    reject(pool, options, row, "the patch is larger than the server's max_payload").await?;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            acks.push(ack);
             sent.push(row.id);
         }
         for ack in acks {
@@ -143,4 +154,15 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
             return Ok(());
         }
     }
+}
+
+/// Sets `row` aside for an operator, logging it if this relay is the one that rejected it.
+async fn reject(pool: &PgPool, options: &Options, row: &store::Pending, why: &str) -> Result<(), Error> {
+    if store::reject(pool, row.id, &row.feed).await? {
+        // A key may be kilobytes long; its start identifies it next to the row id.
+        let feed: String = row.feed.chars().take(80).collect();
+        tracing::warn!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?feed,
+            feed_bytes = row.feed.len(), "outbox row rejected: {why}; it stays unpublished until repaired");
+    }
+    Ok(())
 }

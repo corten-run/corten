@@ -6,11 +6,14 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - `corten-cluster` refuses a feed key that is not a literal NATS subject (`my feed`, `a..b`,
-  `*`) at `create_feed` and `begin` with `InvalidFeedKey`, `Cluster::feed` answers `None` for
-  it, and `Cluster::start` refuses such a subject prefix. The relay sets an existing invalid
-  outbox row's `rejected_at` (not `published_at`), logs it and goes on, instead of retrying one
-  impossible subject and stopping every feed's patches. Rejected rows are not pruned; repair
-  their feed keys before clearing the rejection to retry delivery.
+  `*`, whitespace or control characters, or more than `MAX_FEED_KEY_BYTES`, 3,584 bytes) at
+  `create_feed` and `begin` with `InvalidFeedKey`, `Cluster::feed` answers `None` for it, and
+  `Cluster::start` refuses such a subject prefix (or one over 255 bytes). The relay sets an
+  existing invalid outbox row, or one whose patch exceeds the server's `max_payload`, aside
+  with `rejected_at` (not `published_at`), logs it and goes on, instead of retrying it and
+  stopping every feed's patches. The pending index leaves rejected rows out
+  (`corten_outbox_ready` replaces `corten_outbox_pending` on first start). Rejected rows are not
+  pruned; repair them as the live-data guide describes, after every instance is upgraded.
 
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
