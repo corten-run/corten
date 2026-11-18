@@ -220,6 +220,7 @@ test("check and release reject malformed fragments without changing either file"
     "- ` `\n",
     "- A paragraph.\n  - A nested bullet.\n",
     "- # A heading instead of prose.\n",
+    "- | Guide |\n  | --- |\n  | `[kit](../docs/guide/kit.md) | ` |\n",
     "-     This is an indented code block, not note text.\n",
     "-  One.\n  ## Outside the bullet.\n",
     "### Fixed\n- A fix.\n",

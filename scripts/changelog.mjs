@@ -22,7 +22,7 @@ function checkProse(lines, label) {
       throw new Error(`${label}: use only single-line [label](https://host/path) links; put literal Markdown syntax in code spans`);
     }
     if (/^(?:#{1,6}(?: |$)|[-+*](?: |$)|\d{1,9}[.)](?: |$)|~{3,})/.test(prose) ||
-      /^(?:=+|(?:[-*_] *){3,}|\|? *:?-+:? *(?:\| *:?-+:? *)+\|?)$/.test(prose.trimEnd())) {
+      /^(?:=+|(?:[-*_] *){3,}|\|? *:?-+:? *(?:\| *:?-+:? *)*\|?)$/.test(prose.trimEnd())) {
       throw new Error(`${label}: expected one paragraph of note text, not nested Markdown blocks`);
     }
   }
