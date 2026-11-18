@@ -30,6 +30,14 @@ to reconstruct a wall-clock interval. None of these fields changes the retry
 deadline, cancellation decision or replay verdict.
 Earlier failures and failures outside the census have no such measurements.
 
+To exercise the catalog build path without renting a benchmark host, the
+**Catalog observer diagnostic** workflow runs Corten's ordinary single-app
+catalog build and checks both data sources on a fresh hosted Linux runner.
+It runs on manual dispatch or changes to the probe itself, not on main pushes.
+Inspect the command outcome, host replay and native check summary together.
+An interrupted build is a failed diagnostic, not a zero-throughput app.
+There are no timed requests, other contenders or official-round results.
+
 The original `observerError` remains authoritative, and a nonzero diagnostic count
 also blocks replay if that flag contradictorily says no error occurred.
 
