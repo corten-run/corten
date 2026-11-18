@@ -444,8 +444,10 @@ Even an unshifted hint can block a server-valid decimal spelling about one float
 an exclusive end in Chromium and WebKit. For example, with an `f64` minimum of
 `0.0010000000000000002`, the server accepts `0.0010000000000000005` but those browsers can
 block it before submission. If the field must accept such spellings, leave `{..BOUNDS}` off
-the input and use `step="any"` without the offending `min` or `max` hint. Keep the exclusive
-`Bounds::read` check in the handler. See [Choice 62](../design.md#choice-exclusive-ends).
+the input and use `step="any"` without the offending `min` or `max` hint. `NumberField` adds
+its bounds internally, so replace that field with a plain `<input type="number" step="any">`
+without the offending hint. In either case, keep `Bounds::input_value(&entry)` for redisplay
+and the exclusive `Bounds::read(&entry)` check in the handler.
 
 ```rust,ignore
 const DISCOUNT: Bounds<f64, AnyStep> =
@@ -466,8 +468,7 @@ representable value must remain after excluding ends. For a plain any-step input
 past 18 digits written out, so a stored `1e-20` is drawn in a short spelling the browser can submit
 unchanged.
 It still draws submitted text as typed after a refusal. Standalone `Entry` attributes keep their
-existing formatting. See [Choice 62](../design.md#choice-exclusive-ends), to revisit when HTML
-adds an attribute for exclusive number bounds.
+existing formatting. See [Choice 62](../design.md#choice-exclusive-ends) for when to revisit this choice.
 
 Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
 `Bounds::new(0.1, 16.0).step(0.1)`. Stepped fields keep their existing formatting. Integers
