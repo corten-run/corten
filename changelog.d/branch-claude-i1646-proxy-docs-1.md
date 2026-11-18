@@ -1,0 +1,1 @@
+- The deploy guide and design Limit 21 now say that a proxy in front of the app must pass the browser's `Accept-Encoding` on: a page `GET` is tagged only for a request that accepts a coding or names a tag, so behind a proxy that takes the header off a browser that holds no tag is never sent one and gets the whole page each time.

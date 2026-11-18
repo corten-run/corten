@@ -6967,6 +6967,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     does not explicitly accept a non-identity coding and sends no `If-None-Match` gets no tag:
     for a client like `curl` or a benchmark, the hash would cost about a third of the render for
     nothing. A CDN that fetches pages without asking for a coding gets no tag to revalidate them.
+    What counts is the header as it reaches the app: behind a proxy that takes `Accept-Encoding`
+    off, a browser that holds no tag is never sent one (one that still holds a tag names it, and
+    is answered).
     With `compress`, only explicitly named codings Corten can send count.
     Without it, any named non-identity coding with a positive weight counts, as does a positive
     `*` (it allows unlisted codings, RFC 9110 section 12.5.3). An absent or empty

@@ -1467,7 +1467,8 @@ tag costs about 3 instructions a byte of a page (2.5 of a file), and a `304` sav
 and the body. A `GET` that does not explicitly accept a non-identity coding and sends no
 `If-None-Match` (a benchmark, `curl`) is not sent a tag: the hash would cost about a third of the
 render. A CDN that fetches pages without asking for a coding therefore gets no tag to revalidate
-them. With `compress`, only explicitly named codings Corten can send count; without it, any
+them, and a proxy in front of the app must pass the browser's `Accept-Encoding` on
+([deploying](deploy.md#response-compression)). With `compress`, only explicitly named codings Corten can send count; without it, any
 non-identity coding or `*` with a positive weight counts. In both builds, an otherwise taggable
 `HEAD` gets an `ETag` regardless of coding, so a shared cache does not freshen an untagged `GET`
 just because the lengths match ([RFC 9111 section 4.3.5](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.5)).

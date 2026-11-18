@@ -288,6 +288,15 @@ system zstd is installed. The starter's Dockerfile instead sets `ZSTD_SYS_USE_PK
 library, remove the setting so the build compiles zstd and links it into the app. To avoid
 zstd altogether, turn off the `compress` feature in the app's `Cargo.toml`.
 
+A proxy that compresses in the app's place must still pass the browser's `Accept-Encoding` on to
+it. With the feature or without, a page `GET` is hashed for an `ETag` only when the request accepts
+a coding or already names a tag ([design Limit 21](../design.md#limit-etag)), and what counts is
+the header as it reaches the app. Behind a proxy that takes it off, a browser that holds no tag is
+never sent one, and so gets the whole page each time where it would get a `304`. A proxy takes it
+off when it is told to (nginx's `proxy_set_header Accept-Encoding ""`), and some do as part of
+compressing for the app (HAProxy's `compression offload`). To check, ask for a page through the
+proxy with `Accept-Encoding: gzip` and look for its `ETag`.
+
 ## Building the image
 
 The Dockerfile builds with `cargo build --release --locked`, as `corten check` holds its Cargo
