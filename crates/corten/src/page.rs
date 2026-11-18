@@ -3060,7 +3060,7 @@ fn at_action(query: Option<&str>) -> bool {
 /// posts to the address the page is at.
 #[cfg(debug_assertions)]
 fn post_form_without_action(html: &str) -> Option<&str> {
-    crate::html::start_tags(html)
+    crate::html::start_tags_no_script(html)
         .find(|tag| {
             tag.name == "form"
                 && tag.attr("method").is_some_and(|method| method.eq_ignore_ascii_case("post"))

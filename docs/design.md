@@ -7119,3 +7119,23 @@ by design; where it is known, a limit says what would lift it or why it is so.
     it is not yet ([#1536 A form field's control kind is not checked at compile time when the call and the control are in the same html! expansion](https://github.com/corten-run/corten/issues/1536)),
     and that would not reach the case this Choice is for, fields another component draws. It lifts
     when the kind a form draws for a field is known where the call is checked.
+
+33. <a id="limit-developer-markup-scan"></a>The developer checks for patch ids, form hints,
+    empty submit keys and `data-vars` share the
+    [HTML tokenizer's](https://html.spec.whatwg.org/multipage/parsing.html#tokenization)
+    tag, comment and text boundaries. They do not build the browser's tree. The patch id
+    check still stops at the shapes in [Limit 2](#limit-whole-element-patches). The hint
+    check recognizes SVG and MathML text (including CDATA), decodes numeric whitespace
+    references and `&Tab;` and `&NewLine;` in HTML text and textarea values, and leaves
+    script and stylesheet source, iframe fallback and inert template contents out of
+    hint text. It follows explicit closes and the SVG and MathML exits, not HTML's
+    automatic closing or reparenting of elements: `<li id=qty-hint><li>Outside` can still
+    count text after the first list item. This is the remaining case in
+    [#1620 Track known limits of the debug form-hint scan](https://github.com/corten-run/corten/issues/1620).
+    Hints and submit keys distinguish an ordinary template from a declarative shadow root
+    on an eligible document host without a root already. This is a scan of written markup:
+    it does not decode attribute values, model the accessibility tree or follow slotting,
+    script changes or custom-element registration. A patch uses a template fragment and
+    does not attach declarative shadow roots. The hint, key and patch id checks run only
+    in debug builds; the `data-vars` check runs only with development mode enabled, even
+    in a release build.

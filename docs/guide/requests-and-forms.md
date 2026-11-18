@@ -882,7 +882,10 @@ from data writes `{..e.control(name).hint()}` with no branch; a corten-ui widget
 `attrs`. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
 `HintId(&id)` element with text, and the element `id` without that hint in its
 `aria-describedby`, is an error, since a screen reader would never read the hint; so is a page
-that draws such a hint and no element `id` (a radio group without an id). A patch that redraws the
+that draws such a hint and no element `id` (a radio group without an id). A lone `<` in
+`raw(..)` can be text; script and stylesheet source and inert templates do not supply hint
+text. This check reads written markup, not the browser's tree or computed visibility
+([Limit 33](../design.md#limit-developer-markup-scan)). A patch that redraws the
 hint alone, its control staying on the page, is not checked. A tag that writes `id`, `name` or the
 ARIA attributes beside `e.control(..)` does not compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes
 what `e.aria(..)` does. `e.control` is for a field's one control: radios or checkboxes that share
@@ -1108,8 +1111,9 @@ empty and refused. Drawn with `SubmitKey::field`, every copy would carry the tem
 and the app would apply only the first copy's submit. Put it only in a `<template>`: without
 JavaScript nothing fills it, and a `SubmitKey` posted empty is refused with the same 422 as a
 malformed one (an `Option<SubmitKey>` reads it as none). A debug build's page that draws one
-outside a `<template>` a script copies is an error (a declarative shadow root,
-`<template shadowrootmode="open">`, is drawn in the page and needs its own key). A script that copies a
+outside a `<template>` a script copies is an error. A declarative shadow root,
+`<template shadowrootmode="open">`, needs its own key when the browser attaches it to
+its host; a template the browser leaves inert does not. A script that copies a
 form already on the page, rather than a template, empties the copy's key field
 (`field.value = ""`) so the runtime gives it one. A field with no key draws nothing at random, so
 a page whose only key fields are a template's keeps its `ETag`, which `SubmitKey::field` takes

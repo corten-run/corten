@@ -8,6 +8,7 @@ import zlib from "node:zlib";
 import { readFileSync } from "node:fs";
 import { stall } from "./stall.mjs";
 import { browserBug } from "./browser-bugs.mjs";
+import { checkMarkupScanner } from "./markup-scan.mjs";
 
 const base = process.argv[2] ?? "http://localhost:18480";
 const engines = { chromium, firefox, webkit };
@@ -1085,6 +1086,8 @@ async function run(browser) {
     });
     check(`a patch's top level parses as patch-parsing.json says, in ${cases.length} shapes`, !differ.length, differ.join("; "));
   }
+  const markupCases = await checkMarkupScanner(browser);
+  check(`the developer markup fixture agrees with the browser in ${markupCases} cases`, true);
   // Patches generated from a fixed seed (`patch-generated.json`, which html.rs's
   // `generated_patches_carry_the_check_s_verdict` writes with the debug check's verdict on each):
   // the shapes above composed with the tokens the check has been found to misread. The check

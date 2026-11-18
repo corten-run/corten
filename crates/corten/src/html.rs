@@ -1,5 +1,11 @@
 //! Small HTML helpers with no dependencies.
 
+mod scan;
+#[cfg(debug_assertions)]
+pub(crate) use scan::{Event, Markup};
+#[cfg(any(debug_assertions, test))]
+use scan::{Mode, Token, Tokens, lone_lt, raw_text_end, script_end};
+
 /// Escapes text for use in HTML text or a quoted attribute.
 /// To append to a string instead, use [`crate::view::escape_into`].
 pub fn escape(text: &str) -> String {
@@ -64,16 +70,7 @@ pub(crate) fn json_string(text: &str) -> String {
     out
 }
 
-/// HTML's elements whose text is not markup (the HTML standard's script data, RAWTEXT and RCDATA
-/// elements; `<plaintext>` aside, which `html!` refuses, and `<noscript>`, which a template's
-/// parse, with scripting off, reads as an element): nothing in one is a tag until its end tag. The
-/// same elements as `RAW_TEXT` and `TEXT_ONLY` in `crates/corten-macros/src/html.rs` together,
-/// which `the_macro_s_patch_lists_are_the_check_s` holds it to.
-const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes"];
-
 /// A start tag as `html!` writes it, read by [`start_tag`].
-// Where it starts and whether it closes itself are read by the debug builds' checks only.
-#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 pub(crate) struct Tag<'a> {
     /// Where its `<` is, and one past its `>`.
     pub start: usize,
@@ -86,8 +83,7 @@ pub(crate) struct Tag<'a> {
     /// It ends `/>`.
     pub self_closing: bool,
     /// It ends at its `>`: the patch does not end inside it (a browser drops a tag the input ends
-    /// in, `<col data-note='` without its quote's end or its `>`). Read by the debug check only.
-    #[cfg(any(debug_assertions, test))]
+    /// in, `<col data-note='` without its quote's end or its `>`).
     pub complete: bool,
 }
 
@@ -103,211 +99,27 @@ impl Tag<'_> {
 /// taken for the tag's own: `data-on` is single-quoted and its JSON has `"` in it
 /// (`docs/design.md#choice-data-on-single-quoted`). Whitespace may come around an attribute's
 /// `=`, and only a `/` right before the `>` makes it self-closing.
-pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
-    let bytes = html.as_bytes();
-    let mut i = start + 1;
-    let name_end = html[i..].find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/').map_or(bytes.len(), |n| i + n);
-    let name = html[i..name_end].to_ascii_lowercase();
-    i = name_end;
+fn start_tag(html: &str, start: usize) -> Tag<'_> {
     let mut attrs = Vec::new();
-    let mut self_closing = false;
-    while i < bytes.len() && bytes[i] != b'>' {
-        let c = bytes[i];
-        if c.is_ascii_whitespace() {
-            i += 1;
-        } else if c == b'/' {
-            // The browser ignores a `/` anywhere else.
-            self_closing = bytes.get(i + 1) == Some(&b'>');
-            i += 1;
-        } else {
-            // A name, its first character any but these (an `=` there is the name's), which may be
-            // one past ASCII: the name goes on after its whole character.
-            let first = html[i..].chars().next().map_or(1, char::len_utf8);
-            let attr_end = html[i + first..]
-                .find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '>' || c == '/')
-                .map_or(bytes.len(), |n| i + first + n);
-            let attr = &html[i..attr_end];
-            i = attr_end;
-            let skip = |mut at: usize| {
-                while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
-                    at += 1;
-                }
-                at
-            };
-            let mut value = "";
-            if bytes.get(skip(i)) == Some(&b'=') {
-                i = skip(skip(i) + 1);
-                match bytes.get(i) {
-                    Some(&q @ (b'"' | b'\'')) => {
-                        let close = html[i + 1..].find(q as char).map_or(bytes.len(), |n| i + 1 + n);
-                        value = &html[i + 1..close];
-                        i = close + 1;
-                    }
-                    _ => {
-                        let end = html[i..].find(|c: char| c.is_ascii_whitespace() || c == '>').map_or(bytes.len(), |n| i + n);
-                        value = &html[i..end];
-                        i = end;
-                    }
-                }
-            }
-            attrs.push((attr, value));
-        }
-    }
-    Tag {
-        start,
-        end: (i + 1).min(bytes.len()),
-        name,
-        attrs,
-        self_closing,
-        #[cfg(any(debug_assertions, test))]
-        complete: i < bytes.len(),
-    }
+    let (name, end, self_closing) = scan::read_tag(html, start + 1, |name, value| attrs.push((name, value)));
+    Tag { start, end: end.min(html.len()), name: name.to_ascii_lowercase(), attrs, self_closing, complete: end <= html.len() }
 }
 
-/// Each start tag of `html` in order, past comments, end tags, a doctype and the text of the
-/// elements whose text is not markup. Reads markup as `html!` writes it (`<` escaped in text), and a
-/// `<` that starts no tag (`1 <2`, in markup placed with `raw`) as text, as the browser does.
+/// Each start tag of a page, including those in inert templates that a script can copy.
 pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
-    let mut i = 0;
-    std::iter::from_fn(move || loop {
-        let at = i + html.get(i..)?.find('<')?;
-        if html[at..].starts_with("<!--") {
-            i = html[at..].find("-->").map_or(html.len(), |n| at + n + 3);
-            continue;
-        }
-        match html.as_bytes().get(at + 1) {
-            Some(c) if c.is_ascii_alphabetic() => {}
-            // An end tag, a doctype or a processing instruction: up to its `>`.
-            Some(b'/' | b'!' | b'?') => {
-                i = html[at..].find('>').map_or(html.len(), |n| at + n + 1);
-                continue;
-            }
-            _ => {
-                i = at + 1;
-                continue;
-            }
-        }
-        let tag = start_tag(html, at);
-        i = tag.end;
-        if RAW_TEXT.contains(&tag.name.as_str()) {
-            let close = format!("</{}", tag.name);
-            i = html[i..].to_ascii_lowercase().find(&close).map_or(html.len(), |n| i + n);
-        }
-        return Some(tag);
-    })
+    scan::tags(html, true)
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn start_tags_no_script(html: &str) -> impl Iterator<Item = Tag<'_>> {
+    scan::tags(html, false)
 }
 
 /// Elements that have no end tag, and those the HTML parser closes at once as it does them.
-#[cfg(any(debug_assertions, test))]
 const VOID: &[&str] = &[
     "area", "base", "basefont", "bgsound", "br", "col", "embed", "frame", "hr", "img", "input", "keygen", "link", "meta",
     "param", "source", "track", "wbr",
 ];
-
-/// Where the end tag of the raw-text element `name` (in lowercase) starts in `html`, searching from
-/// `from`, or `html`'s end: `</name` in any letter case followed by whitespace, `/` or `>`, so a
-/// longer name (`</scriptx>`) is the element's text, as the HTML standard's tokenizer reads it.
-/// Allocates nothing, so a patch with many raw-text elements is read in one pass.
-#[cfg(any(debug_assertions, test))]
-fn raw_text_end(html: &str, from: usize, name: &str) -> usize {
-    let bytes = html.as_bytes();
-    let mut at = from;
-    while let Some(n) = html.get(at..).and_then(|rest| rest.find("</")) {
-        let start = at + n;
-        let name_end = start + 2 + name.len();
-        if bytes.get(start + 2..name_end).is_some_and(|written| written.eq_ignore_ascii_case(name.as_bytes()))
-            && matches!(bytes.get(name_end), None | Some(b'>' | b'/' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' '))
-        {
-            return start;
-        }
-        at = start + 2;
-    }
-    html.len()
-}
-
-/// Where the end tag of the HTML `<script>` whose start tag ends at `from` in `html` starts, as
-/// the HTML standard's tokenizer reads script data: a `</script` followed by whitespace, `/` or
-/// `>`, in any letter case, but one a `<!--` and a `<script` before it in its text hide (the
-/// script data escaped and double-escaped states, which a `</script` or a `-->` leaves). `html`'s
-/// end if its text hides every one after it. Allocates nothing.
-#[cfg(any(debug_assertions, test))]
-fn script_end(html: &str, from: usize) -> usize {
-    #[derive(Clone, Copy, PartialEq)]
-    enum State {
-        Data,
-        Escaped,
-        EscapedDash,
-        EscapedDashDash,
-        Double,
-        DoubleDash,
-        DoubleDashDash,
-    }
-    let bytes = html.as_bytes();
-    // A `script` tag name at `at`, in any letter case, ended by whitespace, `/` or `>`.
-    let script_at = |at: usize| {
-        bytes.get(at..at + 6).is_some_and(|name| name.eq_ignore_ascii_case(b"script"))
-            && matches!(bytes.get(at + 6), Some(b'>' | b'/' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' '))
-    };
-    let mut state = State::Data;
-    let mut i = from;
-    while i < bytes.len() {
-        let c = bytes[i];
-        let double = matches!(state, State::Double | State::DoubleDash | State::DoubleDashDash);
-        match c {
-            b'<' if state == State::Data => {
-                if bytes.get(i + 1) == Some(&b'/') && script_at(i + 2) {
-                    return i;
-                }
-                if bytes[i + 1..].starts_with(b"!--") {
-                    // `<!--`: the escaped state, as after its dash dash, so `<!-->` leaves it at once.
-                    state = State::EscapedDashDash;
-                    i += 4;
-                    continue;
-                }
-            }
-            b'<' if !double => {
-                if bytes.get(i + 1) == Some(&b'/') && script_at(i + 2) {
-                    return i;
-                }
-                if script_at(i + 1) {
-                    // `<script` and its delimiter: double-escaped.
-                    state = State::Double;
-                    i += 8;
-                    continue;
-                }
-                state = State::Escaped;
-            }
-            b'<' => {
-                if bytes.get(i + 1) == Some(&b'/') && script_at(i + 2) {
-                    // `</script` and its delimiter: escaped again.
-                    state = State::Escaped;
-                    i += 9;
-                    continue;
-                }
-                state = State::Double;
-            }
-            b'-' => {
-                state = match state {
-                    State::Data => State::Data,
-                    State::Escaped => State::EscapedDash,
-                    State::EscapedDash | State::EscapedDashDash => State::EscapedDashDash,
-                    State::Double => State::DoubleDash,
-                    State::DoubleDash | State::DoubleDashDash => State::DoubleDashDash,
-                };
-            }
-            b'>' if matches!(state, State::EscapedDashDash | State::DoubleDashDash) => state = State::Data,
-            _ => {
-                state = match state {
-                    State::Data => State::Data,
-                    State::Escaped | State::EscapedDash | State::EscapedDashDash => State::Escaped,
-                    State::Double | State::DoubleDash | State::DoubleDashDash => State::Double,
-                };
-            }
-        }
-        i += 1;
-    }
-    html.len()
-}
 
 /// Whether the `<form>` whose start tag ends at `from` in `html` holds what a page shows: a
 /// start tag ended by its `>`, or text that shows ([`text_shows`]; a `<` that starts no tag among it), before its
@@ -382,16 +194,11 @@ fn ignored_end_tag(name: &str) -> bool {
     !name.eq_ignore_ascii_case("br") && VOID.iter().any(|void| void.eq_ignore_ascii_case(name))
 }
 
-/// One past the `-->` of the comment whose `<!--` is at `html[at]`, or `html`'s end; `None`
-/// for one a browser ends elsewhere (written `<!-->`, `<!--->` or with `--!>` in it).
+/// The strict patch checks stop at comments that do not end as `html!` writes them.
 #[cfg(any(debug_assertions, test))]
 fn comment_end(html: &str, at: usize) -> Option<usize> {
-    let body = at + 4;
-    let end = html[body..].find("-->").map_or(html.len(), |n| body + n);
-    if html[body..].starts_with('>') || html[body..].starts_with("->") || html[body..end].contains("--!>") {
-        return None;
-    }
-    Some((end + 3).min(html.len()))
+    let (end, ordinary) = scan::comment(html, at);
+    ordinary.then_some(end)
 }
 
 /// Whether `text`, written in an HTML element, shows: `Some(true)` when it has a character but ASCII
@@ -402,7 +209,7 @@ fn comment_end(html: &str, at: usize) -> Option<usize> {
 /// `&#39;`) and `&nbsp;` show; `None` when the text shows nothing else and has another named
 /// reference, which the check does not decode. Debug builds only.
 #[cfg(any(debug_assertions, test))]
-fn text_shows(text: &str) -> Option<bool> {
+pub(crate) fn text_shows(text: &str) -> Option<bool> {
     let bytes = text.as_bytes();
     let mut undecided = false;
     let mut i = 0;
@@ -421,11 +228,7 @@ fn text_shows(text: &str) -> Option<bool> {
             _ => return Some(true),
         }
     }
-    if undecided {
-        None
-    } else {
-        Some(false)
-    }
+    if undecided { None } else { Some(false) }
 }
 
 /// The character reference whose `&` is at `bytes[at]`, as [`text_shows`] reads it: whether it
@@ -478,18 +281,6 @@ fn reference(bytes: &[u8], at: usize) -> (Option<bool>, usize) {
     (shows, i)
 }
 
-/// Whether the `<` at `bytes[at]` starts no token, so it is text, as the tokenizer reads it: one
-/// before anything but a letter, `/`, `!` or `?`, or the patch's end, and a `</` the patch ends in.
-#[cfg(any(debug_assertions, test))]
-fn lone_lt(bytes: &[u8], at: usize) -> bool {
-    match bytes.get(at + 1) {
-        Some(c) if c.is_ascii_alphabetic() => false,
-        Some(b'/') => at + 2 == bytes.len(),
-        Some(b'!' | b'?') => false,
-        _ => true,
-    }
-}
-
 /// Whether `html[at..]` starts a doctype (`<!doctype` in any letter case), and whether it is the one
 /// `<!DOCTYPE html>` (in any letter case), which a browser ignores in a patch. The check reads no
 /// other: what it holds (a quoted `>` ends it early) is not followed.
@@ -512,76 +303,42 @@ fn doctype(bytes: &[u8], at: usize) -> Option<bool> {
 /// Checked in debug builds only.
 #[cfg(any(debug_assertions, test))]
 pub(crate) fn patch_problem(html: &str) -> Option<String> {
-    let bytes = html.as_bytes();
-    // The elements open, each with whether it is SVG's or MathML's and how what it holds is read.
+    let mut tokens = Tokens::new(html);
     let mut open: Vec<Open> = Vec::new();
-    // In a `<template>`'s content, read by its own rules.
     let in_template = |open: &[Open]| open.iter().any(|el| !el.foreign && el.name == "template");
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'<' || lone_lt(bytes, i) {
-            // Text, a `<` that starts no tag among it.
-            let from = if bytes[i] == b'<' { i + 1 } else { i };
-            let end = html[from..].find('<').map_or(bytes.len(), |n| from + n);
-            let text = &html[i..end];
-            // Whether it shows, where that decides: at the top level, and in a table holder, which
-            // the browser moves it out of; `None` (a named reference it does not decode) stops.
-            let holder = !in_template(&open)
-                && open.last().is_some_and(|last| !last.foreign && TABLE_HOLDERS.contains(&last.name.as_str()));
-            if open.is_empty() || holder {
-                match text_shows(text) {
-                    Some(true) if open.is_empty() => {
-                        let shown: String = text.trim_ascii().chars().take(40).collect();
-                        return Some(format!("text {shown:?} outside an element"));
+    loop {
+        let name = open.last().map_or("", |el| el.name.as_str());
+        let foreign = open.last().is_some_and(|el| el.foreign);
+        let mode = if foreign { Mode::Data } else { Mode::of(name, false) };
+        let Some(token) = tokens.next(mode, name, foreign) else { break };
+        let tag = match token {
+            Token::Text(text) => {
+                // A table holder moves visible text out; the parse check handles that case.
+                let holder = !foreign && !in_template(&open) && TABLE_HOLDERS.contains(&name);
+                if open.is_empty() || holder {
+                    match text_shows(text) {
+                        Some(true) if open.is_empty() => {
+                            let shown: String = text.trim_ascii().chars().take(40).collect();
+                            return Some(format!("text {shown:?} outside an element"));
+                        }
+                        Some(false) => {}
+                        _ => return None,
                     }
-                    Some(false) => {}
-                    _ => return None,
                 }
-            }
-            i = end;
-            continue;
-        }
-        if html[i..].starts_with("<!--") {
-            i = comment_end(html, i)?;
-            continue;
-        }
-        if bytes.get(i + 1) == Some(&b'/') {
-            if !bytes.get(i + 2).is_some_and(u8::is_ascii_alphabetic) {
-                // A bogus comment (`</ x>`) or a `</>`, which shows nothing.
-                i = html[i..].find('>').map_or(bytes.len(), |n| i + n + 1);
                 continue;
             }
-            let (name, end) = exact_end_tag(html, i)?;
-            if open.last().is_some_and(|open| open.name.eq_ignore_ascii_case(name)) {
-                open.pop();
-            } else if !ignored_end_tag(name) {
-                // It closes no element open, or one with others open in it.
-                return None;
-            }
-            i = end;
-            continue;
-        }
-        if matches!(bytes.get(i + 1), Some(b'!' | b'?')) {
-            if doctype(bytes, i) == Some(false) {
-                // A doctype but `<!DOCTYPE html>`: what it holds is not followed.
-                return None;
-            }
-            if html[i..].starts_with("<![CDATA[") {
-                // Text up to `]]>` in an SVG or MathML element (an integration point too); elsewhere
-                // not read.
-                let foreign = open.last().is_some_and(|last| last.foreign);
-                i = i + html[i..].find("]]>").filter(|_| foreign)? + 3;
+            Token::End { name, exact: true } => {
+                if open.last().is_some_and(|el| el.name.eq_ignore_ascii_case(name)) {
+                    open.pop();
+                } else if !ignored_end_tag(name) {
+                    return None;
+                }
                 continue;
             }
-            i = html[i..].find('>').map_or(bytes.len(), |n| i + n + 1);
-            continue;
-        }
-        // A start tag: its name, then its attributes up to `>`, unless the patch ends in it.
-        let tag = start_tag(html, i);
-        if !tag.complete {
-            return None;
-        }
-        i = tag.end;
+            Token::Ignored { uncertain: false } | Token::Cdata(_, true) => continue,
+            Token::Start(tag) if tag.complete => tag,
+            _ => return None,
+        };
         let id = tag.attrs.iter().any(|(attr, value)| attr.eq_ignore_ascii_case("id") && !value.is_empty());
         let written = &html[tag.start..tag.end];
         if open.is_empty() && !id {
@@ -603,12 +360,7 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
             // Where the browser puts it is not followed.
             return None;
         }
-        let raw = !foreign && RAW_TEXT.contains(&tag.name.as_str());
-        if raw {
-            // Its text up to the end tag: nothing in it is markup.
-            i = if tag.name == "script" { script_end(html, i) } else { raw_text_end(html, i, &tag.name) };
-        }
-        if raw || (!self_closing && (foreign || !void)) {
+        if !self_closing && (foreign || !void) {
             open.push(Open { name: tag.name, foreign, within, start: tag.start });
         }
     }
@@ -629,19 +381,16 @@ const TABLE_PARTS: &[&str] = &["caption", "col", "colgroup", "tbody", "td", "tfo
 /// The SVG elements whose children are HTML's: the HTML standard's HTML integration points in SVG.
 /// The same list as `SVG_HTML_POINTS` in `crates/corten-macros/src/html.rs`, which
 /// `the_macro_s_patch_lists_are_the_check_s` holds it to.
-#[cfg(any(debug_assertions, test))]
 const SVG_HTML_POINTS: &[&str] = &["foreignObject", "desc", "title"];
 
 /// The MathML elements whose children are HTML's but a `<mglyph>` and a `<malignmark>`: the HTML
 /// standard's MathML text integration points. The same list as `MATH_HTML_POINTS` in
 /// `crates/corten-macros/src/html.rs`.
-#[cfg(any(debug_assertions, test))]
 const MATH_HTML_POINTS: &[&str] = &["mi", "mo", "mn", "ms", "mtext"];
 
 /// The start tags the HTML standard's rules for foreign content take out of an `<svg>` or a
 /// `<math>` (and a `<font>` with a `color`, `face` or `size`). The same list as `BREAKOUT` in
 /// `crates/corten-macros/src/html.rs`, which refuses one written straight in either.
-#[cfg(any(debug_assertions, test))]
 const BREAKOUT: &[&str] = &[
     "b",
     "big",
@@ -691,7 +440,6 @@ const BREAKOUT: &[&str] = &[
 
 /// How the start tags in an open element are read, as the HTML standard's tree construction
 /// dispatcher reads them, as far as a patch's foreign content needs.
-#[cfg(any(debug_assertions, test))]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Within {
     /// As HTML's: outside foreign content, and in an SVG or MathML HTML integration point.
@@ -722,18 +470,17 @@ struct Open {
 /// it is foreign content's and how what it holds is read. `None` for an element HTML's wherever it
 /// lands written straight in foreign content (`BREAKOUT`), which the browser takes out of it, closing
 /// the elements around it: not followed here, and `html!` refuses it.
-#[cfg(any(debug_assertions, test))]
 fn placed(within: Within, tag: &Tag) -> Option<(bool, Within)> {
     let is = |name: &str| tag.name.eq_ignore_ascii_case(name);
     let any = |list: &[&str]| list.iter().any(|name| is(name));
-    let breaks_out = any(BREAKOUT) || (is("font") && ["color", "face", "size"].iter().any(|a| tag.attr(a).is_some()));
+    let breaks_out = || any(BREAKOUT) || (is("font") && ["color", "face", "size"].iter().any(|a| tag.attr(a).is_some()));
     match within {
         Within::Html if is("svg") => Some((true, Within::Svg)),
         Within::Html if is("math") => Some((true, Within::Math)),
         Within::Html => Some((false, Within::Html)),
         Within::MathText if is("mglyph") || is("malignmark") => Some((true, Within::Math)),
         Within::MathText => placed(Within::Html, tag),
-        _ if breaks_out => None,
+        _ if breaks_out() => None,
         Within::Svg if any(SVG_HTML_POINTS) => Some((true, Within::Html)),
         Within::Svg => Some((true, Within::Svg)),
         Within::AnnotationXml if is("svg") => Some((true, Within::Svg)),
@@ -755,7 +502,6 @@ fn placed(within: Within, tag: &Tag) -> Option<(bool, Within)> {
 /// decoded, with or without its `;` (U+FFFD for one that is no character, which neither has),
 /// and `&sol;` and `&plus;`, the only named ones for a character of theirs (no named one
 /// is a letter). Any other is left as written, which neither is either way.
-#[cfg(any(debug_assertions, test))]
 fn encoding_decoded(value: &str) -> std::borrow::Cow<'_, str> {
     if !value.contains('&') {
         return value.into();
@@ -1182,11 +928,7 @@ fn integration_point(open: &[Open]) -> String {
 fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
     let shown = |written: &str| -> String {
         let shown: String = written.chars().take(80).collect();
-        if shown.len() < written.len() {
-            format!("{shown}..")
-        } else {
-            shown
-        }
+        if shown.len() < written.len() { format!("{shown}..") } else { shown }
     };
     let since = |first: &str| format!(", since {} comes first", shown(first));
     let bytes = html.as_bytes();
@@ -1492,16 +1234,17 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
         }
         // An HTML element's text, up to its end tag: nothing in it is markup. An SVG or MathML
         // `<title>`, `<style>` or `<script>` holds elements.
-        if !foreign_element && RAW_TEXT.contains(&name) {
+        let mode = Mode::of(name, false);
+        if !foreign_element && matches!(mode, Mode::Rcdata | Mode::Rawtext | Mode::Script) {
             let written_end = raw_text_end(html, i, name);
-            let end = if name == "script" { script_end(html, i) } else { written_end };
+            let end = if mode == Mode::Script { script_end(html, i) } else { written_end };
             if end == bytes.len() {
                 // No end tag the tokenizer reads: a `<!--` and a `<script` in a script's text can
                 // hide the one written after it (`html!` writes its text as is), and the rest of the
                 // patch is its text.
                 let after = html[written_end..].find('>').map_or(bytes.len(), |n| written_end + n + 1);
                 // An element written after it is lost; text and end tags only may be its own.
-                if problem.is_none() && start_tags(&html[after..]).any(|tag| tag.complete) {
+                if problem.is_none() && scan::tags(&html[after..], false).next().is_some() {
                     problem = Some(format!(
                         "what follows {} is read as its text, since a <!-- and a <script in its text hide its end tag",
                         shown(written)
@@ -1546,6 +1289,8 @@ fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
 #[cfg(test)]
 mod tests {
     use super::{patch_parse_problem, patch_problem};
+
+    const TEXT_ELEMENTS: &[&str] = &["script", "style", "textarea", "title", "xmp", "iframe", "noembed", "noframes"];
 
     /// A start tag's attributes are read past what a quoted value holds: `data-on`'s JSON, with
     /// `"` in it, can look like another attribute or the tag's end, and is not one.
@@ -1607,6 +1352,7 @@ mod tests {
         assert_eq!(patch_problem(r#"<template id="rows" data-append><tr><td>8</td></tr></template>"#), None);
         assert_eq!(patch_problem(""), None, "an empty patch changes nothing, and says so");
         assert_eq!(patch_problem("<!-- note --><p id=b>1</p>\n"), None);
+        assert_eq!(patch_problem(r#"<div id="a">1 <2</div><p>x</p>"#).as_deref(), Some("<p> has no id"));
         assert_eq!(
             patch_problem(r#"<div id="recovery">ok</div><div class="write-off"><form id="w">..</form></div>"#).as_deref(),
             Some(r#"<div class="write-off"> has no id"#),
@@ -2288,7 +2034,7 @@ mod tests {
             let svg = tag.name == "svg" || open.iter().any(|(shown, _)| shown.split('#').next() == Some("svg"));
             let name = if svg { &html[at + 1..at + 1 + tag.name.len()] } else { tag.name.as_str() };
             open.push((format!("{name}{id}"), Vec::new()));
-            if super::RAW_TEXT.contains(&tag.name.as_str()) {
+            if TEXT_ELEMENTS.contains(&tag.name.as_str()) {
                 // A script's text as the tokenizer ends it, or, where its text hides every end tag,
                 // as `html!` wrote it (to the end tag after its text).
                 let script = (tag.name == "script").then(|| super::script_end(html, i)).filter(|end| *end < html.len());
@@ -2416,10 +2162,14 @@ mod tests {
         assert_eq!(list("MATH_HTML_POINTS"), super::MATH_HTML_POINTS);
         assert_eq!(list("BREAKOUT"), super::BREAKOUT);
         let mut text = [list("RAW_TEXT"), list("TEXT_ONLY")].concat();
-        let mut raw_text = super::RAW_TEXT.to_vec();
+        let mut raw_text = TEXT_ELEMENTS.to_vec();
         text.sort();
         raw_text.sort();
         assert_eq!(text, raw_text, "the elements whose text is not markup");
+        assert!(raw_text.iter().all(|name| matches!(
+            super::Mode::of(name, false),
+            super::Mode::Rcdata | super::Mode::Rawtext | super::Mode::Script
+        )));
     }
 
     /// A seeded generator of patches: the shapes of \`patch-parsing.json\` (table parts, a
@@ -3119,7 +2869,7 @@ mod tests {
     /// `raw` is not read for what a table's reading does to it: the browser keeps it as text.
     #[test]
     fn a_text_element_s_markup_is_its_text() {
-        for holder in super::RAW_TEXT.iter().filter(|name| **name != "script") {
+        for holder in TEXT_ELEMENTS.iter().filter(|name| **name != "script") {
             let html = format!(r#"<tr id="r"></tr><{holder} id="x"><table><tr><td><form>x</form></td></tr></table></{holder}>"#);
             let parse = super::patch_parse(&html);
             assert_eq!((parse.problem, parse.unread), (None, None), "{html}");

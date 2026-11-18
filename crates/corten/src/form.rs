@@ -2153,15 +2153,45 @@ pub(crate) fn collect_hints<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
 /// argument in `data-on`, whose JSON keeps its quotes) is not taken for an attribute.
 #[cfg(debug_assertions)]
 pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> Option<&'a str> {
-    let tags: Vec<crate::html::Tag<'_>> = crate::html::start_tags(html).collect();
-    let by_id = |id: &str| tags.iter().find(|tag| tag.attr("id") == Some(id));
-    hints.iter().map(String::as_str).find(|hint| {
-        let Some(shown) = by_id(hint) else { return false };
-        if !has_text(html, shown) {
-            return false;
+    use crate::html::{text_shows, Event, Markup, Tag};
+
+    if hints.is_empty() {
+        return None;
+    }
+    let mut scan = Markup::new(html, page, true);
+    let mut tags: Vec<(Tag<'_>, bool)> = Vec::new();
+    let mut active: Vec<(usize, usize)> = Vec::new();
+    while let Some(event) = scan.next() {
+        let depth = scan.depth();
+        let parents = depth - usize::from(matches!(&event, Event::Start { opens: true, .. }));
+        while active.last().is_some_and(|&(depth, _)| depth > parents) {
+            active.pop();
         }
+        match event {
+            Event::Start { tag, opens, live: true } => {
+                if let Some(id) = tag.attr("id") {
+                    if opens && hints.iter().any(|hint| hint == id) {
+                        active.push((depth, tags.len()));
+                    }
+                    tags.push((tag, false));
+                }
+            }
+            Event::Text { text, literal } if !active.is_empty() => {
+                let shows = if literal { !text.trim_ascii().is_empty() } else { text_shows(text).unwrap_or(true) };
+                if shows {
+                    for (_, i) in active.drain(..) {
+                        tags[i].1 = true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let by_id = |id: &str| tags.iter().find(|(tag, _)| tag.attr("id") == Some(id));
+    hints.iter().map(String::as_str).find(|hint| {
+        let Some((_, true)) = by_id(hint) else { return false };
         let described = &hint[..hint.len() - "-hint".len()];
-        let Some(tag) = by_id(described) else { return page };
+        let Some((tag, _)) = by_id(described) else { return page };
         !tag.attr("aria-describedby").is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
     })
 }
@@ -2175,103 +2205,16 @@ pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> O
 #[cfg(debug_assertions)]
 pub(crate) fn keyless_submit_field(html: &str) -> Option<&str> {
     const EMPTY: &str = r#"" data-submit>"#;
-    let mut templates = Templates::default();
-    let mut from = 0;
-    while let Some(found) = html[from..].find(EMPTY) {
-        let end = from + found + EMPTY.len();
-        if !templates.inert_at(html, end) {
-            return Some(&html[html[..end].rfind("<input").unwrap_or(0)..end]);
-        }
-        from = end;
+    if !html.contains(EMPTY) {
+        return None;
     }
-    None
-}
-
-/// How deep a scan of markup is in `<template>`s, read on from where it last stopped, so the
-/// markup is read once however many fields it holds. It reads the markup `html!` writes, where a
-/// `<` in text or a value is `&lt;`; it does not parse literal `<script>` or `<style>` text,
-/// comments or `raw(..)`, so a `<template` in them can mislead this debug check.
-#[cfg(debug_assertions)]
-#[derive(Default)]
-struct Templates {
-    /// Where the scan stopped.
-    at: usize,
-    /// The `<template>`s open there.
-    depth: usize,
-    /// The depth of the outermost one open whose content the parser keeps out of the page. A
-    /// declarative shadow root (`<template shadowrootmode="open">` or `"closed"`) is not one: its
-    /// content is in the page.
-    inert: Option<usize>,
-}
-
-#[cfg(debug_assertions)]
-impl Templates {
-    /// Reads `html` on to `end` and says whether `end` is inside an inert `<template>`. A start
-    /// or end tag's name ends at `>`, `/` or whitespace, so a custom element such as
-    /// `<template-picker>` is not one, and is matched ASCII case-insensitively, as the parser does.
-    fn inert_at(&mut self, html: &str, end: usize) -> bool {
-        const NAME: &[u8] = b"template";
-        let bytes = html.as_bytes();
-        while let Some(found) = html.get(self.at..end).and_then(|text| text.find('<')) {
-            let closing = bytes.get(self.at + found + 1) == Some(&b'/');
-            let name = self.at + found + 1 + usize::from(closing);
-            self.at = name;
-            if !bytes.get(name..name + NAME.len()).is_some_and(|text| text.eq_ignore_ascii_case(NAME)) {
-                continue;
-            }
-            self.at = name + NAME.len();
-            let rest = &html[self.at..];
-            if !rest.starts_with(|c: char| c == '>' || c == '/' || c.is_ascii_whitespace()) {
-                continue;
-            }
-            if closing {
-                if self.inert == Some(self.depth) {
-                    self.inert = None;
-                }
-                self.depth = self.depth.saturating_sub(1);
-            } else {
-                self.depth += 1;
-                // A declarative shadow root takes `open` or `closed`, in any case; with no value or
-                // another one, the template is inert (the HTML standard's `shadowrootmode`).
-                let tag = crate::html::start_tag(html, name - 1);
-                self.at = self.at.max(tag.end);
-                let shadow_root = tag
-                    .attr("shadowrootmode")
-                    .is_some_and(|mode| mode.eq_ignore_ascii_case("open") || mode.eq_ignore_ascii_case("closed"));
-                if self.inert.is_none() && !shadow_root {
-                    self.inert = Some(self.depth);
-                }
-            }
-        }
-        self.inert.is_some()
-    }
-}
-
-/// Whether the element whose start tag is `tag` has text other than white space, in it or in an
-/// element inside it.
-#[cfg(debug_assertions)]
-fn has_text(html: &str, tag: &crate::html::Tag<'_>) -> bool {
-    let name = tag.name.as_str();
-    let (mut rest, mut depth) = (&html[tag.end..], 1usize);
-    while depth > 0 && !rest.is_empty() {
-        match rest.find('<') {
-            Some(lt) => {
-                if !rest[..lt].trim().is_empty() {
-                    return true;
-                }
-                let tag = &rest[lt..];
-                let gt = tag.find('>').unwrap_or(tag.len() - 1);
-                if let Some(closing) = tag.strip_prefix("</") {
-                    depth -= usize::from(closing.starts_with(name));
-                } else if tag[1..].starts_with(name) && !tag[..gt].ends_with('/') {
-                    depth += 1;
-                }
-                rest = &tag[gt + 1..];
-            }
-            None => return !rest.trim().is_empty(),
-        }
-    }
-    false
+    // With scripting off, a noscript fallback form also needs a key of its own.
+    crate::html::Markup::new(html, true, false).find_map(|event| {
+        let crate::html::Event::Start { tag, live: true, .. } = event else { return None };
+        let written = &html[tag.start..tag.end];
+        (tag.name == "input" && tag.attr("data-submit") == Some("") && tag.attr("value").is_none() && written.ends_with(EMPTY))
+            .then_some(written)
+    })
 }
 
 /// A form field's control's attributes, from [`Within::control`].
