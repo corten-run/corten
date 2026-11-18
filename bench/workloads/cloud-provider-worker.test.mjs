@@ -11,6 +11,7 @@ import { productionMain } from "./cloud-production.mjs";
 import { publicError } from "./droplet.mjs";
 import { providerDiagnostic } from "./cloud-options.mjs";
 import { accountId, campaign, commit, context, harness as controllerHarness, subject, syntheticDelivery } from "./cloud-fixtures.mjs";
+import { settlementControl } from "./test-fixtures/provider-settlement-control.mjs";
 
 const account = ["account", "get", "--output", "json", "--context", "synthetic-worker-context"];
 function harness(t, mode = "success", transform = (value) => value, interrupted = () => false, receive = (value) => value) {
@@ -321,24 +322,15 @@ test("normal collect retires a refused create through the actual worker without 
 
 test("approved productionMain reaps the actual clean worker and retains locks for uncertain create", async (t) => {
   for (const mode of ["success", "hang-create", "withhold-close", "post-invalid-action-id", "first-action-http-failure", "zero-resource-create", "create-http-failure"]) await t.test(mode, async (t) => {
-  const h = controllerHarness(t), workers = [];
+  const h = controllerHarness(t, { active: true }), workers = [];
   let approval;
   const interrupted = () => {
     if (mode !== "hang-create" || !workers[1]) return false;
     try { return workers[1].state().calls.some((value) => value.method === "POST"); } catch { return false; }
   };
-  const deps = { repo: h.repo, interrupted, sleep: async () => {}, inspect: async () => h.report(), write(value) { approval = JSON.parse(value).approvalSha256; },
-    providerFactory({ interrupted }) { const w = harness(t, mode, undefined, interrupted); workers.push(w); return w.run; },
-    spawn(binary, argv, options) {
-      assert.notEqual(binary, "doctl", "parent must never consume a provider credential");
-      if (binary === "git" && argv[0] === "show") return { status: 0, stdout: readFileSync(resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") };
-      const args = [...argv];
-      if (binary === "ssh") args[args.length - 1] = options.input.replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
-      const result = h.run(binary, args, options.timeout);
-      if (binary === "ssh" && args.at(-1).startsWith("systemctl show"))
-        result.stdout = result.stdout.replaceAll(/corten-bench-groups-r21-[a-f0-9]{16}\.service/g, h.saved().unit);
-      return result;
-    } };
+  const deps = { ...settlementControl(t, h), repo: h.repo, interrupted, sleep: async () => {}, inspect: async () => h.report(),
+    write(value) { approval = JSON.parse(value).approvalSha256; },
+    providerFactory({ interrupted }) { const w = harness(t, mode, undefined, interrupted); workers.push(w); return w.run; } };
   const args = ["r21", "--state-dir", h.base, "--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   assert.equal(await productionMain([...args, "--print-approval"], deps), 3);
   assert.equal(workers[0].launches, 0);
@@ -362,6 +354,10 @@ test("approved productionMain reaps the actual clean worker and retains locks fo
   const unboundFailure = ["hang-create", "create-http-failure"].includes(mode);
   const knownFailure = ["post-invalid-action-id", "first-action-http-failure"].includes(mode);
   assert.equal(h.saved().status, unboundFailure ? "creating" : knownFailure ? "preparing" : "running");
+  if (completed || mode === "withhold-close") {
+    assert.equal(h.saved().control.monitor.phase, "closed");
+    assert.ok(h.saved().control.sealed.includes("bootstrap"));
+  }
   if (unboundFailure || knownFailure) {
     assert.equal(Object.hasOwn(h.saved(), "id"), knownFailure);
     assert.equal(h.calls.some(([binary]) => binary === "ssh" || binary === "scp"), false);

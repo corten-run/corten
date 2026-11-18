@@ -3,12 +3,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { accountId, commit, context, harness } from "./cloud-fixtures.mjs";
 import { productionMain } from "./cloud-production.mjs";
 import { createProviderEngine } from "./cloud-engine-test-fixture.mjs";
+import { settlementControl } from "./test-fixtures/provider-settlement-control.mjs";
 
 function nativeHarness(t, attack = null) {
   const h = harness(t, { active: true }), configPath = join(h.temp, "synthetic-config.yaml"), ledgerPath = join(h.temp, "synthetic-ledger.json");
@@ -16,17 +17,15 @@ function nativeHarness(t, attack = null) {
   writeFileSync(configPath, JSON.stringify(config("A")), { mode: 0o600 });
   writeFileSync(ledgerPath, JSON.stringify({ hosts: { A: [], B: [] }, mutations: [], calls: [], restoreOriginal: attack !== null }));
   let rebound = false, approval;
+  const control = settlementControl(t, h);
   const spawn = (binary, argv, options) => {
-    if (binary === "git" && argv[0] === "show") return { status: 0, stdout: readFileSync(resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") };
     if (binary === "doctl") {
       assert.deepEqual(argv.slice(0, 2), ["auth", "token"], "only credential consumption may run doctl");
       const result = spawnSync(process.execPath, [fileURLToPath(new URL("cloud-credentials-fixture.mjs", import.meta.url)), configPath, ledgerPath, h.statePath, ...argv],
         { ...options, env: {}, timeout: 5000 });
       return result;
     }
-    const args = [...argv];
-    if (binary === "ssh") args[args.length - 1] = options.input.replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
-    return h.run(binary, args, options.timeout);
+    return control.spawn(binary, argv, options);
   };
   const providerRequest = async ({ method, path, body, credential, timeout }) => {
     if (path === "/v2/actions/456") return { status: 200, value: { action: { id: 456, resource_id: 123, resource_type: "droplet", type: "create", status: "completed" } } };
@@ -42,18 +41,20 @@ function nativeHarness(t, attack = null) {
       ...argv, "--context", context, "--synthetic-rest-stdin"], { env: {}, input: JSON.stringify({ credential }), encoding: "utf8", timeout: 5000 });
     assert.equal(result.status, 0); const value = JSON.parse(result.stdout);
     if (path === "/v2/account") return { status: 200, value: { account: value } };
+    if (argv[2] === "get" && value.length === 0) return { status: 404, value: null };
     if (method === "GET") return { status: 200, value: argv[2] === "get" ? { droplet: value[0] } : { droplets: value, meta: { total: value.length }, links: {} } };
     // Keep fake SSH/systemd state in sync. Only the native ledger determines
     // which account actually mutated; no credential is in the child's argv/env.
     h.run("doctl", [...argv, "--context", context], timeout);
     return { status: 202, value: { droplet: value[0], links: { actions: [{ id: 456, rel: "create", href: "https://api.digitalocean.com/v2/actions/456" }] } } };
   };
-  const deps = { spawn, providerRequest, repo: h.repo, inspect: async () => h.report(), sleep: async () => {}, write(value) { approval = JSON.parse(value).approvalSha256; } };
+  const deps = { ...control, spawn, providerRequest, repo: h.repo, inspect: async () => h.report(), sleep: async () => {}, write(value) { approval = JSON.parse(value).approvalSha256; } };
   deps.providerFactory = ({ repo, interrupted }) => Object.assign(createProviderEngine({ repo, interrupted, spawn, request: providerRequest, sleep: deps.sleep }), { close: async () => {} });
   const args = (detach) => ["r21", "--state-dir", h.base, ...(detach ? ["--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context] : ["--collect"])];
-  async function action(detach = false) {
-    const values = args(detach); await productionMain([...values, "--print-approval"], deps);
-    return productionMain([...values, "--approve-reviewed-merged-ready", approval], deps);
+  async function action(detach = false, sleep = deps.sleep) {
+    const values = args(detach), options = { ...deps, sleep };
+    await productionMain([...values, "--print-approval"], options);
+    return productionMain([...values, "--approve-reviewed-merged-ready", approval], options);
   }
   return { h, action, configPath, ledgerPath, config, ledger: () => JSON.parse(readFileSync(ledgerPath)), get rebound() { return rebound; } };
 }
@@ -69,6 +70,7 @@ function assertMatchingProbes(p, command) {
 
 test("native saved-context ordinary positive mutates only its approved synthetic account", { timeout: 60000 }, async (t) => {
   const p = nativeHarness(t); assert.equal(await p.action(true), 3);
+  assert.equal(p.h.saved().control.monitor.phase, "closed");
   assert.equal(p.ledger().hosts.A.length, 1); assert.equal(p.ledger().hosts.B.length, 0);
   assert.deepEqual(p.ledger().mutations, [{ operation: "create", account: "A" }]);
   assert.equal(p.ledger().calls.filter(({ command }) => command === "consume").length, 1);
@@ -96,10 +98,18 @@ test("native rebind-restore empty foreign host lookup cannot confirm the origina
   ledger.hosts.A = [{ id: 123, name: state.name, tags: ["corten-bench", "corten-bench-groups", state.tag], size_slug: state.host.size,
     region: { slug: state.host.region }, networks: { v4: [{ type: "public", ip_address: state.ip }] } }];
   writeFileSync(p.ledgerPath, JSON.stringify(ledger));
-  await p.action().catch(() => {});
+  // Spend the remaining confirmation budget after the first full observation,
+  // rather than starting hundreds of native fixture children on Windows.
+  const wallNow = Date.now; let advancedMs = 0;
+  t.mock.method(Date, "now", () => wallNow() + advancedMs);
+  await assert.rejects(p.action(false, async () => { advancedMs += 120000; }), /deletion not confirmed/);
+  assert.equal(advancedMs, 120000);
   assert.equal(p.rebound, true); assert.equal(p.ledger().hosts.A.length, 1);
   assert.equal(p.ledger().calls.filter(({ command }) => command === "consume").length, 1);
   assertMatchingProbes(p, "get");
+  assert.deepEqual(p.ledger().calls.slice(-3), [
+    { command: "account", account: "A" }, { command: "get", account: "A" }, { command: "account", account: "A" },
+  ]);
   assert.deepEqual(JSON.parse(readFileSync(p.configPath)), p.config("A"));
   assert.ok(!p.h.saved().destroyedAt, "P1: absence in rebound account falsely confirmed destruction of an existing original host");
 });

@@ -13,9 +13,15 @@ Corten is pre-1.0, so any minor version may change the API.
   Subject prefixes follow the same rules with a 255-byte limit. The relay logs and drops
   pending rows with invalid legacy keys instead of stopping other feeds. No schema change;
   publish and acknowledgement errors still retry.
+- Every `corten` command accepts `--help` and `-h`, printing its own usage and exiting
+  successfully without running the command; `corten help <command>` prints the same and refuses an
+  unknown command. An option given twice (`--name`, `--corten-path`, `--port`) is refused instead of
+  taking the first. `corten check` reports each step and its elapsed time on stderr, including in
+  redirected logs, while preserving Cargo's output.
+- The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
+  `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
-
 - JSON benchmark v2 keeps classified target failures separate from apparatus
   faults, retains verified phases of incomplete passes, and leaves independently
   complete peers comparable. Raw stock-load output, counted resources, source
@@ -24,7 +30,6 @@ Corten is pre-1.0, so any minor version may change the API.
   evidence retains its original exact fixed-offer and zero-error verifier.
   The campaign carries independently reviewed v2 transport receipts from the
   cloud inbox through timing replay; a version label alone is not an audit.
-
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
@@ -38,6 +43,10 @@ Corten is pre-1.0, so any minor version may change the API.
   Saved worker evidence joins every preflight to the timed upstream and the
   apparatus source hashes to the bound measured commit; failed capacity checks
   remain unqualified rather than attributed to the measured framework.
+
+- The catalog benchmark keeps one supervised control connection off the measured
+  cores. Losing that connection does not authorize deleting an active droplet.
+  Collection replays the saved control evidence before authorizing cleanup.
 
 - Preserve every client benchmark candidate's not-run record when policy input
   is invalid or missing. Such attempts still fail before any native build.
