@@ -158,7 +158,7 @@ impl Module {
             types.extend(q("(__A0, ::corten::script::__private::ts::<__A1>()),", &[literal(name), ty]));
         }
         q(
-            "{ __A5 ::corten::script::Script { name: __A0, file: __A1, source: __A2, handlers: &[__A3], events: &[__A4], imports: &[__A6], types: &[__A7] } }",
+            "{ __A5 ::corten::__script_literal!({ name: __A0, file: __A1, source: __A2, handlers: &[__A3], events: &[__A4], imports: &[__A6], }, &[__A7]) }",
             &[literal(&self.name), literal(&self.file), literal(&self.served), names, events, checks, siblings, types],
         )
     }

@@ -1593,6 +1593,7 @@ mod tests {
             handlers: &["f"],
             events: &[],
             imports: &[],
+            #[cfg(feature = "types")]
             types: &[],
         }),
         style: None,
@@ -1660,7 +1661,16 @@ mod tests {
         const fn script(name: &'static str, imports: &'static [&'static str]) -> Component {
             Component {
                 name,
-                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports, types: &[] }),
+                script: Some(crate::Script {
+                    name,
+                    file: name,
+                    source: name,
+                    handlers: &[],
+                    events: &[],
+                    imports,
+                    #[cfg(feature = "types")]
+                    types: &[],
+                }),
                 style: None,
                 event: None,
                 view: None,
@@ -1693,7 +1703,16 @@ mod tests {
         const fn script(name: &'static str, imports: &'static [&'static str]) -> Component {
             Component {
                 name,
-                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports, types: &[] }),
+                script: Some(crate::Script {
+                    name,
+                    file: name,
+                    source: name,
+                    handlers: &[],
+                    events: &[],
+                    imports,
+                    #[cfg(feature = "types")]
+                    types: &[],
+                }),
                 style: None,
                 event: None,
                 view: None,
@@ -1755,6 +1774,7 @@ mod tests {
                 handlers: &[],
                 events: &[],
                 imports: &[],
+                #[cfg(feature = "types")]
                 types: &[],
             }),
             style: None,
@@ -1771,6 +1791,7 @@ mod tests {
                 handlers: &[],
                 events: &[],
                 imports: &[],
+                #[cfg(feature = "types")]
                 types: &[],
             }),
             style: None,
@@ -1792,7 +1813,16 @@ mod tests {
         const fn script(name: &'static str, imports: &'static [&'static str]) -> Component {
             Component {
                 name,
-                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports, types: &[] }),
+                script: Some(crate::Script {
+                    name,
+                    file: name,
+                    source: name,
+                    handlers: &[],
+                    events: &[],
+                    imports,
+                    #[cfg(feature = "types")]
+                    types: &[],
+                }),
                 style: None,
                 event: None,
                 view: None,
@@ -1850,6 +1880,7 @@ mod tests {
                 handlers: &[],
                 events: &[SAVED],
                 imports: &[],
+                #[cfg(feature = "types")]
                 types: &[],
             }),
             style: None,
@@ -1887,6 +1918,7 @@ mod tests {
                 handlers: &["f"],
                 events: &[TOGGLED],
                 imports: &[],
+                #[cfg(feature = "types")]
                 types: &[],
             }),
             style: None,

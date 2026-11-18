@@ -73,6 +73,12 @@ including the types those values contain. Use `Types::add` for other types, such
 screen data the script receives from a URL. A type already collected through a component or
 added by hand is declared only once.
 
+If two Rust types have the same name, the generator numbers later declarations (for example,
+`Payload2`), just as it does for types reached through `Types::add`. Type generation fails if
+a handler's JSDoc imports a different name from the declaration for its Rust type. Give
+same-named handler argument types distinct Rust names. A renamed Rust alias does not create a
+declaration: use the underlying type's declared name, or define a newtype that derives `ToJson`.
+
 ### Where the types come from
 
 `#[derive(ToJson)]` describes the JSON it writes (`corten::json::schema::ToJsonSchema`) and

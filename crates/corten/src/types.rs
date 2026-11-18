@@ -64,16 +64,18 @@ impl Types {
         self
     }
 
-    fn add_schema(&mut self, describe: TsType, source: &str) {
+    fn add_schema(&mut self, describe: TsType, source: &str) -> Value {
         let schema = describe(&mut self.generator);
         self.generator.missing(source);
         assert!(schema.get("$ref").is_some(), "{source}: the type has no declaration of its own; use a type that derives ToJson");
+        schema
     }
 
     /// Adds the typed events among the app's components (the list it gives `App::components`)
     /// and those their scripts import, to `corten/events`, with the types of their fields, and the
     /// views (`#[component(view)]`) to `corten/views`. Also adds the named `ToJson` types the
     /// scripts' checked handler parameters use, and the types those refer to.
+    /// Panics if a handler imports a different name from the one assigned to its Rust type.
     pub fn components(mut self, components: &[crate::Component]) -> Self {
         for view in components.iter().filter_map(|c| c.view) {
             self.views.insert(view.class, view.ts);
@@ -97,7 +99,17 @@ impl Types {
         }
         for script in components.iter().filter_map(|c| c.script.as_ref()) {
             for &(name, describe) in script.types {
-                self.add_schema(describe, &format!("{}: handler argument {name}", script.file));
+                let source = format!("{}: handler argument {name}", script.file);
+                let schema = self.add_schema(describe, &source);
+                let declared = schema["$ref"]
+                    .as_str()
+                    .and_then(|reference| reference.strip_prefix("#/$defs/"))
+                    .filter(|declared| self.generator.has_definition(declared))
+                    .unwrap_or_else(|| panic!("{source}: the Rust type's schema has no local declaration ({})", schema["$ref"]));
+                assert!(
+                    declared == name,
+                    "{source} resolves to `{declared}` instead of `{name}`; use an unambiguous Rust type name and import its generated declaration in JSDoc"
+                );
             }
         }
         self
@@ -374,6 +386,74 @@ mod tests {
         assert_eq!(Types::new().add::<Change>().components(&[ReportChange, ConfirmChange]).typescript(), types);
         assert_eq!(Types::new().components(&[ReportChange, ConfirmChange]).add::<Change>().typescript(), types);
         report.sync(concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/types/app.d.ts"));
+    }
+
+    mod alternative {
+        #[derive(crate::ToJson)]
+        pub(super) struct Change {
+            applied: bool,
+        }
+
+        #[crate::component(js)]
+        #[allow(dead_code)]
+        pub(super) fn AlternativeChange(change: Change) -> impl crate::Render {
+            crate::html! { <button type="button" on:click={js::report(change)}>"Report"</button> }
+        }
+    }
+
+    #[test]
+    fn same_named_handler_types_are_refused_in_either_order() {
+        for (first, second, file) in [
+            (ConfirmChange, alternative::AlternativeChange, "alternative_change.js"),
+            (alternative::AlternativeChange, ConfirmChange, "confirm_change.js"),
+        ] {
+            assert_type_error(
+                || Types::new().components(&[first, second]).typescript(),
+                &format!("{file}: handler argument Change resolves to `Change2` instead of `Change`"),
+            );
+        }
+    }
+
+    #[test]
+    fn a_handler_cannot_import_a_name_taken_by_an_added_or_nested_type() {
+        #[derive(ToJson)]
+        struct Envelope {
+            change: alternative::Change,
+        }
+
+        let expected = "confirm_change.js: handler argument Change resolves to `Change2` instead of `Change`";
+        assert_type_error(|| Types::new().add::<alternative::Change>().components(&[ConfirmChange]).typescript(), expected);
+        assert_type_error(|| Types::new().add::<Envelope>().components(&[ConfirmChange]).typescript(), expected);
+
+        // The same numbering still works when only one type is named in a handler's JSDoc.
+        let declarations = Types::new().components(&[ConfirmChange]).add::<Envelope>().typescript();
+        assert!(declarations.contains("export type Change = "), "{declarations}");
+        assert!(declarations.contains("export interface Change2 {\n  applied: boolean;"), "{declarations}");
+        assert!(declarations.contains("change: Change2;"), "{declarations}");
+    }
+
+    mod renamed {
+        type Change = super::Card;
+
+        #[crate::component(js)]
+        #[allow(dead_code)]
+        pub(super) fn AliasedChange(change: Change) -> impl crate::Render {
+            crate::html! { <button type="button" on:click={js::report(change)}>"Report"</button> }
+        }
+    }
+
+    #[test]
+    fn a_renamed_handler_type_does_not_declare_an_alias() {
+        assert_type_error(
+            || Types::new().components(&[renamed::AliasedChange]).typescript(),
+            "aliased_change.js: handler argument Change resolves to `Card` instead of `Change`",
+        );
+    }
+
+    fn assert_type_error(generate: impl FnOnce() -> String + std::panic::UnwindSafe, expected: &str) {
+        let error = std::panic::catch_unwind(generate).expect_err("declaration generation should fail");
+        let message = error.downcast_ref::<String>().expect("a formatted diagnostic");
+        assert!(message.contains(expected), "{message}");
     }
 
     #[test]

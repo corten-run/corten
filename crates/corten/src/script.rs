@@ -1522,8 +1522,29 @@ pub struct Script {
     /// `"stripe"`): a page that loads it preloads them, and the app must list them.
     pub imports: &'static [&'static str],
     /// The names and schemas of the JSON values its checked handlers take, for type generation.
+    #[cfg(feature = "types")]
     #[doc(hidden)]
     pub types: &'static [(&'static str, __private::TsType)],
+}
+
+/// Builds a script literal with the offline metadata only when Corten has the types feature.
+#[cfg(feature = "types")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __script_literal {
+    ({ $($fields:tt)* }, $types:expr) => {
+        $crate::script::Script { $($fields)* types: $types }
+    };
+}
+
+/// Builds a script literal without offline metadata when Corten lacks the types feature.
+#[cfg(not(feature = "types"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __script_literal {
+    ({ $($fields:tt)* }, $types:expr) => {
+        $crate::script::Script { $($fields)* }
+    };
 }
 
 /// A typed DOM event, from [`event`]: its name in the page and its fields, for the class the

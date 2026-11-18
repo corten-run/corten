@@ -156,6 +156,10 @@ impl Generator {
         self.defs.iter().filter_map(|(name, schema)| Some((name.clone(), schema.clone()?))).collect()
     }
 
+    pub(crate) fn has_definition(&self, name: &str) -> bool {
+        self.defs.get(name).is_some_and(Option::is_some)
+    }
+
     /// The definition a `$ref` names.
     pub fn resolve<'a>(&'a self, schema: &'a Value) -> &'a Value {
         match schema.get("$ref").and_then(Value::as_str).and_then(|r| r.strip_prefix("#/$defs/")) {
