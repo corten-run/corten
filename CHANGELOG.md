@@ -12,6 +12,8 @@ Corten is pre-1.0, so any minor version may change the API.
   either. The starter and seven example images build with `--locked` too, instead of resolving a
   different graph during deployment; card-market's waits on its paired benchmark recipe
   ([#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)).
+- The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
+  `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 - JSON benchmark v2 keeps classified target failures separate from apparatus
@@ -27,6 +29,9 @@ Corten is pre-1.0, so any minor version may change the API.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
+- Give maintainers one [release runbook](RELEASING.md) for deciding readiness, shipping urgent and
+  security patches, publishing, verifying public packages and binaries, and recovering from failed
+  releases.
 - The catalog benchmark uses a fixed two-worker upstream within its existing CPU
   and memory budget, retaining per-process headroom and a first-host preflight.
   Saved worker evidence joins every preflight to the timed upstream and the
@@ -1839,7 +1844,7 @@ their names, and has no tag or release.
     `.github/workflows/release.yml`: the checks, a static `corten` binary for Linux (x86_64,
     aarch64), macOS (x86_64, aarch64) and Windows, `cargo publish --workspace`, and a GitHub
     release with the binaries and the changelog section. `cargo binstall corten-cli` downloads
-    the binary. `CONTRIBUTING.md` (Releasing) has the steps, including the first release.
+    the binary. The [release runbook](RELEASING.md) has the steps, including the first release.
 19. `.github/workflows/ci.yml` runs the checks in `CONTRIBUTING.md` on every pull request and
     push to `main`, plus `cargo publish --workspace --dry-run` and a build on Rust 1.88.
 20. List fields. `corten::Form` and a route's `Params` (Added 116) read a key
@@ -8928,12 +8933,13 @@ their names, and has no tag or release.
     Corten copies the state into each route, method slot and request and a handler takes the whole
     state through a `Clone`-bounded `FromRef`; the Choice is revisited when neither needs `Clone`
     ([#1227 Design Choice 33 still stands on axum's MethodRouter and axum-core's FromRef impl, which Corten stopped calling when axum left, so its premise and Revisit-when name code Corten does not run](https://github.com/corten-run/corten/issues/1227)).
-86. CONTRIBUTING's release steps leave every published crate accepting trusted publishing only and
-    owned by the `github:corten-run:maintainers` team as well as the account that published it, so
-    only `release.yml`, approved in the `release` environment, can publish a version; a release
-    that adds a crate first allows token publishing again on the crates already published, since
+86. The [release steps](RELEASING.md#publishing-and-ownership) leave every published crate accepting
+    trusted publishing only and owned by the `github:corten-run:maintainers` team as well as the
+    account that published it, so only `release.yml`, approved in the `release` environment, can
+    publish a version; a release that adds a crate first allows token publishing on existing crates, since
     the workflow publishes every crate in the run with the token; a crate's trusted publisher is
-    checked as well as added, and step 2 names every file that carries the version
+    checked as well as added, and the [preparation checklist](RELEASING.md#prepare-the-candidate)
+    names the files that carry the version
     ([#1238 CONTRIBUTING's release steps leave a new crate open to token publishing and owned by one account: turn on trusted publishing only and add the maintainers team](https://github.com/corten-run/corten/issues/1238)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
