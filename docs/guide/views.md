@@ -489,9 +489,12 @@ keeps a copy of the request's head on a preferred submit or a swap write that re
 middleware. It keeps the head even if middleware removes the preference: the handler may still set
 `req.mode = Mode::Document`. A fragment starts no layout reads.
 A handler forwarding the request into another Corten router does not suppress that router's
-layout reads. The receiving router decides whether to fill the page in its own dispatch.
-Its optional reads stop at the earliest active deadline, even if the receiving router has no
-deadline of its own.
+layout reads. Each app's layout reads follow its own deadline. When one Corten app forwards a
+write to another, the outer app's request timer still bounds the whole response. Set the inner
+app's deadline no longer than the outer app's if the outer app should answer with the slow places
+empty rather than time out, leaving room for any work before forwarding. With an outer one-second
+deadline, an inner app with `deadline(None)` waiting on a two-second read will get cut off and the
+outer app will answer 503.
 A handler that answers only patches (`req.patch_or`, `action.patch`, `req.invalid`) can return
 `HtmlResult<Patches>` to skip the typed route's copy. With no middleware that could answer a
 page in its place, it skips whole-page negotiation and late filling too. Middleware or a raw
