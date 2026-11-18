@@ -53,7 +53,9 @@ the token. A comment directly between two parts of a selector or an `@scope` pre
 be kept or removed safely by the scoper. Write the intended selector without it: for a
 compound selector, write `.list.selected`, not `.list/**/.selected`.
 The scoper also refuses a custom property value with a `{ ... }` block at its outer level
-rather than treating it as a nested rule. Give the block's contents as a plain value instead.
+rather than treating it as a nested rule. Removing the braces would turn the block's
+declarations into real ones, so put such a declaration in the app's `static/style.css`. A block
+inside a function or square brackets (`--x: f({ .. })`) is kept as written.
 Both restrictions can be lifted by
 [#1602 Component stylesheets need one CSS Syntax tokenizer shared by the macro and the startup scanner](https://github.com/corten-run/corten/issues/1602).
 Component class names use ASCII without escapes; a nonbreaking space is part of a

@@ -823,7 +823,7 @@ impl Scoper<'_> {
                 if starts_custom_property(&self.text[source.clone()]) {
                     return Err(self.error(
                         start,
-                        "a custom property whose value holds a { } block is not supported in a component stylesheet yet (#1602); give the block's contents as a plain value",
+                        "a custom property whose value holds a { } block at its outer level is not supported in a component stylesheet yet (#1602); put that declaration in the app's stylesheet (static/style.css)",
                     ));
                 }
                 self.i += 1;
@@ -2401,7 +2401,7 @@ mod tests {
                 let error = scope(&css, "x").unwrap_err();
                 assert_eq!(
                     error,
-                    format!("line {line}: a custom property whose value holds a {{ }} block is not supported in a component stylesheet yet (#1602); give the block's contents as a plain value"),
+                    format!("line {line}: a custom property whose value holds a {{ }} block at its outer level is not supported in a component stylesheet yet (#1602); put that declaration in the app's stylesheet (static/style.css)"),
                     "{css}"
                 );
             }
@@ -2413,6 +2413,11 @@ mod tests {
         let sheet = scope(".a{--x: 1px; &:hover{} .b{}}", "x").unwrap();
         assert_eq!(sheet.css, ".x__a{--x:1px;&:hover{}.x__b{}}");
         assert_eq!(sheet.classes, ["a", "b"]);
+        // A block inside a function or square brackets is part of the value, as browsers read it.
+        for (value, expected) in [("f({color:red})", "f({color:red})"), ("[{color:red}]", "[{color:red}]")] {
+            let sheet = scope(&format!(".a{{--x: {value}; color:blue}}"), "x").unwrap();
+            assert_eq!(sheet.css, format!(".x__a{{--x:{expected};color:blue}}"));
+        }
         let sheet = scope("@scope (.a){--x/**/: 1px; .b{}}", "x").unwrap();
         assert_eq!(sheet.css, "@scope (.x__a){--x:1px;.x__b{}}");
         assert_eq!(sheet.classes, ["a", "b"]);
@@ -3056,7 +3061,7 @@ mod tests {
             ("crossed_selector_after_not.css", "mismatched selector block"),
             ("non_ascii_class.css", "non-ASCII characters in a class name"),
             ("joined_selector_comment.css", "a comment directly between two parts of a selector"),
-            ("braced_custom_property.css", "line 2: a custom property whose value holds a { } block"),
+            ("braced_custom_property.css", "line 2: a custom property whose value holds a { } block at its outer level"),
             (
                 "invalid_scope_ampersand.css",
                 "`p` styles elements this component does not own: `@scope (:is(main, [foo=&]))` can start outside the component",

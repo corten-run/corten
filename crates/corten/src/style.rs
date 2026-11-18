@@ -455,7 +455,7 @@
 //! ```
 //!
 //! A custom property value with a `{ ... }` block at its outer level is refused rather
-//! than read as a nested rule. Give the block's contents as a plain value instead.
+//! than read as a nested rule. Put such a declaration in the app's `static/style.css`.
 //!
 //! ```compile_fail
 //! use corten::prelude::*;
