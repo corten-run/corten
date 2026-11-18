@@ -488,6 +488,8 @@ In an app with layout reads a typed write route whose answer type can be a page 
 keeps a copy of the request's head on a preferred submit or a swap write that reaches it through
 middleware. It keeps the head even if middleware removes the preference: the handler may still set
 `req.mode = Mode::Document`. A fragment starts no layout reads.
+A handler forwarding the request into another Corten router does not suppress that router's
+layout reads. The receiving router decides whether to fill the page in its own dispatch.
 A handler that answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) can return
 `HtmlResult<Patches>` to skip the typed route's copy. With no middleware that could answer a
 page in its place, it skips whole-page negotiation and late filling too. Middleware or a raw
@@ -511,7 +513,7 @@ async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> H
 ```
 
 Either way there is one answer that brings a layout read up to date after a write, a page: the page
-the write redirects to, or its own ([design Choice 63](../design.md#choice-write-own-page-whole)).
+the write redirects to, or its own ([design Choice 64](../design.md#choice-write-own-page-whole)).
 
 A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}>"News"</a>`:
 `href`, `data-nav` and `aria-current="page"` when it is the page (`req.nav_section` for a link

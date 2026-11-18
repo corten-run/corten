@@ -1553,6 +1553,41 @@ async function run(browser) {
     return button && menu && { gap: Math.max(menu.top - button.bottom, button.top - menu.bottom), left: menu.left - button.left };
   });
   check("the menu is anchored to its button", !!menuBox && menuBox.gap >= 0 && menuBox.gap <= 8 && Math.abs(menuBox.left) <= 1, JSON.stringify(menuBox));
+  // Put the real MenuButton at the viewport's bottom: its component-local option, not the
+  // built-in flip-block tactic, must move the menu above the button.
+  await trigger.evaluate((button) => button.scrollIntoView({ block: "end" }));
+  // Right after the scroll the menu can still be drawn where it was, which is above the moved
+  // button too, before the browser chooses a position option again: wait for the menu against
+  // the button's top with the option applied, and report what there is if that never comes.
+  // (Both are functions, not strings: the page's Trusted Types policy refuses a string eval.)
+  const placed = () => {
+    const button = document.querySelector("#actions-button");
+    const menu = document.querySelector("#actions");
+    if (!button || !menu) return null;
+    const b = button.getBoundingClientRect();
+    const m = menu.getBoundingClientRect();
+    const style = getComputedStyle(menu);
+    return { names: style.positionTryFallbacks, area: style.positionArea, gap: b.top - m.bottom, atBottom: b.bottom >= innerHeight - 1 };
+  };
+  await page
+    .waitForFunction(
+      () => {
+        const button = document.querySelector("#actions-button")?.getBoundingClientRect();
+        const menu = document.querySelector("#actions");
+        if (!button || !menu) return false;
+        const gap = button.top - menu.getBoundingClientRect().bottom;
+        return button.bottom >= innerHeight - 1 && gap >= 0 && gap <= 8 && getComputedStyle(menu).positionArea.includes("start");
+      },
+      null,
+      { timeout: 10_000 },
+    )
+    .catch(() => {});
+  const fallback = await page.evaluate(placed);
+  check(
+    "the menu uses its component-local @position-try when below overflows",
+    !!fallback && fallback.atBottom && fallback.gap >= 0 && fallback.gap <= 8 && fallback.names.includes("--gallery__above") && fallback.area.includes("start"),
+    JSON.stringify(fallback),
+  );
   await page.keyboard.press("ArrowDown");
   check("Arrow Down moves", (await page.evaluate(() => document.activeElement?.textContent)) === "Archive");
   await page.keyboard.press("ArrowDown");

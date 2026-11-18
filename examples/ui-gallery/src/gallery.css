@@ -17,4 +17,6 @@
 .facts > p { margin: 0; }
 .buttons { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .buttons form { margin: 0; }
+@position-try --above { position-area: block-start span-inline-end; }
+.buttons [role="menu"] { position-try-fallbacks: --above, flip-inline; }
 .rename { display: grid; gap: 1rem; margin: 0; }
