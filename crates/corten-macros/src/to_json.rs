@@ -272,27 +272,35 @@ pub(crate) fn serde_args_for(attrs: &[Group], derive: &str) -> Result<Vec<Arg>, 
                 return err(args.span(), format!("{derive}: expected #[serde(key)] or #[serde(key = \"value\")]"));
             };
             // A value a `macro_rules!` passed in (`rename_all = $rule`) comes in an invisible group.
-            let literal = match arg.get(2) {
-                Some(TokenTree::Group(g)) if g.delimiter() == proc_macro::Delimiter::None => {
+            let literal = match arg.get(2..) {
+                Some([TokenTree::Group(g)]) if g.delimiter() == Delimiter::None => {
                     let mut inner = g.stream().into_iter();
                     match (inner.next(), inner.next()) {
                         (Some(TokenTree::Literal(l)), None) => Some(l),
                         _ => None,
                     }
                 }
-                Some(TokenTree::Literal(l)) => Some(l.clone()),
+                Some([TokenTree::Literal(l)]) => Some(l.clone()),
                 _ => None,
             };
-            let value = match (arg.get(1), literal) {
-                (None, _) => Value::Bare,
-                (Some(TokenTree::Punct(p)), Some(l)) if p.as_char() == '=' => match string_value(&l) {
-                    Some(s) => Value::Str(s),
-                    None => return err(l.span(), format!("{derive}: expected a string")),
-                },
-                (Some(TokenTree::Group(g)), _) => Value::Group(g.stream()),
+            let name = key.to_string();
+            let value = match arg.as_slice() {
+                [_] => Value::Bare,
+                [_, TokenTree::Punct(p), ..] if p.as_char() == '=' => {
+                    if let Some(s) = literal.as_ref().and_then(string_value) {
+                        Value::Str(s)
+                    } else if derive == "FromJson" && matches!(name.as_str(), "from" | "try_from" | "into") {
+                        return err(key.span(), format!("expected serde {name} attribute to be a string: `{name} = \"...\"`"));
+                    } else if let Some(l) = literal {
+                        return err(l.span(), format!("{derive}: expected a string"));
+                    } else {
+                        return err(key.span(), format!("{derive}: expected #[serde(key)] or #[serde(key = \"value\")]"));
+                    }
+                }
+                [_, TokenTree::Group(g)] => Value::Group(g.stream()),
                 _ => return err(key.span(), format!("{derive}: expected #[serde(key)] or #[serde(key = \"value\")]")),
             };
-            out.push(Arg { key: key.to_string(), value, span: key.span() });
+            out.push(Arg { key: name, value, span: key.span() });
         }
     }
     Ok(out)

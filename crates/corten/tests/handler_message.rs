@@ -357,6 +357,14 @@ struct TwoConversions(u64);
 #[serde(transparent, into)]
 struct MalformedInto(u64);
 
+#[derive(corten::FromJson)]
+#[serde(transparent, into = "u64" + "u8")]
+struct TrailingInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(from = "u64", try_from = "u64" + "u8")]
+struct TrailingTryFrom(u64);
+
 fn main() {}
 "#,
         &["json"],
@@ -369,6 +377,8 @@ fn main() {}
         r#"#[serde(transparent)] is not allowed with #[serde(try_from = "...")]"#,
         r#"#[serde(from = "...")] and #[serde(try_from = "...")] conflict with each other"#,
         r#"FromJson: use #[serde(into = "...")]"#,
+        r#"expected serde into attribute to be a string: `into = "..."`"#,
+        r#"expected serde try_from attribute to be a string: `try_from = "..."`"#,
     ] {
         let expected = format!("error: {said}");
         assert!(stderr.lines().any(|line| line == expected), "missing {expected}: {stderr}");
