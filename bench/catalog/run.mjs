@@ -32,7 +32,8 @@ try {
   observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
-const { aggregate, cpuSettings, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
+const { aggregate, cpuSettings, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
+  validateCatalog, verifyDocumentHeaderChecks, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
 const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
@@ -337,7 +338,8 @@ try {
         // stays a trustworthy browser origin without disabling security features.
         const workerBefore = group ? await upstreamControl() : undefined;
         await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "2g", "--shm-size", "1g", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
-          "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", checker.Id, "node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, apiBase, "/results/checks.json"], checkContainer);
+          "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", checker.Id, "node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, apiBase,
+          "/results/checks.json", ...(leanApps.includes(app) ? [app] : [])], checkContainer);
         let checkerFailure, boundary;
         try { await docker(["start", "-a", checkContainer], { timeout: 15 * 60 * 1000, file: join(out, "checks.log") }); }
         catch (error) { checkerFailure = error; }
@@ -356,6 +358,7 @@ try {
           });
           writeFileSync(join(out, "checks.json"), JSON.stringify(checked, null, 2));
         } else checked = JSON.parse(readFileSync(join(out, "checks.json"), "utf8"));
+        if (!checked.failure && leanApps.includes(app)) verifyDocumentHeaderChecks(checked.documentHeaders, catalog, source);
         if (group) {
           checked.qualification = qualificationIdentity(group, app, source, entry.imageId);
           writeFileSync(join(out, "qualification.json"), JSON.stringify(checked, null, 2));

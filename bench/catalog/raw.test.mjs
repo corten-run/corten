@@ -30,7 +30,7 @@ import { requestOutcome } from "./load-outcome.js";
 function fixture(passes = 1) {
   const files = new Map();
   const put = (key, value) => files.set(key, typeof value === "string" ? value : JSON.stringify(value));
-  const group = groupDescriptor("catalog-page");
+  const group = groupDescriptor("catalog-page", { historical: true });
   const options = parseArgs(["c1", "--group", "catalog-page", "--passes", String(passes), "--build"], allApps);
   const commit = "a".repeat(40), imageId = `sha256:${"b".repeat(64)}`;
   const catalog = records(), fixtureText = `${JSON.stringify(catalog)}\n`;
@@ -736,6 +736,13 @@ test("catalog lean profile is bound to the saved runtime without relabeling hist
   const lean = structuredClone(original);
   lean.runtime.Config.Env.push(`PROFILE=${leanProfile}`);
   verifyCheckBoundary(lean, f.summary, "corten", "fixture", true);
+  const standalone = { ...f.summary, group: undefined };
+  assert.throws(() => verifyCheckBoundary(lean, standalone, "corten", "fixture", true), /command differs/);
+  const current = structuredClone(lean);
+  current.checker.Config.Cmd.push("corten");
+  current.checker.Args.push("corten");
+  verifyCheckBoundary(current, standalone, "corten", "fixture", true);
+  assert.throws(() => verifyCheckBoundary(current, f.summary, "corten", "fixture", true), /command differs/);
   for (const value of ["PROFILE=matched", "PROFILE=default"]) {
     const changed = structuredClone(lean);
     changed.runtime.Config.Env.push(value);

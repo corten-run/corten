@@ -1,16 +1,19 @@
 // Pure native-runner selection/provenance. No readiness or inventory filtering.
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
-import { contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
+import { catalogDocumentHeaders, contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
 // Keep this version check local: the observation reader imports this contract.
 const timedSchema = "catalog-saved-evidence/v3";
 
 export const groupResultSchema = "catalog-group-results/v1";
-export function groupDescriptor(name) {
+// The pre-header catalog-page contract, not an alias for the current one.
+const historicalContract = "c267655acacf8083ce51cbd92d80cbfafbe5fe8f5f56141d4ef1d12a48ac89ee";
+export function groupDescriptor(name, { historical = false } = {}) {
   assert.equal(name, "catalog-page", "catalog runner supports only --group catalog-page");
   const cases = structuredClone(definition(name).cases);
   assert.ok(cases.every((c) => c.payload === "catalog-v1" && c.target === "page" && c.locale === null), "not a native catalog-page contract");
-  return { schema: "catalog-group/v1", registrySchema, group: name, contractSha256: contractSha256(name),
+  return { schema: "catalog-group/v1", registrySchema, group: name, contractSha256: historical ? historicalContract : contractSha256(name),
+    ...(historical ? {} : { documentHeaders: catalogDocumentHeaders }),
     apps: selectedApps(name), cases, sources: [...new Set(cases.map((c) => c.source))],
     targets: [...new Set(cases.map((c) => c.target))], correctnessTargets: ["page", "json"] };
 }
@@ -29,7 +32,8 @@ export function timingPlan(options, sources, targets) {
 }
 
 export function qualificationIdentity(group, app, source, imageId) {
-  return { app, source, payload: group.cases[0].payload, targets: group.correctnessTargets, imageId };
+  return { app, source, payload: group.cases[0].payload, targets: group.correctnessTargets, imageId,
+    ...(group.documentHeaders ? { documentHeaders: group.documentHeaders } : {}) };
 }
 
 const nonnegative = (n) => typeof n === "number" && Number.isFinite(n) && n >= 0;
@@ -53,7 +57,7 @@ function completedTimedLoad(phase, measured) {
 export function inspectGroupEvidence(summary, phases, aggregate) {
   if (summary.group === undefined && summary.options?.group === undefined && summary.schema !== groupResultSchema) return null;
   assert.equal(summary.schema, groupResultSchema, "missing or unsupported catalog group result schema");
-  const group = groupDescriptor(summary.options?.group);
+  const group = groupDescriptor(summary.options?.group, { historical: summary.group?.contractSha256 === historicalContract });
   assert.deepEqual(summary.group, group, "catalog group descriptor/contract differs");
   assert.deepEqual(summary.options.apps, group.apps, "group requires the exact registry apps");
   const warnings = [];
@@ -71,6 +75,7 @@ export function inspectGroupEvidence(summary, phases, aggregate) {
     assert.ok(Object.keys(entry.checks ?? {}).every((source) => group.sources.includes(source)), `${app}: unexpected correctness source`);
     for (const source of group.sources) {
       const check = entry.checks?.[source];
+      if (check && !group.documentHeaders) assert.ok(!Object.hasOwn(check, "documentHeaders"), "historical contract cannot carry current document header evidence");
       if (!check?.qualification) missing(`${app} ${source}: missing qualification identity.`);
       else assert.deepEqual(check.qualification, qualificationIdentity(group, app, source, entry.imageId), `${app} ${source}: wrong qualification identity`);
     }

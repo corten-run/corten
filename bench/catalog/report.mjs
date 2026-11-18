@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { allApps } from "../fullstack/apps.mjs";
-import { aggregate, cpuSettings, expectedPageChecks, phases, leanApps, leanProfile } from "./contract.mjs";
+import { aggregate, cpuSettings, expectedPageChecks, phases, leanApps, leanProfile, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
 import { inspectGroupEvidence } from "./group.mjs";
 import { dirname } from "node:path";
@@ -86,6 +86,13 @@ export function inspectCatalog(summary, expectedCommit) {
     for (const source of ["fixture", "api"]) if (!completeChecks(entry?.checks?.[source], source)) {
       everyCheck = false;
       warnings.push(`${app} ${source}: missing or contradictory JSON, page, browser-profile or upstream correctness evidence.`);
+    }
+    if (group?.descriptor.documentHeaders) for (const source of ["fixture", "api"]) {
+      try { verifyDocumentHeaderChecks(entry?.checks?.[source]?.documentHeaders, fixture, source); }
+      catch {
+        everyCheck = false;
+        warnings.push(`${app} ${source}: missing or invalid document header observations.`);
+      }
     }
     if (entry?.failures?.length) { everyCheck = false; warnings.push(`${app}: per-app failures are recorded.`); }
     const results = Object.fromEntries(reportKeys.map((key) => {
@@ -172,6 +179,7 @@ export function renderCatalog(report) {
   if (c.leanProfile) lines.push("", `Speed configuration: \`${c.leanProfile.name}\`; configured contenders: ${c.leanProfile.apps.map((app) => `\`${app}\``).join(", ")}.`);
   if (c.apparatus) lines.push("", `Upstream: \`${c.apparatus.schema}\`, exactly two request workers plus coordinator; unchanged 2-CPU/512-MiB budget. Raw replay: ${report.rawVerified === true ? "verified" : "not verified"}; first-host admission: ${report.apparatusPreflight ?? "not verified"}. Legacy evidence is not retroqualified.`);
   if (report.group) lines.push("", `Group: \`${report.group.group}\`; registry: \`${report.group.registrySchema}\`; contract SHA-256: \`${report.group.contractSha256}\`.`,
+    report.group.documentHeaders ? `Document header contract: \`${report.group.documentHeaders}\`.` : "Historical contract: the current document header floor was not checked.",
     `After-run commit: \`${c.commitAfter ?? "not recorded"}\`; tree dirty after run: ${c.dirtyAfter ?? "not recorded"}.`,
     `Exact apps: ${report.group.apps.map((app) => `\`${app}\``).join(", ")}.`,
     "Timing targets: page only, fixture and API sources. Native correctness gates remain page AND JSON; JSON is not timed. This is a group comparison, not the historical twenty-app catalog baseline.");

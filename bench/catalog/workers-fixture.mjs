@@ -1,7 +1,7 @@
 // Small synthetic round for portable replay tests. Never native qualification.
 import { createHash } from "node:crypto";
 import { allApps } from "../fullstack/inventory.mjs";
-import { cpuSettings, expectedPageChecks, parseArgs, phases, aggregate } from "./contract.mjs";
+import { cpuSettings, expectedPageChecks, expectedDocumentHeaderPaths, parseArgs, phases, aggregate } from "./contract.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "./group.mjs";
 import { records } from "./fixtures.mjs";
 import { timedFixture } from "./timed-fixture.mjs";
@@ -15,7 +15,7 @@ export function legacyRound(failure = null) {
   const files = new Map(), put = (key, value) => files.set(key, typeof value === "string" ? value : JSON.stringify(value));
   const reader = { readText(key) { if (!files.has(key)) throw Object.assign(new Error(`missing ${key}`), { missing: true }); return files.get(key); },
     readJson: (key) => JSON.parse(reader.readText(key)) };
-  const group = groupDescriptor("catalog-page"), commit = "a".repeat(40), imageId = `sha256:${"b".repeat(64)}`;
+  const group = groupDescriptor("catalog-page", { historical: true }), commit = "a".repeat(40), imageId = `sha256:${"b".repeat(64)}`;
   const options = parseArgs(["c1", "--group", "catalog-page", "--passes", "1", "--duration", "3", "--warmup", "2", "--build"], allApps);
   const catalog = records(), fixture = JSON.stringify(catalog) + "\n", fixtureSha256 = digest(fixture);
   const summary = { schema: groupResultSchema, group, options, workload: "catalog-v1", round: "c1", runId: "catalog-c1-test", commit,
@@ -57,8 +57,18 @@ function control(epoch) {
   return { epoch, requests: {}, status: 200, configuration, coordinator: ids[0],
     workers: ids.slice(1).map((identity) => ({ identity, epoch, requests: {}, status: 200, configuration })) };
 }
-export function workerRound(failure = null) {
+export function syntheticDocumentHeaders(catalog, source) {
+  return expectedDocumentHeaderPaths(catalog, source).map((path) => ({ path, status: 200,
+    headers: Object.entries({ "content-type": "text/html; charset=utf-8",
+      "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
+      "x-content-type-options": "nosniff", "referrer-policy": "origin, no-referrer",
+      "cross-origin-opener-policy": "same-origin", "permissions-policy": "geolocation=()", "cache-control": "no-store" })
+      .map(([name, value]) => ({ name, value })) }));
+}
+export function workerRound(failure = null, { historical = false } = {}) {
   const f = legacyRound(failure), s = f.summary, initial = Date.parse(s.startedAt);
+  if (!historical) s.group = groupDescriptor("catalog-page");
+  const catalog = records();
   s.savedEvidence.schema = workerRawSchema; s.measurement.apparatus = apparatus; s.measurement.upstreamMemoryBytes = 512 * 2 ** 20;
   f.put("upstream.log", "");
   const proof = JSON.stringify(sourceProof(s.commit)); f.put("apparatus-source.json", proof); s.savedEvidence.apparatusSourceSha256 = digest(proof);
@@ -67,6 +77,17 @@ export function workerRound(failure = null) {
   }
   for (const source of s.group.sources) for (const app of s.group.apps) {
     const key = `${source}/${app}/checker.json`, boundary = f.reader.readJson(key);
+    if (!historical) {
+      const check = s.apps[app].checks[source];
+      check.documentHeaders = syntheticDocumentHeaders(catalog, source);
+      check.qualification = qualificationIdentity(s.group, app, source, s.apps[app].imageId);
+      const { qualification, ...native } = check;
+      f.put(`${source}/${app}/checks.json`, native);
+      f.put(`${source}/${app}/checks.log`, native);
+      f.put(`${source}/${app}/qualification.json`, check);
+      boundary.checker.Args.push(app);
+      boundary.checker.Config.Cmd.push(app);
+    }
     boundary.upstream.Config.Cmd = workerCommand; boundary.upstream.Args = workerCommand;
     boundary.workerBefore = control(0); boundary.workerAfter = control(0); f.put(key, boundary);
   }

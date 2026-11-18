@@ -7,6 +7,7 @@ import { summarizeSamples } from "./stats.mjs";
 import { digest, verifyControl } from "./apparatus.mjs";
 import { inspectCatalog, renderCatalog } from "./report.mjs";
 import { preflightArtifacts, requiredRoundArtifacts, verifyArtifactIndex, verifyPreflight } from "./preflight.mjs";
+import { groupDescriptor } from "./group.mjs";
 
 const failure = { app: "fastapi", source: "api", pass: 1, phase: "sat256", timeouts: 1 };
 const prefix = "api/fastapi/p1-page";
@@ -40,6 +41,47 @@ test("v4 round replays both positive and attributed negative outcomes with first
     assert.equal(inspectCatalog(f.summary, f.commit).attemptComplete, true);
     assert.match(renderCatalog(report), negative ? /not a baseline/ : /COMPLETE/);
   }
+});
+
+test("native document header evidence cannot be relabeled, omitted, weakened or detached from checker execution", () => {
+  const current = groupDescriptor("catalog-page"), historical = groupDescriptor("catalog-page", { historical: true });
+  const old = workerRound(null, { historical: true });
+  assert.equal(replayCatalog(old.summary, old.reader, old.commit, historical.contractSha256).group.documentHeaders, undefined);
+  assert.throws(() => replayCatalog(old.summary, old.reader, old.commit, current.contractSha256), /requested contract/);
+  const f = workerRound();
+  assert.equal(replayCatalog(f.summary, f.reader, f.commit, current.contractSha256).group.documentHeaders, current.documentHeaders);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit, historical.contractSha256), /requested contract/);
+  const app = "express", source = "api", base = `${source}/${app}`;
+  const original = structuredClone(f.summary.apps[app].checks[source]);
+  const putCheck = (check) => {
+    const { qualification, ...native } = check;
+    f.summary.apps[app].checks[source] = check;
+    f.put(`${base}/qualification.json`, check);
+    f.put(`${base}/checks.json`, native);
+    f.put(`${base}/checks.log`, native);
+    indexRound(f);
+  };
+  for (const mutate of [
+    (check) => { check.documentHeaders = true; },
+    (check) => { check.documentHeaders.pop(); },
+    (check) => { check.documentHeaders[0].path = "/api/catalog/record_1"; },
+    (check) => { check.documentHeaders.at(-1).headers.find((h) => h.name === "referrer-policy").value = "no-referrer, unsafe-url"; },
+  ]) {
+    const check = structuredClone(original); mutate(check); putCheck(check);
+    assert.match(inspectCatalog(f.summary).warnings.join("\n"), /express api: missing or invalid document header observations/);
+    assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /not complete/);
+  }
+  putCheck(structuredClone(original));
+  const log = f.reader.readJson(`${base}/checks.log`);
+  log.documentHeaders[0].headers.find((h) => h.name === "cache-control").value = "private, no-cache";
+  f.put(`${base}/checks.log`, log); indexRound(f);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /checker stdout receipt differs/);
+  putCheck(structuredClone(original));
+  const key = `${base}/checker.json`;
+  const boundary = f.reader.readJson(key);
+  boundary.checker.Config.Cmd.pop(); boundary.checker.Args.pop();
+  f.put(key, boundary); indexRound(f);
+  assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /command differs/);
 });
 
 test("v4 phase accepts proven aggregate under 160 but not a busy worker, coordinator or generator", () => {

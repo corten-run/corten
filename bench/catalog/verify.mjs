@@ -65,7 +65,7 @@ export function savedReader(folder) {
   return { readText, readJson: (key) => JSON.parse(readText(key)) };
 }
 
-export function validateSaved({ folder, round, commit }) {
+export function validateSaved({ folder, round, commit, expectedContractSha256 }) {
   // Do not echo invalid operator inputs into a log.
   if (!full(round, /c[1-9]\d{0,8}/) || !full(commit, /[a-f0-9]{40}/)) return { status: "invalid", complete: false, errors: ["invalid catalog identity"] };
   try {
@@ -75,7 +75,7 @@ export function validateSaved({ folder, round, commit }) {
     assert.equal(summary.commit, commit, "commit differs");
     if (summary.savedEvidence === undefined) return { status: "blocked", complete: false, errors: ["native raw evidence version absent; historical summary is not qualification"] };
     assert.ok([rawSchema, timedRawSchema, workerRawSchema].includes(summary.savedEvidence.schema), "unsupported native evidence schema");
-    const report = replayCatalog(summary, reader, commit);
+    const report = replayCatalog(summary, reader, commit, expectedContractSha256);
     return { status: "verified", complete: true, round, commit, report,
       scope: "native saved evidence replay; host isolation and independent source audit are separate campaign gates" };
   } catch (error) {

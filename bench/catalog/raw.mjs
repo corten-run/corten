@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { aggregate, leanApps, leanProfile, phases, readLoad } from "./contract.mjs";
+import { aggregate, leanApps, leanProfile, phases, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { inspectCatalog, completeChecks } from "./report.mjs";
 import { records } from "./fixtures.mjs";
 import { qualificationIdentity } from "./group.mjs";
@@ -113,7 +113,9 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   assert.equal(checker.HostConfig.CpusetCpus, budget.load.cpuset ?? ""); assert.equal(checker.HostConfig.Memory, 2 ** 31);
   assert.ok([`container:${runtime.Id}`, `container:${summary.runId}-${app}`].includes(checker.HostConfig.NetworkMode));
   mounts(checker, [mount(checkout, "/repo"), mount(`${checkout}/bench/catalog/results/${summary.round}/${source}/${app}`, "/results", true)]);
-  execution(checker, summary.tools.checker.execution, ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, `http://${summary.runId}-upstream:8080`, "/results/checks.json"]);
+  const headersChecked = summary.group ? !!summary.group.documentHeaders : leanApps.includes(app);
+  execution(checker, summary.tools.checker.execution, ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source,
+    `http://${summary.runId}-upstream:8080`, "/results/checks.json", ...(headersChecked ? [app] : [])]);
   assert.equal(checker.State.Status, "exited"); assert.equal(checker.State.Running, false);
   for (const key of ["OOMKilled", "Dead", "Paused", "Restarting"]) assert.equal(checker.State[key], false);
   assert.equal(checker.State.ExitCode, failed ? 1 : 0); assert.equal(checker.State.Error, "");
@@ -125,12 +127,15 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   assert.equal(new Set([runtime.Id, upstream.Id, checker.Id]).size, 3, "checker/participant identities overlap");
 }
 
-export function replayCatalog(summary, { readJson, readText }, commit) {
+export function replayCatalog(summary, { readJson, readText }, commit, expectedContractSha256) {
   assert.ok([rawSchema, timedRawSchema, workerRawSchema].includes(summary.savedEvidence?.schema), "native raw evidence version missing");
   assert.equal(summary.options?.group, "catalog-page", "raw group validation requires catalog-page");
   const report = inspectCatalog(summary, commit);
+  if (expectedContractSha256 !== undefined) assert.equal(report.group.contractSha256, expectedContractSha256, "native catalog contract differs from requested contract");
   const gated = summary.timingDisposition === "gated-functional";
   const workers = workerAware(summary);
+  const documentHeaders = report.group.documentHeaders;
+  if (documentHeaders) assert.ok(workers, "document-header contract requires worker-aware native evidence");
   if (workers) { verifySource(summary, { readJson, readText }); verifyArtifactIndex(summary, { readJson, readText }); }
   const timed = (workers || summary.savedEvidence.schema === timedRawSchema) && !gated;
   assert.ok(summary.timingDisposition === undefined || gated, "unknown timing disposition");
@@ -152,6 +157,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   const fixture = readText("fixture.json");
   assert.equal(summary.fixtureSha256, summary.savedEvidence.fixtureSha256);
   assert.equal(summary.savedEvidence.fixtureSha256, createHash("sha256").update(fixture).digest("hex"));
+  const catalog = documentHeaders ? JSON.parse(fixture) : null;
   const cleanup = readJson("cleanup.json");
   assert.deepEqual(cleanup, { runId: summary.runId, containers: [], networks: [] }, "owned resources remain or cleanup proof differs");
   assert.deepEqual(readJson("tools.json"), summary.tools, "tool observations differ");
@@ -180,7 +186,11 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
       assert.deepEqual(checked, entry.checks[source], "saved checks differ");
       const { qualification, ...nativeCheck } = checked;
       assert.deepEqual(readJson(`${base}/checks.json`), nativeCheck, "native checker receipt differs");
-      readText(`${base}/checks.log`);
+      const checksLog = readText(`${base}/checks.log`);
+      if (documentHeaders && !checked.failure) {
+        verifyDocumentHeaderChecks(nativeCheck.documentHeaders, catalog, source);
+        assert.deepEqual(JSON.parse(checksLog), nativeCheck, "checker stdout receipt differs");
+      }
       readText(`${base}/app.log`);
       let boundary;
       if (gated || timed) {
