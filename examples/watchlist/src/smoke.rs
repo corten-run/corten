@@ -85,7 +85,7 @@ fn ScopedPage() -> impl Document {
                 <Corten />
             </head>
             <body>
-                <main><output id={ScopedReadyId} ref={ready} on:connect={js::ready(ready)}></output></main>
+                <main><output id={ScopedReadyId} ref={ready} on:connect={js::ready(ready, signal)}></output></main>
             </body>
         </html>
     }
