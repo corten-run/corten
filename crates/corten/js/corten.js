@@ -1049,20 +1049,29 @@ export function patch(html, signal) {
  *   runtime did not fetch ({@link parse}); a part's read (part.js) passes a function, shown what
  *   this call parsed before anything can run: an argument only the runtime and its part module
  *   pass, never the signal, which may be a script's
- * @param {Element} [asked] the `ReadAgain` tag of a part of the page the patch answers a read of:
- * the patch's own tag takes its place, so the part's next read is the one on the page
+ * @param {Element} [asked] the tag of a part of the page the patch answers a read of:
+ * the patch's own `ReadAgain` tag takes its place, so the part's next read is the one on the page
  * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
  *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
  *   it replaces takes ({@link opened})
+ * @param {Map<string | null, Element>} [readIds] nodes a `ReadAgain` saw before its request
  */
-async function apply(html, signal, sent, took, own, asked, within) {
+async function apply(html, signal, sent, took, own, asked, within, readIds) {
   const content = parse(html, own);
   const closes = queryOne(content, CLOSED_DIALOG);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
-  await Promise.all([modulesOf(content), stylesOf(content), closes && loadDialogs()]);
-  if (signal?.aborted) return;
-  const plan = closes && dialogs?.patchPlan(served);
+  const loading = closes && !dialogs && patchCloses(content) && loadDialogs();
+  await Promise.all([modulesOf(content), stylesOf(content), loading]);
+  const stale = () => signal?.aborted || (readIds && !ownsPatch(content, readIds));
+  if (stale()) return;
+  // A module or stylesheet can take time to load: match against the document we will draw into.
+  let closing = closes && patchCloses(content);
+  if (closing && !dialogs && !loading) {
+    await loadDialogs();
+    if (stale()) return;
+    closing = patchCloses(content);
+  }
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
@@ -1089,21 +1098,27 @@ async function apply(html, signal, sent, took, own, asked, within) {
       elementOwn.append.call(target, insert);
     }
   };
-  for (const el of Array.from(content.children)) {
-    if (hasAttr(el, "data-corten-read-again")) {
-      again = el;
-      continue;
+  /** @param {() => boolean} [valid] */
+  const drawPatch = (valid) => {
+    for (const el of Array.from(content.children)) {
+      if (hasAttr(el, "data-corten-read-again")) {
+        again = el;
+        continue;
+      }
+      if (valid?.() === false) break;
+      const id = idOf(el) ?? "";
+      const target = id ? document.getElementById(id) : null;
+      const insert = patchInsert(el);
+      if (target) draw(target, id, insert);
+      else if (insert) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
     }
-    const id = idOf(el) ?? "";
-    const target = id ? document.getElementById(id) : null;
-    const insert = el instanceof HTMLTemplateElement && hasAttr(el, "data-remove") ? null :
-      el instanceof HTMLTemplateElement && hasAttr(el, "data-append") ? el.content : el;
-    if (!target && insert) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
-    if (plan) {
-      if (!plan.add(target, id, insert)) return;
-    } else if (target) draw(target, id, insert);
+    if (valid?.() === false) again = undefined;
+  };
+  if (closing && dialogs) {
+    if (!dialogs.independent(patchTargets(content)) || !dialogs.closeDrawn(closing, drawPatch, signal)) return;
+  } else {
+    drawPatch();
   }
-  if (plan && !plan.run(draw, signal)) return;
   // The server marked a nav link in the patch against the request that made it (a form's action),
   // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
   // only looks through what it put.
@@ -1114,6 +1129,42 @@ async function apply(html, signal, sent, took, own, asked, within) {
     if (beside) beside.replaceWith(again);
     readPatchAgain(again, put);
   }
+}
+
+/** @param {Element} el */
+function patchInsert(el) {
+  if (el instanceof HTMLTemplateElement) {
+    if (hasAttr(el, "data-remove")) return null;
+    if (hasAttr(el, "data-append")) return el.content;
+  }
+  return el;
+}
+
+/** This walk is for inspection only. Drawing resolves ids in order, after earlier handlers.
+ * @param {DocumentFragment} content @returns {IterableIterator<import("./dialog.js").Target>}
+ */
+function* patchTargets(content) {
+  for (const el of content.children) {
+    if (hasAttr(el, "data-corten-read-again")) continue;
+    const id = idOf(el) ?? "";
+    yield [id ? document.getElementById(id) : null, id, patchInsert(el)];
+  }
+}
+
+/** @param {DocumentFragment} content @param {Map<string | null, Element>} ids */
+function ownsPatch(content, ids) {
+  for (const [target, id, insert] of patchTargets(content)) {
+    if (target !== (ids.get(id) ?? null)) return false;
+    if ((!insert || insert instanceof Element) && target) {
+      for (const el of queryAll(target, "[id]")) if (ids.get(idOf(el)) !== el) return false;
+      // A descendant that vanished while this read was away must not be drawn back in either.
+      if (insert) for (const el of queryAll(insert, "[id]")) {
+        const id = idOf(el);
+        if (id && ids.has(id) && !document.getElementById(id)) return false;
+      }
+    }
+  }
+  return true;
 }
 
 /**
@@ -1149,6 +1200,7 @@ function readPatchAgain(tag, put) {
       // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
       // part's order in it).
       const from = /** @type {string} */ (tag.getAttribute("data-from"));
+      const ids = new Map(Array.from(queryAll(document, "[id]"), (el) => [idOf(el), el]));
       // Offline or unreachable: the part stays as it is.
       const res = await fetch(from, { headers: { corten: "action" } }).catch(() => {});
       if (!res?.headers.has("corten-patch") || !fromHere(res.url)) {
@@ -1161,7 +1213,7 @@ function readPatchAgain(tag, put) {
       // The address can change on the way or while assets load: read again for the new one.
       const changed = () => tag.isConnected && tag.getAttribute("data-from") !== from;
       if (changed()) continue;
-      await apply(html, { get aborted() { return !here() || changed(); } }, null, undefined, undefined, tag);
+      await apply(html, { get aborted() { return !here() || changed(); } }, null, undefined, undefined, tag, undefined, ids);
       if (!changed()) return;
     }
   });
@@ -1501,6 +1553,43 @@ const loadDialogs = () => loadingDialogs ??= import(DIALOGS).then(
 /** @param {Element} el */
 const drawsClosed = (el) => matchesOf(el, CLOSED_DIALOG) || !!queryOne(el, CLOSED_DIALOG);
 
+/** @param {DocumentFragment} content */
+function patchCloses(content) {
+  if (!queryOne(document, "dialog[open]")) return;
+  /** @type {Map<HTMLDialogElement, boolean>} */
+  const shut = new Map();
+  /** @type {Element[]} */
+  const removed = [];
+  for (const [target, , insert] of patchTargets(content)) {
+    if (!target) continue;
+    if (!insert) removed.push(target);
+    else if (insert instanceof Element && drawsClosed(insert)) collectCloses(target, insert, shut, false, removed);
+  }
+  return shut.size ? shut : undefined;
+}
+
+/** Layout morphs match children themselves; a replacement only matches its root and ids.
+ * @param {Element} root @param {Element} fresh @param {Map<HTMLDialogElement, boolean>} shut
+ * @param {boolean} [morph] @param {Element[]} [removed]
+ */
+function collectCloses(root, fresh, shut, morph, removed) {
+  /** @param {Element} dialog */
+  const counterpart = (dialog) => {
+    const id = idOf(dialog);
+    return id && queryOne(fresh, `#${CSS.escape(id)}`);
+  };
+  for (const dialog of morph ? [root] : [root, ...queryAll(root, "dialog[open][id]")]) {
+    if (!(dialog instanceof HTMLDialogElement) || !dialog.open || !served.get(dialog) || removed?.some((old) => holds(old, dialog))) continue;
+    const to = dialog === root ? fresh : counterpart(dialog);
+    if (!(to instanceof HTMLDialogElement) || to.open) continue;
+    shut.set(dialog, true);
+    // A modal being removed can still block the outer opener when the outer modal closes.
+    if (!morph && matchesOf(dialog, ":modal")) for (const nested of queryAll(dialog, "dialog:modal")) {
+      if (nested instanceof HTMLDialogElement && nested.open && !(counterpart(nested) instanceof HTMLDialogElement) && !removed?.some((old) => holds(old, nested))) shut.set(nested, false);
+    }
+  }
+}
+
 /**
  * Focuses `el`, or else the nearest element around it that can take focus, so a keyboard or
  * screen reader user whose element a patch took away stays where they were rather than at the
@@ -1552,7 +1641,7 @@ function focusNear(el, root, fresh) {
 async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html)) {
   preload(content);
   const [, styled] = await Promise.all([modulesOf(content), stylesOf(content),
-    html.includes(" data-corten-page") && queryOne(content, CLOSED_DIALOG) && loadDialogs()]);
+    html.includes(" data-corten-page") && queryOne(content, CLOSED_DIALOG) && queryOne(document, "dialog[open]") && loadDialogs()]);
   signal?.throwIfAborted();
   if (!styled) {
     reload(notice);
@@ -1565,7 +1654,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   // which the user's place is found in by position. One the page lacks is another layout's: the
   // page loads in full. One a patch replaced has no `page` mark, and is still the one to replace.
   // An app without them skips the walk: a search of the text costs less than one of the answer.
-  /** @type {[Element, Element][]} */
+  /** @type {Element[]} */
   const parts = [];
   if (html.includes(" data-corten-page")) {
     for (const part of Array.from(content.children)) {
@@ -1584,60 +1673,69 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
       const markup = markupOf(part);
       if (partSent.get(old) === markup) continue;
       partSent.set(part, markup);
-      parts.push([old, part]);
+      parts.push(part);
     }
   }
-  /** @type {HTMLDialogElement[]} */
-  const shut = [];
-  for (const [old, part] of parts) dialogs?.collect(old, part, shut, served);
-  const draw = layout?.plan(shut, parts);
-  if (dialogs?.closeDrawn(shut, signal) === false) return false;
-  const title = content.querySelector("title");
-  if (title) {
-    document.title = textOf(title) ?? "";
-    title.remove();
+  const shut = dialogs && (parts.some(drawsClosed) || layout?.closes()) ? new Map() : null;
+  if (shut) {
+    const targets = parts.map((part) => /** @type {const} */ ([document.getElementById(idOf(part) ?? ""), part]));
+    for (const [old, part] of targets) if (old && drawsClosed(part)) collectCloses(old, part, shut);
+    layout?.collect(shut, targets);
   }
-  const tags = Array.from(content.querySelectorAll("[data-corten-head]"));
-  for (const old of Array.from(document.head.querySelectorAll("[data-corten-head]"))) old.remove();
-  document.head.append(...tags);
-  const view = stay ? viewOf(main, content) : null;
-  // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
-  // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
-  // Back or forward records it too when it is the entry's own (Back before a link's page came).
-  const traverse = navigation?.transition?.navigationType === "traverse";
-  const key = navigation?.currentEntry?.key;
-  if (key && drawnFor && (drawnFor !== key || traverse)) remember(drawnFor, main);
-  if (key) drawnFor = key;
-  typedFields.clear();
-  // Back or forward to an entry: what the user typed there and had not sent, put in before the
-  // page joins, so a component that reads its fields as it connects reads them.
-  const typed = traverse ? typedIn.get(key ?? "") : undefined;
-  if (typed) putTyped(content, typed);
-  serve(content);
-  const [x, y] = [scrollX, scrollY];
-  for (const [old, part] of parts) {
-    // One inside an element the layout drew changes what a write's page is compared with, as a
-    // patch there does; one that is such an element takes its place (`replaceKeeping`).
-    const parent = parentElementOf(old);
-    if (!drawn.has(old) && parent) changedIn(parent, ["r", /** @type {string} */ (idOf(part)), [part]]);
-    // A link followed moves the focus as one in the header does; a read again keeps it.
-    replaceKeeping(old, part, null, false, !!stay);
-  }
-  main.replaceChildren(content);
-  // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
-  if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
-  draw?.();
-  scrolledIn.clear();
-  sideways.clear();
-  const kept = view?.() ?? [];
-  if (stay) scrollTo(x, y);
-  swapped = html;
-  swappedWhole = "";
-  shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
-  markCurrent(kept);
-  readAgainLater();
-  readPartsAgain(main);
-  return true;
+  /** @param {() => boolean} [valid] */
+  const draw = (valid) => {
+    const title = content.querySelector("title");
+    if (title) {
+      document.title = textOf(title) ?? "";
+      title.remove();
+    }
+    const tags = Array.from(content.querySelectorAll("[data-corten-head]"));
+    for (const old of Array.from(document.head.querySelectorAll("[data-corten-head]"))) old.remove();
+    document.head.append(...tags);
+    const view = stay ? viewOf(main, content) : null;
+    // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
+    // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
+    // Back or forward records it too when it is the entry's own (Back before a link's page came).
+    const traverse = navigation?.transition?.navigationType === "traverse";
+    const key = navigation?.currentEntry?.key;
+    if (key && drawnFor && (drawnFor !== key || traverse)) remember(drawnFor, main);
+    if (key) drawnFor = key;
+    typedFields.clear();
+    // Back or forward to an entry: what the user typed there and had not sent, put in before the
+    // page joins, so a component that reads its fields as it connects reads them.
+    const typed = traverse ? typedIn.get(key ?? "") : undefined;
+    if (typed) putTyped(content, typed);
+    serve(content);
+    const [x, y] = [scrollX, scrollY];
+    for (const part of parts) {
+      if (valid?.() === false) return false;
+      const old = document.getElementById(idOf(part) ?? "");
+      if (!old || holds(main, old)) continue;
+      // One inside an element the layout drew changes what a write's page is compared with, as a
+      // patch there does; one that is such an element takes its place (`replaceKeeping`).
+      const parent = parentElementOf(old);
+      if (!drawn.has(old) && parent) changedIn(parent, ["r", /** @type {string} */ (idOf(part)), [part]]);
+      // A link followed moves the focus as one in the header does; a read again keeps it.
+      replaceKeeping(old, part, null, false, !!stay);
+    }
+    if (valid?.() === false) return false;
+    main.replaceChildren(content);
+    // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
+    if (html.includes("data-vars")) for (const el of [main, ...parts]) setVars(el);
+    layout?.apply(valid);
+    scrolledIn.clear();
+    sideways.clear();
+    const kept = view?.() ?? [];
+    if (stay) scrollTo(x, y);
+    swapped = html;
+    swappedWhole = "";
+    shown = notice?.has("d") ? (notice.get("m") ?? "") : null;
+    markCurrent(kept);
+    readAgainLater();
+    readPartsAgain(main);
+    return true;
+  };
+  return dialogs && shut?.size ? dialogs.closeDrawn(shut, draw, signal) : draw();
 }
 
 /**
@@ -1814,42 +1912,42 @@ function layoutChanges(doc, notice) {
   // page: it stays.
   return {
     fresh: changed.map(([, el]) => el),
-    /** @param {HTMLDialogElement[]} shut @param {[Element, Element][]} [parts] */
-    plan(shut, parts) {
-      /** @type {(() => void)[]} */
-      const layout = [];
+    closes: () => changed.some(([old, el]) => drawsClosed(el) && (matchesOf(old, "dialog[open]") || queryOne(old, "dialog[open]"))),
+    /** @param {Map<HTMLDialogElement, boolean>} shut @param {ReadonlyArray<readonly [Element | null, Element]>} [parts] */
+    collect(shut, parts) {
       for (const [old, el, was] of changed) {
-        if (!inPage(old) || drawn.get(old) !== was) continue;
+        if (!inPage(old) || drawn.get(old) !== was || !drawsClosed(el)) continue;
         // An earlier page part can take out this element or change its baseline (changedIn),
         // in which case this layout draw will be skipped.
-        if (parts?.some(([part]) => holds(part, old) || (!drawn.has(part) && holds(old, part)))) continue;
+        if (parts?.some(([part]) => part && (holds(part, old) || (!drawn.has(part) && holds(old, part))))) continue;
         const as = was === undefined ? null : drawnAs(was);
-        /** @type {(() => void)[]} */
-        const steps = [];
-        planLayout(old, el, as === null ? null : parse(as).firstElementChild, said, steps, shut);
+        drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said, false, shut);
+      }
+    },
+    /** @param {() => boolean} [valid] */
+    apply(valid) {
+      // An entry the load had and this page lacks stays: the runtime cannot tell the server's
+      // (a theme it stopped writing) from a script's (a theme set before first paint).
+      frame = { parts: frame.parts, sent };
+      stale = false;
+      for (const [old, el, was] of changed) {
+        if (valid?.() === false) return;
+        if (!inPage(old) || drawn.get(old) !== was) continue;
         const markup = markupOf(el);
         // The server's markup of each page's part in it, before drawing adds what the user had
         // (a <details> they opened) or a focus move's tabindex.
         const pageParts = [el, ...Array.from(queryAll(el, "[data-corten-page]"))]
           .filter((part) => hasAttr(part, "data-corten-page"))
           .map((part) => /** @type {const} */ ([part, part === el ? markup : markupOf(part)]));
-        layout.push(() => {
-          if (!inPage(old) || drawn.get(old) !== was) return;
-          for (const run of steps) run();
-          const now = inPage(old) ? old : el;
-          drawn.set(now, markup);
-          // A page's part the write's page drew anew is what the next navigation compares with.
-          if (now !== old) for (const [part, sent] of pageParts) partSent.set(part, sent);
-          setVars(now);
-        });
+        const as = was === undefined ? null : drawnAs(was);
+        drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said, false, undefined, valid);
+        if (valid?.() === false) return;
+        const now = inPage(old) ? old : el;
+        drawn.set(now, markup);
+        // A page's part the write's page drew anew is what the next navigation compares with.
+        if (now !== old) for (const [part, sent] of pageParts) partSent.set(part, sent);
+        setVars(now);
       }
-      return () => {
-        // An entry the load had and this page lacks stays: the runtime cannot tell the server's
-        // from a script's (a theme it set before first paint) or an extension's.
-        frame = { parts: frame.parts, sent };
-        stale = false;
-        for (const run of layout) run();
-      };
     },
   };
 }
@@ -1872,41 +1970,53 @@ const shows = (el, said) =>
  * earlier markup, when known) stays as it is, with what a script did to it (a toaster's button it
  * showed), unless it shows the notice (`said`); anything else of the same shape is drawn in place,
  * so an element a script holds stays the one it holds, and one of another shape is replaced.
- * Plan those drawing decisions once and collect closes from them. A live region's discarded
- * children aren't matched.
+ * With `shut`, only visit the same matches to find native closes, without changing either tree.
+ * A live region takes its new content wholesale, so its children aren't matched.
  * @param {Element} old @param {Element} fresh @param {Element | null} before @param {string | null} said
- * @param {(() => void)[]} steps @param {HTMLDialogElement[]} shut @param {boolean} [inside]
+ * @param {boolean} [inside] @param {Map<HTMLDialogElement, boolean>} [shut] @param {() => boolean} [valid]
  */
-function planLayout(old, fresh, before, said, steps, shut, inside = false) {
-  const live = matchesOf(fresh, LIVE);
-  const [mine, theirs] = [Array.from(childNodesOf(old)), Array.from(childNodesOf(fresh))];
-  if (localNameOf(old) !== localNameOf(fresh) || !(inside || matchesOf(old, LIVE) || queryOne(old, LIVE)) ||
-      (!live && (mine.length !== theirs.length || mine.some((n, i) => nodeNameOf(n) !== nodeNameOf(/** @type {Node} */ (theirs[i])))))) {
-    dialogs?.collect(old, fresh, shut, served);
-    steps.push(() => replaceKeeping(old, fresh, null));
+function drawLayout(old, fresh, before, said, inside = false, shut, valid) {
+  if (valid) {
+    if (!valid()) return;
+    const id = inside && idOf(old);
+    const target = id ? document.getElementById(id) : old;
+    if (!target || !inPage(target)) return;
+    old = target;
+  }
+  if (localNameOf(old) !== localNameOf(fresh) || !(inside || matchesOf(old, LIVE) || queryOne(old, LIVE))) {
+    if (shut) collectCloses(old, fresh, shut);
+    else replaceKeeping(old, fresh, null);
     return;
   }
-  dialogs?.collect(old, fresh, shut, served, true);
-  steps.push(() => morphLayoutNode(old, fresh));
-  if (live) {
-    steps.push(() => {
+  if (!shut) morphLayoutNode(old, fresh);
+  if (valid?.() === false) return;
+  if (matchesOf(fresh, LIVE)) {
+    if (shut) collectCloses(old, fresh, shut, true);
+    else {
       const content = document.createDocumentFragment();
-      content.append(...theirs);
+      content.append(...Array.from(childNodesOf(fresh)));
       serve(content);
       elementOwn.replaceChildren.call(old, content);
-    });
+    }
     return;
   }
+  const [mine, theirs] = [Array.from(childNodesOf(old)), Array.from(childNodesOf(fresh))];
+  if (mine.length !== theirs.length || mine.some((n, i) => nodeNameOf(n) !== nodeNameOf(/** @type {Node} */ (theirs[i])))) {
+    if (shut) collectCloses(old, fresh, shut);
+    else replaceKeeping(old, fresh, null);
+    return;
+  }
+  if (shut) collectCloses(old, fresh, shut, true);
   const then = before && childNodesOf(before).length === theirs.length ? childNodesOf(before) : null;
   mine.forEach((n, i) => {
     const [there, was] = [/** @type {ChildNode} */ (theirs[i]), then?.[i]];
     if (!(n instanceof Element)) {
-      if (was?.nodeValue !== there.nodeValue && n.nodeValue !== there.nodeValue) steps.push(() => { n.nodeValue = there.nodeValue; });
+      if (!shut && valid?.() !== false && was?.nodeValue !== there.nodeValue && n.nodeValue !== there.nodeValue) n.nodeValue = there.nodeValue;
       return;
     }
     const fresh = /** @type {Element} */ (there);
     const same = was instanceof Element && localNameOf(was) === localNameOf(n) && comparable(outerOf(was)) === markupOf(fresh);
-    if (!same || shows(fresh, said)) planLayout(n, fresh, was instanceof Element ? was : null, said, steps, shut, true);
+    if (!same || shows(fresh, said)) drawLayout(n, fresh, was instanceof Element ? was : null, said, true, shut, valid);
   });
 }
 
@@ -1965,7 +2075,7 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
     return false;
   }
   preload(doc.head);
-  await Promise.all([...layout.fresh.map(modulesOf), layout.fresh.some(drawsClosed) && loadDialogs()]);
+  await Promise.all([...layout.fresh.map(modulesOf), layout.closes() && loadDialogs()]);
   signal.throwIfAborted();
   // What a navigation's answer holds: the title, the page's head tags, the section stylesheets and
   // the page.
@@ -1982,11 +2092,11 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
       return false;
     }
     // Its section stylesheets are the page's, which are on the page already.
-    /** @type {HTMLDialogElement[]} */
-    const shut = [];
-    const draw = layout.plan(shut);
-    if (dialogs?.closeDrawn(shut, signal) === false) return false;
-    draw();
+    const shut = dialogs && layout.closes() ? new Map() : null;
+    if (shut) layout.collect(shut);
+    if (dialogs && shut?.size) {
+      if (!dialogs.closeDrawn(shut, layout.apply, signal)) return false;
+    } else layout.apply();
     readAgainLater();
     return true;
   }

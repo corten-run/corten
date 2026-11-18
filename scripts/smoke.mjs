@@ -6778,39 +6778,58 @@ async function run(browser) {
       JSON.stringify({ ...failed, posts, moduleRequests, diagnostics }));
     await missing.close();
 
-    const cold = await browser.newPage();
-    cold.on("pageerror", (e) => errors.push(`read waiting for dialog module: ${e.message}`));
-    let releaseModule = () => {};
-    const holdModule = new Promise((resolve) => { releaseModule = () => resolve(undefined); });
-    await cold.route("**/dialog.js", async (route) => {
-      await holdModule;
-      await route.continue();
-    });
-    await cold.route("**/smoke/cold-dialog-read", (route) => route.fulfill({
-      ...answer, body: '<div id="smoke-cold-read"><dialog id="smoke-cold-dialog">Obsolete</dialog></div>',
-    }));
-    await cold.goto(`${base}/smoke/closing`);
-    const requested = cold.waitForRequest("**/dialog.js");
-    await cold.evaluate(async () => {
+    for (const childOnly of [false, true]) {
+      const cold = await browser.newPage();
+      cold.on("pageerror", (e) => errors.push(`read waiting for dialog module: ${e.message}`));
+      let releaseModule = () => {};
+      const holdModule = new Promise((resolve) => { releaseModule = () => resolve(undefined); });
+      await cold.route("**/dialog.js", async (route) => {
+        await holdModule;
+        await route.continue();
+      });
+      await cold.route("**/smoke/cold-dialog-read", (route) => route.fulfill({
+        ...answer, body: '<div id="smoke-cold-read"><dialog id="smoke-cold-dialog">Obsolete</dialog></div>',
+      }));
+      await cold.goto(`${base}/smoke/closing`);
+      const requested = cold.waitForRequest("**/dialog.js");
+      await cold.evaluate(async () => {
+        const { patch } = await import("corten");
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="smoke-cold-read"></div>'));
+        await patch(__html('<div id="smoke-cold-read"><dialog id="smoke-cold-dialog" open>Reading</dialog></div><template data-corten-read-again="0" data-from="/smoke/cold-dialog-read"></template>'));
+      });
+      const moduleUrl = (await requested).url();
+      const dialog = await cold.evaluateHandle(async (childOnly) => {
+        const { patch } = await import("corten");
+        const dialog = '<dialog id="smoke-cold-dialog" open>Newer</dialog>';
+        await patch(__html(childOnly ? dialog : `<div id="smoke-cold-read">${dialog}</div>`));
+        return document.getElementById("smoke-cold-dialog");
+      }, childOnly);
+      releaseModule();
+      const newer = await cold.evaluate(async ({ url, dialog }) => {
+        await import(url);
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return { same: dialog?.isConnected, open: dialog?.hasAttribute("open"), text: dialog?.textContent };
+      }, { url: moduleUrl, dialog });
+      check(`a read waiting for the first dialog module leaves a newer ${childOnly ? "child" : "wrapper"} redraw alone`,
+        newer.same && newer.open && newer.text === "Newer", JSON.stringify(newer));
+      await cold.close();
+    }
+
+    const ordered = await browser.newPage();
+    ordered.on("pageerror", (e) => errors.push(`ordered patch: ${e.message}`));
+    let dialogRequests = 0;
+    ordered.on("request", (request) => { if (request.url().endsWith("/dialog.js")) dialogRequests++; });
+    await ordered.goto(`${base}/smoke/closing`);
+    const orderedText = await ordered.evaluate(async () => {
       const { patch } = await import("corten");
-      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="smoke-cold-read"></div>'));
-      await patch(__html('<div id="smoke-cold-read"><dialog id="smoke-cold-dialog" open>Reading</dialog></div><template data-corten-read-again="0" data-from="/smoke/cold-dialog-read"></template>'));
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="smoke-list"></div><div id="smoke-settings"></div>'));
+      await patch(__html('<template id="smoke-list" data-append><p id="smoke-row">First</p></template>' +
+        '<p id="smoke-row">Second</p><div id="smoke-settings"><dialog></dialog>Settings</div>'));
+      return ["smoke-row", "smoke-settings"].map((id) => document.getElementById(id)?.textContent);
     });
-    const moduleUrl = (await requested).url();
-    const dialog = await cold.evaluateHandle(async () => {
-      const { patch } = await import("corten");
-      await patch(__html('<div id="smoke-cold-read"><dialog id="smoke-cold-dialog" open>Newer</dialog></div>'));
-      return document.getElementById("smoke-cold-dialog");
-    });
-    releaseModule();
-    const newer = await cold.evaluate(async ({ url, dialog }) => {
-      await import(url);
-      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-      return { same: dialog?.isConnected, open: dialog?.hasAttribute("open"), text: dialog?.textContent };
-    }, { url: moduleUrl, dialog });
-    check("a read waiting for the first dialog module leaves a newer patch's dialog alone",
-      newer.same && newer.open && newer.text === "Newer", JSON.stringify(newer));
-    await cold.close();
+    check("closed markup with no native close keeps append-then-redraw ordering and does not request the dialog module",
+      orderedText.join() === "Second,Settings" && dialogRequests === 0, JSON.stringify({ orderedText, dialogRequests }));
+    await ordered.close();
 
     const closing = await browser.newPage();
     closing.on("pageerror", (e) => errors.push(`closing: ${e.message}`));
@@ -7019,6 +7038,101 @@ async function run(browser) {
     check("a focus handler that reopens a closing dialog keeps the new session and abandons the draw",
       reopenOpen && reopened.same && reopened.modal && reopened.focused && reopened.seen.join() === "true",
       JSON.stringify(reopened));
+    await closing.reload();
+
+    const reentrant = await closing.evaluate(async () => {
+      const { patch } = await import("corten");
+      const main = document.querySelector("main");
+      main?.insertAdjacentHTML("beforeend", __html('<button id="smoke-redraw-opener">Old opener</button>' +
+        '<p id="smoke-redraw-status">Old status</p><div id="smoke-redraw-slot"></div>'));
+      await patch(__html('<div id="smoke-redraw-slot"><dialog id="smoke-redraw-dialog" open><button>Inside</button></dialog></div>'));
+      const opener = /** @type {HTMLButtonElement} */ (document.getElementById("smoke-redraw-opener"));
+      const old = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-redraw-dialog"));
+      opener.focus();
+      document.addEventListener("focus", (event) => {
+        if (event.target === opener || !(event.target instanceof Element) || event.target.id !== opener.id) return;
+        document.getElementById("smoke-redraw-status")?.insertAdjacentHTML("afterend", __html('<p id="smoke-script-status">Script</p>'));
+        document.getElementById("smoke-redraw-status")?.remove();
+        const replacement = document.getElementById("smoke-script-status");
+        if (replacement) replacement.id = "smoke-redraw-status";
+      }, true);
+      await patch(__html('<button id="smoke-redraw-opener">New opener</button><dialog id="smoke-redraw-dialog">Closed</dialog>' +
+        '<p id="smoke-redraw-status">Answer</p>'));
+      return { closed: !old.isConnected, status: document.getElementById("smoke-redraw-status")?.textContent, focused: document.activeElement?.textContent };
+    });
+    check("a planned step draws into the current id after a replacement opener's focus handler replaces a later target",
+      reentrant.closed && reentrant.status === "Answer" && reentrant.focused === "New opener", JSON.stringify(reentrant));
+
+    const reopenedAfterDraw = await closing.evaluate(async () => {
+      const { patch } = await import("corten");
+      const main = document.querySelector("main");
+      main?.insertAdjacentHTML("beforeend", __html('<button id="smoke-session-opener">Old opener</button><div id="smoke-session-slot"></div>'));
+      await patch(__html('<div id="smoke-session-slot"><dialog id="smoke-session" open><button>Inside</button></dialog></div>'));
+      const opener = /** @type {HTMLButtonElement} */ (document.getElementById("smoke-session-opener"));
+      const old = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-session"));
+      old.removeAttribute("open");
+      opener.focus();
+      old.showModal();
+      const reopen = (/** @type {Event} */ event) => {
+        if (event.target === opener || !(event.target instanceof Element) || event.target.id !== opener.id) return;
+        document.removeEventListener("focus", reopen, true);
+        old.showModal();
+      };
+      document.addEventListener("focus", reopen, true);
+      await patch(__html('<button id="smoke-session-opener">New opener</button><dialog id="smoke-session">Must not replace</dialog>'));
+      const state = { same: old.isConnected, modal: old.matches(":modal"), focused: old.contains(document.activeElement) };
+      if (old.open) old.close();
+      return state;
+    });
+    check("a focus handler on a replacement opener can reopen the old dialog without the next step detaching it",
+      reopenedAfterDraw.same && reopenedAfterDraw.modal && reopenedAfterDraw.focused, JSON.stringify(reopenedAfterDraw));
+
+    const coupled = await closing.evaluate(async () => {
+      const { patch } = await import("corten");
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="smoke-coupled"></div>'));
+      await patch(__html('<div id="smoke-coupled"><dialog id="smoke-coupled-other" open>Other</dialog>' +
+        '<dialog id="smoke-coupled-first" open><button>First</button></dialog></div>'));
+      const first = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-coupled-first"));
+      const other = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-coupled-other"));
+      first.querySelector("button")?.focus();
+      first.addEventListener("beforetoggle", () => other.close("from first"), { once: true });
+      let native = 0;
+      other.addEventListener("close", () => native++);
+      const heard = [];
+      document.addEventListener("close", (event) => {
+        if (event.target instanceof HTMLDialogElement && event.target.id.startsWith("smoke-coupled-")) heard.push(`${event.target.id}:${event.target.returnValue}`);
+      }, true);
+      await patch(__html('<dialog id="smoke-coupled-other">Closed other</dialog><dialog id="smoke-coupled-first">Closed first</dialog>'));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50))));
+      return { native, heard: heard.sort(), replaced: !first.isConnected && !other.isConnected };
+    });
+    check("a planned dialog closed by another dialog's handler still hands off one close with its result",
+      coupled.replaced && coupled.native === 1 && coupled.heard.join() === "smoke-coupled-first:,smoke-coupled-other:from first", JSON.stringify(coupled));
+
+    const unmatched = await closing.evaluate(async () => {
+      const { patch } = await import("corten");
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<section><button id="smoke-unmatched-opener">Open outer</button><div id="smoke-unmatched-slot"></div></section>'));
+      await patch(__html('<div id="smoke-unmatched-slot"><dialog id="smoke-unmatched-outer" open><button>Open inner</button>' +
+        '<dialog><button>Inside inner</button></dialog></dialog></div>'));
+      const opener = /** @type {HTMLButtonElement} */ (document.getElementById("smoke-unmatched-opener"));
+      const outer = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-unmatched-outer"));
+      const inner = /** @type {HTMLDialogElement} */ (outer.querySelector("dialog"));
+      outer.removeAttribute("open");
+      opener.focus();
+      outer.showModal();
+      outer.querySelector("button")?.focus();
+      inner.showModal();
+      const heard = [];
+      document.addEventListener("close", (event) => {
+        if (event.target === inner) heard.push("inner");
+        if (event.target instanceof HTMLDialogElement && event.target.id === outer.id) heard.push(event.target !== outer);
+      }, true);
+      await patch(__html('<dialog id="smoke-unmatched-outer">Closed outer</dialog>'));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50))));
+      return { heard, focused: document.activeElement?.id || document.activeElement?.localName, removed: !inner.isConnected };
+    });
+    check("a matched outer modal restores its opener without handing off the removed inner modal's close",
+      unmatched.removed && unmatched.heard.join() === "true" && unmatched.focused === "smoke-unmatched-opener", JSON.stringify(unmatched));
     await closing.close();
   }
   // A write's page that draws closed the dialogs the server drew open in a layout element it draws
