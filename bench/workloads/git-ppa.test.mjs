@@ -27,6 +27,7 @@ for (const [name, original] of Object.entries(scripts)) {
     "key parser failure": { gpgExit: 38 },
     "key download failure": { curlExit: 37 },
     "extractor failure after fingerprint": { awkExit: 39 },
+    ...(name === "image" ? { "unavailable signed index": { indexExit: 100 } } : {}),
   })) test(`${name} Git PPA setup ${scenario}`, { skip: process.platform !== "linux" }, t => {
     const root = mkdtempSync(join(tmpdir(), "corten-git-ppa-"));
     chmodSync(root, 0o700);
@@ -34,7 +35,7 @@ for (const [name, original] of Object.entries(scripts)) {
     const shims = {
       curl: '#!/bin/sh\nset -eu\nif test "$CURL_EXIT" != 0; then exit "$CURL_EXIT"; fi\nwhile test "$1" != -o; do shift; done\nprintf "public-key-fixture\\n" > "$2"\n',
       gpg: '#!/bin/sh\nprintf "%s" "$KEYS"\nexit "$GPG_EXIT"\n',
-      "apt-get": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$ROOT/apt-calls"\n',
+      "apt-get": '#!/bin/sh\nprintf "%s\\n" "$*" >> "$ROOT/apt-calls"\nif test -e "$ROOT/apt/sources.list.d/corten-git-ppa.list"; then\n  case " $* " in *" update "*) exit "$INDEX_EXIT";; esac\nfi\n',
       git: '#!/bin/sh\nprintf "git version fixture\\n"\n',
       timeout: '#!/bin/sh\nshift\nexec "$@"\n',
     };
@@ -51,7 +52,7 @@ for (const [name, original] of Object.entries(scripts)) {
     const result = spawnSync(name === "cloud" ? "/bin/bash" : "/bin/sh", ["-c", `${name === "cloud" ? "set -Eeuo pipefail" : "set -eu"}\numask 077\nmkdir -p '${root}/apt/sources.list.d'\n${script}`], {
       env: { PATH: `${root}:/usr/bin:/bin`, HOME: root, ROOT: root,
         KEYS: options.keys ?? `pub:::::::::\nfpr:::::::::${fingerprint}:\n`,
-        GPG_EXIT: String(options.gpgExit ?? 0), CURL_EXIT: String(options.curlExit ?? 0) },
+        GPG_EXIT: String(options.gpgExit ?? 0), CURL_EXIT: String(options.curlExit ?? 0), INDEX_EXIT: String(options.indexExit ?? 0) },
       cwd: root, encoding: "utf8", timeout: 5000, maxBuffer: 65536,
     });
     assert.equal(result.error, undefined);
@@ -69,6 +70,12 @@ for (const [name, original] of Object.entries(scripts)) {
           "-o Acquire::Retries=5 install -y -qq --no-install-recommends git",
         ]);
       } else assert.match(calls, /update -qq\ninstall -y -qq(?: --no-install-recommends)? git\n$/);
+    } else if (options.indexExit) {
+      assert.equal(result.status, options.indexExit);
+      assert.ok(existsSync(list), "failure occurs after checking the signing key");
+      const calls = readFileSync(join(root, "apt-calls"), "utf8");
+      assert.match(calls, /update -qq --error-on=any\n$/);
+      assert.ok(!calls.includes(" git"), "a missing index must stop Git installation");
     } else {
       assert.notEqual(result.status, 0);
       assert.equal(existsSync(list), false, "unverified key must not authorize a source");
