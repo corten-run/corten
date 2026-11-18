@@ -5684,9 +5684,15 @@ rules something out.
     the guide only asks today; or the browsers the runtime falls back for gain the Navigation API,
     when [Limit 1](#limit-navigation-api)'s sentence on the mark goes.
 
-    Last checked: 2026-11-17, the runtime's size on the working tree after `8a6ff134a` against main
-    `8d0ae1f82`'s; 2026-11-15, the page's and the patch's bytes and times measured with
-    `307d00bca`'s runtime in Chromium 156.0.8078.4.
+    Last checked: 2026-11-17, the runtime's size on `c6beaa655` against main `056964945`'s (the
+    same as `8d0ae1f82`'s); 2026-11-17, the watchlist smoke on `c6beaa655` (its server and runtime
+    `8e381f3e2`'s, the later commits the smoke's own), Chromium 156.0.8078.4 475 checks and Firefox
+    157.0 472 with 1 skipped in the three-engine run, WebKit 27.2 345 with 104 skipped run alone on
+    a server started for it, the `data-address` steps 14 in each, all passed; 2026-11-17, the steps
+    for a patch and its address in one task and for an unmarked form's write queued behind another
+    and sent after a GET, against `8a6ff134a`'s server and runtime (`168a5ddd4`'s image): both
+    fail in all three engines and pass with `8e381f3e2`'s; 2026-11-15, the page's and the patch's
+    bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4.
 
 ## Rules
 
