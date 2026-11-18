@@ -75,8 +75,9 @@ sheet do. Since nothing fails when a rail is missing (the page answers, the rail
 drawn), `corten dev` warns in the console of each closed dialog or popover that a rule inside
 `@media` or `@container` gives a `display`, at the width the page is at or any other. Outside
 `@scope` it suggests both rules: the page cannot tell a rail from an open look written without
-`[open]`. Within a scope it names the rule without suggesting a replacement selector. With an explicit
-`@scope` root, the check anchors each plain selector-list member below the root, binds a single
+`[open]`. The suggestion uses a matching class from the resolved selector, including in nested
+rules written with `&`. Within a scope it names the rule without suggesting a replacement selector.
+With an explicit `@scope` root, the check anchors each plain selector-list member below the root, binds a single
 `:scope` or `&` to it, and checks declarations written directly in the scope on the root itself.
 It accepts `:is()`, `:not()` and `:where()` with a single type, class, ID or attribute presence
 selector, such as `dialog:not([open])`.
@@ -89,7 +90,8 @@ root reference, other functional pseudo-classes, sibling or column combinators, 
 quotes, escapes or namespaces. Selectors longer than 1,024 characters before or after composition
 are skipped, including in ordinary CSS nesting. A skipped display rule cannot cause a warning.
 It can only withhold one if it declares a non-`none` `display` with `!important` and could match
-the candidate. Skip notes are deduplicated by CSSOM selector text. Adopted stylesheets
+the candidate. For a limited scope it uses the composed selector when supported, ignoring the
+limit but keeping the root. Skip notes are deduplicated by CSSOM selector text. Adopted stylesheets
 are not inspected ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
 When only areas have stylesheets, each area's file starts with these rules. An app with no component stylesheet has
 neither file, so if its `static/style.css` gives a hidden element, a popover or a dialog a

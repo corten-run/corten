@@ -12,9 +12,11 @@ Corten is pre-1.0, so any minor version may change the API.
   roots such as `@scope (:scope)`, other
   [unsupported shapes](docs/guide/styles.md#styles), and selectors longer than 1,024 characters
   before or after composition. Only skipped rules with non-`none` `display: ... !important` can
-  withhold a warning for a candidate they could match. Skip notes are deduplicated by CSSOM
-  selector text. Scoped warnings do not suggest replacement selectors. Adopted stylesheets are
-  not inspected
+  withhold a warning for a candidate they could match; when the selector can be composed, the
+  check keeps the root and ignores only the `to` limit. Skip notes are deduplicated by CSSOM
+  selector text. Scoped warnings do not suggest replacement selectors; unscoped suggestions use
+  a matching class from the resolved selector, including with ordinary CSS nesting. Adopted
+  stylesheets are not inspected
   ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.

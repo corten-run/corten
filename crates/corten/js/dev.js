@@ -145,14 +145,15 @@ function displays() {
    * @param {string | null} selector
    * @param {string | null} written
    * @param {boolean} scoped
+   * @param {boolean} limited
    */
-  const walk = (rules, condition, selector, written, scoped) => {
+  const walk = (rules, condition, selector, written, scoped, limited) => {
     for (const rule of rules) {
       if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule) {
         const start = rule.start;
-        const root = !start || rule.end || (!scoped && selector !== null) || (selector === null && start.match(SCOPE_REF))
+        const root = !start || (!scoped && selector !== null) || (selector === null && start.match(SCOPE_REF))
           ? "" : resolved(start, selector, true);
-        walk(rule.cssRules, condition, root, start || "@scope", true);
+        walk(rule.cssRules, condition, root, start || "@scope", true, limited || !!rule.end);
         continue;
       }
       const styled = rule instanceof CSSStyleRule;
@@ -162,12 +163,12 @@ function displays() {
       if (style?.display && asWritten) {
         const display = style.display;
         const important = style.getPropertyPriority("display") === "important";
-        if (own) found.push({ selector: own, written: asWritten, display, condition, important, scoped });
-        else if (own === "") {
+        if (own && !limited) found.push({ selector: own, written: asWritten, display, condition, important, scoped });
+        else if (own !== null) {
           if (important && display !== "none") {
-            // A plain selector can rule out a candidate even without its root. If it depends on
-            // context or is too long to inspect, do not use a failed match as evidence.
-            possibleOverrides.push(asWritten.length <= MAX_SELECTOR && !unsupported(asWritten) && !asWritten.match(SCOPE_REF) && !/(^|,)\s*>/.test(asWritten) ? asWritten : "");
+            // Ignore a limit, not its root. Without a resolved selector, only a plain selector
+            // can rule out a candidate.
+            possibleOverrides.push(own || (asWritten.length <= MAX_SELECTOR && !unsupported(asWritten) && !asWritten.match(SCOPE_REF) && !/(^|,)\s*>/.test(asWritten) ? asWritten : ""));
           }
           if (!skipped.has(asWritten)) {
             skipped.add(asWritten);
@@ -179,12 +180,12 @@ function displays() {
       if (!inner) continue;
       // A width (or a container's size) is a breakpoint; @supports is not, and passes its own on.
       const query = rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
-      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), scoped && styled ? "" : own, asWritten, scoped);
+      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), scoped && styled ? "" : own, asWritten, scoped, limited);
     }
   };
   for (const sheet of document.styleSheets) {
     try {
-      walk(sheet.cssRules, null, null, null, false);
+      walk(sheet.cssRules, null, null, null, false, false);
     } catch {}
   }
   return { found, possibleOverrides };
@@ -235,8 +236,8 @@ function inPlace(root) {
     // Not [hidden] either, so a rail the app hides with the attribute stays hidden.
     const closedState = dialog ? "[open],[hidden]" : ":popover-open,[hidden]";
     // The class as the component's file writes it (`.filters`, which Corten prefixes:
-    // `.search-page__filters`), from the rule's own selector.
-    const cls = [...drawn.written.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "").find((c) => /** @type {DOMTokenList} */ (Reflect.get(own, "classList", el)).contains(c))?.split("__").pop();
+    // `.search-page__filters`), from the resolved selector.
+    const cls = [...drawn.selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "").find((c) => /** @type {DOMTokenList} */ (Reflect.get(own, "classList", el)).contains(c))?.split("__").pop();
     const id = attrOf(el, "id");
     const named = cls ? "." + cls : Reflect.get(own, "localName", el) + (id ? "#" + id : "");
     console.warn(`${warning} To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${kind}'s look, write it as \`${named}${state}\``, el);

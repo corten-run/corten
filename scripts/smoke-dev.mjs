@@ -84,6 +84,7 @@ try {
       '<div class="overridePanel"><dialog id="insideOverride" class="overrideRail"></dialog></div><dialog id="outsideOverride" class="overrideRail"></dialog>',
       '<div class="panel"><dialog id="closedInsidePanel"></dialog></div><dialog id="closedOutsidePanel"></dialog>',
       '<div class="card"><div id="skipCardBody" class="card-body"></div><div class="slot"></div></div>',
+      '<dialog class="filters"></dialog>',
       '<dialog id="lastrail" class="rail"></dialog>',
     ].join("");
     const sheet = '<link rel="stylesheet" href="/dialog-in-place.css">';
@@ -113,8 +114,9 @@ try {
         "@media (min-width: 1px) { @scope (.anonymousRail) { :scope { display: flex; } } }",
         "@media (min-width: 900px) { .overrideRail { display: flex; } @scope (.overridePanel) to (.stop) { .overrideRail { display: flex !important; } } }",
         "@scope (.panel) { @media (min-width: 1px) { dialog:not([open]) { display: flex; outline-style: solid; } } }",
+        ".filters { @media (min-width: 900px) { & { display: flex; } } }",
         ...(skippedShapes ? [
-          "@scope (.card) to (.slot) { :scope > .card-body { display: grid; } :scope dialog { display: none !important; } }",
+          "@scope (.card) to (.slot) { :scope > .card-body { display: grid !important; } :scope dialog { display: none !important; } }",
           "@scope (.identity) { @media (min-width: 1px) { :scope > :scope { display: flex; outline-style: solid; } } }",
           "@scope (:scope) { @media (min-width: 1px) { .explicitScopeRoot { display: flex; outline-style: solid; } } }",
         ] : []),
@@ -134,7 +136,7 @@ try {
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
   const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
   const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
-  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,listPlain,listExplicit,relativeChild,scopedPopover,doubleScope,dialog,closedInsidePanel,lastrail", railNames);
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,listPlain,listExplicit,relativeChild,scopedPopover,doubleScope,dialog,outsideOverride,closedInsidePanel,dialog,lastrail", railNames);
   const warned = new Set(railOnLoad.map((e) => e.split(" ")[1]));
   check("a plain scoped dialog rule does not warn outside its root", warned.has("scopedPlain") && !warned.has("outsidePlain"), railNames);
   check(":scope > dialog warns only inside its root", warned.has("scopedRoot") && !warned.has("outsideRoot"), railNames);
@@ -150,7 +152,9 @@ try {
   check("a scoped warning does not suggest a selector that drops the scope", railOnLoad.some((m) => m.startsWith("corten: dialog is a closed dialog that `:scope`") && !m.includes("dialog:not(")));
   const overrideDisplays = () => drawn.locator(".overrideRail").evaluateAll((els) => els.map((el) => getComputedStyle(el).display).join(","));
   const smallOverride = await overrideDisplays();
-  check("a skipped override withholds the rail warnings at 600px and notes its selector once", smallOverride === "none,none" && !warned.has("insideOverride") && !warned.has("outsideOverride") && notes(".overrideRail") === 1, smallOverride);
+  check("a skipped override withholds only the inside rail warning at 600px and notes its selector once", smallOverride === "none,none" && !warned.has("insideOverride") && warned.has("outsideOverride") && notes(".overrideRail") === 1, smallOverride);
+  const nestedRail = railOnLoad.find((m) => m.startsWith("corten: dialog is a closed dialog that `&`"));
+  check("a nested & rule suggests the matching class on an idless dialog", !!nestedRail?.includes("`.filters:not([open],[hidden]) { display: flex !important }`"), nestedRail);
   check(
     "its warning names the rule, the query, the rule that draws it in place and the open one's look",
     !!railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") &&
@@ -229,7 +233,7 @@ try {
   const wideRail = reportOf("lastrail");
   await drawn.reload();
   const largeOverride = await overrideDisplays();
-  check("the native scoped override draws only the inside rail at 1000px", await wideRail && largeOverride === "flex,none" && !warnings.some((m) => /^corten: (insideOverride|outsideOverride) /.test(m)) && notes(".overrideRail") === 1, largeOverride);
+  check("the native scoped override draws only the inside rail at 1000px", await wideRail && largeOverride === "flex,none" && !warnings.some((m) => m.startsWith("corten: insideOverride ")) && warnings.some((m) => m.startsWith("corten: outsideOverride ")) && notes(".overrideRail") === 1, largeOverride);
 
   await drawn.setViewportSize({ width: 600, height: 800 });
   skippedShapes = true;
@@ -240,7 +244,7 @@ try {
   const implicitLooks = await drawn.locator("#implicitNested").evaluate((el) => getComputedStyle(el).outlineStyle);
   const warnedOnSkip = (/** @type {string} */ id) => warnings.some((m) => m.startsWith(`corten: ${id} is a closed`));
   const cardDisplay = await drawn.locator("#skipCardBody").evaluate((el) => getComputedStyle(el).display);
-  check("a skipped normal display and a skipped display: none !important do not silence dialog.rail at 600px", await skippedLoad && cardDisplay === "grid" && warnings.some((m) => m.startsWith("corten: rail is a closed dialog that `.rail` in `@media (min-width: 900px)` gives display: flex")) && notes(":scope > .card-body") === 1 && notes(":scope dialog") === 1, cardDisplay);
+  check("skipped important rules in an unrelated limited scope do not silence dialog.rail at 600px", await skippedLoad && cardDisplay === "grid" && warnings.some((m) => m.startsWith("corten: rail is a closed dialog that `.rail` in `@media (min-width: 900px)` gives display: flex")) && notes(":scope > .card-body") === 1 && notes(":scope dialog") === 1, cardDisplay);
   check("a skip note names the selector and the check without a warning caveat", warnings.includes("corten: skipped `:scope > .card-body`: cannot compose its selector for the closed dialog and popover check"));
   check("nested implicit roots are skipped in every engine, including where WebKit applies them", await skippedImplicit && implicitLooks === (engine === "webkit" ? "solid" : "none") && !warnedOnSkip("implicitNested") && notes(":scope .implicitOuter > #implicitNested") === 1, implicitLooks);
   check("multiple scope references are skipped rather than matched to different roots", !warnedOnSkip("differentRoots") && notes(":scope > :scope") === 1);
