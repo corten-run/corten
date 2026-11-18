@@ -7,7 +7,7 @@
 //! script reads (`corten/read`), a form whose fields a handler is given as its controls, and view
 //! classes (`corten/views`) whose holes are in a form, past one and a form's whole text, beside
 //! controls named after the members their paths read.
-use corten::{Error, LiveResponse, prelude::*};
+use corten::{Error, LiveResponse, prelude::*, script::Ref};
 use futures_util::{StreamExt, stream};
 
 use crate::layout::Layout;
@@ -74,13 +74,15 @@ pub mod url {
     #[route("/smoke/shared-refs", get = shared_refs_page)]
     pub struct SharedRefsPage;
 
-    #[route("/smoke/shared-refs/replace", get = replace_shared_ref_part)]
-    pub struct ReplaceSharedRefPart;
+    #[route("/smoke/shared-refs/{instance}/replace", get = replace_shared_ref_part)]
+    pub struct ReplaceSharedRefPart {
+        pub instance: u32,
+    }
 }
 
 /// The components the smoke's pages draw.
 pub const COMPONENTS: &[corten::Component] =
-    &[Quoted, ScopeProbe, StyledNote, ShipForm, Reader, FormNested, PastForm, FormText, ScopedPage];
+    &[Quoted, ScopeProbe, StyledNote, ShipForm, Reader, FormNested, PastForm, FormText, ScopedPage, SharedRefsPage];
 
 #[derive(Id)]
 struct ScopedReadyId;
@@ -462,40 +464,59 @@ async fn large() -> LiveResponse {
 }
 
 #[derive(Id)]
-struct SharedRefPartId;
+struct SharedRefPartId(u32);
 
 #[component(js)]
-pub(crate) fn SharedRefsPage(replaced: bool) -> impl Render {
+fn SharedRefsPage(instance: u32, replaced: bool) -> impl Render {
     let out = refs();
-    let part: corten::script::SharedRef<el::HTMLParagraphElement> = refs();
+    let part: Ref<el::HTMLParagraphElement> = refs();
     html! {
         <section>
             <output ref={out}></output>
             <button type="button" on:click={js::show_part(part, out)}>"Read part"</button>
-            <form method="get" action={url::ReplaceSharedRefPart} data-patch><button>"Replace part"</button></form>
-            {shared_ref_part(SharedRefsPageRefs, replaced)}
+            <form method="get" action={url::ReplaceSharedRefPart { instance }} data-patch><button>"Replace part"</button></form>
+            if instance == 2 {
+                <PartBoundary>
+                    <SharedRefPart bundle={SharedRefsPageRefs} instance={instance} replaced={replaced} />
+                </PartBoundary>
+            } else {
+                <SharedRefPart bundle={SharedRefsPageRefs} instance={instance} replaced={replaced} />
+            }
         </section>
     }
 }
 
-fn shared_ref_part(refs: SharedRefsPageRefs, replaced: bool) -> impl Patch {
-    html! { <p id={SharedRefPartId} ref={refs.part()}>{if replaced { "Replacement" } else { "Original" }}</p> }
+#[component]
+fn PartBoundary(children: impl Render) -> impl Render {
+    let boundary = refs();
+    html! { <div ref={boundary}>{children}</div> }
 }
 
-fn shared_refs_document(req: &Req, replaced: bool) -> HtmlResult {
+#[component]
+fn SharedRefPart(bundle: SharedRefsPageRefs, instance: u32, replaced: bool) -> impl Patch {
+    let status = if replaced { "Replacement" } else { "Original" };
+    html! { <p id={SharedRefPartId(instance)} ref={bundle.part}>{status} " " {instance}</p> }
+}
+
+fn shared_refs_document(req: &Req, replaced: Option<u32>) -> HtmlResult {
     req.page(html! {
         <Layout req={req} title="Shared patch refs" viewer={None} head="">
-            <SharedRefsPage replaced={replaced} />
+            <SharedRefsPage instance={1} replaced={replaced == Some(1)} />
+            <SharedRefsPage instance={2} replaced={replaced == Some(2)} />
         </Layout>
     })
 }
 
 async fn shared_refs_page(req: Req) -> HtmlResult {
-    shared_refs_document(&req, false)
+    shared_refs_document(&req, None)
 }
 
-async fn replace_shared_ref_part(req: Req) -> HtmlResult {
-    req.patch_or(shared_ref_part(SharedRefsPageRefs, true), || async { shared_refs_document(&req, true) }).await
+async fn replace_shared_ref_part(req: Req, Params(at): Params<url::ReplaceSharedRefPart>) -> HtmlResult {
+    let instance = at.instance;
+    req.patch_or(SharedRefPart { bundle: SharedRefsPageRefs, instance, replaced: true }, || async {
+        shared_refs_document(&req, Some(instance))
+    })
+    .await
 }
 
 #[cfg(test)]

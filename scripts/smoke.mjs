@@ -1049,24 +1049,46 @@ async function run(browser) {
   {
     const shared = await browser.newPage();
     await shared.goto(`${base}/smoke/shared-refs`);
-    const part = shared.locator("#shared-ref-part");
-    const ref = await part.getAttribute("data-ref");
-    const readPart = shared.getByRole("button", { name: "Read part" });
-    await readPart.click();
-    await shared.waitForFunction(() => document.querySelector("main output")?.value === "Original");
-    const answer = shared.waitForResponse((r) => new URL(r.url()).pathname === "/smoke/shared-refs/replace");
-    await shared.getByRole("button", { name: "Replace part" }).click();
-    const patch = await answer;
+    const owners = shared.locator('section[data-scope="shared-refs-page"]');
+    const first = owners.nth(0);
+    const second = owners.nth(1);
+    const firstPart = first.locator("#shared-ref-part-1");
+    const secondPart = second.locator('[data-scope="part-boundary"] #shared-ref-part-2');
+    const untouched = await firstPart.elementHandle();
+    const directRef = await firstPart.getAttribute("data-ref");
+    const ref = await secondPart.getAttribute("data-ref");
+    const readPart = async (/** @type {import('@playwright/test').Locator} */ owner, /** @type {string} */ expected) => {
+      const out = owner.locator("output");
+      await out.evaluate((node) => { /** @type {HTMLOutputElement} */ (node).value = ""; });
+      await owner.getByRole("button", { name: "Read part" }).click();
+      await owner.getByText(expected, { exact: true }).and(out).waitFor();
+    };
+    await readPart(first, "Original 1");
+    await readPart(second, "Original 2");
+    const replace = () => Promise.all([
+      shared.waitForResponse((r) => new URL(r.url()).pathname === "/smoke/shared-refs/2/replace"),
+      second.getByRole("button", { name: "Replace part" }).click(),
+    ]);
+    const [patch] = await replace();
     const body = await patch.text();
-    await shared.getByText("Replacement", { exact: true }).waitFor();
-    await readPart.click();
-    await shared.waitForFunction(() => document.querySelector("main output")?.value === "Replacement");
+    await secondPart.and(second.getByText("Replacement 2", { exact: true })).waitFor();
+    await readPart(second, "Replacement 2");
+    await readPart(first, "Original 1");
     check(
-      "a standalone patch keeps the page part's ref, and its owner finds the replacement",
-      ref === "shared-refs-page/part" && patch.headers()["corten-patch"] === "1" && body.includes(`data-ref="${ref}"`) &&
-        !body.includes("data-scope=") && (await part.getAttribute("data-ref")) === ref,
+      "a standalone patch keeps its ref across a nested scope and only replaces the targeted owner instance",
+      ref === "shared-refs-page/part" && directRef === ref && patch.headers()["corten-patch"] === "1" && body.includes(`data-ref="${ref}"`) &&
+        !body.includes("data-scope=") && (await secondPart.getAttribute("data-ref")) === ref &&
+        (await untouched.evaluate((node) => node.isConnected && node.textContent === "Original 1")),
       body,
     );
+    await secondPart.evaluate((node) => node.remove());
+    const diagnostic = shared.waitForEvent("console", (m) =>
+      m.type() === "error" && m.text().includes("corten: patch element <p> needs an id that exists on the page"),
+    );
+    await replace();
+    await diagnostic;
+    await readPart(first, "Original 1");
+    check("a standalone patch with a missing target reports it without inserting the part", (await shared.locator("#shared-ref-part-2").count()) === 0);
     await shared.close();
   }
   // `data-on` is single-quoted, so the JSON of a handler's arguments (here the feed's address and
