@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
+  `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
+
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 
