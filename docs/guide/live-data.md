@@ -471,7 +471,42 @@ once. Against a feed that answers every stream with `sync`, one page made 544 sn
 in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
 221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream), on
-async-nats 0.52 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why). In the failover
+async-nats 0.52 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
+
+Cluster feed keys use literal [NATS subjects](https://docs.nats.io/nats-concepts/subjects):
+nonempty dot-separated tokens without whitespace, control characters (NUL included), `*` or
+`>`, and at most `corten_cluster::MAX_FEED_KEY_BYTES` (1,024) bytes. UTF-8 and several tokens
+(`seller.42`) work. Corten follows the documented naming rules even where the broker is
+more permissive. `Options::subject_prefix` follows the same rules, with a 255-byte limit
+checked at startup. The key also fits the feed and outbox B-tree indexes on standard
+8 KB Postgres pages without relying on compression.
+
+At NATS's default 4,096-byte [`max_control_line`](https://docs.nats.io/reference/config/max_control_line),
+a prefix set with `async_nats::ConnectOptions::custom_inbox_prefix` can be at most 2,729 bytes.
+`Cluster::start` checks the generated reply inbox, including the client's dot and 22-byte
+token, before touching Postgres. The budget reserves space for the longest supported publish
+subject and its protocol framing. Stay with the default unless you need a longer inbox prefix.
+NATS does not advertise the limit: if you change it, set `Options::max_control_line` to match
+the lowest limit on any NATS server the client can connect to. Raise both to allow a longer
+inbox prefix; this does not change the key or subject prefix limits.
+
+`create_feed` and `begin` refuse invalid keys before doing SQL. Inspect the error with
+`error.is::<corten_cluster::InvalidFeedKey>()`. `Cluster::feed` answers `None` without
+querying Postgres, and the snapshot and live routes answer 404.
+
+The relay logs and drops pending rows with invalid keys from an older version or external
+SQL, then publishes the remaining rows in order. Look on `corten::feed` for the outbox row
+ID and key. The relay uses the existing `published_at` marker to take the skipped row out
+of the queue; it did not deliver that patch. Ordinary pruning can remove it. There is no
+schema migration. An older instance holding the relay lease can still stall on a bad row
+until a new relay takes over. Publish and acknowledgement failures, including message size
+limits, still retry ([Choice 63](../design.md#choice-cluster-feed-subjects)).
+
+To replace an invalid key, write a new feed with a valid key using the app's current
+committed data, and point clients and future writes at it. Do not rename queued rows or
+try to replay the dropped patches.
+
+In the failover
 benchmark (200 clients, 50 writes a second, each instance killed and restarted under load),
 every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000 with
 clients back on the other instance after 1.1 s at the median (measured on async-nats 0.50,

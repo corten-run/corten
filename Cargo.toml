@@ -21,8 +21,6 @@ corten = { package = "corten-run", version = "0.2.0", path = "crates/corten", de
 corten-macros = { version = "0.2.0", path = "crates/corten-macros" }
 corten-feed = { version = "0.2.0", path = "crates/corten-feed" }
 corten-protocol = { version = "0.2.0", path = "crates/corten-protocol" }
-corten-cluster = { version = "0.2.0", path = "crates/corten-cluster" }
-corten-ui = { version = "0.2.0", path = "crates/corten-ui" }
 
 [profile.release]
 opt-level = 3

@@ -468,7 +468,7 @@ representable value must remain after excluding ends. For a plain any-step input
 past 18 digits written out, so a stored `1e-20` is drawn in a short spelling the browser can submit
 unchanged.
 It still draws submitted text as typed after a refusal. Standalone `Entry` attributes keep their
-existing formatting. See [Choice 63](../design.md#choice-exclusive-ends) for when to revisit this choice.
+existing formatting. See [Choice 64](../design.md#choice-exclusive-ends) for when to revisit this choice.
 
 Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
 `Bounds::new(0.1, 16.0).step(0.1)`. Stepped fields keep their existing formatting. Integers
@@ -2443,7 +2443,9 @@ failures as plain text instead),
 the standard one: an RFC 9457 Problem Details document, sent as `application/problem+json`,
 `{"title":"Not Found","status":404,"detail":"No item 7."}`. `title` is the status's reason. A
 4xx's `detail` is the error's message or the rejection's text; a 5xx has no `detail`, only the
-status (the message is logged, and shown under `corten dev`). Validation errors add the fields
-as an extension member:
+status (the message is logged, and shown under `corten dev`). If a JSON body has a value that
+does not fit a field, `Json<T>` uses the same serde reader to report that field's path in its
+422 whether `T` has a derived `FromJson` fast path or delegates to serde. Validation errors add
+the fields as an extension member:
 `{"title":"Unprocessable Entity","status":422,"detail":"email: ...","fields":{"email":"..."}}`,
 and a message about the whole form (`Errors::add_form`) is `form` too.

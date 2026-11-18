@@ -137,7 +137,8 @@
 //! ```
 //!
 //! Neither do the attributes serde's derive refuses: a unit struct's `default` or `transparent`,
-//! and `rename_all_fields` on a struct:
+//! `transparent` on an enum or with a conversion attribute, `from` with `try_from`, and
+//! `rename_all_fields` on a struct:
 //!
 //! ```compile_fail
 //! #[derive(Default, corten::FromJson)]
@@ -153,8 +154,49 @@
 //!
 //! ```compile_fail
 //! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! enum Marker { Present }
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent, into = "u64")]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(from = "u64")]
+//! #[serde(transparent)]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent, try_from = "u64")]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(try_from = "u64", from = "u64")]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
 //! #[serde(rename_all_fields = "camelCase")]
 //! struct Price { amount: f64 }
+//! ```
+//!
+//! On its own, `into` only affects serialization, so `FromJson` still reads the type normally:
+//!
+//! ```
+//! #[derive(corten::FromJson)]
+//! #[serde(into = "u64")]
+//! struct Cents(u64);
+//!
+//! assert_eq!(corten::json::from_str::<Cents>("42").unwrap().0, 42);
 //! ```
 //!
 //! A `transparent` struct is read as its one field that is neither skipped, defaulted nor a
@@ -1927,6 +1969,31 @@ mod tests {
             Ok(Json(v)) => ("ok".into(), format!("{v:?}")),
             Err(e) => (e.status().to_string(), e.body_text()),
         }
+    }
+
+    #[tokio::test]
+    async fn json_names_the_same_bad_field_with_both_readers() {
+        #[derive(Debug)]
+        struct SerdeAlerts;
+
+        impl<'de> serde::Deserialize<'de> for SerdeAlerts {
+            fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+                <Vec<Alert> as serde::Deserialize>::deserialize(de).map(|_| Self)
+            }
+        }
+
+        impl FromJson for SerdeAlerts {}
+
+        let valid = r#"[{"email":"a@b.c","target":1}]"#;
+        assert!(super::read::fast::<Vec<Alert>>(valid).is_some());
+        assert!(super::read::fast::<SerdeAlerts>(valid).is_none());
+
+        let invalid = br#"[{"email":"a@b.c","target":-1}]"#;
+        let content_type = Some("application/json");
+        let derived = read::<Vec<Alert>>(content_type, invalid).await;
+        assert_eq!(derived, read::<SerdeAlerts>(content_type, invalid).await);
+        assert_eq!(derived.0, StatusCode::UNPROCESSABLE_ENTITY.to_string());
+        assert!(derived.1.contains("[0].target:"), "{}", derived.1);
     }
 
     #[test]

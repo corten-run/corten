@@ -62,8 +62,8 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 # Always on for `Form` and `Query`; `json` adds the derive.
 serde = { version = "1", default-features = false, features = ["std"] }
 serde_json = { version = "1", optional = true }
-# Where in a JSON body a value did not fit (`Json`'s 422 names the path, as it did when it was
-# axum's reader).
+# Names the field path in `Json`'s 422 when serde rejects the body. The fast reader uses that
+# same error path when it cannot read a body.
 serde_path_to_error = { version = "0.1", optional = true }
 corten-feed = { workspace = true, optional = true }
 brotli = { version = "9", optional = true }

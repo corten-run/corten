@@ -1717,7 +1717,10 @@ rules something out.
     their own type through another type and through `Rule<u8>`, the `compile_fail,E0391` doctests at
     `1e0bcd58`; 2026-11-16, rustc's E0391 naming `SHAPE` for a row written as `self::Step`, after
     preserving path punctuation, the `compile_fail,E0391` doctest at `4f83d633` (focused form
-    doctests with `--show-output`, 61 passed, one ignored).
+    doctests with `--show-output`, 61 passed, one ignored); 2026-11-17, serde_derive 1.0.229's
+    `check_transparent` and `check_from_and_try_from` against the `FromJson` compile errors in
+    `crates/corten/src/json.rs`; 2026-11-18, serde_derive 1.0.229's conversion argument diagnostics
+    against the compile errors in `crates/corten/tests/handler_message.rs`.
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
@@ -5814,7 +5817,58 @@ rules something out.
     Last checked: 2026-11-17, Towncrier 26.9.0, Changesets 3.0.3, Keep a Changelog 1.1.0,
     and Corten's release procedure at `231225b9a`.
 
-63. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
+63. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys use literal NATS subjects, not encoded names; the
+    relay skips rows with invalid legacy keys.** Corten requires nonempty dot-separated tokens
+    without whitespace, control characters, `*` or `>`. This is stricter than the broker: it may
+    accept an embedded `*` or a non-breaking space, but the documented naming rules reserve
+    wildcards and exclude whitespace. Control characters are not useful in names, and Postgres
+    cannot store NUL. UTF-8 and multiple tokens are allowed. The existing subjects and message
+    IDs for valid keys do not change.
+
+    Keys are limited to 1,024 bytes and the subject prefix to 255. These bounds leave room
+    for a 2,729-byte custom reply inbox prefix, a dot and a 22-byte token, and 64 bytes of
+    publish framing in NATS's default 4,096-byte control line. The key fits the feed primary
+    key and the outbox `(feed, seq)` entry under the
+    Postgres B-tree limit on standard 8 KB pages without depending on compression.
+    `create_feed` and `begin` return `InvalidFeedKey` before doing SQL. `Cluster::feed` checks
+    before loading an uncached key, returning `None` for an invalid one; only validated keys
+    get cache entries. `Cluster::start` checks both the subject prefix and the generated reply
+    inbox before changing the database or starting background work. NATS does not advertise
+    its control-line limit, so deployments that change it set `Options::max_control_line` to
+    match the lowest server limit the client can encounter.
+
+    The relay uses the same check, independent of the client or broker, for rows that an old
+    version or external SQL could have queued. It marks an invalid row done with the existing
+    `published_at` marker, logs the row ID and key at error level, and continues without
+    sending the patch. The marker means done, not delivered, in this case. Ordinary pruning
+    can remove the row; the app's committed data is not changed. No schema or index change is
+    needed. Only acknowledged valid rows get marked done; publish and acknowledgement
+    failures (including size limits) still retry. A server with a lower control-line limit
+    than the one configured in Corten can still reject a publish.
+
+    Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
+    restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
+    no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
+    in place. Using `Subject::is_valid` would copy the key and accept whitespace outside the
+    framing bytes.
+
+    Stands on: platform (the [NATS subject rules](https://docs.nats.io/nats-concepts/subjects)
+    exclude whitespace and reserve wildcards for subscriptions, the
+    [NATS server configuration](https://docs.nats.io/reference/config/) defaults to a 4 KB
+    control line, and [Postgres B-tree entries](https://www.postgresql.org/docs/16/btree-intro.html)
+    fit only about a third of a page); reasoned (a key that fails the same pure check at
+    every retry cannot be repaired by retrying, and marking it done also removes it from the
+    existing pending index); value (correctness and reliability first, early failure and a
+    small surface: README Values 4 and 6).
+
+    Revisit when: an app needs arbitrary text as a cluster key, the NATS server's default
+    control line or documented grammar changes, or deployments need automatic recovery for
+    previously accepted keys.
+
+    Last checked: 2026-11-17, NATS subject and configuration documentation and async-nats 0.52.0
+    source reviewed, and the pre-fix store and relay read at `056964945`.
+
+64. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
     on the server.** HTML has no exclusive number bound. For both `f32` and `f64`, emit the
     endpoint itself as `min` or `max`, just as for an inclusive bound. The hint is advisory.
     The cost is that an endpoint can reach the handler, which runs the authoritative
@@ -5859,6 +5913,7 @@ rules something out.
     WebKit (Playwright 1.64.1), with 422 for ordinary endpoints and 200 for inward values, and
     a separate no-JavaScript probe confirming the precise-end counterexample in Chromium and
     WebKit.
+
 
 
 ## Rules
@@ -6061,16 +6116,62 @@ by design; where it is known, a limit says what would lift it or why it is so.
 8. <a id="limit-views-render-once"></a>`html!` views render once and own what they capture; read from `req` before building the view.
    A value borrowed from one the view owns is computed inside the markup:
    `html! { let shown = saved.as_deref().unwrap_or(typed); <input value={shown}> }`.
-9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting and `@media`, `@supports`, `@container`,
-   `@layer`, `@scope`, `@keyframes` and `@font-face`; `@import`, `@scope` with no root and
-   escaped class names are not supported. At the top of the file, an `@scope` rule's root names
+9. <a id="limit-stylesheet-support"></a>Component stylesheets support plain CSS with nesting.
+   The supported block at-rules are listed below; their names match ASCII case-insensitively:
+
+| At-rules | Processing |
+|---|---|
+| `@media`, `@supports`, `@container`, `@layer`, `@starting-style` | Rules checked and classes prefixed as at the surrounding level; declarations in a nested rule stay declarations. Token breakpoints in `@media` are resolved at app startup. |
+| `@scope` | Root and limit selectors checked and prefixed; rules checked as described below. |
+| `@property` | Body copied raw, then required descriptors and supported syntax checked; registered names and references prefixed to the component. Not allowed inside a style rule. |
+| `@position-try` | Declaration body copied raw; its dashed-ident name and matching references in `position-try-fallbacks` and `position-try` declarations in this file prefixed to the component, even before the definition. Not allowed inside a style rule. |
+| `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied raw, without selector checks or class prefixes. Their names (animation, font family, counter style, palette and feature-value names) remain global: use component-qualified names when private. |
+| `@page` | Name must start with the component's name and `-` (written by the author); body copied raw, including margin at-rules. The name remains global. An unnamed page or a name without that prefix is refused. |
+
+   Raw bodies still lose comments and extra whitespace and receive registered-property
+   renaming; their nested block at-rules are copied raw too (for example `@styleset` and
+   `@top-left`), not independently checked against this list. The statement parser recognizes
+   lowercase `@layer` (copied) and `@charset` (discarded: the generated stylesheet is UTF-8).
+   `@import` is refused because it loads a stylesheet the component does not own;
+   `@custom-media` is refused because tokens define breakpoints. Unrecognized rules such as
+   `@namespace` and `@document` are refused outside raw bodies; put them in the app's global
+   stylesheet. This is not a CSS validator: the macro may copy unknown block at-rules that
+   start with a known prefix, such as `@supports_other`, applying that rule's body handling.
+   Likewise, unknown statements are refused even inside raw bodies unless the statement parser
+   recognizes a prefix; for example it copies `@layer_other`. Escaped at-rule and class names
+   are not supported.
+
+   A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
+   digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
+   CSS escapes. The scoping pass prefixes only names defined in this file. The values of
+   `position-try` and `position-try-fallbacks` are read as
+   [CSS Syntax](https://www.w3.org/TR/css-syntax-3/#tokenization) tokens, and only an ident
+   token equal to a local name is renamed, where the value takes an option: at its top level,
+   in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an `if()` branch's value. A
+   lookup's name and an `if()` condition (`style(--x: 1)`) name custom properties, a dashed
+   function token (`--x()`) calls a custom function, and strings, URLs, anchor names, other
+   functions' arguments and unrelated declarations are not position references. The macro
+   matches whole names from the source before normalizing whitespace and comments as in
+   other declarations. That normalization can change token boundaries in unprefixed options:
+   `--externa\6c  flip-block` loses the extra space and becomes one name (`--externalflip-block`).
+   A registered custom property with the same name does not rename an option, but its `var()`
+   lookup still gets the property prefix. A name carried in a custom property's value is not
+   rewritten as a position option.
+   [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
+   gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
+   components share the document tree, so prefixing prevents collisions. This does not make
+   anchors component-local. The older raw global namespaces stay global rather than silently
+   renaming names that apps can already share through global CSS or font files; revisit that
+   policy when an app needs checked private names for them.
+
+   An `@scope` with no root is refused because its implicit root is outside the component.
+   At the top of the file, an `@scope` rule's root names
    one of its classes, or else each rule in the body must start at one, as at the top. A root
    nested in a rule, or in an `@scope` whose root names one of the file's classes, is relative to
    that one's elements and is not checked; one nested in any other `@scope` is checked as at the top.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's
    root.
-   Keyframe names are not scoped, so an area's keyframes share one namespace with the rest.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
    item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
    and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file
