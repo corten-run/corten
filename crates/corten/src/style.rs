@@ -1271,6 +1271,9 @@ mod tests {
 
     #[test]
     fn a_compiled_url_cannot_hide_a_missing_custom_property_at_startup() {
+        let mut class = String::new();
+        UrlScan {}.write_classes(&mut class);
+        assert_eq!(class, "url-scan__a ");
         let err = crate::assets::Assets::build(None, &[UrlScan], "/assets").err().expect("missing property");
         assert!(err.to_string().contains("reads var(--fake), which no stylesheet declares"), "{err}");
     }
