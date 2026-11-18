@@ -157,7 +157,12 @@ pub fn SortHeader<'a, L: Render, C: ClassList>(
     };
     html! {
         if let Some(links) = links {
-            <th ref={links.descending.with(corten::route::link(descending))} scope="col" class={class} aria-sort={aria}>
+            <th
+                ref={links.descending.with(corten::route::link(descending))}
+                scope="col"
+                class={class}
+                aria-sort={aria}
+            >
                 <a
                     ref={links.ascending.with(corten::route::link(ascending))}
                     class={Sorter}
@@ -166,7 +171,11 @@ pub fn SortHeader<'a, L: Render, C: ClassList>(
                     on:click={on_sort}
                 >
                     {label}
-                    <span ref={links.descending_first.with(first == Sort::Descending)} class={Arrow} aria-hidden="true"></span>
+                    <span
+                        ref={links.descending_first.with(first == Sort::Descending)}
+                        class={Arrow}
+                        aria-hidden="true"
+                    ></span>
                 </a>
             </th>
         } else {
