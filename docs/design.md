@@ -6004,18 +6004,19 @@ rules something out.
     deadline of half the lease from its last renewal, leaving time to retire acknowledged rows.
     The failed row stays pending and takes one slot on a retry; a full batch with nothing to
     retire can stall the queue. The broker and stream limits must fit the longest key plus up
-    to 135 bytes of marker headers. Within
-    JetStream's configured deduplication window, the shared ID deduplicates retries of either
-    the original patch or its marker. A duplicate acknowledgement retires the row but does
-    not identify which representation was first accepted; outside the window both can be
-    stored. The application write remains committed and the outbox body stays available
-    for replay and inspection until ordinary pruning.
+    to 135 bytes of marker headers. Within JetStream's configured deduplication window from
+    first acceptance, the shared ID deduplicates retries of either the original patch or its
+    marker. A duplicate acknowledgement retires the row but does not identify which
+    representation was first accepted; outside the window both can be stored. The
+    application write remains committed and the outbox body stays available for replay
+    and inspection until ordinary pruning.
 
     The relay pipelines a batch of up to 256 patches before waiting for acknowledgements, even
     when every patch belongs to one feed. A broker's connection-wide `Maximum Payload Violation`
-    or disconnect identifies no publish; the relay retries an unacknowledged batch and does not
-    force a reconnect. Later patches can overtake a failed one in JetStream; followers
-    recover as described in the [relay stream-order limit](#limit-relay-stream-order).
+    or disconnect identifies no publish; the relay retries all selected rows on an ordinary send
+    or acknowledgement failure and does not force a reconnect. Later patches can overtake a
+    failed one in JetStream; followers recover as described in the
+    [relay stream-order limit](#limit-relay-stream-order).
 
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
@@ -6031,8 +6032,8 @@ rules something out.
     is not an operation async-nats 0.52 exposes. Dropping a handle does not cancel the connection
     task, `force_reconnect` queues a command, and `drain` flushes pending work. A fresh client
     per lease or batch would need the caller's connection configuration and still would not
-    prevent its queue from crossing a socket failure; an attempt limit counts the initial
-    connection and resets after success.
+    prevent its queue from crossing a socket failure. `max_reconnects(0)` means unlimited;
+    positive limits count consecutive connection attempts and reset after success.
     Waiting for an acknowledgement between rows of the same feed serializes a hot backlog on
     broker round trips. JetStream's `Nats-Expected-Last-Subject-Sequence`
     compares the most recent stored message on a subject by its stream-wide sequence, not by
@@ -6058,6 +6059,7 @@ rules something out.
     [async-nats 0.52](https://docs.rs/crate/async-nats/0.52.0/source/src/connector.rs)
     caches the limit from its handshake and its
     [publish queue](https://docs.rs/crate/async-nats/0.52.0/source/src/lib.rs) survives reconnect;
+    zero [maps to no reconnect limit](https://docs.rs/crate/async-nats/0.52.0/source/src/options.rs);
     [client drain](https://docs.rs/crate/async-nats/0.52.0/source/src/client.rs) flushes pending work);
     reasoned (retrying cannot repair a key that fails a pure check; the compact marker fits
     limits that refuse larger patches, provided they can carry the headers; the durable
@@ -6070,8 +6072,9 @@ rules something out.
     refusal or reliably refresh the cached limit without reconnecting, JetStream provides a
     standard invalidation signal, supported limits cannot carry the marker, or deployments need every
     delta delivered or immediate recovery on old followers, the NATS client can abandon queued
-    publishes on socket loss, or JetStream can guard a subject by a publisher-supplied predecessor
-    ID without first waiting for the predecessor's stream sequence.
+    publishes on socket loss, deployments need raw stream ordering, or JetStream can guard a
+    subject by a publisher-supplied predecessor ID without first waiting for the predecessor's
+    stream sequence.
 
     Last checked: 2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
     NATS 2.15.2 with async-nats 0.52.0: both refusals publish markers while retaining the
@@ -6081,9 +6084,9 @@ rules something out.
     withheld, the acknowledged rows retire first. A retry retires the remaining row once
     acknowledgements resume. The longest marker overhead measured 135 bytes. Retries
     deduplicate in both orders without reconnecting. After a real broker disconnect, the batch
-    remains pending for retry and later patches overtake the missing patch's marker. The follower
-    reloads from Postgres, ignores a copy that the broker stores again, and delivers the next
-    write as a normal patch on its live stream;
+    remains pending for retry and a queued later patch reaches JetStream before retry. The
+    follower reloads from Postgres, ignores a stored repeat and at-or-behind markers, and
+    delivers the next write as a normal patch on its live stream;
     2026-11-17 at `056964945`, subject rules and control-line configuration.
 
 64. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
@@ -7213,12 +7216,27 @@ by design; where it is known, a limit says what would lift it or why it is so.
     and that would not reach the case this Choice is for, fields another component draws. It lifts
     when the kind a form draws for a field is known where the call is checked.
 
-33. <a id="limit-relay-stream-order"></a>JetStream does not guarantee Corten feed order across
-    a relay connection failure mid-batch. The relay submits the pending patches in feed order,
-    but the NATS client can send a queued suffix on the replacement socket before the relay
-    retries the missing patch or sends its reload marker. Raw stream consumers may also see
-    duplicates when retry occurs outside JetStream's deduplication window. Postgres commits
-    each feed's sequence under its row lock. Corten followers reload the committed state from
-    Postgres on a feed-sequence gap and ignore patches and markers at or behind their current
-    sequence in the same generation. This limit can be revisited when the client can discard
-    its queue on connection loss without serializing healthy publishes ([Choice 63](#choice-cluster-feed-subjects)).
+33. <a id="limit-relay-stream-order"></a>JetStream stream order is not always Corten feed
+    order. Postgres commits each feed's sequence under its row lock. The relay submits
+    ordinary patches in outbox-ID order, which is feed-sequence order within a generation.
+
+    - **Connection failure.** An ordinary send or acknowledgement failure retires none of
+      the selected outbox IDs in that attempt, including rows already acknowledged. After
+      a mid-batch disconnect the NATS client may send queued publishes on the replacement
+      socket; JetStream can store later patches of a feed before it accepts the missing
+      patch on retry, or before the retry stores its reload marker.
+    - **Per-row size refusal.** Even without a disconnect, the relay sends reload markers
+      after attempting ordinary patches, so JetStream can store later patches of a feed
+      before the refused row's marker. If the marker cannot be sent or acknowledged, that
+      row stays pending while other acknowledged rows can retire. If only the ack is lost,
+      the marker may already be stored.
+
+    In either case the configured deduplication window starts at JetStream's first
+    acceptance of the message ID. A retry after that window can store another patch or
+    marker for the same row. In both failure cases a Corten follower may stay at its last
+    applied sequence until an update arrives. It reloads committed state from Postgres on
+    a feed-sequence gap or a marker ahead of it. This restores state, not every missed
+    delta. Followers ignore same-generation patches and markers at or behind their current
+    sequence. Revisit when deployments need raw stream ordering
+    ([#1657 Measure JetStream atomic batch publish for the cluster relay, so a disconnect cannot store a feed's later patches without the earlier ones](https://github.com/corten-run/corten/issues/1657));
+    see [Choice 63](#choice-cluster-feed-subjects) for other criteria.
