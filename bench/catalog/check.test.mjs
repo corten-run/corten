@@ -30,11 +30,13 @@ test("document floor evaluates effective header values and accepts alternate enc
     "Cross-Origin-Opener-Policy": 'same-origin;report-to="diagnostics"' });
   verify({ "Content-Security-Policy": ["script-src 'self'; frame-ancestors *", "frame-ancestors 'self'"] });
   verify({ "Cross-Origin-Opener-Policy": 'same-origin;mode=strict; flag;note="semi;colon";report-to=?0' });
-  verify({ "Cross-Origin-Opener-Policy": 'same-origin;bin=:YWJj:;count=3;ratio=1.25;stamp=@1;label=%"caf%c3%a9"' });
+  verify({ "Cross-Origin-Opener-Policy": 'same-origin;bin=:YWJj:;count=3;ratio=1.25' });
   for (const [changes, error] of [
     [{ "Content-Security-Policy": "\u00a0script-src 'self'; frame-ancestors 'none'" }, /restrict inline/],
     [{ "Content-Security-Policy": "script-src 'self' \u00a0; frame-ancestors 'none'" }, /restrict inline/],
     [{ "Cross-Origin-Opener-Policy": "same-origin;mode=?" }, /Cross-Origin-Opener-Policy/],
+    [{ "Cross-Origin-Opener-Policy": "same-origin;stamp=@1" }, /Cross-Origin-Opener-Policy/],
+    [{ "Cross-Origin-Opener-Policy": 'same-origin;label=%"caf%c3%a9"' }, /Cross-Origin-Opener-Policy/],
     [{ "Cross-Origin-Opener-Policy": 'same-origin;label=%"%ff"' }, /Cross-Origin-Opener-Policy/],
     [{ "Cross-Origin-Opener-Policy": "same-origin;bin=:a:" }, /Cross-Origin-Opener-Policy/],
     [{ "Cross-Origin-Opener-Policy": "same-origin;mode=ok, unsafe-none" }, /Cross-Origin-Opener-Policy/],

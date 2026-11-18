@@ -114,11 +114,11 @@ export function expectedDocumentHeaderPaths(catalog, source) {
 const strictReferrers = ["strict-origin-when-cross-origin", "strict-origin", "same-origin", "no-referrer"];
 const referrers = new Set([...strictReferrers, "no-referrer-when-downgrade", "origin", "origin-when-cross-origin", "unsafe-url"]);
 const trimOWS = (v) => v.replace(/^[ \t]+|[ \t]+$/g, "");
-// COOP is a Structured Fields token item. Unknown parameters do not change the
-// policy, but a malformed item has no policy. Do not split on a quoted semicolon.
+// The checker browser enforces COOP with RFC 8941 item parameters. It treats
+// the later Date and Display String types as malformed and drops the policy.
 function sameOriginOpener(value) {
   if (!value.startsWith("same-origin")) return false;
-  const param = /; *[a-z*][a-z0-9_.*-]*(?:=("(?:[\x20-\x21\x23-\x5b\x5d-\x7e]|\\["\\])*"|\?[01]|[A-Za-z*][A-Za-z0-9!#$%&'*+.^_\x60|~:/-]*|-?\d{1,12}\.\d{1,3}|@?-?\d{1,15}|:[A-Za-z0-9+/]*={0,2}:|%"(?:[\x20-\x21\x23-\x24\x26-\x7e]|%[a-f0-9]{2})*"))?/y;
+  const param = /; *[a-z*][a-z0-9_.*-]*(?:=("(?:[\x20-\x21\x23-\x5b\x5d-\x7e]|\\["\\])*"|\?[01]|[A-Za-z*][A-Za-z0-9!#$%&'*+.^_\x60|~:/-]*|-?\d{1,12}\.\d{1,3}|-?\d{1,15}|:[A-Za-z0-9+/]*={0,2}:))?/y;
   for (let i = "same-origin".length; i < value.length; i = param.lastIndex) {
     param.lastIndex = i;
     const m = param.exec(value);
@@ -126,7 +126,6 @@ function sameOriginOpener(value) {
     const bare = m[1] ?? "";
     try {
       if (bare.startsWith(":")) atob(bare.slice(1, -1));
-      if (bare.startsWith('%"')) decodeURIComponent(bare.slice(2, -1));
     } catch { return false; }
   }
   return true;
