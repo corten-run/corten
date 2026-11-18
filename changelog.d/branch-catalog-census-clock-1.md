@@ -1,0 +1,1 @@
+- Failed catalog process censuses now distinguish time before the sampling callback from time spent reading and retrying the census. The benchmark's one-second continuity limit is unchanged.

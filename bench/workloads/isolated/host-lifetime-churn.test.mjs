@@ -351,6 +351,26 @@ test("catalog pins a newly seen executable inside the remaining continuity budge
   ]);
 });
 
+for (const late of [true, false]) test(`catalog distinguishes ${late ? "late callback" : "slow census retries"} on a membership failure`, async (t) => {
+  let faults = 0, reads = 0;
+  const f = await fixture(t, [], false, () => faults++, 0, true);
+  f.clock += late ? 1241 : 100;
+  f.override = (path) => {
+    if (path === `/sys/fs/cgroup${f.scope}/cgroup.procs` && ++reads % 2 === 0) {
+      if (!late) f.clock += 450;
+      return ""; // Closing census disagrees with the opening one.
+    }
+  };
+  await f.tick();
+  assert.equal(faults, 1); assert.equal(f.samples().length, 2);
+  assert.equal((await f.finish()).status, "blocked"); assert.equal(f.terminal.empty, true);
+  const { first, count } = f.terminal.observerFailures;
+  assert.equal(count, 1); assert.equal(first.operation, "snapshot-membership-recheck");
+  assert.deepEqual(first.catalogCensus, late
+    ? { entryGapMs: 1241, censusMs: 0, attempts: 1 }
+    : { entryGapMs: 100, censusMs: 901, attempts: 2 });
+});
+
 test("a listed catalog PID with an unreadable executable still blocks after an empty terminal", async (t) => {
   let faults = 0, attempts = 0;
   const f = await fixture(t, [], false, () => faults++, 0, true);
@@ -472,6 +492,7 @@ for (const code of ["EACCES", "EPERM", "EIO", "ENOENT", "ESRCH"]) test(`persiste
   assert.equal((await f.finish()).status, "blocked"); assert.equal(f.terminal.empty, true);
   assert.equal(f.terminal.observerError, "host-observation-gap"); assert.equal(f.terminal.observerFailures.count, 1);
   assert.equal(f.terminal.observerFailures.first.code, code);
+  assert.equal(Object.hasOwn(f.terminal.observerFailures.first, "catalogCensus"), false);
 });
 
 for (const change of ["pid", "start"]) test(`${change} bookend mismatch still fails immediately`, async (t) => {
