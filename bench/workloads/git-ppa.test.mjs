@@ -49,7 +49,8 @@ for (const [name, original] of Object.entries(scripts)) {
     const script = original.replaceAll("/etc/apt", `${root}/apt`).replaceAll("/tmp/corten-git-ppa.keys", `${root}/keys`)
       .replaceAll("/tmp/corten-git-ppa.asc", `${root}/public-key`)
       .replaceAll("/var/lib/apt/lists/*", `${root}/unused-lists`);
-    const result = spawnSync(name === "cloud" ? "/bin/bash" : "/bin/sh", ["-c", `${name === "cloud" ? "set -Eeuo pipefail" : "set -eu"}\numask 077\nmkdir -p '${root}/apt/sources.list.d'\n${script}`], {
+    // Docker RUN uses /bin/sh -c without errexit. Do not hide a broken && chain.
+    const result = spawnSync(name === "cloud" ? "/bin/bash" : "/bin/sh", ["-c", `${name === "cloud" ? "set -Eeuo pipefail" : ""}\numask 077\nmkdir -p '${root}/apt/sources.list.d' || exit 1\n${script}`], {
       env: { PATH: `${root}:/usr/bin:/bin`, HOME: root, ROOT: root,
         KEYS: options.keys ?? `pub:::::::::\nfpr:::::::::${fingerprint}:\n`,
         GPG_EXIT: String(options.gpgExit ?? 0), CURL_EXIT: String(options.curlExit ?? 0), INDEX_EXIT: String(options.indexExit ?? 0) },
