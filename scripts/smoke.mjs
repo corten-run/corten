@@ -855,16 +855,19 @@ async function run(browser) {
   if (engine === "chromium") {
     const scoped = await browser.newPage();
     await scoped.goto(`${base}/smoke/scope`);
+    const probes = scoped.locator("[data-scope-probe]");
+    const names = await probes.evaluateAll((items) => items.map((p) => p.getAttribute("data-scope-probe")).join(","));
+    check("the nested scope fixture has both inside and outside controls", names === "inside,section,outside,other", names);
     for (const [root, expected] of [
       ["hoisted", "inside,section"],
       ["subject", "inside,section"],
       ["ancestor", "section"],
     ]) {
-      const matched = await scoped.locator("[data-scope-probe]").evaluateAll(
+      const matched = await probes.evaluateAll(
         (probes, root) => probes.filter((p) => getComputedStyle(p).getPropertyValue(`--smoke-${root}-scope`) === "yes").map((p) => p.getAttribute("data-scope-probe")).join(","),
         root,
       );
-      check(`an inner scope with a ${root} class anchor styles only its owned paragraphs`, matched === expected, matched);
+      check(`an inner scope with the ${root} class anchor styles only its owned paragraphs`, matched === expected, matched);
     }
     await scoped.close();
   }
