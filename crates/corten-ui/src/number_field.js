@@ -71,6 +71,10 @@ export function click(event, button, input, by) {
 
 /** @param {KeyboardEvent} event @param {HTMLInputElement} input */
 export function key(event, input) {
+  // With no step there is none to add ten of (`stepUp` throws), and Home and End move the caret,
+  // as in a text field, rather than go to an endpoint. The arrow keys stay the browser's:
+  // they can land on a hinted end, even if the handler refuses it.
+  if (input.step === "any") return;
   if (event.key === "PageUp" || event.key === "PageDown") step(input, event.key === "PageUp" ? 10 : -10);
   else if (event.key === "Home" && input.min !== "") set(input, input.min);
   else if (event.key === "End" && input.max !== "") set(input, input.max);
@@ -79,14 +83,15 @@ export function key(event, input) {
 }
 
 /**
- * Disables each button at its bound.
+ * Disables each button at its bound, and both when there is no step to add.
  * @param {HTMLButtonElement} decrease @param {HTMLInputElement} input @param {HTMLButtonElement} increase
  */
 export function sync(decrease, input, increase) {
   const value = input.valueAsNumber;
   const known = !Number.isNaN(value);
-  decrease.disabled = input.disabled || (known && input.min !== "" && value <= Number(input.min));
-  increase.disabled = input.disabled || (known && input.max !== "" && value >= Number(input.max));
+  const off = input.disabled || input.step === "any";
+  decrease.disabled = off || (known && input.min !== "" && value <= Number(input.min));
+  increase.disabled = off || (known && input.max !== "" && value >= Number(input.max));
 }
 
 /**

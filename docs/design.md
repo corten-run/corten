@@ -5909,6 +5909,53 @@ rules something out.
     Last checked: 2026-11-17, NATS subject and configuration documentation and async-nats 0.52.0
     source reviewed, and the pre-fix store and relay read at `056964945`.
 
+64. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
+    on the server.** HTML has no exclusive number bound. For both `f32` and `f64`, emit the
+    endpoint itself as `min` or `max`, just as for an inclusive bound. The hint is advisory.
+    The cost is that an endpoint can reach the handler, which runs the authoritative
+    `Bounds` check and refuses it with a typed field error and HTTP 422 on a form POST.
+    Show the logical rule in a visible hint and in the field error.
+
+    Correctness and HTML that works on its own matter more than blocking every invalid
+    value early. Moving a hint inward can stop a server-valid submission before the handler
+    sees it. Firefox can read an excluded `f64` endpoint and the next float as the same number.
+    Chromium and WebKit can reject a decimal Rust rounds inward even against a serialized
+    `f32` rounding midpoint, and a shortest spelling of an excluded `f32` can itself land on
+    that midpoint. Keep the ordinary native hints instead of trying to encode exclusivity in
+    an inclusive attribute, or replacing number inputs with a parser or input mask.
+
+    Known limit: even with unshifted hints, Chromium and WebKit can block a server-valid
+    decimal spelling about one float step inside an exclusive end. For an `f64` minimum of
+    `0.0010000000000000002` (emitted as `1.0000000000000002e-3`), both block the fixed
+    spelling `0.0010000000000000005`, which `Bounds::read` accepts as the next float.
+    Keep native feedback for ordinary fields. An app that needs these values can omit the
+    native range hint on that field and enforce the exclusive rule on the server alone.
+
+    Any-step bounds and programmatic prefills share one formatter, using exponent notation
+    past 18 digits written out. The digit budget governs notation, not logical ranges.
+    Plain inputs use `Bounds::input_value`, which `NumberField` also uses; it preserves
+    submitted text on redisplay. Existing stepped fields and standalone `Entry` attributes
+    keep their formatting.
+
+    Concrete `f32` and `f64` constructors reject non-finite or reversed ranges, or ranges with
+    no representable member, using stable const comparisons and adjacent-float operations.
+    A stepped bound stays off an end by starting one step in.
+
+    Stands on: platform ([HTML's number state](https://html.spec.whatwg.org/multipage/input.html#number-state-(type=number))
+    and [floating-point syntax](https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#floating-point-numbers));
+    measured (gallery POSTs at and just inside the `f64` minimum and `f32` maximum in three
+    engines, and the precise-end counterexample above); value (correctness, standards first,
+    and HTML that works without JavaScript).
+
+    Revisit when: HTML gains an attribute for exclusive number bounds, or browsers compare
+    native range hints at full double precision.
+
+    Last checked: 2026-11-18, gallery POSTs with JavaScript disabled in Chromium, Firefox and
+    WebKit (Playwright 1.64.1), with 422 for ordinary endpoints and 200 for inward values, and
+    a separate no-JavaScript probe confirming the precise-end counterexample in Chromium and
+    WebKit.
+
+
 
 ## Rules
 

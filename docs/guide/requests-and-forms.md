@@ -429,9 +429,9 @@ type of its own that implements `Deserialize`.
 
 A number the user types is an `Entry` of its type: the text as sent and the number it reads as.
 Its allowed values are a `Bounds` constant of that type, which gives the input its `min`, `max`
-and `step` and the handler its check, so the two cannot drift apart: the browser stops a value
-outside them before the form is sent, and `Bounds::read` gives the handler the number within
-them, or `None` for the field's message, whatever the client sent:
+and `step` and the handler its check, so the rule is declared once. The browser uses the
+attributes for native validation, and `Bounds::read` gives the handler the number within
+the bounds, or `None` for the field's message, whatever the client sent:
 
 ```rust,ignore
 const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_000.0).step(0.01)
@@ -447,6 +447,50 @@ let Some(copies) = COPIES.read(&input.copies) else {
     return req.invalid(&errors, ..).await;
 };
 ```
+
+A decimal with no step, such as a ratio or percentile, uses
+`Bounds::<f64>::any_step(min, max)`. It writes HTML's `step="any"` and holds every finite
+number in range. Use `Bounds::<f32>::any_step` for an `f32` field. Only any-step bounds take
+`.exclusive_min()` and `.exclusive_max()`. HTML has no exclusive number bound, so the input
+gets the endpoint itself, just like an inclusive `min` or `max`. Shifting the hint inward can
+block a value the server accepts. Correctness and a form that works without JavaScript matter
+more than catching every invalid value before it is sent. The hint is advisory: the browser
+can send the endpoint, and the handler's authoritative `Bounds` check refuses it with a typed
+field error and HTTP 422. Show the logical rule in a visible hint and in the field error.
+
+Even an unshifted hint can block a server-valid decimal spelling about one float step inside
+an exclusive end in Chromium and WebKit. For example, with an `f64` minimum of
+`0.0010000000000000002`, the server accepts `0.0010000000000000005` but those browsers can
+block it before submission. If the field must accept such spellings, leave `{..BOUNDS}` off
+the input and use `step="any"` without the offending `min` or `max` hint. `NumberField` adds
+its bounds internally, so replace that field with a plain `<input type="number" step="any">`
+without the offending hint. In either case, keep `Bounds::input_value(&entry)` for redisplay
+and the exclusive `Bounds::read(&entry)` check in the handler.
+
+```rust,ignore
+const DISCOUNT: Bounds<f64, AnyStep> =
+    Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
+
+// <input type="number" name={f.discount} value={DISCOUNT.input_value(&input.discount)} {..DISCOUNT}> writes
+// min="0" max="100" step="any".
+let Some(discount) = DISCOUNT.read(&input.discount) else {
+    let (min, max) = (DISCOUNT.min(), DISCOUNT.max());
+    errors.add(f.discount, format!("Enter a discount above {min} and below {max} percent."));
+    return req.invalid(&errors, ..).await;
+};
+```
+
+Declare any-step bounds as constants. Ends must be finite and ordered, and at least one
+representable value must remain after excluding ends. For a plain any-step input, use
+`Bounds::input_value` to prefill from an `Entry`: like `NumberField`, it uses exponent notation
+past 18 digits written out, so a stored `1e-20` is drawn in a short spelling the browser can submit
+unchanged.
+It still draws submitted text as typed after a refusal. Standalone `Entry` attributes keep their
+existing formatting. See [Choice 64](../design.md#choice-exclusive-ends) for when to revisit this choice.
+
+Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
+`Bounds::new(0.1, 16.0).step(0.1)`. Stepped fields keep their existing formatting. Integers
+cannot opt into any step: a number input that allows `2.5` cannot feed an integer.
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
 handler runs, and the user loses the form: a blank field, `two`, a count past the type, or

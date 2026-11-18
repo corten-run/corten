@@ -749,7 +749,7 @@ pub use corten_macros::Fields;
 /// assert_eq!(<Arc<fn() -> u8>>::from_ref(&calls)(), 7);
 /// ```
 pub use corten_macros::FromRef;
-pub use form::{Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
+pub use form::{AnyStep, Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
 pub use handler::FromRef;
 pub use html::escape;
 #[cfg(feature = "json")]
@@ -806,8 +806,8 @@ pub mod prelude {
         script::{el, refs, Handler, Ref},
         style::ClassList,
         view::Id,
-        Api, App, Area, Bounds, Caller, Challenge, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form,
-        FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Patches, Public,
+        AnyStep, Api, App, Area, Bounds, Caller, Challenge, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files,
+        Form, FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Patches, Public,
         ReadAgain, Refused, Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
     };
     #[cfg(feature = "json")]

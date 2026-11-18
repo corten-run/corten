@@ -9,10 +9,10 @@
 //! | `POST /?do=save` | saving the draft, answered with a toast; without JavaScript, back to the view of the draft it was on, whose toaster says it (`req.redirect_with_notice`) |
 //! | `POST /?do=publish` | publishing the draft: refused (409, the card sold meanwhile), answered with a failed toast |
 //! | `POST /?do=rename` | the rename dialog's form: refused (no name, or the other draft's, which the form's own message says in `FormAlert`), the dialog drawn open; else back to the view of the draft it was on, whose toaster says it was renamed (`req.redirect_with_notice`) |
-//! | `GET /help` | the menu's link |
+//! | `GET /help`, `POST /help` | the menu's link, with plain number inputs showing a precise discount and checking exclusive ends |
 //! | `GET /orders?page=2` | the seller's orders, a page of them: the kit's other components |
 //! | `POST /orders/settings` | the shipping settings: back to the orders, whose toaster says they were saved |
-use corten::{Component, Refusal, i18n::Currency, prelude::*, route::FromUrl};
+use corten::{Component, Refusal, form::HintId, i18n::Currency, prelude::*, route::FromUrl};
 use std::time::{Duration, SystemTime};
 
 use corten_ui::{Toast, Toaster};
@@ -28,7 +28,7 @@ use crate::ui::{
 };
 
 corten::i18n::messages! {
-    /// The gallery's text: one locale, for the relative times.
+    /// The gallery's text: one locale, for formatted values and messages with arguments.
     pub struct Msg { "en" => "locales/en.json" }
 }
 
@@ -69,7 +69,7 @@ pub mod url {
         pub sales: Option<crate::gallery::SalesPage>,
     }
 
-    #[route("/help", get = help)]
+    #[route("/help", get = help, post = check_bounds)]
     pub struct Help;
 
     #[route("/orders", get = orders)]
@@ -202,6 +202,7 @@ fn listings<'a>(req: &Req, none: &'a Errors) -> Gallery<'a> {
         rename: RenameDialog { here: DRAFT, name: "", errors: none },
         qty: 1.into(),
         weight: 0.5.into(),
+        discount: Entry::default(),
     }
 }
 
@@ -230,6 +231,8 @@ pub struct SellForm {
     /// Money as the reader typed it, read by `t.parse_money`: a refused entry is shown back as is.
     pub price: String,
     pub weight: Entry<f64>,
+    /// A percentage off two or more copies, as precise as typed; blank for none.
+    pub discount: Entry<f64>,
     /// One of the combo box's options: a word outside them is refused, as a malformed number is.
     pub condition: Condition,
     /// The regions the seller ships to: at least one (`CheckboxGroup`).
@@ -249,6 +252,16 @@ pub const USD: Currency = Currency::new("USD");
 /// and `step`, and the handler's check.
 pub const QTY: Bounds<u32> = Bounds::new(1, 10);
 pub const WEIGHT: Bounds<f64> = Bounds::new(0.1, 16.0).step(0.1);
+const DISCOUNT_MIN: u8 = 0;
+const DISCOUNT_MAX: u8 = 100;
+/// The discount on two or more copies, in percent: above 0 and below 100, with any decimals. HTML
+/// has no exclusive end, so the input hints at 0 and 100 and the handler refuses the ends.
+pub const DISCOUNT: Bounds<f64, AnyStep> =
+    Bounds::<f64>::any_step(DISCOUNT_MIN as f64, DISCOUNT_MAX as f64).exclusive_min().exclusive_max();
+
+pub fn discount_rule(t: Msg) -> impl Render + std::fmt::Display {
+    t.discount_rule(msg::DiscountRule { min: t.number(DISCOUNT_MIN), max: t.number(DISCOUNT_MAX) })
+}
 
 /// What a listing that ships nowhere is told, by the browser and by the handler.
 pub const NO_REGION: &str = "Choose where you ship.";
@@ -266,6 +279,10 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     if weight.is_none() {
         errors.add(f.weight, format!("Enter a weight from {} to {} oz, in tenths.", WEIGHT.min(), WEIGHT.max()));
     }
+    let discount = DISCOUNT.read(&form.discount);
+    if discount.is_none() && !form.discount.is_blank() {
+        errors.add(f.discount, discount_rule(t).to_string());
+    }
     let price = t.parse_money(&form.price, USD);
     if price.is_none() {
         errors.add(f.price, "Enter a price, such as 12.50.");
@@ -279,7 +296,13 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     if let Some((_, message)) = errors.iter().next() {
         let none = Errors::new();
         // Without the script the form is drawn again, its numbers as they were typed.
-        let sent = || Gallery { result: message, qty: form.qty.clone(), weight: form.weight.clone(), ..listings(&req, &none) };
+        let sent = || Gallery {
+            result: message,
+            qty: form.qty.clone(),
+            weight: form.weight.clone(),
+            discount: form.discount.clone(),
+            ..listings(&req, &none)
+        };
         let page = || async { gallery(&req, sent()) };
         return req.invalid(&errors, OrderResult { text: message }, page).await;
     }
@@ -288,7 +311,8 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     let condition = form.condition.label();
     // Some here: a price that does not read is refused above.
     let price = price.map(|cents| t.money(cents, USD).to_string()).unwrap_or_default();
-    let text = format!("Listed {qty} {condition} {CARD} at {price} each, {weight:.1} oz to ship.");
+    let off = discount.map(|d| format!(", {d}% off two or more")).unwrap_or_default();
+    let text = format!("Listed {qty} {condition} {CARD} at {price} each, {weight:.1} oz to ship{off}.");
     let none = Errors::new();
     let page = || async { gallery(&req, Gallery { result: &text, ..listings(&req, &none) }) };
     req.patch_or(OrderResult { text: &text }, page).await
@@ -386,9 +410,58 @@ async fn settings(req: Req, Form(form): Form<SettingsForm>) -> HtmlResult {
     )
 }
 
+#[derive(Id)]
+struct ExampleDiscountId;
+
+#[derive(Id)]
+struct ExampleBoundsId;
+
+#[derive(Fields)]
+struct ExampleBounds {
+    minimum_ratio: Entry<f64>,
+    maximum_ratio: Entry<f32>,
+}
+
+const MINIMUM_RATIO: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(0.001, 1.0).exclusive_min();
+const MAXIMUM_RATIO: Bounds<f32, AnyStep> = Bounds::<f32>::any_step(0.0, 1.0).exclusive_max();
+
+fn minimum_ratio_rule(t: Msg) -> impl Render + std::fmt::Display {
+    t.minimum_ratio_rule(msg::MinimumRatioRule { min: MINIMUM_RATIO.min().to_string(), max: MINIMUM_RATIO.max().to_string() })
+}
+
+fn maximum_ratio_rule(t: Msg) -> impl Render + std::fmt::Display {
+    t.maximum_ratio_rule(msg::MaximumRatioRule { min: MAXIMUM_RATIO.min().to_string(), max: MAXIMUM_RATIO.max().to_string() })
+}
+
 async fn help(req: Req) -> HtmlResult {
+    let example = ExampleBounds { minimum_ratio: 0.002.into(), maximum_ratio: 0.5.into() };
+    help_page(&req, RatioExample { t: req.t(), example: &example, errors: None, result: "" })
+}
+
+async fn check_bounds(req: Req, Form(form): Form<ExampleBounds>) -> HtmlResult {
+    let f = ExampleBounds::FIELDS;
+    let t = req.t();
+    let mut errors = Errors::new();
+    if MINIMUM_RATIO.read(&form.minimum_ratio).is_none() {
+        errors.add(f.minimum_ratio, minimum_ratio_rule(t).to_string());
+    }
+    if MAXIMUM_RATIO.read(&form.maximum_ratio).is_none() {
+        errors.add(f.maximum_ratio, maximum_ratio_rule(t).to_string());
+    }
+    if !errors.is_empty() {
+        let view = || RatioExample { t, example: &form, errors: Some(&errors), result: "" };
+        return req.invalid(&errors, view(), || async { help_page(&req, view()) }).await;
+    }
+    let view = || RatioExample { t, example: &form, errors: None, result: "Both ratios are in range." };
+    req.patch_or(view(), || async { help_page(&req, view()) }).await
+}
+
+fn help_page(req: &Req, ratios: impl Render) -> HtmlResult {
+    let f = SellForm::FIELDS;
+    let t: Msg = req.t();
+    let discount = Entry::from(1e-20);
     req.page(html! {
-        <Layout req={&req} title="Help | corten-ui" toast={QUIET}>
+        <Layout req={req} title="Help | corten-ui" toast={QUIET}>
             <h1>"Listing a card"</h1>
             <p>"A draft is yours until you list it. Each part of the form:"</p>
             <dl>
@@ -403,9 +476,61 @@ async fn help(req: Req) -> HtmlResult {
                 <dt>"Archive and Watch"</dt>
                 <dd>"Archiving puts the draft away without listing it. Watching tells you when this card's market low moves."</dd>
             </dl>
+            <form method="post" action={DRAFT}>
+                <input type="hidden" name={f.qty} value={1}>
+                <input type="hidden" name={f.price} value="12.50">
+                <input type="hidden" name={f.weight} value={0.5}>
+                <input type="hidden" name={f.condition} value={Condition::LightlyPlayed}>
+                <input type="hidden" name={f.ships} value={Region::Us}>
+                <input type="hidden" name={f.pricing} value={Pricing::Fixed}>
+                <label for={ExampleDiscountId}>"Example discount (%)"</label>
+                <input
+                    type="number"
+                    id={ExampleDiscountId}
+                    name={f.discount}
+                    aria-describedby={HintId(&ExampleDiscountId)}
+                    value={DISCOUNT.input_value(&discount)}
+                    {..DISCOUNT}
+                >
+                <p id={HintId(&ExampleDiscountId)}>{discount_rule(t)}</p>
+                <button>"Try listing with this discount"</button>
+            </form>
+            {ratios}
             <p><a href={url::Home { tab: None, sale: None, period: None, sold: None, sales: None }}>"Back to the draft"</a></p>
         </Layout>
     })
+}
+
+#[component]
+fn RatioExample<'a>(t: Msg, example: &'a ExampleBounds, errors: Option<&'a Errors>, result: &'a str) -> impl Patch {
+    let f = ExampleBounds::FIELDS;
+    let e = errors.map_or_else(|| Within::none(ExampleBoundsId), |errors| errors.within(ExampleBoundsId));
+    html! {
+        <form id={ExampleBoundsId} method="post" action={url::Help}>
+            <label for={e.id(f.minimum_ratio)}>"Minimum ratio example"</label>
+            <input
+                type="number"
+                {..e.control(f.minimum_ratio).hint()}
+                value={MINIMUM_RATIO.input_value(&example.minimum_ratio)}
+                {..MINIMUM_RATIO}
+                required
+            >
+            <p id={HintId(&e.id(f.minimum_ratio))}>{minimum_ratio_rule(t)}</p>
+            {e.message(f.minimum_ratio)}
+            <label for={e.id(f.maximum_ratio)}>"Maximum ratio example"</label>
+            <input
+                type="number"
+                {..e.control(f.maximum_ratio).hint()}
+                value={MAXIMUM_RATIO.input_value(&example.maximum_ratio)}
+                {..MAXIMUM_RATIO}
+                required
+            >
+            <p id={HintId(&e.id(f.maximum_ratio))}>{maximum_ratio_rule(t)}</p>
+            {e.message(f.maximum_ratio)}
+            <button>"Check the example ratios"</button>
+            <OrderResult text={result} />
+        </form>
+    }
 }
 
 #[cfg(test)]
@@ -540,6 +665,34 @@ mod tests {
         let page = listed().await;
         assert_eq!(page.status(), StatusCode::OK);
         assert!(page.text().contains("<html") && page.text().contains("Listed 2 Lightly Played Ashen Drake"));
+    }
+
+    /// A discount takes any decimals and stays off both its ends: the input hints at 0 and 100,
+    /// and the handler refuses those ends with the message that says "above".
+    #[tokio::test]
+    async fn a_discount_is_above_0_and_below_100_with_any_decimals() {
+        let app = client();
+        let f = SellForm::FIELDS;
+        let sent = |discount: &str| listing(&app, "1", &[Region::Us], Pricing::Fixed, "").field(f.discount, discount);
+        let listed = sent("37.5").mode(Mode::Action).await;
+        assert_eq!(
+            read(&listed),
+            (
+                StatusCode::OK,
+                r#"<p id="result" role="status">Listed 1 Lightly Played Ashen Drake at $1.00 each, 1.0 oz to ship, 37.5% off two or more.</p>"#
+            )
+        );
+        for (discount, status) in [("0.001", StatusCode::OK), ("99.999", StatusCode::OK), ("", StatusCode::OK)] {
+            assert_eq!(sent(discount).mode(Mode::Action).await.status(), status, "{discount}");
+        }
+        let refused = r#"<p id="result" role="status">Enter a discount above 0 and below 100 percent, or none.</p>"#;
+        for discount in ["0", "100", "-1", "1e3", "half"] {
+            let res = sent(discount).mode(Mode::Action).await;
+            assert_eq!(read(&res), (StatusCode::UNPROCESSABLE_ENTITY, refused), "{discount}");
+        }
+        // Without JavaScript the form comes back with the discount as sent.
+        let page = sent("100").await;
+        assert!(page.text().contains(r#"name="discount" value="100" min="0" max="100" step="any""#), "{}", page.text());
     }
 
     /// What the browser stops when its script runs (no region, offers with no lowest one), the

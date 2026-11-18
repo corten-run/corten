@@ -206,7 +206,15 @@ its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new
 `RequiredWhen`, `SubmitKey::field`) the field it is for, and a widget its id as an `Id`
 (`Number::new(e.id(f.qty), f.qty, ..)`), never text. A number the user types is
 `qty: Entry<u32>`, read with its `Bounds` (`QTY.read(&input.qty)`, `None` for the field's
-message) and drawn again with `value={&input.qty}`; a typed `qty: u32` is only for a number a
+message) and drawn again with `value={&input.qty}`; a decimal with no step or an end it stays
+off is `Bounds::<f64>::any_step(0.0, 1.0).exclusive_min()`, a `Bounds<f64, AnyStep>`.
+Declare it as a constant: the ends must be finite and ordered and leave at least one value.
+The native range hints at the endpoint itself. The handler refuses excluded endpoints, and a
+visible hint says "above" or "below". Draw an any-step entry with
+`value={DISCOUNT.input_value(&input.discount)}` so the browser can submit a prefilled value
+unchanged even when it needs exponent notation.
+A stepped field stays off an end by starting a step inside it (`Bounds::new(0.1, 16.0).step(0.1)`);
+a typed `qty: u32` is only for a number a
 page writes itself, since one that does not read is the error page. A date and time the user
 picks (`<input type="datetime-local">`) is `when: Entry<LocalDateTime>` (`corten::i18n`) beside
 `zone: FormZone` (`corten::form`): the page draws in `let zone = DrawZone::from(req.zone())`
@@ -229,7 +237,8 @@ instant there, the change where the clocks skip midnight, not `00:00` read as a 
 carries its zone too; `day.start(req.zone())` only for a day with no form, a link's parameter). A value the app stores and
 draws back into a number field must be one its `Bounds` hold (a ported screen's `min`/`step`
 never ran under `fetcher.submit`), or the browser will not send the form; `corten dev` names
-such a control in the console. A helper that takes a name of any field is generic over it
+such a control in the console, a stored 0 under "above 0" included. A helper that takes a name
+of any field is generic over it
 (`fn hint<T>(f: FieldName<T>)`), and a list of several fields' names takes `.untyped()`:
 
 ```rust
