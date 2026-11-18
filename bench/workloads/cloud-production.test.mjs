@@ -334,6 +334,7 @@ async function supervisedAudit(t, group, flags = {}, withheldReady) {
     p.deps.providerFactory = (options) => Object.assign(factory(options), { close: withheldReady.settle });
   }
   const pending = productionMain(approval, p.deps);
+  withheldReady?.started(pending, () => stopStream?.());
   let launchError;
   pending.then((code) => { launchError = new Error(`audit controller exited before ready (${code})`); },
     (error) => { launchError = error; });
@@ -391,12 +392,20 @@ test("supervised audit startup surfaces a controller failure before the ready ma
 
 test("supervised audit startup timeout cancels and joins a registered monitor before fixture cleanup", { timeout: 10000 }, async (t) => {
   const live = Promise.withResolvers(), settling = Promise.withResolvers(), release = Promise.withResolvers();
-  const flags = {}; let settled = 0, settledAtReturn;
-  t.signal.addEventListener("abort", release.resolve, { once: true });
-  const rejected = assert.rejects(supervisedAudit(t, "json-api", flags, {
+  const flags = {}; let launch, settled = 0, settledAtReturn;
+  // Register before the harness adds its directory removal hook.
+  t.after(async () => {
+    flags.cancelled = true;
+    release.resolve();
+    launch?.stop();
+    await (launch?.pending ?? audit).catch(() => {});
+  });
+  const audit = supervisedAudit(t, "json-api", flags, {
     live: live.resolve,
+    started(pending, stop) { launch = { pending, stop }; },
     async settle() { settling.resolve(); await release.promise; settled++; },
-  }).finally(() => { settledAtReturn = settled; }), { message: "bounded audit stream wait" });
+  }).finally(() => { settledAtReturn = settled; });
+  const rejected = assert.rejects(audit, { message: "bounded audit stream wait" });
   const rejectedEarly = rejected.then(() => assert.fail("startup returned before controller settlement"));
   let h;
   try {
