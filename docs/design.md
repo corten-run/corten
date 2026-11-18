@@ -1923,10 +1923,12 @@ rules something out.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
-    `corten::middleware`'s; the app's steps are resolved at compile time. An area's or an API's
-    own steps (`Area::middleware`, `Api::middleware`) run right after the app's, for the requests
-    at its prefix; they are boxed, since which run depends on the route, and an app with none pays
-    nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
+    `corten::middleware`'s; the app's steps are resolved at compile time. The page tag stage
+    can skip the hash for a `GET`, but not for an otherwise taggable `HEAD`: without its
+    validator, a cache could freshen an older page of the same length ([Limit 21](#limit-etag)).
+    An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
+    app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
+    an app with none pays nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
     with those of the areas and APIs around it) is resolved once for each when the router is
     built and given to each of its routes, so a request reads it from the route it matched; only
     an unknown URL, whose `404` belongs to the prefix it is under, and a route that can match a
@@ -6918,16 +6920,19 @@ by design; where it is known, a limit says what would lift it or why it is so.
     tag and have a client keep a page that changed. A tag from another process does not match: after
     a restart, or behind a load balancer that sends a client to another instance, the page is sent
     whole, as it was before pages had tags. WebKit 27.2 sends no `If-None-Match` on a reload or a
-    `fetch` (probed), so the runtime's navigations there always get the whole page. A client that
-    does not explicitly accept a non-identity coding and sends no `If-None-Match` is sent no tag:
-    it is not a browser keeping pages (a benchmark, `curl`), and for a page the hash would cost
-    about a third of the render. A CDN that fetches pages without asking for a coding gets no tag
-    to revalidate them. With `compress`, only explicitly named codings Corten can send count.
+    `fetch` (probed), so the runtime's navigations there always get the whole page. A `GET` that
+    does not explicitly accept a non-identity coding and sends no `If-None-Match` gets no tag:
+    for a client like `curl` or a benchmark, the hash would cost about a third of the render for
+    nothing. A CDN that fetches pages without asking for a coding gets no tag to revalidate them.
+    With `compress`, only explicitly named codings Corten can send count.
     Without it, any named non-identity coding with a positive weight counts, as does a positive
     `*` (it allows unlisted codings, RFC 9110 section 12.5.3). An absent or empty
-    `Accept-Encoding` does not count in either build. A file of a type compression does not vary
-    on (a PNG, a PDF, `no-transform`) is tagged for every other
-    client, since its `304` saves the whole body. Its `Vary` does not name `Accept-Encoding`, though
+    `Accept-Encoding` does not count in either build. An otherwise taggable `HEAD` gets a weak
+    `ETag` in both builds even without an accepted coding or `If-None-Match`. The tag cannot match
+    a stored untagged `GET`, so the cache should consider that copy stale even if the new answer
+    has the same `Content-Length` ([RFC 9111 section 4.3.5](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.5)).
+    A file of a type compression does not vary on (a PNG, a PDF, `no-transform`) is tagged for
+    every other client, since its `304` saves the whole body. Its `Vary` does not name `Accept-Encoding`, though
     whether it carries a tag depends on it, so a shared cache whose fetch of a public file accepted
     no compression and named no tag keeps a copy it cannot revalidate: a whole fetch, never a wrong
     answer. A file is hashed on each such request, about 2.5 instructions a byte (a 1 MiB PNG

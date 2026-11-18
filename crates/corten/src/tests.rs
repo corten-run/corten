@@ -14488,12 +14488,47 @@ async fn a_page_get_needs_an_explicit_coding_for_an_unrequested_tag() {
     }
 }
 
+#[tokio::test]
+async fn a_page_head_has_a_validator_for_a_same_length_change() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let changed = Arc::new(AtomicBool::new(false));
+    let price = changed.clone();
+    let routes = Table::new().route(
+        "/price",
+        get(move || {
+            let body = if price.load(Ordering::Relaxed) { "<p>$20</p>" } else { "<p>$10</p>" };
+            async move { Public::new(Duration::from_secs(60), crate::Media::new("text/html", body)) }
+        }),
+    );
+    let router = App::new(Routes::from(routes)).router();
+    let ask = |method| {
+        let req = Request::builder().method(method).uri("/price").header(header::ACCEPT_ENCODING, "identity");
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+
+    let (stored, body) = ask(http::Method::GET).await.unwrap().into_parts();
+    assert_eq!(stored.status, StatusCode::OK);
+    assert_eq!(stored.headers[header::CACHE_CONTROL], "public, max-age=60");
+    assert_eq!(body.collect().await.unwrap().to_bytes(), "<p>$10</p>");
+    assert!(!stored.headers.contains_key(header::ETAG));
+    assert!(!stored.headers.contains_key(header::LAST_MODIFIED));
+
+    changed.store(true, Ordering::Relaxed);
+    let (head, body) = ask(http::Method::HEAD).await.unwrap().into_parts();
+    assert_eq!(head.status, StatusCode::OK);
+    assert_eq!(head.headers[header::CONTENT_LENGTH], stored.headers[header::CONTENT_LENGTH]);
+    assert!(body.collect().await.unwrap().to_bytes().is_empty());
+    // RFC 9111 section 4.3.5: equal lengths cannot freshen the stored GET if HEAD has a tag it lacks.
+    assert!(head.headers.contains_key(header::ETAG), "an untagged HEAD could freshen the old body");
+}
+
 /// A page's `GET` and `HEAD` carry a weak tag of the body it rendered and its `corten-*`
 /// headers, and one the client names in `If-None-Match` is answered `304` with no body (and is
 /// not compressed): the same tag whether the body is compressed or not, another for another mode
 /// or another `corten-*` header; a `304` still sets the page's cookie and varies as its `200`.
-/// A client that does not explicitly accept a coding is tagged only when it sends
-/// `If-None-Match`. A file compression sends as it is is tagged too. Nothing else is
+/// A `GET` that does not explicitly accept a coding is tagged only when it sends
+/// `If-None-Match`; `HEAD` does not need either. A file compression sends as it is is tagged too. Nothing else is
 /// tagged: a body with this request's nonce or a submit key drawn for it, an answer nothing may
 /// keep or that is immutable, one with a tag or an encoding of its own, a stream, a relayed page,
 /// an error, a write, an API's answer, the runtime.

@@ -1464,12 +1464,15 @@ whoever is asking, since the tag is the hash of what this request rendered; it s
 answer's headers and cookies. The runtime's headers count because a cache keeps a stored header the
 `304` leaves out: a copy that came with a notice must not stand in for an answer without one. The
 tag costs about 3 instructions a byte of a page (2.5 of a file), and a `304` saves the compression
-and the body. A client that does not explicitly accept a non-identity coding and sends no
+and the body. A `GET` that does not explicitly accept a non-identity coding and sends no
 `If-None-Match` (a benchmark, `curl`) is not sent a tag: the hash would cost about a third of the
 render. A CDN that fetches pages without asking for a coding therefore gets no tag to revalidate
 them. With `compress`, only explicitly named codings Corten can send count; without it, any
-non-identity coding or `*` with a positive weight counts. Not tagged: a body with this request's nonce or a
-form's new submit key (`SubmitKey::field`; either is never the same twice), an answer nothing may
+non-identity coding or `*` with a positive weight counts. In both builds, an otherwise taggable
+`HEAD` gets an `ETag` regardless of coding, so a shared cache does not freshen an untagged `GET`
+just because the lengths match ([RFC 9111 section 4.3.5](https://www.rfc-editor.org/rfc/rfc9111.html#section-4.3.5)).
+Not tagged: a body with this request's nonce or a form's new submit key (`SubmitKey::field`;
+either is never the same twice), an answer nothing may
 keep (`NoStore`, or `no_store` on its route) or that is immutable, one with an `ETag` or an encoding of its own, a stream, a
 relayed page, an error, a write and an API's answer. An answer compression sends as it is (a PNG, a
 PDF, `no-transform`) is tagged as well: its `304` saves no compression, but the whole body.
