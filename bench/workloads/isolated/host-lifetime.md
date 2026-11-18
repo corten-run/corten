@@ -26,6 +26,29 @@ the cause of a swallowed exception. Successful samples describe only completed
 observations, not the failed attempt. Do not infer a specific exit race, permission
 failure, identity change or latency cause from a generic `host-observation-gap` alone.
 
+## Fault Shutdown
+
+The first irrecoverable interval observation or storage failure requests command-local
+cooperative cancellation through `onFault`. A sticky asynchronous writer error is
+noticed on the next sampling tick. An admitted sample outside the unchanged
+one-second continuity bound, or containing a recorded Docker-participant gap, also
+notifies once, including during initial capture or attachment. Notification follows
+sample admission and executable-capture transaction commit; setup then rechecks
+cancellation before returning an observer or creating an interval.
+
+Notification does not await storage, clear a fault, retry a command or change the
+caller's signal. A throwing callback does not escape the sampler. The campaign joins
+its owned supervisor through the existing cancellation path and retains invalid or
+partial evidence, pending native roots and uncertain ownership. Failed lifetime
+replay forbids another command. Neither observer failure nor command exit establishes
+an empty scope, a complete archive or permission to delete a host.
+
+The existing 120-second cooperative stop and five-second forced-terminal bounds
+remain unchanged. They cannot interrupt a blocked synchronous kernel read, a stalled
+event loop or outstanding filesystem I/O; FIFO ownership and storage deadlines still
+apply. This contains invalid-run duration but does not establish a cause or fix for
+the original SSH-associated survivors, whose attempt recorded no observer error.
+
 ## Snapshot Retries
 
 Each attempt reads the entire recursive scope's accounting and membership, then

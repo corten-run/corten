@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { memoryMiB, summarizeSamples } from "./stats.mjs";
 import { leanApps, leanProfile } from "./contract.mjs";
+import { workerAware, workerPhaseSchema, workerCommand, verifyWorkers, workerHeadroom } from "./apparatus.mjs";
 
 export const timedRawSchema = "catalog-saved-evidence/v3";
 export const phaseSchema = "catalog-timed-phase/v1";
@@ -85,9 +86,10 @@ function healthy(info, summary, name, image, role, memory, status) {
 export function verifyTimedPhase(summary, { app, source, target, phase, seconds, instance }, { readJson, readText }, previous = {}) {
   const metrics = readTimedLoad(readJson(`${phase}.json`)), proof = readJson(`${phase}-cpu-counters.json`), receipt = readJson(`${phase}-boundary.json`);
   const appName = `${summary.runId}-${app}`, upstreamName = `${summary.runId}-upstream`, loadName = `${summary.runId}-k6`;
-  const names = [appName, ...(source === "api" ? [upstreamName] : [])], sampled = [...names, loadName];
+  const workers = workerAware(summary);
+  const names = [appName, ...(source === "api" || workers ? [upstreamName] : [])], sampled = [...names, loadName];
   same(Object.keys(receipt).sort(), ["schema", "exit", "errors", "before", "after", "observedAt"].sort(), "timed boundary fields differ");
-  assert.equal(receipt.schema, phaseSchema); same(receipt.errors, [], "timed apparatus errors retained");
+  assert.equal(receipt.schema, workers ? workerPhaseSchema : phaseSchema); same(receipt.errors, [], "timed apparatus errors retained");
   same(receipt.exit, { code: metrics.outcome === "failed" ? 99 : 0, signal: null, expired: false, interrupted: false }, "timed native exit is not a normal matching threshold exit");
   assert.ok(Number.isSafeInteger(proof.startedAt) && Number.isSafeInteger(proof.finishedAt) && proof.startedAt >= Date.parse(summary.startedAt)
     && proof.startedAt >= (previous.finishedAt ?? Date.parse(instance.startedAt)) && proof.finishedAt > proof.startedAt, "invalid timed clock");
@@ -108,7 +110,7 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
     same(runtime.mounts, [mount(`${checkout}/bench/catalog/fixtures`, "/fixtures")], "timed app mounts differ");
     assert.equal(runtime.id, instance.id); assert.equal(runtime.state.StartedAt, instance.startedAt);
     healthy(upstream, summary, upstreamName, summary.tools.upstream.imageId, "api", 512 * 2 ** 20, "running");
-    execution(upstream, summary.tools.upstream.execution, ["node", "/bench/catalog/upstream.mjs"]);
+    execution(upstream, summary.tools.upstream.execution, workers ? workerCommand : ["node", "/bench/catalog/upstream.mjs"]);
     same(upstream.env, [], "timed upstream environment differs");
     same(upstream.mounts, [mount(`${checkout}/bench`, "/bench"), mount(`${checkout}/bench/catalog/fixtures`, "/fixtures")], "timed upstream mounts differ");
     for (const info of [runtime, upstream]) assert.ok(Number.isFinite(Date.parse(info.state.StartedAt)) && Date.parse(info.state.StartedAt) >= Date.parse(summary.startedAt)
@@ -159,14 +161,23 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
   }
   if (phase === "warmup") assert.equal(metrics.outcome, "passed", "failed warmup is not a completed timed target outcome");
   if (phase !== "fixed") assert.equal(metrics.dropped, 0, "closed-loop dropped iterations contradict the executor");
+  const workerEvidence = workers ? readJson(`${phase}-workers.json`) : null;
+  const workerPeaks = workers ? verifyWorkers(summary, { app, source, target, phase }, workerEvidence,
+    { start, end, container: receipt.after.upstream }) : null;
   if (metrics.outcome === "failed") {
     assert.ok(derived[loadName].cpuMaxPct < summary.measurement.cpus.load.quota * 80, "load generator has no demonstrated CPU headroom");
-    if (source === "api") assert.ok(derived[upstreamName].cpuMaxPct < 80, "busy upstream cannot establish an app request outcome");
+    if (source === "api") {
+      if (workers) workerHeadroom(workerPeaks, derived[upstreamName].cpuMaxPct);
+      else assert.ok(derived[upstreamName].cpuMaxPct < 80, "busy upstream cannot establish an app request outcome");
+    }
     if (metrics.dropped) assert.ok(derived[appName].cpuAvgPct >= summary.measurement.cpus.app.quota * 95, "dropped work lacks observed target pressure");
   }
   Object.assign(metrics, derived[appName], { cpuUsec: deltas[appName].usec, perCpuSecond: metrics.requests / (deltas[appName].usec / 1e6),
-    upstream: source === "api" ? { ...derived[upstreamName], cpuUsec: deltas[upstreamName].usec, highCpu: derived[upstreamName].cpuAvgPct >= 80,
-      interpretation: "single-process upstream; a busy API may be the throughput limit, not the app" } : null });
+    upstream: source === "api" ? { ...derived[upstreamName], cpuUsec: deltas[upstreamName].usec,
+      ...(workers ? { workerPeaks, highCpu: derived[upstreamName].cpuMaxPct >= 160 || Object.values(workerPeaks).some((p) => p >= 80),
+        interpretation: "two fixed request workers; per-process skew and container headroom both matter" }
+        : { highCpu: derived[upstreamName].cpuAvgPct >= 80,
+          interpretation: "single-process upstream; a busy API may be the throughput limit, not the app" }) } : null });
   readText(`${phase}.log`);
   const participants = [receipt.after.runtime, receipt.after.upstream].map((info) => {
     const name = info.name.slice(1);
@@ -175,7 +186,8 @@ export function verifyTimedPhase(summary, { app, source, target, phase, seconds,
     } : {}) };
   });
   participants.push({ id: load.id, lifetime: { restarts: load.restarts, state: load.state }, load: { startedAt: start, finishedAt: end } });
-  return { metrics, counters: proof.after, finishedAt: receipt.observedAt, upstreamId: receipt.after.upstream.id, loadId: load.id, participants };
+  return { metrics, counters: proof.after, finishedAt: receipt.observedAt, upstreamId: receipt.after.upstream.id, loadId: load.id, participants,
+    ...(workers ? { workerEvidence, workerPeaks, workerWindow: { start, end }, resources: derived } : {}) };
 }
 
 // Summary traversal groups passes by app, not by their native observation clock.
@@ -202,20 +214,26 @@ export function verifyTimedContinuity(observations) {
 
 // Dependencies are the native runner's existing bounded commands, never saved code.
 export async function collectTimedPhase(context, subject) {
-  const { summary, raw, docker, owned, inspect, remove, cpu, sampleStats, cpus, mount, k6Image } = context;
+  const { summary, raw, docker, owned, inspect, remove, cpu, sampleStats, cpus, mount, k6Image, upstreamControl } = context;
   const { app, source, target, phase, seconds } = subject, name = `${summary.runId}-${app}`, container = `${summary.runId}-k6`;
-  const names = [name, ...(source === "api" ? [`${summary.runId}-upstream`] : [])];
-  const receipt = { schema: phaseSchema, exit: null, errors: [], before: {}, after: {}, observedAt: null };
+  const workers = workerAware(summary);
+  const names = [name, ...(source === "api" || workers ? [`${summary.runId}-upstream`] : [])];
+  const receipt = { schema: workers ? workerPhaseSchema : phaseSchema, exit: null, errors: [], before: {}, after: {}, observedAt: null };
   const error = (stage, e) => receipt.errors.push({ stage, message: e.message ?? String(e) });
   const attempt = async (stage, fn) => { try { return await fn(); } catch (e) { error(stage, e); } };
   const participants = async () => Object.fromEntries(await Promise.all([["runtime", name], ["upstream", `${summary.runId}-upstream`], ["load", container]]
     .map(async ([role, id]) => [role, timedContainerEvidence(await inspect(id))])));
-  let before, after, sampler, startedAt, finishedAt;
+  let before, after, sampler, startedAt, finishedAt, workerBefore, workerAfter, observation, observing = false;
   try {
     await attempt("create", () => owned(["create", "--network", `${summary.runId}-net`, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount,
       ...Object.entries(phaseEnvironment(name, target, phase, seconds, summary.options.rate)).flatMap(([k, v]) => ["-e", `${k}=${v}`]),
       k6Image, "run", "--quiet", "--summary-export", "/tmp/catalog-summary.json", "/bench/catalog/load.js"], container));
     receipt.before = await attempt("before participants", participants) ?? {};
+    if (workers) {
+      workerBefore = await attempt("worker epoch reset", () => upstreamControl({}));
+      observing = true;
+      await attempt("worker sampler start", () => upstreamControl({ observation: "begin", seconds }));
+    }
     startedAt = Date.now(); before = await attempt("before CPU", () => cpu(names));
     if (!receipt.errors.length) {
       sampler = await attempt("sampler start", () => sampleStats([...names, container], join(raw, `${phase}-stats.log`), seconds + 35));
@@ -226,8 +244,19 @@ export async function collectTimedPhase(context, subject) {
     }
   } finally {
     if (sampler) await attempt("sampler stop", () => sampler.stop());
+    if (observing) {
+      observation = await attempt("worker sampler stop", () => upstreamControl({ observation: "end" }));
+      workerAfter = await attempt("worker epoch acknowledgement", () => upstreamControl());
+    }
     after = await attempt("after CPU", () => cpu(names)); finishedAt = Date.now();
     receipt.after = await attempt("after participants", participants) ?? {};
+    if (workers) await attempt("worker artifacts", () => {
+      const container = receipt.after.upstream;
+      writeFileSync(join(raw, `${phase}-workers.json`), JSON.stringify({ schema: "catalog-worker-observations/v1",
+        binding: { commit: summary.commit, sourceSha256: summary.savedEvidence.apparatusSourceSha256, container: container.id,
+          image: container.image, startedAt: container.state.StartedAt, budget: container.budget, app, source, target, phase },
+        before: workerBefore, after: workerAfter, processes: observation?.processes }, null, 2));
+    });
     await attempt("summary copy", () => docker(["cp", `${container}:/tmp/catalog-summary.json`, join(raw, `${phase}.json`)]));
     await attempt("CPU artifacts", () => {
       assert.ok(before && after, "phase CPU observations missing"); same(before.ids, after.ids, "phase CPU identity changed");
