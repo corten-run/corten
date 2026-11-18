@@ -54,8 +54,8 @@ Every parameter needs a JSDoc type; an untyped one is a compile error that names
 
 ## Generating the script types
 
-A test in the app writes the TypeScript declarations its scripts read (feed rows, typed
-events), and fails while the committed file is stale:
+A test in the app writes the TypeScript declarations its scripts read and fails while the
+committed file is stale:
 
 ```rust,ignore
 #[test]
@@ -66,6 +66,32 @@ fn script_types_match_the_server() {
         .sync(concat!(env!("CARGO_MANIFEST_DIR"), "/types/app.d.ts"));
 }
 ```
+
+Give `Types::components` the same component lists as `App::components`. It declares typed
+events, views, and the named `ToJson` types in the scripts' checked handler parameters,
+including the types those values contain. The macro recognizes JSDoc import specifiers that
+are `types/app` or end in `/types/app` after removing an optional `.js` or `.d.ts` suffix. An
+alias without that ending is neither checked nor collected by the macro.
+
+Use a relative JSDoc import from the script to the generated file. For `../types/app`,
+`Types::sync` looks for `../types/app.d.ts` first, then `../types/app/index.d.ts`, folding
+`dir/..` out of the path before it follows symlinks, as TypeScript does. A component
+library can write its own declarations while the app still collects its events and views.
+`sync` skips a handler only when its import and output can both be resolved on disk and refer
+to different files. If either cannot be resolved, for example on the first `sync` or with a
+recognized bare specifier, `sync` includes the handler type and checks the imported name.
+Use `Types::add` for other types, such as feed rows or screen data the script receives from a
+URL. A type already collected through a component or added by hand is declared only once.
+
+If two Rust types have the same name, the generator numbers later declarations (for example,
+`Payload2`), just as it does for types reached through `Types::add`. Handler types for the
+file are registered first; component events and explicit adds otherwise keep their builder
+order. Generated references can use the numbered names.
+TypeScript generation fails if a handler imports from that file under a different name from
+the declaration for its Rust type. Give handler argument types in the same file distinct Rust
+names. A renamed Rust alias does not create a declaration: use the underlying type's declared
+name, or define a newtype that derives `ToJson`. `Types::json_schema` includes all handler
+types in `$defs` without checking the names their scripts import.
 
 ### Where the types come from
 
@@ -90,7 +116,8 @@ error, logged with the tool's name, and a debug build answers it with a 500 nami
 newtype that is a tool's whole input takes `impl corten::FromJson for T {}` beside its
 `Deserialize`). In a generic type, a field type that has a schema only under a bound the type does
 not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same way: add the bound to the type's where clause. A type a root names
-directly (`Types::add`, a tool's input or output, an event's field) without a schema does not
+directly (`Types::add`, a checked handler parameter's generated type, a tool's input or output,
+an event's field) without a schema does not
 compile. Rust's own types that serde writes have one (strings, numbers, `NonZero*`, lists, sets,
 maps, tuples, `Option`, `Box`/`Rc`/`Arc`/`Cow`, `Duration`, `SystemTime`, paths and addresses,
 `serde_json`'s values and `RawValue`, Corten's `Raw` and `Day`). The read side describes what

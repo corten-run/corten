@@ -632,14 +632,14 @@ pub(crate) mod tests {
     /// The column a table sorted in place sorts by: a Rust type the script's parameter is declared
     /// as (`types/app.d.ts`), so the call takes it and nothing else.
     #[derive(Clone, Copy, corten::prelude::ToJson)]
-    pub(crate) enum TotalsBy {
+    enum TotalsBy {
         Total,
         Placed,
     }
 
     /// A header of a table that sorts in place, told its column by a typed call on its link.
     #[corten::component(js)]
-    fn SortedTotals() -> impl corten::view::Render {
+    pub(crate) fn SortedTotals() -> impl corten::view::Render {
         use super::table::{Sort, SortHeader, TableNumeric};
         use crate::{app::url, orders::OrderSort};
         use corten::prelude::*;
