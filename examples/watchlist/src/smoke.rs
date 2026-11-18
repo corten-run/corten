@@ -30,9 +30,6 @@ pub mod url {
     #[route("/smoke/scoped", get = scoped_page)]
     pub struct ScopedPage;
 
-    #[route("/smoke/scoped/replace", get = replace_scoped_part)]
-    pub struct ReplaceScopedPart;
-
     /// A patch whose component is listed in this area only, for a `data-patch` form on a page
     /// outside it (the test writes the form into the watchlist).
     #[route("/smoke/styled", post = styled)]
@@ -69,6 +66,12 @@ pub mod url {
     /// `textContent` (#1531).
     #[route("/smoke/views", get = views_page)]
     pub struct ViewsPage;
+
+    #[route("/smoke/shared-refs", get = shared_refs_page)]
+    pub struct SharedRefsPage;
+
+    #[route("/smoke/shared-refs/replace", get = replace_shared_ref_part)]
+    pub struct ReplaceSharedRefPart;
 }
 
 /// The components the smoke's pages draw.
@@ -77,13 +80,9 @@ pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm, Rea
 #[derive(Id)]
 struct ScopedReadyId;
 
-#[derive(Id)]
-struct ScopedPartId;
-
 #[component(js)]
-fn ScopedPage(replaced: bool) -> impl Document {
+fn ScopedPage() -> impl Document {
     let ready = refs();
-    let part: corten::script::SharedRef<el::HTMLParagraphElement> = refs();
     html! {
         <!DOCTYPE html>
         <html lang="en">
@@ -92,27 +91,14 @@ fn ScopedPage(replaced: bool) -> impl Document {
                 <Corten />
             </head>
             <body>
-                <main>
-                    <output id={ScopedReadyId} ref={ready} on:connect={js::ready(ready)}></output>
-                    <button type="button" on:click={js::show_part(part, ready)}>"Read part"</button>
-                    <form method="get" action={url::ReplaceScopedPart} data-patch><button>"Replace part"</button></form>
-                    {scoped_part(ScopedPageRefs, replaced)}
-                </main>
+                <main><output id={ScopedReadyId} ref={ready} on:connect={js::ready(ready)}></output></main>
             </body>
         </html>
     }
 }
 
 async fn scoped_page(req: Req) -> HtmlResult {
-    req.page(ScopedPage { replaced: false })
-}
-
-fn scoped_part(refs: ScopedPageRefs, replaced: bool) -> impl Patch {
-    html! { <p id={ScopedPartId} ref={refs.part()}>{if replaced { "Replacement" } else { "Original" }}</p> }
-}
-
-async fn replace_scoped_part(req: Req) -> HtmlResult {
-    req.patch_or(scoped_part(ScopedPageRefs, true), || async { req.page(ScopedPage { replaced: true }) }).await
+    req.page(ScopedPage {})
 }
 
 /// The text the handler is given, as itself and in a JSON array. `data-on` is single-quoted, so it
@@ -446,6 +432,43 @@ async fn views_page(req: Req) -> HtmlResult {
 /// One large event and then nothing: the browser must show it without more of the stream coming.
 async fn large() -> LiveResponse {
     corten::live(stream::once(async { LargeList {}.to_html() }).chain(stream::pending()))
+}
+
+#[derive(Id)]
+struct SharedRefPartId;
+
+#[component(js)]
+pub(crate) fn SharedRefsPage(replaced: bool) -> impl Render {
+    let out = refs();
+    let part: corten::script::SharedRef<el::HTMLParagraphElement> = refs();
+    html! {
+        <section>
+            <output ref={out}></output>
+            <button type="button" on:click={js::show_part(part, out)}>"Read part"</button>
+            <form method="get" action={url::ReplaceSharedRefPart} data-patch><button>"Replace part"</button></form>
+            {shared_ref_part(SharedRefsPageRefs, replaced)}
+        </section>
+    }
+}
+
+fn shared_ref_part(refs: SharedRefsPageRefs, replaced: bool) -> impl Patch {
+    html! { <p id={SharedRefPartId} ref={refs.part()}>{if replaced { "Replacement" } else { "Original" }}</p> }
+}
+
+fn shared_refs_document(req: &Req, replaced: bool) -> HtmlResult {
+    req.page(html! {
+        <Layout req={req} title="Shared patch refs" viewer={None} head="">
+            <SharedRefsPage replaced={replaced} />
+        </Layout>
+    })
+}
+
+async fn shared_refs_page(req: Req) -> HtmlResult {
+    shared_refs_document(&req, false)
+}
+
+async fn replace_shared_ref_part(req: Req) -> HtmlResult {
+    req.patch_or(shared_ref_part(SharedRefsPageRefs, true), || async { shared_refs_document(&req, true) }).await
 }
 
 #[cfg(test)]
