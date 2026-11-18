@@ -640,9 +640,12 @@ pub(crate) mod tests {
     /// A header of a table that sorts in place, told its column by a typed call on its link.
     #[corten::component(js)]
     pub(crate) fn SortedTotals() -> impl corten::view::Render {
-        use super::table::{Sort, SortHeader, TableNumeric};
+        use super::table::{Sort, SortHeader, SortLinks, TableNumeric};
         use crate::{app::url, orders::OrderSort};
         use corten::prelude::*;
+        use corten_ui::rows;
+        let (up, down, first) = refs();
+        let links = Some(SortLinks { ascending: up, descending: down, descending_first: first });
         html! {
             <tr>
                 <SortHeader
@@ -652,6 +655,8 @@ pub(crate) mod tests {
                     descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown), payout: None }}
                     first={Sort::Ascending}
                     class={TableNumeric {}}
+                    links={None}
+                    on:connect={None::<Handler>}
                     on:sort={js::sortBy(event, TotalsBy::Total)}
                 />
                 <SortHeader
@@ -661,6 +666,8 @@ pub(crate) mod tests {
                     descending={&url::Orders { page: Some(2), sort: None, payout: None }}
                     first={Sort::Descending}
                     class={()}
+                    links={links}
+                    on:connect={rows::connect(target, up, down, first)}
                     on:sort={js::sortBy(event, TotalsBy::Placed)}
                 />
             </tr>
@@ -674,10 +681,7 @@ pub(crate) mod tests {
         use corten::view::Render;
         let html = SortedTotals {}.to_html();
         // On the link, not the header: the click the script takes is the link's.
-        assert!(
-            html.contains(r#"href="/orders?sort=total_down" data-ascending="/orders?sort=total_up" data-descending="/orders?sort=total_down" data-on='click:sorted_totals.sortBy($e,"Total")'>"#),
-            "{html}"
-        );
+        assert!(html.contains(r#"href="/orders?sort=total_down" data-on='click:sorted_totals.sortBy($e,"Total")'>"#), "{html}");
         // A header the server sorts writes no handler.
         let served = super::table::SortHeader {
             label: "Total",
@@ -686,14 +690,20 @@ pub(crate) mod tests {
             descending: &crate::app::url::Orders { page: None, sort: None, payout: None },
             first: super::table::Sort::Ascending,
             class: (),
+            links: None,
+            on_connect: &None::<corten::prelude::Handler>,
             on_sort: &None::<corten::prelude::Handler>,
         }
         .to_html();
-        assert!(!served.contains("data-on"), "{served}");
+        assert!(!served.contains("data-on") && !served.contains("data-ref"), "{served}");
         // A column read newest first: its first click sorts it descending, and without the
         // script its link is the descending page.
         assert!(
-            html.contains(r#"href="/orders?page=2" data-ascending="/orders?page=1" data-descending="/orders?page=2" data-first="descending" data-on='click:sorted_totals.sortBy($e,"Placed")'"#),
+            html.contains(r#"data-ref="down" data-ref-value='"/orders?page=2"'"#)
+                && html.contains(r#"data-ref="up" data-ref-value='"/orders?page=1"'"#)
+                && html.contains(r#"data-ref="first" data-ref-value='true'"#)
+                && html.contains(r#"href="/orders?page=2" data-on='connect:ui.rows.connect("#)
+                && html.contains(r#"click:sorted_totals.sortBy($e,"Placed")'"#),
             "{html}"
         );
     }

@@ -60,6 +60,48 @@
 //! }
 //! ```
 //!
+//! Registering a sort link also checks the values and tags of its refs. The first direction is
+//! a boolean, not text:
+//!
+//! ```compile_fail,E0271
+//! use corten::prelude::*;
+//! use corten_ui::rows;
+//!
+//! #[component]
+//! fn Headers() -> impl Render {
+//!     let (up, down, first) = refs();
+//!     html! {
+//!         <th ref={down.with("/?sold=down")}>
+//!             <a ref={up.with("/?sold=up")} on:connect={rows::connect(target, up, down, first)}>
+//!                 <span ref={first.with("descending")}>"Price"</span>
+//!             </a>
+//!         </th>
+//!     }
+//! }
+//! ```
+//!
+//! The ascending address belongs to the link, not another table cell:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//! use corten_ui::rows;
+//!
+//! #[component]
+//! fn Headers() -> impl Render {
+//!     let (up, down, first) = refs();
+//!     html! {
+//!         <tr>
+//!             <th ref={up.with("/?sold=up")}></th>
+//!             <th ref={down.with("/?sold=down")}>
+//!                 <a on:connect={rows::connect(target, up, down, first)}>
+//!                     <span ref={first.with(true)}>"Price"</span>
+//!                 </a>
+//!             </th>
+//!         </tr>
+//!     }
+//! }
+//! ```
+//!
 //! Use the platform for everything else: `<dialog>` with `command="show-modal"` for dialogs and
 //! alert dialogs (with [`dialog::modal`] on one the server can draw open), `popover` for popovers and toggletips (`popovertarget`: shown on a click or
 //! tap), `<details name>` for accordions,
@@ -289,7 +331,8 @@ script!(pub mod ordered = "ordered.js");
 /// "Refresh" whose answer redirects back to the page) calls `ordered::send` (a form's
 /// `on:submit`) or `ordered::link` (a link's `on:connect`) with it, so what it sends or opens
 /// carries the order on screen. Each table is named by its `#[derive(Id)]` type, so a renamed
-/// table's id does not compile where a string would name nothing.
+/// table's id does not compile where a string would name nothing. The table's header links
+/// register their sort addresses through [`rows::connect`].
 ///
 /// ```
 /// use corten::prelude::*;

@@ -29,6 +29,8 @@
 //!                     descending={&url::Orders { sort: Some(By::TotalDown) }}
 //!                     first={Sort::Ascending}
 //!                     class={TableNumeric {}}
+//!                     links={None}
+//!                     on:connect={None::<Handler>}
 //!                     on:sort={None::<Handler>}
 //!                 />
 //!             </tr>
@@ -50,6 +52,7 @@
 //! ```
 use corten::Href;
 use corten::prelude::*;
+use corten::script::{NoRows, ts};
 
 /// How a table fits a box narrower than it. Each is a class in `table.css`, so one without a rule
 /// does not compile.
@@ -101,13 +104,23 @@ pub enum Sort {
     Descending,
 }
 
+/// The refs used by `corten_ui::rows::connect` for a table that sorts in place.
+#[derive(Clone, Copy)]
+pub struct SortLinks {
+    pub ascending: Ref<el::HTMLAnchorElement, NoRows, ts::String>,
+    pub descending: Ref<el::HTMLTableCellElement, NoRows, ts::String>,
+    pub descending_first: Ref<el::HTMLSpanElement, NoRows, ts::Boolean>,
+}
+
 /// A column header the table can be sorted by: `ascending` and `descending` are the page sorted
 /// by it each way (typed routes), and its link is the one a click gives, the other way when the
 /// table is sorted by it now and else `first` (`Sort::Descending` for a column read newest or
 /// largest first), so it works without a script; and
-/// `aria-sort` on the column the table is sorted by now (`sort`, `None` for the others). With a
-/// click handler it writes both on the link (`data-ascending`, `data-descending`), so
-/// `corten_ui::rows::sort` puts the order it shows in the address and each header's link. The
+/// `aria-sort` on the column the table is sorted by now (`sort`, `None` for the others). For
+/// `corten_ui::rows::sort`, pass the table's `SortLinks` refs as `links` and give the link
+/// `on:connect={rows::connect(target, up, down, first)}` with those refs. They carry both addresses
+/// and the first direction, so a sort keeps the page address and the header links in step.
+/// Otherwise pass `links={None}` and `on:connect={None::<Handler>}`. The
 /// direction is drawn, not written, so a screen reader reads the label and the column's sort
 /// state, not an arrow's name: the arrow is drawn from the header's `aria-sort`, so it follows
 /// the one state both the server and a script write. `class` is the header's look (`TableNumeric
@@ -132,6 +145,8 @@ pub fn SortHeader<'a, L: Render, C: ClassList>(
     descending: &'a dyn Href,
     first: Sort,
     class: C,
+    links: Option<SortLinks>,
+    on_connect: Handler<'a>,
     on_sort: Handler<'a>,
 ) -> impl Render {
     let (aria, link) = match sort {
@@ -140,25 +155,26 @@ pub fn SortHeader<'a, L: Render, C: ClassList>(
         None if first == Sort::Descending => (None, descending),
         None => (None, ascending),
     };
-    // Only a click handler reads them: a table the server sorts does without.
-    let (up, down) = if on_sort.present() {
-        (Some(ascending), Some(descending))
-    } else {
-        (None, None)
-    };
-    let starts = (on_sort.present() && first == Sort::Descending).then_some("descending");
     html! {
-        <th scope="col" class={class} aria-sort={aria}>
-            <a
-                class={Sorter}
-                href={link}
-                data-ascending={up}
-                data-descending={down}
-                data-first={starts}
-                on:click={on_sort}
-            >
-                {label}<span class={Arrow} aria-hidden="true"></span>
-            </a>
-        </th>
+        if let Some(links) = links {
+            <th ref={links.descending.with(corten::route::link(descending))} scope="col" class={class} aria-sort={aria}>
+                <a
+                    ref={links.ascending.with(corten::route::link(ascending))}
+                    class={Sorter}
+                    href={link}
+                    on:connect={on_connect}
+                    on:click={on_sort}
+                >
+                    {label}
+                    <span ref={links.descending_first.with(first == Sort::Descending)} class={Arrow} aria-hidden="true"></span>
+                </a>
+            </th>
+        } else {
+            <th scope="col" class={class} aria-sort={aria}>
+                <a class={Sorter} href={link} on:connect={on_connect} on:click={on_sort}>
+                    {label}<span class={Arrow} aria-hidden="true"></span>
+                </a>
+            </th>
+        }
     }
 }

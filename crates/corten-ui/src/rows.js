@@ -5,10 +5,43 @@
 // app's, to the page the server sorts, for a click with a modifier key and a page without the
 // script. A table that shows one page of its rows sorts on the server: its links, not this.
 
+/** @type {WeakMap<HTMLAnchorElement, { up: string, down: string, first: 1 | -1 }>} */
+const routes = new WeakMap();
+
+/**
+ * Registers a sort link's two typed route values and its first direction when it joins the page.
+ * @param {HTMLElement} link the header link (a prop's handler gets an `HTMLElement`)
+ * @param {Map<HTMLAnchorElement, string>} ascending
+ * @param {Map<HTMLTableCellElement, string>} descending
+ * @param {Map<HTMLSpanElement, boolean>} descendingFirst
+ */
+export function connect(link, ascending, descending, descendingFirst) {
+  if (!(link instanceof HTMLAnchorElement)) return;
+  const header = link.closest("th");
+  const arrow = Array.from(link.children).find((part) => part instanceof HTMLSpanElement && descendingFirst.has(part));
+  const up = ascending.get(link);
+  const down = header && descending.get(header);
+  if (up !== undefined && down != null && arrow instanceof HTMLSpanElement) {
+    routes.set(link, { up, down, first: descendingFirst.get(arrow) ? -1 : 1 });
+  }
+}
+
+/**
+ * Registered sort links of this table's own header, not of a nested table.
+ * @param {HTMLTableElement} table
+ */
+export function sortLinks(table) {
+  const links = table.tHead?.querySelectorAll(/** @type {"a"} */ (":scope > tr > th > a")) ?? [];
+  return Array.from(links).flatMap((link) => {
+    const route = routes.get(link);
+    return route ? [{ link, ...route }] : [];
+  });
+}
+
 /**
  * Sorts the rows of each body of the link's table by the column of the header the link is in, in
- * place of following it: ascending, then descending on the next click (descending first when the
- * link has `data-first="descending"`). Each cell sorts by the machine value of the one
+ * place of following it: ascending, then descending on the next click (or the first direction
+ * registered by `connect`). Each cell sorts by the machine value of the one
  * `<time datetime>` (as an instant, when it is a date or a date and time) or `<data value>`
  * it holds outside its hidden parts, else its text. Use `sortByNumber` or `sortByText` for cells
  * with explicit values. A
@@ -21,7 +54,7 @@
  * the page was drawn in the order the server sorts from, not when it was drawn already sorted (a
  * reload of a sorted address): then ties follow the order it was drawn in. The header gets `aria-sort` and the table's other headers lose it, as the ARIA
  * sortable table does: nothing else is announced. When the header's link names the page sorted
- * each way (`data-ascending` and `data-descending`, as the kit's `SortHeader` writes them), the
+ * each way (registered by `connect` from the kit's `SortHeader` refs), the
  * address becomes the page sorted as shown, in place of its history entry, and each header's link
  * the page its next click gives, as the server draws them: a reload and a page that reads itself
  * again (`ReadAgain`) get the order on screen, a part of it read again from its own route around
@@ -69,7 +102,8 @@ function sortRows(event, link, cells) {
   const column = header.cellIndex;
   // The other way when sorted by this column, else the way its first click goes.
   const now = header.getAttribute("aria-sort");
-  const order = now === "ascending" ? -1 : now === "descending" ? 1 : firstOf(link);
+  const route = link instanceof HTMLAnchorElement ? routes.get(link) : undefined;
+  const order = now === "ascending" ? -1 : now === "descending" ? 1 : (route?.first ?? 1);
   const sorted = Array.from(table.tBodies, (body) => {
     // A body none of whose rows were seen is as the page drew it.
     const fresh =
@@ -90,17 +124,15 @@ function sortRows(event, link, cells) {
   }
   for (const other of table.tHead.querySelectorAll("th[aria-sort]")) if (other !== header) other.removeAttribute("aria-sort");
   header.setAttribute("aria-sort", order === 1 ? "ascending" : "descending");
-  const shown = link.dataset[order === 1 ? "ascending" : "descending"];
-  if (shown === undefined) return;
-  const sorters = Array.from(table.tHead.querySelectorAll(/** @type {"a"} */ (":scope > tr > th > a[data-ascending][data-descending]")));
-  const links = sorters.flatMap((a) => [a.dataset.ascending, a.dataset.descending]).map((to) => new URL(to ?? "", location.href).searchParams);
+  if (!route) return;
+  const shown = order === 1 ? route.up : route.down;
+  const sorters = sortLinks(table);
+  const links = sorters.flatMap(({ up, down }) => [up, down]).map((to) => new URL(to, location.href).searchParams);
   // The address is the page sorted as shown, and each link the page its next click gives: this
-  // header's the other way, the others' ascending (none of them is sorted now).
-  for (const other of sorters) {
-    const way = other === link ? -order : firstOf(other);
-    const next = way === 1 ? other.dataset.ascending : other.dataset.descending;
-    if (next === undefined) continue;
-    const to = keeping(next, links);
+  // header's the other way, the others' first direction (none of them is sorted now).
+  for (const { link: other, up, down, first } of sorters) {
+    const way = other === link ? -order : first;
+    const to = keeping(way === 1 ? up : down, links);
     to.hash = "";
     other.setAttribute("href", to.href);
   }
@@ -156,15 +188,6 @@ function sendsIn(el, part, order, links) {
 
 /** A part of the page read again from its own route: the runtime's `PART_AGAIN`. */
 const PART_AGAIN = "template[data-corten-read-again][data-from]";
-
-/**
- * The way a header's first click sorts: descending when its link says so (`data-first`, as the
- * kit's `SortHeader` writes for `first: Sort::Descending`), else ascending.
- * @param {HTMLElement} link @returns {1 | -1}
- */
-function firstOf(link) {
-  return link.dataset.first === "descending" ? -1 : 1;
-}
 
 /**
  * A header's link, on this page: the address as it is with only the query keys the table's header

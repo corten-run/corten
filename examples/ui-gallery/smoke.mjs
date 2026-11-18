@@ -1130,7 +1130,7 @@ async function run(browser) {
         delete headers["content-length"];
         let body = await res.text();
         // The rows module as the page's own sort links name it in `data-on`.
-        const rows = /data-on='click:([^']+?)\.sort\(/.exec(body)?.[1];
+        const rows = /(?:data-on='| )click:([\w.]+)\.sort\(/.exec(body)?.[1];
         if (!rows) throw new Error("no rows::sort call on the page");
         const ordered = rows.replace(/rows$/, "ordered");
         const list = (/** @type {string[]} */ ids) => `[${ids.map((id) => `&quot;${id}&quot;`).join(",")}]`;
@@ -1398,10 +1398,17 @@ async function run(browser) {
   });
   check("tied rows sort in the order the page drew them, not the last click's", tied === "Grace Hopper|Alan Turing|Ada Lovelace", tied);
   await page.goto(unsorted);
-  // A column read newest first (SortHeader's `first: Sort::Descending`, `data-first` on its link)
-  // sorts descending on its first click, puts that order in the address, and links to ascending.
-  // Buyer, which the page does not draw sorted, so the click is a first one, not a reversal.
-  await sales.getByRole("link", { name: "Buyer" }).evaluate((a) => a.setAttribute("data-first", "descending"));
+  // Replace just Buyer's unsorted header, as a patch can. Its new link must register its own
+  // values, including a first click that goes descending, not use those of the removed link.
+  await sales.getByRole("columnheader", { name: "Buyer" }).evaluate((header) => {
+    const replacement = /** @type {HTMLTableCellElement} */ (header.cloneNode(true));
+    const arrow = replacement.querySelector('span[aria-hidden="true"]');
+    const link = replacement.querySelector("a");
+    if (!arrow || !link) throw new Error("missing sort arrow or link");
+    arrow.setAttribute("data-ref-value", "true");
+    link.href = JSON.parse(replacement.getAttribute("data-ref-value") ?? "null");
+    header.replaceWith(replacement);
+  });
   await sales.getByRole("link", { name: "Buyer" }).click();
   const newest = await sortedBy();
   const newestNext = new URL(/** @type {string} */ (await sales.getByRole("link", { name: "Buyer" }).getAttribute("href")), page.url());

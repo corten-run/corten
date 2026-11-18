@@ -33,7 +33,7 @@ use crate::ui::{
     sheet::{Sheet, SheetHeader, SheetWidth, Side},
     stepper::{Stepper, StepperUnit},
     steps::{Step, StepState, Steps, StepsLayout},
-    table::{Sort, SortHeader, Table, TableLayout, TableNumeric},
+    table::{Sort, SortHeader, SortLinks, Table, TableLayout, TableNumeric},
     tabs::Tabs,
     tip::{Tip, TipText},
 };
@@ -638,6 +638,8 @@ pub fn Gallery<'a>(
 #[component]
 fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldBy>, earlier: bool) -> impl Render {
     let (day_value, price_value) = refs();
+    let (up, down, first) = refs();
+    let links = Some(SortLinks { ascending: up, descending: down, descending_first: first });
     let sales = earlier.then_some(SalesPage::Earlier);
     // Each sort header links to the page sorted by its column; the script sorts in place instead.
     let sorted = |by| url::Home { tab, sale: None, period, sold: Some(by), sales };
@@ -670,6 +672,8 @@ fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldB
                         descending={&day_down}
                         first={Sort::Ascending}
                         class={()}
+                        links={links}
+                        on:connect={rows::connect(target, up, down, first)}
                         on:sort={rows::sortByText(event, target, day_value)}
                     />
                     <SortHeader
@@ -679,6 +683,8 @@ fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldB
                         descending={&buyer_down}
                         first={Sort::Ascending}
                         class={()}
+                        links={links}
+                        on:connect={rows::connect(target, up, down, first)}
                         on:sort={rows::sort(event, target)}
                     />
                     <th scope="col">"Condition"</th>
@@ -690,6 +696,8 @@ fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldB
                         descending={&price_down}
                         first={Sort::Ascending}
                         class={TableNumeric {}}
+                        links={links}
+                        on:connect={rows::connect(target, up, down, first)}
                         on:sort={rows::sortByNumber(event, target, price_value)}
                     />
                 </tr>

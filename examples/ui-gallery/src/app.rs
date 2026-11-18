@@ -632,7 +632,10 @@ mod tests {
         let page = page(&url::Home { sold: Some(SoldBy::PriceDown), ..HOME }).await;
         let at = |name: &str| page.find(name).unwrap_or_else(|| panic!("{name}: {page}"));
         assert!(at("Ada Lovelace") < at("Grace Hopper") && at("Grace Hopper") < at("Alan Turing"), "{page}");
-        assert!(page.contains(r#"aria-sort="descending"><a class="#) && page.contains(r#"href="/?sold=price""#), "{page}");
+        let price = at(r#"aria-sort="descending""#);
+        let header = &page[price..price + page[price..].find("</th>").unwrap()];
+        assert!(header.contains(r#"href="/?sold=price""#) && header.contains("Price"), "{header}");
+        assert!(!page.contains("data-ascending") && !page.contains("data-descending") && !page.contains("data-first"), "{page}");
         assert!(page.contains(r#"href="/?sold=day""#) && page.contains(r#"href="/?sold=buyer""#), "{page}");
         assert!(page.contains(r#"data-ref="price_value" data-ref-value='1240'"#), "{page}");
         // A hover does not fetch the sorted page, which a click sorting in place does not use.

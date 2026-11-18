@@ -178,8 +178,12 @@ every click without the script, so the link is the page the server sorts (a rout
 `sold: Option<SoldBy>`), which draws `aria-sort` on its column, the default order's too. A
 `SortHeader` takes the page sorted by its column each way (`ascending`, `descending`) and links
 to the one a click gives: the other way when the table is sorted by it, else the way `first` says
-(`Sort::Descending` for a column read newest or largest first), which the script follows too; with a click handler it also writes both on the link, and after a sort
-the script makes the address the page sorted as shown, in place of its history entry, and each
+(`Sort::Descending` for a column read newest or largest first). For client sorting, declare the
+table's three `SortLinks` refs and pass them to each `SortHeader` as `links`. Give each one
+`on:connect={rows::connect(target, up, down, first)}` with those same refs. The header supplies
+its two route addresses and first direction as typed values on the link, header, and arrow. The
+connect handler registers them for this link, including when a patch draws a new header.
+After a sort the script makes the address the page sorted as shown, in place of its history entry, and each
 header's link the page its next click gives. So a reload and a page that reads itself again
 (`ReadAgain`, which reads the address as it is then) show the order on screen, and a click with a
 modifier key opens the order that click would give. Only the query keys the header links differ
@@ -237,7 +241,9 @@ on; it reports the element in the console and does nothing.
 A form or link that carries the order of several sorted tables (one route's query set holding each
 table's keys) names each (`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are
 taken from the address and the others' left; an id of an element around several sorted tables
-names them all. A GET form's address is its fields, so one that carries the page's query in hidden
+names them all. Both handlers find the current tables and use the sort links registered in them,
+so they do not need the header refs in their own component. A GET form's address is its fields,
+so one that carries the page's query in hidden
 inputs (`corten::form::keep_query`) and calls it sends those keys as the address has them instead
 (set in each list of its fields made while it is sent, the browser's and one another handler
 makes, so nothing is added to the page): replaced, added when the form had
@@ -261,12 +267,15 @@ List `corten_ui::COMPONENTS` and it is served.
 
 ```rust,ignore
 let price = refs();
+let (up, down, first) = refs();
+let links = Some(SortLinks { ascending: up, descending: down, descending_first: first });
 html! {
     <table>
         <thead data-no-prefetch>
             <tr>
                 <SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price) }}
                     descending={&url::Sales { sold: Some(SoldBy::PriceDown) }} first={Sort::Ascending} class={TableNumeric {}}
+                    links={links} on:connect={rows::connect(target, up, down, first)}
                     on:sort={rows::sortByNumber(event, target, price)} />
             </tr>
         </thead>
@@ -347,6 +356,7 @@ pub struct Sales { pub sold: Option<SoldBy>, pub page: Option<usize> }
 ..
 <SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price), page: None }}
     descending={&url::Sales { sold: Some(SoldBy::PriceDown), page: None }} first={Sort::Ascending} class={TableNumeric {}}
+    links={None} on:connect={None::<Handler>}
     on:sort={None::<Handler>} />
 ..
 <Pagination .. link={|page| url::Sales { sold, page: Some(page).filter(|p| *p > 1) }} on:link={None::<Handler>} />

@@ -402,7 +402,12 @@ opens and a link closes (`?selected=..`) gets `dialog::modalClosedBy(target, clo
 the link as the `close` ref, so a close request (Escape) goes to its address. A table whose page
 has all its rows sorts in place, also when other routes read its order (no round trip; the UI guide
 has the measurement), with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
-`SortHeader` and `data-no-prefetch` on the `<thead>`. When a cell's text is not its order, put a
+`SortHeader` and `data-no-prefetch` on the `<thead>`. Declare `let (up, down, first) = refs();`
+in the table's component. Each header takes `links={Some(SortLinks { ascending: up,
+descending: down, descending_first: first })}` and
+`on:connect={rows::connect(target, up, down, first)}`, which registers its typed addresses and
+first direction for the sort and for `ordered` handlers elsewhere. A server-sorted header takes
+`links={None}` and `on:connect={None::<Handler>}`. When a cell's text is not its order, put a
 `<time datetime>` or `<data value>` in it, or write `ref={cell.with(value)}` on the cell and
 give that ref to `rows::sortByNumber(event, target, cell)` for numbers or
 `rows::sortByText(event, target, cell)` for text. The header's `ascending` and `descending` link

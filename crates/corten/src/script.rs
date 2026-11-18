@@ -2429,7 +2429,7 @@ pub trait Bind {
     #[doc(hidden)]
     fn write_bind(&self, out: &mut String);
     /// False for a handler that is not there (`None`): its `on:` is left out, and a component
-    /// can leave out what only the handler reads (the kit's `SortHeader` its `data-` links).
+    /// can leave out what only the handler reads.
     fn present(&self) -> bool {
         true
     }
