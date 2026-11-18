@@ -5782,57 +5782,39 @@ rules something out.
     above, at `65ac1dc47` against `38587c414`.
 
 62. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
-    on the server.** HTML has no exclusive number bound. For `f64`, draw the next float inside
-    a refused end. For `f32`, draw the midpoint between the end and the next `f32` inside it,
-    exactly representable as an `f64`. Omit a hint if its spelling does not round-trip as that
-    `f64`. The handler checks the logical ends and refuses out-of-range input with 422. Show the
-    rule in a visible hint and in the field error: the browser can only describe inclusive attributes.
+    on the server.** HTML has no exclusive number bound. For both `f32` and `f64`, emit the
+    endpoint itself as `min` or `max`, just as for an inclusive bound. The hint is advisory.
+    The cost is that an endpoint can reach the handler, which runs the authoritative
+    `Bounds` check and refuses it with a typed field error and HTTP 422 on a form POST.
+    Show the logical rule in a visible hint and in the field error.
 
-    Reopened after the fixed-notation magnitude restriction rejected useful exclusive ends
-    such as 0.01, even though all three engines accepted the inward hints in exponent form.
-    The digit budget governs notation, not logical ranges. Any-step bounds and programmatic
-    prefills share one formatter, using exponent notation past 18 digits written out. Plain
-    inputs use `Bounds::input_value`, which `NumberField` also uses: Chromium and WebKit
-    block a fixed prefill `0.00000000000000000001` against `min="5e-324"`, but submit `1e-20`
-    unchanged. The helper still preserves submitted text on redisplay. Existing stepped
-    fields and standalone `Entry` attributes keep their formatting.
+    Correctness and HTML that works on its own matter more than blocking every invalid
+    value early. Moving a hint inward can stop a server-valid submission before the handler
+    sees it. Firefox can read an excluded `f64` endpoint and the next float as the same number.
+    Chromium and WebKit can reject a decimal Rust rounds inward even against a serialized
+    `f32` rounding midpoint, and a shortest spelling of an excluded `f32` can itself land on
+    that midpoint. Keep the ordinary native hints instead of trying to encode exclusivity in
+    an inclusive attribute, or replacing number inputs with a parser or input mask.
 
-    Reopened again when Firefox read `min="1.0000000000000002e-3"` and the short spelling
-    `0.001` as the same number, admitting the excluded end. Chromium and WebKit block `0.001`.
-    Firefox also reads the valid inward spelling as `0.001`, so a stricter hint would block
-    that input. Keep the hint; the handler refuses the endpoint in every engine. For `f32`,
-    the old exclusive hint `max="0.99999994"` blocked `0.99999996` in all three engines, even
-    though Rust rounds it inward. The midpoint hint `max="0.9999999701976776"` admits it and
-    blocks `1` in all three. The hint includes the midpoint even if Rust rounds the exact tie
-    to the excluded end and refuses it.
+    Any-step bounds and programmatic prefills share one formatter, using exponent notation
+    past 18 digits written out. The digit budget governs notation, not logical ranges.
+    Plain inputs use `Bounds::input_value`, which `NumberField` also uses; it preserves
+    submitted text on redisplay. Existing stepped fields and standalone `Entry` attributes
+    keep their formatting.
 
-    Native checks are advisory: Chromium and WebKit may admit the fixed spelling of `1e-20`
-    below `9.999999999999998e-21`, or `0.00000000000000999999999999999999e16` below 100 (Rust
-    rounds it to 100 and rejects it). They can also refuse `4e-324` above zero (Rust rounds it
-    to `5e-324`). No inclusive HTML range can constrain every spelling. The server runs its
-    check for every submission.
-
-    Not chosen: rendering the unshifted end, which admits ordinary spellings and lets
-    arrows land on it; a new parser or input mask, which replaces HTML and cannot help
-    without JavaScript; empty or non-finite HTML ranges, which can be invalid or ignored.
     Concrete `f32` and `f64` constructors reject non-finite or reversed ranges, or ranges with
     no representable member, using stable const comparisons and adjacent-float operations.
     A stepped bound stays off an end by starting one step in.
 
     Stands on: platform ([HTML's number state](https://html.spec.whatwg.org/multipage/input.html#number-state-(type=number))
     and [floating-point syntax](https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#floating-point-numbers));
-    measured (native submissions around 0.01, tiny and extreme inward hints, fixed and exponent
-    prefills, and gallery POSTs at the reported `f64` and `f32` limits in three engines);
-    value (standards first, compile-time safety, and HTML that works without JavaScript).
+    measured (gallery POSTs at and just inside the `f64` minimum and `f32` maximum in three
+    engines); value (correctness, standards first, and HTML that works without JavaScript).
 
-    Revisit when: HTML gains exclusive number bounds, browsers can distinguish both sides of
-    a known collapsed pair, a new shortest spelling of an exclusive end gets past its hint,
-    or a server-valid shortest spelling or `Bounds::input_value` prefill is blocked by a hint.
+    Revisit when: HTML gains an attribute for exclusive number bounds.
 
-    Last checked: 2026-11-18, range probes and gallery POSTs with JavaScript disabled in Chromium
-    156, Firefox 157 and WebKit 27.2 (Playwright 1.64.1) at the `f64` and `f32` limits above;
-    2026-11-17, native submissions around 0.01 (Playwright 1.64.1) and a Rust 1.89 const check
-    of both 0.01 ranges.
+    Last checked: 2026-11-18, gallery POSTs with JavaScript disabled in Chromium, Firefox and
+    WebKit (Playwright 1.64.1): endpoints got 422 and inward values got 200.
 
 ## Rules
 

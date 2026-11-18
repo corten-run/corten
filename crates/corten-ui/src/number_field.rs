@@ -264,14 +264,13 @@ mod tests {
         let share = Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
         let field = Number { value: 37.5.into(), ..Number::new(ShareId, Form::FIELDS.p, share, "Less", "More") };
         let html = NumberField { field: &field }.to_html();
-        assert!(html.contains(r#"value="37.5" min="5e-324" max="99.99999999999999" step="any""#), "{html}");
+        assert!(html.contains(r#"value="37.5" min="0" max="100" step="any""#), "{html}");
         assert_eq!(html.matches(r#"tabindex="-1" disabled"#).count(), 2, "{html}");
-        // A tiny number made in code is drawn in exponent form, which Chromium and WebKit hold
-        // above `5e-324`, where `0.00000000000000000001` underflows it.
+        // A tiny number made in code is still drawn in exponent form.
         let tiny = Number { value: 1e-20.into(), ..Number::new(ShareId, Form::FIELDS.p, share, "Less", "More") };
-        assert!(NumberField { field: &tiny }.to_html().contains(r#"value="1e-20" min="5e-324""#));
+        assert!(NumberField { field: &tiny }.to_html().contains(r#"value="1e-20" min="0""#));
         let below = Bounds::<f64>::any_step(-1.0, 0.0).exclusive_max();
         let tiny = Number { value: (-1e-20).into(), ..Number::new(ShareId, Form::FIELDS.p, below, "Less", "More") };
-        assert!(NumberField { field: &tiny }.to_html().contains(r#"value="-1e-20" min="-1" max="-5e-324""#));
+        assert!(NumberField { field: &tiny }.to_html().contains(r#"value="-1e-20" min="-1" max="0""#));
     }
 }

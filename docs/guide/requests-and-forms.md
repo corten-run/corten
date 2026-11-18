@@ -434,20 +434,18 @@ A decimal with no step, such as a ratio or percentile, uses
 `Bounds::<f64>::any_step(min, max)`. It writes HTML's `step="any"` and holds every finite
 number in range. Use `Bounds::<f32>::any_step` for an `f32` field. Only any-step bounds take
 `.exclusive_min()` and `.exclusive_max()`. HTML has no exclusive number bound, so the input
-gets the next `f64` inside a refused `f64` end. For an `f32` end the hint is the rounding
-midpoint between the end and the next `f32` inside, not the next `f32` itself: a decimal that
-rounds inward should not be cut off at that neighbor. A hint whose spelling cannot round-trip
-as an `f64` is omitted. This is advisory: the browser and Rust can round differently, and even
-a short spelling of an excluded end can get through. The server's check is authoritative.
-Show the logical rule in a visible hint and in the field's error; the browser can only
-describe inclusive attributes.
+gets the endpoint itself, just like an inclusive `min` or `max`. Shifting the hint inward can
+block a value the server accepts. Correctness and a form that works without JavaScript matter
+more than catching every invalid value before it is sent. The hint is advisory: the browser
+can send the endpoint, and the handler's authoritative `Bounds` check refuses it with a typed
+field error and HTTP 422. Show the logical rule in a visible hint and in the field error.
 
 ```rust,ignore
 const DISCOUNT: Bounds<f64, AnyStep> =
     Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
 
 // <input type="number" name={f.discount} value={DISCOUNT.input_value(&input.discount)} {..DISCOUNT}> writes
-// min="5e-324" max="99.99999999999999" step="any".
+// min="0" max="100" step="any".
 let Some(discount) = DISCOUNT.read(&input.discount) else {
     let (min, max) = (DISCOUNT.min(), DISCOUNT.max());
     errors.add(f.discount, format!("Enter a discount above {min} and below {max} percent."));
@@ -458,9 +456,11 @@ let Some(discount) = DISCOUNT.read(&input.discount) else {
 Declare any-step bounds as constants. Ends must be finite and ordered, and at least one
 representable value must remain after excluding ends. For a plain any-step input, use
 `Bounds::input_value` to prefill from an `Entry`: like `NumberField`, it uses exponent notation
-past 18 digits written out, so a stored `1e-20` can be submitted unchanged against `min="5e-324"`.
+past 18 digits written out, so a stored `1e-20` is drawn in a short spelling the browser can submit
+unchanged.
 It still draws submitted text as typed after a refusal. Standalone `Entry` attributes keep their
-existing formatting. See [Choice 62](../design.md#choice-exclusive-ends).
+existing formatting. See [Choice 62](../design.md#choice-exclusive-ends), to revisit when HTML
+adds an attribute for exclusive number bounds.
 
 Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
 `Bounds::new(0.1, 16.0).step(0.1)`. Stepped fields keep their existing formatting. Integers

@@ -204,9 +204,10 @@ its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new
 message) and drawn again with `value={&input.qty}`; a decimal with no step or an end it stays
 off is `Bounds::<f64>::any_step(0.0, 1.0).exclusive_min()`, a `Bounds<f64, AnyStep>`.
 Declare it as a constant: the ends must be finite and ordered and leave at least one value.
-The native range is advisory; the handler enforces the rule and a visible hint says "above" or
-"below". Draw an any-step entry with `value={DISCOUNT.input_value(&input.discount)}` so the
-browser can submit a prefilled value unchanged even when it needs exponent notation.
+The native range hints at the endpoint itself. The handler refuses excluded endpoints, and a
+visible hint says "above" or "below". Draw an any-step entry with
+`value={DISCOUNT.input_value(&input.discount)}` so the browser can submit a prefilled value
+unchanged even when it needs exponent notation.
 A stepped field stays off an end by starting a step inside it (`Bounds::new(0.1, 16.0).step(0.1)`);
 a typed `qty: u32` is only for a number a
 page writes itself, since one that does not read is the error page. A date and time the user

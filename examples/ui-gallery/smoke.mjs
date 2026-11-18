@@ -448,11 +448,7 @@ async function run(browser) {
   await discount.press("Home");
   const stepless = [await discount.inputValue(), await discount.getAttribute("step"), await discountButtons.nth(0).isDisabled(), await discountButtons.nth(1).isDisabled()].join(" ");
   check("a number field with step any keeps both buttons disabled and Home leaves its value", stepless === "37.5 any true true", stepless);
-  // Its arrow keys are the browser's: with step="any" they add 1 and never step past the ends the
-  // input says. Its ends are refused (Bounds::exclusive_min and exclusive_max), so the input says
-  // the numbers next to them inside, and a key within 1 of an end stays inside the range (Chromium
-  // and WebKit leave the value, Firefox leaves it or goes to the drawn end) rather than going to 0 or 100,
-  // which the handler would refuse, as each engine did when the input said 0 and 100.
+  // The browser owns the arrow keys and may land on a hinted endpoint. It must not step past it.
   /** @param {string} from @param {string} key */
   const arrow = async (from, key) => {
     await discount.fill(from);
@@ -460,16 +456,15 @@ async function run(browser) {
     return discount.evaluate((input) => ({ value: /** @type {HTMLInputElement} */ (input).value, valid: /** @type {HTMLInputElement} */ (input).validity.valid }));
   };
   const down = await arrow("0.5", "ArrowDown");
-  check("step any: ArrowDown from 0.5 stays above the refused 0, at a value the browser and the handler hold", down.valid && Number(down.value) > 0 && Number(down.value) <= 0.5, JSON.stringify(down));
+  check("step any: ArrowDown from 0.5 does not go below the minimum hint", down.valid && Number(down.value) >= 0 && Number(down.value) <= 0.5, JSON.stringify(down));
   const up = await arrow("99.5", "ArrowUp");
-  check("step any: ArrowUp from 99.5 stays below the refused 100, at a value the browser and the handler hold", up.valid && Number(up.value) >= 99.5 && Number(up.value) < 100, JSON.stringify(up));
-  // A number made in code is drawn with an exponent past 18 digits written out (NumberField's
-  // test: `value="1e-20"`), which each engine holds above the drawn 5e-324; Chromium and WebKit
-  // refuse `0.00000000000000000001`, reading about 19 digits.
+  check("step any: ArrowUp from 99.5 does not go above the maximum hint", up.valid && Number(up.value) >= 99.5 && Number(up.value) <= 100, JSON.stringify(up));
+  // A number made in code is drawn with an exponent past 18 digits written out. Check that
+  // the browser admits that prefill near either end.
   const drawnTiny = await discount.evaluate((input) => {
     const [min, max] = [input.getAttribute("min") ?? "", input.getAttribute("max") ?? ""];
     // The discount's own ends, and the mirror: below 0 (exclusive_max), from -1.
-    return [["1e-20", min, max], ["-1e-20", "-1", "-5e-324"]].map(([value, min, max]) => {
+    return [["1e-20", min, max], ["-1e-20", "-1", "0"]].map(([value, min, max]) => {
       const i = document.createElement("input");
       Object.assign(i, { type: "number", step: "any", min, max });
       i.setAttribute("value", value);
@@ -477,16 +472,6 @@ async function run(browser) {
     }).join(" ");
   });
   check("step any: a tiny number drawn with an exponent is inside the drawn ends, above 0 and below it", drawnTiny === "true true", drawnTiny);
-  // Ordinary spellings near the gallery's ends. This is a sampled check, not a guarantee of
-  // browser/server parity: see the raw POST regression below and the design Choice.
-  const nearEnds = ["0", "-0", "1e-400", "2e-324", "2.5e-324", "4e-324", "4.9e-324", "5e-324", "1e-323", "1e-310", "1e-20", "0.00000000000000000001",
-    "0.0000000000000000000000000000001", "0.5", "99.99999999999999", "99.999999999999992", "99.999999999999993", "99.999999999999995", "99.99999999999999999",
-    "99.9999999999999999999999", "100", "100.0000000000000001", "1e2", "-1", "1e3"];
-  const looser = await discount.evaluate((input, typed) => {
-    const i = /** @type {HTMLInputElement} */ (input);
-    return typed.filter((t) => { i.value = t; const n = Number(t); return i.validity.valid && !(Number.isFinite(n) && n > 0 && n < 100); });
-  }, nearEnds);
-  check("step any: the sampled spellings rejected by the handler are also blocked natively", looser.length === 0, looser.join(" "));
   // The Rust render tests pin these attributes. In particular the stepped writer must not mix
   // an exponent min and step with a fixed-notation prefilled value.
   const otherBounds = await page.evaluate(() => {
@@ -5059,39 +5044,37 @@ async function run(browser) {
   await listForSale();
   const offStep = (await plain.textContent("#result")) ?? "";
   check("no script: a weight between the input's steps is refused by the handler", offStep === "Enter a weight from 0.1 to 16 oz, in tenths.", offStep);
-  // A refused end (Bounds::exclusive_min and exclusive_max): HTML has none, so the input says the
-  // numbers next to 0 and 100 inside them, which the browser checks; sent past that check, as a
-  // client that skips it would, the handler refuses the end. Any decimals inside are listed.
+  // The browser admits both hinted endpoints, but the handler refuses them. Values inside post
+  // without bypassing validation. Only the extra long spelling probe below bypasses validation.
   /** @param {string} discount */
-  const postDiscount = async (discount) => {
+  const postDiscount = async (discount, bypass = false) => {
     await plain.goto(`${base}/`);
     await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
     await plain.fill("#discount", discount);
-    const valid = await plain.evaluate(() => {
+    const valid = await plain.evaluate((bypass) => {
       const form = /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]'));
       const valid = form.checkValidity();
-      form.noValidate = true;
+      if (bypass) form.noValidate = true;
       return valid;
-    });
+    }, bypass);
+    if (!valid && !bypass) return "blocked by native validation";
     const answer = await listForSale();
     return `${valid} ${answer.status()} ${(await plain.textContent("#result")) ?? ""}`;
   };
   for (const end of ["0", "100"]) {
     const atEnd = await postDiscount(end);
-    check(`no script: a discount of ${end}, a refused end, is refused by the browser and by the handler`, atEnd === "false 422 Enter a discount above 0 and below 100 percent, or none.", atEnd);
+    check(`no script: a discount of ${end} posts natively and is refused by the handler`, atEnd === "true 422 Enter a discount above 0 and below 100 percent, or none.", atEnd);
   }
-  const roundedEnd = await postDiscount("0.00000000000000999999999999999999e16");
+  const roundedEnd = await postDiscount("0.00000000000000999999999999999999e16", true);
   check("no script: the handler refuses a value that rounds to 100 even if native validation admits it",
     roundedEnd.split(" ").slice(1).join(" ") === "422 Enter a discount above 0 and below 100 percent, or none.", roundedEnd);
   const precise = await postDiscount("12.345");
   check("no script: a discount with any decimals is listed", precise === "true 200 Listed 1 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship, 12.345% off two or more.", precise);
-  // The handler holds the least double above 0 however it is typed: `4e-324` reads as it. Chromium
-  // and WebKit refuse that text (the decimal is below min="5e-324"), Firefox takes it; `1e-20`
-  // every engine takes.
-  for (const [typed, browsers] of [["4e-324", "either"], ["1e-20", "true"]]) {
+  // The least double above zero still posts in a spelling that used to be blocked by the hint.
+  for (const typed of ["4e-324", "1e-20"]) {
     const tiny = await postDiscount(typed);
     const [valid, status] = tiny.split(" ");
-    check(`no script: a discount of ${typed} is held by the handler (browser: ${valid})`, status === "200" && (browsers === "either" || valid === browsers), tiny.slice(0, 80));
+    check(`no script: a discount of ${typed} posts natively and is held by the handler`, status === "200" && valid === "true", tiny.slice(0, 80));
   }
   await plain.goto(`${base}/help`);
   const prefill = plain.getByLabel("Example discount (%)");
@@ -5103,38 +5086,61 @@ async function run(browser) {
   ]);
   const postedDiscount = new URLSearchParams(prefilled.request().postData() ?? "").get("discount");
   check("no script: a plain any-step input posts its tiny prefill unchanged",
-    defaultDiscount === "1e-20" && discountMin === "5e-324" && postedDiscount === defaultDiscount && prefilled.status() === 200,
+    defaultDiscount === "1e-20" && discountMin === "0" && postedDiscount === defaultDiscount && prefilled.status() === 200,
     `${defaultDiscount} min=${discountMin} posted=${postedDiscount} ${prefilled.status()}`);
-  for (const [label, typed, expected, message] of [
-    ["Minimum ratio example", "0.001", "either", "Enter a ratio above 0.001 and at most 1."],
-    ["Minimum ratio example", "1.0000000000000002e-3", "valid", "Both ratios are in range."],
-    ["Maximum ratio example", "0.99999996", "valid", "Both ratios are in range."],
-    ["Maximum ratio example", "1", "invalid", "Enter a ratio of at least 0 and below 1."],
-  ]) {
-    await plain.goto(`${base}/help`);
-    const input = plain.getByLabel(label);
-    await input.fill(typed);
-    const { name, valid } = await input.evaluate((el) => {
-      const input = /** @type {HTMLInputElement} */ (el);
-      return { name: input.name, valid: input.validity.valid };
-    });
-    const test = `no script: ${label} posts ${typed} (${expected === "valid" ? "held by the server" : "refused by the server"})`;
-    if (expected === "valid" && !valid) {
-      check(test, false, "native validation blocked a server-valid number");
-      continue;
-    }
-    // Firefox can submit the f64 endpoint natively. If the browser blocks an endpoint, bypass
-    // only its advisory check to show that the same POST still gets a 422 from the handler.
-    if (!valid) await input.evaluate((el) => { /** @type {HTMLInputElement} */ (el).form?.setAttribute("novalidate", ""); });
+  const ratios = [
+    { label: "Minimum ratio example", attr: "min", end: "0.001", inside: "1.0000000000000002e-3", rule: "Enter a ratio above 0.001 and at most 1." },
+    { label: "Maximum ratio example", attr: "max", end: "1", inside: "0.9999999701976776123046874", rule: "Enter a ratio of at least 0 and below 1." },
+  ];
+  const postRatios = async () => {
     const [response] = await Promise.all([
       plain.waitForResponse((r) => new URL(r.url()).pathname === "/help" && r.request().method() === "POST"),
+      plain.waitForEvent("load"),
       plain.getByRole("button", { name: "Check the example ratios" }).click(),
     ]);
-    const posted = new URLSearchParams(response.request().postData() ?? "").get(name);
-    check(test, (expected !== "invalid" || !valid) && posted === typed &&
-      response.status() === (expected === "valid" ? 200 : 422) && (await plain.textContent("#result")) === message,
-    `${valid ? "native" : "bypassed"} posted=${posted} ${response.status()}`);
+    return response;
+  };
+  /** @param {import("@playwright/test").Locator} input @param {string} rule */
+  const showsRatioError = async (input, rule) => {
+    const [hintId, errorId, ...extra] = (await input.getAttribute("aria-describedby") ?? "").split(/\s+/);
+    if (!hintId || !errorId || extra.length || await input.getAttribute("aria-invalid") !== "true") return false;
+    const hint = plain.locator(`[id="${hintId}"]`);
+    const error = plain.locator(`[id="${errorId}"]`);
+    return hintId !== errorId && await hint.isVisible() && await hint.textContent() === rule &&
+      await error.isVisible() && await error.textContent() === rule;
+  };
+  for (const { label, attr, end, inside, rule } of ratios) {
+    for (const typed of [end, inside]) {
+      await plain.goto(`${base}/help`);
+      const input = plain.getByLabel(label);
+      const hint = await input.getAttribute(attr);
+      await input.fill(typed);
+      const { name, valid } = await input.evaluate((el) => {
+        const input = /** @type {HTMLInputElement} */ (el);
+        return { name: input.name, valid: input.form?.checkValidity() };
+      });
+      const test = `no script: ${label} posts ${typed} natively (${typed === end ? "422 with the field error" : "200"})`;
+      if (!valid) {
+        check(test, false, `native validation blocked the form with ${attr}=${hint}`);
+        continue;
+      }
+      const response = await postRatios();
+      const posted = new URLSearchParams(response.request().postData() ?? "").get(name);
+      const refused = typed === end;
+      check(test, hint === end && posted === typed && response.status() === (refused ? 422 : 200) &&
+        (refused ? await showsRatioError(input, rule) : await plain.textContent("#result") === "Both ratios are in range."),
+      `${attr}=${hint} posted=${posted} ${response.status()}`);
+    }
   }
+  await plain.goto(`${base}/help`);
+  for (const { label, end } of ratios) await plain.getByLabel(label).fill(end);
+  const bothValid = await plain.getByRole("button", { name: "Check the example ratios" }).evaluate(
+    (el) => /** @type {HTMLButtonElement} */ (el).form?.checkValidity(),
+  );
+  const both = bothValid ? await postRatios() : undefined;
+  check("no script: one refused submission redisplays both typed ratio errors",
+    both?.status() === 422 && (await Promise.all(ratios.map(({ label, rule }) => showsRatioError(plain.getByLabel(label), rule)))).every(Boolean),
+    both ? String(both.status()) : "native validation blocked the form");
   await plain.goto(`${base}/`);
   const plainFloor = plain.getByLabel("Lowest offer");
   check("no script: the lowest offer is enabled and optional (the handler checks it)", (await plainFloor.isEnabled()) && !(await plainFloor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required)));

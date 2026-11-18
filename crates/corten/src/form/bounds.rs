@@ -44,11 +44,9 @@ use crate::view::{quoted, Attrs, Render};
 /// `Bounds::<f64>::any_step` or `Bounds::<f32>::any_step`, HTML's `step="any"`: a
 /// `Bounds<T, AnyStep>`, which holds every finite number from `min` to `max`. Its ends, and
 /// only its, can be refused ("above 0", "below 1"): `exclusive_min` and `exclusive_max`. HTML
-/// has no exclusive `min` or `max`. An `f64` hint uses the next float inside the end (`5e-324`
-/// above 0); an `f32` hint uses the midpoint between the end and its inward neighbor, written
-/// as an `f64` so a decimal that rounds inward is not cut off at the neighbor. A hint whose
-/// spelling cannot round-trip is omitted. Native validation is advisory: a browser and Rust
-/// can round a decimal differently. The handler's check is authoritative:
+/// has no exclusive `min` or `max`, so the input gets the same endpoint as an inclusive bound.
+/// Shifting the hint inward can block a value the server would accept. Native validation is
+/// advisory; the handler's check is authoritative and refuses the endpoint itself:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -64,7 +62,7 @@ use crate::view::{quoted, Attrs, Render};
 /// let view = html! { <input type="number" name={f.discount} value={DISCOUNT.input_value(&discount)} {..DISCOUNT}> };
 /// assert_eq!(
 ///     view.to_html(),
-///     r#"<input type="number" name="discount" value="1e-20" min="5e-324" max="99.99999999999999" step="any">"#
+///     r#"<input type="number" name="discount" value="1e-20" min="0" max="100" step="any">"#
 /// );
 ///
 /// assert!(DISCOUNT.holds(37.5) && DISCOUNT.holds(5e-324));
@@ -124,9 +122,9 @@ use crate::view::{quoted, Attrs, Render};
 /// assert!(LESS.holds(0.01_f64.next_down()) && !LESS.holds(0.01));
 /// assert!(MORE.holds(0.01_f64.next_up()) && !MORE.holds(0.01));
 /// assert_eq!(html! { <input type="number" {..LESS}> }.to_html(),
-///     r#"<input type="number" min="0" max="9.999999999999998e-3" step="any">"#);
+///     r#"<input type="number" min="0" max="0.01" step="any">"#);
 /// assert_eq!(html! { <input type="number" {..MORE}> }.to_html(),
-///     r#"<input type="number" min="1.0000000000000002e-2" max="1" step="any">"#);
+///     r#"<input type="number" min="0.01" max="1" step="any">"#);
 /// ```
 ///
 /// ```compile_fail,E0080
@@ -212,14 +210,14 @@ macro_rules! any_step {
         }
 
         impl Bounds<$t, AnyStep> {
-            /// Refuses `min` itself. The input's hint is the type's next number above it.
+            /// Refuses `min` itself on the server. The input's `min` hint is unchanged.
             /// Panics if this leaves no value; a constant fails to compile.
             pub const fn exclusive_min(mut self) -> Self {
                 self.step.above = true;
                 self.check_nonempty()
             }
 
-            /// Refuses `max` itself. The input's hint is the type's next number below it.
+            /// Refuses `max` itself on the server. The input's `max` hint is unchanged.
             /// Panics if this leaves no value; a constant fails to compile.
             pub const fn exclusive_max(mut self) -> Self {
                 self.step.below = true;
@@ -263,9 +261,9 @@ impl<T: Numeric, S: Spacing<T>> Bounds<T, S> {
 
     /// The `value` of an `<input type="number">` using these bounds. Text sent back by a form
     /// stays as typed. A programmatic value is shown with the step's decimals, or with any step,
-    /// uses exponent notation if writing it out would take more than 18 digits. In particular,
-    /// `1e-20` can be submitted unchanged against `min="5e-324"` in browsers that treat its long
-    /// fixed spelling as underflow. Like [`super::Entry`], this leaves out an unset value.
+    /// uses exponent notation if writing it out would take more than 18 digits. This avoids
+    /// native validation problems with long fixed spellings. Like [`super::Entry`], this leaves
+    /// out an unset value.
     #[inline]
     pub fn input_value<'a>(&self, entry: &'a super::Entry<T>) -> Option<Cow<'a, str>> {
         match entry.text() {
@@ -351,8 +349,8 @@ impl<T: Float> Spacing<T> for AnyStep {
     }
 
     fn render_attrs(bounds: &Bounds<T, AnyStep>, out: &mut String) {
-        number_attr(" min", bounds.min, bounds.step.above, true, out);
-        number_attr(" max", bounds.max, bounds.step.below, false, out);
+        number_attr(" min", bounds.min, out);
+        number_attr(" max", bounds.max, out);
         out.push_str(r#" step="any""#);
     }
 
@@ -374,26 +372,13 @@ pub trait Stepped: sealed::Sealed {}
 impl<T: Numeric> Stepped for T {}
 
 trait Float: Numeric {
-    fn exclusive_hint(self, up: bool) -> f64;
     fn write_value(self, out: &mut String);
 }
 
-fn number_attr<T: Float>(name: &str, value: T, exclusive: bool, up: bool, out: &mut String) {
-    let start = out.len();
+fn number_attr<T: Float>(name: &str, value: T, out: &mut String) {
     out.push_str(name);
     out.push_str("=\"");
-    if exclusive {
-        let hint = value.exclusive_hint(up);
-        let text = out.len();
-        hint.write_value(out);
-        if f64::read(&out[text..]) != Some(hint) {
-            // Prefer no attribute to a different bound.
-            out.truncate(start);
-            return;
-        }
-    } else {
-        value.write_value(out);
-    }
+    value.write_value(out);
     out.push('"');
 }
 
@@ -463,13 +448,9 @@ whole!(u8 => u8, u16 => u16, u32 => u32, u64 => u64, u128 => u128, usize => usiz
     i8 => u8, i16 => u16, i32 => u32, i64 => u64, i128 => u128, isize => usize);
 
 macro_rules! float {
-    ($($t:ty => $hint:expr),*) => {$(
+    ($($t:ty),*) => {$(
         impl sealed::Sealed for $t {}
         impl Float for $t {
-            fn exclusive_hint(self, up: bool) -> f64 {
-                let inside = if up { self.next_up() } else { self.next_down() };
-                ($hint)(self, inside)
-            }
             fn write_value(self, out: &mut String) {
                 // Written out unless that would take more than 18 digits. Measured on 6,222 numbers,
                 // each between the doubles next to it: Chromium and WebKit took every one written
@@ -551,12 +532,7 @@ macro_rules! float {
         }
     )*};
 }
-// The browser reads doubles. For f32, the rounding boundary is exactly representable as an
-// f64. Include the midpoint in the hint even when the server rounds that tie to the refused end.
-float!(
-    f32 => |end, inside| (f64::from(end) + f64::from(inside)) * 0.5,
-    f64 => |_, inside| inside
-);
+float!(f32, f64);
 
 /// A float as the shortest decimal that reads back as it (what `Display` writes): `digits` times
 /// ten to `exponent`. `None` for an infinity or NaN.
@@ -792,48 +768,31 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_f64_end_is_drawn_as_the_next_number_inside_it() {
-        fn drawn(bounds: impl Attrs) -> String {
-            let mut out = String::new();
-            bounds.render_attrs(&mut out);
-            out
-        }
-        let percent = Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
-        assert_eq!(drawn(percent), r#" min="5e-324" max="99.99999999999999" step="any""#);
-        assert_eq!(drawn(Bounds::<f64>::any_step(-1.0, 1.0).exclusive_min()), r#" min="-0.9999999999999999" max="1" step="any""#);
-        // Each drawn end reads back as a number the handler holds, where the end itself does not.
-        let attr = |out: &str, name: &str| {
-            out.split(&format!(" {name}=\"")).nth(1).and_then(|rest| rest.split('"').next()).map(String::from)
-        };
-        for bounds in [percent, Bounds::<f64>::any_step(-1.0, 1.0), Bounds::<f64>::any_step(-1.0, -0.1)] {
-            let bounds = bounds.exclusive_min().exclusive_max();
-            let out = drawn(bounds);
-            for name in ["min", "max"] {
-                let sent = attr(&out, name).unwrap();
-                let read = bounds.read(&super::super::Entry::typed(&sent));
-                assert!(read.is_some_and(|v| v != bounds.min() && v != bounds.max()), "{out} {name}");
-            }
-        }
+    fn exclusive_f64_ends_keep_the_inclusive_hints() {
+        use super::super::Entry;
+
+        let bounds = Bounds::<f64>::any_step(-0.001, 0.001).exclusive_min().exclusive_max();
+        let mut out = String::new();
+        bounds.render_attrs(&mut out);
+        assert_eq!(out, r#" min="-0.001" max="0.001" step="any""#);
+        assert_eq!(bounds.read(&Entry::typed("-0.001")), None);
+        assert_eq!(bounds.read(&Entry::typed("0.001")), None);
+        assert_eq!(bounds.read(&Entry::typed("-0.0009999999999999998")), Some((-0.001f64).next_up()));
+        assert_eq!(bounds.read(&Entry::typed("0.0009999999999999998")), Some(0.001f64.next_down()));
     }
 
     #[test]
-    fn an_exclusive_f32_hint_sits_at_the_rounding_boundary() {
+    fn exclusive_f32_ends_keep_the_inclusive_hints() {
         use super::super::Entry;
 
         let bounds = Bounds::<f32>::any_step(-1.0, 1.0).exclusive_min().exclusive_max();
         let mut out = String::new();
         bounds.render_attrs(&mut out);
-        assert_eq!(out, r#" min="-0.9999999701976776" max="0.9999999701976776" step="any""#);
-        for (typed, expected) in [("-0.99999996", (-1.0f32).next_up()), ("0.99999996", 1.0f32.next_down())] {
-            assert_eq!(bounds.read(&Entry::typed(typed)), Some(expected));
-        }
-        // Ties to the even, refused endpoint are still refused by the server.
-        for typed in ["-1", "1", "-0.9999999701976776123046875", "0.9999999701976776123046875"] {
-            assert_eq!(bounds.read(&Entry::typed(typed)), None, "{typed}");
-        }
-        assert_eq!(0.0f32.exclusive_hint(true), f64::from(0.0f32.next_up()) * 0.5);
-        assert_eq!((-0.0f32).exclusive_hint(false), f64::from(0.0f32.next_down()) * 0.5);
-        assert!(f32::MAX.exclusive_hint(false).is_finite());
+        assert_eq!(out, r#" min="-1" max="1" step="any""#);
+        assert_eq!(bounds.read(&Entry::typed("-1")), None);
+        assert_eq!(bounds.read(&Entry::typed("1")), None);
+        assert_eq!(bounds.read(&Entry::typed("-0.9999999701976776123046874")), Some((-1.0f32).next_up()));
+        assert_eq!(bounds.read(&Entry::typed("0.9999999701976776123046874")), Some(1.0f32.next_down()));
     }
 
     #[test]
@@ -851,17 +810,10 @@ mod tests {
         const WIDE: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(f64::MIN, f64::MAX).exclusive_min().exclusive_max();
         let mut out = String::new();
         TINY.render_attrs(&mut out);
-        assert_eq!(out, r#" min="-9.999999999999998e-21" max="9.999999999999998e-21" step="any""#);
+        assert_eq!(out, r#" min="-1e-20" max="1e-20" step="any""#);
         out.clear();
         WIDE.render_attrs(&mut out);
-        assert_eq!(out, r#" min="-1.7976931348623155e308" max="1.7976931348623155e308" step="any""#);
-    }
-
-    #[test]
-    fn a_hint_that_does_not_round_trip_is_omitted() {
-        let mut out = String::from("<input");
-        number_attr(" min", f64::INFINITY, true, true, &mut out);
-        assert_eq!(out, "<input");
+        assert_eq!(out, r#" min="-1.7976931348623157e308" max="1.7976931348623157e308" step="any""#);
     }
 
     #[test]

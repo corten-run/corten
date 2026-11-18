@@ -255,7 +255,7 @@ pub const WEIGHT: Bounds<f64> = Bounds::new(0.1, 16.0).step(0.1);
 const DISCOUNT_MIN: u8 = 0;
 const DISCOUNT_MAX: u8 = 100;
 /// The discount on two or more copies, in percent: above 0 and below 100, with any decimals. HTML
-/// has no exclusive end, so the input says the numbers next to 0 and 100 inside them.
+/// has no exclusive end, so the input hints at 0 and 100 and the handler refuses the ends.
 pub const DISCOUNT: Bounds<f64, AnyStep> =
     Bounds::<f64>::any_step(DISCOUNT_MIN as f64, DISCOUNT_MAX as f64).exclusive_min().exclusive_max();
 
@@ -414,10 +414,7 @@ async fn settings(req: Req, Form(form): Form<SettingsForm>) -> HtmlResult {
 struct ExampleDiscountId;
 
 #[derive(Id)]
-struct MinimumRatioId;
-
-#[derive(Id)]
-struct MaximumRatioId;
+struct ExampleBoundsId;
 
 #[derive(Fields)]
 struct ExampleBounds {
@@ -427,32 +424,40 @@ struct ExampleBounds {
 
 const MINIMUM_RATIO: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(0.001, 1.0).exclusive_min();
 const MAXIMUM_RATIO: Bounds<f32, AnyStep> = Bounds::<f32>::any_step(0.0, 1.0).exclusive_max();
-const MINIMUM_RATIO_RULE: &str = "Enter a ratio above 0.001 and at most 1.";
-const MAXIMUM_RATIO_RULE: &str = "Enter a ratio of at least 0 and below 1.";
+
+fn minimum_ratio_rule(t: Msg) -> impl Render + std::fmt::Display {
+    t.minimum_ratio_rule(msg::MinimumRatioRule { min: MINIMUM_RATIO.min().to_string(), max: MINIMUM_RATIO.max().to_string() })
+}
+
+fn maximum_ratio_rule(t: Msg) -> impl Render + std::fmt::Display {
+    t.maximum_ratio_rule(msg::MaximumRatioRule { min: MAXIMUM_RATIO.min().to_string(), max: MAXIMUM_RATIO.max().to_string() })
+}
 
 async fn help(req: Req) -> HtmlResult {
-    help_page(&req, &ExampleBounds { minimum_ratio: 0.002.into(), maximum_ratio: 0.5.into() }, "")
+    let example = ExampleBounds { minimum_ratio: 0.002.into(), maximum_ratio: 0.5.into() };
+    help_page(&req, RatioExample { t: req.t(), example: &example, errors: None, result: "" })
 }
 
 async fn check_bounds(req: Req, Form(form): Form<ExampleBounds>) -> HtmlResult {
     let f = ExampleBounds::FIELDS;
+    let t = req.t();
     let mut errors = Errors::new();
     if MINIMUM_RATIO.read(&form.minimum_ratio).is_none() {
-        errors.add(f.minimum_ratio, MINIMUM_RATIO_RULE);
+        errors.add(f.minimum_ratio, minimum_ratio_rule(t).to_string());
     }
     if MAXIMUM_RATIO.read(&form.maximum_ratio).is_none() {
-        errors.add(f.maximum_ratio, MAXIMUM_RATIO_RULE);
+        errors.add(f.maximum_ratio, maximum_ratio_rule(t).to_string());
     }
-    if let Some((_, message)) = errors.iter().next() {
-        return req.invalid(&errors, OrderResult { text: message }, || async { help_page(&req, &form, message) }).await;
+    if !errors.is_empty() {
+        let view = || RatioExample { t, example: &form, errors: Some(&errors), result: "" };
+        return req.invalid(&errors, view(), || async { help_page(&req, view()) }).await;
     }
-    let text = "Both ratios are in range.";
-    req.patch_or(OrderResult { text }, || async { help_page(&req, &form, text) }).await
+    let view = || RatioExample { t, example: &form, errors: None, result: "Both ratios are in range." };
+    req.patch_or(view(), || async { help_page(&req, view()) }).await
 }
 
-fn help_page(req: &Req, example: &ExampleBounds, result: &str) -> HtmlResult {
+fn help_page(req: &Req, ratios: impl Render) -> HtmlResult {
     let f = SellForm::FIELDS;
-    let ratio = ExampleBounds::FIELDS;
     let t: Msg = req.t();
     let discount = Entry::from(1e-20);
     req.page(html! {
@@ -490,35 +495,42 @@ fn help_page(req: &Req, example: &ExampleBounds, result: &str) -> HtmlResult {
                 <p id={HintId(&ExampleDiscountId)}>{discount_rule(t)}</p>
                 <button>"Try listing with this discount"</button>
             </form>
-            <form method="post" action={url::Help}>
-                <label for={MinimumRatioId}>"Minimum ratio example"</label>
-                <input
-                    type="number"
-                    id={MinimumRatioId}
-                    name={ratio.minimum_ratio}
-                    aria-describedby={HintId(&MinimumRatioId)}
-                    value={MINIMUM_RATIO.input_value(&example.minimum_ratio)}
-                    {..MINIMUM_RATIO}
-                    required
-                >
-                <p id={HintId(&MinimumRatioId)}>{MINIMUM_RATIO_RULE}</p>
-                <label for={MaximumRatioId}>"Maximum ratio example"</label>
-                <input
-                    type="number"
-                    id={MaximumRatioId}
-                    name={ratio.maximum_ratio}
-                    aria-describedby={HintId(&MaximumRatioId)}
-                    value={MAXIMUM_RATIO.input_value(&example.maximum_ratio)}
-                    {..MAXIMUM_RATIO}
-                    required
-                >
-                <p id={HintId(&MaximumRatioId)}>{MAXIMUM_RATIO_RULE}</p>
-                <button>"Check the example ratios"</button>
-                <OrderResult text={result} />
-            </form>
+            {ratios}
             <p><a href={url::Home { tab: None, sale: None, period: None, sold: None, sales: None }}>"Back to the draft"</a></p>
         </Layout>
     })
+}
+
+#[component]
+fn RatioExample<'a>(t: Msg, example: &'a ExampleBounds, errors: Option<&'a Errors>, result: &'a str) -> impl Patch {
+    let f = ExampleBounds::FIELDS;
+    let e = errors.map_or_else(|| Within::none(ExampleBoundsId), |errors| errors.within(ExampleBoundsId));
+    html! {
+        <form id={ExampleBoundsId} method="post" action={url::Help}>
+            <label for={e.id(f.minimum_ratio)}>"Minimum ratio example"</label>
+            <input
+                type="number"
+                {..e.control(f.minimum_ratio).hint()}
+                value={MINIMUM_RATIO.input_value(&example.minimum_ratio)}
+                {..MINIMUM_RATIO}
+                required
+            >
+            <p id={HintId(&e.id(f.minimum_ratio))}>{minimum_ratio_rule(t)}</p>
+            {e.message(f.minimum_ratio)}
+            <label for={e.id(f.maximum_ratio)}>"Maximum ratio example"</label>
+            <input
+                type="number"
+                {..e.control(f.maximum_ratio).hint()}
+                value={MAXIMUM_RATIO.input_value(&example.maximum_ratio)}
+                {..MAXIMUM_RATIO}
+                required
+            >
+            <p id={HintId(&e.id(f.maximum_ratio))}>{maximum_ratio_rule(t)}</p>
+            {e.message(f.maximum_ratio)}
+            <button>"Check the example ratios"</button>
+            <OrderResult text={result} />
+        </form>
+    }
 }
 
 #[cfg(test)]
@@ -655,9 +667,8 @@ mod tests {
         assert!(page.text().contains("<html") && page.text().contains("Listed 2 Lightly Played Ashen Drake"));
     }
 
-    /// A discount takes any decimals and stays off both its ends: the input says the numbers next
-    /// to 0 and 100 inside them, and the handler refuses the ends, which a browser without that
-    /// check could send, with the message that says "above".
+    /// A discount takes any decimals and stays off both its ends: the input hints at 0 and 100,
+    /// and the handler refuses those ends with the message that says "above".
     #[tokio::test]
     async fn a_discount_is_above_0_and_below_100_with_any_decimals() {
         let app = client();
@@ -681,11 +692,7 @@ mod tests {
         }
         // Without JavaScript the form comes back with the discount as sent.
         let page = sent("100").await;
-        assert!(
-            page.text().contains(r#"name="discount" value="100" min="5e-324" max="99.99999999999999" step="any""#),
-            "{}",
-            page.text()
-        );
+        assert!(page.text().contains(r#"name="discount" value="100" min="0" max="100" step="any""#), "{}", page.text());
     }
 
     /// What the browser stops when its script runs (no region, offers with no lowest one), the
