@@ -14460,15 +14460,6 @@ struct KeyedWrite {
     submit: crate::SubmitKey,
 }
 
-/// A page's `GET` and `HEAD` carry a weak tag of the body it rendered and its `corten-*`
-/// headers, and one the client names in `If-None-Match` is answered `304` with no body (and is
-/// not compressed): the same tag whether the body is compressed or not, another for another mode
-/// or another `corten-*` header; a `304` still sets the page's cookie and varies as its `200`.
-/// With `compress`, a client that accepts no compression is tagged only when it names a tag. A
-/// file compression sends as it is is tagged too. Nothing else is
-/// tagged: a body with this request's nonce or a submit key drawn for it, an answer nothing may
-/// keep or that is immutable, one with a tag or an encoding of its own, a stream, a relayed page,
-/// an error, a write, an API's answer, the runtime.
 #[tokio::test]
 async fn a_page_get_needs_an_explicit_coding_for_an_unrequested_tag() {
     let router = App::new(Routes::from(self::routes())).router();
@@ -14497,6 +14488,15 @@ async fn a_page_get_needs_an_explicit_coding_for_an_unrequested_tag() {
     }
 }
 
+/// A page's `GET` and `HEAD` carry a weak tag of the body it rendered and its `corten-*`
+/// headers, and one the client names in `If-None-Match` is answered `304` with no body (and is
+/// not compressed): the same tag whether the body is compressed or not, another for another mode
+/// or another `corten-*` header; a `304` still sets the page's cookie and varies as its `200`.
+/// A client that does not explicitly accept a coding is tagged only when it sends
+/// `If-None-Match`. A file compression sends as it is is tagged too. Nothing else is
+/// tagged: a body with this request's nonce or a submit key drawn for it, an answer nothing may
+/// keep or that is immutable, one with a tag or an encoding of its own, a stream, a relayed page,
+/// an error, a write, an API's answer, the runtime.
 #[tokio::test]
 async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modified() {
     async fn send(router: Router, method: &str, uri: &str, headers: &[(&str, &str)]) -> (StatusCode, http::HeaderMap, Vec<u8>) {
