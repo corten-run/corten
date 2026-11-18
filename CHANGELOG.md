@@ -12,7 +12,7 @@ Corten is pre-1.0, so any minor version may change the API.
   explicit top-level roots such as `@scope (:scope)`, other
   [unsupported shapes](docs/guide/styles.md#styles), and selectors longer than 1,024 characters
   before or after composition. Only skipped rules with non-`none` `display: ... !important` can
-  withhold a warning for a candidate they could match. The check ignores `to` limits, but keeps
+  withhold a warning for a candidate the check cannot rule out. It ignores `to` limits, but keeps
   known scope roots, including outer roots, even when a selector cannot be composed or read.
   Skip notes are deduplicated by CSSOM selector text. Scoped warnings do not suggest replacement
   selectors; unscoped suggestions use a matching class from the resolved selector, including

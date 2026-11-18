@@ -89,9 +89,9 @@ selectors with multiple root references in one member, a leading combinator comb
 root reference, other functional pseudo-classes, sibling or column combinators, pseudo-elements,
 quotes, escapes or namespaces. Selectors longer than 1,024 characters before or after composition
 cannot cause a warning, including in ordinary CSS nesting. No skipped display rule can cause one.
-It can only withhold one if it declares a non-`none` `display` with `!important` and could match
-the candidate. For a limited scope it uses the composed selector when supported, ignoring the
-limit but keeping the root. When a scoped selector cannot be composed or read, an override can
+It can only withhold one if it declares a non-`none` `display` with `!important` and the check
+cannot rule out the candidate. For a limited scope it uses the composed selector when supported,
+ignoring the limit but keeping the root. When a scoped selector cannot be composed or read, an override can
 only withhold a warning inside the roots the check can match, including any known outer roots.
 If it cannot match any root, the rule cannot withhold a warning. Skip notes are deduplicated by
 CSSOM selector text. Adopted stylesheets are not inspected
