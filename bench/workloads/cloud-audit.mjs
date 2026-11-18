@@ -41,7 +41,9 @@ export function auditProgram(state, intent, publish = false) {
   full(state.token, /[a-f0-9]{16}/, "ownership token");
   full(intent.campaign, new RegExp(`${state.round}-[a-f0-9]{16}`), "audit campaign");
   for (const key of ["subjectSha256", "sha256"]) full(intent[key], /[a-f0-9]{64}/, key);
-  // The journal is written atomically by the live campaign, not by the delivery.
+  const pending = state.control !== undefined;
+  // Registered delivery publishes only a pending file. The detached owner admits it
+  // after the entire audit epoch, including the seal session, has disappeared.
   return `const fs=require('node:fs'),p=require('node:path'),a=require('node:assert/strict'),c=require('node:crypto');
 const root='/bench/campaign', id='${intent.campaign}', dir=p.join(root,id);
 function physical(d){a.equal(fs.realpathSync(d),d);a.ok(fs.lstatSync(d).isDirectory()&&!fs.lstatSync(d).isSymbolicLink());}
@@ -54,7 +56,7 @@ const status=JSON.parse(read(p.join(dir,names.at(-1)))).status,subject=JSON.pars
 a.equal(status.campaign,id);a.equal(status.round,plan.round);a.equal(status.campaignSha256,plan.campaignSha256);a.equal(status.state,'blocked-review-needed');a.equal(status.auditGroup,'${group}');a.equal(status.auditInbox,id+'/${prefix}-audit-delivery.json');a.equal(status.${group === "mixed-production" ? "mixedAuditSubjectSha256" : "auditSubjectSha256"},'${intent.subjectSha256}');a.equal(subject.subjectSha256,'${intent.subjectSha256}');a.equal(subject.schema,'benchmark-${prefix}-audit-subject/v1');a.equal(subject.commit,plan.commit);a.equal(subject.campaignSha256,plan.campaignSha256);
 function canonical(v){if(Array.isArray(v))return v.map(canonical);if(v!==null&&typeof v==='object')return Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])]));return v;}
 const {subjectSha256,...body}=subject;a.equal(c.createHash('sha256').update(JSON.stringify(canonical(body))).digest('hex'),subjectSha256);
-${publish ? `const stage='/bench/cloud-${prefix}-audit-${state.token}.json',target=p.join(dir,'${prefix}-audit-delivery.json');
+${publish ? `const stage='/bench/cloud-${prefix}-audit-${state.token}.json',target=p.join(dir,'${prefix}-audit-delivery${pending ? "-pending" : ""}.json');
 const bytes=read(stage);a.equal(c.createHash('sha256').update(bytes).digest('hex'),'${intent.sha256}');a.equal(fs.lstatSync(stage).mode&63,0);
 const data=JSON.parse(bytes);a.equal(data.schema,'${schema}');a.equal(data.subjectSha256,subjectSha256);a.equal(data.review.subjectSha256,subjectSha256);a.equal(data.review.decision,'approved');a.deepEqual(data.review.findings,[]);a.ok(${JSON.stringify(bundleSchemas)}.includes(data.bundle?.schema));
 const expected=${group === "mixed-production" ? "subject.requests.map(r=>r.identity)" : "subject.identities"},actual=data.bundle.receipts.map(r=>r.identity);
