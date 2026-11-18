@@ -2743,6 +2743,14 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
+    fn a_hint_can_start_with_a_browser_closed_comment() {
+        let hints = ["qty-hint".to_string()];
+        let html = "<input id=qty><p id=qty-hint><!-->visible</p>";
+        assert_eq!(unnamed_hint(html, &hints, true), Some("qty-hint"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
     fn a_hint_s_text_excludes_comments_and_tag_attributes() {
         let hints = ["qty-hint".to_string()];
         let html = r#"<input id="qty"><p id="qty-hint"><!-- >not text --><em title="x>y"></em></P a="x>">outside"#;

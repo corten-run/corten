@@ -217,7 +217,12 @@ fn end_tag(html: &str, at: usize) -> (Option<&str>, usize) {
 /// One past an ignored declaration, comment or bogus comment, or EOF.
 fn declaration_end(html: &str, at: usize) -> usize {
     if let Some(body) = html[at..].strip_prefix("<!--") {
-        body.find("-->").map_or(html.len(), |n| at + 4 + n + 3)
+        body.match_indices('>')
+            .find(|&(n, _)| {
+                let before = &body[..n];
+                before.is_empty() || before == "-" || before.ends_with("--") || before.ends_with("--!")
+            })
+            .map_or(html.len(), |(n, _)| at + 4 + n + 1)
     } else {
         html[at..].find('>').map_or(html.len(), |n| at + n + 1)
     }
@@ -252,8 +257,7 @@ pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
         let tag = start_tag(html, at);
         i = tag.end;
         if RAW_TEXT.contains(&tag.name.as_str()) {
-            let close = format!("</{}", tag.name);
-            i = html[i..].to_ascii_lowercase().find(&close).map_or(html.len(), |n| i + n);
+            i = raw_text_end(html, i, &tag.name);
         }
         return Some(tag);
     })
@@ -269,8 +273,8 @@ const VOID: &[&str] = &[
 /// Where the end tag of the raw-text element `name` (in lowercase) starts in `html`, searching from
 /// `from`, or `html`'s end: `</name` in any letter case followed by whitespace, `/` or `>`, so a
 /// longer name (`</scriptx>`) is the element's text, as the HTML standard's tokenizer reads it.
-/// Allocates nothing, so a patch with many raw-text elements is read in one pass.
-#[cfg(any(debug_assertions, test))]
+/// A bare `</name` at EOF is returned so the patch check can diagnose the incomplete tag.
+/// Allocates nothing, so markup with many raw-text elements is read in one pass.
 fn raw_text_end(html: &str, from: usize, name: &str) -> usize {
     let bytes = html.as_bytes();
     let mut at = from;
@@ -1669,6 +1673,36 @@ mod tests {
         assert_eq!(names(r#"</p a='x><div>"#), Vec::<String>::new(), "an unfinished quoted value reads to EOF");
         assert_eq!(names(r#"</p a=x"><b>"#), ["b"], "a quote in an unquoted value does not open a quote");
         assert_eq!(names(r#"</! a="x><b>"#), ["b"], "a bogus comment does not parse attributes");
+    }
+
+    #[test]
+    fn start_tags_resume_after_a_browser_closed_comment() {
+        for (comment, tail) in [("<!-->", ""), ("<!--->", ""), ("<!-- a > b --!>", "<!-- later -->"), ("<!-- a > b -->", "")] {
+            let html = format!("{comment}<div data-vars=--m:7%></div>{tail}");
+            let mut tags = super::start_tags(&html);
+            let div = tags.next().unwrap_or_else(|| panic!("missing div after {comment}"));
+            assert_eq!((div.name.as_str(), div.attr("data-vars")), ("div", Some("--m:7%")), "{comment}");
+            assert!(tags.next().is_none(), "{comment}");
+        }
+    }
+
+    #[test]
+    fn patch_parse_finds_a_lost_element_after_a_browser_closed_comment() {
+        let html = "<script id=s type=text/plain><!--<script></script><!--><p>x</p>";
+        let parse = super::patch_parse(html);
+        assert_eq!(
+            parse.problem.as_deref(),
+            Some("what follows <script id=s type=text/plain> is read as its text, since a <!-- and a <script in its text hide its end tag")
+        );
+    }
+
+    #[test]
+    fn start_tags_only_parse_attributes_on_an_appropriate_raw_text_end_tag() {
+        let html = r#"<textarea></textareax a="</textarea><div data-vars=--m:7%></div>"#;
+        let names = |html: &str| super::start_tags(html).map(|tag| tag.name).collect::<Vec<_>>();
+        assert_eq!(names(html), ["textarea", "div"]);
+        assert_eq!(names(r#"<style></style- a="</STYLE note='x><i>'><div>"#), ["style", "div"]);
+        assert_eq!(names("<title></TITLE/><div>"), ["title", "div"]);
     }
 
     #[test]

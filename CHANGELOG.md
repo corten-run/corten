@@ -6,7 +6,8 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - Developer markup checks count a lone `<` as text in a hint and read past quoted end-tag
-  attributes without mistaking them for new tags.
+  attributes without mistaking them for new tags. They resume after browser-closed comments
+  (`<!-->`, `<!--->`, `--!>`) and only read end-tag attributes after raw text when the name matches.
 - Every `corten` command accepts `--help` and `-h`, printing its own usage and exiting
   successfully without running the command; `corten help <command>` prints the same and refuses an
   unknown command. An option given twice (`--name`, `--corten-path`, `--port`) is refused instead of
