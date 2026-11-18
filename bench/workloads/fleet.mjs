@@ -5,11 +5,13 @@ import { mkdirSync, readdirSync, realpathSync, unlinkSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
+import { isIPv4 } from "node:net";
 import { fleetPlan, roundName, selection } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { controllerFailure, full, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
 import { providerFiles } from "./cloud-provider.mjs";
+import { streamRecoveryReady } from "./cloud-control-stream.mjs";
 import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { fleetRoot, present, readFleet, readGroup, recheckCollectedGroup, verifyCollectedGroup } from "./fleet-verify.mjs";
 
@@ -85,11 +87,54 @@ function childArgs(options, hash) {
   return [...args, "--approve-reviewed-merged-ready", hash];
 }
 
+// readGroup already validates the owned reservation and the complete terminal
+// bootstrap ledger. A running host, or a monitor registered before its seal,
+// does not authorize another allocation.
+function supervisedHost(saved, phase) {
+  const s = saved?.state, monitor = s?.control?.monitor;
+  if (s?.status !== "running" || s.deletionIntentAt || s.destroyedAt || monitor?.phase !== phase
+    || !s.control.sealed.includes("bootstrap") || s.control.ledger.filter((r) => r.request.epoch === "bootstrap").at(-1)?.code !== 0) return;
+  const at = (name) => join(saved.local, name);
+  if (present(at("monitor-invalid.json"))) return;
+  if (phase === "live") {
+    if (saved.outcome !== "busy" || present(at("monitor-terminal.json")) || present(at("monitor-local-closed.json"))) return;
+    for (const lock of [at("operation.lock"), join(saved.stateRoot, ".groups-launch.lock")])
+      if (JSON.parse(regular(lock, 1024)).pid !== process.pid) return;
+  } else {
+    if (saved.outcome !== "available" || present(join(saved.stateRoot, ".groups-launch.lock"))
+      || !present(at("monitor-terminal.json")) || !present(at("monitor-local-closed.json"))) return;
+    streamRecoveryReady(saved.local, monitor); // Validate close/binding; collection itself enforces elapsed lease.
+  }
+  const reg = JSON.parse(regular(at("monitor-registration.json"), 131072));
+  if (reg.id !== monitor.id || digest(JSON.stringify(reg)) !== monitor.registrationSha256
+    || reg.binding?.round !== s.round || reg.binding.commit !== s.commit || reg.binding.token !== s.token || reg.binding.helperSha256 !== s.control.helperSha256) return;
+  return { id: s.id, ip: s.ip, registration: monitor.registrationSha256 };
+}
+
+export function watchSupervisedHost(options, notify) {
+  const fleet = readFleet(dirname(options.fleet), options.round);
+  assert.notEqual(options.group, fleet.manifest.jobs[0].group);
+  assert.equal(options.stateDir, join(fleet.root, options.group));
+  assert.ok(!present(options.stateDir), "remaining group already reserved");
+  const registration = join(options.stateDir, `groups-${options.round}`, "monitor-registration.json");
+  // Read the mutable state on its writer's event loop, never concurrently
+  // with a Windows rename. A missing or invalid proof cannot advance admission.
+  const timer = setInterval(() => {
+    try {
+      if (present(registration)) {
+        const proof = supervisedHost(readGroup(fleet, options.group), "live");
+        if (proof) { clearInterval(timer); notify(proof); }
+      }
+    } catch { /* Settlement still runs and must independently pass the final check. */ }
+  }, 100);
+  return () => clearInterval(timer);
+}
+
 // WorkerClass is a synthetic test boundary, never an option or saved field.
 // Separate event loops keep collection independent while SSH/SCP uses spawnSync.
-export function productionChild(args, { cancellation, WorkerClass = Worker, sources = installedSources } = {}) {
+export function productionChild(args, { cancellation, WorkerClass = Worker, sources = installedSources, onReady, onFailure } = {}) {
   return new Promise((resolve, reject) => {
-    let worker, message, messages = 0, failed = false;
+    let worker, message, messages = 0, failed = false, notified = false;
     const uncertain = () => Object.assign(new Error("group-control-uncertain"), { controlTreeUncertain: true, controlUncertain: true });
     try {
       assert.ok(cancellation instanceof SharedArrayBuffer && cancellation.byteLength === 4);
@@ -102,11 +147,22 @@ export function productionChild(args, { cancellation, WorkerClass = Worker, sour
         assert.equal(digest(source.source), source.sha256);
       }
       const bootstrap = new URL(`data:text/javascript;base64,${Buffer.from(entry.source).toString("base64")}`);
-      worker = new WorkerClass(bootstrap, { workerData: { args, cancellation, sources, entry: entry.url }, stdout: true, stderr: true, execArgv: [] });
+      worker = new WorkerClass(bootstrap, { workerData: { args, cancellation, sources, entry: entry.url, ...(onReady ? { admission: true } : {}) },
+        stdout: true, stderr: true, execArgv: [] });
     } catch { reject(uncertain()); return; }
     worker.stdout.resume(); worker.stderr.resume();
-    worker.on("message", (value) => { message = value; messages++; });
-    worker.on("error", () => { failed = true; });
+    worker.on("message", (value) => {
+      if (value?.schema === "benchmark-group-fleet-worker-ready/v1") {
+        if (!onReady || failed || notified || messages || JSON.stringify(Object.keys(value).sort()) !== '["id","ip","registration","schema"]'
+          || typeof value.id !== "string" || !/^[1-9]\d{0,15}$/.test(value.id) || !isIPv4(value.ip)
+          || typeof value.registration !== "string" || !/^[a-f0-9]{64}$/.test(value.registration)) { failed = true; onFailure?.(); return; }
+        notified = true; onReady(value); return;
+      }
+      message = value; messages++;
+      if (messages !== 1 || value?.schema !== "benchmark-group-fleet-worker-result/v1" || value.code !== 3
+        || Object.keys(value).length !== 2) onFailure?.();
+    });
+    worker.on("error", () => { failed = true; onFailure?.(); });
     worker.once("exit", (code) => {
       // Never finish on a message alone or terminate a possibly mutating worker.
       // A crash cannot prove descendant/provider settlement and retains locks.
@@ -303,23 +359,33 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
       write(JSON.stringify(row)); return row;
     };
     const launching = options.detach || options["admit-remaining"];
-    const admittedIds = new Set(), admittedIps = new Set();
+    const admittedIds = new Set(), admittedIps = new Set(), supervised = new Map();
+    const claimHost = (group, proof) => {
+      if (!proof) return false;
+      const prior = supervised.get(group);
+      if (supervised.has(group)) return prior?.id === proof.id && prior.ip === proof.ip && prior.registration === proof.registration;
+      if (admittedIds.has(proof.id) || admittedIps.has(proof.ip)) { supervised.set(group, null); return false; }
+      admittedIds.add(proof.id); admittedIps.add(proof.ip); supervised.set(group, proof); return true;
+    };
     if (options["admit-remaining"]) {
       const first = readGroup(preview.fleet, preview.fleet.manifest.jobs[0].group);
       admittedIds.add(first.state.id); admittedIps.add(first.state.ip);
     }
-    const operate = async (job, skipped) => {
+    const operate = async (job, skipped, onReady, onFailure) => {
       if (skipped) return persist(job, { group: job.group, outcome: "not-admitted", reason: skipped });
       if (["deferred", "verified"].includes(job.outcome)) return persist(job, { group: job.group, outcome: job.outcome });
       let code, failure;
       try {
         if (job.outcome === "planned") code = main
-          ? await main(childArgs(job.options, job.approvalSha256), { repo, spawn, providerFactory, inspect, sleep, interrupted: cancelled, write: () => {} })
-          : await productionChild(childArgs(job.options, job.approvalSha256), { cancellation, WorkerClass });
+          ? await main(childArgs(job.options, job.approvalSha256), { repo, spawn, providerFactory, inspect, sleep, interrupted: cancelled, write: () => {}, onReady })
+          : await productionChild(childArgs(job.options, job.approvalSha256), { cancellation, WorkerClass, onReady, onFailure });
       }
       catch (error) { failure = error; if (error?.controlTreeUncertain || error?.controlUncertain) uncertain = true; }
-      let saved;
-      try { saved = readGroup(preview.fleet, job.group); } catch { /* Only validated saved identity is public. */ }
+      let saved, closed;
+      try {
+        saved = readGroup(preview.fleet, job.group);
+        if (options["admit-remaining"] && !failure && code === 3) closed = supervisedHost(saved, "closed");
+      } catch { /* Only validated saved identity is public. */ }
       const diagnostic = providerFailure(failure);
       const stage = controllerFailure(failure);
       const row = { group: job.group, outcome: job.outcome !== "planned" ? job.outcome : failure ? "error" : code === 0 ? "collected" : code === 1 ? "terminal-incomplete" : code === 3 ? "pending" : "error",
@@ -338,44 +404,63 @@ export async function fleetMain(args, { repo = checkout, spawn, providerFactory,
           && /^[a-f0-9]{64}$/.test(state.retirement.evidenceSha256);
         const consistent = saved?.outcome === "available" && (launching
           ? code === 3 && state.status === "running" && state.id && state.ip && !state.deletionIntentAt && !state.destroyedAt
-            && bootstrap && !admittedIds.has(state.id) && !admittedIps.has(state.ip)
+            && bootstrap && (options["admit-remaining"] ? claimHost(job.group, closed)
+              : !admittedIds.has(state.id) && !admittedIps.has(state.ip))
           : code === 3 ? state.status === "running"
           : retired || [0, 1].includes(code) && state.status === "collected" && state.destroyedAt && state.exitCode === code
             && (code === 0 ? state.validation?.status === "verified" : ["failed", "blocked"].includes(state.validation?.status)));
         if (!consistent) Object.assign(row, { outcome: "error", error: "group-state-invalid" });
+        else if (closed) row.collection = "separate-child-approval-required";
         else if (launching) { admittedIds.add(state.id); admittedIps.add(state.ip); }
         else if (retired) row.outcome = state.retirement.kind === "unused" ? "unused-retired" : "setup-failed-retired";
       }
       return persist(job, row);
     };
     let settled;
+    const started = [];
     try {
       if (launching) {
         settled = [];
         let stopped;
         // Deferred groups cannot execute under the initial approval. A separate
         // consumed intent admits the remaining hosts after first-group replay.
-        // Their remote campaigns overlap while local admission stays serialized.
+        // Provision one at a time, but do not wait for native work to end. Each
+        // worker keeps its own custody; persist its final receipt immediately so
+        // an independently approved child collect need not wait for the fleet.
+        const active = new Set();
+        const revoked = () => [...active].some((dir) => present(join(dir, "monitor-invalid.json")));
         for (const job of preview.subject.jobs) {
           if (cancelled()) stopped = "cancelled";
-          if (!stopped) {
-            try { await controlCheckpoint(cancelled); }
-            catch { stopped = "cancelled"; }
-          }
           if (!stopped && preview.subject.firstGroup) {
             try { recheckCollectedGroup(preview.fleet, preview.subject.firstGroup.snapshot); }
             catch { stopped = "first-group-evidence-changed"; }
           }
-          try {
-            const value = await operate(job, stopped);
-            settled.push({ status: "fulfilled", value });
-            if (!stopped && !["pending", "deferred", "verified"].includes(value.outcome)) stopped = "prior-admission-failed";
-          } catch (reason) {
-            settled.push({ status: "rejected", reason }); stopped ??= "prior-admission-failed";
+          // Rehashing the first archive/tree is synchronous. Deliver pending
+          // worker failures and signals from that interval before dispatch.
+          if (!stopped) {
+            try { await controlCheckpoint(cancelled); }
+            catch { stopped = "cancelled"; }
           }
+          if (!stopped && revoked()) stopped = "prior-admission-failed";
+          const watch = !stopped && options["admit-remaining"] && job.outcome === "planned";
+          const local = watch && join(job.options.stateDir, `groups-${options.round}`);
+          if (watch) active.add(local);
+          const i = started.length;
+          const ready = Promise.withResolvers();
+          const done = operate(job, stopped, watch ? (proof) => {
+            if (!claimHost(job.group, proof)) stopped = "prior-admission-failed";
+            ready.resolve();
+          } : undefined, watch ? () => { stopped ??= "prior-admission-failed"; } : undefined).then((value) => {
+            settled[i] = { status: "fulfilled", value };
+            if (!["pending", "deferred", "verified"].includes(value.outcome)) stopped ??= "prior-admission-failed";
+          }, (reason) => {
+            settled[i] = { status: "rejected", reason }; stopped ??= "prior-admission-failed";
+          }).finally(() => active.delete(local));
+          started.push(done);
+          await (watch ? Promise.race([ready.promise, done]) : done);
         }
       } else settled = await Promise.allSettled(preview.subject.jobs.map((job) => operate(job)));
-    } finally { clearInterval(cancellationPoll); }
+    } finally { await Promise.all(started); clearInterval(cancellationPoll); }
     // productionMain settles its credential worker in finally. Await every
     // admitted child (or all collection siblings) before releasing this lock.
     const groups = settled.map((s, i) => s.status === "fulfilled" ? s.value : { group: preview.subject.jobs[i].group, outcome: "error", error: "group-receipt-failed" });

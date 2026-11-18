@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { existsSync, linkSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { setImmediate as turn } from "node:timers/promises";
+import { setImmediate as turn, setTimeout as delay } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { EventEmitter } from "node:events";
 import { isDeepStrictEqual } from "node:util";
@@ -10,12 +10,14 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, syntheticInspection } from "./cloud-fixtures.mjs";
-import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild } from "./fleet.mjs";
-import { fleetPlan, reservation } from "./cloud-contract.mjs";
+import { fleetMain, fleetWorkerPaths, parseFleetArgs, productionChild, watchSupervisedHost } from "./fleet.mjs";
+import { fleetPlan, reservation, tags } from "./cloud-contract.mjs";
 import { digest, fileHash, treeHash } from "./cloud-local.mjs";
 import { parseProductionArgs, productionMain, productionPlan } from "./cloud-production.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
+import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 
 // The fake committed tree is fixed for this process, like the captured loader.
 // Concurrent worktree edits are not changes to that synthetic Git object.
@@ -34,10 +36,10 @@ function fixture(t, flags = {}) {
     return h.run(binary, argv, 60000);
   };
   const deps = { repo: h.repo, spawn, interrupted: () => !!flags.cancelled, write: (value) => output.push(JSON.parse(value)),
-    main: async (argv) => {
+    main: async (argv, { onReady }) => {
       const { options, approval } = parseProductionArgs(argv), group = options.group ?? groupNames.find((g) => options.stateDir === join(h.base, g));
       children.push(group); assert.ok(approval);
-      if (flags.child) return flags.child({ options, group, approval });
+      if (flags.child) return flags.child({ options, group, approval, onReady });
       if (options.detach) seed(group);
       completions.push(group); return 3;
     } };
@@ -49,6 +51,18 @@ function fixture(t, flags = {}) {
       status: "running", createIntentAt: "2026-11-14T01:00:00.000Z", id: String(i + 1), ip: `192.0.2.${i + 1}`,
       provider: fleet.provider, fullGroupQualified: false };
     if (group === fleet.jobs[0].group) state.bootstrapReady = { sha256: "a".repeat(64), observedAt: "2026-11-14T01:01:00.000Z" };
+    if (i > 0 && existsSync(join(h.base, "remaining-intent.json"))) {
+      const binding = { round: state.round, commit, token: state.token, helperSha256: guardianSha256 };
+      const reg = { ...registration, binding, id: state.token.repeat(2) };
+      state.control = { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: ["bootstrap"],
+        monitor: { schema: "benchmark-supervised-control/v1", id: reg.id, phase: "closed", registrationSha256: digest(JSON.stringify(reg)) } };
+      state.control.ledger.push({ request: controlRequest(state, "ssh", [":"], 60000, "bootstrap", []), localTerminal: true, code: 0 });
+      writeFileSync(join(local, "monitor-registration.json"), JSON.stringify(reg));
+      const closedAtMs = Date.now(), terminal = { id: reg.id, binding, nativeTerminal: true, localClosed: true, remoteDrained: false,
+        campaign: `r21-${state.token}`, sealSha256: digest("synthetic native seal") };
+      writeFileSync(join(local, "monitor-terminal.json"), JSON.stringify(terminal));
+      writeFileSync(join(local, "monitor-local-closed.json"), JSON.stringify({ ...terminal, code: 0, signal: null, closedAtMs, recoverAfterMs: closedAtMs + 30000 }));
+    }
     change(state); writeFileSync(join(local, "state.json"), JSON.stringify(state)); return state;
   }
   async function approve(mode) {
@@ -177,7 +191,7 @@ test("malformed first bootstrap proof refuses before another admission", async (
   }
 });
 
-test("separately approved remaining admission starts each future group once after child settlement", async (t) => {
+test("separately approved remaining admission waits for proof or confirmed settlement, not bare running state", async (t) => {
   const flags = {}, p = fixture(t, flags), pending = [];
   const approved = await p.remaining();
   const preview = p.output.at(-1);
@@ -192,10 +206,10 @@ test("separately approved remaining admission starts each future group once afte
   for (const [i, group] of groupNames.slice(1).entries()) {
     while (pending.length <= i) await turn();
     assert.equal(pending.length, i + 1); assert.equal(pending[i].group, group);
-    p.seed(group); await turn(); await turn();
-    assert.equal(pending.length, i + 1, "a running state alone is not child/credential-worker settlement");
+    p.seed(group, (s) => { delete s.control; }); await delay(150);
+    assert.equal(pending.length, i + 1, "bare running state is not admission proof");
     assert.equal(finished, false); assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
-    p.completions.push(group); pending[i].resolve(3);
+    p.seed(group); p.completions.push(group); pending[i].resolve(3);
   }
   assert.equal(await operation, 3); assert.deepEqual(p.children, groupNames.slice(1));
   assert.deepEqual(p.completions, groupNames.slice(1));
@@ -224,8 +238,128 @@ test("later admission failure preserves running siblings and never admits the re
   }
 });
 
+function heldHost(p, options, onReady) {
+  const stop = watchSupervisedHost(options, onReady);
+  const local = join(options.stateDir, "groups-r21"), state = p.seed(options.group, (s) => { s.control.monitor.phase = "live"; });
+  const locks = [join(local, "operation.lock"), join(options.stateDir, ".groups-launch.lock")];
+  for (const lock of locks) writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+  for (const name of ["monitor-terminal.json", "monitor-local-closed.json"]) unlinkSync(join(local, name));
+  const done = Promise.withResolvers();
+  return { done: done.promise, locks, state, close(error) {
+    stop();
+    if (error) { done.reject(error); return; }
+    for (const lock of locks) unlinkSync(lock);
+    p.seed(options.group); done.resolve(3);
+  } };
+}
+
+test("live registration alone cannot advance an unsealed or misbound host", async (t) => {
+  const p = fixture(t), approved = await p.remaining(), waiting = Promise.withResolvers();
+  const [a, b] = groupNames.slice(1);
+  let monitor;
+  p.flags.child = ({ group, options, onReady }) => {
+    if (group === b) throw new Error("stop after observed admission");
+    assert.equal(group, a); monitor = heldHost(p, options, onReady);
+    const state = monitor.state, file = join(options.stateDir, "groups-r21/state.json"), save = () => writeFileSync(file, JSON.stringify(state));
+    state.control.sealed = []; save(); waiting.resolve(save); return monitor.done;
+  };
+  const operation = fleetMain(approved, p.deps);
+  const save = await waiting.promise, state = monitor.state;
+  try {
+    await delay(220); assert.deepEqual(p.children, [a]);
+    const hash = state.control.monitor.registrationSha256;
+    state.control.sealed = ["bootstrap"]; state.control.monitor.registrationSha256 = "0".repeat(64); save();
+    await delay(220); assert.deepEqual(p.children, [a]);
+    state.control.monitor.registrationSha256 = hash; save();
+    const deadline = Date.now() + 3000;
+    while (p.children.length < 2) { assert.ok(Date.now() < deadline); await delay(10); }
+    assert.deepEqual(p.children, [a, b]); assert.ok(monitor.locks.every(existsSync));
+  } finally { monitor.close(); await operation; }
+  assert.equal(await operation, 2);
+});
+
+test("a finished child can be collected with its own approval while a sibling keeps monitor custody", async (t) => {
+  const p = fixture(t), approved = await p.remaining();
+  const [held, finished, refused] = groupNames.slice(1), local = join(p.h.base, finished, "groups-r21");
+  const statePath = join(local, "state.json"), saved = () => JSON.parse(readFileSync(statePath));
+  let monitor, removed = 0;
+  p.flags.child = ({ group, options, onReady }) => {
+    if (group === held) { monitor = heldHost(p, options, onReady); return monitor.done; }
+    if (group === refused) throw new Error("synthetic later refusal");
+    assert.equal(group, finished); p.seed(group); return 3;
+  };
+  const operation = fleetMain(approved, p.deps);
+  try {
+    const deadline = Date.now() + 5000;
+    while (!p.output.some((row) => row.group === refused && row.outcome === "error")) { assert.ok(Date.now() < deadline); await delay(10); }
+    assert.ok(p.output.some((row) => row.group === finished && row.outcome === "pending" && row.collection === "separate-child-approval-required"));
+    const collect = ["r21", "--state-dir", dirname(local), "--collect"], state = saved();
+    const report = syntheticInspection("verified");
+    Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", selection: state.selection,
+      campaign: `r21-${state.token}`, groups: report.groups.filter((g) => g.group === finished),
+      supervisedTerminal: { registrationSha256: state.control.monitor.registrationSha256, sealSha256: digest("synthetic native seal") } });
+    const result = (stdout) => ({ status: 0, stdout, stderr: "" });
+    const opts = { repo: p.h.repo, write() {}, inspect: async () => report, spawn(binary, args, options) {
+      if (binary === "git") return p.deps.spawn(binary, args);
+      assert.equal(binary, "ssh"); assert.ok(options.input.includes("systemctl show " + state.unit));
+      const id = saved().control.ledger.at(-1).request.invocation.id;
+      return { ...result(`Id=${state.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${state.unit}\nRestart=no\nActiveState=inactive\nMainPID=0\nExecMainCode=1\nExecMainStartTimestamp=synthetic\n`),
+        stderr: `CORTEN_CONTROL ${id} ${"d".repeat(64)}\nCORTEN_RESULT ${id} 0\n` };
+    }, providerFactory: () => Object.assign(async (args, timeout) => {
+      if (args[2] !== "delete") return p.h.run("doctl", args, timeout);
+      assert.equal(args[3], state.id); assert.ok(saved().deletionIntentAt); removed++; p.h.hosts([]); return result("");
+    }, { close: async () => {} }) };
+    p.h.hosts([{ id: Number(state.id), name: state.name, tags: [...tags, state.tag], size_slug: state.host.size,
+      region: { slug: state.host.region }, networks: { v4: [{ type: "public", ip_address: state.ip }] } }]);
+    // Fixture resumes from an already downloaded, hashed archive after the
+    // standard recovery lease. Production still extracts, validates and deletes.
+    const bytes = archive([{ name: "run.log" }, { name: "host.txt" }, { name: "exit-code", body: "0\n" }, { name: "campaign/" }]);
+    writeFileSync(join(local, "results.tgz"), bytes); state.archiveSha256 = digest(bytes); writeFileSync(statePath, JSON.stringify(state));
+    const closed = join(local, "monitor-local-closed.json"), receipt = JSON.parse(readFileSync(closed));
+    receipt.closedAtMs -= 60000; receipt.recoverAfterMs -= 60000; writeFileSync(closed, JSON.stringify(receipt));
+    await assert.rejects(productionMain([...collect, "--approve-reviewed-merged-ready", approved.at(-1)], opts), /exact action required/);
+    const plan = await productionPlan(parseProductionArgs(collect).options, { repo: p.h.repo, run: p.deps.spawn });
+    assert.equal(await productionMain([...collect, "--approve-reviewed-merged-ready", plan.approvalSha256], opts), 0);
+    assert.ok(saved().destroyedAt); assert.equal(removed, 1); assert.ok(monitor.locks.every(existsSync));
+    assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
+  } finally { monitor?.close(); await operation; }
+  assert.equal(await operation, 2); assert.deepEqual(p.children, [held, finished, refused]);
+  assert.ok(!existsSync(join(p.h.base, ".fleet-operation.lock")));
+});
+
+test("late monitor failure or cancellation stops new groups and still settles the second worker", async (t) => {
+  for (const cancel of [false, true]) {
+    const p = fixture(t), approved = await p.remaining(), second = Promise.withResolvers();
+    let monitor, opened = false;
+    const [a, b] = groupNames.slice(1);
+    p.flags.child = ({ group, options, onReady }) => {
+      if (group === a) { monitor = heldHost(p, options, onReady); return monitor.done; }
+      assert.equal(group, b); p.seed(b); opened = true; return second.promise;
+    };
+    const operation = fleetMain(approved, p.deps);
+    const outcome = cancel ? assert.rejects(operation, /cancelled/) : operation;
+    try {
+      const deadline = Date.now() + 5000;
+      while (!opened) { assert.ok(Date.now() < deadline); await delay(10); }
+      if (cancel) { p.flags.cancelled = true; monitor.close(); }
+      else monitor.close(Object.assign(new Error("synthetic stream lost"), { controlTreeUncertain: true }));
+      while (!p.output.some((row) => row.group === a && ["pending", "error"].includes(row.outcome))) {
+        assert.ok(Date.now() < deadline); await delay(10);
+      }
+      assert.ok(existsSync(join(p.h.base, ".fleet-operation.lock")));
+    } finally { second.resolve(3); }
+    const result = await outcome;
+    if (!cancel) assert.equal(result, 2);
+    assert.deepEqual(p.children, [a, b]);
+    assert.ok(p.output.some((row) => row.group === b && row.outcome === "pending"));
+    for (const group of groupNames.slice(3)) assert.ok(p.output.some((row) => row.group === group &&
+      row.reason === (cancel ? "cancelled" : "prior-admission-failed")));
+    assert.equal(existsSync(join(p.h.base, ".fleet-operation.lock")), !cancel);
+  }
+});
+
 test("detach refuses a return code without valid running unique host state", async (t) => {
-  for (const kind of ["missing", "preparing", "locked", "code0", "code1", "duplicate-id", "duplicate-ip"]) {
+  for (const kind of ["missing", "preparing", "locked", "code0", "code1", "duplicate-id", "duplicate-ip", "no-seal", "registration", "revoked"]) {
     const flags = {}, p = fixture(t, flags);
     const approved = await p.remaining();
     flags.child = ({ group }) => {
@@ -234,8 +368,11 @@ test("detach refuses a return code without valid running unique host state", asy
         if (kind === "preparing") s.status = "preparing";
         if (kind === "duplicate-id") s.id = "1";
         if (kind === "duplicate-ip") s.ip = "192.0.2.1";
+        if (kind === "no-seal") s.control.sealed = [];
+        if (kind === "registration") s.control.monitor.registrationSha256 = "0".repeat(64);
       });
       if (kind === "locked") writeFileSync(join(p.h.base, group, "groups-r21/operation.lock"), "synthetic-unsettled");
+      if (kind === "revoked") writeFileSync(join(p.h.base, group, "groups-r21/monitor-invalid.json"), "{}");
       return kind === "code0" ? 0 : kind === "code1" ? 1 : 3;
     };
     assert.equal(await fleetMain(approved, p.deps), 2);
@@ -867,6 +1004,30 @@ test("worker protocol rejects malformed diagnostics, unexpected fields and unset
       assert.equal(error.message, "group-control-uncertain"); assert.equal(error.controlUncertain, true);
       assert.equal(error.providerDiagnostic, undefined); return true;
     });
+  }
+});
+
+test("a ready notification is optional, one-shot, exact and never worker settlement", async () => {
+  const ready = { schema: "benchmark-group-fleet-worker-ready/v1", id: "123", ip: "192.0.2.1", registration: "f".repeat(64) };
+  const result = { schema: "benchmark-group-fleet-worker-result/v1", code: 3 };
+  for (const [messages, admitted, fails] of [
+    [[ready, result], 1, false], [[result], 0, false], [[ready], 1, true], [[ready, ready, result], 1, true],
+    [[result, ready], 0, true], [[{ ...ready, ip: "foreign" }, result], 0, true],
+    [[{ ...ready, extra: true }, result], 0, true], [[{ ...ready, registration: "bad" }, result], 0, true],
+  ]) {
+    let worker, count = 0, settled = false, flagged = false;
+    class Held extends EventEmitter {
+      constructor() { super(); this.stdout = this.stderr = { resume() {} }; worker = this; }
+    }
+    const task = productionChild([], { cancellation: new SharedArrayBuffer(4), WorkerClass: Held,
+      onReady: () => count++, onFailure: () => { flagged = true; } }).finally(() => { settled = true; });
+    for (const message of messages) worker.emit("message", message);
+    await turn();
+    assert.equal(settled, false); assert.equal(count, admitted);
+    if (fails && messages.length > 1) assert.ok(flagged);
+    worker.emit("exit", 0);
+    if (fails) await assert.rejects(task, (e) => e.controlTreeUncertain === true);
+    else assert.equal(await task, 3);
   }
 });
 

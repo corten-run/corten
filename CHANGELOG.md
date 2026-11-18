@@ -59,6 +59,11 @@ Corten is pre-1.0, so any minor version may change the API.
   (`raw("<table>")` keeps the row after it); the debug check reads them when sent. One inside
   the lost top-level element itself does not save it (`<table id={..}>{text}</table>` after a
   first row, or a row holding an expression after a first `<table>`, is still refused).
+- Every `corten` command accepts `--help` and `-h`, printing its own usage and exiting
+  successfully without running the command; `corten help <command>` prints the same and refuses an
+  unknown command. An option given twice (`--name`, `--corten-path`, `--port`) is refused instead of
+  taking the first. `corten check` reports each step and its elapsed time on stderr, including in
+  redirected logs, while preserving Cargo's output.
 - The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
   `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
@@ -84,6 +89,10 @@ Corten is pre-1.0, so any minor version may change the API.
   Saved worker evidence joins every preflight to the timed upstream and the
   apparatus source hashes to the bound measured commit; failed capacity checks
   remain unqualified rather than attributed to the measured framework.
+
+- The catalog benchmark keeps one supervised control connection off the measured
+  cores. Losing that connection does not authorize deleting an active droplet.
+  Collection replays the saved control evidence before authorizing cleanup.
 
 - Preserve every client benchmark candidate's not-run record when policy input
   is invalid or missing. Such attempts still fail before any native build.

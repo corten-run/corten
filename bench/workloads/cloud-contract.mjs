@@ -111,6 +111,50 @@ export function validateState(s, round) {
   if (s.ip !== undefined) assert.equal(isIP(s.ip), 4, "public IPv4 required");
   for (const key of ["archiveSha256", "evidenceSha256"]) if (s[key] !== undefined) full(s[key], /[a-f0-9]{64}/, key);
   for (const key of ["createIntentAt", "collectedAt", "deletionIntentAt", "destroyedAt"]) if (s[key] !== undefined) date(s[key]);
+  if (s.control !== undefined) {
+    exact(s.control, ["schema", "helperSha256", "ledger", "sealed", ...(s.control.monitor === undefined ? [] : ["monitor"])]);
+    if (s.control.monitor !== undefined) {
+      const m = s.control.monitor;
+      exact(m, ["schema", "id", "phase", ...(m.registrationSha256 === undefined ? [] : ["registrationSha256"])]);
+      assert.equal(m.schema, "benchmark-supervised-control/v1"); full(m.id, /[a-f0-9]{32}/, "monitor identity");
+      assert.ok(["pending", "live", "closed", "invalid"].includes(m.phase));
+      if (m.phase === "live" || m.phase === "closed") assert.ok(m.registrationSha256);
+      if (m.registrationSha256 !== undefined) full(m.registrationSha256, /[a-f0-9]{64}/, "monitor registration digest");
+    }
+    assert.equal(s.control.schema, "benchmark-control-ledger/v1");
+    full(s.control.helperSha256, /[a-f0-9]{64}/, "control source");
+    assert.ok(Array.isArray(s.control.ledger) && s.control.ledger.length <= 4096);
+    assert.ok(Array.isArray(s.control.sealed) && new Set(s.control.sealed).size === s.control.sealed.length);
+    assert.ok(s.control.sealed.every((e) => ["bootstrap", "audit-json-api", "audit-mixed-production"].includes(e)));
+    const ids = new Set();
+    for (const [sequence, row] of s.control.ledger.entries()) {
+      exact(row, ["request", "localTerminal", ...(row.localTerminal ? ["code"] : [])]);
+      const request = row.request, invocation = request.invocation;
+      exact(request, ["invocation", "helperSha256", "epoch", "sequence", ...(request.seal === undefined ? [] : ["seal"])]);
+      exact(invocation, ["schema", "round", "commit", "token", "id", "channel", "purpose", "requestSha256", "deadlineMs"]);
+      assert.equal(invocation.schema, "benchmark-control-invocation/v1");
+      assert.ok(["ssh", "sftp"].includes(invocation.channel));
+      assert.ok(["bootstrap", "audit-json-api", "audit-mixed-production", "collection"].includes(request.epoch));
+      assert.equal(invocation.purpose, request.epoch.startsWith("audit-") ? "audit" : request.epoch);
+      full(invocation.requestSha256, /[a-f0-9]{64}/, "control request digest");
+      assert.ok(Number.isSafeInteger(invocation.deadlineMs) && invocation.deadlineMs > 0 && invocation.deadlineMs <= 900000);
+      assert.equal(request.sequence, sequence); assert.equal(request.helperSha256, s.control.helperSha256);
+      for (const key of ["round", "commit", "token"]) assert.equal(invocation[key], s[key]);
+      full(invocation.id, /[a-f0-9]{32}/, "control invocation"); assert.ok(!ids.has(invocation.id)); ids.add(invocation.id);
+      assert.equal(typeof row.localTerminal, "boolean");
+      if (row.localTerminal) assert.ok(Number.isInteger(row.code) && row.code >= 0 && row.code <= 255);
+      if (request.seal !== undefined) {
+        assert.notEqual(request.epoch, "collection"); assert.equal(invocation.channel, "ssh");
+        const expected = s.control.ledger.slice(0, sequence + 1).filter((r) => r.request.epoch === request.epoch)
+          .map((r) => ({ id: r.request.invocation.id, sha256: createHash("sha256").update(JSON.stringify(r.request.invocation)).digest("hex") }));
+        assert.deepEqual(request.seal, expected, "incomplete controller epoch seal");
+      }
+    }
+    for (const epoch of s.control.sealed) {
+      const rows = s.control.ledger.filter((r) => r.request.epoch === epoch);
+      assert.ok(rows.length && rows.every((r) => r.localTerminal) && rows.at(-1).request.seal, "sealed epoch lacks terminal final control");
+    }
+  }
   if (s.extractionAttempts !== undefined) {
     assert.ok(Array.isArray(s.extractionAttempts));
     for (const path of s.extractionAttempts) full(path, /evidence-[A-Za-z0-9]+/, "extraction directory");
@@ -208,9 +252,9 @@ export function archivePaths(bounds = {}) {
       assert.equal(directory, name.endsWith("/"), "archive path/type mismatch");
       const path = name.replace(/\/$/, ""), parts = path.split("/");
       assert.ok(parts.length <= 64 && parts.every((p) => p.length <= 255 && portableEvidenceSegment(p)), "unsafe archive path/component");
-      assert.ok(path === "campaign" || path.startsWith("campaign/") || ["run.log", "host.txt", "exit-code"].includes(path), "foreign archive member");
-      if (path === "campaign") assert.ok(directory, "campaign root must be a directory");
-      if (!path.includes("/") && path !== "campaign") assert.ok(!directory, "metadata must be a regular file");
+      assert.ok(path === "campaign" || path.startsWith("campaign/") || path === "control" || path.startsWith("control/") || ["run.log", "host.txt", "exit-code"].includes(path), "foreign archive member");
+      if (["campaign", "control"].includes(path)) assert.ok(directory, "evidence root must be a directory");
+      if (!path.includes("/") && !["campaign", "control"].includes(path)) assert.ok(!directory, "metadata must be a regular file");
       let id = 0, length = 0;
       for (const part of parts) {
         const at = id * 12 + 10;

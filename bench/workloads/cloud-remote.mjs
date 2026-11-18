@@ -1,11 +1,14 @@
 import { remoteFiles as contractFiles, validateState } from "./cloud-contract.mjs";
 import { quote } from "./cloud-transport.mjs";
 import { archiveLimit, expandedLimit } from "./cloud-local.mjs";
+import { custodyCommand, guardianSha256 } from "./cloud-control-runtime.mjs";
 
 export const sourceUrl = "https://github.com/corten-run/corten.git";
 export function bootstrapMarker(state) {
   validateState(state, state.round);
-  return { schema: "benchmark-common-bootstrap/v1", round: state.round, commit: state.commit, token: state.token, group: state.group ?? "all" };
+  return { schema: state.control ? "benchmark-common-bootstrap/v2" : "benchmark-common-bootstrap/v1", round: state.round, commit: state.commit,
+    token: state.token, group: state.group ?? "all", ...(state.control ? { controlHelperSha256: guardianSha256 } : {}),
+    ...(state.control?.monitor ? { monitorId: state.control.monitor.id } : {}) };
 }
 export const bootstrapReadScript = `if test ! -e /bench/bootstrap-ready.json; then exit 3; fi
 test -f /bench/bootstrap-ready.json && test ! -L /bench/bootstrap-ready.json
@@ -48,7 +51,10 @@ test -z "$(git status --porcelain --untracked-files=all)"`;
 set -euo pipefail
 umask 077
 cd '/bench'
-for file in 'run.log' 'host.txt' 'exit-code'; do test -f "$file" && test ! -L "$file"; done
+${state.control ? `if test -d '/run/corten-bench-control-${state.token}'; then
+  ${custodyCommand(state.token)}
+fi
+` : ""}for file in 'run.log' 'host.txt' 'exit-code'; do test -f "$file" && test ! -L "$file"; done
 if test -e 'results.tgz' || test -L 'results.tgz'; then
   test -f 'results.tgz' && test ! -L 'results.tgz'
   test "$(stat -c '%s' -- 'results.tgz')" -le ${archiveLimit}
@@ -85,7 +91,7 @@ stage=$(mktemp '/bench/cloud-pack.XXXXXXXX')
 trap 'rm -f -- "$stage"' EXIT
 files=('run.log' 'host.txt' 'exit-code')
 test ! -e 'campaign' || files+=('campaign')
-tar --format=gnu -czf "$stage" -- "\${files[@]}"
+${state.control ? "test ! -e 'control' || files+=('control')\n" : ""}tar --format=gnu -czf "$stage" -- "\${files[@]}"
 test "$(stat -c '%s' -- "$stage")" -le ${archiveLimit}
 ln -- "$stage" 'results.tgz'
 rm -- "$stage"
