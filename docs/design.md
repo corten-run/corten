@@ -4321,8 +4321,15 @@ rules something out.
     async-nats 0.53 keeps Rust 1.89 and fixes how the client requires TLS and trusts server
     discovery. `Cluster::start` takes the app's `async_nats::Client`, so staying on 0.52
     would prevent an app from taking those fixes.
-    SQLx stays on 0.8.6: 0.9.0 requires Rust 1.94, and none of the Postgres, pool or TLS fixes
-    its changelog lists is on a path corten-cluster uses (Stands on, reasoned).
+    SQLx stays on 0.8.6. None of the Postgres, pool or TLS fixes in 0.9.0 is needed on
+    corten-cluster's paths (Stands on, reasoned), but 0.9.1 fixes a pool race that applies
+    to listings-feed. Returning a connection makes it available before incrementing the idle
+    count. A concurrent checkout can decrement a zero count, and if maintenance reads the
+    wrapped count, it can spin on a runtime worker. This is a risk confirmed from the source,
+    not a reproduced Corten hang. Keep Rust 1.89 for now rather than raise the floor for all
+    apps or carry a private SQLx fork without a demonstrated Corten incident. A maintained
+    backport that builds on the floor, or SQLx 0.9.1 or later once the floor can move to Rust
+    1.94, can close [#1673 SQLx 0.8.6 can spin a listings-feed worker in pool maintenance](https://github.com/corten-run/corten/issues/1673).
 
     auction-room keeps SQLx's bundled SQLite, which RUSTSEC-2026-0459 reports: SQLite before
     3.54.0 can return stale process memory when a process opens a database file together with
@@ -4366,14 +4373,22 @@ rules something out.
     that reaches Postgres over TLS enables that feature itself and, because `Cluster::start`
     takes SQLx 0.8's `PgPool`, stays on 0.8 without it; the remaining Postgres entries cover
     geometric types, `.pgpass` handling and query macros, which it does not use);
+    platform (SQLx 0.8.6's [return and checkout](https://github.com/transact-rs/sqlx/blob/v0.8.6/sqlx-core/src/pool/inner.rs#L192-L213)
+    can underflow `num_idle`, and its [maintenance sweep](https://github.com/transact-rs/sqlx/blob/v0.8.6/sqlx-core/src/pool/inner.rs#L539-L555)
+    uses the count as its loop bound;
+    [transact-rs/sqlx #4289 fix(pool): prevent num_idle underflow that wedges maintenance in a CPU spin](https://github.com/transact-rs/sqlx/pull/4289)
+    shipped in 0.9.1); reasoned (listings-feed runs on multithreaded Tokio and leaves the
+    pool's default idle and maximum-lifetime maintenance on, so taking the app's `PgPool`
+    does not keep this race off the feed path);
     value (small surface and deliberate dependencies, verified rather than assumed: Values 6
     and 9).
 
     Revisit when: a SQLx release that builds on the Rust floor allows libsqlite3-sys 0.39 or
     later, any Corten crate or example opens a database another party could write, another
     advisory is published against the bundled SQLite auction-room builds, SQLx's TLS hang
-    (#4251) is reported on Postgres or
-    an app on corten-cluster needs a SQLx 0.9 fix, a held dependency line needs a
+    (#4251) is reported on Postgres, a Corten app reproduces or reports the pool hang,
+    a maintained backport of the pool fix builds on the floor, the floor reaches 1.94,
+    an app on corten-cluster needs another SQLx 0.9 fix, or a held dependency line needs a
     correctness or security fix or loses maintenance, the Rust floor moves for another needed
     dependency, or an urgent fix requires a compiler less than about six months old. Re-read
     release notes, compiler requirements and advisories before moving either driver, and
@@ -4381,6 +4396,8 @@ rules something out.
 
     Last checked: 2026-11-18, crates.io metadata for async-nats 0.53.0 and SQLx 0.9.1,
     sqlx-sqlite 0.9.1's manifest, RUSTSEC-2026-0459 and async-nats 0.53.0's release notes;
+    2026-11-18, the SQLx 0.8.6 pool and defaults against listings-feed's pool setup on
+    `51675cc48`, and the SQLx 0.9.1 changelog and Rust requirement for the fix;
     2026-11-14, crates.io metadata for SQLx 0.8.6 and 0.9.0, sqlx-sqlite 0.8.6
     and 0.9.0 and async-nats 0.51.0 and 0.52.0, their release notes, Rust 1.89.0's release
     date and RUSTSEC-2026-0459, against `7d232f93d`; 2026-11-14, the SQLx 0.9.0 changelog's

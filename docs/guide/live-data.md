@@ -482,9 +482,30 @@ in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream), on
 async-nats 0.53 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
 An app upgrading `corten-cluster` must set `async-nats = "0.53"` in its own `Cargo.toml` too:
-`Cluster::start` takes its `async_nats::Client`. Review the
-[async-nats 0.53 release notes](https://github.com/nats-io/nats.rs/releases/tag/async-nats%2Fv0.53.0)
-for changes to TLS and server discovery before deploying.
+`Cluster::start` takes its `async_nats::Client`.
+
+**Keep TLS failover when upgrading.** In
+[async-nats 0.53](https://github.com/nats-io/nats.rs/releases/tag/async-nats%2Fv0.53.0),
+root certificates, a client certificate, a custom TLS config, or a `tls://` URL make TLS
+mandatory for every endpoint by default, including `nats://` URLs and reconnects.
+Discovered endpoints keep the transport they were learned on, so a peer learned over TLS
+is dialed with TLS. If the peer is intentionally plaintext, list it explicitly as a
+`nats://` URL and set `ConnectOptions::tls_optional()`.
+Use explicit `tls://` URLs for the secure endpoints in that mixed pool. If a plaintext
+server advertises a TLS peer by hostname, the client does not trust that name for TLS:
+configure the peer's `tls://` URL explicitly, or set `tls_server_name()` to a name valid for
+every TLS peer. Do not make TLS optional for an all-TLS deployment.
+
+When TLS starts after the first INFO, the client uses only discovery lists received inside
+TLS. With nats-server older than 2.12, a single configured server can connect without
+discovering any failover peers. Pass multiple `tls://` endpoints to `ConnectOptions::connect`,
+or use `ConnectOptions::tls_first()` if every broker has TLS `handshake_first` enabled, or
+upgrade the brokers to 2.12 or later. Check the advertised hostnames against the peers'
+certificates. A discovered IP is checked against the reporting server's verified name
+by default; for certificates with IP addresses instead, use
+`verify_discovered_servers_by_ip()` with a CA dedicated to the cluster. Before rollout,
+take the connected broker out of service in staging and verify that the client reconnects
+to a peer over the intended transport and feed delivery resumes.
 
 Cluster feed keys use literal [NATS subjects](https://docs.nats.io/nats-concepts/subjects):
 nonempty dot-separated tokens without whitespace, control characters (NUL included), `*` or
