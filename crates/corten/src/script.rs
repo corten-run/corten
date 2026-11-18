@@ -1180,6 +1180,31 @@
 //! # }
 //! ```
 //!
+//! A named handler argument with a hand-written `ToJson` also needs `ToJsonSchema` when the
+//! `types` feature is enabled. With only `json`, the same component compiles and renders the call:
+//!
+#![cfg_attr(feature = "types", doc = "```compile_fail,E0277")]
+#![cfg_attr(all(feature = "json", not(feature = "types")), doc = "```")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! struct Tab;
+//!
+//! impl ToJson for Tab {
+//!     fn write_json(&self, out: &mut Vec<u8>) {
+//!         out.extend_from_slice(br#""offers""#);
+//!     }
+//! }
+//!
+//! #[component(js)]
+//! fn TabBar() -> impl Render {
+//!     html! { <nav on:click={js::show(target, Tab)}></nav> }
+//! }
+//! # fn main() {
+//! assert!(TabBar {}.to_html().contains(r#"tab_bar.show($t,"offers")"#));
+//! # }
+//! ```
+//!
 //! ```compile_fail,E0277
 //! use corten::prelude::*;
 //!
@@ -1521,6 +1546,30 @@ pub struct Script {
     /// The script modules of its directory it imports (`import { load } from "./stripe.js"` is
     /// `"stripe"`): a page that loads it preloads them, and the app must list them.
     pub imports: &'static [&'static str],
+    /// The names, declaration paths and schemas of its checked handler argument types.
+    #[cfg(feature = "types")]
+    #[doc(hidden)]
+    pub types: &'static [__private::HandlerType],
+}
+
+/// Builds a script literal with the offline metadata only when Corten has the types feature.
+#[cfg(feature = "types")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __script_literal {
+    ({ $($fields:tt)* }, $types:expr) => {
+        $crate::script::Script { $($fields)* types: $types }
+    };
+}
+
+/// Builds a script literal without offline metadata when Corten lacks the types feature.
+#[cfg(not(feature = "types"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __script_literal {
+    ({ $($fields:tt)* }, $types:expr) => {
+        $crate::script::Script { $($fields)* }
+    };
 }
 
 /// A typed DOM event, from [`event`]: its name in the page and its fields, for the class the
@@ -3982,6 +4031,8 @@ pub mod __private {
     /// How `corten::types` describes a type.
     #[cfg(feature = "types")]
     pub type TsType = fn(&mut crate::json::schema::Generator) -> serde_json::Value;
+    #[cfg(feature = "types")]
+    pub type HandlerType = (&'static str, Option<&'static str>, TsType);
     #[cfg(not(feature = "types"))]
     pub type TsType = ();
 
