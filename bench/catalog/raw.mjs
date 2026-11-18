@@ -11,6 +11,8 @@ import { summarizeSamples, memoryMiB } from "./stats.mjs";
 import { verifyK6Provenance } from "../load-tool.mjs";
 import { timedRawSchema, verifyTimedPhase, verifyTimedContinuity } from "./timed.mjs";
 import { isDeepStrictEqual } from "node:util";
+import { workerAware, workerRawSchema, workerCommand, verifyControl, verifySource, verifyWorkers } from "./apparatus.mjs";
+import { verifyArtifactIndex, verifyPreflight } from "./preflight.mjs";
 
 export const rawSchema = "catalog-saved-evidence/v2";
 export const upstreamImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
@@ -69,7 +71,7 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
     for (const key of ["OOMKilled", "Dead", "Paused", "Restarting"]) assert.equal(info.State[key], false);
     assert.equal(info.State.ExitCode, 0); assert.equal(info.State.Error, "");
     assert.ok(Date.parse(info.State.StartedAt) >= Date.parse(summary.startedAt));
-    if (summary.savedEvidence?.schema === timedRawSchema) assert.ok(typeof info.State.FinishedAt === "string"
+    if (workerAware(summary) || summary.savedEvidence?.schema === timedRawSchema) assert.ok(typeof info.State.FinishedAt === "string"
       && Number.isFinite(Date.parse(info.State.FinishedAt)) && Date.parse(info.State.FinishedAt) <= 0,
       "participant has an unknown prior termination");
   };
@@ -100,7 +102,11 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   running(upstream, summary.tools.upstream.imageId, "api", 512 * 2 ** 20);
   assert.deepEqual(upstream.networks, [`${summary.runId}-net`]);
   mounts(upstream, [mount(`${checkout}/bench/catalog/fixtures`, "/fixtures"), mount(`${checkout}/bench`, "/bench")]);
-  execution(upstream, summary.tools.upstream.execution, ["node", "/bench/catalog/upstream.mjs"]);
+  execution(upstream, summary.tools.upstream.execution, workerAware(summary) ? workerCommand : ["node", "/bench/catalog/upstream.mjs"]);
+  if (workerAware(summary)) {
+    assert.ok(isDeepStrictEqual(verifyControl(proof.workerBefore, true), verifyControl(proof.workerAfter, true)), "checker worker identities changed");
+    assert.ok(proof.workerAfter.epoch >= proof.workerBefore.epoch, "checker worker epoch reversed");
+  }
   assert.match(checker.Id, /^[a-f0-9]{64}$/); assert.equal(checker.Image, summary.tools.checker.imageId);
   assert.equal(checker.Config.Labels?.["run.corten.catalog"], summary.runId);
   assert.equal(checker.HostConfig.NanoCpus, budget.load.quota * 1e9);
@@ -120,11 +126,13 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
 }
 
 export function replayCatalog(summary, { readJson, readText }, commit) {
-  assert.ok([rawSchema, timedRawSchema].includes(summary.savedEvidence?.schema), "native raw evidence version missing");
+  assert.ok([rawSchema, timedRawSchema, workerRawSchema].includes(summary.savedEvidence?.schema), "native raw evidence version missing");
   assert.equal(summary.options?.group, "catalog-page", "raw group validation requires catalog-page");
   const report = inspectCatalog(summary, commit);
   const gated = summary.timingDisposition === "gated-functional";
-  const timed = summary.savedEvidence.schema === timedRawSchema && !gated;
+  const workers = workerAware(summary);
+  if (workers) { verifySource(summary, { readJson, readText }); verifyArtifactIndex(summary, { readJson, readText }); }
+  const timed = (workers || summary.savedEvidence.schema === timedRawSchema) && !gated;
   assert.ok(summary.timingDisposition === undefined || gated, "unknown timing disposition");
   if (timed) {
     assert.equal(report.attemptComplete, true, "timed native attempt is not complete");
@@ -153,6 +161,8 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   const targetFailures = [];
   const timedIds = new Set();
   const timedParticipants = [];
+  const workerWindows = [];
+  const workerChecks = [];
   let lastCheckFinishedAt = -Infinity, firstColdAt = Infinity;
   let negative = false;
   let upstreamId;
@@ -177,6 +187,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
         assert.deepEqual(qualification, qualificationIdentity(summary.group, app, source, entry.imageId));
         boundary = readJson(`${base}/checker.json`);
         verifyCheckBoundary(boundary, summary, app, source, !!checked.failure);
+        if (workers) workerChecks.push(boundary);
         if (timed) lastCheckFinishedAt = Math.max(lastCheckFinishedAt, Date.parse(boundary.checker.State.FinishedAt));
         upstreamId ??= boundary.upstream.Id;
         assert.equal(boundary.upstream.Id, upstreamId, "upstream identity changed across functional checks");
@@ -232,6 +243,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
               assert.ok(!timedIds.has(observed.loadId), "timed load container reused across phases"); timedIds.add(observed.loadId);
               upstreamId ??= observed.upstreamId; assert.equal(observed.upstreamId, upstreamId, "timed upstream identity changed");
               timedParticipants.push(...observed.participants);
+              if (workers) workerWindows.push(observed);
               if (observed.metrics.outcome === "failed") {
                 failed = true;
                 targetFailures.push({ app, source, target: profile.target, pass: run.pass, phase, failed: observed.metrics.failed,
@@ -303,10 +315,45 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   if (timed) {
     assert.ok(Number.isFinite(lastCheckFinishedAt) && Number.isFinite(firstColdAt) && lastCheckFinishedAt <= firstColdAt,
       "all positive checks must finish before cold timing begins");
+    if (workers) {
+      const preflight = verifyPreflight(summary, { readJson, readText });
+      for (const observed of preflight) assert.equal(observed.upstreamId, upstreamId, "preflight upstream identity changed");
+      workerWindows.push(...preflight);
+      timedParticipants.push(...preflight.flatMap((o) => o.participants));
+      const starts = preflight.map((o) => o.workerEvidence.processes[0].samples[0].wallMs);
+      const ends = preflight.map((o) => o.finishedAt);
+      assert.ok(Math.min(...starts) >= lastCheckFinishedAt && Math.max(...ends) <= firstColdAt,
+        "preflight must follow correctness and precede official timing");
+      workerWindows.sort((a, b) => a.workerEvidence.processes[0].samples[0].wallMs - b.workerEvidence.processes[0].samples[0].wallMs);
+      let previous;
+      for (const observed of workerWindows) {
+        const e = observed.workerEvidence;
+        const boundary = { id: e.binding.container, image: e.binding.image, state: { StartedAt: e.binding.startedAt }, budget: e.binding.budget };
+        verifyWorkers(summary, e.binding, e, { ...observed.workerWindow, container: boundary, previous });
+        previous = e;
+      }
+    }
     verifyTimedContinuity(timedParticipants);
     const ordered = (rows) => [...rows].sort((a, b) => `${a.app}/${a.source}/${a.target}/${a.pass}/${a.phase}`.localeCompare(`${b.app}/${b.source}/${b.target}/${b.pass}/${b.phase}`));
     assert.ok(isDeepStrictEqual(ordered(summary.targetFailures), ordered(targetFailures)), "timed target failure ledger differs from raw");
   }
+  if (workers) {
+    workerChecks.sort((a, b) => Date.parse(a.checker.State.StartedAt) - Date.parse(b.checker.State.StartedAt));
+    let prior;
+    for (const proof of workerChecks) {
+      const ids = verifyControl(proof.workerBefore);
+      if (prior) {
+        assert.ok(isDeepStrictEqual(ids, verifyControl(prior.workerAfter)), "worker identity changed across checks");
+        assert.equal(proof.workerBefore.epoch, prior.workerAfter.epoch, "worker check epoch changed between checkers");
+      }
+      prior = proof;
+    }
+    if (workerWindows.length) {
+      assert.ok(isDeepStrictEqual(verifyControl(prior.workerAfter), verifyControl(workerWindows[0].workerEvidence.before)), "worker identity changed after correctness");
+      assert.equal(workerWindows[0].workerEvidence.before.epoch, prior.workerAfter.epoch + 1, "preflight reset epoch missing");
+    }
+  }
   return { ...report, ...(gated ? { status: "COMPLETE ATTEMPT: functional failure; not a baseline" } : {}),
+    ...(workers ? { rawVerified: true, apparatusPreflight: gated ? "not run: functional gate" : "passed" } : {}),
     attemptComplete: true, outcomes, comparisonEligibleApps: gated ? [] : outcomes.filter((r) => r.outcome === "passed").map((r) => r.app) };
 }
