@@ -2,12 +2,13 @@
 //! disconnect mid-batch can let queued publishes overtake a failed one. Every instance runs a
 //! candidate; the one holding the lease (store::lease) publishes. Delivered patches are marked done
 //! after JetStream acknowledges them. A relay that dies or loses its lease in between leaves them to
-//! the next one, which republishes them, and JetStream drops the copies by message ID. Two
-//! relays briefly overlapping can republish these rows within the deduplication window.
+//! the next one, which republishes them. JetStream drops copies by message ID within its
+//! configured deduplication window.
 //!
 //! Rows with invalid feed keys are logged and marked done without publishing. On a per-publish
 //! size refusal the relay publishes a reload marker and waits for its acknowledgement before
-//! marking the row done. Patch bodies stay in Postgres until ordinary pruning.
+//! marking the row done. If the marker fails, the row stays pending without holding up the
+//! other acknowledged rows. Patch bodies stay in Postgres until ordinary pruning.
 
 use std::{
     sync::{
@@ -148,7 +149,8 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
         } else {
             finish_refusals(pool, js, options, held, &mut sent, refused).await?;
         }
-        if (rows.len() as i64) < BATCH {
+        if (rows.len() as i64) < BATCH || sent.is_empty() {
+            // A full batch with nothing retired would only select the same rows again.
             return Ok(());
         }
     }
@@ -184,6 +186,20 @@ enum Refusal {
     Stream,
 }
 
+fn marker_publish_failed(options: &Options, row: &store::Pending, error: impl std::fmt::Display) {
+    tracing::warn!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
+        %error, "reload marker publish failed; outbox row remains pending");
+}
+
+fn marker_size_refused(options: &Options, row: &store::Pending, stream_limit: Option<i32>, error: &PublishError) {
+    // NATS header framing and names (including the two ID separators) use 65 bytes.
+    // The generation and sequence occur twice each.
+    let marker_bytes = row.feed.len() + 65 + 2 * (row.generation.len() + row.seq.to_string().len());
+    tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
+        marker_bytes, stream = %options.stream, stream_max_message_size = stream_limit, %error,
+        "reload marker refused for size; outbox row remains pending");
+}
+
 async fn finish_refusals(
     pool: &PgPool,
     js: &jetstream::Context,
@@ -196,37 +212,60 @@ async fn finish_refusals(
     if held.renewed.elapsed() >= options.lease / 4 {
         held.renew(options).await?;
     }
-    // Only size refusals identify a publish we can replace. Pipeline the markers too.
-    let marker_error = |id, error| format!("publishing reload marker for outbox row {id}: {error}");
+    // Pipeline the markers too, but bound the whole attempt to leave time to retire
+    // acknowledgements before the lease gets stale, even if a marker gets no reply.
+    let deadline = (held.renewed + options.lease / 2).into();
     let mut markers = Vec::new();
-    for (row, refusal) in &refused {
+    let mut completed = Vec::new();
+    for (row, refusal) in refused {
         if matches!(refusal, Refusal::InvalidKey) {
             sent.push(row.id);
+            completed.push((row, refusal, false));
             continue;
         }
-        held.check()?;
-        let ack = send(js, options, row, true).await.map_err(|error| marker_error(row.id, error))?;
-        markers.push((row.id, ack));
+        match tokio::time::timeout_at(deadline, send(js, options, row, true)).await {
+            Ok(Ok(ack)) => markers.push((row, refusal, ack)),
+            Ok(Err(error)) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
+                marker_size_refused(options, row, None, &error);
+            }
+            Ok(Err(error)) => marker_publish_failed(options, row, error),
+            Err(error) => marker_publish_failed(options, row, error),
+        }
     }
-    for (id, ack) in markers {
-        ack.await.map_err(|error| marker_error(id, error))?;
-        sent.push(id);
+    let mut stream_failed_markers = Vec::new();
+    for (row, refusal, ack) in markers {
+        match tokio::time::timeout_at(deadline, ack).await {
+            Ok(Ok(ack)) => {
+                sent.push(row.id);
+                completed.push((row, refusal, ack.duplicate));
+            }
+            Ok(Err(error)) if stream_size_refusal(&error) => stream_failed_markers.push((row, error)),
+            Ok(Err(error)) => marker_publish_failed(options, row, error),
+            Err(error) => marker_publish_failed(options, row, error),
+        }
     }
     // 10054 does not carry the limit. Look it up once for diagnostics only.
-    let stream_limit = if refused.iter().any(|(_, refusal)| matches!(refusal, Refusal::Stream)) {
-        let budget = (options.lease / 8).min(held.stale.saturating_sub(held.renewed.elapsed()));
-        tokio::time::timeout(budget, js.get_stream(&options.stream))
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .map(|stream| stream.cached_info().config.max_message_size)
-    } else {
-        None
-    };
+    let stream_limit =
+        if !stream_failed_markers.is_empty() || completed.iter().any(|(_, refusal, _)| matches!(refusal, Refusal::Stream)) {
+            let budget = (options.lease / 8).min(held.stale.saturating_sub(held.renewed.elapsed()));
+            tokio::time::timeout(budget, js.get_stream(&options.stream))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .map(|stream| stream.cached_info().config.max_message_size)
+        } else {
+            None
+        };
+    for (row, error) in stream_failed_markers {
+        marker_size_refused(options, row, stream_limit, &error);
+    }
+    if sent.is_empty() {
+        return Ok(());
+    }
     held.check()?;
     let mut retired = store::mark_published_returning(pool, sent).await?;
     retired.sort_unstable();
-    for (row, refusal) in refused {
+    for (row, refusal, duplicate) in completed {
         if retired.binary_search(&row.id).is_err() {
             continue;
         }
@@ -239,9 +278,14 @@ async fn finish_refusals(
             Refusal::Cached(error) => ("refused by the connection's cached limit", Some(error)),
             Refusal::Stream => ("JetStream size refusal (10054)", None),
         };
+        let outcome = if duplicate {
+            "duplicate reload marker acknowledgement (already accepted notification, kind unknown)"
+        } else {
+            "published reload marker"
+        };
         tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
             patch_bytes = row.body.len(), stream = %options.stream, stream_max_message_size = stream_limit,
-            error = error.as_ref().map(tracing::field::display), "published reload marker: {reason}; patch kept for inspection");
+            error = error.as_ref().map(tracing::field::display), "{outcome}: {reason}; patch kept for inspection");
     }
     Ok(())
 }

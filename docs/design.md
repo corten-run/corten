@@ -5937,11 +5937,15 @@ rules something out.
     a gap or other reload. Other generations still use the existing generation mismatch path.
 
     The relay sends markers after the batch's patch attempts, so a later patch may already
-    have revealed the gap. It marks rows done in one batch, with a size-refused row included
-    only after acknowledgement of its marker. If sending or acknowledging the marker fails, the
-    normal retry path applies. JetStream's deduplication works across a retry of either the original
-    patch or its marker because the ID is the same. The application write remains committed
-    and the outbox body stays available for replay and inspection until ordinary pruning.
+    have revealed the gap. It marks acknowledged rows done in one batch, even when another
+    row's marker cannot be sent or acknowledged. The failed row stays pending and takes one
+    slot on a retry; a full batch of unpublishable rows can stall the queue. The broker and
+    stream limits must fit the longest key plus up to 135 bytes of marker headers. Within
+    JetStream's configured deduplication window, the shared ID deduplicates retries of either
+    the original patch or its marker. A duplicate acknowledgement retires the row but does
+    not identify which representation was first accepted; outside the window both can be
+    stored. The application write remains committed and the outbox body stays available
+    for replay and inspection until ordinary pruning.
 
     Postgres commits each feed's sequence under that feed's row lock, and followers detect
     gaps by that sequence, not across feeds by outbox ID. A broker's connection-wide
@@ -5967,7 +5971,8 @@ rules something out.
     Stands on: platform (the [NATS subject rules](https://docs.nats.io/nats-concepts/subjects)
     exclude whitespace and reserve wildcards for subscriptions, the
     [NATS server configuration](https://docs.nats.io/reference/config/) defaults to a 4 KB
-    control line, and [Postgres B-tree entries](https://www.postgresql.org/docs/16/btree-intro.html)
+    control line, [JetStream message deduplication](https://docs.nats.io/learn/jetstream/publishing#avoiding-duplicate-writes)
+    uses a configured window, and [Postgres B-tree entries](https://www.postgresql.org/docs/16/btree-intro.html)
     fit only about a third of a page;
     [JetStream's size check](https://github.com/nats-io/nats-server/blob/v2.15.2/server/stream.go#L6663-L6674)
     returns `10054` on that publish; the
@@ -5985,13 +5990,15 @@ rules something out.
     Revisit when: an app needs arbitrary text as a cluster key, the NATS server's default
     control line or documented grammar changes, clients can identify an individual broker
     refusal or reliably refresh the cached limit without reconnecting, JetStream provides a
-    standard invalidation signal, limits cannot carry the marker, or deployments need every
+    standard invalidation signal, supported limits cannot carry the marker, or deployments need every
     delta delivered, immediate recovery on old followers, or ordering across a mid-batch disconnect.
 
     Last checked: 2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
     NATS 2.15.2 with async-nats 0.52.0: both refusals publish markers while retaining the
-    patch in Postgres. Ready and loading followers reload a refused tail without another
-    same-feed patch, unrelated patches flow, and size recovery does not reconnect;
+    patch in Postgres. Ready and loading followers reload a refused tail, then apply the
+    next patch normally, while a cold follower reads the committed state. A refused marker does
+    not stop unrelated rows crossing a batch boundary, and the longest marker overhead
+    measured 135 bytes. Retries deduplicate in both orders without reconnecting;
     2026-11-17 at `056964945`, subject rules and control-line configuration.
 
 64. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
