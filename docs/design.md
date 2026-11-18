@@ -6251,11 +6251,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `@import` is refused because it loads a stylesheet the component does not own;
    `@custom-media` is refused because tokens define breakpoints. Unrecognized rules such as
    `@namespace` and `@document` are refused outside raw bodies; put them in the app's global
-   stylesheet. This is not a CSS validator: the macro may copy unknown block at-rules that
-   start with a known prefix, such as `@supports_other`, applying that rule's body handling.
-   Likewise, unknown statements are refused even inside raw bodies unless the statement parser
-   recognizes a prefix; for example it copies `@layer_other`. Escaped at-rule and class names
-   are not supported.
+    stylesheet. At-rule names must match whole names, not prefixes: `@supports_other` and
+    `@layer_other` are not supported. Unknown statements are refused even inside raw bodies.
+    Escaped or non-ASCII at-rule and class names are not supported.
 
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
@@ -6267,9 +6265,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
    lookup's name and an `if()` condition (`style(--x: 1)`) name custom properties, a dashed
    function token (`--x()`) calls a custom function, and strings, URLs, anchor names, other
    functions' arguments and unrelated declarations are not position references. The macro
-   matches whole names from the source before normalizing whitespace and comments as in
-   other declarations. That normalization can change token boundaries in unprefixed options:
-   `--externa\6c  flip-block` loses the extra space and becomes one name (`--externalflip-block`).
+    matches whole names from the source before normalizing whitespace and comments as in
+    other declarations. In an unprefixed option such as `--externa\6c  flip-block`, the first
+    space terminates the hex escape and the second remains a separator.
    A registered custom property with the same name does not rename an option, but its `var()`
    lookup still gets the property prefix. A name carried in a custom property's value is not
    rewritten as a position option.
@@ -6281,13 +6279,21 @@ by design; where it is known, a limit says what would lift it or why it is so.
    policy when an app needs checked private names for them.
 
    An `@scope` with no root is refused because its implicit root is outside the component.
-   At the top of the file, an `@scope` rule's root names
-   one of its classes, or else each rule in the body must start at one, as at the top. A root
-   nested in a rule, or in an `@scope` whose root names one of the file's classes, is relative to
-   that one's elements and is not checked; one nested in any other `@scope` is checked as at the top.
+    Each selector must match only elements that have one of the file's classes or are inside
+    one (by a descendant or child combinator; `+`, `~` and `||` from the class's element lead
+    outside it), directly or through every selector of an `:is()` or `:where()` the browser
+    keeps. A class inside another function only filters, though it is still prefixed. A nested
+    selector is relative when it starts with a combinator or contains no `&` delimiter, even
+    in an invalid arm; only a matchable `&` supplies an anchor at its own position. The same
+    check decides whether an `@scope` root is owned; if it is not, each selector in its body
+    must pass on its own. An inner root under an unowned scope supplies proof for its body only
+    if it requires a class on its element or an ancestor: neither explicit `&` nor implicit
+    nesting can borrow proof from a style rule there. An owned scope bounds its nested scopes.
+    The check reads selectors without a CSS parser, so it is conservative: a selector it
+    cannot show is owned does not compile.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's
-   root.
+    root by naming that component's class. A limit does not supply proof of ownership.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
    item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
    and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file

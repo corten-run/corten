@@ -1155,6 +1155,27 @@ async function run(browser) {
     );
     await quoted.close();
   }
+
+  {
+    const scoped = await browser.newPage();
+    await scoped.goto(`${base}/smoke/scope`);
+    const probes = scoped.locator("[data-scope-probe]");
+    const names = await probes.evaluateAll((items) => items.map((p) => p.getAttribute("data-scope-probe")).join(","));
+    check("the nested scope fixture has both inside and outside controls", names === "inside,section,outside,other", names);
+    for (const [root, expected] of [
+      ["hoisted", "inside,section"],
+      ["subject", "inside,section"],
+      ["ancestor", "section"],
+      ["filtered", "inside,section"],
+    ]) {
+      const matched = await probes.evaluateAll(
+        (probes, root) => probes.filter((p) => getComputedStyle(p).getPropertyValue(`--smoke-${root}-scope`) === "yes").map((p) => p.getAttribute("data-scope-probe")).join(","),
+        root,
+      );
+      check(`the ${root} inner scope styles only its owned paragraphs`, matched === expected, matched);
+    }
+    await scoped.close();
+  }
   // A handler given a form's fields (`js::fill(f.weight, ..)`) gets their controls when it runs,
   // found by name in its own form: a select, an input, a textarea, a checkbox, a radio group's
   // inputs and a row's field (`parcels[1].weight`), which a component with no refs draws. A call

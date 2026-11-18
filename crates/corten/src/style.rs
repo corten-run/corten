@@ -30,14 +30,21 @@
 //!   [`ClassList`].
 //! - A class the file does not have is a compile error, and so is a class of the file written as
 //!   text (`class="list"`), which would not match the scoped rule.
-//! - Every rule must start inside the component: a selector names one of the file's classes.
-//!   `h2 { .. }` alone is a compile error; `.list h2 { .. }` is fine.
+//! - Every selector must match only elements the component owns: the element it styles, or one
+//!   that element is inside (by a descendant or child combinator), has one of the file's classes.
+//!   `h2 { .. }` alone is a compile error; `.list h2 { .. }` is fine, and so is `.list li + li`,
+//!   whose siblings share the list, but not `.list + main`, which is beside it. A class in
+//!   `:is()` or `:where()` counts only if every matchable selector in it does; classes inside other
+//!   functions, such as `:not()` or `:has()`, are prefixed but only filter. A nested selector is
+//!   checked where its `&` stands (`.list { :not(&) { .. } }` does not compile).
 //!   Element defaults, resets and fonts belong in the app's `static/style.css`.
 //! - An `@scope` rule's root and limit (CSS Cascade 6) are prefixed as any selector is:
-//!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When the root names one
-//!   of the file's classes, its rules match only inside the component, so they start anywhere
-//!   (`:scope`, `li`, `> li`); under any other root at the top of the file, such as
-//!   `@scope ([data-theme="dark"])`, each rule starts at one of the classes, as at the top.
+//!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When its root matches
+//!   only elements the component owns, its rules can start anywhere (`:scope`, `li`, `> li`);
+//!   under any other root, such as `@scope ([data-theme="dark"])` or, in a rule,
+//!   `@scope (& + main)`, the scope only filters, and its rules still need proof of ownership.
+//!   An inner root there supplies proof only with its own class anchor, not from `&` or implicit
+//!   nesting alone.
 //! - Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks
 //!   a class, so a variant without a rule does not compile.
 //! - A helper component shares another's stylesheet: `#[component(css = OfferList)]` in the same
@@ -270,6 +277,50 @@
 //! }
 //! ```
 //!
+//! A class under `:not()` does not make a rule local (`negated_list.css` has `:not(.list) p`;
+//! for a `p` in the list, write `.list p`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NegatedList() -> impl ClassList { List }
+//! ```
+//!
+//! Neither does an optional class (`optional_list.css` has `:is(.list, main) p`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn OptionalList() -> impl ClassList { List }
+//! ```
+//!
+//! Nor does a class that the matching element only has elsewhere
+//! (`related_list.css` has `main:has(.list) p`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn RelatedList() -> impl ClassList { List }
+//! ```
+//!
+//! Nor does a class on a sibling, which is beside the element, not around it
+//! (`sibling_list.css` has `.list + main`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn SiblingList() -> impl ClassList { List }
+//! ```
+//!
+//! A nested selector is checked where its `&` is, so `:not(&)` leaves the component
+//! (`negated_nest.css` has `.list { :not(&) { .. } }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NegatedNest() -> impl ClassList { List }
+//! ```
+//!
 //! An `@scope` rule's root and limit are prefixed as any selector is (`scoped_list.css` has
 //! `@scope (.list) to (.slot) { li { padding: 0; } }` and
 //! `@scope ([data-theme="dark"]) { .list { color: plum; } }`):
@@ -291,8 +342,8 @@
 //! assert_eq!(ScopedList {}.to_html(), r#"<ul class="scoped-list__list"><li class="scoped-list__slot"></li></ul>"#);
 //! ```
 //!
-//! but under a root that names none of the file's classes, at the top of the file, a rule that
-//! does not start at one of them would style elements the component does not render
+//! but under a root that can match elements outside the component, a rule that names none of
+//! the file's classes would style elements the component does not render
 //! (`leaky_scope.css` has `@scope (main) { li { .. } }`), so it does not compile:
 //!
 //! ```compile_fail
@@ -302,6 +353,130 @@
 //! fn LeakyScope() -> impl Render {
 //!     html! { <ul class={List}></ul> }
 //! }
+//! ```
+//!
+//! The same check applies to whether an `@scope` root is owned
+//! (`negated_scope.css` has `@scope (:not(.list)) { p { .. } }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NegatedScope() -> impl ClassList { List }
+//! ```
+//!
+//! A root nested in a rule is checked the same way, from the rule's elements
+//! (`sibling_scope.css` has `.list { @scope (& + main) { p { .. } } }`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn SiblingScope() -> impl ClassList { List }
+//! ```
+//!
+//! An unescaped `&` in an invalid arm can suppress implicit nesting but cannot supply an
+//! anchor. Here the browser can match an outside `main` or its paragraphs
+//! (`invalid_nest_ampersand.css` and `invalid_scope_ampersand.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn InvalidNestAmpersand() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn InvalidScopeAmpersand() -> impl ClassList { (List, Slot) }
+//! ```
+//!
+//! The compiler refuses malformed URL and string tokens before it drops any forgiving arm.
+//! The fixtures have an apostrophe in an unquoted URL, a raw form feed and a raw carriage
+//! return in a string, respectively:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn MalformedSelectorUrl() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn MalformedSelectorFf() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn MalformedSelectorCr() -> impl ClassList { List }
+//! ```
+//!
+//! A line break can end a hex escape without becoming a descendant combinator. In
+//! `escaped_sibling.css` a carriage return ends the escape in `.list:empty + p`, which
+//! would style a sibling outside the component:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn EscapedSibling() -> impl ClassList { List }
+//! ```
+//!
+//! A closer must match the innermost open selector block, even in a forgiving arm.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CrossedSelectorBlocks() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn CrossedSelectorAfterNot() -> impl ClassList { List }
+//! ```
+//!
+//! A nonbreaking space is part of a CSS name, not a combinator. Component class names
+//! cannot contain it or other non-ASCII characters.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn NonAsciiClass() -> impl ClassList { List }
+//! ```
+//!
+//! The scoper cannot keep or remove a comment directly between two parts of a selector
+//! safely. Write the intended selector without the comment, such as `.list.selected` for
+//! a compound selector, not `.list/**/.selected`.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn JoinedSelectorComment() -> impl ClassList { (List, Selected) }
+//! ```
+//!
+//! A custom property value with a `{ ... }` block at its outer level is refused rather
+//! than read as a nested rule. Put such a declaration in the app's `static/style.css`.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn BracedCustomProperty() -> impl ClassList { List }
+//! ```
+//!
+//! An inner scope under an unowned outer scope cannot take its proof from an intervening
+//! style rule. Browsers can resolve the inner root through the outer scope instead, whether
+//! the root uses an explicit `&` or implicit nesting.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn LeakyNestedScopeAmpersand() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn LeakyNestedScopeRelative() -> impl ClassList { List }
 //! ```
 //!
 //! Nor does an `@scope` with no root (`rootless_scope.css` has `@scope { li { .. } }`), which
