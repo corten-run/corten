@@ -5843,13 +5843,14 @@ rules something out.
     versioned module, fetched on the first patch that needs a close, or alongside the assets of
     a navigation whose layout or page parts might need one. After assets load, a `ReadAgain`
     does not draw if one of the ids it would redraw or replace now identifies a different node
-    than when it sent the read, even inside a surviving target wrapper. If the module fails
+    than when it sent the read, even inside a surviving target wrapper. An id the page did
+    not have when the read was sent can take the answer as usual. If the module fails
     to load, the runtime logs once and draws the answer without closing replacement targets
     first or forwarding their close. It does not retry the write.
-    On `210a3b111` against main `9de7529fc`, core grows from 43,846 to 46,560 bytes raw (+2,714),
-    15,612 to 16,619 gzip (+1,007), and 14,100 to 14,971 Brotli (+871). The optional module,
+    On `da81de3b3` against main `9de7529fc`, core grows from 43,846 to 46,575 bytes raw (+2,729),
+    15,612 to 16,613 gzip (+1,001), and 14,100 to 14,968 Brotli (+868). The optional module,
     absent on main, is 1,875 bytes raw, 960 gzip and 835 Brotli. With no dialogs, six alternating
-    Chromium batches of 1,500 layout draws after 300 warmups, excluding the network, did not
+    Chromium batches of 1,500 layout draws after 300 warmups on `210a3b111`, excluding the network, did not
     resolve a timing difference. Replacement medians were 449 to 441 microseconds per draw
     (ranges 327 to 514 and 318 to 543), and live-region morph medians were 545 to 612 (486 to
     643 and 566 to 636). Neither build requested the module.

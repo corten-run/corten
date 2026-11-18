@@ -1152,7 +1152,8 @@ a child before redrawing its parent is allowed and does not close the child. A h
 changes the tree during the native close phase stops the draw. Starting a new dialog session,
 including when focus moves to a replacement opener, stops the remaining draws without undoing
 the completed ones. A `ReadAgain` answer does not overwrite a target, or a descendant with an id,
-that was replaced while it was away. If the optional dialog module fails to load, the runtime
+that was replaced while it was away. It can still draw into an id introduced in the meantime.
+If the optional dialog module fails to load, the runtime
 logs once and draws the answer without handing off a close to a replacement. It does not retry
 a received write.
 
