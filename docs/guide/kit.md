@@ -123,8 +123,9 @@ line to add, at the kit's value; a copy the app edited to another value keeps it
 kit's `var()` line when merging and declaring the token at its own value instead. A color the
 kit's theme lacks comes with the kit's light and dark lines; one an app's own theme lacks, by
 name, to give as a reference to one of the app's colors so it follows its dark theme too.
-A theme keeps its own values when the kit later changes a default: no command reports it, and
-`CHANGELOG.md` names each such change.
+A theme keeps its own values when the kit later changes a default: no command reports it.
+Upcoming changes to defaults are in the [pending changelog entries](../../changelog.d/);
+published changes are in [CHANGELOG.md](../../CHANGELOG.md).
 
 A focused field's ring is a box shadow, which forced colors (Windows High Contrast) does not
 paint, so each text control and menu item also has a transparent outline that forced colors

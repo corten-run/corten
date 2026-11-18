@@ -90,7 +90,7 @@ test("runner rejects marketplace/matched/unsafe rounds before any Docker command
 });
 test("catalog CI covers exactly the registry's twenty page apps and both sources without nightly integration", () => {
   const workflow = readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8");
-  const names = /app: \[([^\]]+)\]/.exec(workflow)[1].split(",").map((s) => s.trim());
+  const names = JSON.parse(/PARITY_APPS: >-\s*(\[[^\]]+\])/.exec(workflow)[1].replace(/\s+/g, " "));
   assert.equal(names.length, 20);
   assert.deepEqual(names.sort(), Object.entries(allApps).filter(([, app]) => app.pages !== false).map(([name]) => name).sort());
   assert.match(workflow, /run\.mjs c1 --apps \$\{\{ matrix\.app \}\} --build --check-only/);

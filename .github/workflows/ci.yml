@@ -9,6 +9,14 @@ on:
   pull_request:
   workflow_call:
 
+# A newer run for a pull request cancels its older one, so superseded commits do not hold runners.
+# A rerun of an old commit is newer too and cancels the head's run; rerun the head's CI after it.
+# Pushes to main and the release's call each keep their own run. Do not give release.yml a
+# concurrency group this one could share.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 

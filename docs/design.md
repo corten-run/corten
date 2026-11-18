@@ -5781,6 +5781,39 @@ rules something out.
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
     above, at `65ac1dc47` against `38587c414`.
 
+62. <a id="choice-changelog-fragments"></a>**Unreleased changelog entries are per-change
+    Markdown bullets.** Pull requests add separate files rather than edit the same list. The
+    PR number and an entry suffix keep two pull requests for one issue from taking the same
+    path; before there is a PR number, a unique branch slug takes its place. Release preparation
+    collects the notes into the dated version section, with bullets starting with the Breaking
+    marker first and filename order within each group, and leaves the older changelog alone.
+    Fragments use prose with single-line inline HTTPS links so a link works before and after its
+    note moves, without rewriting it or depending on a reference definition.
+
+    [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) describes the published changelog,
+    not how to store fragments. Corten keeps its human-written, newest-first, dated versions
+    and an Unreleased section, which links to the pending notes. The new bullets are not
+    grouped into its recommended change categories: they are the same uncategorized list
+    Corten already uses, with upgrade notes brought to the front.
+    [Towncrier](https://towncrier.readthedocs.io/en/stable/tutorial.html#creating-news-fragments)
+    would bring a Python tool and put a category in each filename.
+    [Changesets](https://changesets.dev/guide/getting-started#what-is-a-changeset) would add npm
+    package and bump metadata to each note, duplicating the explicit Rust workspace version
+    bump in [release preparation](../RELEASING.md#prepare-the-candidate). Neither is a shared
+    fragment standard or needed to collect Markdown bullets with the Node tooling already here.
+
+    Stands on: platform (the two tools' input conventions and Keep a Changelog's published
+    guidance); reasoned (distinct paths avoid edits to the same Unreleased list, and one
+    workspace version is chosen for the whole release, not inferred from notes); value
+    (README Values 2 and 6: keep the published format familiar without adding a release dependency).
+
+    Revisit when: the workspace needs separate package bumps or categorized notes, or a
+    common Markdown fragment format can keep the existing release procedure without adding a
+    toolchain or duplicating version decisions.
+
+    Last checked: 2026-11-17, Towncrier 26.9.0, Changesets 3.0.3, Keep a Changelog 1.1.0,
+    and Corten's release procedure at `231225b9a`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
