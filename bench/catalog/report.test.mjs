@@ -55,7 +55,7 @@ test("historical catalog validation does not acquire group-only provenance or ag
 });
 // Summary-only synthetic fixtures, not raw evidence or native measurements.
 function timedResult(grouped, failed) {
-  const s = result(), group = groupDescriptor("catalog-page"), imageId = `sha256:${"b".repeat(64)}`;
+  const s = result(), group = groupDescriptor("catalog-page", { historical: true }), imageId = `sha256:${"b".repeat(64)}`;
   s.savedEvidence = { schema: "catalog-saved-evidence/v3", fixtureSha256: s.fixtureSha256 };
   s.attemptComplete = true; s.targetFailures = [];
   if (grouped) {
@@ -114,6 +114,7 @@ test("supported grouped v3 summaries preserve successful and failed dispositions
     assert.equal(report.timedCells.find((c) => c.app === "corten" && c.profile === "fixture-page" && c.phase === "sat64").outcomes.failed, failed ? 1 : 0);
     assert.equal(cli.status, failed ? 1 : 0); assert.equal(cli.stderr, "");
     assert.match(cli.stdout, failed ? /COMPLETE ATTEMPT: observed load\/request failure; not a baseline/ : /\*\*COMPLETE\*\*/);
+    assert.match(cli.stdout, /Historical contract: the current document header floor was not checked/);
   }
 });
 
