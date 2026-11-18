@@ -1,12 +1,12 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable changes to Corten. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- The grouped benchmark controller waits for SSH before sending tracked setup, and can
-  retire an unused allocation after an unacknowledged first SSH no-op without retrying it.
+Pending entries are in [changelog.d/](changelog.d/).
+
 - CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
   for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
