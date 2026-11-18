@@ -34,6 +34,8 @@ for (const mode of ["cancel", "deadline", "close", "exit"]) for (const failure o
   t.mock.method(childProcess, "spawn", () => child);
   let doneSetup;
   const setupDone = new Promise((resolve) => { doneSetup = resolve; });
+  const deadlines = mode === "deadline" ? { readyMs: 40, runMs: 10000, stopMs: 40, killMs: 40 } : undefined;
+  if (deadlines) t.mock.timers.enable({ apis: ["setTimeout"] });
   let returned = false;
   const running = supervise({ executable: "node", argv: ["synthetic-startup"], shell: false }, {
     cwd: tmpdir(), env: {}, signal: abort.signal, log() {},
@@ -48,14 +50,17 @@ for (const mode of ["cancel", "deadline", "close", "exit"]) for (const failure o
       } catch (error) { observer?.dispose(); throw error; }
       finally { setupFinished = true; doneSetup(); }
     },
-  }, mode === "deadline" ? { readyMs: 40, runMs: 10000, stopMs: 40, killMs: 40 } : undefined)
+  }, deadlines)
     .then((result) => { returned = true; return result; });
   try {
     await pause.entered;
     if (mode === "cancel") abort.abort();
     if (mode === "close") child.close(0);
     if (mode === "exit") { child.emit("exit", 0, null); child.stdout.end(); child.stderr.end(); }
-    if (mode === "deadline") {
+    if (deadlines) {
+      // Expire startup with open pending, regardless of how long it took to get here.
+      assert.equal(setupSignal.aborted, false);
+      t.mock.timers.tick(deadlines.readyMs);
       const result = await running;
       assert.equal(result.success, false); assert.equal(result.cancelled, true);
       assert.equal(setupFinished, false, "deadline cannot pretend the outstanding open completed");
@@ -72,6 +77,7 @@ for (const mode of ["cancel", "deadline", "close", "exit"]) for (const failure o
     assert.equal(result.success, false);
     if (mode === "cancel") assert.equal(result.cancelled, true);
     // A completed fs.open is followed by FIFO cleanup, not by attachment.
+    if (deadlines) t.mock.timers.reset();
     for (let i = 0; i < 100 && f.live.size; i++) await delay(1);
     assert.equal(f.live.size, 0); assert.equal(observer, undefined);
     assert.equal(starts, 0); assert.equal(intervals, 0); assert.equal(f.members.length, 0);
