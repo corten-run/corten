@@ -7095,7 +7095,8 @@ async function run(browser) {
     await ordered.goto(`${base}/smoke/closing`);
     const orderedText = await ordered.evaluate(async () => {
       const { patch } = await import("corten");
-      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="smoke-list"></div><div id="smoke-settings"></div>'));
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="smoke-list"></div><div id="smoke-settings"></div><div id="smoke-unrelated"></div>'));
+      await patch(__html('<div id="smoke-unrelated"><dialog open>Unrelated</dialog></div>'));
       await patch(__html('<template id="smoke-list" data-append><p id="smoke-row">First</p></template>' +
         '<p id="smoke-row">Second</p><div id="smoke-settings"><dialog></dialog>Settings</div>'));
       return ["smoke-row", "smoke-settings"].map((id) => document.getElementById(id)?.textContent);

@@ -1157,10 +1157,11 @@ function ownsPatch(content, ids) {
     if (target !== (ids.get(id) ?? null)) return false;
     if ((!insert || insert instanceof Element) && target) {
       for (const el of queryAll(target, "[id]")) if (ids.get(idOf(el)) !== el) return false;
-      // A descendant that vanished while this read was away must not be drawn back in either.
+      // A descendant the read would redraw can also have vanished or moved out of this root.
       if (insert) for (const el of queryAll(insert, "[id]")) {
         const id = idOf(el);
-        if (id && ids.has(id) && !document.getElementById(id)) return false;
+        const before = ids.get(id);
+        if (before && id && document.getElementById(id) !== before) return false;
       }
     }
   }
