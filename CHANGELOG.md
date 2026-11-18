@@ -1,18 +1,14 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable changes to Corten. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- **Breaking:** direct patch answers require `Some(action)` from `req.action()`, then
-  `action.patch(view)` or `action.patch_with_status(status, view)`. The unchecked
-  `Req::patch` and `Req::patch_with_status` methods are removed. `patch_or_with` passes
-  this builder to its part closure: `|action| async move { action.patch(view) }`. The builder
-  is `corten::Action`, not in the prelude, where a bare `Action` would clash with a post's
-  address (`route::Action`) under glob imports.
-  `patch_or`, `invalid` and `invalid_with` keep their APIs; the plain-request debug guard still
-  covers explicit mode overrides and raw marked responses.
+Pending entries are in [changelog.d/](changelog.d/).
+
+- CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
+  for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
@@ -86,6 +82,10 @@ Corten is pre-1.0, so any minor version may change the API.
   cloud inbox through timing replay; a version label alone is not an audit.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
+- Catalog Contract selects affected parity apps on pull requests and runs all parity and JSON
+  jobs for unrecognized app paths. Benchmark Evidence runs portable source-custody checks when
+  captured sources change and native kernel checks when their own inputs change. Both scope
+  against the full Git diff and cancel superseded pull request runs, not main runs.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
@@ -169,7 +169,6 @@ Corten is pre-1.0, so any minor version may change the API.
   pages whole; `scripts/dsd-probe.mjs` checks both again
   ([#1400 A slow part costs a second route, a stream handler that repeats the page's read and two waiting states, where one handler could answer the page and its part](https://github.com/corten-run/corten/issues/1400),
   [#1462 A patches route's handler whose part needs its own read cannot answer its page without building a patch it will not send: only patch_or turns a page into HtmlResult<Patches>, and it takes the patch already built](https://github.com/corten-run/corten/issues/1462)).
-
 - `serve_wrapped_with` carries a TLS handshake's value to each request as
   `ConnectionInfo<T>`, readable by handlers (including a documented API's, where it adds
   nothing to the document) and `Identify`. The existing serve paths carry no value;
@@ -205,7 +204,7 @@ Corten is pre-1.0, so any minor version may change the API.
   `<script>` or `<template>`; Chromium and WebKit let a leading `<title>`, `<base>`,
   `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the rest is read, so a table
   row, cell or other table part beside another element was dropped (or a `<table>` or `<form>`
-  after a row taken apart) with only a console error about the next element. `action.patch`,
+  after a row taken apart) with only a console error about the next element. `req.patch`,
   `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
   fragment panics, naming the element lost and the one that came first, so an app's own
   debug-build tests that draw such a patch now fail; a patch with a token the check does not read
