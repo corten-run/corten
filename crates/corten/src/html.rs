@@ -97,7 +97,7 @@ impl Tag<'_> {
         self.attrs.iter().find(|(attr, _)| attr.eq_ignore_ascii_case(name)).map(|(_, value)| *value)
     }
 
-    /// Whether the element has text other than whitespace, in it or in an element inside it.
+    /// Whether the element has text other than whitespace, skipping nested raw-text elements.
     #[cfg(debug_assertions)]
     pub(crate) fn has_text(&self, html: &str) -> bool {
         let mut at = self.end;
@@ -119,8 +119,16 @@ impl Tag<'_> {
                 b'!' | b'?' => at = declaration_end(html, lt),
                 _ => {
                     let (name, end, self_closing) = read_tag(html, lt + 1, |_, _| {});
-                    depth += usize::from(!self_closing && name.eq_ignore_ascii_case(&self.name));
                     at = (end + 1).min(html.len());
+                    if let Some(&raw) = RAW_TEXT.iter().find(|raw| name.eq_ignore_ascii_case(raw)) {
+                        let close = if raw == "script" { script_end(html, at) } else { raw_text_end(html, at, raw) };
+                        if close == html.len() {
+                            return false;
+                        }
+                        at = end_tag(html, close).1;
+                    } else {
+                        depth += usize::from(!self_closing && name.eq_ignore_ascii_case(&self.name));
+                    }
                 }
             }
         }

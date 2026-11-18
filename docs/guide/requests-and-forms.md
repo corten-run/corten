@@ -802,10 +802,11 @@ from data writes `{..e.control(name).hint()}` with no branch; a corten-ui widget
 that draws such a hint and no element `id` (a radio group without an id). A `<` that starts no
 tag counts as text in a hint placed with `raw(..)`; comments and tag attributes do not. The hint
 check reads text after a comment, including the short forms `<!-->` and `<!--->` or a comment
-ending in `--!>`. A patch that redraws the hint alone, its control staying on the page, is not
-checked. A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)` does not
-compile, nor does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes what
-`e.aria(..)` does.
+ending in `--!>`. It also reads text after a nested `<textarea>`, `<title>`, `<style>` or
+`<script>`, even if that element contains `<!--` as text. A patch that redraws the hint alone,
+its control staying on the page, is not checked. A tag that writes `id`, `name` or the ARIA
+attributes beside `e.control(..)` does not compile, nor does one that spreads `e.aria(..)` beside
+it, since `e.control(..)` writes what `e.aria(..)` does.
 `e.control` is for a field's one control: radios or checkboxes that share
 a field each need an id of their own, so each takes `name={f.size}`. Each checkbox also takes
 `{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the

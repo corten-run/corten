@@ -2751,6 +2751,30 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
+    fn a_hint_can_follow_comment_like_text_in_a_textarea() {
+        let hints = ["qty-hint".to_string()];
+        let html = "<input id=qty><div id=qty-hint><textarea><!--not a comment</textarea>Visible hint</div>";
+        assert_eq!(unnamed_hint(html, &hints, true), Some("qty-hint"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_can_follow_comment_like_text_in_title_and_raw_text() {
+        let hints = ["qty-hint".to_string()];
+        let found = [
+            ("title", r#"<!--</titlex a="</TITLE/>"#),
+            ("style", r#"<!--</stylex a="</STYLE note='x><i>'>"#),
+            ("script", "<!--<script></script></div></script>"),
+        ]
+        .map(|(tag, content)| {
+            let html = format!("<input id=qty><div id=qty-hint><{tag}>{content}Visible hint</div>");
+            (tag, unnamed_hint(&html, &hints, true))
+        });
+        assert_eq!(found, [("title", Some("qty-hint")), ("style", Some("qty-hint")), ("script", Some("qty-hint"))]);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
     fn a_hint_s_text_excludes_comments_and_tag_attributes() {
         let hints = ["qty-hint".to_string()];
         let html = r#"<input id="qty"><p id="qty-hint"><!-- >not text --><em title="x>y"></em></P a="x>">outside"#;
