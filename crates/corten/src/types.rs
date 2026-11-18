@@ -320,6 +320,13 @@ fn lexically_normal(path: &Path) -> PathBuf {
                 out.pop();
             }
             Component::ParentDir if out.has_root() => {}
+            // Appended as text: `PathBuf::push` would read an interior `D:foo` as a new drive
+            // on Windows, where TypeScript reads it as one more directory name.
+            Component::Normal(name) if out.file_name().is_some() || out.ends_with("..") => {
+                let text = out.as_mut_os_string();
+                text.push(std::path::MAIN_SEPARATOR_STR);
+                text.push(name);
+            }
             other => out.push(other),
         }
     }
@@ -591,6 +598,8 @@ mod tests {
         assert_eq!(lexically_normal(Path::new("/a/./b/../c")), Path::new("/a/c"));
         assert_eq!(lexically_normal(Path::new("/../a")), Path::new("/a"));
         assert_eq!(lexically_normal(Path::new("../a/../../b")), Path::new("../../b"));
+        #[cfg(windows)]
+        assert_eq!(lexically_normal(Path::new(r"C:\src\D:foo\..\types\app")), Path::new(r"C:\src\types\app"));
         #[cfg(unix)]
         {
             let dir = crate::tests::Scratch::new("types-symlink");
