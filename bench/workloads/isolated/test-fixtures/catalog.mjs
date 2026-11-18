@@ -1,11 +1,13 @@
 // Synthetic validator fixture only. Never imported by the worker.
 import { aggregate, phases } from "../../../catalog/contract.mjs";
 import { records } from "../../../catalog/fixtures.mjs";
+import { syntheticDocumentHeaders } from "../../../catalog/workers-fixture.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } from "../../../catalog/group.mjs";
 import { digest } from "../evidence.mjs";
 
 export function catalogResult(binding) {
   const options = structuredClone(binding.execution.effectiveOptions), group = groupDescriptor("catalog-page");
+  const catalog = records();
   const imageId = `sha256:${"b".repeat(64)}`;
   const phase = { requests: 6000, rps: 100, p50: 1, p95: 2, p99: 3, failed: 0, dropped: 0,
     perCpuSecond: 110, cpuUsec: 55000000, cpuAvgPct: 99, memMaxMiB: 8, upstream: { cpuAvgPct: 50, highCpu: false } };
@@ -14,10 +16,11 @@ export function catalogResult(binding) {
     upstream: { readsPerRequest: 1, uncachedPage: true, uncachedJson: true, jsonReserialized: true, errors: true } };
   const s = { schema: groupResultSchema, group, options, workload: "catalog-v1", round: binding.request.round, commit: binding.request.commit,
     dirty: false, commitAfter: binding.request.commit, dirtyAfter: false, complete: true, checksPassed: true, failures: [], cleanupFailures: [],
-    startedAt: "2026-11-07T16:00:00Z", finishedAt: "2026-11-07T22:00:00Z", fixtureSha256: digest(`${JSON.stringify(records())}\n`),
+    startedAt: "2026-11-07T16:00:00Z", finishedAt: "2026-11-07T22:00:00Z", fixtureSha256: digest(`${JSON.stringify(catalog)}\n`),
     measurement: { encoding: "identity", fixedRate: options.rate, cpus: structuredClone(binding.resources.expectedCpus) },
     apps: Object.fromEntries(group.apps.map((app) => [app, { imageId, checks: Object.fromEntries(group.sources.map((source) =>
-      [source, { ...structuredClone(check), qualification: qualificationIdentity(group, app, source, imageId) }])), runs: {} }])) };
+      [source, { ...structuredClone(check), documentHeaders: syntheticDocumentHeaders(catalog, source),
+        qualification: qualificationIdentity(group, app, source, imageId) }])), runs: {} }])) };
   for (const { app, pass, ...profile } of timingPlan(options, group.sources, group.targets)) {
     const key = `${profile.source}-${profile.target}`;
     (s.apps[app].runs[key] ??= []).push({ pass, evidence: { app, ...profile, imageId }, complete: true,
