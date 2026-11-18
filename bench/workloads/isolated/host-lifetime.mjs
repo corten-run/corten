@@ -249,7 +249,10 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     if (!startupSignals.some((value) => value.aborted) && !writer?.state().pendingOwnership) rmdirSync(join(root, path));
     throw error;
   }
-  const executables = new Map(); pending = browser ? participantExecutables() : null;
+  const executables = new Map();
+  // Catalog build commands introduce large CLI/plugin executables during live
+  // sampling. Pin them now and seal their bytes after the final sample.
+  pending = browser || binding.request.group === "catalog-page" ? participantExecutables() : null;
   let samples = 0, observerError = null, attached = false, faultNotified = false;
   const observerFailures = { count: 0, first: null, last: null };
   let sampleOperation, lastSampleAt = null;
