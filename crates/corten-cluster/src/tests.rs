@@ -490,13 +490,22 @@ const LOW_PAYLOAD: usize = 4096;
 /// Relay one connection to the real broker, substituting a stale-low initial INFO.
 async fn payload_proxy(listener: TcpListener, upstream: async_nats::ServerAddr, max_payload: usize) {
     let (mut client, _) = listener.accept().await.unwrap();
+    let mut server = advertise_payload(&mut client, &upstream, max_payload).await;
+    tokio::io::copy_bidirectional(&mut client, &mut server).await.unwrap();
+}
+
+async fn advertise_payload(
+    client: &mut TcpStream,
+    upstream: &async_nats::ServerAddr,
+    max_payload: usize,
+) -> BufReader<TcpStream> {
     let mut server = BufReader::new(TcpStream::connect((upstream.host(), upstream.port())).await.unwrap());
     let mut info = String::new();
     server.read_line(&mut info).await.unwrap();
     let mut advertised: serde_json::Value = serde_json::from_str(info.strip_prefix("INFO ").unwrap()).unwrap();
     advertised["max_payload"] = max_payload.into();
     client.write_all(format!("INFO {advertised}\r\n").as_bytes()).await.unwrap();
-    tokio::io::copy_bidirectional(&mut client, &mut server).await.unwrap();
+    server
 }
 
 // Single-threaded so the relay task runs with the test's tracing subscriber.
@@ -813,8 +822,10 @@ async fn an_unacknowledged_marker_does_not_block_other_retirements() {
         let item = Item { id: "x".repeat(LOW_PAYLOAD), n: 1 };
         write.commit(&[Change::Upsert { id: &item.id, value: &item }]).await.unwrap();
     }
+    set(&pool, "delayed", 2, None).await;
     set(&pool, "small", 1, None).await;
-    let rows = wait_pending(&pool, 3).await;
+    set(&pool, "small", 2, None).await;
+    let rows = wait_pending(&pool, 5).await;
     let delayed = &rows[0];
 
     let observer = async_nats::connect(&nats).await.unwrap();
@@ -849,8 +860,9 @@ async fn an_unacknowledged_marker_does_not_block_other_retirements() {
 
     let mut messages = stream_messages(&delayed_stream).await;
     expect_reload(&mut messages, &delayed_subject, delayed).await;
-    let pending = wait_pending(&pool, 1).await;
-    assert_eq!(pending[0].id, delayed.id);
+    let pending = wait_pending(&pool, 2).await;
+    assert_eq!((pending[0].id, pending[1].id), (delayed.id, rows[2].id));
+    assert_eq!(delayed_stream.info().await.unwrap().state.messages, 1, "the delayed feed's successor was not sent");
     let warning = "WARN corten::feed message=reload marker publish failed; outbox row remains pending";
     let fields = format!("id={} feed=\"delayed\" error=deadline has elapsed", delayed.id);
     assert!(logs.0.lock().unwrap().iter().any(|line| line.starts_with(warning) && line.contains(&fields)));
@@ -861,7 +873,8 @@ async fn an_unacknowledged_marker_does_not_block_other_retirements() {
     wait_pending(&pool, 0).await;
     let retired: Vec<i64> = sqlx::query_scalar("SELECT id FROM retirements ORDER BY id").fetch_all(&pool).await.unwrap();
     assert_eq!(retired, rows.iter().map(|row| row.id).collect::<Vec<_>>());
-    assert_eq!(delayed_stream.info().await.unwrap().state.messages, 1);
+    expect_patch(&mut messages, &delayed_subject, 2, 2).await;
+    assert_eq!(delayed_stream.info().await.unwrap().state.messages, 2);
 
     relay.abort();
     assert!(relay.await.unwrap_err().is_cancelled());
@@ -1000,6 +1013,148 @@ async fn the_relay_retries_an_acknowledgement_error_that_is_not_a_size_refusal()
     js.delete_stream(&stream_name).await.unwrap();
     let admin = PgPool::connect(&db).await.unwrap();
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_broker_disconnect_does_not_reorder_a_feed() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("interrupted_");
+    let pool = schema_pool(&db, &schema).await;
+    migrate(&pool).await.unwrap();
+    test_items(&pool).await;
+    new_feed(&pool, "feed").await;
+    new_feed(&pool, "other").await;
+    let options = Arc::new(Options { stream: schema.to_uppercase(), subject_prefix: schema.clone(), ..Options::default() });
+    let observer = async_nats::connect(&nats).await.unwrap();
+    let js = jetstream::new(observer.clone());
+    let hub = hub::Hub::new(pool.clone(), Items, options.clone());
+    hub::start(hub.clone(), js.clone()).await.unwrap();
+    let follower = hub.feed("feed").await.unwrap().unwrap();
+    assert_eq!(follower.seq(), 0);
+
+    // The real broker refuses the second patch on the original connection. Make it large
+    // enough that async-nats cannot write the whole batch to that connection before it closes.
+    let advertised = 16 * 1024 * 1024;
+    let oversized = 8 * 1024 * 1024;
+    assert!(observer.max_payload() < oversized);
+    set(&pool, "feed", 1, None).await;
+    set(&pool, "other", 1, None).await;
+    set(&pool, "feed", 2, None).await;
+    sqlx::query("UPDATE corten_outbox SET body = body || repeat(' ', $1) WHERE feed = 'feed' AND seq = 2")
+        .bind(oversized as i32)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for seq in 3..=255 {
+        set(&pool, "feed", seq, None).await;
+    }
+    let rows = wait_pending(&pool, 256).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let upstream: async_nats::ServerAddr = nats.parse().unwrap();
+    let proxy = tokio::spawn(async move {
+        let (mut client, _) = listener.accept().await.unwrap();
+        let mut server = advertise_payload(&mut client, &upstream, advertised).await;
+        let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+        drop(client);
+        let (mut client, _) = listener.accept().await.unwrap();
+        let mut server = TcpStream::connect((upstream.host(), upstream.port())).await.unwrap();
+        let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+    });
+    let publisher = async_nats::ConnectOptions::new().ignore_discovered_servers().connect(addr).await.unwrap();
+    assert_eq!(publisher.max_payload(), advertised);
+    let relay = tokio::spawn(relay::run(pool.clone(), jetstream::new(publisher.clone()), options.clone(), Arc::default()));
+    eventually("the relay connection to be replaced", || publisher.statistics().connects.load(Ordering::Relaxed) == 2).await;
+    assert_eq!(publisher.max_payload(), observer.max_payload());
+    publisher.flush().await.unwrap();
+    let pending = store::pending(&pool, 257).await.unwrap();
+    let ids = |rows: &[store::Pending]| rows.iter().map(|r| r.id).collect::<Vec<_>>();
+    assert_eq!(ids(&pending), ids(&rows), "an interrupted batch stays pending for retry");
+    let mut stream = js.get_stream(&options.stream).await.unwrap();
+    let prefix = stream.get_raw_message(1).await.unwrap();
+    let feed_subject = relay::subject(&options, "feed");
+    let other_subject = relay::subject(&options, "other");
+    assert_eq!(prefix.subject.as_str(), feed_subject);
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&prefix.payload).unwrap()["seq"], 1);
+
+    // The retry deduplicates the prefix and publishes a marker in place of the oversized row.
+    wait_pending(&pool, 0).await;
+    assert_eq!(stream.info().await.unwrap().state.messages, 256, "no extra messages within the dedup window");
+    let mut messages = stream_messages(&stream).await;
+    let mut next = 1;
+    let mut other = 0;
+    for _ in 0..256 {
+        let msg = tokio::time::timeout(Duration::from_secs(10), messages.next()).await.unwrap().unwrap().unwrap();
+        if msg.subject.as_str() == other_subject {
+            other += 1;
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"], 1);
+            continue;
+        }
+        assert_eq!(msg.subject.as_str(), feed_subject);
+        if next == 2 {
+            assert!(msg.payload.is_empty(), "a later patch overtook the missing patch's reload marker");
+            assert_eq!(msg.headers.as_ref().unwrap().get(RELOAD_HEADER).unwrap().as_str(), "2");
+        } else {
+            assert_eq!(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"], next);
+        }
+        next += 1;
+    }
+    assert_eq!((next, other), (256, 1));
+    eventually("the loaded follower to catch up", || follower.seq() == 255).await;
+    assert_eq!(follower.read(|rows| rows["a"].n), 255);
+
+    relay.abort();
+    assert!(relay.await.unwrap_err().is_cancelled());
+    proxy.abort();
+    delete_test_stream_and_schema(&db, &js, &options.stream, &schema).await;
+}
+
+/// Healthy relay throughput, with startup but not setup timed. Alternate release binaries on
+/// the same Postgres and NATS, ignoring the first sample per binary. Each sample starts with a
+/// fresh schema and stream. Run alone: `cargo test --release -p corten-cluster -- --ignored
+/// --nocapture relay_throughput`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn relay_throughput() {
+    const ROWS: i64 = 16_384;
+    let (db, nats) = urls().expect("set the cluster integration URLs");
+    let js = jetstream::new(async_nats::connect(nats).await.unwrap());
+    for feeds in [256_i64, 16, 1] {
+        let schema = key("throughput_");
+        let pool = schema_pool(&db, &schema).await;
+        migrate(&pool).await.unwrap();
+        sqlx::query("INSERT INTO corten_outbox (feed, generation, seq, body)
+                     SELECT 'f' || (g % $1), 'test', (g / $1) + 1, json_build_object('seq', (g / $1) + 1, 'changes', '[]'::json)::text
+                     FROM generate_series(0, $2::bigint - 1) g ORDER BY g")
+            .bind(feeds)
+            .bind(ROWS)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let options = Arc::new(Options { stream: schema.to_uppercase(), subject_prefix: schema.clone(), ..Options::default() });
+        let mut stream = js
+            .create_stream(jetstream::stream::Config {
+                name: options.stream.clone(),
+                subjects: vec![format!("{schema}.>")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let started = Instant::now();
+        let relay = tokio::spawn(relay::run(pool.clone(), js.clone(), options.clone(), Arc::default()));
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while !store::pending(&pool, 1).await.unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        println!("{feeds} feeds: {:.0} rows/s", ROWS as f64 / started.elapsed().as_secs_f64());
+        assert_eq!(stream.info().await.unwrap().state.messages, ROWS as u64);
+        relay.abort();
+        assert!(relay.await.unwrap_err().is_cancelled());
+        delete_test_stream_and_schema(&db, &js, &options.stream, &schema).await;
+    }
 }
 
 /// One write's latency until a follower has it (begin, statements, commit, relay, JetStream,

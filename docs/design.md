@@ -5998,13 +5998,14 @@ rules something out.
     An old follower drops a same-generation marker as invalid JSON and can stay stale until
     a gap or other reload. Other generations still use the existing generation mismatch path.
 
-    The relay sends markers after the batch's patch attempts, so a later patch may already
-    have revealed the gap. It marks acknowledged rows done in one batch, even when another
-    row's marker cannot be sent or acknowledged. Marker sends and acknowledgements share a
-    deadline of half the lease from its last renewal, leaving time to retire acknowledged rows.
-    The failed row stays pending and takes one slot on a retry; a full batch with nothing to
-    retire can stall the queue. The broker and stream limits must fit the longest key plus up
-    to 135 bytes of marker headers. Within
+    The relay waits for each feed's preceding patch or reload marker to be acknowledged before
+    sending its next one. Distinct feed subjects still publish concurrently, with one pending
+    scan and one retirement for up to 256 rows. Marker sends and acknowledgements use a deadline
+    of half the lease from the renewal in effect when the relay starts the marker, leaving time
+    to retire acknowledged rows. A failed marker leaves its row and any later rows of that feed
+    pending while other feeds in the batch can advance. A full batch with nothing to retire can
+    stall the queue, including unrelated rows beyond the scan. The broker and stream limits must
+    fit the longest key plus up to 135 bytes of marker headers. Within
     JetStream's configured deduplication window, the shared ID deduplicates retries of either
     the original patch or its marker. A duplicate acknowledgement retires the row but does
     not identify which representation was first accepted; outside the window both can be
@@ -6013,12 +6014,9 @@ rules something out.
 
     Postgres commits each feed's sequence under that feed's row lock, and followers detect
     gaps by that sequence, not across feeds by outbox ID. A broker's connection-wide
-    `Maximum Payload Violation` and disconnect identify no publish; the relay handles
-    that as an ordinary unacknowledged failure. Because the batch is sent before it is
-    acknowledged, a later same-feed patch can reach JetStream on the new connection
-    before the failed patch
-    ([#1633 A relay batch interrupted by a broker disconnect can store a feed's later patches before the one that failed](https://github.com/corten-run/corten/issues/1633)).
-    The relay never forces a client reconnect.
+    `Maximum Payload Violation` and disconnect identify no publish; the relay retries an
+    unacknowledged batch. The failed row's successors are not in the client's queue and
+    cannot overtake it on the replacement connection. The relay never forces a reconnect.
 
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
@@ -6030,7 +6028,13 @@ rules something out.
     can make selecting work for unrelated feeds slow. A separate queue would not put a
     patch back in its original stream position. Refreshing a shared client to confirm its
     cached limit disrupts followers and other publishers, and a fresh connection's limit
-    would still not be an acknowledgement.
+    would still not be an acknowledgement. JetStream's `Nats-Expected-Last-Subject-Sequence`
+    compares the most recent stored message on a subject by its stream-wide sequence, not by
+    Corten's feed sequence or message ID. Unrelated publishes can advance the stream, so the
+    relay still needs the preceding patch's or marker's actual broker sequence before it can
+    guard the next one. It would have to track that sequence per subject and recover it after
+    failover or retention. The subject check can also reject a retry before message-ID
+    deduplication sees it. `Nats-Expected-Last-Msg-Id` checks the entire stream, not one feed.
 
     Stands on: platform (the [NATS subject rules](https://docs.nats.io/nats-concepts/subjects)
     exclude whitespace and reserve wildcards for subscriptions, the
@@ -6039,8 +6043,11 @@ rules something out.
     uses a configured window, and [Postgres B-tree entries](https://www.postgresql.org/docs/16/btree-intro.html)
     fit only about a third of a page;
     [JetStream's size check](https://github.com/nats-io/nats-server/blob/v2.15.2/server/stream.go#L6663-L6674)
-    returns `10054` on that publish; the
-    [NATS broker](https://github.com/nats-io/nats-server/blob/v2.15.2/server/client.go#L2617-L2621)
+    returns `10054` on that publish; its
+    [subject expectation check](https://github.com/nats-io/nats-server/blob/v2.15.2/server/stream.go#L6774-L6797)
+    uses the stored stream sequence and precedes
+    [message-ID deduplication](https://github.com/nats-io/nats-server/blob/v2.15.2/server/stream.go#L7020-L7044);
+    the [NATS broker](https://github.com/nats-io/nats-server/blob/v2.15.2/server/client.go#L2617-L2621)
     sends a connection error without a subject or reply ID, and
     [async-nats 0.52](https://docs.rs/crate/async-nats/0.52.0/source/src/connector.rs)
     caches the limit from its handshake and its
@@ -6055,7 +6062,8 @@ rules something out.
     control line or documented grammar changes, clients can identify an individual broker
     refusal or reliably refresh the cached limit without reconnecting, JetStream provides a
     standard invalidation signal, supported limits cannot carry the marker, or deployments need every
-    delta delivered, immediate recovery on old followers, or ordering across a mid-batch disconnect.
+    delta delivered or immediate recovery on old followers, or JetStream can guard a subject by
+    a publisher-supplied predecessor ID without first waiting for the predecessor's stream sequence.
 
     Last checked: 2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
     NATS 2.15.2 with async-nats 0.52.0: both refusals publish markers while retaining the
@@ -6064,7 +6072,9 @@ rules something out.
     not stop unrelated rows crossing a batch boundary. With one marker acknowledgement
     withheld, the acknowledged rows retire first. A retry retires the remaining row once
     acknowledgements resume. The longest marker overhead measured 135 bytes. Retries
-    deduplicate in both orders without reconnecting;
+    deduplicate in both orders without reconnecting. A real broker disconnect after the first
+    patch and before the second preserves feed order on retry, including the reload marker,
+    without duplicate stored messages. The loaded follower reaches the committed state;
     2026-11-17 at `056964945`, subject rules and control-line configuration.
 
 64. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends

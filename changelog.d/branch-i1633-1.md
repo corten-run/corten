@@ -1,0 +1,1 @@
+- The cluster relay keeps patches and reload markers in order when the broker disconnects mid-batch. It waits for each feed's previous acknowledgement while still publishing independent feeds concurrently.

@@ -1,5 +1,6 @@
-//! Outbox relay: sends committed patches to JetStream in order within each feed, but a broker
-//! disconnect mid-batch can let queued publishes overtake a failed one. Every instance runs a
+//! Outbox relay: sends committed patches to JetStream in order within each feed. A feed's
+//! next row cannot be sent before the preceding patch or reload marker is acknowledged.
+//! Independent feeds can publish concurrently. Every instance runs a
 //! candidate; the one holding the lease (store::lease) publishes. Delivered patches are marked done
 //! after JetStream acknowledges them. A relay that dies or loses its lease in between leaves them to
 //! the next one, which republishes them. JetStream drops copies by message ID within its
@@ -7,10 +8,11 @@
 //!
 //! Rows with invalid feed keys are logged and marked done without publishing. On a per-publish
 //! size refusal the relay publishes a reload marker and waits for its acknowledgement before
-//! marking the row done. If the marker fails, the row stays pending without holding up the
-//! other acknowledged rows. Patch bodies stay in Postgres until ordinary pruning.
+//! marking the row done. If the marker fails, that feed waits for retry without holding up
+//! the other acknowledged rows. Patch bodies stay in Postgres until ordinary pruning.
 
 use std::{
+    collections::{HashMap, VecDeque},
     future::{poll_fn, Future},
     pin::pin,
     sync::{
@@ -25,14 +27,16 @@ use async_nats::{
     jetstream::{
         self,
         context::{PublishAckFuture, PublishError, PublishErrorKind},
+        publish::PublishAck,
     },
     HeaderMap,
 };
+use futures_util::{stream::FuturesUnordered, StreamExt};
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
 use crate::{store, valid_key, Error, Options, RELOAD_HEADER};
 
-/// Outbox rows published per round trip.
+/// Outbox rows read and retired together.
 const BATCH: i64 = 256;
 
 pub(crate) fn subject(options: &Options, feed: &str) -> String {
@@ -113,7 +117,6 @@ async fn publish(pool: &PgPool, js: &jetstream::Context, options: &Options, held
     }
 }
 
-/// Publishes pending rows oldest first, pipelining up to `BATCH` acknowledgements.
 async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: &mut Held) -> Result<(), Error> {
     loop {
         if held.renewed.elapsed() >= options.lease / 4 {
@@ -123,40 +126,139 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
         if rows.is_empty() {
             return Ok(());
         }
-        held.check()?;
-        let mut acks = Vec::with_capacity(rows.len());
-        let mut sent = Vec::with_capacity(rows.len());
-        let mut refused = Vec::new();
-        for row in &rows {
-            if !valid_key(&row.feed) {
-                refused.push((row, Refusal::InvalidKey));
-                continue;
-            }
-            match send(js, options, row, false).await {
-                Ok(ack) => acks.push((row, ack)),
-                Err(error) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
-                    refused.push((row, Refusal::Cached(error)));
-                }
-                Err(error) => return Err(error.into()),
-            }
-        }
-        for (row, ack) in acks {
-            match ack.await {
-                Ok(_) => sent.push(row.id),
-                Err(error) if stream_size_refusal(&error) => refused.push((row, Refusal::Stream)),
-                Err(error) => return Err(error.into()),
-            }
-        }
-        if refused.is_empty() {
-            store::mark_published(pool, &sent).await?;
-        } else {
-            finish_refusals(pool, js, options, held, &mut sent, refused).await?;
-        }
-        if (rows.len() as i64) < BATCH || sent.is_empty() {
+        let retired = publish_batch(pool, js, options, held, &rows).await?;
+        if (rows.len() as i64) < BATCH || !retired {
             // A full batch with nothing retired would only select the same rows again.
             return Ok(());
         }
     }
+}
+
+/// Send the first row for each subject, then advance each subject as its acks arrive.
+async fn publish_batch(
+    pool: &PgPool,
+    js: &jetstream::Context,
+    options: &Options,
+    held: &mut Held,
+    rows: &[store::Pending],
+) -> Result<bool, Error> {
+    held.check()?;
+    let mut next = vec![None; rows.len()];
+    let mut ready = VecDeque::new();
+    let mut sent = Vec::with_capacity(rows.len());
+    let mut completed = Vec::new();
+    {
+        let mut tails = HashMap::new();
+        for (i, row) in rows.iter().enumerate() {
+            if !valid_key(&row.feed) {
+                sent.push(row.id);
+                completed.push((row, Refusal::InvalidKey, false));
+            } else if let Some(previous) = tails.insert(row.feed.as_str(), i) {
+                next[previous] = Some(i);
+            } else {
+                ready.push_back((i, None));
+            }
+        }
+    }
+    let mut acks = FuturesUnordered::new();
+    let mut stream_failed_markers = Vec::new();
+    loop {
+        while let Some((i, refusal)) = ready.pop_front() {
+            held.check()?;
+            if held.renewed.elapsed() >= options.lease / 4 {
+                held.renew(options).await?;
+            }
+            let row = &rows[i];
+            let marker = refusal.is_some();
+            // Leave time to retire acknowledged rows if a marker gets no reply. Never start
+            // or resume a send after its deadline, even if the client has room to queue it.
+            let budget = if marker { options.lease / 2 } else { held.stale };
+            let deadline = (held.renewed + budget).into();
+            match poll_send_before(deadline, send(js, options, row, marker)).await {
+                Some(Ok(ack)) => acks.push(await_ack(i, refusal, ack, marker.then_some(deadline))),
+                Some(Err(error)) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
+                    if marker {
+                        marker_size_refused(options, row, None, &error);
+                    } else {
+                        ready.push_back((i, Some(Refusal::Cached(error))));
+                    }
+                }
+                Some(Err(error)) if marker => marker_publish_failed(options, row, error),
+                Some(Err(error)) => return Err(error.into()),
+                None if marker => marker_publish_failed(options, row, "deadline has elapsed"),
+                None => return Err("relay lease expired before publish".into()),
+            }
+        }
+
+        let renew_at = (held.renewed + options.lease / 4).into();
+        let (i, refusal, result) = match tokio::time::timeout_at(renew_at, acks.next()).await {
+            Ok(Some(ack)) => ack,
+            Ok(None) => break,
+            Err(_) => {
+                held.check()?;
+                held.renew(options).await?;
+                continue;
+            }
+        };
+        let row = &rows[i];
+        match result {
+            Some(Ok(ack)) => {
+                sent.push(row.id);
+                if let Some(refusal) = refusal {
+                    completed.push((row, refusal, ack.duplicate));
+                }
+                if let Some(next) = next[i] {
+                    ready.push_back((next, None));
+                }
+            }
+            Some(Err(error)) if stream_size_refusal(&error) => {
+                if refusal.is_some() {
+                    stream_failed_markers.push((row, error));
+                } else {
+                    ready.push_back((i, Some(Refusal::Stream)));
+                }
+            }
+            Some(Err(error)) if refusal.is_some() => marker_publish_failed(options, row, error),
+            Some(Err(error)) => return Err(error.into()),
+            None => marker_publish_failed(options, row, "deadline has elapsed"),
+        }
+    }
+
+    // 10054 does not carry the limit. Look it up once for diagnostics only.
+    let stream_limit =
+        if !stream_failed_markers.is_empty() || completed.iter().any(|(_, refusal, _)| matches!(refusal, Refusal::Stream)) {
+            let budget = (options.lease / 8).min(held.stale.saturating_sub(held.renewed.elapsed()));
+            tokio::time::timeout(budget, js.get_stream(&options.stream))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .map(|stream| stream.cached_info().config.max_message_size)
+        } else {
+            None
+        };
+    for (row, error) in stream_failed_markers {
+        marker_size_refused(options, row, stream_limit, &error);
+    }
+    if sent.is_empty() {
+        return Ok(false);
+    }
+    held.check()?;
+    if completed.is_empty() {
+        store::mark_published(pool, &sent).await
+    } else {
+        retire_refusals(pool, options, &sent, completed, stream_limit).await
+    }
+}
+
+async fn await_ack(
+    i: usize,
+    refusal: Option<Refusal>,
+    ack: PublishAckFuture,
+    deadline: Option<tokio::time::Instant>,
+) -> (usize, Option<Refusal>, Option<Result<PublishAck, PublishError>>) {
+    // Unlike sends, an already-ready acknowledgement is useful even at the deadline.
+    let result = if let Some(deadline) = deadline { tokio::time::timeout_at(deadline, ack).await.ok() } else { Some(ack.await) };
+    (i, refusal, result)
 }
 
 async fn send(
@@ -220,71 +322,13 @@ async fn poll_send_before<T>(deadline: tokio::time::Instant, send: impl Future<O
     .flatten()
 }
 
-async fn finish_refusals(
+async fn retire_refusals(
     pool: &PgPool,
-    js: &jetstream::Context,
     options: &Options,
-    held: &mut Held,
-    sent: &mut Vec<i64>,
-    refused: Vec<(&store::Pending, Refusal)>,
-) -> Result<(), Error> {
-    held.check()?;
-    if held.renewed.elapsed() >= options.lease / 4 {
-        held.renew(options).await?;
-    }
-    // Pipeline the markers too, but bound the whole attempt to leave time to retire
-    // acknowledgements before the lease gets stale, even if a marker gets no reply.
-    let deadline = (held.renewed + options.lease / 2).into();
-    let mut markers = Vec::new();
-    let mut completed = Vec::new();
-    for (row, refusal) in refused {
-        if matches!(refusal, Refusal::InvalidKey) {
-            sent.push(row.id);
-            completed.push((row, refusal, false));
-            continue;
-        }
-        held.check()?;
-        match poll_send_before(deadline, send(js, options, row, true)).await {
-            Some(Ok(ack)) => markers.push((row, refusal, ack)),
-            Some(Err(error)) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
-                marker_size_refused(options, row, None, &error);
-            }
-            Some(Err(error)) => marker_publish_failed(options, row, error),
-            None => marker_publish_failed(options, row, "deadline has elapsed"),
-        }
-    }
-    let mut stream_failed_markers = Vec::new();
-    for (row, refusal, ack) in markers {
-        // Unlike sends, an already-ready acknowledgement is useful even at the deadline.
-        match tokio::time::timeout_at(deadline, ack).await {
-            Ok(Ok(ack)) => {
-                sent.push(row.id);
-                completed.push((row, refusal, ack.duplicate));
-            }
-            Ok(Err(error)) if stream_size_refusal(&error) => stream_failed_markers.push((row, error)),
-            Ok(Err(error)) => marker_publish_failed(options, row, error),
-            Err(error) => marker_publish_failed(options, row, error),
-        }
-    }
-    // 10054 does not carry the limit. Look it up once for diagnostics only.
-    let stream_limit =
-        if !stream_failed_markers.is_empty() || completed.iter().any(|(_, refusal, _)| matches!(refusal, Refusal::Stream)) {
-            let budget = (options.lease / 8).min(held.stale.saturating_sub(held.renewed.elapsed()));
-            tokio::time::timeout(budget, js.get_stream(&options.stream))
-                .await
-                .ok()
-                .and_then(Result::ok)
-                .map(|stream| stream.cached_info().config.max_message_size)
-        } else {
-            None
-        };
-    for (row, error) in stream_failed_markers {
-        marker_size_refused(options, row, stream_limit, &error);
-    }
-    if sent.is_empty() {
-        return Ok(());
-    }
-    held.check()?;
+    sent: &[i64],
+    completed: Vec<(&store::Pending, Refusal, bool)>,
+    stream_limit: Option<i32>,
+) -> Result<bool, Error> {
     let mut retired = store::mark_published_returning(pool, sent).await?;
     retired.sort_unstable();
     for (row, refusal, duplicate) in completed {
@@ -309,7 +353,7 @@ async fn finish_refusals(
             patch_bytes = row.body.len(), stream = %options.stream, stream_max_message_size = stream_limit,
             error = error.as_ref().map(tracing::field::display), "{outcome}: {reason}; patch kept for inspection");
     }
-    Ok(())
+    Ok(!retired.is_empty())
 }
 
 #[cfg(test)]

@@ -539,10 +539,12 @@ bytes plus two copies each of the generation and sequence. Look on `corten::feed
   Its protocol error names no row, so the relay cannot use it to drop a patch on a shared
   connection. An unacknowledged publish follows the ordinary retry path (`relay standing by`
   on failure). A disconnect can interrupt other feeds and other users of the shared client.
-  The relay sends a batch before waiting for its acknowledgements, so JetStream can store
-  later patches from the same feed ahead of a failed one when the broker disconnects mid-batch
-  ([#1633 A relay batch interrupted by a broker disconnect can store a feed's later patches before the one that failed](https://github.com/corten-run/corten/issues/1633)).
-  If the reconnected client refuses the row locally, the relay tries a marker as above.
+  The relay publishes independent feeds concurrently, but sends each feed's next patch
+  only after JetStream acknowledges the preceding patch or its reload marker. After a
+  disconnect, the relay retries unacknowledged work without sending later patches of that
+  feed ahead of it. If the reconnected client refuses the row locally, the relay tries a
+  marker as above. A backlog on one feed needs a broker round trip per row; batches with
+  work for many feeds can overlap those round trips.
 
 The patch size-refusal logs include the outbox row ID, feed key, and patch body size (not
 the headers). Inspect the row by its logged `id` before ordinary pruning removes it, without
@@ -568,20 +570,21 @@ This lets followers reload committed state from Postgres even if it was the feed
 patch. A follower still loading checks the marker against its snapshot and reloads if needed;
 a ready follower behind the marker reloads and sends its live clients `sync`. A follower
 first loaded after the marker reads committed state from Postgres. If a marker cannot be
-sent or acknowledged, its row stays pending for retry while the relay retires the other
-acknowledged rows. Each failed row takes one batch slot; a failed marker can stall the
-queue when no row in a full batch (256 rows) can be retired. The marker sends and
-acknowledgements share a deadline of half the lease from its last renewal, not half a lease
-per marker. Consistently late acknowledgements can stall a full batch even when the markers
-fit. When that deadline expires, look for `reload marker publish failed` with
+sent or acknowledged, its row and later rows of that feed stay pending for retry while
+the relay retires acknowledged rows. A failed marker can stall the queue, including unrelated
+rows beyond a full batch (256 rows) if no row in that batch can be retired. A marker's send
+and acknowledgement share a deadline of half the lease from the renewal in effect when the
+relay starts the marker, not half a lease from when the marker was sent. Consistently late
+acknowledgements can stall a full batch even when the markers fit. When that deadline expires,
+look for `reload marker publish failed` with
 `deadline has elapsed`. Check broker and database latency; if the relay needs more time,
 increase `Options::lease`.
 
 For size refusals, check `reload marker refused for size` for the feed key, marker size
 including headers, and the applicable limit (the stream limit is reported when the lookup
 succeeds). Raise the limit if it cannot fit the marker.
-An affected loaded feed can otherwise stay stale until a later patch reveals the gap
-or the feed reloads from Postgres.
+An affected loaded feed can stay stale until the marker can be delivered or the feed reloads
+from Postgres.
 
 Older followers ignore a same-generation marker as an invalid empty patch; they can stay
 stale until a later patch reveals the gap. Upgrade or restart instances still serving stale
