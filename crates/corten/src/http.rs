@@ -70,7 +70,8 @@ pub(crate) fn weight(params: &[u8]) -> Option<u16> {
         s
     }
     let mut quality = None;
-    for param in params.split(|&b| b == b';') {
+    let mut params = params.split(|&b| b == b';');
+    while let Some(param) = params.next() {
         let param = trim(param);
         if let [b'q' | b'Q', b'=', value @ ..] = param {
             if quality.is_some() {
@@ -78,14 +79,33 @@ pub(crate) fn weight(params: &[u8]) -> Option<u16> {
             }
             quality = Some(qvalue(value)?);
         } else {
-            let name = trim(param.split(|&b| b == b'=').next().unwrap_or_default());
+            let mut pair = param.splitn(2, |&b| b == b'=');
+            let name = trim(pair.next().unwrap_or_default());
             // A non-OWS separator must not disguise a weight as an unrelated parameter.
             if name.eq_ignore_ascii_case(b"q") || name.iter().any(|b| !b.is_ascii_graphic()) {
                 return None;
             }
+            if let Some(value) = pair.next().and_then(|value| value.strip_prefix(b"\"")) {
+                if !ends_quoted_string(value) {
+                    // Semicolons inside the string do not start parameters. If a backslash
+                    // ends a chunk, it quotes the discarded semicolon, not the next byte.
+                    params.by_ref().any(ends_quoted_string);
+                }
+            }
         }
     }
     Some(quality.unwrap_or(1000))
+}
+
+fn ends_quoted_string(mut value: &[u8]) -> bool {
+    while let Some((&byte, rest)) = value.split_first() {
+        match byte {
+            b'"' => return true,
+            b'\\' => value = rest.get(1..).unwrap_or_default(),
+            _ => value = rest,
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -134,6 +154,9 @@ mod tests {
             ("level=1; q=0", 0),
             ("qs=2;q=0.25", 250),
             ("q=0.25;qs=2", 250),
+            (r#"note="a\";q=0;b";q=0.25"#, 250),
+            (r#"note="a\\";q=0.25"#, 250),
+            (r#"note="a\;";q=0.25"#, 250),
         ] {
             assert_eq!(weight(params.as_bytes()), Some(expected), "{params:?}");
         }
@@ -153,6 +176,8 @@ mod tests {
             "q=1;q =0",
             "q=1;Q=0",
             "q=1;level=1;q=0",
+            r#"q=1;note="a;q=0;b";Q=0"#,
+            r#"q="0.5""#,
         ] {
             assert_eq!(weight(params.as_bytes()), None, "{params:?}");
         }

@@ -2008,6 +2008,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn negotiation_ignores_weight_like_text_in_quoted_language_parameters() {
+        let locales = ["en", "fr", "de"];
+        for header in
+            [r#"fr;q=0.8;note="a;q=0;b", de;q=0.5"#, r#"fr;note="a\";q=0;b";q=0.8, de;q=0.5"#, r#"fr;note="a\\";q=0.8, de;q=0.5"#]
+        {
+            assert_eq!(locales[negotiate(&locales, Some(header))], "fr", "{header}");
+        }
+    }
+
     /// Callgrind in release at NEGOTIATION_REQUESTS=200 and 1200, difference / 1000:
     /// a request through the stages reading both Accept-Language and Accept-Encoding.
     #[cfg(feature = "compress")]

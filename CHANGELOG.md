@@ -7,7 +7,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - Parse `Accept-Language` and `Accept-Encoding` weights with the same RFC 9110 qvalue
   grammar (0 to 1, at most three decimals). Ignore items with malformed or repeated weights instead of
-  accepting float syntax or treating a malformed compression weight as `1`.
+  accepting float syntax or treating a malformed compression weight as `1`. Weight-like
+  text inside an unrelated quoted parameter does not count as a weight.
 
 - The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
   `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.

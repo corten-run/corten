@@ -751,6 +751,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn negotiation_ignores_weight_like_text_in_quoted_coding_parameters() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for header in [
+            r#"zstd;q=0.8;note="a;q=0;b", gzip;q=0.5"#,
+            r#"zstd;note="a\";q=0;b";q=0.8, gzip;q=0.5"#,
+            r#"zstd;note="a\\";q=0.8, gzip;q=0.5"#,
+        ] {
+            let headers = accept(header);
+            assert_eq!(accepted(&headers, &all), Some(Coding::Zstd), "{header}");
+            assert_eq!(negotiate(&headers).streamed(), Some(Coding::Zstd), "{header}");
+        }
+    }
+
     fn app() -> Compressed {
         let page = "<p>corten</p>".repeat(200);
         apply(
