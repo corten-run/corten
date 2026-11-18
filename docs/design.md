@@ -6256,11 +6256,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     Escaped or non-ASCII at-rule and class names are not supported.
 
    A registered custom property's name is prefixed only where it names that property: in its
-   registration, declaration names, `var()` and `inherit()` lookups, style queries,
+   registration, declaration names, `var()` and `inherit()` lookups (also inside container
+   size queries and `if()` conditions), style queries,
    `@supports` declaration tests, and property lists in `transition`, `transition-property` and
    `will-change`. An `attr()` name or a bare dashed identifier in another namespace is not a
    custom-property reference. This leaves anchor, container, timeline, view-transition and
    font-palette names unchanged, even if they share a spelling with a registered property.
+   A name computed at runtime, for example one built by a script or supplied by `attr()`, is not scoped.
 
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use

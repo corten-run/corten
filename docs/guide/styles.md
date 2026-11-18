@@ -290,11 +290,13 @@ the stock's value this way:
 | `style={(SHARE.pct(s), nudge.map(|n| GAP.px(n)))}` | one attribute, `data-vars="--statement-table__share:12.5%"`; `None` sets nothing, and with nothing to set there is no attribute |
 | an `@property` without `syntax`, `inherits` or `initial-value`, with a `syntax` the browser does not read (`<text>`, a keyword such as `-compact` that starts with `-`), or with a number syntax and an `initial-value` that is not one, or depends on the font or a container (`1em`, `1cqw`), or is a math function (write one value, `6px` rather than `calc(2px * 3)`: the browser drops the rule when a math function does not fit, and checking one would take a CSS math parser) | a compile error: the browser would ignore the rule, or the macro could not tell; another syntax's `initial-value` (`<color>`) is left to the browser |
 
-The prefix applies to the registration, declarations, lookups such as `var(--share)`, style
-queries such as `@container style(--share: 50%)`, and property lists such as
-`transition-property: --share`. A same-spelled anchor, container, timeline, view-transition name
-or font palette keeps its name. A bare name stored as a custom property's value is not a
-lookup, nor is the attribute name in `attr()`.
+The prefix applies to the registration, declarations, lookups such as `var(--share)` (including
+inside container size queries and `if()` conditions), style queries such as
+`@container style(--share: 50%)`, and property lists such as `transition-property: --share`.
+A same-spelled anchor, container, timeline, view-transition name or font palette keeps its name.
+A bare name stored as a custom property's value is not a lookup, nor is the attribute name in
+`attr()`. A name computed at runtime, for example one built by a script or supplied by
+`attr()`, is not scoped. Use a literal name such as `var(--share)` for a scoped lookup.
 
 A full page gets one `<style>` at `<Corten />`, after its stylesheets, with a rule for each
 distinct value (`[data-vars="--statement-table__share:12.5%"]{..}`), marked `!important`, as

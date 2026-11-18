@@ -568,6 +568,8 @@ enum PropertyScan {
 fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: PropertyScan, refs: &mut Vec<(usize, usize)>) {
     use PropertyScan::*;
     let kind = |i: usize| toks.get(i).map(|&(kind, ..)| kind);
+    let spelling = |i: usize| toks.get(i).map(|&(_, start, end)| &css[start..end]);
+    let arg_end = |i| matches!(spelling(i), Some("," | ")"));
     let comparison = |i: usize| {
         toks.get(i).is_some_and(|&(kind, start, end)| kind == Tok::Other && matches!(&css[start..end], "<" | ">" | "="))
     };
@@ -585,22 +587,26 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
     let mut stack = vec![mode];
     for (i, &(token, start, end)) in toks.iter().enumerate().skip(start) {
         let mode = *stack.last().unwrap();
-        let in_value = matches!(mode, Value | IfValue | Style);
+        // Size queries and if() conditions can use substitutions without naming a property
+        // with a bare identifier.
+        let substitutions = matches!(mode, Value | IfValue | Style | Container | IfCondition);
         match token {
             Tok::Function => {
                 let name = decoded_name(&css[start..end - 1]).to_ascii_lowercase();
                 let next = match name.as_str() {
                     "url" => Opaque,
-                    "var" | "inherit" if in_value => {
-                        if matches!(kind(i + 2), Some(Tok::Comma | Tok::Close)) {
+                    "var" | "inherit" if substitutions => {
+                        if arg_end(i + 2) {
                             ident_ref(toks, i + 1, refs);
+                        } else if spelling(i + 1) == Some("{") && spelling(i + 3) == Some("}") && arg_end(i + 4) {
+                            ident_ref(toks, i + 2, refs);
                         }
                         Value
                     }
-                    "if" if in_value => IfCondition,
+                    "if" if substitutions => IfCondition,
                     "style" if matches!(mode, Container | IfCondition) => feature(i + 1, Style, refs),
                     "supports" if mode == IfCondition => feature(i + 1, Supports, refs),
-                    _ if in_value => Value,
+                    _ if substitutions => Value,
                     _ => Opaque,
                 };
                 stack.push(next);
@@ -609,7 +615,7 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
                 let next = match (mode, &css[start..end]) {
                     (Supports | Style, "(") => feature(i + 1, mode, refs),
                     (Container | IfCondition, "(") => mode,
-                    _ if in_value => Value,
+                    _ if substitutions => Value,
                     _ => Opaque,
                 };
                 stack.push(next);
@@ -3181,6 +3187,64 @@ mod tests {
                 r#"--raw:--t;--attr:attr(--t, --t);--fn:--t(--t);background:u\72l(--t);content:"var(--t)"}"#,
                 "@container --t style(--x__t: 24px){.x__b{height:8px}}",
                 r#".x__b[data-kind=--t]{--escaped:attr(--\74);--url:url("--t")}"#,
+            )
+        );
+    }
+
+    #[test]
+    fn registered_property_lookups_in_container_size_queries() {
+        let sheet = scope(
+            "@property --t { syntax: '<length>'; inherits: false; initial-value: 20px }
+             .a { container: --t / inline-size }
+             @container --t (width > var(--t)) { .b { width: 24px } }
+             @container --t (width > calc(var(--t) + 1px)) { .b { height: 24px } }",
+            "x",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.css,
+            concat!(
+                "@property --x__t{syntax:'<length>';inherits:false;initial-value:20px}",
+                ".x__a{container:--t / inline-size}",
+                "@container --t (width > var(--x__t)){.x__b{width:24px}}",
+                "@container --t (width > calc(var(--x__t) + 1px)){.x__b{height:24px}}",
+            )
+        );
+    }
+
+    #[test]
+    fn registered_property_lookups_in_if_conditions() {
+        let sheet = scope(
+            "@property --t { syntax: '*'; inherits: false; initial-value: else }
+             .a { width: if(var(--t): 24px; else: 1px);
+                  height: if(style(--t: else): 24px; else: 1px) }",
+            "x",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.css,
+            concat!(
+                "@property --x__t{syntax:'*';inherits:false;initial-value:else}",
+                ".x__a{width:if(var(--x__t): 24px; else: 1px);height:if(style(--x__t: else): 24px; else: 1px)}",
+            )
+        );
+    }
+
+    #[test]
+    fn registered_property_lookups_with_brace_wrapped_names() {
+        let sheet = scope(
+            r"@property --t { syntax: '*'; inherits: false }
+              .a { width: var({--t}, 1px); height: inherit({--\74}, 1px);
+                   --raw: var(--missing, {--t}); --computed: var({var(--missing, --t)}, 1px) }",
+            "x",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.css,
+            concat!(
+                "@property --x__t{syntax:'*';inherits:false}",
+                ".x__a{width:var({--x__t}, 1px);height:inherit({--x__t}, 1px);",
+                "--raw:var(--missing, {--t});--computed:var({var(--missing, --t)}, 1px)}",
             )
         );
     }
