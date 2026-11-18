@@ -29,6 +29,7 @@ export function shellTransport({ repo, spawn = spawnSync, streamSpawn, sealExec 
     assert.ok(Array.isArray(args) && args.every((v) => typeof v === "string" && !v.includes("\0")));
     assert.ok(Number.isSafeInteger(timeout) && timeout > 0 && timeout <= 15 * 60000, "bounded control timeout required");
     if (control?.stream) {
+      assert.ok(spawn === spawnSync || typeof streamSpawn === "function", "custom command launcher requires an explicit stream launcher");
       assert.equal(binary, "ssh");
       assert.match(control.expected.id, /^[a-f0-9]{32}$/); assert.match(control.expected.binding.token, /^[a-f0-9]{16}$/);
       assert.match(args.at(-1), /^root@(?:\d{1,3}\.){3}\d{1,3}$/);

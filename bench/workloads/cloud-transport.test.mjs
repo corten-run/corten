@@ -8,6 +8,12 @@ import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { harness } from "./cloud-fixtures.mjs";
 
+test("a custom command launcher cannot fall back to native streaming SSH", () => {
+  const run = shellTransport({ repo: resolve("."), spawn() { assert.fail("unexpected command"); } });
+  const control = { stream: true, get expected() { assert.fail("native stream path entered"); } };
+  assert.throws(() => run("ssh", ["root@192.0.2.10"], 60000, false, undefined, control), /explicit stream launcher/);
+});
+
 test("bootstrap seal lets a monitor challenge run before the SSH result is available", async (t) => {
   let finish, input = "", options;
   const id = "a".repeat(32);
