@@ -1154,9 +1154,14 @@ function* patchTargets(content) {
 /** @param {DocumentFragment} content @param {Map<string | null, Element>} ids */
 function ownsPatch(content, ids) {
   for (const [target, id, insert] of patchTargets(content)) {
-    if (target !== (ids.get(id) ?? null)) return false;
+    // A read can deliberately draw into a target introduced while its assets were loading.
+    const asked = ids.get(id);
+    if (asked && target !== asked) return false;
     if ((!insert || insert instanceof Element) && target) {
-      for (const el of queryAll(target, "[id]")) if (ids.get(idOf(el)) !== el) return false;
+      for (const el of queryAll(target, "[id]")) {
+        const before = ids.get(idOf(el));
+        if (before && before !== el) return false;
+      }
       // A descendant the read would redraw can also have vanished or moved out of this root.
       if (insert) for (const el of queryAll(insert, "[id]")) {
         const id = idOf(el);
