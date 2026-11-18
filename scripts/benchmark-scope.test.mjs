@@ -124,6 +124,39 @@ test("native kernel controls run for fixture and tooling inputs, not portable so
   assert.equal(selectKernel(undefined), true);
 });
 
+function kernelEntries() {
+  const script = readFileSync(new URL("scripts/benchmark-kernel-ci.sh", root), "utf8");
+  // Read Node arguments and inline imports, including the generated unit's test path.
+  const paths = [...script.matchAll(/(?:^|[\s"'`])(?:\$checkout\/|\.\/)?([\w/.$\-{}]+\.mjs)(?=[\s"'`]|$)/g)]
+    .map(([, path]) => path);
+  assert.ok(paths.length > 0, "no kernel Node entries");
+  const entries = paths.flatMap(path => {
+    if (!path.includes("$")) return path;
+    const suites = /^\s*for suite in ([\w -]+); do$/m.exec(script);
+    const branch = /const file = suite === '([\w-]+)' \? '[^']+\.mjs'/.exec(script);
+    assert.ok(suites && branch && path.includes("${suite}"), "trace new kernel unit path: " + path);
+    const values = suites[1].split(/\s+/);
+    assert.ok(values.length > 1 && values.includes(branch[1]), "trace new kernel suite branches");
+    return values.filter(suite => suite !== branch[1]).map(suite => path.replaceAll("${suite}", suite));
+  });
+
+  // The process launcher passes bootstrap as argv, not as an import. Bootstrap imports
+  // dispatcher-child, whose argv targets (and the directly spawned fixtures) are in the tests.
+  const spawned = ["bench/workloads/isolated/bootstrap.mjs"];
+  for (const entry of new Set(entries)) {
+    const source = readFileSync(new URL(entry, root), "utf8");
+    for (const [, path] of source.matchAll(/["']((?:bench\/|\.\/)[\w/.-]*(?:dispatcher-fixtures|test-fixtures)\/[\w/.-]+\.mjs)["']/g)) {
+      spawned.push(path.startsWith("./") ? new URL(path, new URL(entry, root)).href.slice(root.href.length) : path);
+    }
+  }
+  return [...new Set([...entries, ...spawned])];
+}
+
+test("every local module used by native kernel controls selects the kernel job", async () => {
+  const inputs = await localImports(kernelEntries());
+  assert.deepEqual(inputs.filter(input => !selectKernel([input])).sort(), [], "unselected native kernel inputs");
+});
+
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "corten-benchmark-scope-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
