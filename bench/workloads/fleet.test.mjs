@@ -116,6 +116,23 @@ test("prepare reserves cryptorandom complete fleet once, using only local Git", 
   assert.deepEqual(readFileSync(join(p.h.base, "fleet-r21.json")), bytes);
 });
 
+test("historical roster is inspectable but never opens either fleet launch stage", async (t) => {
+  const p = fixture(t);
+  const { fleet } = JSON.parse(readFileSync(new URL("./test-fixtures/grouped-sfo2-reservation.json", import.meta.url)));
+  const { fleetSha256, ...body } = fleet;
+  // Match the fake checkout so the launch refusal cannot come from ancestry.
+  body.commit = commit;
+  const bytes = JSON.stringify({ ...body, fleetSha256: digest(JSON.stringify(body)) });
+  const path = join(p.h.base, "fleet-r21.json");
+  writeFileSync(path, bytes);
+  assert.equal(p.manifest().host.region, "sfo2");
+  for (const mode of ["--detach", "--admit-remaining"])
+    await assert.rejects(p.approve(mode), /historical fleet cannot authorize launch/);
+  assert.deepEqual(p.children, []);
+  assert.deepEqual(readdirSync(p.h.base), ["fleet-r21.json"]);
+  assert.equal(readFileSync(path, "utf8"), bytes);
+});
+
 test("detach launches only the first whole group, even after its bootstrap settles", async (t) => {
   const p = fixture(t); await fleetMain(p.prepare(), p.deps);
   assert.equal(await fleetMain(await p.approve("--detach"), p.deps), 3);

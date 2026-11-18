@@ -16,7 +16,7 @@ remain pending; the mixed-inbox/inspection bridge does not waive those gates.
 
 The controller is `droplet.mjs`, separate from catalog, marketplace, the dispatcher,
 registry, parity and runners. It imports the existing read-only `cloud-contract.mjs`
-for the complete nine-group selection, c-8/sfo3/Ubuntu identity, fixed remote files,
+for the complete nine-group selection, pinned c-8/Ubuntu placement, fixed remote files,
 systemd unit and archive namespace. There are no adapter, provider, workload,
 deployment, environment or numeric-settings CLI overrides. Popular/performance
 views share evidence; they do not launch a second campaign.
@@ -71,9 +71,15 @@ readiness; this repair still requires independent source review before merge.
 
 ## Dedicated Group Hosts
 
-A new fleet uses sfo3 for every group. Collect or inspect an older sfo2 fleet
-with its original controller and reservation; do not rewrite its region or
-reuse its approval. A change of region is not a like-for-like comparison.
+A new dedicated fleet uses `benchmark-group-fleet/v2` and sfo3 for every
+group. Nonfleet all-group hosts still use sfo2. A saved
+`benchmark-group-fleet/v1` plan and its dedicated reservations retain sfo2 and
+their original roster. They are readable for inspection and independently
+authorized recovery, never for detach or remaining admission. Ordinary
+collection still needs the original measured checkout; the existing
+merged-controller recovery actions still have their exact eligibility and
+approval requirements. Do not rewrite a saved reservation or reuse its approval.
+A change of region is not a like-for-like comparison.
 
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native
@@ -85,8 +91,10 @@ Popular and performance views still share the same measurements.
 SSH key, host configuration and a unique ownership token for every registry group.
 The full roster and selection are hashed before launch. A host reservation retains
 that complete roster but has the distinct `benchmark-dedicated-group-host/v1`
-schema and exactly one group's selection. Legacy all-group reservations remain
-readable and cannot acquire group-selection fields after reservation.
+schema and exactly one group's selection. The fleet schema fixes placement;
+the provider checks the launch mode before accepting create and never accepts
+a region override. Legacy all-group reservations remain readable and cannot
+acquire group-selection fields after reservation.
 
 The per-host production launch adds `--group GROUP --fleet ABSOLUTE_PLAN_JSON`.
 Both fields are required together, only at detach, and the approval binds the exact

@@ -44,10 +44,10 @@ async function api(t, mode, h) {
   t.after(async () => { server.closeAllConnections(); await new Promise((done) => server.close(done)); assert.equal(sockets.size, 0); });
   return { port: server.address().port, calls, responses, arm(value) { armed = value; }, get injected() { return injected; } };
 }
-function worker(t, api, { mode = "ordinary", receive = (value) => value, interrupted = () => false, onExit } = {}) {
+function worker(t, api, { mode = "ordinary", receive = (value) => value, interrupted = () => false, onExit, createMode = "legacy" } = {}) {
   const root = mkdtempSync(join(tmpdir(), "account-settlement-test-")), output = join(root, "observed.json");
   let child; const messages = [];
-  const run = providerTransport({ repo: resolve("."), interrupted, launch(path, args, options) {
+  const run = providerTransport({ repo: resolve("."), interrupted, createMode, launch(path, args, options) {
     assert.deepEqual(args.slice(0, 2), ["--input-type=module", "-"]);
     child = spawn(path, [fileURLToPath(new URL("cloud-account-settlement-fixture.mjs", import.meta.url)), String(api.port), output, mode],
       { ...options, env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=256" } });
@@ -92,7 +92,7 @@ test("native account rejection requires request/response/socket close and typed 
   });
 });
 
-const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
+const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
   "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", "--context", context];
 test("native account settlement cannot erase preceding create ambiguity or authorize other command replies", { timeout: 15000 }, async (t) => {
   const a = await api(t, "refused-create"), w = worker(t, a);
@@ -186,8 +186,8 @@ test("allocated failed account read settles before unlock, fresh pinned collect 
   const h = harness(t), a = await api(t, "invalid-json", h), workers = []; let approval;
   let locksAtWorkerExit;
   const deps = { ...settlementControl(t, h), repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
-    providerFactory() {
-      const w = worker(t, a, { onExit() {
+    providerFactory({ createMode }) {
+      const w = worker(t, a, { createMode, onExit() {
         if (workers[1] === w) locksAtWorkerExit = [join(h.local, "operation.lock"), join(h.base, ".groups-launch.lock")].map(existsSync);
       } });
       workers.push(w); return w.run;
@@ -232,8 +232,8 @@ test("composed unknown/unclosed/cancel/deadline/mutation failures retain exclusi
     if (mode === "delete") { h.seed(); h.change((s) => { s.status = "preparing"; }); }
     const a = await api(t, mode, h), workers = []; let approval;
     const deps = { ...settlementControl(t, h), repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
-      providerFactory() {
-        const w = worker(t, a, { mode, interrupted: () => mode === "cancel" && a.injected,
+      providerFactory({ createMode }) {
+        const w = worker(t, a, { createMode, mode, interrupted: () => mode === "cancel" && a.injected,
           receive: (message) => mode === "unknown" && message.schema === "cloud-provider-account-failed/v2" ? { ...message, disposition: "unknown" } : message });
         workers.push(w);
         const run = (args, timeout, ...rest) => w.run(args, Math.min(timeout, 2000), ...rest);

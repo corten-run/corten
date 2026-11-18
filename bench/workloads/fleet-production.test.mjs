@@ -112,7 +112,7 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     assert.equal(fs.existsSync(path.join(p.h.base, group, "groups-r21/operation.lock")), false);
     const post = events.find((row) => row.group === group && row.method === "POST");
     assert.equal(post.body.name, job.name); assert.deepEqual(post.body.ssh_keys, [42]);
-    assert.equal(post.body.size, saved.host.size); assert.equal(post.body.region, saved.host.region); assert.equal(post.body.image, saved.host.image);
+    assert.equal(post.body.size, saved.host.size); assert.equal(post.body.region, "sfo3"); assert.equal(saved.host.region, post.body.region); assert.equal(post.body.image, saved.host.image);
     assert.deepEqual(events.filter((row) => row.group === group && (row.method === "POST" || row.path?.startsWith("/v2/actions/")))
       .map((row) => [row.method, row.path]), [["POST", "/v2/droplets"], ["GET", `/v2/actions/${1101 + i}`]]);
     assert.ok(!JSON.stringify(p.output).includes("SYNTHETIC_FLEET_CREDENTIAL"));

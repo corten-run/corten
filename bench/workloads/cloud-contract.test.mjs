@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { host, ownedDroplet, portableEvidenceSegment, remoteFiles, reservation, roundName, safeArchive, selection, tags, terminalUnit, validateState } from "./cloud-contract.mjs";
+import { ownedDroplet, portableEvidenceSegment, remoteFiles, reservation, roundName, safeArchive, selection, tags, terminalUnit, validateState } from "./cloud-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 
 const state = () => reservation({ round: "r21", commit: "a".repeat(40), token: "0123456789abcdef" }, "2026-11-13T00:00:00.000Z");
-const droplet = (s) => ({ id: 123, name: s.name, tags: [...tags, s.tag], size_slug: host.size, region: { slug: host.region },
+const droplet = (s) => ({ id: 123, name: s.name, tags: [...tags, s.tag], size_slug: s.host.size, region: { slug: s.host.region },
   networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } });
 const unit = (s) => `Id=${s.unit}\nLoadState=loaded\nFragmentPath=/etc/systemd/system/${s.unit}\nActiveState=inactive\nRestart=no\nMainPID=0\nExecMainCode=1\nExecMainStartTimestamp=Fri 2026-11-13 00:00:00 UTC\n`;
 test("campaign identity retains the complete current registry, without qualifying it", () => {

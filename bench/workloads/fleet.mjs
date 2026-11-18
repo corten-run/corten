@@ -6,7 +6,7 @@ import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { isIPv4 } from "node:net";
-import { fleetPlan, roundName, selection } from "./cloud-contract.mjs";
+import { fleetPlan, roundName, selection, validateLaunchFleet } from "./cloud-contract.mjs";
 import { digest, durable, physical, regular, syncDirectory } from "./cloud-local.mjs";
 import { controllerFailure, full, providerFailure, providerIdentity } from "./cloud-options.mjs";
 import { controllerPaths, productionPlan, productionSignals } from "./cloud-production.mjs";
@@ -218,6 +218,7 @@ export async function fleetOperationPlan(options, { repo = checkout, run, plan =
   assert.equal(fleet.manifest.commit, head, "fleet-source-mismatch");
   const mode = options.detach ? "detach" : options["admit-remaining"] ? "admit-remaining" : "collect", records = rootRecords(fleet);
   const launching = mode !== "collect", first = fleet.manifest.jobs[0].group;
+  if (launching) validateLaunchFleet(fleet.manifest);
   let deferred = false;
   if (mode === "collect" && present(join(root, "launch-intent.json")) && !present(join(root, "remaining-intent.json"))) {
     // Only a valid staged reservation explains absent future children. Legacy

@@ -80,7 +80,7 @@ try {
   const deps = { spawn, streamSpawn: () => { externalEffect(); assert.fail("unexpected monitor connection"); },
     providerRequest: (options) => { externalEffect(); return request(options); }, repo: h.repo, inspect: async () => h.report(), sleep: async () => {}, interrupted: signals.interrupted,
     write: (value) => { approval = JSON.parse(value).approvalSha256; } };
-  deps.providerFactory = ({ repo, interrupted }) => Object.assign(createProviderEngine({ repo, interrupted, spawn, request: deps.providerRequest, sleep: deps.sleep }), { close: async () => {} });
+  deps.providerFactory = ({ repo, interrupted, createMode }) => Object.assign(createProviderEngine({ repo, interrupted, createMode, spawn, request: deps.providerRequest, sleep: deps.sleep }), { close: async () => {} });
   await productionMain([...args, "--print-approval"], deps);
   let code;
   try { code = await productionMain([...args, "--approve-reviewed-merged-ready", approval], deps); }

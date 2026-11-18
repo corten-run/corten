@@ -56,7 +56,7 @@ function fakeConnect(mode, observed, save = () => {}, cancel = () => {}, local, 
         else if (options.method === "POST") {
           const saved = JSON.parse(readFileSync(join(local, "state.json")));
           created = { id: 123, name: saved.name, tags: ["corten-bench", "corten-bench-groups", saved.tag], size_slug: "c-8",
-            region: { slug: "sfo3" }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
+            region: { slug: "sfo2" }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
           value = { droplet: created, links: { actions: [{ id: 456 }] } };
         } else if (path === "/v2/actions/456") value = { action: { id: 456, resource_id: 123, resource_type: "droplet", type: "create", status: "completed" } };
         else if (path === "/v2/droplets/123") value = { droplet: created };
@@ -132,7 +132,7 @@ test("diagnostic table rejects unknown, extra, conflicting and accessor fields w
   assert.equal(providerFailure({ get providerDiagnostic() { assert.fail("error getter evaluated"); } }), undefined);
 });
 
-function worker(t, mode, local, receive = (value) => value) {
+function worker(t, mode, local, receive = (value) => value, createMode = null) {
   const root = mkdtempSync(join(tmpdir(), "account-diagnostic-test-")), entry = join(root, "entry.mjs"), output = join(root, "observed.json");
   const serve = new URL("cloud-provider-worker.mjs", import.meta.url).href;
   writeFileSync(entry, `import assert from 'node:assert/strict';
@@ -149,7 +149,7 @@ serveProviderWorker({ spawn() { observed.consumes++; save(); return {status:0, s
 connect: fakeConnect(${JSON.stringify(mode)}, observed, save, undefined, ${JSON.stringify(local)}, beforeProvisioning) });
 `);
   let child, launches = 0; const messages = [];
-  const run = providerTransport({ repo: resolve("."), launch(path, args, options) {
+  const run = providerTransport({ repo: resolve("."), createMode, launch(path, args, options) {
     launches++; assert.equal(path, realpathSync(process.execPath));
     assert.deepEqual(args.slice(0, 2), ["--input-type=module", "-"]);
     assert.deepEqual(options.execArgv, []);
@@ -202,7 +202,7 @@ test("production finalizer preserves detail after allocation while retaining loc
   for (const mode of ["request-error", "invalid-json", "http503"]) await t.test(mode, async (t) => {
     const h = controllerHarness(t), workers = []; let approval;
     const deps = { ...settlementControl(t, h), repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
-      providerFactory() { const w = worker(t, mode, h.local); workers.push(w); return w.run; } };
+      providerFactory({ createMode }) { const w = worker(t, mode, h.local, undefined, createMode); workers.push(w); return w.run; } };
     const args = ["r21", "--state-dir", h.base, "--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
     assert.equal(await productionMain([...args, "--print-approval"], deps), 3); assert.equal(workers[0].launches, 0);
     const diagnostic = mode === "http503" ? { code: "account-http", httpStatus: 503 } : { code: "account-request", detail: mode };

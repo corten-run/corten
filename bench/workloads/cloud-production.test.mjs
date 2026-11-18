@@ -77,7 +77,7 @@ function productionHarness(t, flags = {}) {
     }, 5);
     t.after(() => { clearInterval(timer); close(255); }); return child;
   };
-  deps.providerFactory = ({ repo, interrupted }) => Object.assign(createProviderEngine({ repo, interrupted, spawn, request: deps.providerRequest, sleep: deps.sleep }), { close: async () => {} });
+  deps.providerFactory = ({ repo, interrupted, createMode }) => Object.assign(createProviderEngine({ repo, interrupted, createMode, spawn, request: deps.providerRequest, sleep: deps.sleep }), { close: async () => {} });
   const args = (mode = "--collect") => ["r21", "--state-dir", h.base, mode, ...(mode === "--detach" ? ["--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context] : [])];
   async function approve(mode) { const values = args(mode); await productionMain([...values, "--print-approval"], deps); return [...values, "--approve-reviewed-merged-ready", stdout.at(-1).approvalSha256]; }
   return { h, calls, stdout, deps, args, approve };

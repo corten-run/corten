@@ -30,6 +30,17 @@ const publishedCreate = () => ({ status: 202, value: { droplet: { id: 3164444, s
 const createAction = (status = "completed", resource_id = 3164444) => ({ status: 200, value: {
   action: { id: 7515, type: "create", resource_type: "droplet", resource_id, status } } });
 
+test("provider engine refuses cross-mode or unbound create before consuming credentials", async () => {
+  const legacy = create.with(7, "sfo2");
+  for (const [createMode, args] of [["legacy", create], ["dedicated", legacy], [null, create]]) {
+    let consumes = 0, requests = 0;
+    const run = providerTransport({ repo: resolve("."), createMode,
+      spawn() { consumes++; return spawn(); }, request() { requests++; return empty; } });
+    await assert.rejects(run(args, 60000, true), /placement differs from authorized mode/);
+    assert.equal(consumes, 0); assert.equal(requests, 0);
+  }
+});
+
 test("create-link diagnostics isolate each refused predicate without reflecting provider values", async (t) => {
   const cases = [
     ["shape", (response) => { response.value.links.actions = { raw: credential }; }],
