@@ -14,8 +14,8 @@
 //! The relay sends outbox rows in order within each feed and retires them after JetStream acknowledges them.
 //! A broker disconnect mid-batch can let queued publishes overtake a failed one. A relay that dies before
 //! retiring a row republishes it, and JetStream drops the copy within its deduplication window. Rows with invalid
-//! keys or JetStream size refusals are logged and retired without delivery. A cached NATS size
-//! refusal holds only that feed. A stale limit can hold it until the client reconnects; the cluster never forces a reconnect.
+//! keys, per-publish JetStream size refusals, or client-side cached payload refusals are logged and
+//! set aside without delivery, not deleted. The cluster never forces a reconnect.
 //! A gap or a consumer restart reloads the feed from Postgres. Measured with two instances, kills
 //! on a schedule and 200 clients: see `examples/listings-feed` and its `results/`.
 //!

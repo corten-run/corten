@@ -1,15 +1,14 @@
 //! Outbox relay: sends committed patches to JetStream in order within each feed, but a broker
 //! disconnect mid-batch can let queued publishes overtake a failed one. Every instance runs a
-//! candidate; the one holding the lease (store::lease) publishes. A valid patch is marked done
-//! only after JetStream acknowledged it. A relay that dies or loses its lease in between leaves it to
-//! the next one, which publishes it again, and JetStream drops the copy by its message id. Two
+//! candidate; the one holding the lease (store::lease) publishes. Delivered patches are marked done
+//! after JetStream acknowledges them. A relay that dies or loses its lease in between leaves them to
+//! the next one, which republishes them, and JetStream drops the copies by message ID. Two
 //! relays briefly overlapping can republish these rows within the deduplication window.
 //!
-//! Rows with invalid feed keys or JetStream size refusals are logged and marked done without
-//! delivery. A local payload refusal holds only that feed; other failures still retry.
+//! Rows with invalid feed keys or per-publish size refusals are logged and marked done without
+//! delivery. Their bodies stay in Postgres until ordinary pruning; other failures still retry.
 
 use std::{
-    collections::HashMap,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -26,12 +25,10 @@ use async_nats::{
 };
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
-use crate::{
-    store::{self, BATCH},
-    valid_key, Error, Options,
-};
+use crate::{store, valid_key, Error, Options};
 
-const PAYLOAD_BACKOFF: Duration = Duration::from_secs(5);
+/// Outbox rows published per round trip.
+const BATCH: i64 = 256;
 
 pub(crate) fn subject(options: &Options, feed: &str) -> String {
     format!("{}.{feed}", options.subject_prefix)
@@ -39,9 +36,8 @@ pub(crate) fn subject(options: &Options, feed: &str) -> String {
 
 /// Runs forever: wait for the lease, publish while holding it, then start over.
 pub(crate) async fn run(pool: PgPool, js: jetstream::Context, options: Arc<Options>, active: Arc<AtomicBool>) {
-    let mut held_feeds = HashMap::new();
     loop {
-        if let Err(e) = lead(&pool, &js, &options, &active, &mut held_feeds).await {
+        if let Err(e) = lead(&pool, &js, &options, &active).await {
             let error: &(dyn std::error::Error + 'static) = &*e;
             tracing::warn!(target: "corten::feed", instance = %options.instance, error, "relay standing by");
         }
@@ -81,13 +77,7 @@ impl Held {
     }
 }
 
-async fn lead(
-    pool: &PgPool,
-    js: &jetstream::Context,
-    options: &Options,
-    active: &AtomicBool,
-    held_feeds: &mut HashMap<String, Instant>,
-) -> Result<(), Error> {
+async fn lead(pool: &PgPool, js: &jetstream::Context, options: &Options, active: &AtomicBool) -> Result<(), Error> {
     // A dedicated connection outside the pool: the lease names its backend pid.
     let mut conn = pool.acquire().await?.detach();
     while !store::lease(&mut conn, &options.instance, options.lease).await? {
@@ -96,23 +86,17 @@ async fn lead(
     let mut held = Held { conn, renewed: Instant::now(), stale: options.lease * 3 / 4 };
     active.store(true, Ordering::Relaxed);
     tracing::info!(target: "corten::feed", instance = %options.instance, "relay active");
-    let result = publish(pool, js, options, &mut held, held_feeds).await;
+    let result = publish(pool, js, options, &mut held).await;
     active.store(false, Ordering::Relaxed);
     let _ = store::release(&mut held.conn).await;
     result
 }
 
-async fn publish(
-    pool: &PgPool,
-    js: &jetstream::Context,
-    options: &Options,
-    held: &mut Held,
-    held_feeds: &mut HashMap<String, Instant>,
-) -> Result<(), Error> {
+async fn publish(pool: &PgPool, js: &jetstream::Context, options: &Options, held: &mut Held) -> Result<(), Error> {
     let mut wake = PgListener::connect_with(pool).await?;
     wake.listen("corten_outbox").await?;
     loop {
-        drain(pool, js, options, held, held_feeds).await?;
+        drain(pool, js, options, held).await?;
         tokio::select! {
             n = wake.recv() => { n?; }
             // Renew on time even when idle; also a safety net for a lost notification.
@@ -124,26 +108,13 @@ async fn publish(
     }
 }
 
-/// Publishes eligible rows oldest first, pipelining up to `BATCH` acknowledgements.
-async fn drain(
-    pool: &PgPool,
-    js: &jetstream::Context,
-    options: &Options,
-    held: &mut Held,
-    held_feeds: &mut HashMap<String, Instant>,
-) -> Result<(), Error> {
+/// Publishes pending rows oldest first, pipelining up to `BATCH` acknowledgements.
+async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: &mut Held) -> Result<(), Error> {
     loop {
         if held.renewed.elapsed() >= options.lease / 4 {
             held.renew(options).await?;
         }
-        let now = Instant::now();
-        held_feeds.retain(|_, retry_at| *retry_at > now);
-        let rows = if held_feeds.is_empty() {
-            store::pending(pool, BATCH).await?
-        } else {
-            let excluded: Vec<&str> = held_feeds.keys().map(String::as_str).collect();
-            store::pending_excluding(pool, &excluded).await?
-        };
+        let rows = store::pending(pool, BATCH).await?;
         if rows.is_empty() {
             return Ok(());
         }
@@ -151,29 +122,43 @@ async fn drain(
         let mut acks = Vec::with_capacity(rows.len());
         let mut sent = Vec::with_capacity(rows.len());
         for row in &rows {
-            // A refusal can hold a feed after this batch was selected.
-            if held_feeds.contains_key(&row.feed) {
-                continue;
-            }
             if !valid_key(&row.feed) {
-                drop_row(pool, options, row, "invalid feed key").await?;
+                if store::mark_published(pool, &[row.id]).await? {
+                    tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
+                        "dropped outbox row with invalid feed key");
+                }
                 held.check()?;
                 continue;
             }
             match send(js, options, row).await {
                 Ok(ack) => acks.push((row, ack)),
                 Err(error) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
-                    // The client did not send this publish. Its limit can be stale.
-                    held_feeds.insert(row.feed.clone(), Instant::now() + PAYLOAD_BACKOFF);
-                    tracing::warn!(target: "corten::feed", instance = %options.instance, id = row.id, feed = %row.feed,
-                        patch_bytes = row.body.len(), reason = "cached NATS max_payload", "outbox feed held");
+                    set_aside(pool, options, row, "refused by the connection's cached limit", None).await?;
+                    held.check()?;
                 }
                 Err(error) => return Err(error.into()),
             }
         }
+        let mut stream_limit = None;
         for (row, ack) in acks {
-            if delivered(pool, options, row, ack).await? {
-                sent.push(row.id);
+            match ack.await {
+                Ok(_) => sent.push(row.id),
+                Err(error) if stream_size_refusal(&error) => {
+                    // 10054 does not carry the limit. Look it up once per refused batch
+                    // for diagnostics only; an unavailable limit must not stop the relay.
+                    if stream_limit.is_none() {
+                        let budget = (options.lease / 8).min(held.stale.saturating_sub(held.renewed.elapsed()));
+                        stream_limit = Some(
+                            tokio::time::timeout(budget, js.get_stream(&options.stream))
+                                .await
+                                .ok()
+                                .and_then(Result::ok)
+                                .map(|stream| stream.cached_info().config.max_message_size),
+                        );
+                    }
+                    set_aside(pool, options, row, "JetStream size refusal (10054)", stream_limit.flatten()).await?;
+                }
+                Err(error) => return Err(error.into()),
             }
         }
         if !sent.is_empty() {
@@ -192,25 +177,23 @@ async fn send(js: &jetstream::Context, options: &Options, row: &store::Pending) 
     js.publish_with_headers(subject(options, &row.feed), headers, row.body.clone().into()).await
 }
 
-async fn delivered(pool: &PgPool, options: &Options, row: &store::Pending, ack: PublishAckFuture) -> Result<bool, Error> {
-    match ack.await {
-        Ok(_) => Ok(true),
-        Err(error)
-            if std::error::Error::source(&error)
-                .and_then(|source| source.downcast_ref::<jetstream::Error>())
-                .is_some_and(|source| source.error_code() == jetstream::ErrorCode::STREAM_MESSAGE_EXCEEDS_MAXIMUM) =>
-        {
-            drop_row(pool, options, row, "JetStream MaxMsgSize (10054)").await?;
-            Ok(false)
-        }
-        Err(error) => Err(error.into()),
-    }
+fn stream_size_refusal(error: &PublishError) -> bool {
+    std::error::Error::source(error)
+        .and_then(|source| source.downcast_ref::<jetstream::Error>())
+        .is_some_and(|source| source.error_code() == jetstream::ErrorCode::STREAM_MESSAGE_EXCEEDS_MAXIMUM)
 }
 
-async fn drop_row(pool: &PgPool, options: &Options, row: &store::Pending, reason: &'static str) -> Result<(), Error> {
+async fn set_aside(
+    pool: &PgPool,
+    options: &Options,
+    row: &store::Pending,
+    reason: &'static str,
+    stream_limit: Option<i32>,
+) -> Result<(), Error> {
     if store::mark_published(pool, &[row.id]).await? {
         tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
-            patch_bytes = row.body.len(), reason, "dropped outbox row");
+            patch_bytes = row.body.len(), stream = %options.stream, stream_max_message_size = stream_limit,
+            "outbox row set aside: {reason}; kept for inspection");
     }
     Ok(())
 }

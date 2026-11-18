@@ -5859,7 +5859,7 @@ rules something out.
     and Corten's release procedure at `231225b9a`.
 
 63. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys use literal NATS subjects, not encoded names; the
-    relay skips invalid legacy keys and size refusals identified by the server per publish.**
+    relay sets aside invalid legacy keys and per-publish size refusals.**
     Corten requires nonempty dot-separated tokens
     without whitespace, control characters, `*` or `>`. This is stricter than the broker: it may
     accept an embedded `*` or a non-breaking space, but the documented naming rules reserve
@@ -5886,19 +5886,16 @@ rules something out.
     can remove the row; the app's committed data is not changed. A server with a lower
     control-line limit than the one configured in Corten can still reject a publish.
 
-    The relay also uses the done marker for JetStream's `10054` acknowledgement, which
-    refers to the refused publish. A size limit can change; retirement is not a claim that
-    the patch could never be published. It lets later patches on that feed flow, with a gap
-    that reloads the follower from Postgres. The relay does not resend the retired patch to
-    JetStream, and a loaded follower can stay stale if no later patch arrives.
+    The relay uses the same done marker for JetStream's `10054` acknowledgement and for
+    `MaxPayloadExceeded` from the client's cached-limit check before it sends a publish.
+    Both identify one refused publish. A size limit can change; setting the row aside
+    says nothing about whether another connection or stream would accept it. The outbox
+    body remains inspectable until ordinary pruning, and the application write stays
+    committed. Only the delta notification is skipped. The next delivered patch on that
+    feed exposes a gap, so a loaded follower reloads the app's state from Postgres and
+    ignores patches at or below its new sequence. Without a later patch or another
+    reason to reload, a loaded follower can stay stale.
 
-    A cached client-side refusal leaves the oldest refused row and later rows of that feed
-    pending, with a per-feed backoff. Retrying the local check does not refresh a stale limit:
-    that feed stays held until the client reconnects or the row is removed. Startup migration
-    adds a partial pending `(feed, id)` index. With holds, the relay seeks between distinct
-    pending feeds, reads at most a batch of IDs from each eligible feed, and takes the
-    oldest eligible batch without walking the held feed's backlog. Without holds,
-    the ordinary ordered scan of the pending ID index is unchanged.
     Postgres commits each feed's sequence under that feed's row lock, and followers detect
     gaps by that sequence, not across feeds by outbox ID. A broker's connection-wide
     `Maximum Payload Violation` and disconnect identify no publish; the relay handles
@@ -5912,11 +5909,12 @@ rules something out.
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
     no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
     in place. Using `Subject::is_valid` would copy the key and accept whitespace outside the
-    framing bytes. Retrying a stream size refusal indefinitely keeps that feed stale until
-    an operator intervenes. Storing the refusal separately for automatic replay would need
-    a new queue and would still not insert a patch back into its original stream position.
-    Refreshing a shared client to confirm its cached limit disrupts followers and other
-    publishers, and a fresh connection's limit would still not be an acknowledgement.
+    framing bytes. Retrying a size refusal indefinitely keeps the feed stale and blocks
+    the relay's ordinary pending scan. A per-feed hold adds an index to every append and
+    can make selecting work for unrelated feeds slow. A separate queue would not put a
+    patch back in its original stream position. Refreshing a shared client to confirm its
+    cached limit disrupts followers and other publishers, and a fresh connection's limit
+    would still not be an acknowledgement.
 
     Stands on: platform (the [NATS subject rules](https://docs.nats.io/nats-concepts/subjects)
     exclude whitespace and reserve wildcards for subscriptions, the
@@ -5930,23 +5928,22 @@ rules something out.
     [async-nats 0.52](https://docs.rs/crate/async-nats/0.52.0/source/src/connector.rs)
     caches the limit from its handshake and its
     [publish queue](https://docs.rs/crate/async-nats/0.52.0/source/src/lib.rs) survives reconnect);
-    reasoned (steady-state recovery relies on the same payload limit on all eligible brokers;
-    retrying cannot repair a key that fails a pure check; the done marker removes a skipped row from the pending indexes;
-    a cached refusal on a connected client holds the refused row without sending its
-    successors); value (correctness and reliability first, early failure and a small surface:
-    README Values 4 and 6).
+    reasoned (retrying cannot repair a key that fails a pure check; the done marker keeps
+    rejected rows out of the pending index; the loaded follower reloads the affected feed
+    on a sequence gap, and ignores patches at or below its loaded sequence; the durable
+    app state does not depend on the delta being sent); value (correctness and reliability
+    first, early failure and a small surface: README Values 4 and 6).
 
     Revisit when: an app needs arbitrary text as a cluster key, the NATS server's default
     control line or documented grammar changes, clients can identify an individual broker
-    refusal or refresh the cached limit without reconnecting, or deployments need atomic
-    delivery order across feeds, ordering across a mid-batch disconnect, or automatic
-    recovery from an indefinite hold or a dropped patch.
+    refusal or refresh the cached limit without reconnecting, follower gap reload no longer
+    restores committed state, or deployments need a skipped delta delivered, a reload without
+    a later patch, or ordering across a mid-batch disconnect.
 
-    Last checked: 2026-11-18, the `corten-cluster` integration tests on NATS 2.15.2 with
-    async-nats 0.52.0: JetStream's size refusal and follower reload, and a stale cached
-    limit held across retries with a 2.25-second subsequent handshake. The pending-index
-    plan was checked on Postgres 16.13 with 250,000 held rows. Subject rules and
-    control-line configuration checked 2026-11-17 at `056964945`.
+    Last checked: 2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
+    NATS 2.15.2 with async-nats 0.52.0: both size refusals leave the row in Postgres,
+    later patches flow, followers reload, and the cached refusal does not reconnect;
+    2026-11-17 at `056964945`, subject rules and control-line configuration.
 
 64. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
     on the server.** HTML has no exclusive number bound. For both `f32` and `f64`, emit the

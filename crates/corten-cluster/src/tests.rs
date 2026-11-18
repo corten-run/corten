@@ -21,7 +21,6 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
 };
 
 use corten::feed::Change;
@@ -267,59 +266,6 @@ async fn schema_pool(url: &str, schema: &str) -> PgPool {
     PgPoolOptions::new().max_connections(8).connect_with(options).await.unwrap()
 }
 
-#[tokio::test]
-async fn pending_batches_seek_past_held_feeds_after_an_upgrade() {
-    let Some((db, _)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
-    let schema = key("held_backlog_");
-    let pool = schema_pool(&db, &schema).await;
-    migrate(&pool).await.unwrap();
-    sqlx::raw_sql(
-        "DROP INDEX corten_outbox_pending_feed;
-         INSERT INTO corten_outbox (feed, generation, seq, body)
-         SELECT 'held', 'g', n, 'held body' FROM generate_series(1, 250000) AS n;
-         INSERT INTO corten_outbox (feed, generation, seq, body) VALUES ('another_held', 'g', 1, 'held body');",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-    // Upgrade an already populated outbox; even legacy rows without feed metadata are visible.
-    migrate(&pool).await.unwrap();
-    let excluded = ["held", "another_held"];
-    assert!(store::pending_excluding(&pool, &excluded).await.unwrap().is_empty());
-    let mut late = pool.begin().await.unwrap();
-    sqlx::query("INSERT INTO corten_outbox (feed, generation, seq, body) VALUES ('late', 'g', 1, 'late body')")
-        .execute(&mut *late)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO corten_outbox (feed, generation, seq, body)
-         SELECT CASE WHEN n % 2 = 0 THEN 'z' ELSE 'b' END, 'g', n, n::text
-         FROM generate_series(1, $1) AS series(n) ORDER BY series.n",
-    )
-    .bind(store::BATCH)
-    .execute(&pool)
-    .await
-    .unwrap();
-    let batch = store::pending_excluding(&pool, &excluded).await.unwrap();
-    assert_eq!(batch.len() as i64, store::BATCH);
-    for (n, row) in (1..).zip(&batch) {
-        assert_eq!(row.feed, if n % 2 == 0 { "z" } else { "b" });
-        assert_eq!((row.seq, row.body.as_str()), (n, n.to_string().as_str()));
-    }
-    late.commit().await.unwrap();
-    let next = store::pending_excluding(&pool, &excluded).await.unwrap();
-    assert_eq!(next.len(), batch.len());
-    assert_eq!(next[0].feed, "late");
-    assert!(next[0].id < batch[0].id);
-    let mut delivered: Vec<_> = batch.iter().map(|row| row.id).collect();
-    delivered.push(next[0].id);
-    assert!(store::mark_published(&pool, &delivered).await.unwrap());
-    assert!(store::pending_excluding(&pool, &excluded).await.unwrap().is_empty());
-    assert_eq!(store::pending(&pool, 2).await.unwrap()[0].feed, "held");
-    let admin = PgPool::connect(&db).await.unwrap();
-    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
-}
-
 /// Deterministic, low-compressibility ASCII for exercising the real B-tree indexes.
 fn long_key(len: usize) -> String {
     let alphabet = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -455,7 +401,6 @@ async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
     assert_eq!(set(&pool, "large", 3, None).await.seq, Some(3));
     let pending = wait_pending(&pool, 3).await;
     assert_eq!(pending.iter().map(|row| row.seq).collect::<Vec<_>>(), [1, 2, 3]);
-    let refused_id = pending[1].id;
     store::release(&mut gate).await.unwrap();
 
     let mut messages = stream_messages(&stream).await;
@@ -467,52 +412,30 @@ async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
     assert_eq!((state.first_sequence, state.last_sequence, state.messages), (1, 2, 2));
     eventually("the follower to reload at patch 3", || followed.seq() == 3).await;
     assert_eq!(followed.read(|rows| (rows["a"].n, rows[&item.id].n)), (3, 2));
-    let dropped = format!(r#"ERROR corten::feed message=dropped outbox row instance=corten id={refused_id} feed="large" "#);
-    assert!(logs.0.lock().unwrap().iter().any(|line| line.starts_with(&dropped)));
+    let log = expect_set_aside(&pool, &pending[1], &logs, "JetStream size refusal (10054)").await;
+    assert!(log.contains(&format!("stream_max_message_size={STREAM_LIMIT}")), "{log}");
+    assert_eq!(nats.statistics().connects.load(Ordering::Relaxed), 1);
 
     delete_test_stream_and_schema(&db, &js, &stream_name, &schema).await;
 }
 
 const LOW_PAYLOAD: usize = 4096;
 
-/// Relay real NATS traffic, making the first INFO stale-low on an ordinary test broker. If
-/// the broker is actually configured with LOW_PAYLOAD, forward its INFO unchanged instead.
-/// Only the test closes the first connection; the next handshake outlasts a default lease.
-async fn payload_proxy(listener: TcpListener, upstream: async_nats::ServerAddr, mut disconnect: oneshot::Receiver<()>) {
-    let mut first = true;
-    loop {
-        let (mut client, _) = listener.accept().await.unwrap();
-        let mut server = BufReader::new(TcpStream::connect((upstream.host(), upstream.port())).await.unwrap());
-        let mut info = String::new();
-        server.read_line(&mut info).await.unwrap();
-        if first {
-            let mut advertised: serde_json::Value = serde_json::from_str(info.strip_prefix("INFO ").unwrap()).unwrap();
-            if advertised["max_payload"] != LOW_PAYLOAD {
-                advertised["max_payload"] = LOW_PAYLOAD.into();
-                info = format!("INFO {advertised}\r\n");
-            }
-        } else {
-            tokio::time::sleep(Duration::from_millis(2250)).await;
-        }
-        if client.write_all(info.as_bytes()).await.is_ok() {
-            if first {
-                tokio::select! {
-                    _ = &mut disconnect => {}
-                    _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {
-                        panic!("the publisher disconnected before the test closed its socket");
-                    }
-                }
-            } else {
-                let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
-            }
-        }
-        first = false;
-    }
+/// Relay one connection to the real broker, substituting a stale-low initial INFO.
+async fn payload_proxy(listener: TcpListener, upstream: async_nats::ServerAddr) {
+    let (mut client, _) = listener.accept().await.unwrap();
+    let mut server = BufReader::new(TcpStream::connect((upstream.host(), upstream.port())).await.unwrap());
+    let mut info = String::new();
+    server.read_line(&mut info).await.unwrap();
+    let mut advertised: serde_json::Value = serde_json::from_str(info.strip_prefix("INFO ").unwrap()).unwrap();
+    advertised["max_payload"] = LOW_PAYLOAD.into();
+    client.write_all(format!("INFO {advertised}\r\n").as_bytes()).await.unwrap();
+    tokio::io::copy_bidirectional(&mut client, &mut server).await.unwrap();
 }
 
 // Single-threaded so the relay task runs with the test's tracing subscriber.
 #[tokio::test]
-async fn the_relay_holds_only_the_refused_feed_until_the_cached_limit_refreshes() {
+async fn the_relay_sets_aside_a_cached_payload_refusal_without_reconnecting() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let logs = Capture::default();
     let _capture = tracing::subscriber::set_default(logs.clone());
@@ -532,8 +455,7 @@ async fn the_relay_holds_only_the_refused_feed_until_the_cached_limit_refreshes(
         .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_addr = listener.local_addr().unwrap().to_string();
-    let (disconnect, trigger) = oneshot::channel();
-    let proxy = tokio::spawn(payload_proxy(listener, nats.parse().unwrap(), trigger));
+    let proxy = tokio::spawn(payload_proxy(listener, nats.parse().unwrap()));
     let publisher = async_nats::ConnectOptions::new().ignore_discovered_servers().connect(proxy_addr).await.unwrap();
     assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
 
@@ -558,76 +480,55 @@ async fn the_relay_holds_only_the_refused_feed_until_the_cached_limit_refreshes(
         .await
         .unwrap();
     assert_eq!(write.commit(&[Change::Upsert { id: &item.id, value: &item }]).await.unwrap().seq, Some(2));
-    let mut tx = pool.begin().await.unwrap();
-    let last_seq = store::BATCH + 2;
-    sqlx::query(
-        "WITH tip AS (UPDATE corten_feeds SET seq = $1 WHERE key = 'large' RETURNING key, generation)
-         INSERT INTO corten_outbox (feed, generation, seq, body)
-         SELECT key, generation, n, json_build_object('seq', n, 'changes', '[]'::json)::text
-         FROM tip CROSS JOIN generate_series(3, $1) AS n ORDER BY n",
-    )
-    .bind(last_seq)
-    .execute(&mut *tx)
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
-    // The other feed is beyond a batch full of held rows.
     assert_eq!(set(&pool, "small", 1, None).await.seq, Some(1));
+    assert_eq!(set(&pool, "large", 3, None).await.seq, Some(3));
+    let pending = wait_pending(&pool, 4).await;
+    let refused = &pending[1];
+    assert_eq!((refused.feed.as_str(), refused.seq), ("large", 2));
+    assert!(refused.body.len() > LOW_PAYLOAD && refused.body.len() + 128 < observer.max_payload());
     store::release(&mut gate).await.unwrap();
+
     let mut messages = stream_messages(&stream).await;
     let large = format!("{schema}.large");
     let small = format!("{schema}.small");
     expect_patch(&mut messages, &large, 1, 1).await;
     expect_patch(&mut messages, &small, 2, 1).await;
-    let pending = wait_pending(&pool, (last_seq - 1) as usize).await;
-    assert!(pending.iter().all(|row| row.feed == "large"));
-    let refused_id = pending[0].id;
-    let held = format!("WARN corten::feed message=outbox feed held instance=corten id={refused_id} feed=large ");
-    let holds = || logs.0.lock().unwrap().iter().filter(|line| line.starts_with(&held)).count();
-    assert!(holds() >= 1, "no warning for the refused row");
+    expect_patch(&mut messages, &large, 3, 3).await;
+    eventually("the loaded followers at patches 3 and 1", || large_follower.seq() == 3 && small_follower.seq() == 1).await;
+    assert_eq!(large_follower.read(|rows| (rows["a"].n, rows[&item.id].n)), (3, 2));
+    let gap = "message=gap in the feed's patches: reloading it instance=corten feed=large have=1 got=3";
+    assert!(logs.0.lock().unwrap().iter().any(|line| line.contains(gap)));
 
-    let last_seq = last_seq + 1;
-    assert_eq!(set(&pool, "large", last_seq, None).await.seq, Some(last_seq as u64));
     assert_eq!(set(&pool, "small", 2, None).await.seq, Some(2));
-    expect_patch(&mut messages, &small, 3, 2).await;
-    eventually("the two loaded followers at patches 1 and 2", || large_follower.seq() == 1 && small_follower.seq() == 2).await;
-    // With a broker started at LOW_PAYLOAD, an integration runner can reload its config
-    // here. A new client observes the increase; the test publisher still has the old INFO.
-    if observer.max_payload() == LOW_PAYLOAD {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while async_nats::connect(&nats).await.unwrap().max_payload() <= pending[0].body.len() + 128 {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        })
-        .await
-        .expect("the broker did not raise max_payload");
-        assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
-    }
-    let holds_before = holds();
-    for count in holds_before + 1..=holds_before + 2 {
-        eventually("another warning for the same held row", || holds() >= count).await;
-        let still_pending = wait_pending(&pool, (last_seq - 1) as usize).await;
-        assert_eq!(still_pending[0].id, refused_id);
-        assert!(still_pending.iter().all(|row| row.feed == "large"));
-        assert_eq!(still_pending.iter().map(|row| row.seq).collect::<Vec<_>>(), (2..=last_seq).collect::<Vec<_>>());
-        assert_eq!((large_follower.seq(), small_follower.seq()), (1, 2));
-        assert_eq!(large_follower.read(|rows| (rows["a"].n, rows.contains_key(&item.id))), (1, false));
-        assert_eq!(small_follower.read(|rows| rows["a"].n), 2);
-        assert_eq!(stream.info().await.unwrap().state.messages, 3);
-        assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 1);
-    }
-    assert!(!logs.0.lock().unwrap().iter().any(|line| line.contains("gap in the feed's patches")));
-    disconnect.send(()).unwrap();
-    for seq in 2..=last_seq {
-        expect_patch(&mut messages, &large, (seq + 2) as u64, seq).await;
-    }
+    expect_patch(&mut messages, &small, 4, 2).await;
+    eventually("the other feed's next write", || small_follower.seq() == 2).await;
+    assert_eq!(small_follower.read(|rows| rows["a"].n), 2);
     wait_pending(&pool, 0).await;
-    assert_eq!(stream.info().await.unwrap().state.messages, (last_seq + 2) as u64);
-    eventually("the held follower to reach the write made during the hold", || large_follower.seq() == last_seq as u64).await;
-    assert_eq!(large_follower.read(|rows| (rows["a"].n, rows[&item.id].n)), (last_seq, 2));
-    assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 2, "only the test disconnected the publisher");
-    delete_test_stream_and_schema(&db, &js, &stream_name, &schema).await;
+    expect_set_aside(&pool, refused, &logs, "refused by the connection's cached limit").await;
+    assert_eq!(stream.info().await.unwrap().state.messages, 4);
+    publisher.flush().await.unwrap();
+    assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
+    assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 1);
+    assert!(!proxy.is_finished(), "the original publisher connection must still be open");
     proxy.abort();
+    delete_test_stream_and_schema(&db, &js, &stream_name, &schema).await;
+}
+
+async fn expect_set_aside(pool: &PgPool, row: &store::Pending, logs: &Capture, reason: &str) -> String {
+    let (body, done): (String, bool) = sqlx::query_as("SELECT body, published_at IS NOT NULL FROM corten_outbox WHERE id = $1")
+        .bind(row.id)
+        .fetch_one(pool)
+        .await
+        .expect("the set-aside row is still in Postgres");
+    assert!(done);
+    assert_eq!(body, row.body);
+    let message = format!("ERROR corten::feed message=outbox row set aside: {reason}; kept for inspection");
+    let fields = format!("id={} feed={:?} patch_bytes={}", row.id, row.feed, row.body.len());
+    let seen = logs.0.lock().unwrap();
+    seen.iter()
+        .find(|line| line.starts_with(&message) && line.contains(&fields))
+        .unwrap_or_else(|| panic!("missing set-aside log for {fields}: {seen:?}"))
+        .clone()
 }
 
 async fn stream_messages(stream: &jetstream::stream::Stream) -> Ordered {
