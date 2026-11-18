@@ -319,9 +319,10 @@ page in a `Public`, which shared caches give to anyone, answers its part to anyo
 read for one visitor there (picks for the visitor on a cached home page) needs a route of its own
 that says `patches`, named in its `ReadAgain::now`. Only the part closure gets the checked
 builder (its `Action`); the page closure gets none and runs only for a request whose effective
-mode is not an action, where `req.action()` is `None` too, so it answers a page or a redirect. A
-full load gets the fragment only if the app overrides the request's mode to an action, and debug
-builds refuse a fragment that reaches a full load
+mode is not an action, where `req.action()` is `None` too. `patch_or_with` picks the part
+closure only in the request's effective `Mode::Action`; return a page or a redirect from the
+other one. Debug builds refuse a marked patch that reaches a browser's plain request, with the
+limits [Choice 58](../design.md#choice-plain-request-patch) lists
 ([#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)).
 
 Without JavaScript nothing reads the part, so the waiting part holds a link to the page's own

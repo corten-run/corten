@@ -5286,8 +5286,9 @@ rules something out.
     element's `form=` among them, which the field module of `037bb827b` fails in each), and
     `corten dev`'s reports, on `98e7ca184`.
 
-58. <a id="choice-plain-request-patch"></a>**A typed patch requires a checked Action; a debug check still catches overrides and raw
-    responses to a browser's plain request.** `Req::action() -> Option<Action<'_>>` returns
+58. <a id="choice-plain-request-patch"></a>**Building a patch directly requires a checked
+    Action; a debug check still catches overrides and raw responses to a browser's plain
+    request.** `Req::action() -> Option<Action<'_>>` returns
     `Some` only in the current effective `Mode::Action`. Only its opaque borrowed `Action`
     has `patch` and `patch_with_status`; the unchecked `Req` methods are removed.
     `patch_or`, `invalid` and `invalid_with` keep their mode-selecting contracts and check
@@ -5380,8 +5381,8 @@ rules something out.
     the same number of `memcmp` calls, each 22 instructions instead of 18, though the same
     function on the `patch_or` route of the same binary counts what it did before. The other two
     are in the direct handler itself, its mode check, which the unchecked baseline did not make.
-    `Action::patch` counts what `Req::patch` did and nothing calls `memcmp` more often. Why
-    those calls take glibc's longer path was not traced; `memcmp`'s cost depends on where the
+    `Action::patch` counts what the baseline's unchecked builder did and nothing calls `memcmp`
+    more often. Why those calls take glibc's longer path was not traced; `memcmp`'s cost depends on where the
     compared bytes lie, which a rebuild can move (reasoned). The token is a borrow and allocates
     nothing.
 

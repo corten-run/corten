@@ -214,7 +214,7 @@ never runs in a production image or a smoke test against one.
 
 A patch is only for the runtime. `req.action()` returns `Some(action)` only in the request's
 effective `Mode::Action`; only that borrowed `corten::Action` has `patch` and `patch_with_status`.
-An unchecked `req.patch(..)` no longer compiles. For the usual two-mode answer, keep
+A request alone cannot build a patch. For the usual two-mode answer, keep
 `req.patch_or(view, || async { .. })`, whose other side draws a page or redirect. For a patch
 with reads or a status of its own, bind the builder and keep the fallback:
 
