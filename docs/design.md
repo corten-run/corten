@@ -5597,7 +5597,7 @@ rules something out.
     above, at `65ac1dc47` against `38587c414`.
 
 62. <a id="choice-patch-closes-dialog"></a>**A patch closes an open dialog it draws closed as the
-    browser does, and carries the queued events through actual closed redraws.**
+    browser does, and carries one queued close through actual closed redraws.**
     A dialog the user left open as the server drew it, which a patch's markup draws closed, takes
     the markup's state ([Choice 52](#choice-asked-open-state)). The runtime replaced it closed:
     no `close` event, so a `<dialog on:close={..}>` handler never ran, and focus fell to the page
@@ -5606,20 +5606,22 @@ rules something out.
     The runtime calls `close()` while the dialog and its opener are still connected. The
     browser leaves the top layer, returns focus, and emits `beforetoggle` on the old dialog
     synchronously. The draw then carries that focus to the new opener if it replaces the old
-    one. The patch's ordered remove, append and replacement decisions and the layout's own
-    decisions to replace, morph by position or leave an element alone determine which existing
-    dialogs to close before drawing. A dialog removed earlier in the answer isn't closed by a
-    later redraw of its parent. The close follows focus, innermost first for nested dialogs, so
-    each modal can return focus to the one that opened it before that one closes. A
-    `beforetoggle` handler can change the old dialog before the replacement reads it.
+    one. The ordered patch resolver and the layout matcher record their draw decisions once.
+    The runtime collects closes from those decisions, runs them innermost first while the old
+    openers are still on the page, and then applies the recorded draw. A dialog removed before
+    its parent is redrawn isn't closed. Otherwise, in a patch containing closed dialog markup,
+    a fragment cannot target the same tree as another fragment or depend on an element it
+    introduces. The runtime logs an error and refuses the draw before touching its targets.
+    If a synchronous handler changes the tree's children or ids during a close, the runtime
+    stops before applying the draw. It does not undo the close or the handler's changes.
 
-    The browser sends `toggle` and `close` in later tasks. In-place morphs keep the native
-    events. If the draw replaced the dialog, the runtime forwards a copy of each event (same
-    constructor and toggle states, `isTrusted` false) through the actual chain of closed
-    replacements. The old node's own listeners still get native events. Removal and a redraw
-    that starts a new open session break the chain, even if an id is reused. A closed
-    replacement inherits the current `returnValue` when it takes over, not when each event is
-    forwarded, so a change made in the first handler is visible to the second.
+    In-place morphs get the native `beforetoggle`, `toggle` and `close`. For a replacement,
+    native events target the old node; the runtime forwards only a non-bubbling `close`
+    (`isTrusted` false) to the actual closed successor. It follows successive closed
+    replacements, copying the current `returnValue` on each handoff, not on delivery.
+    Removal and a new open session cancel forwarding, even when the id is reused or the
+    new session closes before the first close arrives. `showModal()`, `show()` and a new
+    `open` attribute all end continuity; a canceled opening does not.
 
     This applies to `data-patch`, `<corten-live>`, `ReadAgain`, `patch()`, a page part a
     navigation replaces, and a layout a write's page draws. In a replacement only the root or a
@@ -5628,86 +5630,39 @@ rules something out.
     element, [Limit 2](#limit-whole-element-patches)) is not closed. One the user opened
     stays open where it can be matched ([Choice 52](#choice-asked-open-state)).
 
-    Not chosen: closing each dialog while walking the old element (the first attempt, in
-    [Choice 52](#choice-asked-open-state)'s review), which let a `beforetoggle` handler change the tree under the walk and
-    abort the patch, and closed nested modals outer-first, so focus landed on `<main>`; closing
-    the dialogs of each element as it is replaced (this Choice's first version), which lost the
-    focus when an earlier element of the same answer had replaced the opener, and left a layout
-    drawn in place closing outer-first, its own way; finding the opener's replacement by id after
-    the close, which needs the element the dialog gives focus back to, which the platform keeps
-    to itself; dispatching the copies on the first replacement only (also the first version),
-    which lost them when another patch drew the dialog again before they came; finding the
-    receiver by id at dispatch time, which confused identity with continued replacement;
-    matching layout dialogs in a separate id walk, which missed positional matches; closing
-    in reverse page order alone, which fails a modal opened from inside an earlier sibling;
-    keeping the old dialog in the page until its `close` event, then replacing it, which would
-    end the patch a task or a frame after its answer (Chromium's `close` comes up to a frame
-    later), so a script awaiting `patch()` would see the old element; running the old element's
-    handlers when its `close` comes, which would give them an element and refs no longer on the
-    page, so what they write shows nothing; and closing the new element after the swap
-    (`showModal()`, then `close()`), which knows nothing of what had focus before the old one
-    opened, so focus could not go back to the opener.
+    Not chosen: closing during the swap, which lets a synchronous handler invalidate the walk
+    and can detach an opener needed by a later dialog; matching in a separate pre-pass, which
+    missed positional morphs and followed the wrong dialog during overlaps; looking up the
+    recipient by id, which misdelivered events after removals and reopens; waiting for the
+    native event before swapping, which delays the draw and leaves the old element in place
+    for a frame or task; simulating a close on the new dialog, which lacks the old opener; and
+    forwarding a synthetic `toggle`, which is not needed for the close or focus guarantees.
 
-    What it costs: measured on `237620f73` against main's `056964945`, 1,419 bytes raw
-    (43,846 to 45,265), 611 gzip (15,612 to 16,223), and 519 brotli (14,100 to 14,619).
-    The earlier `f31240cca` was 738, 273 and 226 bytes larger than the same baseline, but
-    identified close recipients by id and missed positional layout matches. A patch with no
-    closed dialog markup pays one incoming selector check and no second target walk. An answer
-    that can close an existing dialog walks the relevant draws before mutation, using the same
-    matching logic for the real draw. A second evaluation on that path lets the draw see what
-    an earlier fragment or synchronous handler changed. Replacement also checks for pending
-    events in the existing dialog-state walk. The per-draw work is reasoned, not measured.
+    A patch with no closed dialog markup checks one incoming selector and resolves and applies
+    targets directly. The planner and close forwarding are a versioned module fetched only
+    when an answer draws a closed dialog, alongside its handlers and stylesheets where
+    possible. The extra request on first use keeps that code off every other page.
 
-    Stands on: platform (HTML's dialog close: `close()` fires `beforetoggle` at once, queues
-    `toggle` and `close`, and, when focus is in the dialog, focuses the element that had it
-    before the dialog opened; and the engines: in Chromium, Firefox and WebKit a dialog closed
-    and at once replaced gets its `toggle` and `close` on the detached element, heard by a
-    listener on it and not by the document's, focus is on the opener right after `close()`, nested
-    modals closed outer-first leave focus in the inner one while inner-first gives it back to
-    the opener, and a `ToggleEvent` made by its constructor from another keeps its
-    `oldState` and `newState`; `close()` without a result keeps `returnValue`); measured (the
-    runtime's minified size by Node's `zlib` gzip and brotli at their defaults, once each build;
-    the smoke's checks, heard by delegated `on:toggle` and `on:close` handlers in
-    `examples/watchlist/src/smoke.rs`, of one modal an answer draws closed with the
-    `returnValue` a script gave it, of nested modals, of an answer that draws the opener again
-    before the dialog, and of two patches in one task, the second drawing the dialog again
-    before its events come, each failing with the first version's runtime and passing with this
-    one, and, by a listener on the document, of nested dialogs and one replaced in a layout a
-    write's page draws in place, failing and passing the same way; the anonymous inner modal
-    restoring focus to the opener, removal before parent redraw, removal and id reuse, a
-    redraw open, and a changed result between forwarded events, all red on `f31240cca` and
-    green on `237620f73` in the same three engines);
-    reasoned (the element the page has is the dialog the app's handlers are for; one listener
-    each on a dialog being closed is the only way to learn when the browser's events come);
+    Stands on: platform (`close()` restores focus from a modal, preserves `returnValue`
+    without an argument, and queues a native `close` even when its target is detached before
+    dispatch); measured (minified runtime and module size by Node's `zlib` defaults and the
+    Watchlist smoke's close inventory, order, result, opener focus, redraw continuity,
+    structural mutation, overlap refusal and close-open-close in Chromium, Firefox and
+    WebKit); reasoned (a closed successor is the dialog the delegated handler is wired to;
+    observing a change to its `open` attribute distinguishes a real new session from an
+    attempted open or a check of its eventual closed state);
     value (a close Corten does behaves as the browser's, one `close` and focus given back,
     README Value 2, and correctness first, the conflict order's 1: a handler that never runs and
     focus lost to the page are wrong output; checked in a browser with a delegated handler,
     README Value 9).
 
-    Revisit when: an engine dispatches a detached dialog's `toggle` or `close` through the
-    document or stops sending them to it; the platform gives a way to move a dialog's focus
-    return to another element, when the new element could be closed instead; an app's handler
-    needs the event the browser made (`isTrusted`), or one on the old element to be the only one;
-    or the runtime gains a way to replace or draw an element that does not close first.
+    Revisit when: an engine dispatches the old dialog's `close` through the document or stops
+    sending it; the platform exposes where focus will return; an app needs the trusted event
+    on the successor, overlapping draws, or a synchronous structural change and draw together;
+    or the first-use request costs more than keeping the planner in the runtime.
 
-    Last checked: 2026-11-16, a one-off probe, not a repository check, in Chromium
-    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1): a modal dialog with focus
-    inside closed and at once replaced, logging its `toggle` and `close` on the element and on
-    the document in the capture phase and the focused element after `close()`, nested modals
-    closed in each order, and a `ToggleEvent` copied through its constructor. To repeat it, open a
-    dialog with `showModal()` from a button, focus inside it, call `close()` then
-    `replaceWith()`, and log the events and `document.activeElement`; 2026-11-16, the smoke's
-    two checks failing with main's runtime (`ba77a51b0`) and passing on `fc0d6f302`, in the same
-    three engines, and the runtime's size on `fc0d6f302` against `ba77a51b0`; 2026-11-16, the
-    runtime's size with this change merged onto main's `38587c414` against `38587c414`;
-    2026-11-16, the smoke's six checks of this Choice failing with `630ab7129`'s runtime (the
-    first version) on its fixture and passing on `1a37ba222`, in Chromium 156.0.8078.4, Firefox
-    157.0 and WebKit 27.2 (the smoke runs WebKit without the Navigation API, which Playwright's
-    WebKit loses the page with, so it skips the layout check there; run alone with it, it failed
-    and passed the same way), and the runtime's size on `1a37ba222` against `38587c414`;
-    2026-11-17, runtime sizes on `f31240cca` and `237620f73` against `056964945`, and
-    the five regression checks on those two branch builds in Chromium 156.0.8078.4, Firefox
-    157.0 and WebKit 27.2 (Playwright 1.64.1, Navigation API enabled for the layout check).
+    Last checked: 2026-11-17, the Watchlist dialog smoke in Chromium, Firefox and WebKit
+    (Playwright 1.64.1, Navigation API enabled in the isolated layout check).
 
 ## Rules
 

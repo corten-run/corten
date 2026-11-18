@@ -341,7 +341,7 @@ fn Openers() -> impl Patch {
 
 /// Dialogs drawn open (`one`, or `nested`: one inside another) or closed, made modal as they join
 /// the page. Their delegated `on:toggle` and `on:close` handlers write what they heard into the
-/// part's `<output>`, and the one dialog's `on:beforetoggle` takes its field and `<details>` out
+/// part's `<output>`, and the one dialog's `on:beforetoggle` can take its field and `<details>` out
 /// as it starts to close. A form inside each draws them all closed; another in the one dialog
 /// draws the forms that open them first, in the same answer.
 #[component(js)]

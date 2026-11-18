@@ -1132,16 +1132,24 @@ are still there to send again; only a successful answer to the form that sent th
 while it was on its way stays, and the same file chosen again goes). What the user opened stays open: a `<dialog>` (modal again if it
 was modal), a `<details>` they unfolded and a shown popover, matched by id (a `<details>` also by
 its place). One the user left as the server sent it takes the new markup's state, so a dialog
-the server sent open and now sends closed closes, as the browser closes one: before the patch
-replaces anything, so focus goes back to what had it before the dialog opened (to the button
-drawn in its place when the same answer draws the opener again). Nested dialogs close
-innermost first. The dialog's `on:toggle` and `on:close` hear one event each; when it is replaced,
-copies follow the actual closed replacements, stopping at removal or a redraw that opens it
-again, even when the id is reused. A replacement inherits the result once, so changes a
-handler makes to `returnValue` stay visible to the next handler. The same holds for a page
-part a navigation replaces and for the layout a write's page draws. Give a dialog an id to
-match it in a replacement. An anonymous descendant is removed without a close event unless
-the layout morph keeps it by position. A dialog or `<details>` the user closed opens again
+the server sent open and now sends closed closes before the draw. Nested dialogs close
+innermost first. The browser can then return focus to the opener while it is still on the page;
+a patch that redraws the opener carries focus to its counterpart.
+The dialog's `on:close` hears one event. A dialog kept in place gets native events; a replacement
+gets a synthetic, non-bubbling `close` only, with the inherited `returnValue`. The pending close
+follows consecutive closed replacements, not reused ids. Removing the dialog or opening a new
+session before delivery cancels forwarding. Give a dialog an id to match it in a replacement.
+An anonymous descendant is removed without a close event unless the layout keeps it by position.
+The same close rules apply to a page part a navigation replaces and the layout a write draws.
+
+An answer containing a dialog drawn closed cannot also redraw the same target twice, redraw a
+parent and then target its child, or otherwise depend on changes from another fragment of that
+answer. The runtime logs an error and refuses that draw. Removing a child before redrawing its
+parent is allowed and does not close the child. If a synchronous close or focus handler changes
+the live tree's children or ids during the close phase, the runtime skips the draw; any closes
+already performed and the handler's own changes remain.
+
+A dialog or `<details>` the user closed opens again
 when a `data-patch` answer replaces it drawn `open` and the button that sent it (or, when none
 did, the focused control of the form, else the form) is outside it: pressing it is newer than
 the user's close, so a Preview button beside a dialog opens it on every press, not only the

@@ -823,6 +823,9 @@ pub const RUNTIME_JS: &str = include_str!("../js/dist/corten.js");
 /// that draws such a part.
 pub(crate) const PART_JS: &str = include_str!("../js/dist/part.js");
 
+/// The close planner loaded when an answer draws a dialog closed, served beside the runtime.
+const DIALOG_JS: &str = include_str!("../js/dist/dialog.js");
+
 /// The runtime's checks under `corten dev` (`js/dev.js`), served at `/corten/dev.js` by a dev
 /// server only.
 pub(crate) const DEV_JS: &str = include_str!("../js/dev.js");
@@ -849,10 +852,11 @@ pub(crate) mod fnv {
     }
 }
 
-const CLIENT_HASH: u64 = fnv::extend(fnv::hash(RUNTIME_JS.as_bytes()), PART_JS.as_bytes());
+const CLIENT_HASH: u64 = fnv::extend(fnv::extend(fnv::hash(RUNTIME_JS.as_bytes()), PART_JS.as_bytes()), DIALOG_JS.as_bytes());
 static CLIENT_VERSION: LazyLock<String> = LazyLock::new(|| format!("{:012x}", CLIENT_HASH >> 16));
 static RUNTIME_URL: LazyLock<String> = LazyLock::new(|| format!("/corten/{}/corten.js", runtime_version()));
 static PART_URL: LazyLock<String> = LazyLock::new(|| format!("/corten/{}/part.js", runtime_version()));
+static DIALOG_URL: LazyLock<String> = LazyLock::new(|| format!("/corten/{}/dialog.js", runtime_version()));
 
 /// Content hash of the client code Corten serves; it changes whenever the runtime does.
 pub fn runtime_version() -> &'static str {
@@ -1074,12 +1078,12 @@ async fn draining() {
     let _ = DRAINING.subscribe().wait_for(|draining| *draining).await;
 }
 
-/// The runtime's route, at [`runtime_path`], and its part module's, at [`part_path`], versioned
-/// and cached forever.
+/// The runtime and its on-demand modules, versioned and cached forever.
 pub(crate) fn runtime_routes() -> router::Table {
     router::Table::new()
         .route(runtime_path(), router::get(|headers: HeaderMap| async move { RUNTIME.respond(&headers) }))
         .route(part_path(), router::get(|headers: HeaderMap| async move { PART.respond(&headers) }))
+        .route(DIALOG_URL.as_str(), router::get(|headers: HeaderMap| async move { DIALOG.respond(&headers) }))
 }
 
 const JS: &str = "text/javascript; charset=utf-8";
@@ -1093,6 +1097,7 @@ struct Served {
 
 static RUNTIME: Served = Served::new(RUNTIME_JS);
 static PART: Served = Served::new(PART_JS);
+static DIALOG: Served = Served::new(DIALOG_JS);
 
 impl Served {
     const fn new(source: &'static str) -> Self {

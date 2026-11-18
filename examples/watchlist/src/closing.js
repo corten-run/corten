@@ -1,8 +1,7 @@
 // @ts-check
 // Closing (smoke.rs): dialogs the server draws open and then closed, for the browser test to see
-// that a patch closes them as the browser does: each one's delegated handlers hear its `toggle`
-// and `close`, with its `returnValue`, the innermost first, and a handler may change the dialog as
-// it starts to close.
+// that a patch closes them as the browser does: each one's delegated handler hears its `close`
+// with its `returnValue`, the innermost first. An opt-in handler changes the tree mid-close.
 
 /**
  * Makes a dialog drawn open modal, as `corten_ui::dialog::modal` does.
@@ -15,13 +14,12 @@ export function modal(dialog) {
 }
 
 /**
- * Takes the dialog's field and `<details>` out as it starts to close, while the patch that closes
- * it is replacing it.
+ * Takes the dialog's field and `<details>` out as it starts to close when the smoke asks for it.
  * @param {ToggleEvent} event
  * @param {HTMLDialogElement} dialog
  */
 export function touch(event, dialog) {
-  if (event.newState !== "closed") return;
+  if (event.newState !== "closed" || dialog.returnValue !== "mutate") return;
   for (const el of Array.from(dialog.querySelectorAll("input, details"))) el.remove();
 }
 

@@ -854,9 +854,13 @@ async fn page_answers_data_requests_with_the_document() {
 #[tokio::test]
 async fn runtime_is_served_at_a_versioned_immutable_url() {
     assert!(runtime_path().starts_with(&format!("/corten/{}/", runtime_version())));
-    let res = app(routes(), None).oneshot(Request::get(runtime_path()).body(Body::empty()).unwrap()).await.unwrap();
-    assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(res.headers()["cache-control"], "public, max-age=31536000, immutable");
+    let dialog_path = format!("/corten/{}/dialog.js", runtime_version());
+    for (url, source) in [(runtime_path(), RUNTIME_JS), (dialog_path.as_str(), DIALOG_JS)] {
+        let (status, headers, body) = call_with(app(routes(), None), "GET", url, None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers["cache-control"], "public, max-age=31536000, immutable");
+        assert_eq!(body, source);
+    }
 }
 
 /// A layout with an inline script of its own, which takes the request's nonce.

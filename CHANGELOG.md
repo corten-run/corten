@@ -1388,22 +1388,15 @@ Corten is pre-1.0, so any minor version may change the API.
   retains the deletion intent without issuing another DELETE or qualifying
   failed results.
 
-- A patch that draws closed a dialog the server drew open, which the user left open, closes it as
-  the browser closes one: before replacing it, so focus goes back to the button that opened it
-  rather than to the page, nested modals the innermost first. Its `toggle` and `close`, which the
-  browser sends to the old element once the patch has taken it off the page, are dispatched again
-  on the element that replaced it, so a delegated `<dialog on:close={..}>` handler hears one of
-  each (a copy, with `isTrusted` false; a listener a script put on the old element hears the
-  browser's). A `beforetoggle` handler that changes the dialog as it closes no longer stops the
-  patch. Every dialog an answer draws closed closes before anything is replaced, so focus also
-  goes back when the same answer draws the opener again (to the button in its place); the
-  copies follow the actual closed replacements, stopping at removal or a redraw that opens a
-  new session even if the id is reused. Each replacement inherits `returnValue` once, so a
-  handler's change is visible to the next handler. This holds for a
-  `data-patch` answer, a `<corten-live>` fragment, a `ReadAgain` read, `patch()`, a page's part
-  a navigation replaces and the layout a write's page draws, including an anonymous dialog a
-  layout morph keeps by position. A dialog the user opened still stays open where matched.
-  The runtime is 1,419 bytes larger minified (611 with gzip, 519 with brotli) (design Choice 62,
+- A patch that draws closed a dialog the server drew open, which the user left open, closes it
+  before replacing anything, nested dialogs innermost first, so the browser can restore focus to
+  the opener. A dialog kept in place gets native events. A replacement gets just one synthetic
+  `close`, with the inherited `returnValue`, through consecutive closed redraws until removal
+  or a new open session. Page parts and layout morphs use the same close rules; dialogs the user
+  opened stay open where matched. Overlapping draws in an answer with closed dialog markup
+  are refused, except for a child removal before its parent's redraw. A synchronous handler
+  changing the tree during the close phase stops the draw, not closes already completed
+  (design Choice 62,
   [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
 
 - `corten check` builds every target (`cargo build --all-targets`) between clippy and the tests,
