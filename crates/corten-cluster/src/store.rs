@@ -237,7 +237,7 @@ pub(crate) async fn pending(pool: &PgPool, limit: i64) -> Result<Vec<Pending>, E
     Ok(rows.into_iter().map(|(id, feed, generation, seq, body)| Pending { id, feed, generation, seq, body }).collect())
 }
 
-/// Retires acknowledged rows or rows with invalid keys. True if any were still pending.
+/// Retires acknowledged rows or rows the relay skips permanently. True if any were still pending.
 pub(crate) async fn mark_published(pool: &PgPool, ids: &[i64]) -> Result<bool, Error> {
     let updated = sqlx::query(
         "UPDATE corten_outbox SET published_at = clock_timestamp()

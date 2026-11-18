@@ -5842,9 +5842,11 @@ rules something out.
     `published_at` marker, logs the row ID and key at error level, and continues without
     sending the patch. The marker means done, not delivered, in this case. Ordinary pruning
     can remove the row; the app's committed data is not changed. No schema or index change is
-    needed. Only acknowledged valid rows get marked done; publish and acknowledgement
-    failures (including size limits) still retry. A server with a lower control-line limit
-    than the one configured in Corten can still reject a publish.
+    needed. An explicit JetStream size refusal or a broker payload limit confirmed after
+    reconnect uses the same marker; other publish and acknowledgement failures retry.
+    A cached broker limit alone is not evidence that a row cannot be published. A server
+    with a lower control-line limit than the one configured in Corten can still reject a
+    publish.
 
     Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
@@ -5863,10 +5865,11 @@ rules something out.
 
     Revisit when: an app needs arbitrary text as a cluster key, the NATS server's default
     control line or documented grammar changes, or deployments need automatic recovery for
-    previously accepted keys.
+    previously accepted keys or dropped patches.
 
-    Last checked: 2026-11-17, NATS subject and configuration documentation and async-nats 0.52.0
-    source reviewed, and the pre-fix store and relay read at `056964945`.
+    Last checked: 2026-11-18, JetStream size refusals and NATS payload-limit increases
+    and decreases checked on NATS 2.15.2 with async-nats 0.52.0. Subject rules and
+    control-line configuration checked 2026-11-17 at `056964945`.
 
 
 ## Rules

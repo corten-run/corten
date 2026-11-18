@@ -499,12 +499,30 @@ SQL, then publishes the remaining rows in order. Look on `corten::feed` for the 
 ID and key. The relay uses the existing `published_at` marker to take the skipped row out
 of the queue; it did not deliver that patch. Ordinary pruning can remove it. There is no
 schema migration. An older instance holding the relay lease can still stall on a bad row
-until a new relay takes over. Publish and acknowledgement failures, including message size
-limits, still retry ([Choice 63](../design.md#choice-cluster-feed-subjects)).
+until a new relay takes over ([Choice 63](../design.md#choice-cluster-feed-subjects)).
 
 To replace an invalid key, write a new feed with a valid key using the app's current
 committed data, and point clients and future writes at it. Do not rename queued rows or
 try to replay the dropped patches.
+
+Size the JetStream stream's `MaxMsgSize` and every eligible NATS broker's
+[`max_payload`](https://docs.nats.io/reference/config/) for the largest serialized patch,
+including NATS headers. Leave `MaxMsgSize` unlimited or set it to at least that size; keep
+the same broker limit on all servers the relay can connect to. JetStream's explicit
+`10054` size refusal retires the row. If the NATS client refuses a patch locally, the relay
+reconnects and tries the patch again against the limit advertised on that new connection.
+It only retires the row for `max_payload` if that fresh check still refuses it. A broker
+that closes the connection on an oversized publish does not send a patch acknowledgement;
+the relay retries that failure and can confirm the limit after reconnecting. Other
+publish or acknowledgement failures still retry.
+
+For a size refusal, the `corten::feed` error includes the outbox row ID, feed key, patch body
+size in bytes, and which limit refused it. Later rows can flow, but the skipped patch is
+not replayed. Raise the applicable limits or make future patches smaller. The next
+deliverable patch on the affected feed reveals the gap and reloads it from committed
+Postgres data. If there is no next patch, restart the instances serving the affected feed
+to clear their loaded copies. Reloading the browser alone can still return a stale snapshot
+from an instance that has not reloaded the feed.
 
 In the failover
 benchmark (200 clients, 50 writes a second, each instance killed and restarted under load),

@@ -5,7 +5,10 @@
 
 use std::time::{Duration, Instant};
 
-use async_nats::jetstream::consumer::{pull::OrderedConfig, DeliverPolicy};
+use async_nats::jetstream::{
+    self,
+    consumer::{pull::OrderedConfig, DeliverPolicy},
+};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -13,6 +16,8 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use corten::feed::Change;
 
 use super::*;
+
+include!("../../../.i1607-throughput.rs");
 
 #[test]
 fn nats_header_line_breaks_do_not_panic() {
@@ -298,6 +303,147 @@ async fn the_relay_drops_legacy_invalid_keys_and_delivers_good_rows_in_order() {
     assert!(cluster.feed("old key").await.unwrap().is_none());
     assert!(cluster.feed(&too_long).await.unwrap().is_none());
 
+    js.delete_stream(&stream_name).await.unwrap();
+    let admin = PgPool::connect(&db).await.unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    relay_drains_past_a_size_refusal(&db, &nats, Some(512)).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_relay_drains_past_a_patch_over_the_broker_limit() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    relay_drains_past_a_size_refusal(&db, &nats, None).await;
+}
+
+async fn relay_drains_past_a_size_refusal(db: &str, nats: &str, stream_limit: Option<i32>) {
+    let schema = key("size_limit_");
+    let pool = schema_pool(db, &schema).await;
+    migrate(&pool).await.unwrap();
+    let nats = async_nats::connect(nats).await.unwrap();
+    let js = async_nats::jetstream::new(nats.clone());
+    let stream_name = schema.to_uppercase();
+    let mut stream = js
+        .create_stream(jetstream::stream::Config {
+            name: stream_name.clone(),
+            subjects: vec![format!("{schema}.>")],
+            max_message_size: stream_limit.unwrap_or(-1),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let padding = stream_limit.map_or(nats.max_payload(), |limit| 2 * limit as usize);
+    let body = format!(r#"{{"seq":1,"changes":[],"padding":"{}"}}"#, "x".repeat(padding));
+    let probe = js.publish(format!("{schema}.probe"), body.clone().into()).await;
+    if let Some(limit) = stream_limit {
+        assert!(body.len() > limit as usize && body.len() + 128 < nats.max_payload());
+        let refusal = probe.unwrap().await.unwrap_err();
+        assert_eq!(
+            std::error::Error::source(&refusal).unwrap().downcast_ref::<jetstream::Error>().unwrap().error_code(),
+            jetstream::ErrorCode::STREAM_MESSAGE_EXCEEDS_MAXIMUM
+        );
+    } else {
+        assert_eq!(probe.unwrap_err().kind(), jetstream::context::PublishErrorKind::MaxPayloadExceeded);
+    }
+
+    let mut tx = pool.begin().await.unwrap();
+    assert!(create_feed(&mut tx, "large").await.unwrap());
+    assert!(create_feed(&mut tx, "small").await.unwrap());
+    tx.commit().await.unwrap();
+    sqlx::query(
+        "INSERT INTO corten_outbox (feed, generation, seq, body)
+         SELECT key, generation, 1, $1 FROM corten_feeds WHERE key = 'large'",
+    )
+    .bind(body)
+    .execute(&pool)
+    .await
+    .unwrap();
+    // The last small patch is beyond the first batch: pipelining alone cannot deliver it.
+    sqlx::query(
+        "INSERT INTO corten_outbox (feed, generation, seq, body)
+         SELECT key, generation, n, json_build_object('seq', n, 'changes', '[]'::json)::text
+         FROM corten_feeds CROSS JOIN generate_series(1, $1) AS n WHERE key = 'small' ORDER BY n",
+    )
+    .bind(relay::BATCH)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let options = Options { stream: stream_name.clone(), subject_prefix: schema.clone(), ..Options::default() };
+    let _cluster = Cluster::start(pool.clone(), nats.clone(), Items, options).await.unwrap();
+    let consumer =
+        stream.create_consumer(OrderedConfig { deliver_policy: DeliverPolicy::All, ..Default::default() }).await.unwrap();
+    let mut messages = consumer.messages().await.unwrap();
+    let subject = format!("{schema}.small");
+    for seq in 1..=relay::BATCH {
+        let msg = tokio::time::timeout(Duration::from_secs(10), messages.next())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for small patch {seq}"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.subject.as_str(), subject);
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"], seq);
+    }
+    let end = Instant::now() + Duration::from_secs(10);
+    while !store::pending(&pool, 10).await.unwrap().is_empty() {
+        assert!(Instant::now() < end, "outbox rows not marked done");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(stream.info().await.unwrap().state.messages, relay::BATCH as u64);
+    if stream_limit.is_none() {
+        assert!(nats.statistics().connects.load(Ordering::Relaxed) > 1, "the relay must refresh the cached limit");
+    }
+    js.delete_stream(&stream_name).await.unwrap();
+    let admin = PgPool::connect(db).await.unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_relay_retries_an_acknowledgement_error_that_is_not_a_size_refusal() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("full_stream_");
+    let pool = schema_pool(&db, &schema).await;
+    migrate(&pool).await.unwrap();
+    let nats = async_nats::connect(nats).await.unwrap();
+    let js = jetstream::new(nats.clone());
+    let stream_name = schema.to_uppercase();
+    let mut config = jetstream::stream::Config {
+        name: stream_name.clone(),
+        subjects: vec![format!("{schema}.>")],
+        max_messages: 1,
+        discard: jetstream::stream::DiscardPolicy::New,
+        ..Default::default()
+    };
+    let mut stream = js.create_stream(config.clone()).await.unwrap();
+    js.publish(format!("{schema}.probe"), "fill".into()).await.unwrap().await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    assert!(create_feed(&mut tx, "small").await.unwrap());
+    tx.commit().await.unwrap();
+    let Begin::New(write) = begin(&pool, "small", None).await.unwrap() else { unreachable!() };
+    let item = Item { id: "a".into(), n: 1 };
+    write.commit(&[Change::Upsert { id: "a", value: &item }]).await.unwrap();
+
+    let mut attempts = nats.subscribe(format!("{schema}.small")).await.unwrap();
+    let options = Options { stream: stream_name.clone(), subject_prefix: schema.clone(), ..Options::default() };
+    let _cluster = Cluster::start(pool.clone(), nats, Items, options).await.unwrap();
+    for _ in 0..2 {
+        tokio::time::timeout(Duration::from_secs(10), attempts.next()).await.expect("relay did not retry").unwrap();
+    }
+    assert_eq!(store::pending(&pool, 10).await.unwrap().len(), 1);
+    assert_eq!(stream.info().await.unwrap().state.messages, 1);
+
+    config.max_messages = 2;
+    js.update_stream(config).await.unwrap();
+    let end = Instant::now() + Duration::from_secs(10);
+    while !store::pending(&pool, 10).await.unwrap().is_empty() {
+        assert!(Instant::now() < end, "the pending patch was not delivered after the stream limit increased");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(stream.info().await.unwrap().state.messages, 2);
     js.delete_stream(&stream_name).await.unwrap();
     let admin = PgPool::connect(&db).await.unwrap();
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();

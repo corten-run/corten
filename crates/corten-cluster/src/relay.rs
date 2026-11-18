@@ -5,8 +5,8 @@
 //! relays briefly overlapping is therefore harmless: each publishes the pending rows in order, and
 //! the copies are dropped.
 //!
-//! Rows with invalid feed keys (written before validation or by external SQL) are marked done
-//! without publishing, and logged. Publish and acknowledgement failures still retry.
+//! Rows with invalid feed keys or confirmed size refusals are logged and marked done without
+//! delivery. Other publish and acknowledgement failures still retry.
 
 use std::{
     sync::{
@@ -16,13 +16,19 @@ use std::{
     time::{Duration, Instant},
 };
 
-use async_nats::{jetstream, HeaderMap};
+use async_nats::{
+    jetstream::{
+        self,
+        context::{PublishAckFuture, PublishError, PublishErrorKind},
+    },
+    HeaderMap,
+};
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
 use crate::{store, valid_key, Error, Options};
 
 /// Outbox rows published per round trip.
-const BATCH: i64 = 256;
+pub(super) const BATCH: i64 = 256;
 
 pub(crate) fn subject(options: &Options, feed: &str) -> String {
     format!("{}.{feed}", options.subject_prefix)
@@ -115,29 +121,105 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
         held.check()?;
         let mut acks = Vec::with_capacity(rows.len());
         let mut sent = Vec::with_capacity(rows.len());
+        let mut needs_refresh = None;
         for row in &rows {
             if !valid_key(&row.feed) {
-                if store::mark_published(pool, &[row.id]).await? {
-                    tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
-                        "dropped outbox row with invalid feed key");
-                }
+                drop_row(pool, options, row, "invalid feed key").await?;
                 held.check()?;
                 continue;
             }
-            let mut headers = HeaderMap::new();
-            headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
-            headers.insert("Feed-Generation", row.generation.as_str());
-            acks.push(js.publish_with_headers(subject(options, &row.feed), headers, row.body.clone().into()).await?);
-            sent.push(row.id);
+            match send(js, options, row).await {
+                Ok(ack) => acks.push((row, ack)),
+                Err(error) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
+                    // Settle the earlier rows before reconnecting or sending this one again.
+                    needs_refresh = Some(row);
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
-        for ack in acks {
-            ack.await?;
+        for (row, ack) in acks {
+            if delivered(pool, options, row, ack).await? {
+                sent.push(row.id);
+            }
         }
         if !sent.is_empty() {
             store::mark_published(pool, &sent).await?;
+        }
+        if let Some(row) = needs_refresh {
+            retry_after_reconnect(pool, js, options, held, row).await?;
+            continue;
         }
         if (rows.len() as i64) < BATCH {
             return Ok(());
         }
     }
+}
+
+async fn send(js: &jetstream::Context, options: &Options, row: &store::Pending) -> Result<PublishAckFuture, PublishError> {
+    let mut headers = HeaderMap::new();
+    headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
+    headers.insert("Feed-Generation", row.generation.as_str());
+    js.publish_with_headers(subject(options, &row.feed), headers, row.body.clone().into()).await
+}
+
+async fn delivered(pool: &PgPool, options: &Options, row: &store::Pending, ack: PublishAckFuture) -> Result<bool, Error> {
+    match ack.await {
+        Ok(_) => Ok(true),
+        Err(error)
+            if std::error::Error::source(&error)
+                .and_then(|source| source.downcast_ref::<jetstream::Error>())
+                .is_some_and(|source| source.error_code() == jetstream::ErrorCode::STREAM_MESSAGE_EXCEEDS_MAXIMUM) =>
+        {
+            drop_row(pool, options, row, "JetStream MaxMsgSize (10054)").await?;
+            Ok(false)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// A local refusal can use stale INFO. Retry once after a fresh handshake, which also checks
+/// the headers using the client's own size calculation.
+async fn retry_after_reconnect(
+    pool: &PgPool,
+    js: &jetstream::Context,
+    options: &Options,
+    held: &Held,
+    row: &store::Pending,
+) -> Result<(), Error> {
+    let client = js.client();
+    let stats = client.statistics();
+    let connects = stats.connects.load(Ordering::Relaxed);
+    tokio::time::timeout(held.stale.saturating_sub(held.renewed.elapsed()), async {
+        client.force_reconnect().await?;
+        while stats.connects.load(Ordering::Relaxed) == connects {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        // The counter advances before the new INFO is installed; flush waits for the
+        // connection task to resume handling commands on that connection.
+        client.flush().await?;
+        Ok::<_, Error>(())
+    })
+    .await??;
+    held.check()?;
+    match send(js, options, row).await {
+        Ok(ack) => {
+            if delivered(pool, options, row, ack).await? {
+                store::mark_published(pool, &[row.id]).await?;
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
+            drop_row(pool, options, row, "NATS max_payload").await
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn drop_row(pool: &PgPool, options: &Options, row: &store::Pending, reason: &'static str) -> Result<(), Error> {
+    if store::mark_published(pool, &[row.id]).await? {
+        tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
+            patch_bytes = row.body.len(), reason, "dropped outbox row");
+    }
+    Ok(())
 }
