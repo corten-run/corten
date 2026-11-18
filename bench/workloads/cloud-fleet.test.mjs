@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -7,6 +10,8 @@ import { groupNames, selectedApps } from "./registry.mjs";
 import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
 import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-options.mjs";
 import { remoteFiles } from "./cloud-remote.mjs";
+import { digest } from "./cloud-local.mjs";
+import { guardianSource, guardianSha256 } from "./cloud-control-runtime.mjs";
 
 const at = "2026-11-14T00:00:00.000Z";
 const input = () => ({ round: "r21", commit: "a".repeat(40), token: "f".repeat(16),
@@ -109,21 +114,73 @@ test("group launch permits exact siblings but reserves only this group's complet
 });
 
 test("a terminal later group cannot be saved as running admission and remains collectable", async (t) => {
-  const { h, options } = configured(t);
+  const { h, options, fleet } = configured(t);
   options.group = groupNames[1]; h.flags.active = false;
-  await assert.rejects(h.task({}, options).launch(), /group ended before running admission/);
+  // Replay the real guardian against the in-memory kernel, including the
+  // actual controller requests and the original exit archive's custody bytes.
+  const kernel = spawn(process.platform === "win32" ? "python" : "python3",
+    ["-I", fileURLToPath(new URL("./test-fixtures/control-session-kernel.py", import.meta.url)), "setup-fleet"],
+    { timeout: 25000, killSignal: "SIGKILL", windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+  const lines = createInterface({ input: kernel.stdout })[Symbol.asyncIterator]();
+  let stderr = ""; kernel.stderr.on("data", (part) => { stderr = (stderr + part).slice(-4096); });
+  const closed = new Promise((resolve) => { kernel.on("error", (e) => resolve(String(e))); kernel.on("close", resolve); });
+  t.after(async () => { kernel.stdin.end(); assert.equal(await closed, 0, stderr); });
+  const token = fleet.jobs[1].token;
+  kernel.stdin.write(JSON.stringify({ mode: "setup-fleet", token, source: guardianSource }) + "\n");
+  const run = async (binary, args, timeout, allowFail, expiry, control) => {
+    if (!control) return h.run(binary, args, timeout, allowFail);
+    const s = h.saved(), script = args.at(-1), request = control.request;
+    const exitArchive = request.epoch === "bootstrap" && script.startsWith("systemctl show");
+    // Re-running pack.sh extends remote custody even though the exit archive
+    // is immutable. A second pack here must fail the custody comparison.
+    const pack = exitArchive || script === "timeout 600 /bin/bash /bench/pack.sh";
+    const query = script.includes("<<'CORTEN_FAILED_SETUP_HOST'");
+    const expected = query && { sequence: request.sequence, requests: s.control.ledger.slice(0, -1).map((r) => r.request),
+      binding: { round: s.round, commit, token, helperSha256: guardianSha256 },
+      queryArgv: ["/usr/bin/python3", "-", s.id, s.unit, JSON.stringify(Object.fromEntries(Object.entries(remoteFiles(s)).map(([k, v]) => [k, digest(v)]))), "1"] };
+    kernel.stdin.write(JSON.stringify({ request, payload: binary === "ssh" ? `set -euo pipefail\n${script}\n` : "synthetic SFTP",
+      pack, ...(query ? { expected } : {}) }) + "\n");
+    const line = await lines.next(); assert.equal(line.done, false, stderr);
+    const reply = JSON.parse(line.value);
+    if (exitArchive) h.setArchive(archive([...metadata(), { name: "control/" },
+      ...Object.entries(reply.custody).map(([k, v]) => ({ name: "control/" + k, body: Buffer.from(v, "hex") }))]));
+    if (query) return { status: 0, stdout: JSON.stringify({ schema: "benchmark-failed-setup-host/v2", hostId: s.id, unit: s.unit,
+      setupFailed: true, exitCode: 1, observedAtMs: Date.now(), control: reply.proof }) };
+    return h.run(binary, args, timeout, allowFail);
+  };
+  await assert.rejects(h.task({ run }, options).launch(), /group ended before running admission/);
   assert.equal(h.saved().status, "starting"); assert.equal(h.saved().group, groupNames[1]);
   assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
-  const report = syntheticInspection("verified");
-  report.schema = "benchmark-isolated-group-campaign-inspection/v1";
-  report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
-  report.groups = report.groups.filter((row) => row.group === options.group);
-  h.setArchive(archive([...metadata().map((row) => row.name === "exit-code" ? { ...row, body: "0\n" } : row),
-    { name: "campaign/" }, { name: "campaign/fake.json", body: "{}" }]));
-  assert.equal(await h.task({ inspect: async () => report }).collect(), 0);
-  assert.equal(h.saved().status, "collected"); assert.ok(h.saved().destroyedAt);
+  assert.equal(await h.task({ run }).collect(), 1);
+  const s = h.saved();
+  assert.equal(s.status, "retired"); assert.equal(s.retirement.kind, "setup-failed"); assert.ok(s.destroyedAt);
+  assert.ok(s.archiveSha256 && s.evidenceSha256); assert.equal(s.validation, undefined); assert.equal(s.collectedAt, undefined);
+  assert.equal(await h.task({ run }).collect(), 1); assert.equal(h.inspections, 0);
   assert.equal(h.saved().fullGroupQualified, false);
   assert.equal(h.creates, 1); assert.equal(h.deletes, 1);
+
+  for (const mode of ["native", "absent-proof", "active", "unacknowledged", "monitor-artifact", "changed-record", "foreign-unit"]) {
+    const f = configured(t), g = f.h;
+    // The first group passes its first running check, then exits inside commonBootstrap.
+    g.flags.hook = (bin, a) => { if (bin === "ssh" && a.at(-1).startsWith("systemctl show") && g.units === 1) g.flags.active = false; };
+    g.flags.startLost = mode === "unacknowledged";
+    await assert.rejects(g.task({}, f.options).launch(), mode === "unacknowledged" ? /start acknowledgement/ : /ended before common bootstrap/);
+    assert.equal(!!g.saved().preBootstrapTerminal, mode !== "unacknowledged"); g.flags.hook = undefined;
+    if (mode === "active") g.flags.active = true;
+    if (mode === "foreign-unit") g.flags.wrongUnit = true;
+    if (mode === "absent-proof") g.setArchive(archive(metadata()));
+    if (mode === "monitor-artifact") writeFileSync(join(g.local, "monitor-journal.jsonl"), "");
+    if (mode === "changed-record") g.change((v) => { v.preBootstrapTerminal.invocation = "f".repeat(32); });
+    let inspections = 0;
+    await assert.rejects(g.task({ inspect() { inspections++; return syntheticInspection("verified"); } }).collect());
+    assert.equal(g.calls.filter(([bin, ...a]) => bin === "scp" && a.at(-2).endsWith(":/bench/results.tgz")).length,
+      ["native", "absent-proof"].includes(mode) ? 1 : 0); assert.equal(inspections, 0);
+    if (mode === "native") {
+      assert.ok(g.saved().archiveSha256 && g.saved().evidenceSha256);
+      assert.equal(readFileSync(join(g.local, g.saved().evidence, "campaign/fake.json"), "utf8"), "{}");
+    }
+    assert.equal(g.deletes, 0); assert.equal(g.saved().validation, undefined); assert.equal(g.saved().retirement, undefined);
+  }
 });
 
 test("a nonterminal later group retains ordinary running admission", async (t) => {
@@ -152,10 +209,17 @@ test("first host requires account room for the whole reserved fleet, not just it
   assert.equal(h.creates, 0); assert.equal(h.deletes, 0);
 });
 
+function finishSupervisedFixture(h, status) {
+  h.flags.active = false; h.flags.reportStatus = status;
+  const path = join(h.local, "monitor-local-closed.json"), closed = JSON.parse(readFileSync(path));
+  closed.closedAtMs = Date.now() - 31000; closed.recoverAfterMs = closed.closedAtMs + 30000;
+  writeFileSync(path, JSON.stringify(closed));
+  return h.report();
+}
+
 test("group inspection is distinct from whole-campaign evidence and retains terminal deletion gates", async (t) => {
   const { h, options } = configured(t); await h.task({}, options).launch();
-  h.flags.active = false;
-  const report = syntheticInspection("verified");
+  const report = finishSupervisedFixture(h, "verified");
   report.schema = "benchmark-isolated-group-campaign-inspection/v1";
   report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
   report.groups = report.groups.filter((row) => row.group === options.group);
@@ -185,8 +249,7 @@ test("CLI group selection cannot omit the full fleet or change collection scope"
 test("failed and blocked collection preserves a host when evidence belongs to another selection", async (t) => {
   for (const status of ["failed", "blocked"]) for (const change of ["group", "apps", "contract"]) {
     const { h, options } = configured(t); await h.task({}, options).launch();
-    h.flags.active = false;
-    const report = syntheticInspection(status);
+    const report = finishSupervisedFixture(h, status);
     report.schema = "benchmark-isolated-group-campaign-inspection/v1";
     report.selection.groups = report.selection.groups.filter((row) => row.group === options.group);
     report.groups = [];
@@ -221,7 +284,23 @@ test("failed or wrong common bootstrap leaves the first host observable without 
       }
     };
     await assert.rejects(h.task({ now: () => clock }, options).launch());
-    assert.equal(h.saved().status, "running"); assert.equal(h.saved().bootstrapReady, undefined);
+    const saved = h.saved(), witness = saved.preBootstrapTerminal;
+    if (mode === "ended") {
+      assert.equal(saved.status, "starting");
+      const row = saved.control.ledger.at(-1), query = h.calls.filter(([binary]) => binary === "ssh").at(-1).at(-1);
+      assert.ok(query.startsWith(`systemctl show ${saved.unit} `));
+      assert.equal(row.request.epoch, "bootstrap"); assert.equal(row.request.invocation.channel, "ssh");
+      assert.equal(row.request.invocation.requestSha256, digest(`set -euo pipefail\n${query}\n`));
+      assert.equal(row.localTerminal, true); assert.equal(row.code, 0);
+      assert.equal(witness.invocation, row.request.invocation.id); assert.equal(witness.monitorId, saved.control.monitor.id);
+      assert.equal(witness.hostId, saved.id); assert.equal(witness.ip, saved.ip);
+      assert.equal(contract.terminalUnit(witness.stdout, saved), true);
+    } else {
+      assert.equal(saved.status, "running", mode); assert.equal(witness, undefined, mode);
+    }
+    assert.equal(saved.control.monitor.phase, "pending"); assert.equal(saved.bootstrapReady, undefined);
+    assert.equal(saved.fullGroupQualified, false); assert.equal(saved.validation, undefined);
+    assert.equal(saved.deletionIntentAt, undefined); assert.equal(saved.destroyedAt, undefined);
     assert.equal(h.creates, 1); assert.equal(h.deletes, 0); assert.equal(h.inspections, 0);
   }
 });

@@ -13,6 +13,7 @@ import { bootstrapMarker } from "./cloud-remote.mjs";
 import { readFleet, verifyCollectedGroup } from "./fleet-verify.mjs";
 import { groupNames } from "./registry.mjs";
 import { syntheticDependencies } from "./fleet-production-fixture.mjs";
+import { registration } from "./test-fixtures/control-stream-fixture.mjs";
 
 const committed = new Map(fleetWorkerPaths.map((file) => [file, fs.readFileSync(path.resolve(file), "utf8").replaceAll("\r\n", "\n")]));
 
@@ -20,7 +21,7 @@ function fixture(t, mode = "success") {
   t.after(() => {
     const rows = events(), starts = rows.filter((row) => row.boundary === "provider-child-start");
     const exits = rows.filter((row) => row.boundary === "provider-child-exit");
-    assert.deepEqual(exits.map((row) => row.pid), starts.map((row) => row.pid), "every owned child reaped");
+    assert.deepEqual(exits.map((row) => row.pid).sort(), starts.map((row) => row.pid).sort(), "every owned child reaped");
     assert.ok(exits.every((row) => row.terminal));
     assert.ok(!rows.some((row) => row.tokenIPC || row.boundary === "forbidden-native-https"));
   });
@@ -41,22 +42,27 @@ function fixture(t, mode = "success") {
     if (file === "bench/workloads/cloud-production.mjs") {
       // Change defaults only. The actual productionMain body, approval gates,
       // transport, controller and worker protocol remain the production code.
-      const before = "spawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted";
-      const after = "spawn = synthetic.spawn, providerFactory = synthetic.providerFactory, repo = synthetic.repo, inspect, sleep = synthetic.sleep, interrupted";
+      const before = "spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted";
+      const after = "spawn = synthetic.spawn, streamSpawn = synthetic.streamSpawn, providerFactory = synthetic.providerFactory, repo = synthetic.repo, inspect, sleep = synthetic.sleep, interrupted";
       assert.equal(source.split(before).length, 2, "review fixture injection when production signature changes");
       source = source.replace(before, after) + `\nimport * as syntheticFs from 'node:fs';
 import * as syntheticPath from 'node:path';
 import { workerData as syntheticData } from 'node:worker_threads';
 import { fork as syntheticFork } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
+import { controlRegistration } from './cloud-control-runtime.mjs';
 import { bootstrapMarker as syntheticMarker, bootstrapReadScript as syntheticRead } from './cloud-remote.mjs';
 const syntheticArgs = syntheticData.args;
 const syntheticGroup = syntheticArgs[syntheticArgs.indexOf('--group') + 1];
 const synthetic = (${syntheticDependencies.toString()})({
   repo: ${JSON.stringify(repo)}, trace: ${JSON.stringify(trace)}, hosts: ${JSON.stringify(hosts)},
   stateDir: syntheticArgs[syntheticArgs.indexOf('--state-dir') + 1], group: syntheticGroup,
-  commit: ${JSON.stringify(commit)}, userId: ${JSON.stringify(userId)}, mode: ${JSON.stringify(mode)}
+  commit: ${JSON.stringify(commit)}, userId: ${JSON.stringify(userId)}, mode: ${JSON.stringify(mode)},
+  holdUntilGroup: ${mode === "overlap" ? `syntheticGroup === ${JSON.stringify(groupNames[1])} ? ${JSON.stringify(groupNames[2])} : null` : "null"}
 }, { fs: syntheticFs, path: syntheticPath, fork: syntheticFork, providerTransport,
-  bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead });\n`;
+  bootstrapMarker: syntheticMarker, bootstrapReadScript: syntheticRead, controlRegistration,
+  EventEmitter, PassThrough, Writable, registration: ${JSON.stringify(registration)} });\n`;
     }
     fs.writeFileSync(target, source);
     return { path: file, url: pathToFileURL(target).href, source, sha256: digest(source) };
@@ -111,6 +117,9 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     assert.ok(!JSON.stringify(p.output).includes("SYNTHETIC_FLEET_CREDENTIAL"));
     const uploads = events.filter((row) => row.group === group && row.boundary === "upload");
     assert.equal(uploads.length, 3);
+    assert.deepEqual(saved.control.sealed, ["bootstrap"]);
+    assert.equal(saved.control.monitor.phase, "closed");
+    assert.equal(events.filter((row) => row.group === group && row.boundary === "monitor").length, 1);
     const script = uploads.find((row) => row.to.endsWith("/job.sh")).content;
     assert.ok(script.includes(`--group '${group}'`)); assert.ok(script.includes(`--commit '${commit}'`));
     assert.ok(script.includes("--state-dir '/bench/campaign'"));
@@ -124,14 +133,14 @@ test("captured production composition ignores arbitrary hints, binds POST identi
   }
   const first = p.saved(), marker = `${JSON.stringify(bootstrapMarker(first))}\n`;
   assert.equal(first.bootstrapReady.sha256, digest(marker)); assert.ok(Number.isFinite(Date.parse(first.bootstrapReady.observedAt)));
-  for (const row of events.filter((row) => ["ssh", "scp"].includes(row.boundary))) {
+  for (const row of events.filter((row) => ["ssh", "sftp", "monitor"].includes(row.boundary))) {
     assert.equal(row.options.shell, false); assert.equal(row.options.windowsHide, true);
-    assert.ok(row.options.timeout > 0 && row.options.timeout <= 900000);
-    assert.deepEqual(row.argv.slice(row.boundary === "scp" ? 1 : 0, row.boundary === "scp" ? 5 : 4), ["-F", "none", "-o", "ForwardAgent=no"]);
+    if (row.boundary !== "monitor") assert.ok(row.options.timeout > 0 && row.options.timeout <= 900000);
+    assert.deepEqual(row.argv.slice(0, 4), ["-F", "none", "-o", "ForwardAgent=no"]);
     assert.ok(row.argv.includes("ClearAllForwardings=yes")); assert.ok(row.argv.includes("ControlPath=none"));
     assert.ok(row.argv.some((arg) => arg.startsWith('UserKnownHostsFile="') && arg.endsWith('/known_hosts"')));
-    if (row.boundary === "ssh") { assert.equal(row.argv.at(-1), "/bin/bash -s"); assert.ok(row.options.input.startsWith("set -euo pipefail\n")); }
-    else assert.equal(row.argv[0], "-B");
+    if (row.boundary === "ssh") assert.ok(row.options.input.startsWith("set -euo pipefail\n"));
+    if (row.boundary === "sftp") assert.ok(row.argv.includes("-b") && row.argv.includes("-s"));
   }
   assert.equal(events.filter((row) => row.method === "POST").length, 1);
   for (const group of groupNames.slice(1)) assert.equal(fs.existsSync(path.join(p.h.base, group)), false);
@@ -139,11 +148,14 @@ test("captured production composition ignores arbitrary hints, binds POST identi
 });
 
 test("second exact approval dispatches all remaining captured production workers once, with overlapping remote groups", { timeout: 60000 }, async (t) => {
-  const p = fixture(t);
+  const p = fixture(t, "overlap");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3);
   const state = p.saved(), group = groupNames[0], campaign = `r21-${state.token}`;
   const local = path.join(p.h.base, group, "groups-r21"), evidence = path.join(local, "evidence-Synthetic");
   const folder = path.join(evidence, "campaign"), report = syntheticInspection("verified");
+  const terminal = JSON.parse(fs.readFileSync(path.join(local, "monitor-terminal.json")));
+  assert.equal(terminal.campaign, campaign); assert.equal(terminal.id, state.control.monitor.id);
+  report.supervisedTerminal = { registrationSha256: state.control.monitor.registrationSha256, sealSha256: terminal.sealSha256 };
   Object.assign(report, { schema: "benchmark-isolated-group-campaign-inspection/v1", campaign,
     selection: state.selection, groups: report.groups.filter((row) => row.group === group) });
   fs.mkdirSync(path.join(folder, campaign), { recursive: true });
@@ -170,7 +182,7 @@ test("second exact approval dispatches all remaining captured production workers
   assert.equal(preview.subject.jobs[0].outcome, "verified");
   for (const job of preview.subject.jobs.slice(1)) assert.equal(job.subject.options.group, job.group);
   const approved = [...args, "--approve-reviewed-merged-ready", approval];
-  assert.equal(await fleetMain(approved, p.deps), 3);
+  assert.equal(await fleetMain(approved, p.deps), 3, JSON.stringify(p.output.at(-1)));
   assert.equal(p.workers.length, groupNames.length);
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "pending"));
   const events = p.events(), posts = events.filter((row) => row.method === "POST");
@@ -182,8 +194,11 @@ test("second exact approval dispatches all remaining captured production workers
     const start = events.findIndex((row) => row.group === group && row.boundary === "provider-child-start");
     const exit = events.findIndex((row) => row.group === group && row.boundary === "provider-child-exit");
     assert.ok(start >= 0 && exit > start);
-    const next = groupNames[groupNames.indexOf(group) + 1];
-    if (next) assert.ok(exit < events.findIndex((row) => row.group === next && row.boundary === "provider-child-start"));
+    if (group === groupNames[1]) {
+      const peer = events.findIndex((row) => row.group === groupNames[2] && row.boundary === "monitor-registered");
+      const terminal = events.findIndex((row) => row.group === group && row.boundary === "monitor-terminal");
+      assert.ok(start < peer && peer < terminal && terminal < exit, "peer registered while this monitor and provider worker were live");
+    }
   }
   assert.equal(ids.size, groupNames.length); assert.equal(ips.size, groupNames.length);
   assert.ok(!events.some((row) => row.method === "DELETE"));
@@ -199,7 +214,7 @@ test("completed POST host A cannot provision otherwise owned host B or admit the
   const events = p.events(), saved = p.saved();
   assert.equal(saved.id, "201", "fresh owned identity retained for recovery");
   assert.equal(saved.status, "preparing");
-  assert.ok(!events.some((row) => ["ssh", "scp", "upload"].includes(row.boundary)));
+  assert.ok(!events.some((row) => ["ssh", "sftp", "monitor", "upload"].includes(row.boundary)));
   assert.equal(events.filter((row) => row.method === "POST").length, 1);
   assert.deepEqual(events.filter((row) => row.path?.startsWith("/v2/actions/")).map((row) => [row.method, row.path]), [["GET", "/v2/actions/1101"]]);
   assert.ok(!events.some((row) => row.method === "DELETE"));
@@ -212,7 +227,7 @@ test("late completed create preserves uncertainty and locks without provisioning
   assert.equal(p.workers.length, 1);
   const events = p.events(), saved = p.saved();
   assert.equal(saved.status, "creating"); assert.equal(saved.id, undefined);
-  assert.ok(!events.some((row) => ["ssh", "scp", "upload"].includes(row.boundary)));
+  assert.ok(!events.some((row) => ["ssh", "sftp", "monitor", "upload"].includes(row.boundary)));
   assert.equal(events.filter((row) => row.method === "POST").length, 1);
   assert.equal(events.filter((row) => row.path?.startsWith("/v2/actions/")).length, 1);
   assert.ok(!events.some((row) => row.method === "DELETE"));

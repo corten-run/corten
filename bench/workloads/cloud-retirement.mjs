@@ -6,6 +6,9 @@ import { isDeepStrictEqual } from "node:util";
 import { digest, evidenceEnvelope, fileHash, physical, regular, treeHash } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 import { quote } from "./cloud-transport.mjs";
+import { guardianSha256, guardianSource } from "./cloud-control-runtime.mjs";
+import { verifyControlSetupQuery } from "./cloud-control-session.mjs";
+import { verifyControlWatcher } from "./isolated/control-admission.mjs";
 import { cancellationState, mixedDigest, mixedWait, originalMixedControls, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
 // This migration is not a general old-source collection or validation override.
@@ -637,7 +640,17 @@ export function unusedEvidence(raw, state, script, startedAtMs, finishedAtMs) {
 
 // The common tooling marker does not prove native entry. Retirement still
 // requires an absent or empty campaign, not a native benchmark result.
-export function terminalSetupScript(state, exitCode) {
+function setupControlExpected(state, exitCode, sequence) {
+  assert.equal(state.control.helperSha256, guardianSha256, "setup control source changed");
+  assert.deepEqual(state.control.sealed, [], "sealed/native entry cannot use pre-entry retirement");
+  assert.ok(Number.isSafeInteger(sequence) && sequence > 0 && sequence < 4096 && sequence <= state.control.ledger.length);
+  const rows = state.control.ledger.slice(0, sequence);
+  assert.ok(rows.every((row) => row.localTerminal && !row.request.seal), "unsettled control cannot retire");
+  const files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
+  return { binding: { round: state.round, commit: state.commit, token: state.token, helperSha256: guardianSha256 }, sequence,
+    requests: rows.map((row) => row.request), queryArgv: ["/usr/bin/python3", "-", state.id, state.unit, JSON.stringify(files), String(exitCode)] };
+}
+export function terminalSetupScript(state, exitCode, sequence = state.control?.ledger.length) {
   assert.ok(Number.isInteger(exitCode) && exitCode >= 1 && exitCode <= 255, "nonzero setup exit code required");
   const files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
   assert.deepEqual(Object.keys(files).sort(), ["job.sh", "pack.sh", state.unit].sort());
@@ -647,6 +660,12 @@ export function terminalSetupScript(state, exitCode) {
     assert.ok(state.bootstrapReady && typeof state.bootstrapReady === "object" && !Array.isArray(state.bootstrapReady), "saved bootstrap observation required");
     assert.equal(state.bootstrapReady.sha256, digest(marker), "saved bootstrap marker differs");
   }
+  const expected = state.control ? setupControlExpected(state, exitCode, sequence) : null;
+  const controlHeader = expected ? `control_namespace = {'__name__': 'fixed_setup_control'}
+exec(compile(${JSON.stringify(guardianSource)}, '<fixed-control-source>', 'exec'), control_namespace)
+control_expected = json.loads(${JSON.stringify(JSON.stringify(expected))})
+control_proof = control_namespace['setup_query'](control_namespace['root_for'](${quote(state.token)}), control_expected)
+` : "";
   return `/usr/bin/timeout 25 /usr/bin/python3 - ${quote(state.id)} ${quote(state.unit)} ${quote(JSON.stringify(files))} ${quote(String(exitCode))} <<'CORTEN_FAILED_SETUP_HOST'
 import hashlib, json, os, pathlib, stat, subprocess, sys, time, urllib.request
 host_id, unit, manifest, expected_code = sys.argv[1:]
@@ -679,7 +698,7 @@ def control(path, name):
 def common_marker(path):
     regular(path, 1024)
     assert path.read_bytes() == expected_marker
-bench = pathlib.Path('/bench')
+${controlHeader}bench = pathlib.Path('/bench')
 assert stat.S_ISDIR(bench.lstat().st_mode)
 marker_path = bench / 'bootstrap-ready.json'
 if os.path.lexists(marker_path):
@@ -693,7 +712,7 @@ for entry in bench.iterdir():
         control(entry, entry.name)
     elif entry.name == 'bootstrap-ready.json':
         common_marker(entry)
-    elif entry.name in ['run.log', 'host.txt', 'exit-code', 'results.tgz']:
+${expected ? "    elif entry.name == 'control':\n        control_namespace['private'](entry)\n" : ""}    elif entry.name in ['run.log', 'host.txt', 'exit-code', 'results.tgz']:
         regular(entry)
     else:
         assert entry.name in ['repo', 'campaign'] and stat.S_ISDIR(entry.lstat().st_mode)
@@ -739,27 +758,48 @@ for entry in pathlib.Path('/proc').iterdir():
         continue
 assert os.getppid() == parent_pid and (parent / 'cmdline').read_bytes() == parent_command
 assert os.readlink(parent / 'exe') == '/usr/bin/timeout'
-print(json.dumps(dict(schema='benchmark-failed-setup-host/v1', hostId=host_id, unit=unit,
-                     observedAtMs=int(time.time()*1000), exitCode=int(expected_code), setupFailed=True)))
+print(json.dumps(dict(schema='benchmark-failed-setup-host/${expected ? "v2" : "v1"}', hostId=host_id, unit=unit,
+                     observedAtMs=int(time.time()*1000), exitCode=int(expected_code), setupFailed=True${expected ? ", control=control_proof" : ""})))
 CORTEN_FAILED_SETUP_HOST`;
 }
 
-export function setupEvidence(raw, state, script, exitCode, startedAtMs, finishedAtMs) {
-  assert.ok(typeof raw === "string" && Buffer.byteLength(raw) <= 1024, "bounded setup proof required");
-  assert.ok(typeof script === "string" && script === terminalSetupScript(state, exitCode), "fixed setup script required");
+export function setupEvidence(raw, state, script, exitCode, startedAtMs, finishedAtMs, local) {
+  assert.ok(typeof raw === "string" && Buffer.byteLength(raw) <= (state.control ? 8 * 1024 * 1024 : 1024), "bounded setup proof required");
   for (const key of ["archiveSha256", "evidenceSha256"])
     assert.ok(typeof state[key] === "string" && state[key].length === 64 && /^[a-f0-9]{64}$/.test(state[key]), "preserved setup evidence hash required");
   const observation = JSON.parse(raw);
   assert.ok(observation && typeof observation === "object" && !Array.isArray(observation), "setup proof required");
-  assert.deepEqual(Object.keys(observation).sort(), ["exitCode", "hostId", "observedAtMs", "schema", "setupFailed", "unit"]);
-  assert.equal(observation.schema, "benchmark-failed-setup-host/v1");
+  const sequence = state.control ? observation.control.requests.length - 1 : undefined;
+  assert.ok(typeof script === "string" && script === terminalSetupScript(state, exitCode, sequence), "fixed setup script required");
+  assert.deepEqual(Object.keys(observation).sort(), [...(state.control ? ["control"] : []), "exitCode", "hostId", "observedAtMs", "schema", "setupFailed", "unit"]);
+  assert.equal(observation.schema, `benchmark-failed-setup-host/${state.control ? "v2" : "v1"}`);
   assert.equal(observation.hostId, state.id); assert.equal(observation.unit, state.unit);
   assert.equal(observation.setupFailed, true); assert.equal(observation.exitCode, exitCode);
+  if (state.control) {
+    assert.equal(sequence, state.control.ledger.length - 1, "setup query is not the final registered control");
+    const expected = setupControlExpected(state, exitCode, sequence), proof = observation.control;
+    verifyControlSetupQuery(expected, proof);
+    const row = state.control.ledger[sequence];
+    assert.equal(row.localTerminal, true); assert.equal(row.code, 0);
+    assert.deepEqual(row.request, proof.requests.at(-1));
+    assert.equal(row.request.invocation.requestSha256, digest(`set -euo pipefail\n${script}\n`), "setup query payload source differs");
+    for (let i = 0; i < sequence; i++) {
+      assert.equal(proof.receipts[i].result.code, state.control.ledger[i].code);
+      verifyControlWatcher(proof.requests[i].invocation, proof.receipts[i], proof.watchers[i]);
+    }
+    assert.equal(typeof local, "string", "original control custody required");
+    const custody = join(local, state.evidence, "control"); physical(custody);
+    assert.deepEqual(readdirSync(custody).sort(), proof.custody.map((entry) => entry.name).sort(), "original control custody inventory differs");
+    for (const entry of proof.custody) {
+      const bytes = regular(join(custody, entry.name), 8 * 1024 * 1024);
+      assert.equal(bytes.length, entry.bytes); assert.equal(digest(bytes), entry.sha256, "original control custody bytes differ");
+    }
+  }
   assert.ok(Number.isSafeInteger(startedAtMs) && Number.isSafeInteger(finishedAtMs) && finishedAtMs >= startedAtMs
     && finishedAtMs - startedAtMs <= 30000, "setup observation exceeded its local window");
   assert.ok(Number.isSafeInteger(observation.observedAtMs) && observation.observedAtMs >= startedAtMs - 5000
     && observation.observedAtMs <= finishedAtMs + 5000, "setup observation clock differs");
-  return { schema: "benchmark-failed-setup-retirement/v1", round: state.round, commit: state.commit, id: state.id, unit: state.unit,
+  return { schema: `benchmark-failed-setup-retirement/${state.control ? "v2" : "v1"}`, round: state.round, commit: state.commit, id: state.id, unit: state.unit,
     archiveSha256: state.archiveSha256, evidenceSha256: state.evidenceSha256, exitCode, scriptSha256: digest(script),
     observation, startedAtMs, finishedAtMs };
 }

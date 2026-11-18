@@ -112,6 +112,9 @@ readiness remain prerequisites; never automatically feed a preview into executio
 The launch intent is durable before any child starts and prevents a second launch,
 including after partial failure. Each child has an independent state directory,
 operation lock, private credential worker and remote systemd unit.
+Every group in the roster uses the same commit. Merge the repairs needed by
+the entire round before preparing it: the first group's results cannot be
+carried into a new reservation for a different commit.
 
 Admission is staged, not a simultaneous fleet allocation. The first `--detach`
 approval launches only the first complete registry group. Untouched groups remain
@@ -141,8 +144,10 @@ child subject. Execution rechecks the snapshot under the fleet lock, consumes an
 exclusive remaining intent and rechecks before each child dispatch. Consumed or
 legacy launch intents cannot acquire this new admission authority.
 
-The remaining dedicated hosts are admitted serially while their remote benchmark
-jobs overlap. Contenders, profiles and measurement parameters are unchanged. A
+The remaining hosts are provisioned one at a time, but their measurements run
+in parallel. The next host may be admitted after its predecessor has a unique
+host identity, a sealed bootstrap and a live registered monitor. A provider
+status of `running` is not enough. Contenders, profiles and measurement parameters are unchanged. A
 failed admission or cancellation leaves every later group visibly `not-admitted`,
 not silently omitted or automatically retried. The complete reserved roster
 remains mandatory. Later groups must also be observed nonterminal before running admission is saved.
@@ -157,6 +162,21 @@ Collection remains independent and concurrent across saved hosts. The parent
 propagates cancellation to children and keeps its lock until every worker exits;
 uncertainty retains the lock. It never terminates a possibly mutating child merely
 to make a timeout look clean.
+
+Keep the local fleet launcher alive while its groups run. A completed worker's
+receipt can say `collection: separate-child-approval-required` while another
+worker still holds the fleet lock. Collect that completed host promptly using
+its own existing group state directory rather than waiting for the slowest group:
+
+```sh
+node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --print-approval
+node bench/workloads/cloud-production.mjs ROUND --state-dir ABSOLUTE_GROUP_STATE_ROOT --collect --approve-reviewed-merged-ready REVIEWED_EXACT_HASH
+```
+
+Review the exact child collection action. Do not clear a lock or infer remote
+termination from a lost local connection. A pending result preserves the host;
+verify the terminal evidence, saved archive and confirmed deletion separately
+for each group before reporting the fleet as complete.
 
 Failed worker results and fleet receipts retain only the existing allowlisted
 `providerDiagnostic` code and optional HTTP status or code-specific finite detail,
@@ -579,8 +599,10 @@ the `droplet.mjs` CLI delegates to that same composition. Direct core imports ke
 their default cloud-execution guard so they cannot accidentally bypass approval.
 Only synthetic configurations and a loopback fake API are used for native credential
 checks; no real account store or provider operation is used. There is no
-hidden launcher: an approved detach provisions once, verifies uploads, starts the
-fixed systemd job and returns. The provider security review does not authorize an
+hidden launcher: an approved detach provisions once, verifies uploads and starts the
+fixed systemd job. For a supervised reservation the local worker stays alive
+until its monitor settles. A clean worker exit does not collect or delete the host.
+The provider security review does not authorize an
 action: the coherent integration still requires merged CI, official-source
 qualification and independently reviewed complete native producer/OS/validator closure.
 
