@@ -1821,7 +1821,9 @@ pub trait DomEvent {
 ///
 /// To write a ref in a standalone patch, declare it at the top of its `#[component(js)]` owner
 /// with `let name: Ref<El> = refs();`. The macro makes a `ComponentNameRefs` bundle with a getter
-/// for each such declaration. Pass that value to the part from both the owner and the patch
+/// for each such declaration. The getter returns a `Ref` whose const parameter is `true`,
+/// so its markup always includes the owner name without adding a flag to the value.
+/// Pass the bundle to the part from both the owner and the patch
 /// handler. Both renders write the owner-qualified name. The part must be under the owner's
 /// root, and its patch ID must identify the instance, not just the component type.
 ///
@@ -1903,10 +1905,36 @@ pub trait DomEvent {
 /// }
 /// # fn main() {}
 /// ```
-pub struct Ref<T = el::HTMLElement, V = NoRows, W = NoValue, K = NoKey> {
+///
+/// Exported refs cannot have conditional declaration attributes. Put the condition on the
+/// component instead:
+///
+/// ```compile_fail
+/// use corten::{prelude::*, script::Ref};
+///
+/// #[component(js)]
+/// fn CountBadge() -> impl Render {
+///     #[cfg(all())]
+///     let out: Ref<el::HTMLOutputElement> = refs();
+///     html! { <output ref={out}></output> }
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// use corten::{prelude::*, script::Ref};
+///
+/// #[component(js)]
+/// fn CountBadge() -> impl Render {
+///     #[cfg_attr(all(), cfg(all()))]
+///     let out: Ref<el::HTMLOutputElement> = refs();
+///     html! { <output ref={out}></output> }
+/// }
+/// # fn main() {}
+/// ```
+pub struct Ref<T = el::HTMLElement, V = NoRows, W = NoValue, K = NoKey, const EXPORTED: bool = false> {
     scope: &'static str,
     name: &'static str,
-    exported: bool,
     kind: PhantomData<fn() -> (T, V)>,
     value: PhantomData<fn() -> (W, K)>,
 }
@@ -2095,21 +2123,21 @@ pub const fn view_id(name: &str) -> u64 {
     hash
 }
 
-impl<T, V, W, K> Clone for Ref<T, V, W, K> {
+impl<T, V, W, K, const EXPORTED: bool> Clone for Ref<T, V, W, K, EXPORTED> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, V, W, K> Copy for Ref<T, V, W, K> {}
+impl<T, V, W, K, const EXPORTED: bool> Copy for Ref<T, V, W, K, EXPORTED> {}
 
-impl<T, V, W, K> std::fmt::Debug for Ref<T, V, W, K> {
+impl<T, V, W, K, const EXPORTED: bool> std::fmt::Debug for Ref<T, V, W, K, EXPORTED> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Ref({}/{})", self.scope, self.name)
     }
 }
 
-impl<T, V, W, K> Ref<T, V, W, K> {
+impl<T, V, W, K, const EXPORTED: bool> Ref<T, V, W, K, EXPORTED> {
     /// The element with this ref that holds the event's target, like the DOM's
     /// `event.target.closest(..)`: one handler on a list's container gets the row that was
     /// clicked. A handler with a `closest()` argument runs only for events inside such an
@@ -2145,7 +2173,7 @@ impl<T, V, W, K> Ref<T, V, W, K> {
     /// # }
     /// ```
     pub const fn closest(self) -> Closest<T> {
-        Closest(Ref { scope: self.scope, name: self.name, exported: self.exported, kind: PhantomData, value: PhantomData })
+        Closest(Ref { scope: self.scope, name: self.name, kind: PhantomData, value: PhantomData })
     }
 
     /// This ref, put on an element with a value for its script: `ref={row.with(cents)}`. A
@@ -2251,7 +2279,7 @@ impl<T, V, W, K> Ref<T, V, W, K> {
     /// }
     /// # fn main() {}
     /// ```
-    pub fn with<X: RefValue<Kind = W>>(self, value: X) -> Valued<T, V, X, K> {
+    pub fn with<X: RefValue<Kind = W>>(self, value: X) -> Valued<T, V, X, K, EXPORTED> {
         Valued { at: self, value }
     }
 }
@@ -2268,8 +2296,8 @@ impl<T> Clone for Closest<T> {
 impl<T> Copy for Closest<T> {}
 
 /// What [`Ref::with`] returns: the ref, put on an element with its value.
-pub struct Valued<T, V, X: RefValue, K = NoKey> {
-    at: Ref<T, V, X::Kind, K>,
+pub struct Valued<T, V, X: RefValue, K = NoKey, const EXPORTED: bool = false> {
+    at: Ref<T, V, X::Kind, K, EXPORTED>,
     value: X,
 }
 
@@ -3308,13 +3336,21 @@ pub mod __private {
     /// `let (rows, rest) = refs();`: each name, made by `#[component]`.
     #[inline]
     pub const fn new_ref<T, V, W, K>(scope: &'static str, name: &'static str) -> Ref<T, V, W, K> {
-        Ref { scope, name, exported: false, kind: PhantomData, value: PhantomData }
+        Ref { scope, name, kind: PhantomData, value: PhantomData }
+    }
+
+    /// Carries the declaration's type arguments into the bundle getter without parsing Rust types.
+    pub trait ExportRef {
+        type Exported;
+    }
+    impl<T, V, W, K> ExportRef for Ref<T, V, W, K> {
+        type Exported = Ref<T, V, W, K, true>;
     }
 
     /// A bundle getter makes the same ref for page and patch, qualified only in `data-ref`.
     #[inline]
-    pub const fn new_exported_ref<T, V, W, K>(scope: &'static str, name: &'static str) -> Ref<T, V, W, K> {
-        Ref { exported: true, ..new_ref(scope, name) }
+    pub const fn new_exported_ref<T, V, W, K>(scope: &'static str, name: &'static str) -> Ref<T, V, W, K, true> {
+        Ref { scope, name, kind: PhantomData, value: PhantomData }
     }
 
     /// A ref of another component's markup is written with its component: `offer-list/rows`.
@@ -3339,14 +3375,14 @@ pub mod __private {
     }
     /// ` data-ref="rows"`.
     #[inline]
-    fn data_ref<T, V, W, K: KeyKind>(r: &Ref<T, V, W, K>, out: &mut String) {
+    fn data_ref<T, V, W, K: KeyKind, const EXPORTED: bool>(r: &Ref<T, V, W, K, EXPORTED>, out: &mut String) {
         out.push_str(" data-ref=\"");
-        qualified(out, r.scope, if r.exported { None } else { current_scope() });
+        qualified(out, r.scope, if EXPORTED { None } else { SCOPE.with(Cell::get) });
         out.push_str(r.name);
         out.push('"');
         K::written(r.scope, r.name);
     }
-    impl<E, V, K: KeyKind> RefAttr<E, V, K> for Ref<E, V, NoValue, K> {
+    impl<E, V, K: KeyKind, const EXPORTED: bool> RefAttr<E, V, K> for Ref<E, V, NoValue, K, EXPORTED> {
         #[inline]
         fn write_ref(&self, out: &mut String) {
             data_ref(self, out)
@@ -3354,7 +3390,7 @@ pub mod __private {
     }
     /// ` data-ref-value='1250'`: the value as JSON, single-quoted as `data-on` is, so a string
     /// keeps its quotes (`docs/design.md#choice-ref-values`).
-    impl<E, V, K: KeyKind, X: RefValue> RefAttr<E, V, K> for Valued<E, V, X, K> {
+    impl<E, V, K: KeyKind, X: RefValue, const EXPORTED: bool> RefAttr<E, V, K> for Valued<E, V, X, K, EXPORTED> {
         #[inline]
         fn write_ref(&self, out: &mut String) {
             data_ref(&self.at, out);
@@ -3568,7 +3604,7 @@ pub mod __private {
     impl<E: ev::SubOf<P>, P: ev::EventType> EventParam<E> for P {}
     impl<E> EventParam<E> for ts::Any {}
 
-    impl<T, V, W, K, P: RefParam<T, V, W, K>> Arg<P> for Ref<T, V, W, K> {
+    impl<T, V, W, K, P: RefParam<T, V, W, K>, const EXPORTED: bool> Arg<P> for Ref<T, V, W, K, EXPORTED> {
         fn write_arg(&self, ctx: &Ctx, out: &mut String) {
             out.push_str(P::SIGIL);
             qualified(out, self.scope, ctx.current);

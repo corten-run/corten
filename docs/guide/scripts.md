@@ -590,10 +590,11 @@ fn AccountChooser<'a>(accounts: &'a [Account]) -> impl Render {
 **Refs in a standalone part.** When a part is drawn in the page and also sent alone, the
 component that owns the script can export a ref for it. Give the ref a concrete
 `corten::script::Ref<El>` type in its `refs()` declaration. This makes a
-`ComponentNameRefs` bundle with a getter returning an ordinary `Ref` for each such declaration.
+`ComponentNameRefs` bundle with a getter returning a typed ref for each such declaration.
 The bundle has no writable fields. A part that takes `InventoryRefs` cannot be passed or filled
 with another component's refs, even if both declare a ref of the same name and element type.
-An exported ref cannot share its name with another ref declaration in the owner.
+An exported ref cannot share its name with another ref declaration in the owner or carry
+`#[cfg]` or `#[cfg_attr]`. Put the condition on the component instead.
 
 ```rust,ignore
 use corten::{prelude::*, script::Ref};

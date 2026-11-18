@@ -675,10 +675,13 @@ fn refs(
                 if !own_script {
                     return err(n.span(), "only the owner of a script (#[component(js)]) can export a ref");
                 }
+                if let Some(span) = conditional_ref_attr(&tokens[..i]) {
+                    return err(span, "an exported ref cannot be conditional; put the condition on the component instead");
+                }
                 let name = record(n, true)?;
                 let ident = TokenTree::Ident(n.clone());
                 getters.extend(q(
-                    "#[doc = __A3] #[inline] __A0 const fn __A1(self) -> __A2 {
+                    "#[doc = __A3] #[inline] __A0 const fn __A1(self) -> <__A2 as ::corten::script::__private::ExportRef>::Exported {
                         ::corten::script::__private::new_exported_ref(__A4, __A5)
                     }",
                     &[
@@ -690,8 +693,7 @@ fn refs(
                         literal(&name),
                     ],
                 ));
-                out.extend(tokens[i..=eq].iter().cloned());
-                out.extend(q("__A0.__A1()", &[bundle(), ident.into()]));
+                out.extend(q("let __A0 = __A1.__A0()", &[ident.into(), bundle()]));
                 found = true;
                 i = eq + 3;
                 continue;
@@ -755,6 +757,20 @@ fn refs(
     let mut copy = Group::new(Delimiter::Brace, stream(out));
     copy.set_span(body.span());
     Ok((copy, found, items))
+}
+
+fn conditional_ref_attr(mut before: &[TokenTree]) -> Option<Span> {
+    while let [rest @ .., TokenTree::Punct(hash), TokenTree::Group(attr)] = before {
+        if hash.as_char() != '#' || attr.delimiter() != Delimiter::Bracket {
+            break;
+        }
+        let name = attr.stream().into_iter().next();
+        if is_ident(name.as_ref(), "cfg") || is_ident(name.as_ref(), "cfg_attr") {
+            return Some(hash.span());
+        }
+        before = rest;
+    }
+    None
 }
 
 fn ref_name(n: &Ident) -> Result<String, Error> {
