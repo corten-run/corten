@@ -100,6 +100,35 @@ const SCOPE_REF = /:scope(?![-\w])|&/gi;
 // Only descendant and child combinators, with no references inside functions or attributes.
 const SCOPE_MEMBER = /^(?:[-\w.#*\s>]|\[[-\w]+\]|:(?:is|not|where)\(\s*(?:[.#]?[-\w]+|\[[-\w]+\])\s*\)|:scope(?![-\w])|&)+$/i;
 
+/** Leave matching to the browser, but omit members that need a nesting or scope context.
+ * @param {string} selector */
+function unscoped(selector) {
+  if (!/[:,&\\]/.test(selector)) return selector;
+  const members = [];
+  let start = 0;
+  let attribute = false;
+  let depth = 0;
+  let reference = false;
+  // CSSOM supplies a parsed selector. Strings and escapes shield punctuation; only a comma
+  // outside attributes and functions splits the list. Do not try to decode escaped pseudo names.
+  for (const { 0: token, index } of selector.matchAll(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\\.|:(?:[-\w\u0080-\uffff]|\\.)+|[()[\],&]/gs)) {
+    if (token === "[") attribute = true;
+    else if (token === "]") attribute = false;
+    else if (attribute) continue;
+    else if (token === "(") depth++;
+    else if (token === ")") depth--;
+    else if (token === "," && !depth) {
+      if (!reference) members.push(selector.slice(start, index));
+      start = index + 1;
+      reference = false;
+    } else if (token === "&" || token.toLowerCase() === ":scope" || token.startsWith(":") && token.includes("\\")) {
+      reference = true;
+    }
+  }
+  if (!reference) members.push(selector.slice(start));
+  return members.join(",") || null;
+}
+
 /** @param {string} selector @param {string | null} parent @param {boolean} [styleParent] */
 function composed(selector, parent, styleParent = false) {
   if (selector.length > MAX_SELECTOR || /[^\x09-\x0d\x20-\x7e]/.test(selector)) return null;
@@ -171,8 +200,8 @@ function* sheetRules(adopted) {
 }
 
 // Read display rules again on each check, since a dev server's stylesheets can change.
-/** @param {boolean} [adopted] @param {boolean} [linkedBreakpoint] */
-function displays(adopted = false, linkedBreakpoint = false) {
+/** @param {boolean} [adopted] */
+function displays(adopted = false) {
   /** @type {Display[]} */
   const found = [];
   /**
@@ -193,7 +222,7 @@ function displays(adopted = false, linkedBreakpoint = false) {
       if (styled && asWritten) {
         if (!adopted || scope) own = resolved(asWritten, selector);
         else if (selector) own = composed(asWritten, selector, true);
-        else own = asWritten.search(SCOPE_REF) < 0 ? asWritten : null;
+        else own = unscoped(asWritten);
       }
       let scoped = scope;
       // undefined: unscoped; null: legacy only, including descendants.
@@ -217,13 +246,10 @@ function displays(adopted = false, linkedBreakpoint = false) {
       // Adopted rules have no legacy fallback: do not guess at an unresolved scope or selector.
       if (adopted && (scoped === null || styled && !own && !scoped)) continue;
       const scopeDisplay = scoped && (styled || globalThis.CSSNestedDeclarations && rule instanceof CSSNestedDeclarations) ? scoped : null;
-      const display = style?.display;
-      if (display && (scopeDisplay || own && asWritten)) {
-        const important = style.getPropertyPriority("display") === "important";
-        if (!adopted || display !== "none" && (condition || important)) {
-          found.push({ selector: own ?? "", written: asWritten ?? "", display, condition,
-            important, scope: scopeDisplay || undefined });
-        }
+      const display = (!adopted || condition) && style?.display;
+      if (display && (!adopted || display !== "none") && (scopeDisplay || own && asWritten)) {
+        found.push({ selector: own ?? "", written: asWritten ?? "", display, condition,
+          important: !adopted && style.getPropertyPriority("display") === "important", scope: scopeDisplay || undefined });
       }
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
@@ -235,12 +261,10 @@ function displays(adopted = false, linkedBreakpoint = false) {
       walk(inner, condition ?? breakpoint(rule), own, asWritten, scoped);
     }
   };
-  const sheets = sheetRules(adopted);
-  // Without a linked breakpoint to override, there is nothing to resolve unless an adopted
-  // sheet has a breakpoint. Check the rule tree without reading selectors or declarations.
-  const readable = adopted && !linkedBreakpoint ? [...sheets] : sheets;
-  if (Array.isArray(readable) && !readable.some(hasBreakpoint)) return found;
-  for (const rules of readable) {
+  // Adopted sheets only add warnings. Without a breakpoint there is nothing to resolve:
+  // check the rule tree without reading selectors or declarations.
+  for (const rules of sheetRules(adopted)) {
+    if (adopted && !hasBreakpoint(rules)) continue;
     try {
       walk(rules, null, null, null);
     } catch {}
@@ -286,8 +310,8 @@ function inPlace(root) {
   if (!closed.length) return;
   const rules = displays();
   const linkedBreakpoint = rules.some((r) => r.condition && r.display !== "none");
-  const adopted = displays(true, linkedBreakpoint);
-  if (!linkedBreakpoint && !adopted.some((r) => r.condition)) return;
+  const adopted = displays(true);
+  if (!linkedBreakpoint && !adopted.length) return;
   const scoped = rules.some((r) => r.scope);
   for (const el of closed) {
     const linked = scoped ? scopedMatches(el, rules) : rules.filter((r) => matching(el, r.selector));
@@ -298,9 +322,8 @@ function inPlace(root) {
     // A .card scope's .rail:not(.gone,.pending) display can warn outside .card and .other despite a .other scope's .rail !important.
     if (linked.some((r) => r.important && r.display !== "none")) continue;
     const linkedDrawn = linked.find((r) => r.condition && r.display !== "none");
-    const matches = adopted.filter((r) => matching(el, r.scope?.selector ?? r.selector));
-    const drawn = linkedDrawn ?? matches.find((r) => r.condition);
-    if (!drawn || matches.some((r) => r.important)) continue;
+    const drawn = linkedDrawn ?? adopted.find((r) => matching(el, r.scope?.selector ?? r.selector));
+    if (!drawn) continue;
     reported.add(el);
     const dialog = el instanceof HTMLDialogElement && !own.hasAttribute.call(el, "popover");
     const kind = dialog ? "dialog" : "popover";

@@ -170,11 +170,16 @@ The check does not evaluate the cascade. Three known limits for closed rails wit
 
 The check also reads the document's adopted stylesheets without changing them or applying
 diagnostic styles to the page. It matches ordinary selectors and the supported explicit scopes
-described above. If it cannot resolve an adopted selector (including nested selectors outside
-the supported forms), an implicit scope root or a `to` limit, it skips the rule rather than
-matching it without its bounds. It skips disabled, namespaced or media-inactive adopted sheets,
-rules in unsupported `@supports` or `@starting-style` blocks, and styles inside shadow roots.
+described above. In an unscoped, unnested selector list it skips members that refer to `:scope`
+or `&`, or whose pseudo-class names contain escapes; other members still match normally.
+An unsupported nested selector, an implicit scope root or a `to` limit is not inspected rather
+than matched without its bounds. It also skips disabled, namespaced or media-inactive adopted
+sheets, rules in unsupported `@supports` or `@starting-style` blocks, and shadow-root styles.
 Within an eligible sheet it still checks media and container breakpoints even when inactive.
+Adopted rules only add warnings; they do not override the linked-sheet check. A dialog that the
+browser already shows does not warn. The check does not inspect which adopted declaration wins
+at another width, so a skipped `to`-limited override can leave a warning for a dialog that
+actually appears at that breakpoint.
 When only areas have stylesheets, each area's file starts with these rules. An app with no
 component stylesheet has neither file, so if its `static/style.css` gives a hidden element, a
 popover or a dialog a `display` (styling corten-ui's parts there, say), it adds them itself:

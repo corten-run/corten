@@ -239,14 +239,20 @@ try {
     });
     await adopted.addInitScript(() => {
       const sheet = new CSSStyleSheet();
-      sheet.replaceSync(`
+      sheet.replaceSync(String.raw`
         @scope (.outer) { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } }
         @scope { @media (min-width: 1px) { #adoptedImplicit { display: flex; outline-style: solid } } }
         @scope (.nest) { @scope { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } } }
         @scope (.limited) to (.stop) { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } }
         @media (min-width: 900px) { #adoptedWide, .adoptedRail { display: flex } }
         @media (min-width: 1px) { .parentOnly { display: flex } }
-        @scope (.override) { @media (min-width: 900px) { .adoptedRail { display: grid !important } } }
+        @scope (.override) to (.stop) { @media (min-width: 900px) { .adoptedRail { display: grid !important } } }
+        :where(#adoptedLoses) { display: grid !important; outline-style: solid }
+        #adoptedShown { display: grid !important }
+        @media (min-width: 1px) {
+          [data-label="R&D"], :is(:scope, #adoptedScopeReference), [data-label=":scope, tag"],
+          :is([data-label=plain], .unused), #adoptedEscape\&, #adoptedComma\, { display: flex; outline-style: solid }
+        }
       `);
       document.adoptedStyleSheets.push(sheet);
       const inactive = new CSSStyleSheet({ media: "not all" });
@@ -260,10 +266,14 @@ try {
       '<dialog id="adoptedImplicit"></dialog><div class="nest"><dialog id="adoptedNested"></dialog></div>' +
       '<div class="limited"><dialog id="adoptedInsideLimit"></dialog><div class="stop"><dialog id="adoptedPastLimit"></dialog></div></div>' +
       '<div class="parentOnly"><dialog id="adoptedChild"></dialog></div>' +
-      '<dialog id="adoptedWide"></dialog><div class="override"><dialog id="adoptedOverride" class="adoptedRail"></dialog></div>' +
+      '<dialog id="adoptedWide"></dialog><div class="override"><dialog id="adoptedOverride" class="adoptedRail"></dialog>' +
+      '<div class="stop"><dialog id="adoptedPastOverride" class="adoptedRail"></dialog></div></div>' +
       '<dialog id="adoptedOutsideOverride" class="adoptedRail"></dialog>' +
-      '<dialog id="adoptedMedia"></dialog><dialog id="adoptedDisabled"></dialog><dialog id="fixtureEnd"></dialog>',
-      "@media (min-width: 1px) { #adoptedMedia, #adoptedDisabled, #fixtureEnd { display: flex } }");
+      '<dialog id="adoptedMedia"></dialog><dialog id="adoptedDisabled"></dialog><dialog id="adoptedLoses"></dialog><dialog id="adoptedShown"></dialog>' +
+      '<dialog id="adoptedAmp" data-label="R&amp;D"></dialog><dialog id="adoptedScopeReference"></dialog>' +
+      '<dialog id="adoptedScopeText" data-label=":scope, tag"></dialog><dialog id="adoptedPlain" data-label="plain"></dialog>' +
+      '<dialog id="adoptedEscape&amp;"></dialog><dialog id="adoptedComma,"></dialog><dialog id="fixtureEnd"></dialog>',
+      "@media (min-width: 1px) { #adoptedMedia, #adoptedDisabled, #adoptedLoses, #adoptedShown, #fixtureEnd { display: flex } }");
     const done = adopted.waitForEvent("console", { predicate: (m) => m.text().startsWith("corten: fixtureEnd "), timeout: 10000 }).then(() => true, () => false);
     await adopted.goto(base + "/");
     const completed = await done;
@@ -272,14 +282,27 @@ try {
       return { id: el.id, display, styled: outlineStyle === "solid" };
     }));
     const styled = states.filter((e) => e.styled).map((e) => e.id);
-    const linked = ["adoptedMedia", "adoptedDisabled"];
+    const inactive = ["adoptedMedia", "adoptedDisabled"];
+    const selectors = ["adoptedAmp", "adoptedScopeText", "adoptedPlain", "adoptedEscape&", "adoptedComma,"];
+    const rails = ["adoptedOverride", "adoptedPastOverride", "adoptedOutsideOverride"];
+    const otherCases = [...inactive, "adoptedLoses", ...selectors, ...rails];
     check("adopted breakpoints use resolvable scopes, without guessing about implicit roots or scope limits",
-      completed && states.every((e) => e.display === "none") && styled.includes("adoptedExplicit") && styled.includes("adoptedInsideLimit") &&
+      completed && states.every((e) => e.display === (e.id === "adoptedShown" ? "grid" : "none")) &&
+      styled.includes("adoptedExplicit") && styled.includes("adoptedInsideLimit") &&
       !styled.includes("adoptedOutside") && !styled.includes("adoptedPastLimit") &&
-      warned.filter((id) => !linked.includes(id)).join(",") === "adoptedExplicit,adoptedWide,adoptedOutsideOverride",
+      warned.filter((id) => !otherCases.includes(id)).join(",") === "adoptedExplicit,adoptedWide",
       `styled: ${styled}; warnings: ${warned}`);
     check("inactive and disabled adopted sheets cannot suppress linked warnings",
-      completed && linked.every((id) => warned.includes(id) && !styled.includes(id)), warned.join(","));
+      completed && inactive.every((id) => warned.includes(id) && !styled.includes(id)), warned.join(","));
+    check("a losing adopted !important cannot suppress a linked warning, but a dialog the browser shows does not warn",
+      completed && styled.includes("adoptedLoses") && warned.includes("adoptedLoses") && !warned.includes("adoptedShown"), warned.join(","));
+    check("an adopted selector list keeps ordinary members with quoted or escaped characters, but skips an actual scope reference",
+      completed && [...selectors, "adoptedScopeReference"].every((id) => styled.includes(id)) &&
+      selectors.every((id) => warned.includes(id)) && !warned.includes("adoptedScopeReference"), `styled: ${styled}; warnings: ${warned}`);
+    await adopted.setViewportSize({ width: 1000, height: 800 });
+    const wide = await adopted.locator(".adoptedRail").evaluateAll((els) => els.map((el) => getComputedStyle(el).display).join(","));
+    check("a skipped adopted to-limited override can leave a warning for a dialog that shows at another width",
+      completed && rails.every((id) => warned.includes(id)) && wide === "grid,none,none", `wide: ${wide}; warnings: ${warned}`);
   } finally {
     await adopted.close();
   }
