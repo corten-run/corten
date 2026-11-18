@@ -8,6 +8,7 @@ import { join, resolve, sep } from "node:path";
 import { mock, test } from "node:test";
 import { groupNames, selectedApps } from "../registry.mjs";
 import { result as jsonResult, failedResult } from "../../json-api/test-fixtures.mjs";
+import { apparatusSources } from "../../catalog/apparatus.mjs";
 
 const seams = new Map();
 for (const group of groupNames.filter((g) => !["catalog-page", "json-api", "localized-marketplace"].includes(g)))
@@ -27,7 +28,8 @@ for (const [path, { group, name }] of seams) mock.module(urls.get(path), { expor
   if (group === "catalog-page") return { status: "verified", complete: true, report: { baseline: true, attemptComplete: true,
     outcomes: selectedApps(group).map((app) => ({ app, outcome: "passed" })), comparisonEligibleApps: selectedApps(group) } };
   if (group === "localized-marketplace") return JSON.parse(readFileSync(join(input.folder, "summary.json")));
-  if (group === "client-api") return { schema: "client-heavy-saved-verification/v2" };
+  if (group === "client-api") return { schema: action === "client-v3" ? "client-heavy-saved-verification/v3"
+    : action === "client-unknown" ? "client-heavy-saved-verification/v4" : "client-heavy-saved-verification/v2" };
   if (action === "mutate") appendFileSync(join(folder, "raw.log"), "changed");
   if (action === "malformed") return { status: "SYNTHETIC_PRIVATE_SENTINEL" };
   return { status: "verified", attemptComplete: true, cleanupComplete: true, resources: "verified",
@@ -46,6 +48,50 @@ function fixture(t, group) {
   writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); writeFileSync(join(folder, "raw.log"), "synthetic\n");
   return { folder, binding, summary };
 }
+
+test("catalog worker source receipts must match the bound commit even after fully rehashing", async (t) => {
+  const f = fixture(t, "catalog-page"), hash = (text) => createHash("sha256").update(text).digest("hex");
+  const proof = { schema: "catalog-apparatus-source/v1", commit: f.binding.request.commit,
+    files: Object.fromEntries(apparatusSources.map((path) => [path, hash(path)])) };
+  f.binding.sources = { commit: proof.commit, files: Object.entries(proof.files).map(([path, sha256]) => ({ path, sha256 })) };
+  const save = (value) => {
+    const text = JSON.stringify(value);
+    f.summary.savedEvidence = { schema: "catalog-saved-evidence/v4", apparatusSourceSha256: hash(text) };
+    writeFileSync(join(f.folder, "apparatus-source.json"), text);
+    writeFileSync(join(f.folder, "summary.json"), JSON.stringify(f.summary));
+  };
+  action = "normal"; save(proof);
+  assert.equal((await inspectNative(f.binding, f.folder)).status, "verified");
+  for (const change of [
+    (p) => { p.files[apparatusSources[0]] = hash("different source"); },
+    (p) => { delete p.files[apparatusSources[0]]; },
+    (p) => { p.files["bench/catalog/unreviewed.mjs"] = hash("extra source"); },
+    (p) => { p.commit = "b".repeat(40); },
+  ]) {
+    const changed = structuredClone(proof); change(changed); save(changed);
+    assert.equal((await inspectNative(f.binding, f.folder)).status, "invalid");
+  }
+  save(proof);
+  f.summary.savedEvidence.apparatusSourceSha256 = "b".repeat(64);
+  writeFileSync(join(f.folder, "summary.json"), JSON.stringify(f.summary));
+  assert.equal((await inspectNative(f.binding, f.folder)).status, "invalid");
+  save(proof); rmSync(join(f.folder, "apparatus-source.json"));
+  assert.equal((await inspectNative(f.binding, f.folder)).status, "blocked");
+});
+
+test("client registered replay uses the same saved verifier for exact historical v2 and candidate v3, never unknown schemas", async (t) => {
+  const f = fixture(t, "client-heavy");
+  for (const [mode, valid] of [["normal", true], ["client-v3", true], ["client-unknown", false]]) {
+    action = mode; calls = [];
+    const result = await inspectNative(f.binding, f.folder);
+    assert.equal(result.status, valid ? "verified" : "invalid", JSON.stringify(result));
+    const replay = calls.filter((c) => c.group === "client-api");
+    assert.equal(replay.length, 1);
+    assert.deepEqual(replay[0].input, { folder: f.folder, round: f.binding.request.round, commit: f.binding.request.commit });
+    if (valid) assert.ok(result.hostSubject);
+  }
+  action = "normal";
+});
 
 test("browser qualification exit is exact and separate from intrinsic completion and cleanup", () => {
   const binding = { request: { group: "fullstack-browser" }, selection: { apps: ["a", "b"] } };
