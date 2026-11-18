@@ -20,12 +20,22 @@ import { composePhase } from "./composition.mjs";
 import * as actualLifetime from "./host-lifetime.mjs";
 import { samplingControl } from "./test-fixtures/host-lifetime-storage.mjs";
 import { ioError } from "./test-fixtures/host-durable-writer-control.mjs";
+import { processStat } from "./host-observation.mjs";
+import * as controlAdmission from "./control-admission.mjs";
+import { guardianSource } from "../cloud-control-runtime.mjs";
 
 const repo = fileURLToPath(new URL("../../../", import.meta.url));
 const temporary = mkdtempSync(join(os.tmpdir(), "isolated-campaign-test-"));
 let root, mode = "normal", expectedPlan, currentInvocation, calls = [], observations = 0, authorizations = [], release, pendingStarted, abort, auditComplete = true, lifetimeFailure, replayLifetimeFailure;
 let lifetimeStartup;
 let lifetimeRun;
+let admittedHost, admittedApparatus, controlWindows;
+mock.module("./control-admission.mjs", { exports: { ...controlAdmission,
+  beginControlWindow(binding) {
+    assert.equal(binding.round, "r21"); controlWindows.push("open");
+    return () => { assert.ok(existsSync(join(controlWindows.directory, "00-client-heavy-timing", "host-after.json"))); controlWindows.push("close"); };
+  },
+} });
 const cpu = { app: { cpuset: "1", quota: 1 } };
 mock.module("./evidence.mjs", { namedExports: { ...evidence,
   physical: (path, ...rest) => evidence.physical(path === "/bench/campaign" ? root : path, ...rest),
@@ -70,8 +80,11 @@ mock.module("./mixed-staging.mjs", { exports: {
   },
   validateMixedRun() { return mode === "complete"; },
 } });
-const host = () => ({ hostname: "test-host", bootId: "boot", containers: [], networks: ["bridge"], processes: [] });
+const host = () => ({ hostname: admittedHost?.hostname ?? "test-host", bootId: admittedHost?.bootId ?? "boot", containers: [], networks: ["bridge"], processes: [],
+  ...(admittedApparatus ? { controlApparatus: { registration: structuredClone(admittedApparatus), sample: { host: admittedApparatus.host,
+    monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener } } } : {}) });
 mock.module("./host-observation.mjs", { namedExports: {
+  processStat,
   observeHost() { observations++; const value = host(); if (mode === "leak" && observations > 2) value.containers = ["leak"]; return value; },
   verifyHostBoundary(before, after) { assert.deepEqual(after, before, "host cleanup uncertain"); return { cleanup: "observed-boundary-matched", isolation: "unverified" }; },
 } });
@@ -104,7 +117,7 @@ mock.module("./host-lifetime.mjs", { exports: {
     if (replayLifetimeFailure === expected.command) checks.accounting = false;
     const complete = Object.values(checks).every(Boolean);
     return { status: complete ? "verified" : "blocked", cleanupComplete: complete, checks,
-      context: { bootId: "boot" }, manifestSha256: evidence.tree(directory).sha256 };
+      context: { bootId: host().bootId }, manifestSha256: evidence.tree(directory).sha256 };
   },
   composeHostProof() { return { resources: mode === "complete" ? "verified" : "blocked", cleanupComplete: mode === "complete" }; },
 } });
@@ -183,6 +196,7 @@ const { createCampaign } = await import("./campaign.mjs");
 const { validateCampaign: validateSavedCampaign } = await import("./campaign-verify.mjs");
 let round = 100;
 function setup(policy = () => true) {
+  admittedHost = null; admittedApparatus = null; controlWindows = [];
   round++; mode = "normal"; calls = []; observations = 0; authorizations = []; auditComplete = true; lifetimeFailure = null; replayLifetimeFailure = null; lifetimeStartup = null; lifetimeRun = null;
   root = join(temporary, `state-${round}`); mkdirSync(root, { mode: 0o700 });
   expectedPlan = { round: `r${round}`, commit: "a".repeat(40), campaignSha256: `plan-${round}`, order: [...groupNames],
@@ -209,6 +223,81 @@ const mixedDelivery = (subjectSha256) => ({ schema: "benchmark-mixed-audit-deliv
   bundle: { schema: "mixed-native-source-audits/v1", receipts: [] } });
 const submitPending = (campaign, handle, status) => status.auditGroup === "mixed-production"
   ? campaign.submitMixedAudit(handle, mixedDelivery(status.mixedAuditSubjectSha256)) : campaign.submitJsonAudit(handle, delivery(handle));
+
+test("v4 live campaign retains actual bootstrap proof before baseline and brackets the original raw phase end", async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
+    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
+  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
+  const proof = JSON.parse(result.stdout), s = setupGroup("client-heavy"); s.plan.round = "r21"; admittedHost = proof.admission.host;
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission } });
+  controlWindows.directory = handle.directory;
+  const rows = evidence.tree(handle.directory).entries.filter((e) => /^\d{5}-/.test(e.path)).map((e) => JSON.parse(readFileSync(join(handle.directory, e.path))));
+  assert.deepEqual(rows.map((e) => e.kind), ["authorized", "control-admitted", "started"]);
+  assert.equal(s.campaign.status(handle).executionVersion, 4);
+  assert.deepEqual(JSON.parse(readFileSync(join(handle.directory, "control-bootstrap.json"))), proof.admission);
+  const status = await s.campaign.advance(handle); assert.equal(status.state, "finished");
+  assert.deepEqual([...controlWindows], ["open", "close"]);
+  const originalEnd = JSON.parse(readFileSync(join(handle.directory, "00-client-heavy-timing", "host-after.json")));
+  assert.deepEqual(originalEnd, host());
+  writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
+  const saved = await validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit });
+  assert.notEqual(saved.status, "invalid", JSON.stringify(saved));
+  proof.admission.watchers[0].properties.MainPID = "999";
+  const bytes = `${JSON.stringify(proof.admission)}\n`;
+  writeFileSync(join(handle.directory, "control-bootstrap.json"), bytes);
+  rows[1].sha256 = evidence.digest(bytes);
+  writeFileSync(join(handle.directory, "00001-control-admitted.json"), JSON.stringify(rows[1]));
+  const collectionPath = join(handle.directory, "collection-manifest.json"), collection = JSON.parse(readFileSync(collectionPath));
+  const entries = evidence.tree(handle.directory).entries.filter((e) => e.path !== "collection-manifest.json");
+  collection.manifest = { entries, sha256: evidence.digest(JSON.stringify(entries)) };
+  writeFileSync(collectionPath, JSON.stringify(collection));
+  assert.equal((await validateSavedCampaign({ folder: root, round: "r21", commit: s.plan.commit })).status, "invalid",
+    "rehashed journal/collection cannot substitute for watcher termination");
+});
+
+test("v5 campaign carries presealed registration through native bookends, final seal and saved drain replay", async (t) => {
+  t.mock.method(fs, "fsyncSync", () => {}); syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const result = childProcess.spawnSync(process.platform === "win32" ? "python" : "python3", ["-I", "bench/workloads/test-fixtures/control-session-kernel.py"],
+    { cwd: resolve(repo), input: JSON.stringify({ source: guardianSource, mode: "normal" }), encoding: "utf8", timeout: 10000, maxBuffer: 512 * 1024, windowsHide: true });
+  assert.equal(result.error, undefined); assert.equal(result.status, 0, result.stderr);
+  const proof = JSON.parse(result.stdout), s = setupGroup("client-heavy"); s.plan.round = "r21"; admittedHost = proof.admission.host;
+  const { registration: fixture } = await import("../test-fixtures/control-stream-fixture.mjs");
+  const { streamHash } = await import("./control-stream.mjs");
+  const { deploymentSha256 } = await import("../deployments.mjs");
+  admittedApparatus = { ...structuredClone(fixture), binding: proof.binding, host: proof.admission.host };
+  proof.admission.apparatus = admittedApparatus;
+  proof.admission.apparatusSample = { host: admittedHost, monoNs: "2000000", members: admittedApparatus.members, listener: admittedApparatus.listener };
+  s.plan.bindings[0].resources.expectedCpus = { app: { cpuset: "1" }, api: { cpuset: "2-3" }, load: { cpuset: "4-7" } };
+  const calls = [], stream = { registration: admittedApparatus, check() { calls.push("check"); },
+    open(cpus) { assert.deepEqual(cpus, { app: "1", api: "2-3", load: "4-7" }); calls.push("open"); },
+    close() { calls.push("close"); }, async seal() {
+      calls.push("seal"); return { schema: "benchmark-control-stream-seal/v1", registration: admittedApparatus,
+        observations: [{ sequence: 1, monoNs: "2000000", registrationSha256: streamHash(admittedApparatus) }], sealedMonoNs: "3000000",
+        lease: { id: admittedApparatus.id, host: admittedHost, expiresMonoNs: "15000000000" } };
+    } };
+  const handle = await s.campaign.begin(s.plan, { stateRoot: "/bench/campaign", control: { binding: proof.binding, admission: proof.admission, stream } });
+  controlWindows.directory = handle.directory; assert.equal(s.campaign.status(handle).executionVersion, 5);
+  assert.equal((await s.campaign.advance(handle)).state, "finished"); assert.ok(calls.indexOf("open") < calls.indexOf("close") && calls.indexOf("close") < calls.indexOf("seal"));
+  assert.deepEqual(JSON.parse(readFileSync(join(handle.directory, "00-client-heavy-timing", "host-after.json"))), host());
+  const drain = { schema: "benchmark-control-stream-drain/v1", id: admittedApparatus.id, registrationSha256: streamHash(admittedApparatus),
+    host: admittedHost, monoNs: "4000000", identitiesAbsent: true, listener: admittedApparatus.listener,
+    scopes: [{ path: "/user.slice/session-1.scope", exists: false, members: [], events: null }] };
+  writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+  writeFileSync(join(handle.directory, "collection-manifest.json"), JSON.stringify(s.campaign.collect(handle)));
+  const request = { folder: root, round: "r21", commit: s.plan.commit };
+  const inspected = await validateSavedCampaign(request);
+  assert.notEqual(inspected.status, "invalid");
+  assert.deepEqual(inspected.supervisedTerminal, { registrationSha256: streamHash(admittedApparatus),
+    sealSha256: evidence.digest(readFileSync(join(handle.directory, "control-stream-seal.json"))) });
+  drain.identitiesAbsent = false; writeFileSync(join(handle.directory, "control-stream-drain.json"), JSON.stringify(drain));
+  const collectionPath = join(handle.directory, "collection-manifest.json"), collection = JSON.parse(readFileSync(collectionPath));
+  const entries = evidence.tree(handle.directory).entries.filter((e) => e.path !== "collection-manifest.json");
+  collection.manifest = { entries, sha256: deploymentSha256(entries) }; writeFileSync(collectionPath, JSON.stringify(collection));
+  assert.equal((await validateSavedCampaign(request)).status, "invalid", "rehashing cannot replace actual apparatus disappearance");
+});
 
 for (const [fault, shutdown = "drained"] of [
   ["observation"], ["write"], ["pending-storage"], ["continuity"], ["observation", "forced"], ["observation", "undrained"],
