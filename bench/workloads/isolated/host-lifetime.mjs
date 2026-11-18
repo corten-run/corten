@@ -114,13 +114,14 @@ function snapshotOnce(path, executables, pending) {
 const retryPause = new Int32Array(new SharedArrayBuffer(4));
 const processReads = new Set(["process-stat", "executable-link", "executable-stat", "executable-hash", "executable-capture",
   "process-cgroup", "process-cmdline", "process-stat-recheck", "executable-recheck"]);
-function snapshot(path, executables, pending, lastSampleAt = null) {
+function snapshot(path, executables, pending, lastSampleAt = null, timing) {
   // Spend only the time left in the existing continuity window. A monotonic
   // deadline also bounds retries when the wall clock moves backwards.
   const remaining = lastSampleAt === null ? maximumSampleGapMs : maximumSampleGapMs - (Date.now() - lastSampleAt);
-  const deadline = performance.now() + Math.max(0, Math.min(maximumSampleGapMs, remaining));
-  let race;
+  const started = performance.now(), deadline = started + Math.max(0, Math.min(maximumSampleGapMs, remaining));
+  let race, attempts = 0;
   for (;;) {
+    attempts++;
     try {
       const attempt = () => {
         const observed = snapshotOnce(path, executables, pending);
@@ -134,8 +135,11 @@ function snapshot(path, executables, pending, lastSampleAt = null) {
       // ENOENT alone is not proof of exit. Only process reads are candidates;
       // success still requires a fresh, complete census and every bookend.
       const missing = ["ENOENT", "ESRCH"].includes(error.code) && processReads.has(operation);
-      const left = deadline - performance.now();
-      if ((!changed && !missing) || left <= 0) throw error;
+      const ended = performance.now(), left = deadline - ended;
+      if ((!changed && !missing) || left <= 0) {
+        if (timing) Object.assign(timing, { censusMs: Math.round(ended - started), attempts });
+        throw error;
+      }
       race = error;
       Atomics.wait(retryPause, 0, 0, Math.min(1, left));
     }
@@ -263,26 +267,27 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
     // the original observation/command failure evidence.
     try { onFault?.(); } catch { /* The observer remains failed closed. */ }
   }
-  function failure(phase, error) {
+  function failure(phase, error, timing) {
     // Retain fixed public codes only, never messages, stacks, paths or arbitrary
     // error properties. First/last plus a count bound disk and memory on failure.
     const code = ["ENOENT", "ESRCH", "EACCES", "EPERM", "EIO", "ENOSPC", "EDQUOT", "EMFILE", "ENFILE", "ERR_ASSERTION"].includes(error?.code) ? error.code : "unknown";
     const entry = { phase, operation: observationOperations.get(error) ?? sampleOperation, code,
-      at: Date.now(), samples, lastSampleAt };
+      at: Date.now(), samples, lastSampleAt, ...(timing?.attempts ? { catalogCensus: timing } : {}) };
     observerFailures.count++; observerFailures.first ??= entry; observerFailures.last = entry;
   }
-  function sample() {
+  function sample(timing) {
     const previous = lastSampleAt;
-    const observed = pending ? pending.transaction(collectSample) : collectSample();
+    const capture = timing ? () => collectSample(timing) : collectSample;
+    const observed = pending ? pending.transaction(capture) : capture();
     // Admission and capture commit precede notification: startup cancellation
     // may dispose the observer, but must not close an active transaction.
     if ((previous !== null && (observed.at < previous || observed.at - previous > maximumSampleGapMs))
       || observed.docker?.gaps.length) notifyFault();
   }
-  function collectSample() {
+  function collectSample(timing) {
     sampleOperation = "snapshot";
     if (writer.error) throw writer.error;
-    const observed = snapshot(path, executables, pending, lastSampleAt), initial = [], keys = new Set();
+    const observed = snapshot(path, executables, pending, lastSampleAt, timing), initial = [], keys = new Set();
     // Keep initial raw PID/start/executable/type observations once. Every live
     // sample independently re-reads those identities and records their references;
     // rapidly changing stat CPU fields are accounted by raw cgroup cpu.stat.
@@ -319,10 +324,11 @@ export async function beginLifetime({ campaign, binding, invocation, directory, 
         writeFileSync(join(root, path, "cgroup.procs"), String(pid)); attached = true; sample();
         checkStartup(); assert.equal(closed, false);
         timer = setInterval(() => {
+          const timing = binding.request.group === "catalog-page" ? { entryGapMs: Date.now() - lastSampleAt } : null;
           try {
-            sample();
+            sample(timing);
           } catch (error) {
-            observerError = "host-observation-gap"; failure("interval", error);
+            observerError = "host-observation-gap"; failure("interval", error, timing);
             if (writer.error) clearInterval(timer);
             notifyFault();
           }

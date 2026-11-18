@@ -18,6 +18,18 @@ arbitrary error properties are saved. Identity diagnostics distinguish PID, star
 and process-name changes while retaining the same full identity assertion. Repeated
 failures do not grow a diagnostic log.
 
+If a catalog interval fails while reading the command's process census, its
+failure entry includes `catalogCensus`. `entryGapMs` is the signed wall-clock
+time from the last admitted sample timestamp to entry into the interval callback.
+It can include the tail of the previous sample, the scheduled wait and time
+in earlier failed callbacks since that last admission; it is not proof of
+scheduler latency. `censusMs` is the rounded monotonic time spent
+inside the failed census, including retries, and `attempts` counts whole census
+attempts, including the first. The clocks differ: do not add the two durations
+to reconstruct a wall-clock interval. None of these fields changes the retry
+deadline, cancellation decision or replay verdict.
+Earlier failures and failures outside the census have no such measurements.
+
 The original `observerError` remains authoritative, and a nonzero diagnostic count
 also blocks replay if that flag contradictorily says no error occurred.
 
