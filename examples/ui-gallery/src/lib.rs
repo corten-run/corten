@@ -2,6 +2,7 @@
 //! components (`orders`) and the UI kit itself (`ui`), from the kit's own files.
 
 pub mod app;
+mod dialog_draw;
 mod gallery;
 mod glyphs;
 mod orders;

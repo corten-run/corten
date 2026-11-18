@@ -4351,10 +4351,12 @@ rules something out.
     the user closed with Escape while it was on its way), the elements inside the one replaced,
     and every redraw nobody asked for keep the user's. A `data-patch` submit answered with a whole
     page, not a patch, redraws `<main>` from the new markup, its dialogs and `<details>` as drawn,
-    as on main, while the layout's elements outside `<main>` keep the user's. A dialog the user left open as the server
-    drew it, which new markup draws closed, is replaced closed with no `close` event and no focus
-    returned to its opener, as on main; doing that as the browser does is
-    [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455). A popover has no markup that shows it, so no answer can ask for one shown
+    as on main, while the layout's elements outside `<main>` keep the user's. When the server draws
+    an open dialog closed, the runtime replaces it without calling `close()`. For a modal opened
+    by the [optional dialog widget](guide/ui.md), the widget handles focus and sends `close` on
+    the attached replacement
+    ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
+    A popover has no markup that shows it, so no answer can ask for one shown
     and it stays as the user left it. A non-modal dialog the user closes while the answer to a press
     outside it is on its way opens when the answer comes: the runtime knows the press, not what the
     user meant by the close after it. A script's `requestSubmit()` while focus is outside the
@@ -4370,22 +4372,45 @@ rules something out.
     the answer draws it closed: it was tried and taken out, since `close()` queues its `close`
     event after the patch has detached the dialog (so a delegated `on:close` handler never hears
     it), closes nested modals outer-first (so focus lands on the page), and lets a `beforetoggle`
-    handler change the tree while the runtime walks it; doing it right is the issue linked above,
-    and the reopen does not need it. The pilot's workaround, a script that
-    replaces the closed dialog with an empty element before each submit, is the per-page script
-    this removes.
+    handler change the tree while the runtime walks it. The widget instead asks the runtime
+    which patch root took its modal away, during the existing connect signal's abort. It looks
+    only inside recorded roots, follows a detached counterpart through any further recorded
+    replacements, and acts after the sweep, innermost first. A dialog needs the drawn-state
+    record made before connect, so a dialog a connect handler just created cannot receive the
+    old close. Duplicate ids are invalid; moving an already-drawn dialog into a replacement
+    root to reuse the removed dialog's id is outside the widget's contract. An open redraw
+    carries the opener forward. A native close takes precedence over a forwarded one; a vetoed
+    open is not a native close. Focus goes to the recorded opener or its verified replacement
+    in the same removal sweep. Like native close, it does not follow an opener already lost,
+    including one replaced after a reentrant ref lookup has swept the dialog. A location guard
+    loses a live close while a navigation is pending, and a page marker or document-wide id
+    lookup can mistake unrelated same-page markup for the replacement. Neither navigation nor
+    an arbitrary script removal is a patch. The pilot's workaround, replacing the closed
+    dialog with an empty element before each submit, is the per-page script this removes.
 
     What it costs: the runtime is 386 bytes larger raw, 149 with gzip (15,069 to 15,218) and 124
     with brotli (13,601 to 13,725), paid once a release by every user. A submit reads the
     `closest` dialog or `<details>` around its control, once per one it is in (usually none),
     into a set, and with no submitter looks the focused element up among the form's controls; a patch pays an argument passed down, and the test runs for the patch's own root
-    only, after the checks that already find the user changed it, as one `Set.has`. All of this
+    only, after the checks that already find the user changed it, as one `Set.has`. That patch work
     is reasoned, not measured: a few calls where the root's state is already read.
 
-    Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
-    defaults, once each build); platform (a `<dialog>`'s and a `<details>`' open state is their
+    The later widget close handoff adds 232 bytes raw, 98 gzip and 81 brotli to core (43,846 to
+    44,078 raw, 15,612 to 15,710 gzip, 14,100 to 14,181 brotli). The optional served
+    `ui.dialog.js` is 1,653 to 4,711 bytes raw, 714 to 1,691 gzip and 591 to 1,462 brotli
+    (up from 4,315 raw, 1,568 gzip and 1,353 brotli before the widget-only fixes).
+    Only a page that loads the widget normally opts in to the map. The patch records replaced
+    or removed roots, not all ids in the document; the removal sweep clears those records.
+    With no dialog or widget, 10,000 ids in Chromium took 0.0313 ms per sparse patch on both
+    builds (ranges 0.0250-0.0788 and 0.0238-0.1413 ms); whole redraws took 18.3 and 18.4 ms
+    (ranges 15.575-30.975 and 14.850-29.300 ms). The differences were smaller than run-to-run
+    variation; neither patch looked up every id for the hook.
+
+    Stands on: measured (minified core and served widget sizes, and the no-dialog patch timings
+    above); platform (a `<dialog>`'s and a `<details>`' open state is their
     `open` attribute, which markup sets and closing removes, while a popover's shown state has no
-    attribute; the smoke's dialog, `<details>` and live checks in Chromium, Firefox and WebKit);
+    attribute; the watchlist's dialog, `<details>` and live checks, and the UI Gallery's close,
+    focus and native-result checks, in Chromium, Firefox and WebKit);
     reasoned (a submitter, or with none the focused control of the form or the form, outside the
     element it asks for is the user asking for that element, and nothing else the runtime sees is; where it was is fixed by the press, not by
     what the page became while the answer was on its way; the cost is a few calls in the cases it
@@ -4399,10 +4424,12 @@ rules something out.
     state (a Refresh beside a sheet the user closed on purpose), which would call for a way to say
     so; the platform gets markup for a shown popover, when an answer could ask for one; or a
     press inside an element is found to ask for it open (a Show more in a `<details>` the user
-    folded), when the rule would need the submitter's intent rather than its place; or the issue
-    on closing an open dialog as the browser does is fixed, when an answer's close may be done as
-    the browser's and the case of an answer that closes what the user opened can be decided with
-    it.
+    folded), when the rule would need the submitter's intent rather than its place; a real app
+    needs native close semantics for a user-opened dialog or for a kept layout dialog updated in
+    place, or needs focus to follow an opener lost outside the sweep, which this replacement-only
+    widget does not address; or the platform provides a native close that can be observed by
+    an attached handler during replacement, so the widget's forwarding and the core lookup
+    can go.
 
     Last checked: 2026-11-14, the smoke's dialog and `<details>` reopen checks failing with main's
     runtime (`e59c32c28`, the checks as at `c264af2ac`) and passing on `bf1b2eaa2`, and its
@@ -4418,7 +4445,18 @@ rules something out.
     them, every open-state check passing, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2,
     and the runtime's size against `8f11b7b35`; 2026-11-14, the smoke's check of a submit that
     waited for a write, its button moved outside the dialog by the write's answer, failing on
-    `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
+    `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines. 2026-11-18,
+    the widget close handoff at `9ce6fe5c9` against main `70dd920cc`: served bytes by Node 24's
+    zlib defaults once per build, and no-dialog patch time from 51 alternating pairs per case
+    in Chromium 156.0.8078.4 (sparse and whole redraws at 100, 2,000 and 10,000 ids). The gallery's
+    lost opener, same-id navigation, unrelated id reuse and two native close races failed
+    with `faa5ae1f8` in Chromium. A live patch during a pending navigation passed there, but
+    delivered no close with main `70dd920cc`.
+    The gallery's close checks passed with the handoff in Chromium 156.0.8078.4, Firefox 157.0
+    and WebKit 27.2 (Playwright 1.64.1). 2026-11-18, the gallery's vetoed-open, dialog-first
+    overlap and script-created same-id cases failed on `e4a97b811` and passed with the widget
+    fixes in the same three engines. The reverse overlap order passed on both. Core was
+    byte-identical to `e4a97b811`.
 
 53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
     in the address each form posts to, not by the pressed button's name in the body or a route per
@@ -6102,7 +6140,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    new markup draws it open, and one they opened closes when it draws it closed), and a
    `<details>` that moved takes another's state. A dialog the server drew open, which the user
    closed and opened again, looks unchanged, so an answer that draws it closed closes it, without
-   a `close` event ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)). Other
+   a native `close` event. A modal the [optional dialog widget](guide/ui.md) opened and the user
+   left open gets a `close` on a same-id replacement. Other
    browser state inside a replaced element (scroll position) resets, so keep targets small. The
    runtime parses a patch as a `<template>`'s content, where the first top-level element (other
    than a head's, such as a `<script>` or `<template>`; Chromium and WebKit let a leading
@@ -6212,11 +6251,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `@import` is refused because it loads a stylesheet the component does not own;
    `@custom-media` is refused because tokens define breakpoints. Unrecognized rules such as
    `@namespace` and `@document` are refused outside raw bodies; put them in the app's global
-   stylesheet. This is not a CSS validator: the macro may copy unknown block at-rules that
-   start with a known prefix, such as `@supports_other`, applying that rule's body handling.
-   Likewise, unknown statements are refused even inside raw bodies unless the statement parser
-   recognizes a prefix; for example it copies `@layer_other`. Escaped at-rule and class names
-   are not supported.
+    stylesheet. At-rule names must match whole names, not prefixes: `@supports_other` and
+    `@layer_other` are not supported. Unknown statements are refused even inside raw bodies.
+    Escaped or non-ASCII at-rule and class names are not supported.
 
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
@@ -6228,9 +6265,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
    lookup's name and an `if()` condition (`style(--x: 1)`) name custom properties, a dashed
    function token (`--x()`) calls a custom function, and strings, URLs, anchor names, other
    functions' arguments and unrelated declarations are not position references. The macro
-   matches whole names from the source before normalizing whitespace and comments as in
-   other declarations. That normalization can change token boundaries in unprefixed options:
-   `--externa\6c  flip-block` loses the extra space and becomes one name (`--externalflip-block`).
+    matches whole names from the source before normalizing whitespace and comments as in
+    other declarations. In an unprefixed option such as `--externa\6c  flip-block`, the first
+    space terminates the hex escape and the second remains a separator.
    A registered custom property with the same name does not rename an option, but its `var()`
    lookup still gets the property prefix. A name carried in a custom property's value is not
    rewritten as a position option.
@@ -6242,13 +6279,21 @@ by design; where it is known, a limit says what would lift it or why it is so.
    policy when an app needs checked private names for them.
 
    An `@scope` with no root is refused because its implicit root is outside the component.
-   At the top of the file, an `@scope` rule's root names
-   one of its classes, or else each rule in the body must start at one, as at the top. A root
-   nested in a rule, or in an `@scope` whose root names one of the file's classes, is relative to
-   that one's elements and is not checked; one nested in any other `@scope` is checked as at the top.
+    Each selector must match only elements that have one of the file's classes or are inside
+    one (by a descendant or child combinator; `+`, `~` and `||` from the class's element lead
+    outside it), directly or through every selector of an `:is()` or `:where()` the browser
+    keeps. A class inside another function only filters, though it is still prefixed. A nested
+    selector is relative when it starts with a combinator or contains no `&` delimiter, even
+    in an invalid arm; only a matchable `&` supplies an anchor at its own position. The same
+    check decides whether an `@scope` root is owned; if it is not, each selector in its body
+    must pass on its own. An inner root under an unowned scope supplies proof for its body only
+    if it requires a class on its element or an ancestor: neither explicit `&` nor implicit
+    nesting can borrow proof from a style rule there. An owned scope bounds its nested scopes.
+    The check reads selectors without a CSS parser, so it is conservative: a selector it
+    cannot show is owned does not compile.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's
-   root.
+    root by naming that component's class. A limit does not supply proof of ownership.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
    item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities
    and six components) is 6,955 bytes, 1,573 brotli (measured). `Area::components` moves the components only some pages render into a file
