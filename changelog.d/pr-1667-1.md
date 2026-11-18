@@ -1,0 +1,1 @@
+- Fix the listings-feed failover benchmark so it can kill and restart instances.
