@@ -89,8 +89,6 @@ pub(crate) struct Tag<'a> {
     /// in, `<col data-note='` without its quote's end or its `>`). Read by the debug check only.
     #[cfg(any(debug_assertions, test))]
     pub complete: bool,
-    #[cfg(debug_assertions)]
-    within: Within,
 }
 
 impl Tag<'_> {
@@ -99,50 +97,52 @@ impl Tag<'_> {
         self.attrs.iter().find(|(attr, _)| attr.eq_ignore_ascii_case(name)).map(|(_, value)| *value)
     }
 
-    /// Whether the element has non-whitespace text, including a nested HTML textarea's value.
+    /// Whether a hint has nonblank text, using tag names rather than a browser's parse tree.
     #[cfg(debug_assertions)]
     pub(crate) fn has_text(&self, html: &str) -> bool {
+        let bytes = html.as_bytes();
         let mut at = self.end;
         let mut depth = 1;
-        let mut open = Foreign::default();
-        if self.within != Within::Html {
-            open.0.push((&self.name, self.within));
-        }
+        let mut markup_end = at;
+        let is_source = |name: &str| ["script", "style"].iter().any(|tag| name.eq_ignore_ascii_case(tag));
+        let mut source = is_source(&self.name).then_some(self.name.as_str());
         while let Some(found) = html[at..].find('<') {
             let lt = at + found;
-            if !html[at..lt].trim().is_empty() || lone_lt(html.as_bytes(), lt) {
+            if !html[at..lt].trim().is_empty() {
                 return true;
             }
-            match html.as_bytes()[lt + 1] {
-                b'/' => {
-                    let (name, end) = end_tag(html, lt);
-                    depth -= usize::from(name.is_some_and(|name| name.eq_ignore_ascii_case(&self.name)));
-                    if depth == 0 {
-                        return false;
+            let tag = &html[lt..];
+            let gt = tag.find('>').unwrap_or(tag.len() - 1);
+            // Keep the tag-name heuristic's text and depth rules. Only newly recognized `<`
+            // needs to be outside a quoted attribute, a comment or script/stylesheet source.
+            if lt >= markup_end {
+                let end_tag = tag.starts_with("</");
+                let name_start = lt + if end_tag { 2 } else { 1 };
+                if lone_lt(bytes, lt) {
+                    if source.is_none() {
+                        return true;
                     }
-                    open.end(name);
-                    at = end;
-                }
-                b'!' | b'?' => at = declaration_end(html, lt),
-                _ => {
-                    let (name, end, self_closing) = read_tag(html, lt + 1, |_, _| {});
-                    at = (end + 1).min(html.len());
-                    let (foreign, _) = open.start(name, self_closing, |parent| placed(parent, &start_tag(html, lt)));
-                    if let Some(&raw) = RAW_TEXT.iter().find(|raw| !foreign && name.eq_ignore_ascii_case(raw)) {
-                        let close = if raw == "script" { script_end(html, at) } else { raw_text_end(html, at, raw) };
-                        if raw == "textarea" && !html[at..close].trim().is_empty() {
-                            return true;
-                        }
-                        if close == html.len() {
-                            return false;
-                        }
-                        at = end_tag(html, close).1;
-                        open.end(Some(name));
-                    } else {
-                        depth += usize::from(!self_closing && name.eq_ignore_ascii_case(&self.name));
+                } else if let Some(body) = tag.strip_prefix("<!--") {
+                    markup_end = body.find("-->").map_or(html.len(), |n| lt + 4 + n + 3);
+                } else if bytes.get(name_start).is_some_and(u8::is_ascii_alphabetic) {
+                    let (name, end, _) = read_tag(html, name_start, |_, _| {});
+                    markup_end = (end + 1).min(html.len());
+                    if end_tag && source.is_some_and(|open| open.eq_ignore_ascii_case(name)) {
+                        source = None;
+                    } else if !end_tag && source.is_none() && is_source(name) {
+                        source = Some(name);
                     }
                 }
             }
+            if let Some(closing) = tag.strip_prefix("</") {
+                depth -= usize::from(closing.starts_with(&self.name));
+                if depth == 0 {
+                    return false;
+                }
+            } else if tag[1..].starts_with(&self.name) && !tag[..gt].ends_with('/') {
+                depth += 1;
+            }
+            at = lt + gt + 1;
         }
         !html[at..].trim().is_empty()
     }
@@ -164,8 +164,6 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
         self_closing,
         #[cfg(any(debug_assertions, test))]
         complete: end < html.len(),
-        #[cfg(debug_assertions)]
-        within: Within::Html,
     }
 }
 
@@ -225,29 +223,30 @@ fn read_tag<'a>(html: &'a str, name_start: usize, mut attr: impl FnMut(&'a str, 
     (name, i, self_closing)
 }
 
-/// The name and one past the end of `</...`. Without a letter after `</` this is a bogus
-/// comment or an empty end tag, neither of which has a name or reads quoted values.
-fn end_tag(html: &str, at: usize) -> (Option<&str>, usize) {
-    if html.as_bytes().get(at + 2).is_some_and(u8::is_ascii_alphabetic) {
-        let (name, end, _) = read_tag(html, at + 2, |_, _| {});
-        (Some(name), (end + 1).min(html.len()))
-    } else {
-        (None, declaration_end(html, at))
+/// One past the end tag's closing `>`, or EOF. Without a letter after `</`, its
+/// contents are a bogus comment or an empty end tag and do not read quoted values.
+fn end_tag_end(html: &str, at: usize, raw: Option<&str>) -> usize {
+    let rest = &html.as_bytes()[at + 2..];
+    // Ordinary end tags need no attribute scan.
+    let Some(stop) = rest.iter().position(|&c| c == b'>' || c == b'=') else {
+        return html.len();
+    };
+    if rest[stop] == b'>' {
+        return at + 2 + stop + 1;
     }
-}
-
-/// One past an ignored declaration, comment or bogus comment, or EOF.
-fn declaration_end(html: &str, at: usize) -> usize {
-    if let Some(body) = html[at..].strip_prefix("<!--") {
-        body.match_indices('>')
-            .find(|&(n, _)| {
-                let before = &body[..n];
-                before.is_empty() || before == "-" || before.ends_with("--") || before.ends_with("--!")
-            })
-            .map_or(html.len(), |(n, _)| at + 4 + n + 1)
-    } else {
-        html[at..].find('>').map_or(html.len(), |n| at + n + 1)
+    let first_gt = || html[at + 2 + stop..].find('>').map_or(html.len(), |n| at + 2 + stop + n + 1);
+    if !rest.first().is_some_and(u8::is_ascii_alphabetic) {
+        return first_gt();
     }
+    let (name, end, _) = read_tag(html, at + 2, |_, _| {});
+    let after = (end + 1).min(html.len());
+    if let Some(raw) = raw.filter(|raw| !name.eq_ignore_ascii_case(raw) && after != first_gt()) {
+        // A name prefix is normally enough for this scan, but quotes on a lookalike
+        // in raw text must not swallow the real end tag.
+        let close = raw_text_end(html, at + 2, raw);
+        return if close == html.len() { close } else { end_tag_end(html, close, None) };
+    }
+    after
 }
 
 /// Each start tag of `html` in order, past comments, end tags, a doctype and the text of the
@@ -255,10 +254,12 @@ fn declaration_end(html: &str, at: usize) -> usize {
 /// `<` that starts no tag (`1 <2`, in markup placed with `raw`) as text, as the browser does.
 pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
     let mut i = 0;
-    #[cfg(debug_assertions)]
-    let mut open = Foreign::default();
     std::iter::from_fn(move || loop {
         let at = i + html.get(i..)?.find('<')?;
+        if html[at..].starts_with("<!--") {
+            i = html[at..].find("-->").map_or(html.len(), |n| at + n + 3);
+            continue;
+        }
         let bytes = html.as_bytes();
         if lone_lt(bytes, at) {
             i = at + 1;
@@ -266,36 +267,20 @@ pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
         }
         match bytes[at + 1] {
             b'/' => {
-                #[cfg(debug_assertions)]
-                if !open.0.is_empty() {
-                    let (name, end) = end_tag(html, at);
-                    open.end(name);
-                    i = end;
-                    continue;
-                }
-                let rest = &bytes[at + 2..];
-                // A `>` can be quoted only after an `=`. Ordinary end tags need no attribute scan.
-                let stop = rest.iter().position(|&c| c == b'>' || c == b'=')?;
-                i = if rest[stop] == b'>' { at + 2 + stop + 1 } else { end_tag(html, at).1 };
+                i = end_tag_end(html, at, None);
                 continue;
             }
             b'!' | b'?' => {
-                i = declaration_end(html, at);
+                i = html[at..].find('>').map_or(html.len(), |n| at + n + 1);
                 continue;
             }
             _ => {}
         }
         let tag = start_tag(html, at);
-        #[cfg(debug_assertions)]
-        let tag = {
-            let name = &html[at + 1..at + 1 + tag.name.len()];
-            let (_, within) = open.start(name, tag.self_closing, |parent| placed(parent, &tag));
-            Tag { within, ..tag }
-        };
         i = tag.end;
-        // Only the hint text scan uses the context; discovery still skips raw text by name.
         if RAW_TEXT.contains(&tag.name.as_str()) {
-            i = raw_text_end(html, i, &tag.name);
+            let close = raw_text_close(html, i, &tag.name, false);
+            i = if close == html.len() { close } else { end_tag_end(html, close, Some(&tag.name)) };
         }
         return Some(tag);
     })
@@ -314,13 +299,19 @@ const VOID: &[&str] = &[
 /// A bare `</name` at EOF is returned so the patch check can diagnose the incomplete tag.
 /// Allocates nothing, so markup with many raw-text elements is read in one pass.
 fn raw_text_end(html: &str, from: usize, name: &str) -> usize {
+    raw_text_close(html, from, name, true)
+}
+
+// Start-tag discovery historically accepts a name prefix. Require the full name for the patch
+// parser and when recovering from quotes on a lookalike.
+fn raw_text_close(html: &str, from: usize, name: &str, exact: bool) -> usize {
     let bytes = html.as_bytes();
     let mut at = from;
     while let Some(n) = html.get(at..).and_then(|rest| rest.find("</")) {
         let start = at + n;
         let name_end = start + 2 + name.len();
         if bytes.get(start + 2..name_end).is_some_and(|written| written.eq_ignore_ascii_case(name.as_bytes()))
-            && matches!(bytes.get(name_end), None | Some(b'>' | b'/' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' '))
+            && (!exact || matches!(bytes.get(name_end), None | Some(b'>' | b'/' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' ')))
         {
             return start;
         }
@@ -807,48 +798,6 @@ enum Within {
     Math,
     /// As MathML's but an `<svg>`: in an `<annotation-xml>` that is not an HTML integration point.
     AnnotationXml,
-}
-
-/// Open tags in SVG or MathML, including HTML descendants of their integration points.
-#[cfg(debug_assertions)]
-#[derive(Default)]
-struct Foreign<'a>(Vec<(&'a str, Within)>);
-
-#[cfg(debug_assertions)]
-impl<'a> Foreign<'a> {
-    fn parent(&self) -> Within {
-        self.0.last().map_or(Within::Html, |&(_, within)| within)
-    }
-
-    fn start(
-        &mut self,
-        name: &'a str,
-        self_closing: bool,
-        place: impl FnOnce(Within) -> Option<(bool, Within)>,
-    ) -> (bool, Within) {
-        let parent = self.parent();
-        if self.0.is_empty() && !name.eq_ignore_ascii_case("svg") && !name.eq_ignore_ascii_case("math") {
-            return (false, Within::Html);
-        }
-        let (foreign, within) = place(parent).unwrap_or_else(|| {
-            while !matches!(self.parent(), Within::Html | Within::MathText) {
-                self.0.pop();
-            }
-            (false, Within::Html)
-        });
-        if (foreign && !self_closing)
-            || (!foreign && !self.0.is_empty() && !VOID.iter().any(|void| name.eq_ignore_ascii_case(void)))
-        {
-            self.0.push((name, within));
-        }
-        (foreign, within)
-    }
-
-    fn end(&mut self, name: Option<&str>) {
-        if let Some(index) = name.and_then(|name| self.0.iter().rposition(|(tag, _)| name.eq_ignore_ascii_case(tag))) {
-            self.0.truncate(index);
-        }
-    }
 }
 
 /// An element open in a patch: its name, whether it is foreign content's (an SVG or MathML
@@ -1756,33 +1705,10 @@ mod tests {
     }
 
     #[test]
-    fn start_tags_resume_after_a_browser_closed_comment() {
-        for (comment, tail) in [("<!-->", ""), ("<!--->", ""), ("<!-- a > b --!>", "<!-- later -->"), ("<!-- a > b -->", "")] {
-            let html = format!("{comment}<div data-vars=--m:7%></div>{tail}");
-            let mut tags = super::start_tags(&html);
-            let div = tags.next().unwrap_or_else(|| panic!("missing div after {comment}"));
-            assert_eq!((div.name.as_str(), div.attr("data-vars")), ("div", Some("--m:7%")), "{comment}");
-            assert!(tags.next().is_none(), "{comment}");
-        }
-    }
-
-    #[test]
-    fn patch_parse_finds_a_lost_element_after_a_browser_closed_comment() {
-        let html = "<script id=s type=text/plain><!--<script></script><!--><p>x</p>";
-        let parse = super::patch_parse(html);
-        assert_eq!(
-            parse.problem.as_deref(),
-            Some("what follows <script id=s type=text/plain> is read as its text, since a <!-- and a <script in its text hide its end tag")
-        );
-    }
-
-    #[test]
-    fn start_tags_only_parse_attributes_on_an_appropriate_raw_text_end_tag() {
-        let html = r#"<textarea></textareax a="</textarea><div data-vars=--m:7%></div>"#;
+    fn start_tags_read_quoted_attributes_on_the_raw_text_end_tag() {
         let names = |html: &str| super::start_tags(html).map(|tag| tag.name).collect::<Vec<_>>();
-        assert_eq!(names(html), ["textarea", "div"]);
-        assert_eq!(names(r#"<style></style- a="</STYLE note='x><i>'><div>"#), ["style", "div"]);
-        assert_eq!(names("<title></TITLE/><div>"), ["title", "div"]);
+        assert_eq!(names(r#"<textarea></textareax a="</textarea><div>"#), ["textarea", "div"]);
+        assert_eq!(names(r#"<style></STYLE note='x><i>'><div>"#), ["style", "div"]);
     }
 
     #[test]

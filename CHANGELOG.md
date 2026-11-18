@@ -5,12 +5,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- Developer markup checks count a lone `<` as text in a hint and read past quoted end-tag
-  attributes without mistaking them for new tags. They resume after browser-closed comments
-  (`<!-->`, `<!--->`, `--!>`) and only read end-tag attributes after raw text when the name matches.
-  A nested HTML `<textarea>`'s initial value counts as hint text, and nested HTML `<title>`,
-  `<style>` and `<script>` tags do not hide the hint text that follows. Within a hint, neither
-  does a self-closing SVG or MathML `<title />` or a foreign-content breakout followed by HTML raw text.
+- Developer markup checks share the rule for a lone `<`, so it can count as hint text.
+  Start-tag discovery reads past quoted end-tag attributes without finding fake start tags.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including

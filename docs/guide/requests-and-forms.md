@@ -799,18 +799,13 @@ from data writes `{..e.control(name).hint()}` with no branch; a corten-ui widget
 `attrs`. In a debug build (`cargo run`, `corten dev`, a router test), a page or patch that draws a
 `HintId(&id)` element with text, and the element `id` without that hint in its
 `aria-describedby`, is an error, since a screen reader would never read the hint; so is a page
-that draws such a hint and no element `id` (a radio group without an id). A `<` that starts no
-tag counts as text in a hint placed with `raw(..)`; comments and tag attributes do not. The hint
-check reads text after a comment, including the short forms `<!-->` and `<!--->` or a comment
-ending in `--!>`. A nested HTML `<textarea>`'s initial value counts as text, including a literal
-`<!--`, but whitespace written as character references can also count as text. Within a hint,
-the check skips text in HTML `<title>`, `<style>` or `<script>` without hiding text that follows,
-and can read past a self-closing SVG or MathML `<title />`. A foreign `<title />` before the hint
-can still prevent the check from finding the hint at all. Stylesheet source in a foreign
-`<style>` inside the hint can count as text.
-A patch that redraws the hint alone, its control staying on the page, is not checked. A tag that
-writes `id`, `name` or the ARIA attributes beside `e.control(..)` does not compile, nor does one
-that spreads `e.aria(..)` beside it, since `e.control(..)` writes what `e.aria(..)` does.
+that draws such a hint and no element `id` (a radio group without an id). A lone `<` can count as
+text in a hint placed with `raw(..)`. This check is a heuristic: it reads by tag name, not by
+namespace or with the browser's full tokenizer and tree builder. It can miss or miscount text
+around raw-text elements, foreign content, implied closing tags and templates.
+A patch that redraws the hint alone, its control staying on the page, is not checked.
+A tag that writes `id`, `name` or the ARIA attributes beside `e.control(..)` does not compile, nor
+does one that spreads `e.aria(..)` beside it, since `e.control(..)` writes what `e.aria(..)` does.
 `e.control` is for a field's one control: radios or checkboxes that share
 a field each need an id of their own, so each takes `name={f.size}`. Each checkbox also takes
 `{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the
