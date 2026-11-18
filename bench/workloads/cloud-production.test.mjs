@@ -283,7 +283,9 @@ test("pinned collection neither adopts abandoned scratch nor clears unknown rese
   assert.equal(readFileSync(join(p.h.temp, "archived-legacy-snapshot", "known_hosts"), "utf8"), "unidentified reservation artifact");
 });
 
-async function supervisedAudit(t, group, flags = {}) {
+const auditStartupMs = 10000;
+
+async function supervisedAudit(t, group, flags = {}, withheldReady) {
   flags.active = true;
   const p = productionHarness(t, flags), prefix = group === "json-api" ? "json" : "mixed", campaign = "r21-0123456789abcdef";
   const delivery = syntheticDelivery(group), identities = delivery.bundle.receipts.map((r) => r.identity);
@@ -296,12 +298,14 @@ async function supervisedAudit(t, group, flags = {}) {
   const subjectSha256 = deploymentSha256(body), subject = Buffer.from(JSON.stringify({ ...body, subjectSha256 }));
   delivery.subjectSha256 = subjectSha256; delivery.review.subjectSha256 = subjectSha256;
   const path = join(p.h.temp, "approved-delivery.json"); writeFileSync(path, JSON.stringify(delivery));
-  const input = []; let finish, started = 0;
+  const input = []; let finish, stopStream, started = 0;
   p.deps.streamSpawn = (binary, argv) => {
     assert.equal(binary, "ssh"); started++;
     const expected = JSON.parse(Buffer.from(argv.at(-1).split(" ").at(-1), "hex")), child = new EventEmitter();
     let sequence = 0, closed = false;
-    const frame = (kind, payload) => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1", id: expected.id, sequence: ++sequence, kind, payload }) + "\n");
+    const frame = (kind, payload) => {
+      if (!closed) child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1", id: expected.id, sequence: ++sequence, kind, payload }) + "\n");
+    };
     const close = (code) => { if (!closed) { closed = true; child.emit("close", code, null); } };
     child.stdout = new PassThrough(); child.stderr = new PassThrough();
     child.stdin = new Writable({ write(bytes, encoding, next) {
@@ -315,18 +319,42 @@ async function supervisedAudit(t, group, flags = {}) {
     finish = () => frame("terminal", { id: expected.id, nativeTerminal: true, campaign, sealSha256: "f".repeat(64) });
     const timer = setInterval(() => {
       if (!p.h.saved().control.sealed.includes("bootstrap")) return;
-      clearInterval(timer); frame("audit-begin", { campaign, group, subjectSha256 });
+      clearInterval(timer);
+      if (withheldReady) { withheldReady.live(p.h); return; }
+      frame("audit-begin", { campaign, group, subjectSha256 });
       frame("audit-file", { group, path: prefix + "-audit-subject.json", bytes: subject.length, sha256: digest(subject) });
       frame("audit-data", { offset: 0, data: subject.toString("base64") }); frame("audit-file-end", {}); frame("audit-end", { group, subjectSha256 });
     }, 5);
-    t.after(() => { clearInterval(timer); close(255); }); return child;
+    stopStream = () => { clearInterval(timer); close(255); };
+    t.after(stopStream); return child;
   };
-  const pending = productionMain(await p.approve("--detach"), p.deps);
-  const wait = async (predicate) => {
-    const deadline = Date.now() + 2000;
+  const approval = await p.approve("--detach");
+  if (withheldReady) {
+    const factory = p.deps.providerFactory;
+    p.deps.providerFactory = (options) => Object.assign(factory(options), { close: withheldReady.settle });
+  }
+  const pending = productionMain(approval, p.deps);
+  withheldReady?.started(pending, () => stopStream?.());
+  let launchError;
+  pending.then((code) => { launchError = new Error(`audit controller exited before ready (${code})`); },
+    (error) => { launchError = error; });
+  const wait = async (predicate, timeout = 2000) => {
+    const deadline = Date.now() + timeout;
     while (!predicate()) { assert.ok(Date.now() < deadline, "bounded audit stream wait"); await new Promise((r) => setTimeout(r, 5)); }
   };
-  await wait(() => existsSync(join(p.h.local, "monitor-audit-" + group + "-ready.json")));
+  try {
+    const ready = join(p.h.local, "monitor-audit-" + group + "-ready.json");
+    await wait(() => {
+      if (launchError) throw launchError;
+      return existsSync(ready);
+    }, auditStartupMs);
+  } catch (error) {
+    // Do not let the harness remove the directory while launch still owns its locks.
+    flags.cancelled = true;
+    stopStream?.();
+    await pending.catch(() => {});
+    throw error;
+  }
   const args = ["r21", "--state-dir", p.h.base, "--deliver-audit", path, "--audit-group", group, "--campaign", campaign, "--approve-subject", subjectSha256];
   const approve = async () => {
     await productionMain([...args, "--print-approval"], p.deps);
@@ -354,6 +382,50 @@ test("supervised approved audit delivery uses locked production approval and the
     } finally { await p.finish(); }
     assert.ok(!existsSync(join(p.h.local, "operation.lock")));
   }
+});
+
+test("supervised audit startup surfaces a controller failure before the ready marker", async (t) => {
+  await assert.rejects(supervisedAudit(t, "json-api", { bootstrapError: true }), {
+    controllerStage: "controller-launch", message: /^common bootstrap marker observation failed/,
+  });
+});
+
+test("supervised audit startup timeout cancels and joins a registered monitor before fixture cleanup", { timeout: 10000 }, async (t) => {
+  const live = Promise.withResolvers(), settling = Promise.withResolvers(), release = Promise.withResolvers();
+  const flags = {}; let launch, settled = 0, settledAtReturn;
+  // Register before the harness adds its directory removal hook.
+  t.after(async () => {
+    flags.cancelled = true;
+    release.resolve();
+    launch?.stop();
+    await (launch?.pending ?? audit).catch(() => {});
+  });
+  const audit = supervisedAudit(t, "json-api", flags, {
+    live: live.resolve,
+    started(pending, stop) { launch = { pending, stop }; },
+    async settle() { settling.resolve(); await release.promise; settled++; },
+  }).finally(() => { settledAtReturn = settled; });
+  const rejected = assert.rejects(audit, { message: "bounded audit stream wait" });
+  const rejectedEarly = rejected.then(() => assert.fail("startup returned before controller settlement"));
+  let h;
+  try {
+    h = await Promise.race([live.promise, rejectedEarly]);
+    const ready = join(h.local, "monitor-audit-json-api-ready.json");
+    assert.equal(h.saved().control.monitor.phase, "live");
+    assert.ok(!existsSync(ready));
+    t.mock.timers.enable({ apis: ["Date"], now: Date.now() + auditStartupMs + 1 });
+    await Promise.race([settling.promise, rejectedEarly]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(settledAtReturn, undefined, "startup must wait for settlement");
+    assert.equal(flags.cancelled, true);
+    assert.equal(JSON.parse(readFileSync(join(h.local, "monitor-local-closed.json"))).code, 255);
+    assert.equal(h.saved().control.monitor.phase, "invalid");
+    assert.ok(!existsSync(ready));
+  } finally { release.resolve(); }
+  await rejected;
+  assert.equal(settledAtReturn, 2);
+  assert.ok(existsSync(h.temp));
+  t.after(() => assert.ok(!existsSync(h.temp)));
 });
 
 test("supervised audit rejects a stale explicit action approval before any publication", async (t) => {
