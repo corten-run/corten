@@ -41,7 +41,7 @@ jobs:
         with:
           persist-credentials: false
       - id: version
-        name: The tag, the crates and CHANGELOG.md name the same version, with no pending fragments
+        name: The tag, the crates and CHANGELOG.md name the same version, with no pending notes
         run: |
           node scripts/changelog.mjs --check-release
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "corten-run") | .version')

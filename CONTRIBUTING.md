@@ -325,12 +325,16 @@ establish a general ranking.
    different positive integer suffix for each entry in the pull request. Before you have a PR
    number, use `branch-<unique-slug>-<entry>.md`. Pick a branch slug unique in this repository
    (lowercase letters, digits and hyphens; add the fork owner or another discriminator if needed).
-   Each file holds one top-level `- ` bullet: one to four spaces after the hyphen, then visible
-   text, not an HTML comment. Indent any continuation lines to at least the start of the text
-   in the first line and do not insert blank lines. Use the inline `**Breaking:**` marker
-   where it applies. Prefer full URLs for links so they work in the published release notes too.
-   `npm run check` validates the fragments and checks relative file links as if the entry were
-   in the root `CHANGELOG.md`.
+   Each file holds one top-level `- ` bullet: one to four spaces after the hyphen, then a
+   paragraph of visible text. Indent continuation lines with spaces to at least the start of the
+   first line's text. No blank lines or nested blocks. Start the bullet's text with
+   `**Breaking:**` followed by a space for a breaking change.
+   Use only single-line `[label](https://host/path)` links with a text label and a bare absolute
+   HTTPS destination, without a title. Percent-encode any parentheses in the destination.
+   These links work in both the pending file and the released changelog.
+   Use emphasis and single-line code spans for prose; put literal brackets, angle brackets,
+   backslashes, URLs, and link examples inside code spans. Do not use raw HTML, character
+   references, images, or reference links or definitions. `npm run check` validates this format.
 4. Commit messages say what changed and why, in plain sentences.
 5. The description says what changed and why, the checks run and their results, and the
    measurements from 2. It merges after its [review](#review).

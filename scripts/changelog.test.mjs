@@ -4,7 +4,6 @@ import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { presentIn, scan } from "./docs.mjs";
 
 const prefix = "# Changelog\n\n## Unreleased\n\n";
 const pointer = "Pending entries are in [changelog.d/](changelog.d/).\n\n";
@@ -35,6 +34,7 @@ function checkout(t, changelog = prefix + previous) {
       return result;
     },
     read: () => readFileSync(file, "utf8"),
+    writeChangelog: (text) => writeFileSync(file, text),
   };
 }
 
@@ -75,15 +75,20 @@ test("release renders Breaking first in filename order within each group, then u
   tree.write("pr-9-1.md", "- A documentation note.\n");
   tree.write("pr-9-2.md", "- **Breaking:** Remove the old API.\n");
   tree.write("pr-10-1.md", "- A fix with no trailing newline.");
-  tree.write("pr-10-2.md", "- Change the API.\r\n  **Breaking:** Explain how to upgrade.\r\n");
+  tree.write("pr-10-2.md", "-  **Breaking:** Change the API.\r\n   Explain how to upgrade.\r\n");
+  tree.write("pr-10-3.md", "- Show the literal `**Breaking:**` marker.\n");
+  tree.write("pr-10-4.md", "- Document migration.\n  **Breaking:** is the label.\n");
 
   const released = tree.run("release", "0.3.0", "2026-11-19");
   assert.equal(released.status, 0, released.stderr);
-  assert.match(released.stdout, /4 fragment\(s\) released in 0\.3\.0/);
+  assert.match(released.stdout, /6 fragment\(s\) released in 0\.3\.0/);
   assert.equal(tree.read(), prefix + pointer + "## 0.3.0 (2026-11-19)\n\n" +
-    "- Change the API.\n  **Breaking:** Explain how to upgrade.\n\n" +
+    "-  **Breaking:** Change the API.\n   Explain how to upgrade.\n\n" +
     "- **Breaking:** Remove the old API.\n\n" +
-    "- A fix with no trailing newline.\n\n- A documentation note.\n\n" +
+    "- A fix with no trailing newline.\n\n" +
+    "- Show the literal `**Breaking:**` marker.\n\n" +
+    "- Document migration.\n  **Breaking:** is the label.\n\n" +
+    "- A documentation note.\n\n" +
     legacy + previous);
   assert.deepEqual(readdirSync(tree.dir), ["README.md"]);
   const check = tree.run("--check");
@@ -125,17 +130,80 @@ test("a release candidate fails if a fragment arrives after preparation", (t) =>
   assert.deepEqual(readdirSync(tree.dir).sort(), ["README.md", "pr-13-1.md"]);
 });
 
-test("fragment links are checked from the released changelog, not from the fragment directory", () => {
-  const file = "changelog.d/pr-12-1.md";
-  const present = presentIn([file, "CHANGELOG.md", "changelog.d/README.md", "changelog.d/pr-13-1.md", "docs/guide/kit.md"]);
-  const links = "- Read the [kit guide](docs/guide/kit.md) and [pending notes README](changelog.d/README.md).\n";
-  assert.deepEqual(scan(file, links, present).problems, []);
-  assert.deepEqual(scan(file, links, present), scan("CHANGELOG.md", links, present));
-  assert.deepEqual(scan(file, "- Read the [kit guide](../docs/guide/kit.md).\n", present).problems, [
-    file + ":1: a link to ../docs/guide/kit.md, which the repository does not have after release",
-  ]);
-  assert.equal(scan(file, "- See [another pending entry](changelog.d/pr-13-1.md).\n", present).problems.length, 1);
-  assert.deepEqual(scan("changelog.d/README.md", "See [history](../CHANGELOG.md).", present).problems, []);
+test("a late inline note blocks the tag gate and a new cut keeps the pointer out of the release", (t) => {
+  const tree = checkout(t, prefix + pointer + previous);
+  tree.copyReadme();
+  const note = "- A prepared fragment.\n";
+  tree.write("pr-12-1.md", note);
+  assert.equal(tree.run("release", "0.3.0", "2026-11-19").status, 0);
+  const prepared = tree.read();
+  const late = "- A late inline note from an older pull request.\n\n";
+  for (const candidate of [
+    prepared.replace(prefix, prefix + late),
+    prepared.replace(pointer, pointer + late),
+    prepared.replace(pointer, late),
+  ]) {
+    tree.writeChangelog(candidate);
+    assert.equal(tree.run("--check").status, 0, "legacy notes can still land in normal CI");
+    const blocked = tree.run("--check-release");
+    assert.equal(blocked.status, 1);
+    assert.match(blocked.stderr, /inline Unreleased entries.*updated base/);
+    assert.equal(tree.read(), candidate, "the tag gate does not consume notes or the pointer");
+  }
+
+  tree.writeChangelog(prefix + late + pointer + previous);
+  tree.write("pr-12-1.md", note);
+  const recut = tree.run("release", "0.3.0", "2026-11-19");
+  assert.equal(recut.status, 0, recut.stderr);
+  assert.equal(tree.read(), prefix + pointer + "## 0.3.0 (2026-11-19)\n\n" + note + "\n" + late + previous);
+  assert.equal(tree.run("--check-release").status, 0);
+  assert.deepEqual(readdirSync(tree.dir), ["README.md"]);
+});
+
+test("single-line absolute HTTPS links survive release unchanged", (t) => {
+  const tree = checkout(t);
+  const links = "- See the [kit guide](https://github.com/corten-run/corten/blob/main/docs/guide/kit.md).\n" +
+    "  Read [more](https://corten.run/) or type ``[an example](./kit.md) and `x` ``.\n";
+  tree.write("pr-12-1.md", links);
+  const check = tree.run("--check");
+  assert.equal(check.status, 0, check.stderr);
+  const released = tree.run("release", "0.3.0", "2026-11-19");
+  assert.equal(released.status, 0, released.stderr);
+  assert.equal(tree.read(), prefix + "## 0.3.0 (2026-11-19)\n\n" + links + "\n" + previous);
+});
+
+test("check rejects unsupported link forms, including links split across lines", (t) => {
+  const tree = checkout(t);
+  for (const text of [
+    "- See [the guide](docs/guide/kit.md).",
+    "- See [the guide](../docs/guide/kit.md).",
+    "- See [the guide](/docs/guide/kit.md).",
+    "- See [this section](#kit).",
+    "- See [the guide](http://example.com).",
+    "- See [the guide](//example.com).",
+    "- See [the guide](https:///example.com).",
+    "- See [the guide](https://).",
+    "- See [the guide](https://example.com \"title\").",
+    "- See [the guide](<https://example.com>).",
+    "- See [the guide](https://example.com/foo(bar)).",
+    "- See [the guide]().",
+    "- See [the guide](\n  ../docs/guide/kit.md).",
+    "- See [the guide](\n  https://example.com).",
+    "- See [the\n  guide](https://example.com).",
+    "- See [the guide]\n  (https://example.com).",
+    "- See [the guide][ref].\n  [ref]: https://example.com",
+    "- See <https://example.com>.",
+    "- See https://example.com or www.example.com.",
+    "- Email me@example.com.",
+    "- Contact xmpp:me@server_name.example.",
+    "- See <a href=\"../docs/guide/kit.md\">the guide</a>.",
+    "- See ![the guide](https://example.com).",
+  ]) {
+    tree.write("pr-12-1.md", text);
+    const rejected = tree.run("--check");
+    assert.equal(rejected.status, 1, text);
+    assert.match(rejected.stderr, /changelog\.d\/pr-12-1\.md:.*\[label\]\(https:\/\//);
+  }
 });
 
 test("check and release reject malformed fragments without changing either file", (t) => {
@@ -147,6 +215,11 @@ test("check and release reject malformed fragments without changing either file"
     "- ---\n",
     "- <!-- No visible note. -->\n",
     "- <!-- No visible\n  note. -->\n",
+    "- [guide]: https://corten.run/\n",
+    "- [&#32;](https://corten.run/)\n",
+    "- ` `\n",
+    "- A paragraph.\n  - A nested bullet.\n",
+    "- # A heading instead of prose.\n",
     "-     This is an indented code block, not note text.\n",
     "-  One.\n  ## Outside the bullet.\n",
     "### Fixed\n- A fix.\n",

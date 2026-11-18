@@ -59,8 +59,8 @@ publication. Coordinate disclosure with the fixed release so users know what to 
    lockfile. Update `crates/corten/tests/openapi.json` (the test that checks it rewrites it) and
    the README's Status where the version shown there changes.
 3. Run `node scripts/changelog.mjs release X.Y.Z YYYY-MM-DD` with the release version and date.
-   It puts fragments marked `**Breaking:**` first, then the rest, in filename order within each
-   group. It moves any inline Unreleased entries after them without reordering and keeps the
+   It puts fragments starting with `**Breaking:**` first, then the rest, in filename order within
+   each group. It moves any inline Unreleased entries after them without reordering and keeps the
    pending-notes link under `## Unreleased`. Review the changelog diff and include the fragment
    deletions in the preparation pull request. Check the versioned section contains any upgrade
    instructions. Get the preparation pull request independently reviewed and merge after its
@@ -68,8 +68,9 @@ publication. Coordinate disclosure with the fixed release so users know what to 
 4. Record the resulting commit SHA on `main`. Confirm the release gates against that exact
    commit, including green CI, the workspace publish dry run in the checks and
    `node scripts/changelog.mjs --check-release` from a clean checkout of that SHA. The command
-   fails if any fragments remain. If one lands after collection, rerun preparation from the
-   updated base. If preparation already merged, restore its consumed fragments and prior inline
+   fails if any fragments or inline Unreleased entries remain. The pending-notes link may stay.
+   If a fragment or an inline entry lands after collection, rerun preparation from the updated
+   base. If preparation already merged, restore its consumed fragments and prior inline
    Unreleased entries, remove its untagged version section, and rerun step 3 in a follow-up
    preparation PR, keeping any notes that arrived since the original cut. A check on the pull
    request head or a later tip is not a check on this candidate. If the candidate changes,
@@ -92,7 +93,7 @@ branch for one patch, not a maintained release branch.
    rename the heading to `## X.Y.Z (YYYY-MM-DD)`, and put a new empty `## Unreleased` above it.
    Also carry `main`'s `SECURITY.md` (the tag's may name an older supported version) and its current
    `.github/workflows/release.yml` and the scripts it runs, including the current
-   `scripts/changelog.mjs` for its pending-fragment check. GitHub runs the workflow as the
+   `scripts/changelog.mjs` for its pending-notes check. GitHub runs the workflow as the
    tagged commit has it, so an older tag's workflow would publish without the attestation and
    checksum gates the [verification](#verify-what-users-received) below expects.
    Keep the tag's own `ci.yml`, which `release.yml` calls: it checks the tree it was written
