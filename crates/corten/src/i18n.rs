@@ -486,8 +486,8 @@ pub fn negotiate(locales: &[&str], accept_language: Option<&str>) -> usize {
     for range in crate::http::list_items(header.as_bytes()) {
         let part = &header[range];
         let (tag, q) = match part.split_once(';') {
-            Some((tag, params)) => (tag.trim(), crate::http::weight(params.as_bytes())),
-            None => (part.trim(), Some(1000)),
+            Some((tag, params)) => (tag.trim_matches([' ', '\t']), crate::http::weight(params.as_bytes())),
+            None => (part.trim_matches([' ', '\t']), Some(1000)),
         };
         let Some(q) = q else { continue };
         if tag.is_empty() || tag == "*" || q == 0 || best.is_some_and(|(b, _)| q <= b) {
@@ -2005,6 +2005,9 @@ mod tests {
             ("fr;q=0.4, en;Q=0.5", "en"),
             ("fr \t; \tq=0.5 , en;q=0.4", "fr"),
             ("en;q=0.4, fr;Q=0.5", "fr"),
+            ("fr\u{00a0};q=0.9, de;q=0.5", "de"),
+            ("fr\u{00a0}, de;q=0.5", "de"),
+            ("fr \t;q=0.9, de;q=0.5", "fr"),
         ] {
             assert_eq!(locales[negotiate(&locales, Some(header))], expected, "{header}");
         }
