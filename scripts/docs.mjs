@@ -29,6 +29,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const isChangelogFragment = (file) => file.startsWith("changelog.d/") && file !== "changelog.d/README.md";
+
 /**
  * The problems in the Markdown file `file` (its path from the repository's root) whose text is
  * `text`, where `present` has every file and folder of the repository (`.` the root), and how
@@ -37,6 +39,9 @@ import { fileURLToPath } from "node:url";
  * @returns {{ problems: string[], rows: number, links: number }}
  */
 export function scan(file, text, present) {
+  // A pending note is copied into root CHANGELOG.md and the fragment itself is removed.
+  const fragment = isChangelogFragment(file);
+  const directory = fragment ? "." : posix.dirname(file);
   /** @type {string[]} */
   const problems = [];
   let rows = 0;
@@ -59,9 +64,11 @@ export function scan(file, text, present) {
           to = decodeURIComponent(path);
         } catch {}
         // GitHub reads a target starting with `/` from the repository's root.
-        to = posix.normalize(to.startsWith("/") ? to.slice(1) || "." : posix.join(posix.dirname(file), to));
+        to = posix.normalize(to.startsWith("/") ? to.slice(1) || "." : posix.join(directory, to));
         to = to === "/" ? "." : to.replace(/\/$/, "");
-        if (!present.has(to)) problems.push(`${at}: a link to ${path}, which the repository does not have`);
+        if (!present.has(to) || (fragment && isChangelogFragment(to))) {
+          problems.push(`${at}: a link to ${path}, which the repository does not have${fragment ? " after release" : ""}`);
+        }
       }
     });
     paragraph = [];
@@ -233,10 +240,14 @@ export function presentIn(paths) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const root = fileURLToPath(new URL("..", import.meta.url));
   const git = (/** @type {string[]} */ args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
-  // Once each: a file with a conflict is listed once per side.
-  const files = [...new Set(git(["ls-files", "-z", "--", "*.md"]))];
   // Every file a commit would hold: tracked, or new and not ignored.
-  const present = presentIn(git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]));
+  const paths = git(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+  const present = presentIn(paths);
+  // Once each: include new fragments too, not just those already staged or committed.
+  const files = [...new Set([
+    ...git(["ls-files", "-z", "--", "*.md"]),
+    ...paths.filter((file) => file.endsWith(".md") && isChangelogFragment(file)),
+  ])];
   /** @type {string[]} */
   const problems = [];
   let rows = 0;

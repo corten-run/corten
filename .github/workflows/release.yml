@@ -41,8 +41,9 @@ jobs:
         with:
           persist-credentials: false
       - id: version
-        name: The tag, the crates and CHANGELOG.md name the same version
+        name: The tag, the crates and CHANGELOG.md name the same version, with no pending fragments
         run: |
+          node scripts/changelog.mjs --check-release
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "corten-run") | .version')
           test "$GITHUB_REF_NAME" = "v$version" || { echo "tag $GITHUB_REF_NAME does not match the workspace version $version"; exit 1; }
           awk -v v="$version" '$0 ~ "^## " v "( |$)" { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md

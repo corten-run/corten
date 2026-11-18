@@ -319,13 +319,18 @@ establish a general ranking.
    `main`, so a commit of the pull request's own passes there; a pull request that cites one is
    merged with a merge commit, which keeps it on `main`'s history, or pushes an evidence tag for
    it first, since a squash or rebase merge leaves it out.
-3. Update the guide in `docs/guide/` that describes the behavior, and add one Markdown bullet
-   in `changelog.d/<id>.md` instead of editing `CHANGELOG.md`. Use the issue number or a unique
-   branch slug (lowercase letters, digits and hyphens); add a suffix if several changes share
-   an issue. Start the entry with `- `, indent wrapped lines by at least two spaces without
-   inserting blank lines, and use `**Breaking:**` in the bullet where it applies. Use full URLs
-   for links to repository files so they still work after the note moves. `npm run check`
-   validates the fragments.
+3. Update the guide in `docs/guide/` that describes the behavior and add a file in
+   [`changelog.d/`](changelog.d/) instead of editing `CHANGELOG.md`. Name it
+   `pr-<PR-number>-<entry>.md`, using the pull request number, not the issue number, and a
+   different positive integer suffix for each entry in the pull request. Before you have a PR
+   number, use `branch-<unique-slug>-<entry>.md`. Pick a branch slug unique in this repository
+   (lowercase letters, digits and hyphens; add the fork owner or another discriminator if needed).
+   Each file holds one top-level `- ` bullet: one to four spaces after the hyphen, then visible
+   text, not an HTML comment. Indent any continuation lines to at least the start of the text
+   in the first line and do not insert blank lines. Use the inline `**Breaking:**` marker
+   where it applies. Prefer full URLs for links so they work in the published release notes too.
+   `npm run check` validates the fragments and checks relative file links as if the entry were
+   in the root `CHANGELOG.md`.
 4. Commit messages say what changed and why, in plain sentences.
 5. The description says what changed and why, the checks run and their results, and the
    measurements from 2. It merges after its [review](#review).

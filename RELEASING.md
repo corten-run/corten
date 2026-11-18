@@ -59,15 +59,21 @@ publication. Coordinate disclosure with the fixed release so users know what to 
    lockfile. Update `crates/corten/tests/openapi.json` (the test that checks it rewrites it) and
    the README's Status where the version shown there changes.
 3. Run `node scripts/changelog.mjs release X.Y.Z YYYY-MM-DD` with the release version and date.
-   It puts the fragments in filename order ahead of any entries already under `## Unreleased`,
-   moves those notes under the version heading, and leaves a new empty `## Unreleased` above
-   it. Review the changelog diff and include the fragment deletions in the preparation pull
-   request. Check the versioned section contains any upgrade instructions. Get the preparation
-   pull request independently reviewed and merge after its required checks pass.
+   It puts fragments marked `**Breaking:**` first, then the rest, in filename order within each
+   group. It moves any inline Unreleased entries after them without reordering and keeps the
+   pending-notes link under `## Unreleased`. Review the changelog diff and include the fragment
+   deletions in the preparation pull request. Check the versioned section contains any upgrade
+   instructions. Get the preparation pull request independently reviewed and merge after its
+   required checks pass.
 4. Record the resulting commit SHA on `main`. Confirm the release gates against that exact
-   commit, including green CI on it and the workspace publish dry run in the checks. A check on
-   the pull request head or a later tip is not a check on this candidate. If the candidate
-   changes, repeat validation on the new SHA before tagging it.
+   commit, including green CI, the workspace publish dry run in the checks and
+   `node scripts/changelog.mjs --check-release` from a clean checkout of that SHA. The command
+   fails if any fragments remain. If one lands after collection, rerun preparation from the
+   updated base. If preparation already merged, restore its consumed fragments and prior inline
+   Unreleased entries, remove its untagged version section, and rerun step 3 in a follow-up
+   preparation PR, keeping any notes that arrived since the original cut. A check on the pull
+   request head or a later tip is not a check on this candidate. If the candidate changes,
+   repeat validation on the new SHA before tagging it.
 
 ### Patch from a release tag
 
@@ -85,7 +91,8 @@ branch for one patch, not a maintained release branch.
    predates the fragment script, put that note under `## Unreleased` in `CHANGELOG.md` instead,
    rename the heading to `## X.Y.Z (YYYY-MM-DD)`, and put a new empty `## Unreleased` above it.
    Also carry `main`'s `SECURITY.md` (the tag's may name an older supported version) and its current
-   `.github/workflows/release.yml` and the scripts it runs. GitHub runs the workflow as the
+   `.github/workflows/release.yml` and the scripts it runs, including the current
+   `scripts/changelog.mjs` for its pending-fragment check. GitHub runs the workflow as the
    tagged commit has it, so an older tag's workflow would publish without the attestation and
    checksum gates the [verification](#verify-what-users-received) below expects.
    Keep the tag's own `ci.yml`, which `release.yml` calls: it checks the tree it was written
@@ -96,7 +103,8 @@ branch for one patch, not a maintained release branch.
 4. Record the merged commit's SHA on the patch branch as the candidate. At that SHA, confirm
    `git diff origin/main CANDIDATE_SHA -- .github/workflows/release.yml` prints nothing and
    `git diff vX.Y.W CANDIDATE_SHA -- .github/workflows/ci.yml` prints nothing beyond what step 3
-   added. CI does not run on pushes to that branch, so run the [checks](CONTRIBUTING.md#checks)
+   added. Run `node scripts/changelog.mjs --check-release` at that SHA too. CI does not run on
+   pushes to that branch, so run the [checks](CONTRIBUTING.md#checks)
    the tag's tree has on that commit before tagging it; the Release run also reuses CI on the
    tagged commit before anything publishes. Right before tagging, confirm `vX.Y.W` is still the
    newest published release: the highest version of `corten` on crates.io that is not yanked,
@@ -134,8 +142,9 @@ git push origin vX.Y.Z
 ```
 
 1. The tag push starts `Release`. It reuses `CI`; its `version` job checks the tag against the
-   `corten-run` version and extracts the matching, nonempty `CHANGELOG.md` section. After both
-   jobs pass, `binaries` builds the five locked release binaries and uploads their archives:
+   `corten-run` version, refuses a tagged commit with pending fragments and extracts the
+   matching, nonempty `CHANGELOG.md` section. After both jobs pass, `binaries` builds the five
+   locked release binaries and uploads their archives:
    Linux musl x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64.
 2. `attest` signs build provenance in a separate job that builds nothing; the archive builders
    do not hold an OIDC token. `verify-archives` requires exactly the five expected archives,

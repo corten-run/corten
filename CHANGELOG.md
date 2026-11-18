@@ -1,9 +1,11 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable changes to Corten. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
+
+Pending entries are in [changelog.d/](changelog.d/).
 
 - The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
   `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
