@@ -69,15 +69,18 @@ fn script_types_match_the_server() {
 
 Give `Types::components` the same component lists as `App::components`. It declares typed
 events, views, and the named `ToJson` types in the scripts' checked handler parameters,
-including the types those values contain. Use `Types::add` for other types, such as feed rows or
-screen data the script receives from a URL. A type already collected through a component or
-added by hand is declared only once.
+including the types those values contain. `Types::sync` collects handler argument types for the
+file it writes: relative JSDoc imports are resolved from each script's directory. A component
+library can write its own declarations while the app still collects its events and views.
+Use `Types::add` for other types, such as feed rows or screen data the script receives from a
+URL. A type already collected through a component or added by hand is declared only once.
 
 If two Rust types have the same name, the generator numbers later declarations (for example,
 `Payload2`), just as it does for types reached through `Types::add`. Type generation fails if
-a handler's JSDoc imports a different name from the declaration for its Rust type. Give
-same-named handler argument types distinct Rust names. A renamed Rust alias does not create a
-declaration: use the underlying type's declared name, or define a newtype that derives `ToJson`.
+a handler imports from that file under a different name from the declaration for its Rust
+type. Give handler argument types in the same file distinct Rust names. A renamed Rust alias
+does not create a declaration: use the underlying type's declared name, or define a newtype
+that derives `ToJson`.
 
 ### Where the types come from
 

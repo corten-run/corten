@@ -27,20 +27,43 @@
 //! `Option` is `T | null`). [`Types::json_schema`] gives the same definitions as JSON Schema,
 //! for native code generators.
 
-use std::{collections::BTreeMap, fmt::Write as _, path::Path};
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    fmt::Write as _,
+    path::{Component as PathComponent, Path, PathBuf},
+};
 
 use serde_json::{Map, Value};
 
 use crate::json::schema::{Generator, ToJsonSchema};
-use crate::script::__private::TsType;
+use crate::script::{
+    __private::{HandlerType, TsType},
+    EventDef,
+};
 
 /// The set of types one app sends to the browser.
 pub struct Types {
+    base: Declarations,
+    // The output path is not known until sync. Keep registrations after the first handler
+    // in order so filtering out another file's handlers does not renumber this file's types.
+    pending: Vec<Registration>,
+    /// Each view's class in `corten/views`, by name.
+    views: BTreeMap<&'static str, &'static str>,
+}
+
+#[derive(Clone, Default)]
+struct Declarations {
     generator: Generator,
     /// Each typed event's class in `corten/events`, by name.
     events: BTreeMap<&'static str, String>,
-    /// Each view's class in `corten/views`, by name.
-    views: BTreeMap<&'static str, &'static str>,
+}
+
+#[derive(Clone, Copy)]
+enum Registration {
+    Add(TsType, &'static str),
+    Event(EventDef),
+    Handler(&'static str, HandlerType),
 }
 
 impl Default for Types {
@@ -51,89 +74,84 @@ impl Default for Types {
 
 impl Types {
     pub fn new() -> Self {
-        Types { generator: Generator::new(), events: BTreeMap::new(), views: BTreeMap::new() }
+        Types { base: Declarations::default(), pending: Vec::new(), views: BTreeMap::new() }
     }
 
     /// Adds `T` and every type it refers to, under their Rust names. Use this for types
     /// [`Types::components`] does not already collect, such as feed rows. `T` is a type that
     /// derives `ToJson` (a declaration of its own); one that has none, such as `Vec<Row>` or
     /// `String`, panics: add the type it holds instead. So does a type with a field, at any depth,
-    /// whose type has no schema ([`crate::json::schema`]).
+    /// whose type has no schema ([`crate::json::schema`]). After handler arguments have been
+    /// collected, those checks wait until the declarations are generated.
     pub fn add<T: ToJsonSchema>(mut self) -> Self {
-        self.add_schema(T::json_schema, &format!("Types::add::<{}>()", std::any::type_name::<T>()));
+        self.register(Registration::Add(T::json_schema, std::any::type_name::<T>()));
         self
     }
 
-    fn add_schema(&mut self, describe: TsType, source: &str) -> Value {
-        let schema = describe(&mut self.generator);
-        self.generator.missing(source);
-        assert!(schema.get("$ref").is_some(), "{source}: the type has no declaration of its own; use a type that derives ToJson");
-        schema
+    fn register(&mut self, entry: Registration) {
+        if self.pending.is_empty() {
+            self.base.register(entry);
+        } else {
+            self.pending.push(entry);
+        }
     }
 
     /// Adds the typed events among the app's components (the list it gives `App::components`)
     /// and those their scripts import, to `corten/events`, with the types of their fields, and the
     /// views (`#[component(view)]`) to `corten/views`. Also adds the named `ToJson` types the
     /// scripts' checked handler parameters use, and the types those refer to.
-    /// Panics if a handler imports a different name from the one assigned to its Rust type.
+    /// [`Types::sync`] collects and checks only the handler arguments imported from the file
+    /// being written, when the import path is known. Generation panics if a checked handler
+    /// imports a different name from the one assigned to its Rust type.
     pub fn components(mut self, components: &[crate::Component]) -> Self {
         for view in components.iter().filter_map(|c| c.view) {
             self.views.insert(view.class, view.ts);
         }
         let imported = components.iter().filter_map(|c| c.script).flat_map(|s| s.events);
         for event in components.iter().chain(imported).filter_map(|c| c.event) {
-            let mut fields = String::new();
-            let mut init = Vec::new();
-            for field in event.fields {
-                let schema = (field.ts)(&mut self.generator);
-                let ty = ts(&schema, "    ");
-                let _ = write!(fields, "\n    readonly {}: {ty};", field.name);
-                init.push(format!("{}: {ty}", field.name));
-            }
-            let init = if init.is_empty() { "init?: {}".to_string() } else { format!("init: {{ {} }}", init.join("; ")) };
-            let entry = format!(
-                "  /** The `{}` event, from #[event] {}. */\n  export class {} extends Event {{\n    constructor({init});{fields}\n  }}\n",
-                event.name, event.class, event.class
-            );
-            self.events.insert(event.class, entry);
+            self.register(Registration::Event(event));
         }
         for script in components.iter().filter_map(|c| c.script.as_ref()) {
-            for &(name, describe) in script.types {
-                let source = format!("{}: handler argument {name}", script.file);
-                let schema = self.add_schema(describe, &source);
-                let declared = schema["$ref"]
-                    .as_str()
-                    .and_then(|reference| reference.strip_prefix("#/$defs/"))
-                    .filter(|declared| self.generator.has_definition(declared))
-                    .unwrap_or_else(|| panic!("{source}: the Rust type's schema has no local declaration ({})", schema["$ref"]));
-                assert!(
-                    declared == name,
-                    "{source} resolves to `{declared}` instead of `{name}`; use an unambiguous Rust type name and import its generated declaration in JSDoc"
-                );
-            }
+            self.pending.extend(script.types.iter().map(|ty| Registration::Handler(script.file, *ty)));
         }
         self
     }
 
-    /// Every definition, after checking that each field met (an event's too) has a schema.
-    fn definitions(&self) -> BTreeMap<String, Value> {
-        self.generator.missing("corten::types");
-        self.generator.definitions()
+    fn declarations(&self, path: Option<&Path>) -> Cow<'_, Declarations> {
+        if self.pending.is_empty() {
+            return Cow::Borrowed(&self.base);
+        }
+        let path = path.map(declaration_path);
+        let mut out = self.base.clone();
+        for &entry in &self.pending {
+            if matches!(entry, Registration::Handler(_, (_, Some(import), _))
+                if path.as_ref().is_some_and(|path| *path != declaration_path(Path::new(import))))
+            {
+                continue;
+            }
+            out.register(entry);
+        }
+        Cow::Owned(out)
     }
 
     /// Every definition as JSON Schema (draft 2020-12): `{"$defs": {...}}`.
     pub fn json_schema(&self) -> Value {
-        let defs: Map<String, Value> = self.definitions().into_iter().collect();
+        let defs: Map<String, Value> = self.declarations(None).definitions().into_iter().collect();
         serde_json::json!({ "$schema": "https://json-schema.org/draft/2020-12/schema", "$defs": defs })
     }
 
-    /// The declarations file: one `export` per type, in name order.
+    /// All collected declarations as one file: one `export` per type, in name order.
     pub fn typescript(&self) -> String {
+        self.typescript_for(None)
+    }
+
+    fn typescript_for(&self, path: Option<&Path>) -> String {
+        let declarations = self.declarations(path);
         let mut out = String::from(
             "// Generated by corten::types from the Rust types; do not edit. The test that calls\n// Types::sync rewrites this file when they change.\n",
         );
         let mut blocks = BTreeMap::new();
-        for (name, schema) in self.definitions() {
+        for (name, schema) in declarations.definitions() {
             let mut block = String::new();
             if let Some(text) = schema.get("description").and_then(Value::as_str) {
                 doc(&mut block, "", text);
@@ -152,9 +170,9 @@ impl Types {
             out.push('\n');
             out.push_str(block);
         }
-        if !self.events.is_empty() {
+        if !declarations.events.is_empty() {
             out.push_str("\n/** The app's typed events (#[event]), dispatched by scripts and listened for with on:Name. */\ndeclare module \"corten/events\" {\n");
-            for entry in self.events.values() {
+            for entry in declarations.events.values() {
                 out.push_str(entry);
             }
             out.push_str("}\n");
@@ -166,19 +184,20 @@ impl Types {
             }
             out.push_str("}\n");
         }
-        if !self.events.is_empty() || !self.views.is_empty() {
+        if !declarations.events.is_empty() || !self.views.is_empty() {
             out.push_str("\nexport {};\n");
         }
         out
     }
 
-    /// Writes [`Types::typescript`] to `path` when it differs from what is there, and then panics
-    /// with the file name, so a test that calls it fails until the new file is committed. Line
-    /// endings do not count: a checkout that writes the file with CRLF (Git's `core.autocrlf` on
-    /// Windows) has it as committed.
+    /// Writes the declarations to `path` when they differ from what is there, and then panics
+    /// with the file name, so a test that calls it fails until the new file is committed.
+    /// Handler arguments imported from another file do not contribute to this file. Line
+    /// endings do not count: a checkout that writes the file with CRLF (Git's `core.autocrlf`
+    /// on Windows) has it as committed.
     pub fn sync(&self, path: impl AsRef<Path>) {
         let path = path.as_ref();
-        let text = self.typescript();
+        let text = self.typescript_for(Some(path));
         if std::fs::read_to_string(path).is_ok_and(|was| was.replace("\r\n", "\n") == text) {
             return;
         }
@@ -191,6 +210,74 @@ impl Types {
             path.display()
         );
     }
+}
+
+impl Declarations {
+    fn register(&mut self, entry: Registration) {
+        match entry {
+            Registration::Add(describe, name) => {
+                self.add_schema(describe, &format!("Types::add::<{name}>()"));
+            }
+            Registration::Event(event) => self.add_event(event),
+            Registration::Handler(file, (name, _, describe)) => {
+                let source = format!("{file}: handler argument {name}");
+                let schema = self.add_schema(describe, &source);
+                let declared = schema["$ref"]
+                    .as_str()
+                    .and_then(|reference| reference.strip_prefix("#/$defs/"))
+                    .filter(|declared| self.generator.has_definition(declared))
+                    .unwrap_or_else(|| panic!("{source}: the Rust type's schema has no local declaration ({})", schema["$ref"]));
+                assert!(
+                    declared == name,
+                    "{source} resolves to `{declared}` instead of `{name}`; use an unambiguous Rust type name and import its generated declaration in JSDoc"
+                );
+            }
+        }
+    }
+
+    fn add_schema(&mut self, describe: TsType, source: &str) -> Value {
+        let schema = describe(&mut self.generator);
+        self.generator.missing(source);
+        assert!(schema.get("$ref").is_some(), "{source}: the type has no declaration of its own; use a type that derives ToJson");
+        schema
+    }
+
+    fn add_event(&mut self, event: EventDef) {
+        let mut fields = String::new();
+        let mut init = Vec::new();
+        for field in event.fields {
+            let schema = (field.ts)(&mut self.generator);
+            let ty = ts(&schema, "    ");
+            let _ = write!(fields, "\n    readonly {}: {ty};", field.name);
+            init.push(format!("{}: {ty}", field.name));
+        }
+        let init = if init.is_empty() { "init?: {}".to_string() } else { format!("init: {{ {} }}", init.join("; ")) };
+        let entry = format!(
+            "  /** The `{}` event, from #[event] {}. */\n  export class {} extends Event {{\n    constructor({init});{fields}\n  }}\n",
+            event.name, event.class, event.class
+        );
+        self.events.insert(event.class, entry);
+    }
+
+    /// Every definition, after checking that each field met (an event's too) has a schema.
+    fn definitions(&self) -> BTreeMap<String, Value> {
+        self.generator.missing("corten::types");
+        self.generator.definitions()
+    }
+}
+
+/// Compare import and output paths even when the declarations file does not yet exist.
+fn declaration_path(path: &Path) -> PathBuf {
+    let absolute = std::path::absolute(path).expect("resolve declaration path");
+    let mut path = PathBuf::new();
+    for part in absolute.components() {
+        if part == PathComponent::ParentDir {
+            path.pop();
+        } else {
+            path.push(part);
+        }
+    }
+    path
 }
 
 fn doc(out: &mut String, indent: &str, text: &str) {
@@ -324,6 +411,8 @@ mod tests {
     use super::*;
     use crate::json::ToJson;
 
+    const APP_DECLARATIONS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/types/app.d.ts");
+
     /// A card on the watchlist.
     #[derive(ToJson)]
     #[allow(dead_code)]
@@ -385,7 +474,7 @@ mod tests {
         assert_eq!(Types::new().components(&[ReportChange, ConfirmChange]).typescript(), types);
         assert_eq!(Types::new().add::<Change>().components(&[ReportChange, ConfirmChange]).typescript(), types);
         assert_eq!(Types::new().components(&[ReportChange, ConfirmChange]).add::<Change>().typescript(), types);
-        report.sync(concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/types/app.d.ts"));
+        report.sync(APP_DECLARATIONS);
     }
 
     mod alternative {
@@ -401,15 +490,43 @@ mod tests {
         }
     }
 
+    mod library {
+        #[derive(crate::ToJson)]
+        pub(super) struct Change {
+            applied: bool,
+        }
+
+        crate::script::script!(mod report = "type_tests/library/src/library_change.js");
+
+        // Model the served names of a component crate with a scripts prefix.
+        const SCRIPT: crate::Script = crate::Script { name: "library.library_change", ..report::COMPONENT.script.unwrap() };
+        pub(super) const COMPONENTS: &[crate::Component] =
+            &[crate::Component { name: SCRIPT.name, script: Some(SCRIPT), ..report::COMPONENT }];
+    }
+
+    #[test]
+    fn a_prefixed_library_can_generate_its_own_handler_declarations() {
+        let library = concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/library/types/app.d.ts");
+        let app_component = [ConfirmChange];
+
+        let combined = Types::new().components(&app_component).components(library::COMPONENTS);
+        combined.sync(APP_DECLARATIONS);
+        combined.sync(library);
+        Types::new().components(library::COMPONENTS).components(&app_component).sync(APP_DECLARATIONS);
+        Types::new().components(library::COMPONENTS).sync(library);
+    }
+
     #[test]
     fn same_named_handler_types_are_refused_in_either_order() {
         for (first, second, file) in [
             (ConfirmChange, alternative::AlternativeChange, "alternative_change.js"),
             (alternative::AlternativeChange, ConfirmChange, "confirm_change.js"),
         ] {
+            let expected = format!("{file}: handler argument Change resolves to `Change2` instead of `Change`");
+            assert_type_error(|| Types::new().components(&[first, second]).typescript(), &expected);
             assert_type_error(
-                || Types::new().components(&[first, second]).typescript(),
-                &format!("{file}: handler argument Change resolves to `Change2` instead of `Change`"),
+                || Types::new().components(&[first, second]).typescript_for(Some(Path::new(APP_DECLARATIONS))),
+                &expected,
             );
         }
     }
