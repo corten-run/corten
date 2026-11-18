@@ -1149,6 +1149,13 @@ mod tests {
     }
 
     #[test]
+    fn an_escaped_var_still_checks_required_reads_and_skips_fallbacks() {
+        assert_eq!(custom_properties(r".a{color:\var(--missing)}"), (vec![], vec!["--missing"]));
+        assert_eq!(custom_properties(r".a{color:\var(--opt,var(--fallback))}"), (vec![], vec![]));
+        assert_eq!(custom_properties(r".a{--v:url(x\/*@property/**/--fake);color:var(--fake)}"), (vec!["--v"], vec!["--fake"]));
+    }
+
+    #[test]
     fn tokens_are_typed_scales_and_utilities_are_classes_per_breakpoint() {
         assert_eq!(Space::_4.var(), "var(--space-4)");
         assert_eq!(theme::Color::Accent.value(), "#6b3fd4");

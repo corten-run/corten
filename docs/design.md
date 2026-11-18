@@ -5809,7 +5809,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `@custom-media` is refused because tokens define breakpoints. Every other block or statement
    at-rule, including `@namespace` and `@document`, is refused outside raw bodies because the
    macro has no scoping rule for it; put those rules in the app's global stylesheet. Unknown
-   statements are refused inside raw bodies too. Escaped at-rule and class names are not supported.
+   statements are refused inside raw bodies too. For compatibility, malformed lowercase
+   `@layer` or `@charset` prefixes that previously passed through are discarded, not treated
+   as new supported at-rules. Escaped at-rule and class names are not supported.
 
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
@@ -5820,10 +5822,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
    in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an `if()` branch's value. A
    lookup's name and an `if()` condition (`style(--x: 1)`) name custom properties, a dashed
    function token (`--x()`) calls a custom function, and strings, URLs, anchor names, other
-   functions' arguments and unrelated declarations are not position references. A hex escape's
-   terminating whitespace is kept apart from the whitespace after it, which still separates
-   tokens, and only CSS whitespace counts. A name carried in a custom property's value is not
-   rewritten.
+   functions' arguments and unrelated declarations are not position references. With a local
+   definition, the macro reads these declarations' source values and preserves their token
+   boundaries, including comments and escapes. A name carried in a custom property's value is
+   not rewritten.
    [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
    gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
    components share the document tree, so prefixing prevents collisions. This does not make

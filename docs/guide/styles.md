@@ -108,6 +108,8 @@ renamed there too. Nested block at-rules inside them are copied raw (font featur
 page margin `@top-left`, and others), not independently selector-checked. The only statement
 at-rules accepted are `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded, since
 the generated stylesheet is UTF-8). Unknown statements are refused even inside raw bodies.
+For compatibility, malformed lowercase `@layer` or `@charset` prefixes that previously
+passed through are discarded.
 
 `@import` does not compile: imported CSS is not checked or owned by the component. Put it in
 `static/style.css`. `@custom-media` does not compile either: the token file defines breakpoints,
