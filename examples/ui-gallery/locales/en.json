@@ -1,1 +1,3 @@
-{}
+{
+  "discount_rule": "Enter a discount above {min} and below {max} percent, or none."
+}

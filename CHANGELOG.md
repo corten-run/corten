@@ -5,27 +5,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- A decimal field with no step or with an end it stays off is a `Bounds` too, so its input's
-  attributes and its handler's check are one constant again instead of `step="any"` written by
-  hand beside a rule of the app's
-  ([#1412 Bounds cannot say step any or an exclusive end (above 0, below 1), so most decimal fields keep hand-written rules beside their Entry](https://github.com/corten-run/corten/issues/1412)).
-  `Bounds::any_step(min, max)`, a `Bounds<f64, AnyStep>`, writes `step="any"` and holds every
-  finite number in range, and its `.exclusive_min()` and `.exclusive_max()` refuse the end itself
-  ("above 0", "below 1"). HTML has no exclusive `min` or `max`, so the input says the type's next
-  number inside a refused end (`5e-324` above 0), which the browser checks and its arrow keys never
-  step past; the handler refuses the end too, and a number that reads as it in the field's type (`1e-50`
-  in an `f32`). A browser may still refuse a number near a refused end that the handler holds
-  (Chromium and WebKit refuse a typed `4e-324`), and none was measured taking one it refuses
-  (docs/design.md, Choice 62). A number the input says past 18 digits written out, a drawn end or
-  a value made in code (`Entry::from(1e-20)`), is written with an exponent (`1e-20`), which
-  Chromium and WebKit read exactly where they refused `0.00000000000000000001` as below
-  `min="5e-324"`, and any-step bounds that hold nothing (an exclusive `min` at `f64::MAX`, whose
-  next is infinite) are drawn as `min="1" max="0"`. Any step is a float's alone, and an exclusive end is
-  any step's alone: stepped bounds stay off an end by starting a step inside it
-  (`Bounds::new(0.1, 16.0).step(0.1)` is above 0 in tenths), so an exclusive end on them, a step
-  on any-step bounds and `Bounds::any_step(0u32, 3)` do not compile. corten-ui's `NumberField`
-  takes either kind of bounds; with any step it shows the number as it is and draws both buttons
-  disabled. ui-gallery's listing has a discount, above 0 and below 100 percent with any decimals.
+- Decimal fields can use `Bounds::<f64>::any_step` (also for `f32`) for `step="any"`,
+  with optional exclusive endpoints. Constants reject non-finite, reversed, empty, or
+  unsupported exclusive ranges. The browser gets an advisory inward bound and the
+  server enforces the logical rule. Stepped fields and standalone `Entry` keep their
+  formatting. The gallery's discount shows its exclusive limits.
+  See [Choice 62](docs/design.md#choice-exclusive-ends) and
+  [#1412 Bounds cannot say step any or an exclusive end (above 0, below 1), so most decimal fields keep hand-written rules beside their Entry](https://github.com/corten-run/corten/issues/1412).
 
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.

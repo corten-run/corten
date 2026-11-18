@@ -435,11 +435,15 @@ async function run(browser) {
       .join(" ");
   });
   check("the design system orders an adornment between the parts", layout === "button span input button", layout);
-  // A field with step="any" (Bounds::any_step) has no step for a button to add: both stay disabled
+  // A field with step="any" has no step for a button to add: both stay disabled
   // as the value changes, and Home leaves the value as typed rather than going to an end the field
   // may have to stay off (exclusive_min).
   const discount = page.locator("#discount");
   const discountButtons = page.locator("[data-scope=ui-number-field]").nth(2).locator("button");
+  const discountHint = page.locator("#discount-hint");
+  check("the discount has a visible, associated hint with the exclusive limits",
+    (await discount.getAttribute("aria-describedby")) === "discount-hint" && await discountHint.isVisible() &&
+    (await discountHint.textContent()) === "Enter a discount above 0 and below 100 percent, or none.");
   await discount.fill("37.5");
   await discount.press("Home");
   const stepless = [await discount.inputValue(), await discount.getAttribute("step"), await discountButtons.nth(0).isDisabled(), await discountButtons.nth(1).isDisabled()].join(" ");
@@ -473,10 +477,8 @@ async function run(browser) {
     }).join(" ");
   });
   check("step any: a tiny number drawn with an exponent is inside the drawn ends, above 0 and below it", drawnTiny === "true true", drawnTiny);
-  // Typed numbers near the ends (docs/design.md#choice-exclusive-ends): a browser may refuse one the handler
-  // holds (Chromium and WebKit compare the typed decimal with the drawn one, so `4e-324`, which
-  // reads as 5e-324, is below min="5e-324"), but takes none it refuses. The handler reads a
-  // number as the nearest double, as `Number` does, and holds it above 0 and below 100.
+  // Ordinary spellings near the gallery's ends. This is a sampled check, not a guarantee of
+  // browser/server parity: see the raw POST regression below and the design Choice.
   const nearEnds = ["0", "-0", "1e-400", "2e-324", "2.5e-324", "4e-324", "4.9e-324", "5e-324", "1e-323", "1e-310", "1e-20", "0.00000000000000000001",
     "0.0000000000000000000000000000001", "0.5", "99.99999999999999", "99.999999999999992", "99.999999999999993", "99.999999999999995", "99.99999999999999999",
     "99.9999999999999999999999", "100", "100.0000000000000001", "1e2", "-1", "1e3"];
@@ -484,15 +486,21 @@ async function run(browser) {
     const i = /** @type {HTMLInputElement} */ (input);
     return typed.filter((t) => { i.value = t; const n = Number(t); return i.validity.valid && !(Number.isFinite(n) && n > 0 && n < 100); });
   }, nearEnds);
-  check("step any: the browser takes no number near the refused ends that the handler refuses", looser.length === 0, looser.join(" "));
-  // Bounds that hold nothing (an exclusive min at f64::MAX, whose next is infinite) are drawn as
-  // min="1" max="0", which each engine refuses whole, as the handler does; `min="inf"` it ignores.
-  const empty = await page.evaluate(() => {
-    const i = document.createElement("input");
-    Object.assign(i, { type: "number", min: "1", max: "0", step: "any" });
-    return ["0", "0.5", "1", "-1", "1e308"].filter((v) => { i.value = v; return i.validity.valid; }).join(" ");
+  check("step any: the sampled spellings rejected by the handler are also blocked natively", looser.length === 0, looser.join(" "));
+  // The Rust render tests pin these attributes. In particular the stepped writer must not mix
+  // an exponent min and step with a fixed-notation prefilled value.
+  const otherBounds = await page.evaluate(() => {
+    const input = () => document.createElement("input");
+    const [tiny, positive, negative] = [input(), input(), input()];
+    const fixed = "0.00000000000000000001";
+    Object.assign(tiny, { type: "number", min: fixed, step: fixed, max: "1" });
+    tiny.setAttribute("value", fixed);
+    Object.assign(positive, { type: "number", min: "-3.4028235e38", max: "3.4028235e38", step: "any", value: "1e39" });
+    Object.assign(negative, { type: "number", min: "-3.4028235e38", max: "3.4028235e38", step: "any", value: "-1e39" });
+    return [tiny.validity.valid, positive.validity.rangeOverflow, negative.validity.rangeUnderflow].join(" ");
   });
-  check("step any: min=1 max=0 takes no number", empty === "", empty);
+  check("the prefilled tiny stepped value is valid and finite f32 bounds block overflow in both directions",
+    otherBounds === "true true true", otherBounds);
   await discount.fill("");
 
   // ComboBox
@@ -5072,6 +5080,9 @@ async function run(browser) {
     const atEnd = await postDiscount(end);
     check(`no script: a discount of ${end}, a refused end, is refused by the browser and by the handler`, atEnd === "false 422 Enter a discount above 0 and below 100 percent, or none.", atEnd);
   }
+  const roundedEnd = await postDiscount("0.00000000000000999999999999999999e16");
+  check("no script: the handler refuses a value that rounds to 100 even if native validation admits it",
+    roundedEnd.split(" ").slice(1).join(" ") === "422 Enter a discount above 0 and below 100 percent, or none.", roundedEnd);
   const precise = await postDiscount("12.345");
   check("no script: a discount with any decimals is listed", precise === "true 200 Listed 1 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship, 12.345% off two or more.", precise);
   // The handler holds the least double above 0 however it is typed: `4e-324` reads as it. Chromium

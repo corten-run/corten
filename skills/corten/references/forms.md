@@ -202,11 +202,11 @@ its field's type (`FieldName<Condition>`), so pass a typed control (`Picker::new
 (`Number::new(e.id(f.qty), f.qty, ..)`), never text. A number the user types is
 `qty: Entry<u32>`, read with its `Bounds` (`QTY.read(&input.qty)`, `None` for the field's
 message) and drawn again with `value={&input.qty}`; a decimal with no step or an end it stays
-off is `Bounds::any_step(0.0, 1.0).exclusive_min()`, a `Bounds<f64, AnyStep>` (a float's alone;
-the input says the type's next number inside a refused end, `5e-324` above 0, so the browser
-refuses the end as the handler does, though Chromium and WebKit may refuse a few numbers right next
-to it that the handler holds; the message says "above"), and a stepped field stays off an end by
-starting a step inside it (`Bounds::new(0.1, 16.0).step(0.1)`), never a rule beside the `Entry`;
+off is `Bounds::<f64>::any_step(0.0, 1.0).exclusive_min()`, a `Bounds<f64, AnyStep>`.
+Declare it as a constant: the ends must be finite, leave at least one value, and nonzero
+exclusive ends must have supported magnitudes (see the forms guide). The native range is
+advisory; the handler enforces the rule and a visible hint says "above" or "below".
+A stepped field stays off an end by starting a step inside it (`Bounds::new(0.1, 16.0).step(0.1)`);
 a typed `qty: u32` is only for a number a
 page writes itself, since one that does not read is the error page. A date and time the user
 picks (`<input type="datetime-local">`) is `when: Entry<LocalDateTime>` (`corten::i18n`) beside

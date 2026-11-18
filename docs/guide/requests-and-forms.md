@@ -411,9 +411,9 @@ type of its own that implements `Deserialize`.
 
 A number the user types is an `Entry` of its type: the text as sent and the number it reads as.
 Its allowed values are a `Bounds` constant of that type, which gives the input its `min`, `max`
-and `step` and the handler its check, so the two cannot drift apart: the browser stops a value
-outside them before the form is sent, and `Bounds::read` gives the handler the number within
-them, or `None` for the field's message, whatever the client sent:
+and `step` and the handler its check, so the rule is declared once. The browser uses the
+attributes for native validation, and `Bounds::read` gives the handler the number within
+the bounds, or `None` for the field's message, whatever the client sent:
 
 ```rust,ignore
 const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_000.0).step(0.01)
@@ -430,22 +430,20 @@ let Some(copies) = COPIES.read(&input.copies) else {
 };
 ```
 
-A decimal that takes whatever precision is typed (a ratio, a percentile) has no step:
-`Bounds::any_step(min, max)`, a `Bounds<f64, AnyStep>`, writes HTML's `step="any"` and holds
-every finite number in range. Its ends, and only its, can be refused ("above 0", "below 100"):
-`.exclusive_min()` and `.exclusive_max()`. HTML has no exclusive `min` or `max`, so the input
-says the type's next number inside a refused end (`min="5e-324"` above 0 in an `f64`). The
-browser checks a typed value against it, and its arrow keys, which add 1 with `step="any"`, never
-step past it to the end. The handler refuses the end too, for a client that does not check,
-and a number that reads as the end in the field's type (`1e-50` is `0` in an `f32`). The message
-is the app's, as every rule's is, and says "above" where the bound does:
+A decimal with no step, such as a ratio or percentile, uses
+`Bounds::<f64>::any_step(min, max)`. It writes HTML's `step="any"` and holds every finite
+number in range. Use `Bounds::<f32>::any_step` for an `f32` field. Only any-step bounds take
+`.exclusive_min()` and `.exclusive_max()`. HTML has no exclusive number bound, so the input
+gets the type's next number inside a refused end. This is advisory: the browser and Rust
+can round differently. The server's check is authoritative. Show the logical rule in a
+visible hint and in the field's error; the browser can only describe inclusive attributes.
 
 ```rust,ignore
-const DISCOUNT: Bounds<f64, AnyStep> = Bounds::any_step(0.0, 100.0).exclusive_min().exclusive_max();
+const DISCOUNT: Bounds<f64, AnyStep> =
+    Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
 
 // <input type="number" name={f.discount} value={&input.discount} {..DISCOUNT}> writes
-// min="5e-324" max="99.99999999999999" step="any"; DISCOUNT.read is None for 0, 100 and 100.5,
-// Some for 37.5
+// min="5e-324" max="99.99999999999999" step="any".
 let Some(discount) = DISCOUNT.read(&input.discount) else {
     let (min, max) = (DISCOUNT.min(), DISCOUNT.max());
     errors.add(f.discount, format!("Enter a discount above {min} and below {max} percent."));
@@ -453,16 +451,17 @@ let Some(discount) = DISCOUNT.read(&input.discount) else {
 };
 ```
 
-Bounds with a step stay off an end by starting a step inside it, as a count does with its next
-whole number: above 0 in tenths is `Bounds::new(0.1, 16.0).step(0.1)`, and `Bounds::new(1, 9)` is
-above 0. So an exclusive end on stepped bounds does not compile, nor `.step(..)` on any-step ones,
-nor `Bounds::any_step(0u32, 3)`: `step="any"` would let the browser send `2.5`, which no integer
-reads. A number past 18 digits written out, a drawn end or a value made in code, is written with
-an exponent (`1e-20`), which Chromium and WebKit read exactly, and bounds that hold nothing
-(`min` above `max`, or an exclusive `min` at `f64::MAX`) are drawn as `min="1" max="0"`. A browser
-can still refuse a number the handler holds near a refused end (Chromium and WebKit refuse a
-typed `4e-324`, which reads as `5e-324`); what the input says and where the two differ is
+Declare any-step bounds as constants. Ends must be finite, and at least one representable
+value must remain after excluding ends. Nonzero exclusive ends must have a magnitude from
+0.1 for `f64` or 1e-9 for `f32`, up to but not including 1e18. Beyond this conservative range,
+even an ordinary fixed spelling can exceed browser precision. This does not limit the
+precision typed or the magnitude of an inclusive end. Any-step bounds and prefilled any-step
+`NumberField` values use exponent notation past 18 digits written out. See
 [Choice 62](../design.md#choice-exclusive-ends).
+
+Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
+`Bounds::new(0.1, 16.0).step(0.1)`. Stepped fields keep their existing formatting. Integers
+cannot opt into any step: a number input that allows `2.5` cannot feed an integer.
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
 handler runs, and the user loses the form: a blank field, `two`, a count past the type, or

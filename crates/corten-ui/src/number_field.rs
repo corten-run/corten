@@ -24,7 +24,7 @@ pub struct Number<'a, I, T, S = T> {
     pub value: Entry<T>,
     /// Its `min`, `max` and `step`: the amount a button or arrow key adds, which also sets the
     /// decimals shown (`0.1` shows `0.5` as `0.5`, `0.25` shows it as `0.50`). Page Up and Page
-    /// Down add ten steps. [`Bounds::any_step`] has no step for a button to add: a number is shown
+    /// Down add ten steps. `Bounds::<f64>::any_step` has no step for a button to add: a number is shown
     /// as it is, both buttons are drawn disabled, so the field keeps its layout, and the arrow
     /// keys are the browser's, which add 1 and never step past the ends the input says.
     pub bounds: Bounds<T, S>,
@@ -163,22 +163,15 @@ pub fn NumberField<'a, I: Id, T: Numeric, S: Spacing<T>>(field: &'a Number<'a, I
     let f = field;
     let (input, decrease, increase) = refs();
     let number = f.value.value();
-    let step = f.bounds.step_or_any();
     // `step="any"` has no step for a button to add (`stepUp` throws).
-    let stepless = step.is_none();
+    let stepless = f.bounds.is_any_step();
     let at_min = stepless || number.is_some_and(|v| v <= f.bounds.min());
     let at_max = stepless || number.is_some_and(|v| v >= f.bounds.max());
     // What was sent, as typed; a number made in code with its step's decimals, or as it is
     // (`1e-20` in exponent form, which every browser reads as it).
-    let shown = match (f.value.text(), number, step) {
-        (Some(text), _, _) => Some(std::borrow::Cow::Borrowed(text)),
-        (None, Some(v), Some(step)) => Some(std::borrow::Cow::Owned(v.shown(step))),
-        (None, Some(v), None) => {
-            let mut text = String::new();
-            v.write_value(&mut text);
-            Some(std::borrow::Cow::Owned(text))
-        }
-        (None, None, _) => None,
+    let shown = match f.value.text() {
+        Some(text) => Some(std::borrow::Cow::Borrowed(text)),
+        None => number.map(|v| std::borrow::Cow::Owned(f.bounds.shown(v))),
     };
     html! {
         <div on:connect={js::connect(decrease, input, increase, signal)}>
@@ -248,6 +241,25 @@ mod tests {
     }
 
     #[test]
+    fn a_tiny_stepped_value_and_its_bounds_keep_the_same_notation() {
+        #[derive(Fields)]
+        #[allow(dead_code)]
+        struct Form {
+            weight: Entry<f64>,
+        }
+        #[derive(Id)]
+        struct TinySteppedId;
+        const WEIGHT: Bounds<f64> = Bounds::new(1e-20, 1.0).step(1e-20);
+        let weight = Number { value: 1e-20.into(), ..Number::new(TinySteppedId, Form::FIELDS.weight, WEIGHT, "Less", "More") };
+        assert!(WEIGHT.holds(1e-20));
+        assert!(
+            NumberField { field: &weight }
+                .to_html()
+                .contains(r#"value="0.00000000000000000001" min="0.00000000000000000001" max="1" step="0.00000000000000000001""#)
+        );
+    }
+
+    #[test]
     fn a_field_with_any_step_shows_its_number_as_it_is_with_both_buttons_disabled() {
         #[derive(Fields)]
         #[allow(dead_code)]
@@ -256,7 +268,7 @@ mod tests {
         }
         #[derive(Id)]
         struct ShareId;
-        let share = Bounds::any_step(0.0, 100.0).exclusive_min().exclusive_max();
+        let share = Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
         let field = Number { value: 37.5.into(), ..Number::new(ShareId, Form::FIELDS.p, share, "Less", "More") };
         let html = NumberField { field: &field }.to_html();
         assert!(html.contains(r#"value="37.5" min="5e-324" max="99.99999999999999" step="any""#), "{html}");
@@ -265,7 +277,7 @@ mod tests {
         // above `5e-324`, where `0.00000000000000000001` underflows it.
         let tiny = Number { value: 1e-20.into(), ..Number::new(ShareId, Form::FIELDS.p, share, "Less", "More") };
         assert!(NumberField { field: &tiny }.to_html().contains(r#"value="1e-20" min="5e-324""#));
-        let below = Bounds::any_step(-1.0, 0.0).exclusive_max();
+        let below = Bounds::<f64>::any_step(-1.0, 0.0).exclusive_max();
         let tiny = Number { value: (-1e-20).into(), ..Number::new(ShareId, Form::FIELDS.p, below, "Less", "More") };
         assert!(NumberField { field: &tiny }.to_html().contains(r#"value="-1e-20" min="-1" max="-5e-324""#));
     }

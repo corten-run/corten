@@ -28,7 +28,7 @@ use crate::ui::{
 };
 
 corten::i18n::messages! {
-    /// The gallery's text: one locale, for the relative times.
+    /// The gallery's text: one locale, for formatted values and messages with arguments.
     pub struct Msg { "en" => "locales/en.json" }
 }
 
@@ -254,7 +254,11 @@ pub const QTY: Bounds<u32> = Bounds::new(1, 10);
 pub const WEIGHT: Bounds<f64> = Bounds::new(0.1, 16.0).step(0.1);
 /// The discount on two or more copies, in percent: above 0 and below 100, with any decimals. HTML
 /// has no exclusive end, so the input says the numbers next to 0 and 100 inside them.
-pub const DISCOUNT: Bounds<f64, AnyStep> = Bounds::any_step(0.0, 100.0).exclusive_min().exclusive_max();
+pub const DISCOUNT: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
+
+pub fn discount_rule(t: Msg) -> impl Render + std::fmt::Display {
+    t.discount_rule(msg::DiscountRule { min: t.number(DISCOUNT.min()), max: t.number(DISCOUNT.max()) })
+}
 
 /// What a listing that ships nowhere is told, by the browser and by the handler.
 pub const NO_REGION: &str = "Choose where you ship.";
@@ -274,8 +278,7 @@ async fn sell(req: Req, Form(form): Form<SellForm>) -> HtmlResult {
     }
     let discount = DISCOUNT.read(&form.discount);
     if discount.is_none() && !form.discount.is_blank() {
-        let (min, max) = (DISCOUNT.min(), DISCOUNT.max());
-        errors.add(f.discount, format!("Enter a discount above {min} and below {max} percent, or none."));
+        errors.add(f.discount, discount_rule(t).to_string());
     }
     let price = t.parse_money(&form.price, USD);
     if price.is_none() {

@@ -5589,71 +5589,45 @@ rules something out.
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
     above, at `65ac1dc47` against `38587c414`.
 
-62. <a id="choice-exclusive-ends"></a>**An exclusive end is any step's alone, and the input says
-    the type's next number inside it.** HTML's number input has a `min` and a `max`, both
-    included, and no exclusive form. Bounds with a step stay off an end as a count does, by
-    starting a step inside it (`Bounds::new(0.1, 16.0).step(0.1)` is above 0 in tenths,
-    `Bounds::new(1, 9)` above 0), so only `Bounds::any_step`, a `Bounds<T, AnyStep>`, takes
-    `exclusive_min` and `exclusive_max`, and an exclusive end on stepped bounds or a step on
-    any-step ones does not compile (`compile_fail` examples of `Bounds`). For a refused end the
-    input says the float's next number inside it, the shortest decimal that reads as it, with an
-    exponent where written out it would take more than 18 digits (`min="5e-324"` above 0 in an
-    `f64`, `max="99.99999999999999"` below 100); a number made in code for the input's `value` is
-    written the same way (`1e-20`). Bounds that hold no number, an exclusive `min` at the type's
-    largest number among them (its next is infinite, and a browser ignores `min="inf"`), are
-    drawn as `min="1" max="0"`, which takes nothing. The browser's range check then refuses the
-    end as the handler does, and its arrow keys, which with `step="any"` add 1, never step past
-    `min` or `max`: within 1 of a drawn end, Chromium and WebKit leave the value as it is, and
-    Firefox leaves it or moves it to the drawn end (`5e-324` from 0.5), which the handler holds.
-    The handler still refuses the end itself, for a client that does not check.
+62. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
+    on the server.** HTML has no exclusive number bound. Draw the next representable float
+    inside a refused end to block ordinary spellings and keep native arrows off the end.
+    The handler checks the logical ends. Show them in a visible hint and in the field error:
+    the browser can only describe inclusive attributes.
 
-    Where the two can still differ: a browser may refuse a number the handler holds; none was
-    measured taking one the handler refuses. Chromium and WebKit compare the decimal typed with
-    the decimal drawn, not the doubles they read as, and read about 19 digits: `4e-324`, which
-    reads as `5e-324`, is below `min="5e-324"`, `1.00000000000000019`, which reads as the double
-    after 1, is below `min="1.0000000000000002"`, and `0.00000000000000000001` is below
-    `5e-324`, though the handler holds each. Firefox reads about 15 significant digits, and took
-    what the handler holds in every case measured. An `f32` field's drawn end is the shortest
-    decimal for the `f32` next to the end (`1e-45` above 0, `0.99999994` below 1), which a browser
-    reads as a nearby double: within one `f32` spacing of the end it refuses a few numbers the
-    handler takes (`0.99999994039` below 1), and a typed number that reads as the end in an `f32`
-    (`1e-50`), being below `1e-45`.
+    Reopened after Chromium and WebKit admitted the fixed spelling of `1e-20` below the
+    drawn `9.999999999999998e-21`, and the negative mirror. Their decimal range check can
+    spend its digit budget on fractional zeros even when `valueAsNumber` and Rust read the
+    number correctly. Leave room for a shortest round-trip mantissa in 18 fixed-notation
+    digits: nonzero exclusive ends require magnitude at least 0.1 for `f64` (up to 17
+    significant digits) or 1e-9 for `f32` (up to 9), and below 1e18 for both. Zero is exact
+    in fixed notation. Both tiny declarations fail const evaluation; inclusive ends can
+    still span the finite type. Any-step bounds and prefilled any-step `NumberField` values
+    use exponent notation past 18 digits written out. Stepped fields and standalone
+    `Entry` attributes keep their existing writer.
 
-    Not chosen: drawing the end itself, which this change first did: the browser let a typed end
-    through for the handler to refuse, and its arrow keys landed on it (ArrowDown from 0.5 went
-    to 0 in all three engines). Taking the arrow keys
-    in `number_field.js` for `step="any"`: the page without the script, and a typed end, would
-    still reach the handler as values the browser had allowed. An exclusive end on stepped
-    bounds, drawn as the first step inside it: it holds the same values as the inclusive min a
-    step in, so a field could be written two ways, and it cost about 250 lines and a search on
-    every render. Refusing bounds that hold nothing at compile time: a `const fn` generic over
-    the float can neither compare nor step it on stable Rust, and per-type methods would lose the
-    `E0277` messages that say why an integer or stepped bounds take no exclusive end; `min` above
-    `max` already holds nothing at run time.
+    Native checks are advisory: the same engines may refuse `4e-324` above zero (Rust rounds
+    it to `5e-324`), or admit `0.00000000000000999999999999999999e16` below 100 (Rust rounds it
+    to 100 and rejects it). No inclusive HTML range can constrain every spelling. The server
+    runs its check for every submission.
 
-    Stands on: platform (HTML's number input: `min` and `max` are inclusive, with no exclusive
-    form; with `step="any"` its arrow keys step by the default step, 1, and do not step past `min`
-    or `max`; a valid floating-point number takes an exponent);
-    measured (`examples/ui-gallery/smoke.mjs`, on the gallery's discount, above 0 and below 100,
-    in each engine: ArrowDown from 0.5 and ArrowUp from 99.5 stay inside; a typed 0 and 100 are
-    refused by the browser and by the handler; of 25 numbers typed near the ends the browser takes
-    none the handler refuses; `1e-20` drawn as the value is inside the drawn ends, and so is
-    `-1e-20` below 0; `min="1" max="0"` takes no number; `4e-324` and `1e-20` sent are held. A
-    probe on this change found the same in 52 numbers typed near the ends of three fields, Chromium
-    and WebKit refusing 11 the handler holds and Firefox none, and of 6,222 numbers each drawn
-    between the doubles next to it, Chromium and WebKit took all in exponent form and all written
-    out in up to 19 digits, and refused about half of those in 20 or more); reasoned (an `f32`'s
-    drawn end is within one `f32` spacing of the end); value (correct output first: the browser
-    takes no value the handler refuses, the README's conflict order 1; one way to write a
-    field and a mistake the compiler can see as a compile error, its 3).
+    Not chosen: rendering the unshifted end, which admits ordinary spellings and lets
+    arrows land on it; a new parser or input mask, which replaces HTML and cannot help
+    without JavaScript; empty or non-finite HTML ranges, which can be invalid or ignored.
+    Concrete `f32` and `f64` constructors reject these ranges using stable const comparisons
+    and adjacent-float operations. A stepped bound stays off an end by starting one step in.
 
-    Revisit when: HTML gains an exclusive `min` or `max` for a number input, when the input says
-    the end itself and the next number goes; a browser's arrow keys with `step="any"` step
-    past `min` or `max`; a browser takes a number near a drawn end that the handler refuses; or
-    Chromium and WebKit read 20 digits written out exactly, when the exponent form can go.
+    Stands on: platform ([HTML's number state](https://html.spec.whatwg.org/multipage/input.html#number-state-(type=number))
+    and [floating-point syntax](https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#floating-point-numbers));
+    measured (two tiny endpoint submissions, the long spelling of 100, and one mixed-notation
+    stepped underflow, in both engines); value (standards first,
+    compile-time safety, and HTML that works without JavaScript).
 
-    Last checked: 2026-11-16, the ui-gallery smoke's step-any checks and the probe on this change,
-    in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
+    Revisit when: HTML gains exclusive number bounds, browser range checks use the same
+    rounding as Rust, or a shortest spelling of a supported end gets past its shifted hint.
+
+    Last checked: 2026-11-17, typed submissions in Chromium 156 and WebKit 27.2
+    (Playwright 1.64.1).
 
 ## Rules
 

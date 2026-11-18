@@ -230,11 +230,6 @@ pub trait EntryValue: Copy + Render + fmt::Debug + sealed::Sealed + 'static {
     /// `text` read as the field's value, `None` when it does not read.
     #[doc(hidden)]
     fn read_entry(text: &str) -> Option<Self>;
-    /// Writes ` name="…"` with `self` as the input's value.
-    #[doc(hidden)]
-    fn write_attr_value(self, name: &str, out: &mut String) {
-        crate::view::quoted(name, &self, out)
-    }
 }
 
 mod sealed {
@@ -247,9 +242,6 @@ mod sealed {
 impl<T: Numeric> EntryValue for T {
     fn read_entry(text: &str) -> Option<T> {
         read_number(text)
-    }
-    fn write_attr_value(self, name: &str, out: &mut String) {
-        super::bounds::number_attr(name, self, out)
     }
 }
 
@@ -378,7 +370,7 @@ impl<T: EntryValue> AttrValue for Entry<T> {
     fn write_attr(&self, name: &str, out: &mut String) {
         match (&self.text, self.value) {
             (Some(text), _) => text.write_attr(name, out),
-            (None, Some(value)) => value.write_attr_value(name, out),
+            (None, Some(value)) => crate::view::quoted(name, &value, out),
             (None, None) => {}
         }
     }
