@@ -8,14 +8,24 @@ export const commandResult = (record) => Object.fromEntries(["terminal", "code",
 export function composePhase(binding, native, host, commands, timingAudit = true) {
   const expected = binding.preparation.fixtures.length + 1, last = commands.at(-1);
   const browser = binding.request.group === "fullstack-browser";
+  const hardening = binding.request.group === "hardening";
   const browserExit = typeof native.qualificationPassed === "boolean"
     && native.expectedExitCode === (native.qualificationPassed ? 0 : 1)
     && (!native.qualificationPassed || native.status === "verified" && native.outcomes.every((r) => r.outcome === "passed"))
     ? native.expectedExitCode : null;
-  const nativeCode = browser ? browserExit : binding.request.group === "localized-marketplace" ? 0
+  // Hardening exits zero when the apparatus completes, even if a replayed app failed.
+  // Its current adapter reports dispositions but does not authorize any ranking.
+  const hardeningExit = hardening && native.resources === "verified"
+    && Array.isArray(native.blockers) && native.blockers.length === 0
+    && Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.length === 0
+    && native.outcomes.every((r) => ["passed", "failed", "unsupported"].includes(r.outcome))
+    && native.status === (native.outcomes.some((r) => r.outcome === "failed") ? "failed" : "verified")
+    ? 0 : null;
+  const nativeCode = browser ? browserExit : hardening ? hardeningExit : binding.request.group === "localized-marketplace" ? 0
     : native.status === "failed" ? 1 : binding.request.group === "client-heavy" ? 2 : 0;
   const lifecycle = commands.length === expected && commands.slice(0, -1).every((r) => r.success)
     && commands.every((r) => r.terminal && !r.cancelled && !r.forced && r.error === null)
+    && (!hardening || commands.every((r) => r.code === 0 && r.signal === null && r.success === true))
     && Number.isInteger(nativeCode) && last.code === nativeCode;
   const complete = native.attemptComplete && native.cleanupComplete && host.cleanupComplete
     && native.resources !== "invalid" && host.resources !== "invalid"
@@ -41,7 +51,8 @@ export function composePhase(binding, native, host, commands, timingAudit = true
     && policy.candidates.some((row) => row.app === app && row.status === "satisfied" && row.latestStableEligible === true && row.blockers?.length === 0)
     : legacyPolicyAllowsComparison;
   // These native runners gate timing for the whole group after a parity failure.
-  const nativeAllowsComparison = (app) => client ? native.rankingEligible === true && Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app)
+  const nativeAllowsComparison = (app) => hardening ? false
+    : client ? native.rankingEligible === true && Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app)
     : !["mixed-production", "catalog-page", "json-api"].includes(binding.request.group)
     || (Array.isArray(native.comparisonEligibleApps) && native.comparisonEligibleApps.includes(app));
   const browserAllowsComparison = (app) => !browser || native.qualificationPassed === true && native.expectedExitCode === 0

@@ -1,3 +1,17 @@
+import { isDeepStrictEqual } from "node:util";
+
+export const maxRecordBytes = 64 * 1024;
+export function validRecord(receipt, expected) {
+  if (!receipt || receipt.status !== 200 || receipt.complete !== true || receipt.error !== null ||
+      !/^application\/json(?:\s*;|$)/i.test(receipt.contentType) || typeof receipt.bodyBase64 !== "string" ||
+      receipt.bodyBase64.length > 4 * Math.ceil(maxRecordBytes / 3)) return false;
+  try {
+    const body = Buffer.from(receipt.bodyBase64, "base64");
+    return body.length <= maxRecordBytes && body.toString("base64") === receipt.bodyBase64 &&
+      isDeepStrictEqual(JSON.parse(body.toString("utf8")), expected);
+  } catch { return false; }
+}
+
 export const recoveryProfile = Object.freeze({
   version: "dependency-recovery/v1", intervalMs: 400, timeoutMs: 600,
   beforeMs: 4000, duringMs: 8000, afterMs: 8000, delayMs: 150,

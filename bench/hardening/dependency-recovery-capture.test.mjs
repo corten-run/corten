@@ -68,6 +68,58 @@ test("replays API recovery and fixture bypass without attack or defense results"
   }
 });
 
+function openCircuit(source = "api", boundarySuccess = false) {
+  const input = fixture(source), { samples, restoredAtMs, upstream } = input.raw.at(-1);
+  for (const sample of samples) {
+    if (sample.startMs < restoredAtMs || boundarySuccess && sample.startMs === restoredAtMs) continue;
+    sample.ok = false;
+    sample.receipt = { ...sample.receipt, status: 503, bodyBase64: Buffer.from("{}").toString("base64") };
+  }
+  upstream.after.reads.restored = upstream.after.responses200.restored = 0;
+  return input;
+}
+
+test("a circuit that stays open after the upstream restores is unrecovered, not invalid evidence", () => {
+  const capture = assembleRecovery(openCircuit());
+  assert.equal(capture.assessment.status, "unrecovered");
+  assert.equal(capture.assessment.windows.after.successes, 0);
+  assert.equal(capture.assessment.windows.after.errors, 20);
+  assert.equal(capture.assessment.recoveryMs, null);
+  assert.equal(capture.upstream.restored.phase, "restored");
+  assert.equal(capture.terminal.healthy, true);
+  assert.equal(assembleRecovery(openCircuit("fixture")).assessment.status, "fixture-degraded");
+});
+
+test("a failed recovery still requires slow-phase exposure and a recorded restore", () => {
+  const input = openCircuit(), { samples, upstream } = input.raw.at(-1);
+  for (const sample of samples.filter((s) => s.startMs >= 4000 && s.startMs < 12000)) {
+    sample.ok = false;
+    sample.receipt.status = 503;
+  }
+  for (const snapshot of [upstream.restored, upstream.after]) snapshot.reads.slow = snapshot.responses200.slow = 0;
+  assert.throws(() => assembleRecovery(input), /missing API upstream exposure/);
+  upstream.restored.reads.slow = upstream.after.reads.slow = 1;
+  assert.equal(assembleRecovery(input).assessment.status, "unrecovered", "a delayed read proves exposure without a successful reply");
+  upstream.restored.phase = "slow";
+  assert.throws(() => assembleRecovery(input), /wrong phase/);
+});
+
+test("a success at the restore boundary requires an attributable upstream read and completion", () => {
+  const input = openCircuit("api", true), { samples, upstream } = input.raw.at(-1);
+  assert.throws(() => assembleRecovery(input), /missing API upstream reads/);
+  upstream.restored.observedAtMs = 12030;
+  upstream.restored.elapsedSinceStartMs = 8030;
+  upstream.restored.reads.restored = upstream.after.reads.restored = 1;
+  assert.throws(() => assembleRecovery(input), /missing API upstream responses200/);
+  upstream.restored.responses200.restored = upstream.after.responses200.restored = 1;
+  const capture = assembleRecovery(input);
+  assert.equal(capture.assessment.windows.after.successes, 1);
+  assert.equal(capture.assessment.status, "unrecovered");
+  const next = samples.find((sample) => sample.scheduledMs === 12400);
+  Object.assign(next, { ok: true, receipt: { ...receipt } });
+  assert.throws(() => assembleRecovery(input), /missing API upstream reads for success at 12400 ms/);
+});
+
 test("rejects forged success, missing dependency evidence, and invalid native receipts", () => {
   for (const [mutate, error] of [
     [(i) => i.raw.at(-1).samples[0].receipt.bodyBase64 = Buffer.from("{}").toString("base64"), /success contradicts/],

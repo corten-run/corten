@@ -3,9 +3,9 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { test } from "node:test";
 import { records } from "../marketplace/fixtures.mjs";
-import { assessRecovery, recoveryProfile } from "./dependency-recovery-contract.mjs";
+import { assessRecovery, recoveryProfile, validRecord } from "./dependency-recovery-contract.mjs";
 import { dependencyRecoveryServer } from "./dependency-recovery-upstream.mjs";
-import { runRecovery, validRecord } from "./dependency-recovery-probe.mjs";
+import { runRecovery } from "./dependency-recovery-probe.mjs";
 
 async function listen(server, t) {
   const listening = once(server, "listening"); server.listen(0, "127.0.0.1"); await listening;
@@ -30,7 +30,7 @@ test("partial, malformed, oversized, non-JSON and wrong records never count as s
 test("the API path experiences the delay; the fixture path makes no upstream reads", { timeout: 60000 }, async t => {
   const catalog = records(), item = catalog.item_1;
   const lanes = [];
-  for (const source of ["fixture", "api"]) {
+  for (const [source, brokenTrigger] of [["fixture", false], ["api", false], ["fixture", true]]) {
     const apparatus = dependencyRecoveryServer(catalog), upstream = await listen(apparatus.server, t);
     const target = await listen(createServer(async (_req, res) => {
       try {
@@ -38,15 +38,25 @@ test("the API path experiences the delay; the fixture path makes no upstream rea
         res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(record));
       } catch { res.writeHead(503); res.end(); }
     }), t);
-    lanes.push({ source, target, upstream, apparatus });
+    lanes.push({ source, target, upstream, apparatus, brokenTrigger });
   }
-  const results = await Promise.allSettled(lanes.map(async ({ source, target, upstream, apparatus }) => {
+  const results = await Promise.allSettled(lanes.map(async ({ source, target, upstream, apparatus, brokenTrigger }) => {
     const rows = [];
-    await runRecovery({ phase: "dependency-recovery", source, upstream, target: { origin: target },
+    const run = runRecovery({ phase: "dependency-recovery", source, upstream, target: { origin: target },
       expected: item, budget: { dependencyRecovery: recoveryProfile } }, {
       clock: () => ({ monotonicNs: String(process.hrtime.bigint()), bootId: "test" }),
-      trigger: () => assert.ok(apparatus.start()), emit: row => rows.push(row), sample: () => ({}),
+      trigger: () => { if (brokenTrigger) throw new Error("test marker unavailable"); assert.ok(apparatus.start()); },
+      emit: row => rows.push(row), sample: () => ({}),
     });
+    if (brokenTrigger) {
+      await assert.rejects(run, /test marker unavailable/);
+      assert.equal(rows.at(-1).type, "dependency-recovery-incomplete");
+      assert.equal(rows.at(-1).samples.length, 50);
+      assert.equal(rows.at(-1).upstream.after.phase, "normal");
+      assert.equal(rows.some(r => r.type === "dependency-recovery"), false);
+      return;
+    }
+    await run;
     const evidence = rows.at(-1), result = assessRecovery(evidence.samples, { source, restoredAtMs: evidence.restoredAtMs });
     assert.equal(result.status, source === "api" ? "recovered" : "fixture-control", JSON.stringify(result));
     assert.equal(rows.filter(r => r.type === "resources").length, 3);

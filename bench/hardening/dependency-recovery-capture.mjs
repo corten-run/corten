@@ -1,8 +1,7 @@
 // Offline replay of ordinary record reads during a bounded dependency delay.
 import assert from "node:assert/strict";
 import { records } from "../marketplace/fixtures.mjs";
-import { assessRecovery, recoveryProfile, recoverySchedule } from "./dependency-recovery-contract.mjs";
-import { validRecord } from "./dependency-recovery-probe.mjs";
+import { assessRecovery, recoveryProfile, recoverySchedule, validRecord, maxRecordBytes } from "./dependency-recovery-contract.mjs";
 import { verifyNativeLimits, verifyParity } from "./evidence.mjs";
 import { terminalRecovery } from "./lifecycle.mjs";
 
@@ -16,7 +15,7 @@ const uint = (n) => Number.isSafeInteger(n) && n >= 0;
 
 function validateReadReceipts(samples) {
   assert.ok(Array.isArray(samples) && samples.length === recoverySchedule.length, "missing or extra recovery probes");
-  const expected = records().item_1, maxBytes = 64 * 1024;
+  const expected = records().item_1, maxBytes = maxRecordBytes;
   for (const { startMs, endMs, ok, receipt } of samples) {
     assert.ok(receipt && typeof receipt.complete === "boolean", "missing recovery response receipt");
     assert.ok(receipt.status === null || Number.isInteger(receipt.status) && receipt.status >= 100 && receipt.status <= 599);
@@ -27,6 +26,36 @@ function validateReadReceipts(samples) {
     const body = Buffer.from(receipt.bodyBase64, "base64");
     assert.ok(body.length <= maxBytes && body.toString("base64") === receipt.bodyBase64, "invalid recovery response bytes");
     assert.equal(ok, validRecord(receipt, expected) && endMs - startMs <= timeoutMs, "recovery success contradicts its response receipt or deadline");
+  }
+}
+
+function verifyApiEvidence(snapshots, samples, triggerAtMs, restoredAtMs, jitter) {
+  assert.ok(snapshots[2].reads.slow > 0, "missing API upstream exposure during slow phase");
+  const successful = samples.filter((sample) => sample.ok);
+  const phaseBounds = [0, triggerAtMs, restoredAtMs, Infinity];
+  for (const field of counters) {
+    const slots = snapshots.slice(1).flatMap((current, i) => phases.flatMap((phase, j) => {
+      const previous = snapshots[i], count = current[field][phase] - previous[field][phase];
+      // Snapshots are timestamped on receipt. A boundary-spanning request may
+      // fit more than one bucket, but no observed increment can back two successes.
+      return Array.from({ length: Math.min(count, successful.length) }, () => ({
+        start: previous.observedAtMs - jitter, end: current.observedAtMs,
+        phaseStart: phaseBounds[j] - jitter, phaseEnd: phaseBounds[j + 1],
+      }));
+    }));
+    const claim = (sample, seen) => {
+      for (const slot of slots) {
+        if (seen.has(slot)) continue;
+        const first = Math.max(sample.startMs, slot.phaseStart, field === "reads" ? slot.start : 0);
+        // A completion is booked to the phase of its read, even if the reply
+        // finishes after that phase. The read itself cannot cross the phase end.
+        if (first >= slot.phaseEnd || Math.max(first, slot.start) > Math.min(sample.endMs, slot.end)) continue;
+        seen.add(slot);
+        if (!slot.owner || claim(slot.owner, seen)) { slot.owner = sample; return true; }
+      }
+      return false;
+    };
+    for (const sample of successful) assert.ok(claim(sample, new Set()), `missing API upstream ${field} for success at ${sample.scheduledMs} ms`);
   }
 }
 
@@ -62,20 +91,11 @@ function validateUpstream({ upstream, restoredAtMs, samples }, source, jitter) {
       }
     }
     for (const phase of phases) assert.ok(current.responses200[phase] <= current.reads[phase], "upstream completion without a read");
-    if (source === "api" && previous) {
-      // Cross-boundary requests may finish later or reach the upstream in a
-      // different phase. Only demand attribution for wholly observed successes.
-      const transition = i === 1 ? triggerAtMs : i === 2 ? restoredAtMs : Infinity;
-      const end = Math.min(current.observedAtMs, transition - jitter);
-      const inSegment = samples.filter((s) => s.ok && s.startMs >= previous.observedAtMs && s.endMs <= end).length;
-      const phase = phases[i - 1];
-      for (const field of counters) assert.ok(current[field][phase] - previous[field][phase] >= Math.max(1, inSegment),
-        `missing API upstream ${field} in ${phase} segment`);
-    }
   }
   const drain = Math.max(endMs, ...samples.map((s) => s.endMs));
   assert.ok(upstream.after.observedAtMs >= drain && upstream.after.observedAtMs <= drain + timeoutMs + jitter,
     "upstream end snapshot escaped recovery probe drain");
+  if (source === "api") verifyApiEvidence(snapshots, samples, triggerAtMs, restoredAtMs, jitter);
 }
 
 function clockNs(value) {

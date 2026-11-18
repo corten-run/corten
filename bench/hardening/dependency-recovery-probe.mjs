@@ -4,22 +4,10 @@ import http from "node:http";
 import https from "node:https";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { isDeepStrictEqual } from "node:util";
 import { nativeClock } from "./clock.mjs";
-import { recoveryProfile as profile, recoverySchedule } from "./dependency-recovery-contract.mjs";
+import { recoveryProfile as profile, recoverySchedule, maxRecordBytes, validRecord } from "./dependency-recovery-contract.mjs";
 import { cgroupDirectory, resourceAsync } from "./resource-sample.mjs";
 
-const maxBytes = 64 * 1024;
-export function validRecord(receipt, expected) {
-  if (!receipt || receipt.status !== 200 || receipt.complete !== true || receipt.error !== null ||
-      !/^application\/json(?:\s*;|$)/i.test(receipt.contentType) || typeof receipt.bodyBase64 !== "string" ||
-      receipt.bodyBase64.length > 4 * Math.ceil(maxBytes / 3)) return false;
-  try {
-    const body = Buffer.from(receipt.bodyBase64, "base64");
-    return body.length <= maxBytes && body.toString("base64") === receipt.bodyBase64 &&
-      isDeepStrictEqual(JSON.parse(body.toString("utf8")), expected);
-  } catch { return false; }
-}
 
 // One ordinary read, no retry or redirect. The deadline covers headers AND body.
 export async function readOnce(url, ca) {
@@ -32,7 +20,7 @@ export async function readOnce(url, ca) {
       let size = 0; const chunks = [];
       res.on("data", chunk => {
         size += chunk.length;
-        if (size > maxBytes) req.destroy(new Error("body-too-large")); else chunks.push(chunk);
+        if (size > maxRecordBytes) req.destroy(new Error("body-too-large")); else chunks.push(chunk);
       });
       res.once("error", error => finish(error));
       res.once("end", () => {
@@ -100,11 +88,19 @@ export async function runRecovery(config, { trigger, emit, sample, clock = nativ
     })());
   }
   const settled = await Promise.allSettled(jobs);
-  for (const outcome of settled) if (outcome.status === "rejected") throw outcome.reason;
+  const failures = settled.filter(r => r.status === "rejected").map(r => r.reason);
   await waitUntil(end);
-  upstream.after = { ...await observe(), observedAtMs: now() };
+  try { upstream.after = { ...await observe(), observedAtMs: now() }; }
+  catch (error) { failures.push(error); }
+  samples.sort((a,b) => a.scheduledMs-b.scheduledMs);
+  if (failures.length) {
+    // Diagnostic only: the verifier requires the complete journal and never
+    // accepts this row, even if every application response happened to succeed.
+    emit({ type: "dependency-recovery-incomplete", samples, upstream, failures: failures.map(e => String(e?.message ?? e).slice(0, 200)) });
+    throw failures[0];
+  }
   const restoredAtMs = upstream.restored.observedAtMs - upstream.restored.elapsedSinceStartMs + profile.duringMs;
-  emit({ type: "dependency-recovery", samples: samples.sort((a,b) => a.scheduledMs-b.scheduledMs), restoredAtMs, upstream });
+  emit({ type: "dependency-recovery", samples, restoredAtMs, upstream });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
