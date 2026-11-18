@@ -60,6 +60,12 @@ pub(crate) fn qvalue(value: &[u8]) -> Option<u16> {
 /// 1000 without a `q` parameter, `None` for a malformed or repeated weight. RFC 9110
 /// (sections 5.6.6 and 12.4.2) allows only SP and HTAB around `;` and no whitespace around `=`.
 pub(crate) fn weight(params: &[u8]) -> Option<u16> {
+    // A complete qvalue cannot contain a semicolon, so a valid bare weight needs no scan.
+    if let [b'q' | b'Q', b'=', value @ ..] = params {
+        if let Some(quality) = qvalue(value) {
+            return Some(quality);
+        }
+    }
     fn trim(mut s: &[u8]) -> &[u8] {
         while let [b' ' | b'\t', rest @ ..] = s {
             s = rest;
