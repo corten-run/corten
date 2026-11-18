@@ -163,16 +163,17 @@ division: end statements with `;` and keep a division on the line it continues.
    function, in one `script!` module when several screens use it.
    A filter or scope whose answer is one part of the screen is a GET `data-patch` form marked
    `data-address`, its route answering with `req.patch_or(part, page)`: as the patch is drawn,
-   the address is the one it asked for (a new history entry); an answer dropped before it draws,
-   or a page answer, leaves the address. Back and Forward read the page at each address. Pick
+   the address is the one it asked for (a new history entry unless it is the same address).
+   An answer from an earlier visit does not draw; an empty or incomplete patch, a drawn 5xx or
+   a page answer leaves the address. Back and Forward read the page at each address. Pick
    `data-keep-place` when the change redraws most of the page (a list's results), `data-address`
    when it redraws one part of a screen whose rest is costly to read. The patch draws everything
    the address changes, the form included, and any link or form that carries the scope (a
    `keep_query` form's hidden inputs keep the query it was drawn with); never mark a form whose
    patch appends (Load more), and never call `history.pushState` for it yourself. Its submits
    queue as any `data-patch` form's: a GET pressed while a Save (`formmethod="post"`) is on its
-   way goes once the Save's answer is drawn. Without the Navigation API the browser sends the form
-   itself, a full load at its address.
+   way goes once the Save's answer is drawn, if the visit has not changed. Without the Navigation
+   API the browser sends the form itself, a full load at its address.
 
 ## Text a script computes
 

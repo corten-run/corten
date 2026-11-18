@@ -2077,14 +2077,15 @@ screen. Mark it `data-address` as well, and its answer is the page at the addres
 as the patch is drawn, that address goes in the address bar, in a new history entry (none when it
 is the address already), as the browser leaves it after the same form without JavaScript, a
 `#fragment` of its `action` or `formaction` included. A reload, a bookmark and a shared link then
-reach what the screen shows, and a form that posts without an `action` sends to it. Only an
-answer drawn as a patch moves the address: one a newer submit of the form, a navigation or Back
-drops before it draws leaves it, and so does one that draws nothing (a 204). Back and Forward
-read the page at each address, as for any entry. In every other way the form is a `data-patch`
-form like any other: an answer that is a page is drawn in place and leaves the address, and a GET
-pressed while a Save (`formmethod="post"`) of the form is on its way waits for the Save's answer,
-then goes, its address following as its patch is drawn. Two marked forms are not ordered against
-each other: their answers are drawn as they come, and the address is the last one drawn.
+reach what the screen shows, and a form that posts without an `action` sends to it. A marked
+answer does not draw once another visit has started, even if the old page is still visible. The
+address moves only when the patch draws without skipping any operation: a 204, an empty patch,
+or a patch with a missing target leaves the address alone. A 4xx patch (such as a 422) can move
+the address; a 5xx patch may draw but is a failed request and leaves the address alone. Back and
+Forward read the page at each address, as for any entry. A page answer is drawn in place and
+leaves the address. A GET pressed while a Save (`formmethod="post"`) of the form is on its way
+waits for the Save's answer and is sent only if the visit has not changed. Two marked forms are
+not ordered against each other: their answers are drawn as they come.
 
 Which mark a filter takes depends on what its change redraws. One that changes most of what the
 page shows (a list's results) is a navigation, `data-keep-place`: each change reads the page,

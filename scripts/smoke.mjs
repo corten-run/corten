@@ -556,6 +556,164 @@ function entriesWhileRecordingAddresses() {
 }
 
 /** @param {import("@playwright/test").Browser} browser */
+async function markedPatchVisits(browser) {
+  const page = await browser.newPage();
+  const home = `${base}/smoke/scope`;
+  await page.goto(home);
+  if (!(await page.evaluate(() => "navigation" in window))) {
+    skip("a marked patch is fenced to its visit and moves history only on a completed draw", "no Navigation API");
+    await page.close();
+    return;
+  }
+  const state = () => page.evaluate(() => ({
+    at: location.search,
+    shown: document.querySelector("#smoke-scope output")?.textContent ?? null,
+    index: /** @type {any} */ (window).navigation.currentEntry.index,
+  }));
+  const press = (/** @type {string} */ name) => page.getByRole("button", { name, exact: true }).evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+  const wait = async (/** @type {() => unknown} */ predicate) => page.waitForFunction(predicate, undefined, { timeout: 5000 }).then(() => true, () => false);
+  const trackForm = () => page.evaluate(() => {
+    Object.assign(window, { __form: document.getElementById("smoke-scope-form") });
+  });
+  const finished = () => wait(() => !(/** @type {any} */ (window).__form.hasAttribute("aria-busy")));
+  const week = `${home}?scope=week`;
+  const month = `${home}?scope=month`;
+  const startMonth = () => page.evaluate((url) => {
+    const nav = /** @type {any} */ (window).navigation.navigate(url);
+    nav.committed.catch(() => {});
+    Object.assign(window, { __month: nav.finished.then(() => "finished", (/** @type {Error} */ error) => error.name) });
+  }, month);
+  const finishMonth = () => page.evaluate(() => /** @type {any} */ (window).__month);
+  const hold = async (/** @type {string} */ url, /** @type {string} */ mode, status = 0) => {
+    /** @type {() => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = () => resolve(undefined)));
+    await page.route(url, async (route) => {
+      if (route.request().headers()["corten"] !== mode) return route.continue();
+      await held;
+      if (status) await route.fulfill({ status });
+      else await route.continue().catch(() => {});
+    });
+    const sent = page.waitForRequest((r) => r.url() === url && r.headers()["corten"] === mode, { timeout: 5000 }).then(() => true, () => false);
+    return { sent, release, clear: () => page.unroute(url) };
+  };
+
+  // Submit from the still-visible page after a visit starts, before its page can draw.
+  const pending = await hold(month, "nav");
+  const before = await state();
+  await startMonth();
+  const navSent = await pending.sent;
+  await trackForm();
+  await press("Week");
+  const actionDone = await finished();
+  const still = await state();
+  pending.release();
+  const navDone = await finishMonth();
+  await pending.clear();
+  const after = await state();
+  check("a marked patch from the visible page cannot draw or cancel a pending visit", navSent && actionDone && still.shown === "all" &&
+    still.index <= before.index + 1 && still.at !== "?scope=week" && navDone === "finished" && after.shown === "month" && after.at === "?scope=month" &&
+    after.index === before.index + 1, JSON.stringify({ navSent, actionDone, still, navDone, after, before }));
+
+  // Two ordinary form answers swap in byte-identical pages. The second is still a different visit.
+  await page.goto(home);
+  const ordinary = `${home}?scope=ordinary`;
+  const markup = await fetch(home, { headers: { corten: "nav" } }).then((res) => res.text());
+  await page.route(ordinary, (route) => route.fulfill({ headers: { "corten-page": "1", "content-type": "text/html" }, body: markup }));
+  await page.evaluate((action) => {
+    const form = document.createElement("form");
+    form.action = action;
+    form.dataset.patch = "";
+    const field = document.createElement("input");
+    field.name = "scope";
+    field.value = "ordinary";
+    form.append(field);
+    document.body.append(form);
+    Object.assign(window, { __ordinary: form });
+  }, home);
+  const redraw = async () => {
+    await page.evaluate(() => {
+      Object.assign(window, { __before: document.getElementById("smoke-scope") });
+      /** @type {any} */ (window).__ordinary.requestSubmit();
+    });
+    return wait(() => document.getElementById("smoke-scope") !== /** @type {any} */ (window).__before && !(/** @type {any} */ (window).__ordinary.hasAttribute("aria-busy")));
+  };
+  const firstDraw = await redraw();
+  const marked = await hold(week, "action");
+  await trackForm();
+  await press("Week");
+  const markedSent = await marked.sent;
+  const secondDraw = await redraw();
+  marked.release();
+  const markedDone = await finished();
+  await marked.clear();
+  await page.unroute(ordinary);
+  const identical = await state();
+  check("a marked patch does not draw after a byte-identical page swap", firstDraw && markedSent && secondDraw && markedDone && identical.shown === "all" &&
+    identical.at === "", JSON.stringify({ firstDraw, markedSent, secondDraw, markedDone, identical }));
+
+  // Let the write answer 204, hold the queued retry task itself, then draw a page with the same form ID.
+  await page.goto(home);
+  const save = await hold(home, "action", 204);
+  await press("Save");
+  const saveSent = await save.sent;
+  await press("Week");
+  await page.evaluate(() => {
+    const timeout = window.setTimeout;
+    window.setTimeout = function (fn, delay, ...args) {
+      if (delay !== undefined) return timeout.call(this, fn, delay, ...args);
+      window.setTimeout = timeout;
+      Object.assign(window, { __retry: fn });
+      return 0;
+    };
+  });
+  save.release();
+  const retryHeld = await wait(() => !!(/** @type {any} */ (window).__retry));
+  await save.clear();
+  await startMonth();
+  const queuedNav = await finishMonth();
+  const retried = await page.evaluate(() => {
+    let sent = false;
+    const fetch_ = window.fetch;
+    window.fetch = function (input, init) {
+      if (String(input).endsWith("?scope=week") && new Headers(init?.headers).get("corten") === "action") sent = true;
+      return fetch_.call(this, input, init);
+    };
+    /** @type {any} */ (window).__retry?.();
+    window.fetch = fetch_;
+    return sent;
+  });
+  const queued = await state();
+  check("a marked GET queued behind a 204 write is not retried from the next visit", saveSent && retryHeld && queuedNav === "finished" && !retried &&
+    queued.at === "?scope=month" && queued.shown === "month", JSON.stringify({ saveSent, retryHeld, queuedNav, retried, queued }));
+
+  const patch = async (/** @type {number} */ status, /** @type {string} */ body) => {
+    await page.goto(home);
+    const start = await state();
+    await page.route(week, (route) => route.fulfill({ status, headers: { "corten-patch": "1", "content-type": "text/html" }, body }));
+    await trackForm();
+    await press("Week");
+    const done = await finished();
+    await page.unroute(week);
+    const end = await state();
+    return { done, ...end, added: end.index - start.index };
+  };
+  const empty = await patch(200, "");
+  const missing = await patch(200, '<p id="missing-scope">Missing</p>');
+  const partial = await patch(200, '<template id="smoke-scope" data-remove></template><p id="smoke-scope">Too late</p>');
+  const ordered = await patch(200, '<section id="smoke-scope"><output id="new-scope">First</output></section><output id="new-scope">Second</output>');
+  check("a marked patch moves history only when it draws and skips no operation", [empty, missing, partial].every((p) => p.done && p.at === "" && p.added === 0) &&
+    empty.shown === "all" && missing.shown === "all" && partial.shown === null && ordered.done && ordered.at === "?scope=week" && ordered.added === 1 &&
+    ordered.shown === "Second", JSON.stringify({ empty, missing, partial, ordered }));
+
+  const failed = await patch(500, '<section id="smoke-scope"><output>Failed</output></section>');
+  const invalid = await patch(422, '<section id="smoke-scope"><output>Invalid</output></section>');
+  check("a drawn 5xx marked patch leaves history alone while a drawn 4xx may move it", failed.done && failed.at === "" && failed.added === 0 &&
+    failed.shown === "Failed" && invalid.done && invalid.at === "?scope=week" && invalid.added === 1 && invalid.shown === "Invalid", JSON.stringify({ failed, invalid }));
+  await page.close();
+}
+
+/** @param {import("@playwright/test").Browser} browser */
 async function run(browser) {
   await parsesAsHtmlMeans(browser);
   // A console error the browser logs for its own bug (scripts/browser-bugs.mjs) is not the page's.
@@ -7089,6 +7247,7 @@ async function run(browser) {
     }
     await scope.close();
   }
+  await markedPatchVisits(browser);
   // Without JavaScript the browser sends a data-address form itself: the page at its address.
   {
     const noScript = await browser.newContext({ javaScriptEnabled: false });

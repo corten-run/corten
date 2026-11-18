@@ -1054,18 +1054,21 @@ export function patch(html, signal) {
  * @param {Set<string>} [within] for a submit's answer, the dialogs and details the control that
  *   sent it was in when it was pressed ({@link asking}), which decides whose open state an element
  *   it replaces takes ({@link opened})
- * @param {() => void} [done] called once the patch is drawn, in the same task, before anything
- *   else can run: a `data-address` form's answer puts its address in history there ({@link send})
+ * @param {() => boolean} [here] a marked answer may only draw on the visit it was sent from
+ * @param {() => void} [done] called in the same task after a patch drew without skipping a target:
+ *   a `data-address` form's answer can put its address in history there ({@link send})
  */
-async function apply(html, signal, sent, took, own, asked, within, done) {
+async function apply(html, signal, sent, took, own, asked, within, here, done) {
   const content = parse(html, own);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
-  if (signal?.aborted) return;
+  if (signal?.aborted || (here && !here())) return;
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
+  let placed = false;
+  let skipped = false;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
   for (const el of Array.from(content.children)) {
@@ -1079,27 +1082,35 @@ async function apply(html, signal, sent, took, own, asked, within, done) {
       const up = !!target && holds(target, document.activeElement) && parent;
       navs ||= !!target && holdsNav(target);
       if (parent) changedIn(parent, ["x", id, []]);
-      if (target) elementOwn.remove.call(target);
+      if (target) elementOwn.remove.call(target), (placed = true);
+      else skipped = true;
       if (up) focusNear(up);
     }
-    else if (!target) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
+    else if (!target) {
+      skipped = true;
+      console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
+    }
     else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
       put.push(...Array.from(el.content.children));
       serve(el.content);
-      changedIn(target, ["a", id, Array.from(childNodesOf(el.content))]);
+      const nodes = Array.from(childNodesOf(el.content));
+      changedIn(target, ["a", id, nodes]);
       elementOwn.append.call(target, el.content);
+      placed ||= nodes.length > 0;
     } else {
       const parent = parentElementOf(target);
       if (parent) changedIn(parent, ["r", id, [el]]);
       replaceKeeping(target, el, sent, took, true, within);
       put.push(el);
+      placed = true;
     }
   }
-  done?.();
+  const complete = done && placed && !skipped;
+  if (complete) done();
   // The server marked a nav link in the patch against the request that made it (a form's action),
   // not this page: mark it as a navigation would. Only then, or once the address changed: a patch
   // without one (a ticker's) only looks through what it put.
-  if (done || navs || put.some(holdsNav)) markCurrent();
+  if (complete || navs || put.some(holdsNav)) markCurrent();
   for (const el of put) setVars(el);
   if (again) {
     const beside = asked?.isConnected ? asked : partTagBeside(put);
@@ -1521,12 +1532,14 @@ function focusNear(el, root, fresh) {
  * @param {{ apply: () => void } | null} [layout] what changes around `<main>`, drawn in the same
  *   frame as the page ({@link swapDocument})
  * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
- * @returns {Promise<boolean>} false when it loaded the page in full instead
+ * @param {() => boolean} [here] a marked answer may only draw on the visit it was sent from
+ * @returns {Promise<boolean>} false when it loaded the page in full instead or the visit changed
  */
-async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html)) {
+async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html), here) {
   preload(content);
   const [, styled] = await Promise.all([modulesOf(content), stylesOf(content)]);
   signal?.throwIfAborted();
+  if (here && !here()) return false;
   if (!styled) {
     reload(notice);
     return false;
@@ -1560,6 +1573,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
       parts.push([old, part]);
     }
   }
+  pageVisit += 1;
   const title = content.querySelector("title");
   if (title) {
     document.title = textOf(title) ?? "";
@@ -2493,6 +2507,8 @@ function readLater(seconds, wanted, read) {
  */
 // The Navigation API, where the browser has it.
 const navigation = /** @type {Navigation | undefined} */ (window.navigation);
+/** A visit starts at interception; a page swap also changes identity, even for identical HTML. */
+let pageVisit = 0;
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -2588,6 +2604,7 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
     event.navigationType === "reload" ||
     sourceIn(event, "[data-reload]");
   if (skip) return;
+  pageVisit += 1;
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
   // The dwell of the link followed ends: the server may answer with another page (a redirect),
@@ -2973,6 +2990,9 @@ addEventListener("pagehide", () => (left += 1));
  */
 const submits = new Map();
 
+/** A marked GET's visit rides with its press, not with the write it waits for. @type {WeakMap<Set<string>, number>} */
+const queuedVisits = new WeakMap();
+
 /**
  * A form's entries as the browser sends them in a body that is not multipart, or in a GET's
  * query: a file is its name, and every line break in a name or value is CRLF.
@@ -3034,13 +3054,11 @@ function asking(form, submitter) {
  *   for a write's answer, which read it at the press
  */
 async function send(form, submitter, sends, within = asking(form, submitter)) {
+  // During a navigation the form is still visible, but its visit is already being left.
+  const origin = sends.method === "get" && hasAttr(form, "data-address") ? (navigation?.transition ? -1 : pageVisit) : undefined;
   const data = new FormData(form, submitter);
   const method = sends.method.toUpperCase();
   const url = new URL(sends.action);
-  // A GET form marked `data-address`: its answer is the page at the address it asked for, sent
-  // from this page (`swapped`).
-  const addressed = method === "GET" && hasAttr(form, "data-address");
-  const page = swapped;
   const entries = sentEntries(data);
   const fields = new URLSearchParams(entries);
   // A file by its size and time too: another file of the same name is a new submit.
@@ -3052,6 +3070,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
     previous.nextWithin = within;
+    if (origin !== undefined) queuedVisits.set(within, origin);
     if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
     if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
@@ -3095,6 +3114,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     prefetched.clear();
   };
   forget();
+  const here = origin === undefined ? undefined : () => origin === pageVisit;
   try {
     // A multipart write whose form has an `on:corten:progress` handler goes by XMLHttpRequest, which
     // reports how much of the body is sent; fetch does not. Any other submit is a fetch.
@@ -3110,6 +3130,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         })
       : await fetch(url, init);
     forget();
+    if (here && !here()) return;
     // A whole answer below 500 is definitive: the write applied or was refused, and the form gets
     // a new key. A 5xx (a 502 from a proxy can hide a committed write), a network error, an abort
     // or a body cut off on the way keeps the key, so a retry is the same submission.
@@ -3136,19 +3157,23 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       reload(noticeOf(res));
     } else if (fromHere(res.url) && (res.headers.has("corten-patch") || res.headers.has("corten-page"))) {
       const body = await res.text();
+      if (here && !here()) return;
       renew();
       signal.throwIfAborted();
-      // A marked form's patch puts the address it asked for in history as it is drawn, as the
-      // browser does for the form without JavaScript: a new entry, none when it is the address
-      // already, and none once another page was swapped in since it was sent. Its `#fragment`
-      // too, which `res.url` never has. Not an answer that draws no patch (a page is drawn in
-      // place, as for any `data-patch` form), nor one dropped.
-      const to = res.url + url.hash;
-      const done = addressed ? () => page === swapped && to !== location.href && history.pushState(null, "", to) : undefined;
-      if (res.headers.has("corten-patch")) await apply(body, signal, sent, res.ok, undefined, undefined, within, done);
-      else {
+      if (res.headers.has("corten-patch")) {
+        // A marked form's completed patch puts its address in history, including the requested
+        // fragment (which fetch omits). A server failure can draw but leaves the address alone.
+        const done = here && res.status < 500 ? () => {
+          const to = res.url + url.hash;
+          if (here() && to !== location.href) history.pushState(null, "", to);
+        } : undefined;
+        await apply(body, signal, sent, res.ok, undefined, undefined, within, here, done);
+        if (here && !here()) return;
+      } else {
         const notice = noticeOf(res);
-        await swapPage(body, signal, false, notice);
+        if (here) {
+          if (!(await swapPage(body, signal, false, notice, null, undefined, here))) return;
+        } else await swapPage(body, signal, false, notice);
         announce(notice);
       }
       signal.throwIfAborted();
@@ -3161,6 +3186,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     } else {
       // An answer the runtime does not draw is whole once its body has arrived too.
       await res.arrayBuffer();
+      if (here && !here()) return;
       signal.throwIfAborted();
       if (res.status === 204 || res.status === 205) {
         // Done, with nothing to draw (RFC 9110, 15.3.5): the page stays and a waiting submit goes.
@@ -3181,6 +3207,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     }
   } catch (error) {
     if (signal.aborted) return;
+    if (here && !here()) return;
     // Offline, the server unreachable, or the browser leaving the page (a full navigation without
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
     // that waited goes with it, since it would fail the same way, and the user sends it again.
@@ -3211,6 +3238,8 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
  * @param {HTMLFormElement} form @param {HTMLElement | null} submitter @param {Set<string>} [within]
  */
 function sendAgain(form, submitter, within) {
+  const origin = within && queuedVisits.get(within);
+  if (origin !== undefined && origin !== pageVisit) return;
   const id = idOf(form);
   const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;

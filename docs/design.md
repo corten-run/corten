@@ -5604,24 +5604,25 @@ rules something out.
     with the `#fragment` of the form's `action` or `formaction`, as the browser does for the form
     without JavaScript (a fragment a redirect's `Location` names itself is not seen, as `fetch`
     does not show it, the same as for a link the runtime follows); the same address again adds no
-    entry, and a nav link to the new address is marked current, as for a navigation. Only an
-    answer the runtime draws as a patch does so: one dropped before it draws (by a newer submit of
-    the form, a navigation, Back) changes no address, nor does one that draws nothing (a 204), nor
-    one that comes after another page was swapped in since it was sent. An error status's patch (a
-    422's) is drawn and its address pushed, as the browser shows an error page at the form's
-    address. The rest is the runtime's ordinary `data-patch` form, unchanged by the mark: an
+    entry, and a nav link to the new address is marked current, as for a navigation. The marked
+    answer cannot draw on another visit, even one still pending or one that drew identical HTML.
+    It moves history only after the patch draws and skips no operation: a dropped answer, a 204,
+    an empty patch or a missing target leaves the address alone. A drawn 4xx patch (such as a
+    422) can move history: it is the destination's error view. A 5xx patch may draw, but is a
+    failed request and never moves history. The rest is the runtime's ordinary `data-patch` form: an
     answer that is a page is drawn in place and leaves the address, a redirect the server asks for
     (`corten-location`) is followed as a navigation, and its submits are ordered as any form's are,
     against its own writes and other forms'. A GET pressed while a write of the form is on its way
-    waits for the write's answer and is then sent, its address following as its patch is drawn;
-    two forms' answers are drawn as they come, so the address is always the last patch drawn's.
+    waits for the write's answer and is sent only on the visit where it was pressed, its address
+    following as its patch is drawn. Two forms' answers are drawn as they come; the address is
+    that of the last patch that moved it.
     Back and Forward to such an entry read the page at its address, as for any entry, and a reload
     draws it: so the route at each of those addresses answers its part with `req.patch_or`,
     drawing all that the address changes, a link or form that carries the address included (a
     `keep_query` form's hidden inputs are the query it was drawn with), and a route whose patch
     appends (Load more) is not one to mark. Without the Navigation API
     ([Limit 1](#limit-navigation-api)) the browser sends a marked form itself, which loads the page
-    at its address. It is a few lines of the runtime's `send` and `apply`, with no module.
+    at its address. It is part of the runtime, with no separate module.
 
     Not chosen: `data-keep-place` on the filter's form, Corten's way to apply a filter as it
     changes: it sends the form as a navigation, so the address follows and the user's place stays,

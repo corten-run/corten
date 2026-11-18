@@ -9,9 +9,9 @@ Corten is pre-1.0, so any minor version may change the API.
   asked for: as its patch is drawn, the runtime puts that address in the address bar, in a new
   history entry (none when it is the address already), as the browser does for the form without
   JavaScript, so a filter or scope that redraws one part survives a reload, a bookmark and a
-  shared link. Only an answer drawn as a patch moves the address; one dropped before it draws (a
-  newer submit of the form, a navigation, Back) leaves it. Back and Forward read the page at each
-  address, as for any entry. Otherwise the form is any `data-patch` form: a page answer is drawn
+  shared link. A marked GET cannot draw or be retried on a different visit. Only a patch that
+  draws without skipping an operation moves the address; a 5xx leaves it, even if drawn. Back
+  and Forward read the page at each address, as for any entry. A page answer is still drawn
   in place, and its submits are queued against writes as before. `html!` refuses the mark on
   anything but a `<form>`, on a form without `data-patch` and on one whose `method` is `post` or
   `dialog`. Without the Navigation API the browser sends the form itself, a full load of the page
