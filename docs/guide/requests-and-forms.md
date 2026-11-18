@@ -65,7 +65,7 @@ service is a server of the test's own, not Corten ([Testing an app](app.md#testi
 | `GET`, no `corten` header | first load, reload, no JavaScript | `req.page(doc)`: the app's layout with the page in it | renders HTML |
 | `GET` with `corten: nav` | runtime, same-origin link or back/forward | the same call: `<title>`, head tags and the page only | swaps `<main>` |
 | `GET` with `corten: page` | runtime, the page a write sends the browser to | the same call: the whole document, as a first load gets it (`req.mode` is `Mode::Document`) | swaps the page and draws its layout again |
-| `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `req.patch(view)` once `req.mode == Mode::Action` ([where a form posts](#where-a-form-posts)) | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
+| `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `action.patch(view)` from `Some(action) = req.action()` ([where a form posts](#where-a-form-posts)) | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
 | `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
 | any, `Accept: application/json` | native screen, agent, a page's script ([`read()`](scripts.md#a-screens-data)), test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
@@ -76,9 +76,9 @@ One handler serves every mode, and `req.mode` says which. A `data-patch` form's 
 both of its rows with `req.patch_or(view, || async { req.page(..) }).await`: the patch with
 JavaScript, and otherwise the page (or a redirect), whose closure runs only then, so the patch
 never loads what only the page shows. A patch that needs data of its own, which the page does not,
-is `req.patch_or_with(|| async { .. req.patch(view) }, || async { req.page(..) }).await`, where both
+is `req.patch_or_with(|action| async move { .. action.patch(view) }, || async { req.page(..) }).await`, where both
 sides are closures and only the one the request asks for runs (the part's may answer
-`req.patch_with_status`, or set headers on its response, for a status or headers of its own);
+`action.patch_with_status`, or set headers on its response, for a status or headers of its own);
 a refusal whose
 form needs a read is `req.invalid_with` (below). A route with no screen goes under
 [`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
@@ -212,20 +212,38 @@ matches is taken for that route's, a false 500; an `unstaged` route skips the st
 runs in; an `any = ..` route answers `GET` too; and a release build compiles none of it, so it
 never runs in a production image or a smoke test against one.
 
-A patch is only for the runtime. `req.patch` and `req.patch_with_status` answer whatever request
-reached the handler, and a browser that asked by itself (a form without JavaScript, a link, a
-reload) shows the fragment as the whole page, with no layout, stylesheets or navigation, at the
-address it asked. So a handler answers a patch with `req.patch_or(view, || async { .. })`, whose
-other side draws the page or a redirect, or checks `req.mode == Mode::Action` before
-`req.patch`, as a patch with a status or data of its own does. A debug build answers a browser's
-plain request (no `data-patch`, asking for HTML, any method, and, where the browser sends fetch
-metadata, a top-level navigation: `Sec-Fetch-Mode: navigate` to a `Sec-Fetch-Dest: document`)
-that a handler answered with a patch
-with a 500 naming the method and the route (its pattern, or the path of a route given by hand) and
-what to answer instead, so an app's router test that sends the plain request fails there; the
-handler's cookies and `Clear-Site-Data` go out with the error, as above. The runtime's
-`data-patch` fetch and a client that does not ask for HTML still get the patch. The handler's type
-does not say which it answers, since one handler answers both from `req.mode`
+A patch is only for the runtime. `req.action()` returns `Some(action)` only in the request's
+effective `Mode::Action`; only that borrowed `corten::Action` has `patch` and `patch_with_status`.
+A request alone cannot build a patch. For the usual two-mode answer, keep
+`req.patch_or(view, || async { .. })`, whose other side draws a page or redirect. For a patch
+with reads or a status of its own, bind the builder and keep the fallback:
+
+```rust,ignore
+if let Some(action) = req.action() {
+    let current = read_part().await?;
+    return action.patch_with_status(status, Part { current: &current });
+}
+req.redirect(&url::Home)
+```
+
+It is not in the prelude, where a bare `Action` would clash with a post's address,
+`route::Action`; a function that takes it names it `corten::Action`. It has no public
+constructor and cannot be cloned or copied. It consumes itself to
+answer; obtain another by checking again. Its borrow prevents writing that request's mode
+while the builder still has a subsequent use. It reads `req.mode`, including an explicit
+application override, not the HTTP method: a part read uses GET too. `patch_or`, `invalid`
+and `invalid_with` already check the mode themselves and keep their signatures.
+`patch_or_with` checks too and passes the builder to its part closure, `|action| async move
+{ action.patch(view) }`; its page closure receives no builder. Both branches keep their lazy
+reads and the same caller and answer-kind contracts.
+
+The type checks construction, not arbitrary responses. A handler can still override `req.mode`
+before checking, or replace a response through `DerefMut` or raw HTTP.
+[Choice 58](../design.md#choice-plain-request-patch)'s debug check therefore stays: it answers
+a browser's plain HTML request (any method, a top-level
+navigation where fetch metadata is sent) that got a marked patch with a 500 naming the route.
+It uses the original request, and preserves `Set-Cookie` and `Clear-Site-Data` on the error.
+A runtime fetch and a client not asking for HTML are not checked by that guard
 ([design Choice 58](../design.md#choice-plain-request-patch)). Both checks here leave out a request
 whose fetch metadata says it is not a top-level navigation (a page's own `fetch` that asks for
 HTML, an `<iframe>`'s load), whose answer the browser does not show as the tab's page, and a
@@ -285,7 +303,7 @@ The compiler checks the rest: a page names only the posts it has (`at.sell()` is
 each has one handler, a page with posts has a `get` and is in no API's module, none of its query
 parameters is `do`, a name is an ASCII identifier and not one of the route's own methods (`href`,
 `at`), and a route with a type parameter cannot have posts. A post's address is not a link
-(`Action` is not an `Href`), so `req.redirect(&at.price())` does not compile: a write goes
+(`route::Action` is not an `Href`), so `req.redirect(&at.price())` does not compile: a write goes
 back to the page, not to its own address.
 
 A page drawn at a post's address (a refusal without JavaScript) stays there, so a post form in it
@@ -411,9 +429,9 @@ type of its own that implements `Deserialize`.
 
 A number the user types is an `Entry` of its type: the text as sent and the number it reads as.
 Its allowed values are a `Bounds` constant of that type, which gives the input its `min`, `max`
-and `step` and the handler its check, so the two cannot drift apart: the browser stops a value
-outside them before the form is sent, and `Bounds::read` gives the handler the number within
-them, or `None` for the field's message, whatever the client sent:
+and `step` and the handler its check, so the rule is declared once. The browser uses the
+attributes for native validation, and `Bounds::read` gives the handler the number within
+the bounds, or `None` for the field's message, whatever the client sent:
 
 ```rust,ignore
 const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_000.0).step(0.01)
@@ -429,6 +447,50 @@ let Some(copies) = COPIES.read(&input.copies) else {
     return req.invalid(&errors, ..).await;
 };
 ```
+
+A decimal with no step, such as a ratio or percentile, uses
+`Bounds::<f64>::any_step(min, max)`. It writes HTML's `step="any"` and holds every finite
+number in range. Use `Bounds::<f32>::any_step` for an `f32` field. Only any-step bounds take
+`.exclusive_min()` and `.exclusive_max()`. HTML has no exclusive number bound, so the input
+gets the endpoint itself, just like an inclusive `min` or `max`. Shifting the hint inward can
+block a value the server accepts. Correctness and a form that works without JavaScript matter
+more than catching every invalid value before it is sent. The hint is advisory: the browser
+can send the endpoint, and the handler's authoritative `Bounds` check refuses it with a typed
+field error and HTTP 422. Show the logical rule in a visible hint and in the field error.
+
+Even an unshifted hint can block a server-valid decimal spelling about one float step inside
+an exclusive end in Chromium and WebKit. For example, with an `f64` minimum of
+`0.0010000000000000002`, the server accepts `0.0010000000000000005` but those browsers can
+block it before submission. If the field must accept such spellings, leave `{..BOUNDS}` off
+the input and use `step="any"` without the offending `min` or `max` hint. `NumberField` adds
+its bounds internally, so replace that field with a plain `<input type="number" step="any">`
+without the offending hint. In either case, keep `Bounds::input_value(&entry)` for redisplay
+and the exclusive `Bounds::read(&entry)` check in the handler.
+
+```rust,ignore
+const DISCOUNT: Bounds<f64, AnyStep> =
+    Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
+
+// <input type="number" name={f.discount} value={DISCOUNT.input_value(&input.discount)} {..DISCOUNT}> writes
+// min="0" max="100" step="any".
+let Some(discount) = DISCOUNT.read(&input.discount) else {
+    let (min, max) = (DISCOUNT.min(), DISCOUNT.max());
+    errors.add(f.discount, format!("Enter a discount above {min} and below {max} percent."));
+    return req.invalid(&errors, ..).await;
+};
+```
+
+Declare any-step bounds as constants. Ends must be finite and ordered, and at least one
+representable value must remain after excluding ends. For a plain any-step input, use
+`Bounds::input_value` to prefill from an `Entry`: like `NumberField`, it uses exponent notation
+past 18 digits written out, so a stored `1e-20` is drawn in a short spelling the browser can submit
+unchanged.
+It still draws submitted text as typed after a refusal. Standalone `Entry` attributes keep their
+existing formatting. See [Choice 64](../design.md#choice-exclusive-ends) for when to revisit this choice.
+
+Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
+`Bounds::new(0.1, 16.0).step(0.1)`. Stepped fields keep their existing formatting. Integers
+cannot opt into any step: a number input that allows `2.5` cannot feed an integer.
 
 A typed number field (`copies: u32`) that does not read is a 422 and the error page before the
 handler runs, and the user loses the form: a blank field, `two`, a count past the type, or
@@ -1155,7 +1217,7 @@ modal; give it `on:connect={corten_ui::dialog::modal(target)}` ([headless compon
 
 Each top-level element of a patch replaces the element with its `id`, and the browser drops one
 without an id (and any text outside an element), so a refusal drawn inside a wrapper `<div>`
-would never show. `req.patch`, `req.patch_with_status` and `req.invalid` therefore take a
+would never show. `action.patch`, `action.patch_with_status` and `req.invalid` therefore take a
 `Patch`, which the compiler checks: `html!` whose top-level elements each have `id={..}` with a
 `#[derive(Id)]` type (in every branch of an `if` or `match` among them, whether or not it runs),
 `Remove`, or a component declared `-> impl Patch`, whose markup must be such an `html!`:
@@ -1171,7 +1233,7 @@ Rows known only from data (the fields of the items a write touched) are a `for` 
 patch's parts, with its `let`s and branches, as in a page:
 
 ```rust,ignore
-req.patch(html! {                                    // in Mode::Action, or through req.patch_or
+action.patch(html! {                                    // from req.action(), or use req.patch_or
     <QueueTotals queue={&queue} />
     for sku in &taken {
         let label = label_of(sku);
@@ -1226,7 +1288,7 @@ first element, between the two, or in a later element that holds the lost one, b
 shape compiles (`raw("<table>")` there would keep the row), and the debug check finds it. What a
 lost top-level element holds does not save it, since the parse loses it at its start tag:
 `<tr id={RowId}></tr><table id={TableId}>{text}</table>` is still refused, and so is a row with
-an expression in it after a first `<table>`. Debug builds check each patch as it is sent (`req.patch`,
+an expression in it after a first `<table>`. Debug builds check each patch as it is sent (`action.patch`,
 `req.patch_or`, `req.invalid`, `form.draw` and `corten::live`, with the area's stylesheet
 links Corten adds after its elements): the request fails with a 500, or the stream panics, naming
 the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`,
@@ -2260,7 +2322,7 @@ GET `data-patch` form would (`corten: action`) and applies the patch it answers,
 while it is still behind. The route's URL carries what the read waits for (the write's receipt),
 since the page's address does not; its handler answers the part with `req.patch_or`, and so the
 page without JavaScript, at the same URL. The route says `patches`, and its `get` handler returns
-`HtmlResult<Patches>`, which only `req.patch`, `req.patch_with_status`, `req.patch_or`,
+`HtmlResult<Patches>`, which only `action.patch`, `action.patch_with_status`, `req.patch_or`,
 `req.patch_or_with`, `req.invalid` and `req.invalid_with` make: a page or a redirect there (`req.page(..)` without
 `patch_or` around it) does not compile, since the runtime's read would get nothing it can apply,
 and `ReadAgain::from` takes no other route, so a refactor that drops the `patch_or` fails the
@@ -2291,12 +2353,12 @@ mod url {
 async fn pause(req: Req, Params(at): Params<url::Pause<'_>>) -> HtmlResult {
     let receipt = alerts::pause(&at.id).await?;
     let from = url::Alerts { after: Some(&receipt) };
-    if req.mode != Mode::Action {
+    let Some(action) = req.action() else {
         return req.redirect(&from); // without JavaScript, nothing to read here: the page reads it
-    }
+    };
     let alerts = alerts::read(&receipt).await?;
     let again = alerts.behind.then(|| ReadAgain { after: Duration::from_secs(2) }.from(&from));
-    req.patch(html! { <AlertList alerts={&alerts} /> {again} })
+    action.patch(html! { <AlertList alerts={&alerts} /> {again} })
 }
 
 async fn alerts(req: Req, Params(at): Params<url::Alerts<'_>>) -> HtmlResult<Patches> {
@@ -2309,7 +2371,7 @@ typed, opened and focused, as any patch does, and stop once an element the patch
 page is replaced (a later patch of it, a navigation away) or a read fails. A read that fails without a
 patch (the error page: the server has logged it) or offline stops them quietly and leaves the
 part as it was; any answer that is a patch is applied whatever its status, so a handler whose
-read failed after the write can say so in place (`req.patch_with_status(StatusCode::BAD_GATEWAY,
+read failed after the write can say so in place (`action.patch_with_status(StatusCode::BAD_GATEWAY,
 ..)` in `Mode::Action`: "Saved; reload to see it"). A success that is not a patch, which the
 handler of a route that says `patches` does not answer (but a stage before it, a response
 replaced through `DerefMut`, or a handler that writes `req.mode` before `patch_or`, `invalid`

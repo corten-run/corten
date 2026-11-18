@@ -305,7 +305,10 @@ pub(crate) async fn page(
 ) -> HtmlResult<Patches> {
     let res = req
         .patch_or_with(
-            || async { req.patch(PicksList { picks: &market.picks(&watching.ids).await }) },
+            |action| {
+                let picks = market.picks(&watching.ids);
+                async move { action.patch(PicksList { picks: &picks.await }) }
+            },
             || async {
                 // Read in only when the address asks (the link where no read will bring them):
                 // otherwise the page goes without them and the runtime reads them.
@@ -391,18 +394,19 @@ async fn not_listed(req: &Req, viewer: Option<&Viewer>, market: &Market, watchin
 /// (`not_listed`). The patch leaves the picks as they are, so until the page is read again they
 /// can still name a stock just watched.
 fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut Watching, message: String) -> HtmlResult {
-    if !matches!(req.mode, Mode::Action | Mode::Data) {
-        return Ok(watching.with_cookie(req.redirect_with_notice(&url::Home::default(), message)?));
+    if let Some(action) = req.action() {
+        let home = Home::new(market, watching, message, None);
+        let res = action.patch(html! {
+            <LivePrices stocks={&home.stocks} t={req.t()} />
+            <WatchForm others={&home.others} message={&home.message} notice={None} />
+        })?;
+        return Ok(watching.with_cookie(res));
     }
-    let home = Home::new(market, watching, message, None);
     if req.mode == Mode::Data {
+        let home = Home::new(market, watching, message, None);
         return Ok(watching.with_cookie(home_screen(req, viewer, &home)?));
     }
-    let res = req.patch(html! {
-        <LivePrices stocks={&home.stocks} t={req.t()} />
-        <WatchForm others={&home.others} message={&home.message} notice={None} />
-    })?;
-    Ok(watching.with_cookie(res))
+    Ok(watching.with_cookie(req.redirect_with_notice(&url::Home::default(), message)?))
 }
 
 #[cfg(test)]

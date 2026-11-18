@@ -19,9 +19,9 @@ const box = (root) => boxes.get(root);
 /**
  * @param {HTMLElement} root @param {HTMLSelectElement} select @param {HTMLInputElement} input
  * @param {HTMLDivElement} popup @param {HTMLDivElement} list @param {HTMLParagraphElement} empty
- * @param {AbortSignal} signal
+ * @param {Map<HTMLOptionElement, string>} terms @param {AbortSignal} signal
  */
-export function connect(root, select, input, popup, list, empty, signal) {
+export function connect(root, select, input, popup, list, empty, terms, signal) {
   // A form reset puts the select (and the input's text) back as drawn and sends no `input`: the
   // options are marked again once it has. Listened for each time, a move's `signal` too.
   const reset = () => {
@@ -49,8 +49,8 @@ export function connect(root, select, input, popup, list, empty, signal) {
     if (option.disabled) el.setAttribute("aria-disabled", "true");
     list.append(el);
     b.all.push(el);
-    const terms = option.dataset.terms ? option.dataset.terms.split("\n").filter((t) => t !== "") : [];
-    b.words.push([option.text, ...terms].map((w) => w.toLocaleLowerCase()));
+    const words = terms.get(option)?.split(/\r\n?|\n/).filter((t) => t !== "") ?? [];
+    b.words.push([option.text, ...words].map((w) => w.toLocaleLowerCase()));
   }
   mark(b);
   anchor(popup, input);

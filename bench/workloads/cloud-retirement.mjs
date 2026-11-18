@@ -560,8 +560,26 @@ export function verifyFailedNativeRetirement(local, state, expectedSha256 = stat
   return record;
 }
 
-export function unusedHostScript(state) {
-  const files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
+// An empty ledger proves no tracked SSH was dispatched. The only exception
+// is the first, fixed SSH no-op; its missing acknowledgement stays missing.
+export function unusedBootstrap(state) {
+  const c = state.control, row = c?.ledger[0], request = row?.request;
+  return !!(state.id && state.ip && state.createIntentAt && c?.helperSha256 === guardianSha256
+    && c.monitor?.phase === "pending" && !c.monitor.registrationSha256 && !c.sealed.length
+    && (c.ledger.length === 0 || c.ledger.length === 1 && request.epoch === "bootstrap" && request.sequence === 0 && !request.seal && !row.localTerminal
+    && request.invocation.channel === "ssh" && request.invocation.deadlineMs === 30000
+    && request.invocation.requestSha256 === digest("set -euo pipefail\ntrue\n"))
+    && (state.status === "preparing" ? !state.deletionIntentAt : state.status === "retired" && state.retirement?.kind === "unused")
+    && ["bootstrapReady", "preBootstrapTerminal", "auditIntent", "auditIntents", "archiveSha256", "evidenceSha256", "extractionAttempts",
+      "evidence", "evidenceOutcome", "exitCode", "validation", "collectedAt", "mixedCancellation"].every((key) => state[key] === undefined));
+}
+
+export function unusedHostScript(state, { bootstrap = false, legacyTimestamp = false } = {}) {
+  if (bootstrap) assert.ok(unusedBootstrap(state), "unused bootstrap proof requires pre-provisioning custody");
+  const files = bootstrap ? {} : Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
+  const invocation = bootstrap && state.control.ledger[0]?.request.invocation;
+  const watcher = invocation && `corten-bench-control-${state.token}-${invocation.id}.service`;
+  const timestamp = legacyTimestamp ? "ExecMainStartTimestamp" : "ExecMainStartTimestampMonotonic";
   return `/usr/bin/timeout 25 /usr/bin/python3 - ${quote(state.id)} ${quote(state.unit)} ${quote(JSON.stringify(files))} <<'CORTEN_UNUSED_HOST'
 import hashlib, json, os, pathlib, stat, subprocess, sys, time, urllib.request
 host_id, unit, manifest = sys.argv[1:]
@@ -572,16 +590,36 @@ sys.excepthook = failed
 assert os.getuid() == 0
 with urllib.request.urlopen('http://169.254.169.254/metadata/v1/id', timeout=3) as response:
     assert response.read(64).decode().strip() == host_id
-properties = ['Id', 'LoadState', 'ActiveState', 'MainPID', 'FragmentPath', 'ExecMainStartTimestamp', 'Job', 'Restart']
+properties = ['Id', 'LoadState', 'ActiveState', 'MainPID', 'FragmentPath', '${timestamp}', 'Job', 'Restart']
 r = subprocess.run(['systemctl', 'show', unit] + ['--property=' + p for p in properties], capture_output=True, text=True, timeout=5)
 assert r.returncode in (0, 1)
 values = dict(line.split('=', 1) for line in r.stdout.splitlines() if '=' in line)
 assert len(values) == len(properties) and values['Id'] == unit
 assert values['ActiveState'] == 'inactive' and values['MainPID'] == '0'
-assert values['ExecMainStartTimestamp'] == '' and values['Job'] == ''
+assert values['${timestamp}'] == '${legacyTimestamp ? "" : "0"}' and values['Job'] == ''
 assert values['LoadState'] in ['not-found', 'loaded'] and values['Restart'] == 'no'
 assert values['FragmentPath'] == (('/etc/systemd/system/' + unit) if values['LoadState'] == 'loaded' else '')
-bench = pathlib.Path('/bench')
+${bootstrap ? `def absent(path):
+    try:
+        pathlib.Path(path).lstat()
+    except FileNotFoundError:
+        return
+    raise AssertionError('unexpected bootstrap custody')
+assert values['LoadState'] == 'not-found'
+for path in ['/bench', '/run/corten-bench-control-${state.token}', '/etc/systemd/system/' + unit,
+${watcher ? `             '/run/systemd/transient/${watcher}', '/sys/fs/cgroup/system.slice/${watcher}'` : "             "}]:
+    absent(path)
+assert not any(entry.name.startswith('corten-bench-control-') for entry in pathlib.Path('/run').iterdir())
+${watcher && legacyTimestamp ? `watcher = subprocess.run(['systemctl', 'show', '${watcher}', '--property=LoadState'], capture_output=True, text=True, timeout=5)
+assert watcher.returncode in (0, 1) and watcher.stdout.strip() == 'LoadState=not-found'
+` : ""}${legacyTimestamp ? "" : `for directory in ['/run/systemd/transient', '/sys/fs/cgroup/system.slice']:
+    try:
+        assert not any(entry.name.startswith('corten-bench-control-') for entry in pathlib.Path(directory).iterdir())
+    except FileNotFoundError:
+        absent(directory)
+r = subprocess.run(['systemctl', 'list-units', '--all', '--plain', '--no-legend', '--no-pager', 'corten-bench-control-*.service'], capture_output=True, text=True, timeout=5)
+assert r.returncode == 0 and r.stdout.strip() == ''
+`}` : ""}bench = pathlib.Path('/bench')
 if os.path.lexists(bench):
     assert bench.is_dir() and not bench.is_symlink()
     for entry in bench.iterdir():
@@ -616,14 +654,21 @@ for entry in pathlib.Path('/proc').iterdir():
     except FileNotFoundError:
         continue
     assert b'/bench/' not in command and b'corten-bench-groups-' not in command
-assert os.getppid() == parent_pid and (parent / 'cmdline').read_bytes() == parent_command
+${bootstrap ? `    assert all(value not in command for value in [b'/bench', b'corten-bench-control-', b'corten-control'])
+absent('/run/corten-bench-control-${state.token}')
+absent('/bench')
+` : ""}assert os.getppid() == parent_pid and (parent / 'cmdline').read_bytes() == parent_command
 assert os.readlink(parent / 'exe') == '/usr/bin/timeout'
 print(json.dumps(dict(schema='benchmark-unused-host/v1', hostId=host_id, unit=unit,
                      observedAtMs=int(time.time()*1000), unused=True)))
 CORTEN_UNUSED_HOST`;
 }
 
-export function unusedEvidence(raw, state, script, startedAtMs, finishedAtMs) {
+export function unusedEvidence(raw, state, script, startedAtMs, finishedAtMs, knownHostsSha256) {
+  if (knownHostsSha256 !== undefined) {
+    assert.equal(typeof knownHostsSha256, "string"); assert.match(knownHostsSha256, /^[a-f0-9]{64}$/);
+    assert.ok(unusedBootstrap(state));
+  }
   assert.ok(typeof raw === "string" && Buffer.byteLength(raw) <= 1024, "bounded unused proof required");
   const observation = JSON.parse(raw);
   assert.ok(observation && typeof observation === "object" && !Array.isArray(observation), "unused proof required");
@@ -635,7 +680,18 @@ export function unusedEvidence(raw, state, script, startedAtMs, finishedAtMs) {
   assert.ok(Number.isSafeInteger(observation.observedAtMs) && observation.observedAtMs >= startedAtMs - 5000
     && observation.observedAtMs <= finishedAtMs + 5000, "unused observation clock differs");
   return { schema: "benchmark-unused-retirement/v1", round: state.round, commit: state.commit, id: state.id, unit: state.unit,
-    scriptSha256: digest(script), observation, startedAtMs, finishedAtMs };
+    scriptSha256: digest(script), observation, startedAtMs, finishedAtMs,
+    ...(knownHostsSha256 === undefined ? {} : { knownHostsSha256 }) };
+}
+
+export function verifyUnusedEvidence(record, state) {
+  const pinned = Object.hasOwn(record, "knownHostsSha256");
+  const oldBootstrap = !pinned && unusedBootstrap(state) && state.control.ledger.length === 1;
+  const current = unusedHostScript(state, { bootstrap: pinned });
+  // Previous proof bytes still replay; they are never sent by the collector.
+  const script = pinned || record.scriptSha256 === digest(current) ? current
+    : unusedHostScript(state, { bootstrap: oldBootstrap, legacyTimestamp: true });
+  assert.deepEqual(record, unusedEvidence(JSON.stringify(record.observation), state, script, record.startedAtMs, record.finishedAtMs, record.knownHostsSha256));
 }
 
 // The common tooling marker does not prove native entry. Retirement still

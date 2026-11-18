@@ -477,7 +477,7 @@ pub(crate) mod de;
 mod number;
 pub(crate) mod upload;
 mod zone;
-pub use bounds::{Bounds, Numeric};
+pub use bounds::{AnyStep, Bounds, Numeric, Spacing, Stepped};
 pub use de::{from_bytes, FormError};
 pub use number::{read_number, Entry, EntryValue};
 pub use upload::{File, Files, Upload, UploadError};

@@ -115,8 +115,9 @@ pub enum Sort {
 /// `None::<Handler>` for a table the server sorts, or, on a page that has every row and sorts them
 /// in place without a request (with `data-no-prefetch` on the `<thead>`, so a hover does not fetch
 /// the sorted page), `corten_ui::rows::sort(event, target)`, which sorts by the header's column,
-/// each cell by its `data-sort`, `<time datetime>`, `<data value>` or text (docs/guide/ui.md), or
-/// the page's own typed call
+/// each cell by its `<time datetime>`, `<data value>` or text. For explicit cell values use
+/// `corten_ui::rows::sortByNumber(event, target, cell)` or `sortByText(event, target, cell)`
+/// with `ref={cell.with(value)}` on the cells (docs/guide/ui.md). Or give the page's own typed call
 /// (`on:sort={js::sortBy(event, target, rows, By::Total)}`). Such a script takes the click as an
 /// `Event` (a prop's handler gets that type), leaves a click with a modifier key to the link, so it
 /// still opens or saves the sorted page (`event.ctrlKey`, `metaKey`, `shiftKey` or `altKey` on a

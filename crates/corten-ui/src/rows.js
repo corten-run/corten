@@ -8,13 +8,13 @@
 /**
  * Sorts the rows of each body of the link's table by the column of the header the link is in, in
  * place of following it: ascending, then descending on the next click (descending first when the
- * link has `data-first="descending"`). Each cell sorts by its
- * `data-sort` (a number, a date written as one), else the machine value of the one `<time
- * datetime>` (as an instant, when it is a date or a date and time) or `<data value>` it holds
- * outside its hidden parts, else its text; a
+ * link has `data-first="descending"`). Each cell sorts by the machine value of the one
+ * `<time datetime>` (as an instant, when it is a date or a date and time) or `<data value>`
+ * it holds outside its hidden parts, else its text. Use `sortByNumber` or `sortByText` for cells
+ * with explicit values. A
  * column whose values are all decimal numbers (`-2`, `12.5`, `1e3`) or instants sorts as numbers,
  * any other by the page's language (`lang`), numbers in text in numeric order (`Item 2` before
- * `Item 10`). A number written for the reader's language (`12,5`) needs a `data-sort`. The text
+ * `Item 10`). A number written for the reader's language (`12,5`) needs a machine or ref value. The text
  * leaves out a part hidden from a screen reader (`aria-hidden`, a stacked table's `CellLabel`) or
  * from everyone (`hidden`). Rows with an equal value are in the order the page drew them, whatever
  * earlier clicks did; an empty value is last either way. That is the server's order for ties when
@@ -36,6 +36,29 @@
  * @param {HTMLElement} link the header's link (a prop's handler gets an `HTMLElement`)
  */
 export function sort(event, link) {
+  sortRows(event, link);
+}
+
+/**
+ * Like `sort`, with cells that give a numeric ref value (`ref={cell.with(cents)}`) instead of
+ * sorting by their contents.
+ * @param {Event} event @param {HTMLElement} link @param {Map<HTMLTableCellElement, number>} cells
+ */
+export function sortByNumber(event, link, cells) {
+  sortRows(event, link, cells);
+}
+
+/**
+ * Like `sort`, with cells that give a text ref value (`ref={cell.with(text)}`) instead of
+ * sorting by their contents.
+ * @param {Event} event @param {HTMLElement} link @param {Map<HTMLTableCellElement, string>} cells
+ */
+export function sortByText(event, link, cells) {
+  sortRows(event, link, cells);
+}
+
+/** @param {Event} event @param {HTMLElement} link @param {ReadonlyMap<HTMLTableCellElement, number | string>} [cells] */
+function sortRows(event, link, cells) {
   if (event instanceof MouseEvent && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
   const header = link.closest("th");
   const table = header?.closest("table");
@@ -51,7 +74,7 @@ export function sort(event, link) {
     // A body none of whose rows were seen is as the page drew it.
     const fresh =
       !drawnIds.get(body)?.size && !Array.prototype.some.call(body.rows, (/** @type {HTMLTableRowElement} */ row) => drawn.has(row));
-    const rows = Array.from(body.rows, (row, at) => ({ row, drawn: drawnAt(body, row, fresh ? at : ADDED + at), ...valueOf(row.cells[column]) }));
+    const rows = Array.from(body.rows, (row, at) => ({ row, drawn: drawnAt(body, row, fresh ? at : ADDED + at), ...valueOf(row.cells[column], cells) }));
     const numbers = rows.every(({ text, number }) => text === "" || !Number.isNaN(number));
     rows.sort((a, b) => {
       if (a.text === "" || b.text === "") return Number(a.text === "") - Number(b.text === "") || a.drawn - b.drawn;
@@ -212,29 +235,31 @@ const MACHINE = ':is(time[datetime], data[value]):not([aria-hidden="true"] *, [h
  * A date (`2026-10-30`) or a date and time with `Z` or an offset, as `LocalTime` writes it: what
  * sorts as an instant (a date alone as midnight UTC, so a column writes one form). A duration, a
  * week or a time with no zone sorts as text, so a column of them that text does not order needs
- * `data-sort`. A value inside a hidden part, or a table inside a hidden region, is passed over.
+ * a ref value. A value inside a hidden part, or a table inside a hidden region, is passed over.
  */
 const ISO = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2}))?$/;
 
-/** A decimal number, as a server writes one in `data-sort`: not `0x10` or `Infinity`. */
+/** A decimal number, not `0x10` or `Infinity`. */
 const DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?$/i;
 
 /**
- * What a cell sorts by: its `data-sort`, else its one `<time datetime>` or `<data value>`, else its
+ * What a cell sorts by: its ref value, else its one `<time datetime>` or `<data value>`, else its
  * text; and that as a number, when it is a finite decimal number or a time that is a date.
  * @param {HTMLTableCellElement | undefined} cell
+ * @param {ReadonlyMap<HTMLTableCellElement, number | string> | undefined} cells
  * @returns {{ text: string, number: number }}
  */
-function valueOf(cell) {
+function valueOf(cell, cells) {
   if (!cell) return { text: "", number: NaN };
   /** @param {string} text */
   const decimal = (text) => {
     const number = DECIMAL.test(text) ? Number(text) : NaN;
     return Number.isFinite(number) ? number : NaN;
   };
-  if (cell.dataset.sort !== undefined) {
-    const text = cell.dataset.sort.trim();
-    return { text, number: decimal(text) };
+  const value = cells?.get(cell);
+  if (value != null) {
+    const text = String(value).trim();
+    return { text, number: typeof value === "number" ? value : decimal(text) };
   }
   const machine = cell.querySelectorAll(MACHINE);
   if (machine.length === 1) {

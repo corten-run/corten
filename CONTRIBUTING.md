@@ -118,15 +118,17 @@ their absence cannot establish framework or host qualification.
 
 `Catalog Contract` runs the harness and Corten parity for framework-only changes; app
 changes run the harness and the affected apps, including consumers of shared drivers.
-Changes to shared benchmark inputs or the workflow, pushes to `main` and manual runs
-test all 20 parity apps and both JSON jobs. This also applies to unknown app directories
+Changes to shared benchmark inputs or the workflow, and manual runs, test all 20 parity
+apps and both JSON jobs. A push to `main` is scoped the same way by its push diff, and tests
+everything when its base commit is unknown. This also applies to unknown app directories
 and files directly in `bench/fullstack/apps/`. An `aspnet-aot` change runs the JSON jobs.
 Run `node --test scripts/benchmark-scope.test.mjs` to check both selectors, including
 the imports of the Catalog parity commands for each app.
 Both workflows compare the pull request merge commit with its first parent, using
-the full Git diff rather than GitHub's path-filter file list. Evidence compares the
-before and after commits on a push. Newer pull request runs cancel older ones;
-`main` runs do not cancel one another.
+the full Git diff rather than GitHub's path-filter file list, and the before and after
+commits on a push; a push whose before commit is unknown or not an ancestor of the new one (a
+force-push) tests everything. Newer pull request runs cancel older ones; `main` runs do not
+cancel one another, so each push's own diff is tested.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,

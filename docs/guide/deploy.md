@@ -290,6 +290,13 @@ zstd altogether, turn off the `compress` feature in the app's `Cargo.toml`.
 
 ## Building the image
 
+The Dockerfile builds with `cargo build --release --locked`, as `corten check` holds its Cargo
+steps to the lock. `corten new` writes `Cargo.lock` with the app; run `cargo build` or
+`corten dev` after a dependency change and commit `Cargo.lock` before checking or building the
+image. A missing or stale lock fails rather than resolving crate versions the check did not
+test. For a workspace app, include the workspace-root manifest and lockfile in the Docker build
+context, along with the members it needs.
+
 The Dockerfile `corten new` writes compiles the app with two BuildKit
 [cache mounts](https://docs.docker.com/reference/dockerfile/#run---mounttypecache), which stay on
 the builder between builds and are not part of the image.
@@ -390,3 +397,14 @@ Its cleanup check retains all process observations and exempts only kernel threa
 proved by saved Linux stat flags and matching PID/start identity. A new user-space
 daemon or application process still fails cleanup; later observations cannot repair
 an old failed run. This is benchmark-host preparation, not app deployment advice.
+
+To build the Git-capable browser test image manually, run `npm ci` from the repository
+root and pass the image that matches the installed Playwright version, as CI does:
+
+```sh
+version=$(node -p 'require("@playwright/test/package.json").version') &&
+  docker build --build-arg PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v${version}-noble" \
+    -f bench/workloads/test-tools.Dockerfile -t corten-evidence-tools .
+```
+
+The Dockerfile has no default base image.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { isAbsolute } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import { roundName, selection, terminalUnit, validateState } from "./cloud-contract.mjs";
 
 const providerCodes = ["provider-command", "provider-credential", "provider-output",
@@ -52,13 +52,18 @@ export function full(value, pattern, label) {
 }
 export function validateOptions(o) {
   assert.ok(o && typeof o === "object" && !Array.isArray(o));
-  const allowed = ["round", "stateDir", "detach", "collect", "cancelMixedWait", "retireFailedNative", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject", "group", "fleet"];
+  const allowed = ["round", "stateDir", "detach", "collect", "unusedBootstrapKnownHosts", "cancelMixedWait", "retireFailedNative", "commit", "sshKey", "accountId", "context", "deliverAudit", "auditGroup", "campaign", "approveSubject", "group", "fleet"];
   assert.ok(Object.keys(o).every((k) => allowed.includes(k)), "unknown option/override");
   roundName(o.round); assert.ok(Number(o.round.slice(1)) >= 17, "official campaigns start at r17");
   assert.ok(typeof o.stateDir === "string" && isAbsolute(o.stateDir) && !/[\r\n\0]/.test(o.stateDir)
     && !/^[\\/]{2}/.test(o.stateDir), "absolute local state root required");
   assert.equal([o.detach, o.collect, o.cancelMixedWait, o.retireFailedNative, o.deliverAudit !== undefined].filter(Boolean).length, 1, "choose exactly one controller action");
   for (const flag of ["detach", "collect", "cancelMixedWait", "retireFailedNative"]) if (o[flag] !== undefined) assert.equal(o[flag], true);
+  if (o.unusedBootstrapKnownHosts !== undefined) {
+    assert.equal(o.collect, true, "unused bootstrap proof is only for collection");
+    assert.ok(typeof o.unusedBootstrapKnownHosts === "string" && isAbsolute(o.unusedBootstrapKnownHosts)
+      && !/^[\\/]{2}|["$%\r\n\0]/.test(o.unusedBootstrapKnownHosts), "absolute local verified host-key file required");
+  }
   if (o.detach) {
     full(o.commit, /[a-f0-9]{40}/, "full measured commit required"); full(o.sshKey, /[1-9]\d*/, "SSH key ID required");
     providerIdentity({ accountId: o.accountId, context: o.context });
@@ -75,11 +80,12 @@ export function validateOptions(o) {
     full(o.campaign, new RegExp(`${o.round}-[a-f0-9]{16}`), "exact campaign ID required");
     full(o.approveSubject, /[a-f0-9]{64}/, "explicit operator-approved subject required");
   } else assert.ok(o.auditGroup === undefined && o.campaign === undefined && o.approveSubject === undefined, "audit options require delivery");
-  return Object.freeze({ ...o, ...(o.deliverAudit !== undefined ? { auditGroup: o.auditGroup ?? "json-api" } : {}) });
+  return Object.freeze({ ...o, ...(o.deliverAudit !== undefined ? { auditGroup: o.auditGroup ?? "json-api" } : {}),
+    ...(o.unusedBootstrapKnownHosts !== undefined ? { unusedBootstrapKnownHosts: resolve(o.unusedBootstrapKnownHosts) } : {}) });
 }
 export function parseDropletArgs(args) {
   const o = { round: args[0] }, seen = new Set();
-  const values = { "--state-dir": "stateDir", "--commit": "commit", "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--deliver-audit": "deliverAudit", "--audit-group": "auditGroup", "--campaign": "campaign", "--approve-subject": "approveSubject", "--group": "group", "--fleet": "fleet" };
+  const values = { "--state-dir": "stateDir", "--commit": "commit", "--ssh-key": "sshKey", "--account-id": "accountId", "--context": "context", "--deliver-audit": "deliverAudit", "--audit-group": "auditGroup", "--campaign": "campaign", "--approve-subject": "approveSubject", "--group": "group", "--fleet": "fleet", "--unused-bootstrap-known-hosts": "unusedBootstrapKnownHosts" };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i]; assert.ok(!seen.has(flag), "duplicate option"); seen.add(flag);
     if (flag === "--retire-failed-native") o.retireFailedNative = true;

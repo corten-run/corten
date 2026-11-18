@@ -304,16 +304,16 @@ test("controller exposes no direct credential-taking REST constructor", () => {
   assert.equal(provider.restRequest, undefined);
 });
 
-test("normal collect retires a refused create through the actual worker without another POST", async (t) => {
+test("pinned collect retires a refused create through the actual worker without another POST", async (t) => {
   const h = controllerHarness(t, { missingUnit: true }), w = harness(t, "post-invalid-action-id");
   const run = (binary, args, timeout, allowFail) => binary === "doctl" ? w.run(args, timeout, allowFail) : h.run(binary, args, timeout, allowFail);
   await assert.rejects(h.launch({ run }).launch(), /create completion/);
   assert.equal(h.saved().status, "preparing"); assert.equal(h.saved().id, "123");
   assert.equal(h.calls.some(([binary]) => binary === "ssh" || binary === "scp"), false);
-  assert.equal(await h.task({ run }).collect(), 1);
+  assert.equal(await h.pinnedUnused({ run }).collect(), 1);
   assert.equal(h.saved().status, "retired"); assert.ok(h.saved().destroyedAt);
   assert.equal(h.saved().archiveSha256, undefined); assert.equal(h.saved().validation, undefined);
-  assert.equal(await h.task({ run }).collect(), 1);
+  assert.equal(await h.pinnedUnused({ run }).collect(), 1);
   assert.equal(w.state().consumes, 1);
   assert.equal(w.state().calls.filter(({ method }) => method === "POST").length, 1);
   assert.equal(w.state().calls.filter(({ method }) => method === "DELETE").length, 1);

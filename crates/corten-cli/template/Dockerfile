@@ -16,7 +16,7 @@ ENV ZSTD_SYS_USE_PKG_CONFIG=1
 RUN --mount=type=cache,target=/var/cache/cargo \
     --mount=type=cache,id={{name}}-target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
-    && CARGO_HOME=/var/cache/cargo cargo build --release && cp target/release/{{name}} /server
+    && CARGO_HOME=/var/cache/cargo cargo build --release --locked && cp target/release/{{name}} /server
 
 FROM debian:bookworm-slim
 # jemalloc, preloaded, gives back memory a burst of connections took: eight floods of unfinished

@@ -499,7 +499,7 @@ fn doctype(bytes: &[u8], at: usize) -> Option<bool> {
     is(at, b"<!doctype").then(|| is(at, b"<!doctype html>"))
 }
 
-/// What the browser would drop from a patch (`req.patch`, a [`crate::live`] fragment): the first
+/// What the browser would drop from a patch (`action.patch`, a [`crate::live`] fragment): the first
 /// top-level element without an `id`, or top-level text, described for an error. The runtime
 /// replaces each top-level element by its id and ignores the rest, so either is a view that never
 /// shows. Reads markup as `html!` writes it (attribute values quoted, `<` escaped in text), each
