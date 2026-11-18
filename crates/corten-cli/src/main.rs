@@ -19,6 +19,7 @@ mod pin;
 mod scripts;
 mod ui;
 
+use std::io::Write;
 use std::process::{Command, ExitCode};
 
 const HELP: &str = "corten: create, run and check Corten apps
@@ -53,14 +54,16 @@ Usage:
                    is told which tokens the components read that it lacks; otherwise (or
                    with --kit-theme) it writes the kit's theme tokens (tokens/ui.*.json,
                    light and dark) and the page's colors in static/style.css.
-  corten ui add <name>.. [--force] | corten ui add --all [--force]
+  corten ui add <name>.. [--force | --merge] | corten ui add --all [--force | --merge]
                    Copy kit components into src/ui/, where they are yours to change, and
-                   list them in src/ui.rs. Refuses to replace a file without --force.
+                   list them in src/ui.rs. Refuses to replace a file without --force, which
+                   replaces it, or --merge, which takes the kit's changes and keeps your edits.
   corten ui list   The kit's components.
   corten ui diff [name]..
                    How each copied component differs from this command's kit: whether you
                    edited it, whether the kit changed it since, and the lines. Writes nothing.
-  corten help      This text.
+  corten help [<command>]
+                   This text, or one command's usage (as corten <command> --help).
   corten --version The version, and the commit the command was built from. dev, fmt and
                    check say when the app's Cargo.lock pins another corten, and how to
                    install the matching command; so does ui, and ui add and
@@ -69,6 +72,31 @@ Usage:
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // `corten help <command>` is `corten <command> --help`, and an unknown command is refused.
+    // `corten help --help` is help's own help.
+    let target: Vec<String> = match args.split_first() {
+        Some((first, rest)) if first == "help" => {
+            rest.iter().filter(|arg| !matches!(arg.as_str(), "--help" | "-h")).cloned().collect()
+        }
+        _ => Vec::new(),
+    };
+    if !target.is_empty() {
+        let asked: Vec<String> = target.iter().cloned().chain(["--help".to_string()]).collect();
+        return match command_help(&asked) {
+            Some(help) => {
+                print!("Usage:\n{help}");
+                ExitCode::SUCCESS
+            }
+            None => {
+                eprintln!("corten: no command {:?}; run corten help", target.join(" "));
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Some(help) = command_help(&args) {
+        print!("Usage:\n{help}");
+        return ExitCode::SUCCESS;
+    }
     // `ui` says so itself (`ui::run`), and its `add` and `init` refuse.
     if matches!(args.first().map(String::as_str), Some("dev" | "fmt" | "check"))
         && let Ok(root) = std::env::current_dir()
@@ -108,6 +136,55 @@ fn main() -> ExitCode {
     }
 }
 
+/// Reuse the command's sections of the full help, before any app inspection or work.
+fn command_help(args: &[String]) -> Option<String> {
+    let command = args.first()?;
+    if !asks_help(command, &args[1..]) {
+        return None;
+    }
+    let name = match command.as_str() {
+        "new" | "dev" | "build" | "fmt" | "check" | "help" => command.clone(),
+        "version" | "--version" | "-V" => "--version".into(),
+        "ui" => match args.get(1).map(String::as_str) {
+            Some(sub @ ("init" | "add" | "list" | "diff")) => format!("ui {sub}"),
+            Some("--help" | "-h") => "ui".into(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let prefix = format!("{name} ");
+    Some(
+        HELP.split("\n  corten ")
+            .skip(1)
+            .filter(|section| section.starts_with(&prefix))
+            .map(|section| format!("  corten {section}\n"))
+            .collect(),
+    )
+}
+
+/// Whether `--help` or `-h` stands in a flag position of `command`'s arguments: not as the
+/// value of an option of that command that takes one (`new --corten-path --help` names a directory,
+/// `ui add --port --help` asks for help). No command reads `--` as the end of its options, so
+/// neither does this: the command would still read a flag after it.
+fn asks_help(command: &str, args: &[String]) -> bool {
+    let takes_value: &[&str] = match command {
+        "new" => &["--name", "--corten-path"],
+        "dev" => &["--port"],
+        _ => &[],
+    };
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--help" | "-h" => return true,
+            option if takes_value.contains(&option) => {
+                args.next();
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// `corten check`'s flags: whether `--no-script-types` skips the scripts' type check.
 fn check_flags(args: &[String]) -> Result<bool, String> {
     match args {
@@ -133,10 +210,26 @@ fn check(skip: bool) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
     // Resolve with --locked before anything can rewrite the lock. This also settles whether
     // the scripts can be type-checked before format, lint and tests have run.
-    let scripts = scripts::plan(&root, skip)?;
-    fmt::run(&["--check".to_string()])
-        .and_then(|()| listed::check(&root))
-        .and_then(|()| lint_build_test(cargo, || scripts::run(scripts)))
+    let scripts = check_step("script type setup", || scripts::plan(&root, skip))?;
+    check_step("corten fmt --check", || fmt::run(&["--check".to_string()]))
+        .and_then(|()| check_step("listed components", || listed::check(&root)))
+        .and_then(|()| {
+            lint_build_test(
+                |args| check_step(&format!("cargo {}", args.join(" ")), || cargo(args)),
+                || check_step("script types", || scripts::run(scripts)),
+            )
+        })
+}
+
+/// Cargo's output is inherited already. Name even a silent or cached step in redirected logs.
+fn check_step<T>(name: &str, run: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    // Progress only: a closed stderr must not stop a step or lose its result.
+    let _ = writeln!(std::io::stderr(), "corten check: {name}");
+    let start = std::time::Instant::now();
+    let result = run();
+    let outcome = if result.is_ok() { "finished in" } else { "failed after" };
+    let _ = writeln!(std::io::stderr(), "corten check: {name} {outcome} {:.2}s", start.elapsed().as_secs_f64());
+    result
 }
 
 /// `corten check`'s steps after format and the listed components: each Cargo step run with
@@ -168,18 +261,56 @@ fn cargo(args: &[&str]) -> Result<(), String> {
     if status.success() { Ok(()) } else { Err(format!("cargo {} failed", args.join(" "))) }
 }
 
-/// The value after `flag` in `args`, if present.
+/// The value after `flag` in `args`, if present. The token after `flag` is its value even when it
+/// reads as `flag` again. A flag given twice is refused, so the value a command runs with is the one
+/// [`asks_help`] reads past (`--name a --name --help` is not help).
 fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String> {
-    match args.iter().position(|a| a == flag) {
-        Some(i) => args.get(i + 1).map(|v| Some(v.as_str())).ok_or_else(|| format!("{flag} needs a value")),
-        None => Ok(None),
+    let mut found = None;
+    let mut at = 0;
+    while at < args.len() {
+        if args[at] != flag {
+            at += 1;
+            continue;
+        }
+        if found.is_some() {
+            return Err(format!("{flag} is given more than once"));
+        }
+        found = Some(args.get(at + 1).ok_or_else(|| format!("{flag} needs a value"))?.as_str());
+        at += 2;
     }
+    Ok(found)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{check_flags, lint_build_test};
+    use super::{asks_help, check_flags, lint_build_test, option};
     use std::cell::RefCell;
+
+    #[test]
+    fn help_is_asked_only_in_a_flag_position() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert!(asks_help("new", &args(&["app", "--help"])));
+        assert!(asks_help("new", &args(&["app", "--name", "shop", "-h"])));
+        assert!(!asks_help("new", &args(&["app", "--corten-path", "--help"])));
+        assert!(!asks_help("new", &args(&["app", "--name", "-h"])));
+        assert!(!asks_help("dev", &args(&["--port", "--help"])));
+        // `--` ends no command's options, so it ends no scan for help either.
+        assert!(asks_help("new", &args(&["app", "--", "--help"])));
+        // An option names a value only for the command that has it, and a `--` it takes is a value.
+        assert!(asks_help("ui", &args(&["add", "--all", "--port", "--help"])));
+        assert!(asks_help("new", &args(&["shop", "--corten-path", "--", "--help"])));
+    }
+
+    #[test]
+    fn an_option_reads_the_token_after_it_and_is_given_once() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert_eq!(option(&args(&["shop", "--name", "store"]), "--name"), Ok(Some("store")));
+        // The second `--corten-path` is the first one's value, a directory, not a repeat.
+        assert_eq!(option(&args(&["shop", "--corten-path", "--corten-path"]), "--corten-path"), Ok(Some("--corten-path")));
+        assert!(option(&args(&["shop", "--name", "a", "--name", "b"]), "--name").is_err());
+        assert!(option(&args(&["shop", "--name"]), "--name").is_err());
+        assert_eq!(option(&args(&["shop"]), "--name"), Ok(None));
+    }
 
     #[test]
     fn check_takes_only_the_flag_that_skips_script_types() {
