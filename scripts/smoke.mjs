@@ -7037,23 +7037,30 @@ async function run(browser) {
     // A form without the mark keeps the queue it had: a write that waits for another of the form
     // is still sent after a GET the form sends in between. Post A is held, Post B pressed (it
     // waits for A), A answered 204, and the moment A's busy mark is cleared a script sends the
-    // form's Read (a GET): A, Read and B all go, in that order.
+    // form's Read (a GET): the runtime asks for A, Read and B, in that order. Read by what the
+    // runtime fetches: B's request cancels Read's, which Firefox can do before Read leaves.
     {
       const queue = (/** @type {URL} */ url) => url.pathname === "/smoke/scope" && (url.search === "" || url.search === "?scope=read");
-      /** @type {string[]} */
-      const sent = [];
       /** @type {() => void} */
       let letAGo = () => {};
       const aHeld = new Promise((resolve) => (letAGo = () => resolve(undefined)));
       await scope.route(queue, async (route) => {
         const req = route.request();
         if (req.headers()["corten"] !== "action") return route.continue();
-        const what = `${req.method()} ${req.method() === "GET" ? new URL(req.url()).search : req.postData()}`;
-        sent.push(what);
-        if (what === "POST scope=a") await aHeld;
+        if (req.postData() === "scope=a") await aHeld;
         await route.fulfill({ status: 204 }).catch(() => {});
       });
       await scope.evaluate(() => {
+        /** @type {string[]} */
+        const fetched = [];
+        Object.assign(window, { __fetched: fetched });
+        const fetch_ = window.fetch;
+        window.fetch = function (input, init) {
+          const url = new URL(String(input instanceof Request ? input.url : input), location.href);
+          if (url.pathname === "/smoke/scope" && new Headers(init?.headers).get("corten") === "action")
+            fetched.push(`${init?.method ?? "GET"} ${init?.body ?? url.search}`);
+          return fetch_.call(this, input, init);
+        };
         const form = /** @type {HTMLFormElement} */ (document.getElementById("smoke-scope-queue"));
         const read = /** @type {HTMLButtonElement} */ (form.querySelector('button[value="read"]'));
         let busy = false;
@@ -7070,9 +7077,9 @@ async function run(browser) {
       await scope.getByRole("button", { name: "Post B", exact: true }).click();
       letAGo();
       await scope.waitForFunction(() => !document.getElementById("smoke-scope-queue")?.hasAttribute("aria-busy"), undefined, { timeout: 5000 }).catch(() => {});
-      const ended = Date.now() + 5000;
-      while (sent.length < 3 && Date.now() < ended) await scope.waitForTimeout(50);
+      await scope.waitForFunction(() => /** @type {any} */ (window).__fetched.length >= 3, undefined, { timeout: 5000 }).catch(() => {});
       await settle();
+      const sent = await scope.evaluate(() => /** @type {any} */ (window).__fetched);
       await scope.unroute(queue);
       check(
         "a data-patch form's write waiting for another is still sent after a GET the form sends in between",
