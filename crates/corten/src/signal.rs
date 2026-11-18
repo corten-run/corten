@@ -150,7 +150,7 @@ struct Inner {
     /// A write's whole-page decision ([`WHOLE`]), or a request to recheck after middleware
     /// ([`RECHECK_WHOLE`]). When the app has layout reads, it is filled after it answers (#1370):
     /// [`LATE`] marks eligibility and [`EARLY_CLOSED`] stops new head captures at cleanup. A byte, in the
-    /// padding beside the others; its deadline is not kept here (`crate::layout::LateUntil`), as
+    /// padding beside the others; its deadline is not kept here (`crate::layout::LateWrite`), as
     /// any more would make every request's signal a larger allocation.
     late: AtomicU8,
 }

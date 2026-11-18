@@ -1223,11 +1223,7 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
             Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD);
         // Middleware or a raw route can draw a page from the head it took, including after a
         // typed route answered a forwarded request. The typed endpoint handles its own head.
-        if req.fills
-            && req.write
-            && req.signal.accepts_early_heads()
-            && parts.extensions.get::<crate::layout::LateRoute>().is_none()
-        {
+        if req.fills && req.write && req.signal.accepts_early_heads() && !crate::layout::LateWrite::reached(&parts.extensions) {
             req.early = req.signal.keep_early_head(parts.clone());
         }
         Ok(req)
@@ -3228,9 +3224,7 @@ pub(crate) fn render_errors<'s, 'n, 'g, 'm, S: crate::app::Steps>(
         signal.mark_whole(late);
     }
     if late {
-        if let Some(limit) = deadline {
-            req.extensions_mut().insert(crate::layout::LateUntil(tokio::time::Instant::now() + limit));
-        }
+        crate::layout::LateWrite::stage(&mut req, deadline);
     }
     errors_rendered(shared, req, next, deadline, signal, api, (mode, fetched), late)
 }

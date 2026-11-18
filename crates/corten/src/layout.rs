@@ -547,7 +547,7 @@ pub(crate) struct EarlyHead(pub(crate) Arc<Parts>);
 /// starts them from the head its `Req` kept ([`StartHere::extracted`]). One from a route whose
 /// answer type says it is no page, or that is `Public`, starts none.
 pub(crate) async fn fill_made_early(shared: Arc<crate::page::Shared>, mut res: Response) -> Response {
-    let until = res.extensions().get::<EarlyHead>().and_then(|EarlyHead(head)| LateUntil::of(&head.extensions));
+    let until = res.extensions().get::<EarlyHead>().and_then(|EarlyHead(head)| LateWrite::until(&head.extensions));
     let here = StartHere::new(shared, until);
     if res.extensions().get::<NotAPageAnswer>().is_some() {
         here.lock().state = State::NotAPage;
@@ -569,11 +569,6 @@ pub(crate) async fn fill_made_early(shared: Arc<crate::page::Shared>, mut res: R
 #[derive(Clone, Copy)]
 pub(crate) struct NotAPageAnswer;
 
-/// Only on the request passed to a typed endpoint, not on the head middleware may still hold.
-/// A page-capable endpoint takes its own snapshot; other endpoints need none.
-#[derive(Clone, Copy)]
-pub(crate) struct LateRoute;
-
 /// Marks a typed route reached for a write eligible for late fill.
 #[inline]
 pub(crate) fn reaches_late_route(req: &mut crate::http::Request) -> bool {
@@ -581,7 +576,7 @@ pub(crate) fn reaches_late_route(req: &mut crate::http::Request) -> bool {
         return false;
     }
     let extensions = req.extensions_mut();
-    extensions.get::<crate::Signal>().is_some_and(crate::Signal::fills_late) && extensions.insert(LateRoute).is_none()
+    extensions.get::<crate::Signal>().is_some_and(crate::Signal::fills_late) && LateWrite::reach(extensions)
 }
 
 /// Keep the route's request head before calling a handler that may consume it and answer with
@@ -590,7 +585,7 @@ pub(crate) fn reaches_late_route(req: &mut crate::http::Request) -> bool {
 pub(crate) fn at_late_route(req: &crate::http::Request) -> (Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts) {
     let shared =
         req.extensions().get::<crate::Signal>().and_then(crate::Signal::shared).expect("late writes belong to an app").clone();
-    let until = LateUntil::of(req.extensions());
+    let until = LateWrite::until(req.extensions());
     // Copied field by field from the request in place, rather than taken apart, cloned and put
     // back: a read is given the whole head (`LayoutRead::start` takes `&Parts`, and an app's read
     // may look at any of it), so the headers and extensions are cloned all the same.
@@ -603,14 +598,33 @@ pub(crate) fn at_late_route(req: &crate::http::Request) -> (Arc<crate::page::Sha
     (shared, until, kept)
 }
 
-/// A late-filled write's deadline in an app with layout reads. It follows the request
-/// through middleware without a task-local scope or adding to the size of every signal.
+/// One dispatch's late fill state. Its deadline follows the head through middleware; only the
+/// head forwarded to a typed endpoint is marked, not the head middleware may still hold.
 #[derive(Clone, Copy)]
-pub(crate) struct LateUntil(pub(crate) tokio::time::Instant);
+pub(crate) struct LateWrite {
+    until: Option<tokio::time::Instant>,
+    at_route: bool,
+}
 
-impl LateUntil {
-    fn of(extensions: &http::Extensions) -> Option<tokio::time::Instant> {
-        extensions.get::<Self>().map(|until| until.0)
+impl LateWrite {
+    #[inline(never)]
+    pub(crate) fn stage(req: &mut crate::http::Request, deadline: Option<std::time::Duration>) {
+        // A request forwarded by another router can already carry its deadline and route mark.
+        let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
+        req.extensions_mut().insert(Self { until, at_route: false });
+    }
+
+    fn until(extensions: &http::Extensions) -> Option<tokio::time::Instant> {
+        extensions.get::<Self>().and_then(|late| late.until)
+    }
+
+    pub(crate) fn reached(extensions: &http::Extensions) -> bool {
+        extensions.get::<Self>().is_some_and(|late| late.at_route)
+    }
+
+    #[inline(never)]
+    fn reach(extensions: &mut http::Extensions) -> bool {
+        extensions.get_mut::<Self>().is_some_and(|late| !std::mem::replace(&mut late.at_route, true))
     }
 }
 

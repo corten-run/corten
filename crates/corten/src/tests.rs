@@ -16296,6 +16296,54 @@ mod layout_reads {
     }
 
     #[tokio::test]
+    async fn a_write_forwarded_to_another_router_fills_its_layout_once() {
+        #[crate::routes(state = crate::Router)]
+        mod forward_url {
+            #[route("/typed-write", post = forward)]
+            pub struct Forward;
+        }
+
+        #[crate::routes]
+        mod destination_url {
+            #[route("/typed-write", post = page)]
+            pub struct Destination;
+        }
+
+        async fn forward(crate::extract::State(inner): crate::extract::State<Router>, req: crate::http::Request) -> crate::Relay {
+            let (parts, body) = inner.oneshot(req).await.unwrap().into_parts();
+            crate::Relay::new(parts.status, parts.headers, body)
+        }
+
+        async fn page(req: Req) -> HtmlResult {
+            req.page(html! {
+                <html>
+                    <head><title>"Shop"</title><Corten /></head>
+                    <body>
+                        <header>{later::<CartCount>()}</header>
+                        <main>"typed write"</main>
+                    </body>
+                </html>
+            })
+        }
+
+        for deadline in [None, Some(Duration::from_secs(2))] {
+            let outer_count = CartCount::default();
+            let inner_count = CartCount::default();
+            let inner = App::new(destination_url::router()).layout_read(inner_count.clone()).deadline(deadline).router();
+            let outer = App::new(forward_url::router(inner))
+                .layout_read(outer_count.clone())
+                .middleware(AsViewer(Some("ada")))
+                .router();
+            let (status, headers, body) = call_with(outer, "POST", "/typed-write", Some("action"), None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(!headers.contains_key("corten-page") && headers.contains_key("corten-shell"), "{headers:?}");
+            assert!(body.contains(r#"<header><span class="count">3</span></header>"#), "{body}");
+            assert_eq!(inner_count.started.load(Ordering::SeqCst), 1);
+            assert_eq!(outer_count.started.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
     async fn a_patch_only_write_without_middleware_does_not_negotiate_a_whole_answer() {
         let count = CartCount::default();
         let app = App::new(shop_url::router());
