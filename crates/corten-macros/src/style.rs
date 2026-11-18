@@ -86,7 +86,8 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
         let mut end = output.end + s.out.len() - before;
         if let Some((base, raw)) = rename_positions(&src[source.clone()], &s.positions, prefix) {
             let mut i = 0;
-            let (_, value, _) = scan_chunk(&raw, &mut i).map_err(|(at, message)| s.error(source.start + base + at, message))?;
+            let Chunk { text: value, .. } =
+                scan_chunk(&raw, &mut i).map_err(|(at, message)| s.error(source.start + base + at, message))?;
             debug_assert_eq!(i, raw.len());
             s.out.replace_range(start..end, &value);
             end = start + value.len();
@@ -816,7 +817,7 @@ impl Scoper<'_> {
                 _ => {}
             }
             let start = self.i;
-            let (end, text, url) = self.chunk()?;
+            let Chunk { end, text, url, joined_comment } = self.chunk()?;
             let source = start..self.i;
             if end == Some(b'{') {
                 self.i += 1;
@@ -856,7 +857,7 @@ impl Scoper<'_> {
                             Ctx::Raw
                         }
                         (_, "scope") => {
-                            self.check_selector_url(url)?;
+                            self.check_selector_prelude(url, joined_comment)?;
                             let (prelude, unowned) = self.scope_prelude(prelude, nest, start)?;
                             scope_rule = Some(prelude);
                             // A root the component owns lets its rules start anywhere; any other
@@ -903,7 +904,7 @@ impl Scoper<'_> {
                 } else if text.starts_with('@') || ctx == Ctx::Raw {
                     self.out.push_str(&text);
                 } else {
-                    self.check_selector_url(url)?;
+                    self.check_selector_prelude(url, joined_comment)?;
                     let (selector, anchor) = self.selector(&text, nest, start)?;
                     inner_nest = nest.map(|_| anchor);
                     self.out.push_str(&selector);
@@ -1216,10 +1217,16 @@ impl Scoper<'_> {
         scan_chunk(self.text, &mut self.i).map_err(|(at, message)| self.error(at, message))
     }
 
-    fn check_selector_url(&self, at: Option<usize>) -> Result<(), String> {
+    fn check_selector_prelude(&self, url: Option<usize>, joined_comment: Option<usize>) -> Result<(), String> {
+        if let Some(at) = joined_comment {
+            return Err(self.error(
+                at,
+                "a comment between two parts of a selector is read differently by browsers and this scoper; put a space beside it or remove it",
+            ));
+        }
         // The selector proof handles functions, not URL tokens, whose contents can include
         // delimiters that would change the proof. Refuse them before discarding any arm.
-        if let Some(at) = at {
+        if let Some(at) = url {
             return Err(
                 self.error(at, "an unquoted url() cannot be checked in a component selector: quote its value or remove the arm")
             );
@@ -1711,26 +1718,34 @@ fn css_name_end(bytes: &[u8], mut at: usize) -> usize {
     at
 }
 
-type Chunk = (Option<u8>, String, Option<usize>);
+struct Chunk {
+    end: Option<u8>,
+    text: String,
+    url: Option<usize>,
+    joined_comment: Option<usize>,
+}
 
 /// Reads and normalizes one chunk of preprocessed CSS, advancing `i` to its delimiter.
+/// Only whitespace outside tokens is folded or discarded.
 fn scan_chunk(src: &str, i: &mut usize) -> Result<Chunk, (usize, &'static str)> {
     let bytes = src.as_bytes();
     let mut depth = 0usize;
     let mut text = String::new();
     let mut space = false;
+    let mut pending_comment = None;
+    let mut joined_comment = None;
     let mut url = None;
     while let Some(&b) = bytes.get(*i) {
         let start = *i;
         *i = match b {
-            b'{' | b';' | b'}' if depth == 0 => return Ok((Some(b), text, url)),
+            b'{' | b';' | b'}' if depth == 0 => return Ok(Chunk { end: Some(b), text, url, joined_comment }),
             b if css_space(b) => {
                 space = true;
                 *i += 1;
                 continue;
             }
             b'/' if bytes.get(start + 1) == Some(&b'*') => {
-                space = true;
+                pending_comment.get_or_insert(start);
                 *i = src[start + 2..].find("*/").map_or(bytes.len(), |end| start + end + 4);
                 continue;
             }
@@ -1767,13 +1782,19 @@ fn scan_chunk(src: &str, i: &mut usize) -> Result<Chunk, (usize, &'static str)> 
             _ if b.is_ascii() => start + 1,
             _ => start + src[start..].chars().next().unwrap().len_utf8(),
         };
-        if space && !text.is_empty() {
-            text.push(' ');
+        let comment = pending_comment.take();
+        if !text.is_empty() {
+            if !space && joined_comment.is_none() {
+                joined_comment = comment;
+            }
+            if space || comment.is_some() {
+                text.push(' ');
+            }
         }
         space = false;
         text.push_str(&src[start..*i]);
     }
-    Ok((None, text, url))
+    Ok(Chunk { end: None, text, url, joined_comment })
 }
 
 /// CSS Syntax Level 3's string-token boundaries. An unescaped newline makes a bad
@@ -1814,7 +1835,10 @@ fn split_declaration(text: &str) -> Option<(&str, &str)> {
     let (name, value) = text.split_once(':')?;
     let space = [' ', '\t', '\n'];
     let name = name.trim_matches(space);
-    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| (name, value.trim_matches(space)))
+    // scan_chunk already drops trailing whitespace tokens, but a trailing space may be part
+    // of an escape. Only drop the separator it can leave just after the colon.
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .then(|| (name, value.trim_start_matches(space)))
 }
 
 /// The constant for a class: `alert-message` is `AlertMessage`.
@@ -2280,10 +2304,20 @@ mod tests {
     }
 
     #[test]
+    fn position_options_keep_escaped_trailing_whitespace() {
+        for (definition, option) in [("", "--above"), ("@position-try --above{top:0}", "--x__above")] {
+            let sheet = scope(&format!(r"{definition}.a{{position-try:  --above, --external\  ; color:red}}"), "x").unwrap();
+            assert!(sheet.css.ends_with(&format!(r".x__a{{position-try:{option}, --external\ ;color:red}}")), "{}", sheet.css);
+        }
+        assert_eq!(scope(r".a{--value:--external\\  ;color:red}", "x").unwrap().css, r".x__a{--value:--external\\;color:red}");
+    }
+
+    #[test]
     fn shared_selector_parsing_is_unchanged_by_position_options() {
         for (source, scoped) in [
             (".a:not(.--foreign)", ".x__a:not(.x__--foreign)"),
-            (".a:is(./**/local,body)", ".x__a:is(. local,body)"),
+            (".a /**/.b", ".x__a .x__b"),
+            (".a/**/ .b", ".x__a .x__b"),
             (".a:is(.--a,.a)", ".x__a:is(.x__--a,.x__a)"),
         ] {
             let sheet = scope(&format!("{source}{{position-try:--above}}@position-try --above{{top:0}}"), "x").unwrap();
@@ -2291,7 +2325,7 @@ mod tests {
         }
         assert!(scope(".a:is(.é,.b){color:green}", "x").unwrap_err().contains("non-ASCII characters in a class name"));
         assert_eq!(
-            scope("@scope (.a:is(:/* gap */:marker,.b)){.a p{color:green}}", "x").unwrap().css,
+            scope("@scope (.a:is(:/* gap */ :marker,.b)){.a p{color:green}}", "x").unwrap().css,
             "@scope (.x__a:is(: :marker,.x__b)){.x__a p{color:green}}"
         );
         for name in ["LAYER_other", "LAYER", "layer_other"] {
@@ -2300,6 +2334,26 @@ mod tests {
         }
         let css = "@supports (position-area:top){:is(.a,body){position-try:--above}@position-try --above{top:0}}";
         assert!(scope(css, "x").unwrap_err().contains("styles elements this component does not own"));
+    }
+
+    #[test]
+    fn selector_comments_must_not_join_parts() {
+        for (selector, line) in [
+            (".a:is(./**/local,body)", 1),
+            (".a:is(\n./**/local,body)", 2),
+            (".a/**/.b", 1),
+            (".a/* one *//* two */.b", 1),
+            ("@scope (.a/**/.b)", 1),
+            ("@scope (.a) to/**/(.b)", 1),
+        ] {
+            let error = scope(&format!("{selector}{{.c{{color:red}}}}"), "x").unwrap_err();
+            assert!(error.starts_with(&format!("line {line}: a comment between two parts of a selector")), "{error}");
+            assert!(error.ends_with("put a space beside it or remove it"), "{error}");
+        }
+        assert_eq!(
+            scope(r#"/*start*/.a[title="a/**/b"]/*end*/{--value:a/**/b}"#, "x").unwrap().css,
+            r#".x__a[title="a/**/b"]{--value:a b}"#
+        );
     }
 
     #[test]
@@ -2561,7 +2615,7 @@ mod tests {
                 "@scope (.t__list:not(:is(.t__slot, ::before))){p{color:red}}",
             ),
             (
-                "@scope (.list:is(:/* gap */:before,.row)) { p { color: red } }",
+                "@scope (.list:is(: /* gap */:before,.row)) { p { color: red } }",
                 "@scope (.t__list:is(: :before,.t__row)){p{color:red}}",
             ),
         ] {
@@ -2918,6 +2972,7 @@ mod tests {
             ("crossed_selector_blocks.css", "mismatched selector block"),
             ("crossed_selector_after_not.css", "mismatched selector block"),
             ("non_ascii_class.css", "non-ASCII characters in a class name"),
+            ("joined_selector_comment.css", "a comment between two parts of a selector"),
             (
                 "invalid_scope_ampersand.css",
                 "`p` styles elements this component does not own: `@scope (:is(main, [foo=&]))` can start outside the component",

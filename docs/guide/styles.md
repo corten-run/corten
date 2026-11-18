@@ -49,7 +49,11 @@ such as an empty arm, a pseudo-element arm, or one with a leading, trailing or d
 combinator. It does not remove those arms from the emitted list. Malformed strings,
 unquoted `url()` tokens and mismatched block delimiters in selectors are compile errors, even
 in a forgiving arm: the compiler does not guess where an arm ends. Remove the arm or correct
-the token. Component class names use ASCII without escapes; a nonbreaking space is part of a
+the token. A comment between two parts of a selector or an `@scope` prelude must have CSS
+whitespace on at least one side. For example, write `.list.selected` for a compound selector,
+not `.list/**/.selected`. This restriction can be lifted by
+[#1602 Component stylesheets need one CSS Syntax tokenizer shared by the macro and the startup scanner](https://github.com/corten-run/corten/issues/1602).
+Component class names use ASCII without escapes; a nonbreaking space is part of a
 CSS name, not a separator, including in at-rule names, `@scope` roots and limits, and next to
 `to`. A non-ASCII at-rule name does not compile; the diagnostic escapes the name so an
 invisible character is visible.

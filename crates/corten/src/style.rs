@@ -444,6 +444,15 @@
 //! fn NonAsciiClass() -> impl ClassList { List }
 //! ```
 //!
+//! A comment between two parts of a selector needs whitespace beside it. The browser reads
+//! `.list/**/.selected` as a compound selector, not as a descendant selector.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn JoinedSelectorComment() -> impl ClassList { (List, Selected) }
+//! ```
+//!
 //! An inner scope under an unowned outer scope cannot take its proof from an intervening
 //! style rule. Browsers can resolve the inner root through the outer scope instead, whether
 //! the root uses an explicit `&` or implicit nesting.
