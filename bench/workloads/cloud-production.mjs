@@ -14,7 +14,11 @@ import { failedNativePolicy, failedNativeRoots } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs"].map((p) => `bench/workloads/${p}`);
+export const controllerPaths = ["droplet.mjs", "cloud-contract.mjs", "cloud-options.mjs", "cloud-local.mjs", "cloud-audit.mjs", "cloud-cancellation.mjs", "cloud-validation.mjs", "cloud-validation-worker.mjs", "cloud-validation-snapshot.mjs", "cloud-transport.mjs", "cloud-provider.mjs", "cloud-provider-engine.mjs", "cloud-provider-worker.mjs", "cloud-remote.mjs", "cloud-retirement.mjs", "cloud-production.mjs", "fleet.mjs", "fleet-verify.mjs", "fleet-worker.mjs",
+  "cloud-control-runtime.mjs", "cloud-control-session.mjs", "cloud-control-stream.mjs", "isolated/control-admission.mjs",
+  "isolated/control-session-source.mjs", "isolated/control-stream-source.mjs", "isolated/control-stream.mjs", "isolated/host-observation.mjs",
+  "deployments.mjs", "../marketplace/feature-contract.mjs", "../marketplace/run-contract.mjs", "../marketplace/groups.mjs",
+  "../fullstack/conformance.mjs"].map((p) => posix.normalize(`bench/workloads/${p}`));
 export const nativePaths = ["campaign-entry.mjs", "campaign-verify.mjs", "campaign-contract.mjs", "campaign-journal.mjs", "campaign.mjs", "contract.mjs", "worker.mjs", "process.mjs", "evidence.mjs", "host-observation.mjs", "json-staging.mjs", "mixed-staging.mjs", "composition.mjs", "native-replay.mjs", "host-lifetime.mjs", "bootstrap.mjs", "raw-support.mjs"].map((p) => `bench/workloads/isolated/${p}`);
 const policyPaths = [...new Set([...controllerPaths, ...providerFiles.map((name) => posix.normalize(`bench/workloads/${name}`)), "bench/json-api/contract.mjs", "bench/workloads/registry.mjs"])];
 const loadedSources = new Map(policyPaths.map((path) => [path, regular(join(checkout, path), 1024 * 1024).toString("utf8").replaceAll("\r\n", "\n")]));
@@ -87,9 +91,9 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
 }
 
-export async function productionMain(args, { spawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log } = {}) {
+export async function productionMain(args, { spawn, streamSpawn, providerFactory = providerTransport, repo = checkout, inspect, sleep, interrupted = () => false, write = console.log } = {}) {
   const { options, approval, preview } = parseProductionArgs(args);
-  const processRun = shellTransport({ repo, spawn });
+  const processRun = shellTransport({ repo, spawn, streamSpawn });
   const providerRun = providerFactory({ repo, interrupted });
   let stage = "source-plan";
   const mark = (error, value) => {
@@ -114,7 +118,10 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   const run = async (...args) => {
     await controlCheckpoint(interrupted);
     let result, failure;
-    try { result = args[0] === "doctl" ? await providerRun(...args.slice(1)) : processRun(...args); } catch (error) { failure = error; }
+    try { result = args[0] === "doctl" ? await providerRun(...args.slice(1)) : await processRun(...args); } catch (error) { failure = error; }
+    // The controller performs this post-command checkpoint after taking the
+    // registered handle. Throwing here would orphan a live SSH stream.
+    if (args[5]?.stream && result?.monitor) return result;
     try { await controlCheckpoint(interrupted); }
     catch (error) { if (!failure?.controlTreeUncertain && !failure?.controlUncertain) throw error; }
     if (failure) throw failure;
@@ -146,19 +153,24 @@ export async function productionMain(args, { spawn, providerFactory = providerTr
   assert.equal(repeated.approvalSha256, approval, "source/state/delivery changed after approval");
   assert.deepEqual(repeated.missing, []);
   let entered = false;
-  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs) => {
+  const authorizeLocked = async () => {
+    assert.ok(!interrupted(), "cancelled before provider access");
+    const locked = await productionPlan(options, { repo, run });
+    assert.equal(locked.approvalSha256, approval, "locked action changed after approval");
+    return locked.subject;
+  };
+  const authorizedRun = async (binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration) => {
     if (binary !== "git" && !entered) {
       // The core now holds its exclusive lock. Bind approval to the state it read,
       // not a snapshot that a different collector could have changed meanwhile.
-      assert.ok(!interrupted(), "cancelled before provider access");
-      assert.equal((await productionPlan(options, { repo, run })).approvalSha256, approval, "locked action changed after approval");
+      await authorizeLocked();
       entered = true;
     }
-    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs);
+    return run(binary, argv, timeout, allowFail, deleteProofExpiresAtMs, registration);
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
-    mergedHead: remoteHead, settle: () => providerRun.close(), ...(options.retireFailedNative || options.cancelMixedWait ? {
+    mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, ...(options.retireFailedNative || options.cancelMixedWait ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256 },
     } : {}) });
   let result;

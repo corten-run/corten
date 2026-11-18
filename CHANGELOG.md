@@ -37,6 +37,10 @@ Corten is pre-1.0, so any minor version may change the API.
   apparatus source hashes to the bound measured commit; failed capacity checks
   remain unqualified rather than attributed to the measured framework.
 
+- The catalog benchmark keeps one supervised control connection off the measured
+  cores. Losing that connection does not authorize deleting an active droplet.
+  Collection replays the saved control evidence before authorizing cleanup.
+
 - Preserve every client benchmark candidate's not-run record when policy input
   is invalid or missing. Such attempts still fail before any native build.
 
