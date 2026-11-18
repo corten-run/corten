@@ -7,7 +7,7 @@ import { roundName, validateFleet } from "./cloud-contract.mjs";
 import { campaignOutcome, controllerState, full } from "./cloud-options.mjs";
 import { digest, fileHash, physical, regular, resolveStateRoot, treeHash } from "./cloud-local.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
-import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
+import { setupEvidence, terminalSetupScript, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 
 export const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function fleetRoot(path, repo) {
@@ -144,7 +144,7 @@ export async function verifyFleet({ root, round, commit }, { inspect, interrupte
           const marker = regular(join(extracted, "exit-code"), 16).toString("utf8");
           full(marker, /[1-9]\d{0,2}\n/, "nonzero setup exit"); const exit = Number(marker.trim()); assert.ok(exit <= 255);
           assert.deepEqual(record, setupEvidence(raw, s, terminalSetupScript(s, exit), exit, record.startedAtMs, record.finishedAtMs));
-        } else assert.deepEqual(record, unusedEvidence(raw, s, unusedHostScript(s), record.startedAtMs, record.finishedAtMs));
+        } else verifyUnusedEvidence(record, s);
         result.groups.push({ group, outcome: s.destroyedAt ? setup ? "setup-failed-retired" : "unused-retired" : "cleanup-pending", id: s.id }); continue;
       }
       if (s.status !== "collected" || !s.collectedAt) { result.groups.push({ group, outcome: "uncollected" }); continue; }

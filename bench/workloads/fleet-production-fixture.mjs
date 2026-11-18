@@ -6,9 +6,13 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
   const local = path.join(config.stateDir, "groups-r21");
   const state = () => JSON.parse(fs.readFileSync(path.join(local, "state.json")));
   const record = (event) => fs.appendFileSync(config.trace, `${JSON.stringify({ group: config.group, ...event })}\n`);
+  let readiness = 0;
   const spawn = (binary, argv, options) => {
     let input = options.input, reply = good;
-    if (["ssh", "sftp"].includes(binary)) {
+    const readinessProbe = binary === "ssh" && argv.at(-1) === "/bin/bash -s";
+    if (readinessProbe) {
+      if (state().control.ledger.length || input !== "set -euo pipefail\ntrue\n") throw new Error("unexpected untracked SSH");
+    } else if (["ssh", "sftp"].includes(binary)) {
       const request = state().control.ledger.at(-1).request, control = controlRegistration(request);
       if ((binary === "ssh" ? argv.at(-1) : argv.at(-2)) !== control.command) throw new Error("unregistered synthetic command");
       if (binary === "ssh") {
@@ -28,6 +32,7 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     }
     if (binary === "ssh") {
       const script = input.slice("set -euo pipefail\n".length, -1), saved = state();
+      if (readinessProbe && ++readiness === 1 && config.mode === "ssh-late") return { ...good(), status: 255 };
       if (script === bootstrapReadScript) {
         const marker = bootstrapMarker(saved);
         if (config.mode === "marker") marker.commit = "b".repeat(40);
@@ -73,14 +78,14 @@ export function syntheticDependencies(config, { fs, path, fork, providerTranspor
     return child;
   };
   return { repo: config.repo, spawn, streamSpawn,
-    sleep: async () => { throw new Error("unexpected synthetic sleep"); },
+    sleep: async () => { if (config.mode !== "ssh-late" || readiness !== 1) throw new Error("unexpected synthetic sleep"); },
     providerFactory: ({ interrupted }) => {
       record({ boundary: "provider-factory" });
       return providerTransport({ repo: config.repo, interrupted, launch(binary, argv, options) {
         if (binary !== fs.realpathSync(process.execPath) || argv[0] !== "--input-type=module" || argv[1] !== "-"
           || argv[2] !== path.join(config.repo, "bench/workloads/cloud-provider-worker.mjs")) throw new Error("fixed provider launch required");
         const child = fork(path.join(config.repo, "bench/workloads/fleet-provider-test-worker.mjs"),
-          [config.mode === "overlap" ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
+          [["overlap", "ssh-late"].includes(config.mode) ? "success" : config.mode, config.trace, config.hosts, config.stateDir, config.group, config.userId],
           { ...options, execArgv: [], env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=64 --max-semi-space-size=4" } });
         record({ boundary: "provider-child-start", pid: child.pid });
         const observe = (direction, message) => record({ boundary: "provider-ipc", direction,
