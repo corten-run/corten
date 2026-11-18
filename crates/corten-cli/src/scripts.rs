@@ -322,12 +322,18 @@ fn tsc_command(tsc: &Path) -> Command {
 
 fn cargo_metadata(root: &Path) -> Result<String, String> {
     let output = Command::new("cargo")
-        .args(["metadata", "--format-version", "1"])
+        .args(["metadata", "--format-version", "1", "--locked"])
         .current_dir(root)
         .output()
         .map_err(|e| format!("could not run cargo metadata: {e}"))?;
     if !output.status.success() {
-        return Err("cargo metadata failed".into());
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "cargo metadata --locked failed:\n{}\n\
+             If Cargo.lock is missing or stale, run cargo build or corten dev, then commit Cargo.lock \
+             (at the workspace root for a workspace app) before running corten check.",
+            error.trim()
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }

@@ -5955,6 +5955,42 @@ rules something out.
     a separate no-JavaScript probe confirming the precise-end counterexample in Chromium and
     WebKit.
 
+65. <a id="choice-locked-check"></a>**Checking and shipping use the lock; local builds update it.**
+    `corten check` uses `--locked` on the full Cargo metadata it already reads, before formatting
+    or compiling, and on lint, build and tests. The starter Dockerfile and the examples' also
+    build with `--locked`, all but card-market's, which changes with its paired benchmark recipe
+    ([#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)). A missing or stale lock is an error, not a successful check that silently
+    repairs the dependency graph and leaves CI's committed graph unchecked. Cargo finds the
+    workspace-root lock even from a member, including a library. The CLI does not require a
+    member-local lock or inspect Git's index: the developer commits the resolved lock.
+    A command that writes the manifest writes the lock to match: `corten new` and `corten ui add`
+    (when it adds `corten-ui`) run `cargo update --workspace` in the app's directory, which
+    honors Cargo's configuration there and adds what the lock lacks without moving the versions
+    a workspace's lock already has, so their output passes the check with no step between.
+    `corten dev`, `corten build` and ordinary Cargo builds keep Cargo's normal lock updates;
+    those are the edit loop, while a check verifies what is ready to commit and ship.
+    Not chosen: an opt-in `corten check --locked` or an opt-out that lets CI silently repair
+    the graph; an additional metadata subprocess when the check already resolves metadata;
+    `cargo generate-lockfile` in `corten new`, which rebuilds an existing workspace lock with
+    every package at its newest version when the app is created as a member.
+
+    Stands on: reasoned (locking the existing resolution adds no Cargo invocation; using Cargo
+    rather than locating a lock ourselves preserves workspace semantics; a lock rewritten by
+    CI is not the lock an image receives); value (correctness before developer convenience,
+    one way to check and good defaults, README Values).
+
+    Revisit when: the check no longer reads full Cargo metadata before its other steps, or an
+    app needs to verify a graph without retaining a lock and cannot use ordinary Cargo checks,
+    or Cargo gains a lock-writing command that `corten new` should use instead.
+
+    Last checked: 2026-11-17, the check's metadata and Cargo-step order read at `7d9bbbf1e`;
+    2026-11-17, `corten new` then `corten check`, and `corten ui add --all` then `corten check`,
+    each with no step between, on the change after `dd4baf7a4`; 2026-11-17, Cargo 1.99.1 on a
+    new member of a workspace whose lock held `itoa` 1.0.0: `cargo generate-lockfile` moved it to
+    1.0.19, `cargo update --workspace` kept 1.0.0, and for a standalone app with no lock the two
+    wrote identical locks.
+
+
 
 
 ## Rules
