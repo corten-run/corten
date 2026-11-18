@@ -793,6 +793,16 @@ listed, not `zh-Hant`, and with `zh-Hans` and `zh-Hant` listed and no `zh`, the 
 step gives it `zh-Hans`, the first, even when `zh-Hant` is the header's next choice; an app with
 Traditional Chinese readers lists `zh-TW` and `zh-HK` too, which Corten has data for.
 
+Weights follow RFC 9110's `qvalue` grammar: `0` to `1`, with at most three decimal places
+(`0.123`, `1.000`; a decimal point with no digits is allowed too). A missing weight means `1`,
+and equal weights keep header order. A range with a malformed or repeated weight is ignored.
+A comma inside another parameter's closed quoted value does not start a new range, and
+weight-like text inside that value is not a repeated weight. If the quote never closes, that
+range is ignored and the remaining text is split on commas to recover other ranges.
+For example, `nan`, `inf`, `1.5`, `-0`, an empty value and too many decimals are malformed.
+Only space and tab may surround the weight's `;`, and no whitespace may touch its `=`.
+If no range matches, the first locale is still the fallback.
+
 A page that a shared cache keeps (`Public`), or one whose address should name its
 language (a link to the French page), takes its locale from its URL instead: a
 `corten::i18n::Locale<Msg>` route field, read only as one of the tags `messages!` lists, as
