@@ -241,9 +241,11 @@ try {
     async function run(source) {
       const page = await browser.newPage({ viewport: { width: 600, height: 800 } });
       try {
-        /** @type {string[]} */
-        const messages = [];
-        page.on("console", (m) => m.type() === "warning" && /^corten: (case\w*|dialog) is a closed/.test(m.text()) && messages.push(m.text()));
+        /** @type {Promise<string>[]} */
+        const reports = [];
+        page.on("console", (m) => {
+          if (m.type() === "warning" && /^corten: (case\w*|dialog) is a closed/.test(m.text())) reports.push(m.args()[0].jsonValue().then(String));
+        });
         if (source) await page.route(base + "/corten/dev.js", (route) => route.fulfill({ contentType: "text/javascript", body: source }));
         if (options.reject) await page.addInitScript((reject) => {
           const matches = Element.prototype.matches;
@@ -264,8 +266,12 @@ try {
         const cases = page.locator('[id^="case"]');
         const outline = options.outline === undefined ? "" : await cases.evaluateAll((els) => els.map((el) => getComputedStyle(el).outlineStyle).join(","));
         const hidden = options.wide === undefined || await cases.evaluateAll((els) => els.every((el) => !(el instanceof HTMLDialogElement) || getComputedStyle(el).display === "none"));
-        if (options.wide !== undefined) await page.setViewportSize({ width: 1000, height: 800 });
+        if (options.wide !== undefined) {
+          await page.setViewportSize({ width: 1000, height: 800 });
+          await page.waitForFunction(() => matchMedia("(min-width: 900px)").matches);
+        }
         const wide = options.wide === undefined ? "" : await cases.evaluateAll((els, pseudo) => els.map((el) => getComputedStyle(el, pseudo ?? null).display).join(","), options.pseudo);
+        const messages = await Promise.all(reports);
         return { completed, messages, outline, hidden, wide, ids: messages.map((m) => m.split(" ")[1]).join(",") };
       } finally {
         await page.close();
@@ -273,9 +279,15 @@ try {
     }
     const head = await run();
     const main = baseline ? await run(baseline) : null;
+    const sameMessages = !main || main.messages.join("\n") === head.messages.join("\n");
     check(name, head.completed && head.hidden && head.ids === expected && head.wide === (options.wide ?? "") && head.outline === (options.outline ?? "") &&
-      (!main || main.completed && main.hidden && main.messages.join("\n") === head.messages.join("\n") && main.wide === head.wide && main.outline === head.outline),
-    `head: ${head.ids || "no warnings"}; main: ${(main?.ids ?? expected) || "no warnings"}${head.wide ? `; wide: ${head.wide}` : ""}${head.outline ? `; outline: ${head.outline}` : ""}`);
+      (!main || main.completed && main.hidden && sameMessages && main.wide === head.wide && main.outline === head.outline),
+    `head: ${head.ids || "no warnings"}; main: ${(main?.ids ?? expected) || "no warnings"}` +
+      (options.wide === undefined ? "" : `; wide: ${head.wide} vs ${main?.wide ?? options.wide}`) +
+      (options.outline === undefined ? "" : `; outline: ${head.outline} vs ${main?.outline ?? options.outline}`) +
+      (head.hidden && (!main || main.hidden) ? "" : `; hidden at 600px: ${head.hidden} vs ${main?.hidden ?? true}`) +
+      (head.completed && (!main || main.completed) ? "" : `; completed: ${head.completed} vs ${main?.completed ?? true}`) +
+      (sameMessages || head.ids !== main?.ids ? "" : `; messages differ: ${head.messages.join(" | ")} vs ${main?.messages.join(" | ")}`));
   }
   const rails = "@media (min-width: 900px) { .rail { display: flex } }";
   const cardBody = '<div class="card"><div class="card-body"><dialog class="rail" id="caseInside"></dialog></div><dialog class="rail" id="caseOutside"></dialog></div>';
