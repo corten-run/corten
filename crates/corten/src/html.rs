@@ -96,6 +96,36 @@ impl Tag<'_> {
     pub fn attr(&self, name: &str) -> Option<&str> {
         self.attrs.iter().find(|(attr, _)| attr.eq_ignore_ascii_case(name)).map(|(_, value)| *value)
     }
+
+    /// Whether the element has text other than whitespace, in it or in an element inside it.
+    #[cfg(debug_assertions)]
+    pub(crate) fn has_text(&self, html: &str) -> bool {
+        let mut at = self.end;
+        let mut depth = 1;
+        while let Some(found) = html[at..].find('<') {
+            let lt = at + found;
+            if !html[at..lt].trim().is_empty() || lone_lt(html.as_bytes(), lt) {
+                return true;
+            }
+            match html.as_bytes()[lt + 1] {
+                b'/' => {
+                    let (name, end) = end_tag(html, lt);
+                    depth -= usize::from(name.is_some_and(|name| name.eq_ignore_ascii_case(&self.name)));
+                    if depth == 0 {
+                        return false;
+                    }
+                    at = end;
+                }
+                b'!' | b'?' => at = declaration_end(html, lt),
+                _ => {
+                    let (name, end, self_closing) = read_tag(html, lt + 1, |_, _| {});
+                    depth += usize::from(!self_closing && name.eq_ignore_ascii_case(&self.name));
+                    at = (end + 1).min(html.len());
+                }
+            }
+        }
+        !html[at..].trim().is_empty()
+    }
 }
 
 /// The start tag whose `<` is at `html[start]`, read as the HTML standard's tokenizer reads one.
@@ -104,12 +134,28 @@ impl Tag<'_> {
 /// (`docs/design.md#choice-data-on-single-quoted`). Whitespace may come around an attribute's
 /// `=`, and only a `/` right before the `>` makes it self-closing.
 pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
-    let bytes = html.as_bytes();
-    let mut i = start + 1;
-    let name_end = html[i..].find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/').map_or(bytes.len(), |n| i + n);
-    let name = html[i..name_end].to_ascii_lowercase();
-    i = name_end;
     let mut attrs = Vec::new();
+    let (name, end, self_closing) = read_tag(html, start + 1, |name, value| attrs.push((name, value)));
+    Tag {
+        start,
+        end: (end + 1).min(html.len()),
+        name: name.to_ascii_lowercase(),
+        attrs,
+        self_closing,
+        #[cfg(any(debug_assertions, test))]
+        complete: end < html.len(),
+    }
+}
+
+/// A start or end tag from its name to its closing `>` (or EOF), passing its attributes to
+/// `attr`. Skipping a tag reads the same syntax without allocating a name or attribute list.
+fn read_tag<'a>(html: &'a str, name_start: usize, mut attr: impl FnMut(&'a str, &'a str)) -> (&'a str, usize, bool) {
+    let bytes = html.as_bytes();
+    let name_end = html[name_start..]
+        .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+        .map_or(bytes.len(), |n| name_start + n);
+    let name = &html[name_start..name_end];
+    let mut i = name_end;
     let mut self_closing = false;
     while i < bytes.len() && bytes[i] != b'>' {
         let c = bytes[i];
@@ -126,7 +172,7 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
             let attr_end = html[i + first..]
                 .find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '>' || c == '/')
                 .map_or(bytes.len(), |n| i + first + n);
-            let attr = &html[i..attr_end];
+            let attr_name = &html[i..attr_end];
             i = attr_end;
             let skip = |mut at: usize| {
                 while bytes.get(at).is_some_and(u8::is_ascii_whitespace) {
@@ -135,13 +181,14 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
                 at
             };
             let mut value = "";
-            if bytes.get(skip(i)) == Some(&b'=') {
-                i = skip(skip(i) + 1);
+            let after_name = skip(i);
+            if bytes.get(after_name) == Some(&b'=') {
+                i = skip(after_name + 1);
                 match bytes.get(i) {
                     Some(&q @ (b'"' | b'\'')) => {
                         let close = html[i + 1..].find(q as char).map_or(bytes.len(), |n| i + 1 + n);
                         value = &html[i + 1..close];
-                        i = close + 1;
+                        i = (close + 1).min(bytes.len());
                     }
                     _ => {
                         let end = html[i..].find(|c: char| c.is_ascii_whitespace() || c == '>').map_or(bytes.len(), |n| i + n);
@@ -150,17 +197,29 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
                     }
                 }
             }
-            attrs.push((attr, value));
+            attr(attr_name, value);
         }
     }
-    Tag {
-        start,
-        end: (i + 1).min(bytes.len()),
-        name,
-        attrs,
-        self_closing,
-        #[cfg(any(debug_assertions, test))]
-        complete: i < bytes.len(),
+    (name, i, self_closing)
+}
+
+/// The name and one past the end of `</...`. Without a letter after `</` this is a bogus
+/// comment or an empty end tag, neither of which has a name or reads quoted values.
+fn end_tag(html: &str, at: usize) -> (Option<&str>, usize) {
+    if html.as_bytes().get(at + 2).is_some_and(u8::is_ascii_alphabetic) {
+        let (name, end, _) = read_tag(html, at + 2, |_, _| {});
+        (Some(name), (end + 1).min(html.len()))
+    } else {
+        (None, declaration_end(html, at))
+    }
+}
+
+/// One past an ignored declaration, comment or bogus comment, or EOF.
+fn declaration_end(html: &str, at: usize) -> usize {
+    if let Some(body) = html[at..].strip_prefix("<!--") {
+        body.find("-->").map_or(html.len(), |n| at + 4 + n + 3)
+    } else {
+        html[at..].find('>').map_or(html.len(), |n| at + n + 1)
     }
 }
 
@@ -171,21 +230,21 @@ pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
     let mut i = 0;
     std::iter::from_fn(move || loop {
         let at = i + html.get(i..)?.find('<')?;
-        if html[at..].starts_with("<!--") {
-            i = html[at..].find("-->").map_or(html.len(), |n| at + n + 3);
+        let bytes = html.as_bytes();
+        if lone_lt(bytes, at) {
+            i = at + 1;
             continue;
         }
-        match html.as_bytes().get(at + 1) {
-            Some(c) if c.is_ascii_alphabetic() => {}
-            // An end tag, a doctype or a processing instruction: up to its `>`.
-            Some(b'/' | b'!' | b'?') => {
-                i = html[at..].find('>').map_or(html.len(), |n| at + n + 1);
+        match bytes[at + 1] {
+            b'/' => {
+                i = end_tag(html, at).1;
                 continue;
             }
-            _ => {
-                i = at + 1;
+            b'!' | b'?' => {
+                i = declaration_end(html, at);
                 continue;
             }
+            _ => {}
         }
         let tag = start_tag(html, at);
         i = tag.end;
@@ -479,8 +538,7 @@ fn reference(bytes: &[u8], at: usize) -> (Option<bool>, usize) {
 }
 
 /// Whether the `<` at `bytes[at]` starts no token, so it is text, as the tokenizer reads it: one
-/// before anything but a letter, `/`, `!` or `?`, or the patch's end, and a `</` the patch ends in.
-#[cfg(any(debug_assertions, test))]
+/// before anything but an ASCII letter, `/`, `!` or `?`, or at EOF; `</` at EOF is text too.
 fn lone_lt(bytes: &[u8], at: usize) -> bool {
     match bytes.get(at + 1) {
         Some(c) if c.is_ascii_alphabetic() => false,
@@ -1601,12 +1659,23 @@ mod tests {
     }
 
     #[test]
+    fn start_tags_skip_end_tag_attributes_past_a_quoted_gt() {
+        let names = |html: &str| super::start_tags(html).map(|tag| tag.name).collect::<Vec<_>>();
+        assert_eq!(names(r#"</p a="x>"<div data-vars="--m:7%"><b>"#), ["b"]);
+        assert_eq!(names(r#"</p a = 'x><div>'><b>"#), ["b"]);
+        assert_eq!(names(r#"</p a='x><div>"#), Vec::<String>::new(), "an unfinished quoted value reads to EOF");
+        assert_eq!(names(r#"</p a=x"><b>"#), ["b"], "a quote in an unquoted value does not open a quote");
+        assert_eq!(names(r#"</! a="x><b>"#), ["b"], "a bogus comment does not parse attributes");
+    }
+
+    #[test]
     fn a_patch_names_its_first_top_level_element_without_an_id() {
         assert_eq!(patch_problem(r#"<div id="a"><p>x</p></div> <form id="f"><input name="q"></form>"#), None);
         assert_eq!(patch_problem(r#"<template id="row-7" data-remove></template>"#), None);
         assert_eq!(patch_problem(r#"<template id="rows" data-append><tr><td>8</td></tr></template>"#), None);
         assert_eq!(patch_problem(""), None, "an empty patch changes nothing, and says so");
         assert_eq!(patch_problem("<!-- note --><p id=b>1</p>\n"), None);
+        assert_eq!(patch_problem(r#"<div id="a">1 <2</div><p>x</p>"#).as_deref(), Some("<p> has no id"));
         assert_eq!(
             patch_problem(r#"<div id="recovery">ok</div><div class="write-off"><form id="w">..</form></div>"#).as_deref(),
             Some(r#"<div class="write-off"> has no id"#),

@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Developer markup checks count a lone `<` as text in a hint and read past quoted end-tag
+  attributes without mistaking them for new tags.
+
 - The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
   `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 

@@ -2157,7 +2157,7 @@ pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> O
     let by_id = |id: &str| tags.iter().find(|tag| tag.attr("id") == Some(id));
     hints.iter().map(String::as_str).find(|hint| {
         let Some(shown) = by_id(hint) else { return false };
-        if !has_text(html, shown) {
+        if !shown.has_text(html) {
             return false;
         }
         let described = &hint[..hint.len() - "-hint".len()];
@@ -2245,33 +2245,6 @@ impl Templates {
         }
         self.inert.is_some()
     }
-}
-
-/// Whether the element whose start tag is `tag` has text other than white space, in it or in an
-/// element inside it.
-#[cfg(debug_assertions)]
-fn has_text(html: &str, tag: &crate::html::Tag<'_>) -> bool {
-    let name = tag.name.as_str();
-    let (mut rest, mut depth) = (&html[tag.end..], 1usize);
-    while depth > 0 && !rest.is_empty() {
-        match rest.find('<') {
-            Some(lt) => {
-                if !rest[..lt].trim().is_empty() {
-                    return true;
-                }
-                let tag = &rest[lt..];
-                let gt = tag.find('>').unwrap_or(tag.len() - 1);
-                if let Some(closing) = tag.strip_prefix("</") {
-                    depth -= usize::from(closing.starts_with(name));
-                } else if tag[1..].starts_with(name) && !tag[..gt].ends_with('/') {
-                    depth += 1;
-                }
-                rest = &tag[gt + 1..];
-            }
-            None => return !rest.trim().is_empty(),
-        }
-    }
-    false
 }
 
 /// A form field's control's attributes, from [`Within::control`].
@@ -2760,6 +2733,22 @@ mod tests {
         assert_eq!(unnamed_hint(r#"<p id="qty-hint">3 left.</p>"#, &hints, false), None, "a patch of the hint alone");
     }
 
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_can_start_with_a_lone_lt() {
+        let hints = ["qty-hint".to_string()];
+        let html = r#"<input id="qty"><p id="qty-hint"><</p>"#;
+        assert_eq!(unnamed_hint(html, &hints, true), Some("qty-hint"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_s_text_excludes_comments_and_tag_attributes() {
+        let hints = ["qty-hint".to_string()];
+        let html = r#"<input id="qty"><p id="qty-hint"><!-- >not text --><em title="x>y"></em></P a="x>">outside"#;
+        assert_eq!(unnamed_hint(html, &hints, true), None);
+    }
+
     const EMAIL: FieldName = FieldName::__new("email");
     const PRICE: FieldName = FieldName::__new("price");
     const NAME: FieldName = FieldName::__new("name");
@@ -3051,6 +3040,7 @@ mod tests {
             format!("<template-picker>{F}</template-picker>"),
             format!("<template-picker><template></template>{F}</template-picker>"),
             format!(r#"<template shadowrootmode="open">{F}</template>"#),
+            format!(r#"<template shadowrootmode = "open">{F}</template>"#),
             format!("<template shadowrootmode=open>{F}</template>"),
             format!(r#"<div><template shadowrootmode="closed" shadowrootdelegatesfocus>{F}</template></div>"#),
             format!(r#"<template shadowrootmode="open"><template></template>{F}</template>"#),
