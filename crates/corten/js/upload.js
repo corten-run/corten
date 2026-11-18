@@ -9,16 +9,19 @@
  * sent (fetch does not): `progress` is called with each `ProgressEvent`, the last when all of it
  * is, counting the bytes of the whole request, not of a file. The answer is a `Response` read as
  * fetch's is, once all of it is in; a failure to reach the server rejects as fetch's does, and an
- * abort with the signal's reason.
+ * abort with the signal's reason. `headers` are the runtime's for a submit, sent as fetch would.
+ * The server answers any version's module address with its own bytes, so a runtime from before or
+ * after a deploy may call this one: the arguments keep their order across versions and `headers`
+ * comes last, so a runtime that does not pass it sends the action header alone, as it always did.
  * @param {URL} url @param {string} method @param {FormData} body @param {AbortSignal} signal
- * @param {(event: ProgressEvent) => void} progress
+ * @param {(event: ProgressEvent) => void} progress @param {Record<string, string>} [headers]
  * @returns {Promise<Response>}
  */
-export function upload(url, method, body, signal, progress) {
+export function upload(url, method, body, signal, progress, headers = { corten: "action" }) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(method, url);
-    xhr.setRequestHeader("corten", "action");
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
     xhr.responseType = "arraybuffer";
     xhr.upload.onprogress = progress;
     xhr.onload = () => {

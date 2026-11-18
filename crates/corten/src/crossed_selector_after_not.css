@@ -1,0 +1,1 @@
+.list { :not(&) :is(.list[x=(], .list) ], p) { outline-style: solid } }

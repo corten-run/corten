@@ -39,6 +39,15 @@ use crate::{
 /// Request header the runtime sets: `nav` for navigations, `action` for form submits, `page` for
 /// the whole page it fetches after a write.
 pub const MODE_HEADER: HeaderName = HeaderName::from_static("corten");
+/// `Prefer` (RFC 7240), the request header in which a runtime that draws a write's own page whole
+/// says so with each form submit: `Prefer: corten-draws=whole` ([`DRAWS_WHOLE`]). A write the
+/// runtime sent without it (a tab whose runtime predates this, open across a deploy) gets its own
+/// page as `<main>`, which such a runtime swaps in; a whole page it would take for an answer it
+/// cannot draw (#1370). A server that predates it (a fleet halfway through a deploy) ignores a
+/// preference it does not know, as RFC 7240 asks, and reads `corten: action` as it always did.
+pub(crate) const PREFER: HeaderName = HeaderName::from_static("prefer");
+/// The preference a runtime that draws a write's own page whole sends in [`PREFER`].
+pub(crate) const DRAWS_WHOLE: &str = "corten-draws=whole";
 pub(crate) const PAGE_HEADER: HeaderName = HeaderName::from_static("corten-page");
 pub(crate) const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patch");
 const LOCATION_HEADER: HeaderName = HeaderName::from_static("corten-location");
@@ -70,7 +79,9 @@ pub enum Mode {
     Document,
     /// The runtime is navigating to a page and will swap it into `<main>`.
     Navigation,
-    /// The runtime submitted a `<form data-patch>` and expects fragments back.
+    /// The runtime submitted a `<form data-patch>`: it applies a patch's fragments by id, follows a
+    /// redirect, and draws a page. A write's own is whole, layout included, when the runtime
+    /// prefers it (`Prefer: corten-draws=whole`); otherwise it draws a fragment, as for `GET` and `HEAD`.
     Action,
     /// A client that renders by itself (a native screen, an agent) asked for
     /// `Accept: application/json`. [`Req::screen`] answers with the page's data; [`Req::page`]
@@ -79,21 +90,26 @@ pub enum Mode {
 }
 
 impl Mode {
-    /// The runtime swaps this answer into the page it has ([`Mode::Navigation`], [`Mode::Action`]):
-    /// a page renders only its title, head tags and `<main>`, and the layout around `<main>` (the
-    /// header, a cart's count in it) stays as the full load drew it. The page a write redirects to
-    /// is fetched as a [`Mode::Document`], so the layout is drawn again after a write. A value only
-    /// the layout shows need not be read then:
+    /// The runtime keeps the page it has for this answer ([`Mode::Navigation`], [`Mode::Action`]):
+    /// a navigation's page renders only its title, head tags and `<main>`, a `GET` form's too, and
+    /// a patch replaces elements by id, so the layout around `<main>` (the header, a cart's count in
+    /// it) stays as the full load drew it. What a write changed there is drawn by the two answers to
+    /// a write that are pages: the page it redirects to, which the runtime fetches as a
+    /// [`Mode::Document`], and its own page ([`Req::page`] for a method other than `GET` or `HEAD`),
+    /// which is whole in document mode or an action with `Prefer: corten-draws=whole`.
+    /// A value only the layout shows is a [`crate::LayoutRead`], which Corten
+    /// starts for those answers and no others; code that reads such a value itself before the
+    /// handler (an [`crate::Ahead`] in an extractor) skips it only for a swap that is no write:
     ///
     /// ```
-    /// use corten::prelude::*;
+    /// use corten::{http::{request::Parts, Method}, prelude::*};
     ///
-    /// async fn cart_count(req: &Req) -> Option<u32> {
-    ///     if req.mode.swaps() {
-    ///         return None;
-    ///     }
-    ///     Some(3) // the app's read: carts.count(viewer).await
+    /// /// A conservative check: an action write may prefer to draw its own page whole.
+    /// fn may_draw_the_layout(parts: &Parts) -> bool {
+    ///     let mode = Mode::of(&parts.headers);
+    ///     !mode.swaps() || (mode == Mode::Action && !matches!(parts.method, Method::GET | Method::HEAD))
     /// }
+    /// # let _ = may_draw_the_layout;
     /// ```
     #[inline]
     pub const fn swaps(self) -> bool {
@@ -119,6 +135,41 @@ impl Mode {
             _ => (Mode::Document, false),
         }
     }
+}
+
+/// A write the runtime sent (`mode`, `method`) that answers its own page whole: one whose runtime
+/// says it draws one ([`PREFER`]). Looked up only for such a write.
+#[inline]
+fn own_page_whole(mode: Mode, method: &http::Method, headers: &HeaderMap) -> bool {
+    mode == Mode::Action && !matches!(*method, http::Method::GET | http::Method::HEAD) && prefers_whole(headers)
+}
+
+/// Whether the request prefers `corten-draws=whole` (RFC 7240, 2): its first `corten-draws`
+/// preference across every `Prefer` line, named case aside, its value as written (a token, or a
+/// quoted string without an escape), its parameters aside. Any other value, or none, is `<main>`,
+/// which every runtime draws.
+pub(crate) fn prefers_whole(headers: &HeaderMap) -> bool {
+    for line in headers.get_all(PREFER) {
+        // The line the runtime sends, read without taking it apart: nothing before it in the
+        // request named `corten-draws`, and it names nothing else.
+        if line.as_bytes() == DRAWS_WHOLE.as_bytes() {
+            return true;
+        }
+        for preference in crate::cache::split_unquoted(line.as_bytes(), b',') {
+            let named = crate::cache::split_unquoted(preference, b';').next().unwrap_or_default();
+            let (name, value) = match named.iter().position(|&b| b == b'=') {
+                Some(at) => (&named[..at], &named[at + 1..]),
+                None => (named, &b""[..]),
+            };
+            if !name.trim_ascii().eq_ignore_ascii_case(b"corten-draws") {
+                continue;
+            }
+            let value = value.trim_ascii();
+            let value = value.strip_prefix(b"\"").and_then(|v| v.strip_suffix(b"\"")).unwrap_or(value);
+            return value == b"whole";
+        }
+    }
+    false
 }
 
 /// How long a hover prefetch may take before a debug build names its page.
@@ -1107,12 +1158,20 @@ pub struct Req {
     plain_write: bool,
     /// The request is a write (not `GET` or `HEAD`), which [`Req::resend_to`] needs.
     write: bool,
+    /// This action write asks for a whole page, as read from the request this `Req` was taken with.
+    pub(crate) whole_action: bool,
     /// The runtime sent it ([`Mode::asked`]): a redirect to a place or another site is then
     /// named in `corten-location`, as `fetch` cannot follow one (#1034).
     fetched: bool,
-    /// Corten fills the page's places for layout reads ([`crate::later`]): a whole document in an
-    /// app with some. Otherwise they are removed as the page is rendered.
+    /// Layout reads are available if the handler draws a whole page. The handler can still
+    /// change `mode`; fragments never fill their places.
     fills: bool,
+    /// For a write the runtime sent whose own page is filled after it answers, taken by middleware
+    /// or a raw route: the request's head as it was then, which a page this makes carries, so its reads
+    /// start from it (`layout::fill_made_early`). Its number among the heads kept on the request's
+    /// signal ([`crate::Signal::keep_early_head`]), 0 for none: a byte in the padding, where the head itself made
+    /// every `Req` 8 bytes larger, which every request that takes one paid in a copy.
+    early: u8,
     shared: Arc<Shared>,
     signal: crate::Signal,
     /// A debug build's: the request is to a route with named posts, at one of their addresses
@@ -1289,7 +1348,14 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
         }
         // A HEAD request (a link checker, a preview) gets no body, so it leaves the notice for the
         // page's GET.
-        Ok(Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD))
+        let mut req =
+            Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD);
+        // Middleware or a raw route can draw a page from the head it took, including after a
+        // typed route answered a forwarded request. The typed endpoint handles its own head.
+        if req.fills && req.write && req.signal.accepts_early_heads() && !crate::layout::LateWrite::reached(&parts.extensions) {
+            req.early = req.signal.keep_early_head(parts.clone());
+        }
+        Ok(req)
     }
 }
 
@@ -1305,9 +1371,12 @@ impl Req {
         method: &http::Method,
         notice: bool,
     ) -> Self {
-        let signal: crate::Signal = extensions.get::<crate::Signal>().cloned().unwrap_or_default();
-        let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
         let (mode, fetched) = Mode::asked(headers);
+        let signal = extensions.get::<crate::Signal>();
+        let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
+        let whole_action =
+            mode == Mode::Action && write && signal.map_or_else(|| prefers_whole(headers), |signal| signal.draws_whole(headers));
+        let signal = signal.cloned().unwrap_or_default();
         Req {
             mode,
             nonce: extensions.get::<NonceSlot>().cloned(),
@@ -1320,8 +1389,11 @@ impl Req {
             },
             plain_write: write && !shared.https_only && plain_origin(headers),
             write,
+            whole_action,
             fetched,
-            fills: !shared.layout_reads.is_empty() && extensions.get::<crate::layout::StartHere>().is_some(),
+            fills: !shared.layout_reads.is_empty()
+                && (extensions.get::<crate::layout::StartHere>().is_some() || (write && signal.fills_late())),
+            early: 0,
             shared,
             signal,
             #[cfg(debug_assertions)]
@@ -1498,8 +1570,11 @@ impl Req {
 
     /// A page: `doc` is the whole document, the app's layout with the page in it
     /// (`html! { <Layout req={req} title="About">..</Layout> }`). A browser gets all of it; a
-    /// client navigation gets the title, the page's head tags and `<main>`'s children, and the rest
-    /// of the layout does not run.
+    /// client navigation (and a `GET` form the runtime sends) gets the title, the page's head tags
+    /// and `<main>`'s children, and the rest of the layout does not run. A write's own page is whole
+    /// in document mode or an action with `Prefer: corten-draws=whole`; navigation mode and a legacy
+    /// action still get a fragment. For a whole action answer the runtime draws what differs around
+    /// `<main>`, including its [`crate::LayoutRead`]s, as for the page a write redirects to.
     pub fn page<For>(&self, doc: impl Document) -> crate::Result<HtmlResponse<For>> {
         self.page_with_status(StatusCode::OK, doc)
     }
@@ -1515,7 +1590,9 @@ impl Req {
         // The last size of each part, so the buffer is allocated once.
         static FULL: AtomicUsize = AtomicUsize::new(16 * 1024);
         static SWAP: AtomicUsize = AtomicUsize::new(16 * 1024);
-        let swap = self.mode.swaps();
+        // A write's own page is whole, as without JavaScript and as the page a write redirects to,
+        // so what the write changed around `<main>` is drawn, for a runtime that draws one (#1370).
+        let swap = self.mode.swaps() && !(self.mode == Mode::Action && self.whole_action);
         let (part, size) = if swap { (Part::Swap, &SWAP) } else { (Part::Full, &FULL) };
         let mut out = String::with_capacity(size.load(Ordering::Relaxed));
         HEAD_AT.set(None);
@@ -1597,6 +1674,12 @@ impl Req {
         let mut res = self.finish(html_response(status, out, swap.then_some(PAGE_HEADER)), key);
         if fills {
             res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
+            // Looked for only when there is one: a page with places is otherwise every `GET`'s.
+            if self.early != 0 {
+                if let Some(head) = self.signal.early_head(self.early) {
+                    res.extensions_mut().insert(crate::layout::EarlyHead(head));
+                }
+            }
         }
         if !vars.is_empty() {
             res.extensions_mut().insert(crate::security::StyleBlock(crate::security::hash_source(&vars)));
@@ -3243,7 +3326,37 @@ pub(crate) struct AsIs;
 /// has no route for it. A [`Mode::Data`] request, every request on an `api` route and every
 /// failure of a JSON route ([`crate::JsonResult`]) gets the failure as JSON instead
 /// ([`crate::api`]). A request a [`crate::Caller`] sent to sign in is redirected there.
-pub(crate) async fn render_errors<S: crate::app::Steps>(
+pub(crate) fn render_errors<'s, 'n, 'g, 'm, S: crate::app::Steps>(
+    shared: &'s Arc<Shared>,
+    req: Request,
+    next: Next<'n, S>,
+    deadline: Option<std::time::Duration>,
+    signal: &'g crate::Signal,
+    api: Option<&'m crate::api::Mount>,
+    (mode, fetched): (Mode, bool),
+) -> impl Future<Output = Response> + Send + use<'s, 'n, 'g, 'm, S> {
+    let mut late = false;
+    if next.has_middleware() {
+        // Middleware may change what is asked for or make the page itself, even on a patch-only
+        // route. Allow late fill on a swap write with reads, but negotiate where the page is made.
+        if mode != Mode::Data && api.is_none() && !matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
+            late = mode.swaps() && !shared.layout_reads.is_empty();
+            signal.recheck_whole(late);
+        }
+    } else if mode == Mode::Action
+        && api.is_none()
+        && next.route_can_answer_action_page()
+        && own_page_whole(mode, req.method(), req.headers())
+    {
+        // Without middleware the preference cannot change. A patch-only route need not read it.
+        late = !shared.layout_reads.is_empty();
+        signal.mark_whole(late);
+    }
+    errors_rendered(shared, req, next, deadline, signal, api, (mode, fetched), late)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn errors_rendered<S: crate::app::Steps>(
     shared: &Arc<Shared>,
     req: Request,
     next: Next<'_, S>,
@@ -3251,13 +3364,24 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     signal: &crate::Signal,
     api: Option<&crate::api::Mount>,
     (mode, fetched): (Mode, bool),
+    late: bool,
 ) -> Response {
     if api.is_some() || mode == Mode::Data {
         let shape = api.and_then(|mount| mount.errors.as_ref());
-        return crate::api::json_failure(run(req, next, deadline, signal).await, shared.dev, shape).await;
+        return crate::api::json_failure(run::<S, false>(req, next, deadline, signal).await, shared.dev, shape).await;
+    }
+    if late {
+        // The uncommon path owns the late poller's state, not the ordinary request future.
+        let _release = ReleasesEarlyHeads(signal);
+        let answer: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
+            let mut req = req;
+            crate::layout::LateWrite::stage(&mut req, deadline);
+            page_or_error::<S, true>(shared, req, next, deadline, signal, (mode, fetched)).await
+        });
+        return answer.await;
     }
     if shared.layout_reads.is_empty() || mode.swaps() {
-        return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
+        return page_or_error::<S, false>(shared, req, next, deadline, signal, (mode, fetched)).await;
     }
     // A whole document: a page route starts the layout's reads as it is called, and they are
     // polled with the handler on this task, then drawn into whichever page answers: the
@@ -3270,14 +3394,27 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
     let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
-        let res = here.beside(page_or_error(shared, req, next, deadline, signal, (mode, fetched))).await;
+        let res = here.beside(page_or_error::<S, false>(shared, req, next, deadline, signal, (mode, fetched))).await;
         here.fill(res).await
     });
     filled.await
 }
 
+/// Lets go of the heads `Req`s took before a late write's route once the write
+/// is answered, or dropped unanswered (the client gone, a middleware's timeout): they are kept on
+/// the request's signal, which each holds in its extensions, so left there a head and the signal
+/// would keep each other, and all the head holds, past the request. A `Req` taken after this keeps
+/// none (#1370).
+struct ReleasesEarlyHeads<'g>(&'g crate::Signal);
+
+impl Drop for ReleasesEarlyHeads<'_> {
+    fn drop(&mut self) {
+        self.0.release_early_heads();
+    }
+}
+
 /// The handler's page, or the error page in its place.
-async fn page_or_error<S: crate::app::Steps>(
+async fn page_or_error<S: crate::app::Steps, const LATE_FILL: bool>(
     shared: &Arc<Shared>,
     req: Request,
     next: Next<'_, S>,
@@ -3300,7 +3437,7 @@ async fn page_or_error<S: crate::app::Steps>(
     // answers it as the whole document at the address it asked; its method, for what it is told.
     #[cfg(debug_assertions)]
     let plain = (browser && !fetched && mode == Mode::Document && top_level(req.headers())).then(|| req.method().clone());
-    let res = run(req, next, deadline, signal).await;
+    let res = run::<S, LATE_FILL>(req, next, deadline, signal).await;
     #[cfg(debug_assertions)]
     let res = refresh_header_is_an_error(res, shared.dev);
     #[cfg(debug_assertions)]
@@ -3508,7 +3645,7 @@ fn sign_in_loops(path: &str, to: &HeaderValue) -> Option<String> {
 
 /// The handler's response, through [`within_deadline`]; a handler that panics is answered as a
 /// handler error (500), whose message only `corten dev` shows.
-async fn run<S: crate::app::Steps>(
+async fn run<S: crate::app::Steps, const LATE_FILL: bool>(
     req: Request,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
@@ -3519,7 +3656,7 @@ async fn run<S: crate::app::Steps>(
     let (method, uri) = (req.method().clone(), req.uri().clone());
     // A handler that panics fails its request like one that returned an error, instead of
     // dropping the connection with no answer. Nothing runs unless it panics.
-    let mut fut = pin!(within_deadline(req, next, deadline, signal, (&method, &uri)));
+    let mut fut = pin!(within_deadline::<S, LATE_FILL>(req, next, deadline, signal, (&method, &uri)));
     let outcome = std::future::poll_fn(|cx| match std::panic::catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
         Ok(Poll::Ready(res)) => Poll::Ready(Ok(res)),
         Ok(Poll::Pending) => Poll::Pending,
@@ -3544,23 +3681,28 @@ async fn run<S: crate::app::Steps>(
 
 /// The handler's response, or once it has waited past `deadline` an empty 503, or a 408 when it
 /// was waiting for the client to send the body (the 413 while a body over its limit is read past).
-async fn within_deadline<S: crate::app::Steps>(
+async fn within_deadline<S: crate::app::Steps, const LATE_FILL: bool>(
     req: Request,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     (method, uri): (&http::Method, &Uri),
 ) -> Response {
-    let Some(limit) = deadline else {
+    let result = if LATE_FILL {
+        within_late(deadline, next.run(req), signal).await
+    } else if let Some(limit) = deadline {
+        within(limit, next.run(req)).await
+    } else {
         return next.run(req).await;
     };
-    match within(limit, next.run(req)).await {
+    match result {
         Ok(res) => res,
         // The handler was waiting for the client to send the rest of the body: the request had
         // not arrived whole in time, which is the client's 408 (a stalled upload with the
         // defaults, whose idle time is longer than the deadline), not the server's 503. Still
         // warned of, as the 503 is: a large upload still being sent says the deadline is short.
         Err(Late(Waited::Body)) => {
+            let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline waiting for the request's body", uri.path());
             Error::new("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
@@ -3575,6 +3717,7 @@ async fn within_deadline<S: crate::app::Steps>(
             .into_response()
         }
         Err(Late(Waited::Nothing)) => {
+            let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline", uri.path());
             let mut res = StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -3596,8 +3739,8 @@ fn accepts_html(headers: &HeaderMap) -> bool {
 /// is not ready, so a handler that answers at once (a page rendered from memory) never registers
 /// one: about 600 ns a request measured with `tokio::time::timeout`. Each poll of `fut` starts
 /// with no wait for the body marked, so the mark read when the timer fires is that poll's.
-async fn within<F: std::future::Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
-    use std::{future::Future, pin::pin, task::Poll};
+async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
+    use std::{pin::pin, task::Poll};
     let mut fut = pin!(fut);
     let mut timer = pin!(None::<tokio::time::Sleep>);
     std::future::poll_fn(|cx| {
@@ -3605,15 +3748,63 @@ async fn within<F: std::future::Future>(limit: std::time::Duration, fut: F) -> R
         if let Poll::Ready(out) = fut.as_mut().poll(cx) {
             return Poll::Ready(Ok(out));
         }
-        if timer.is_none() {
-            timer.set(Some(tokio::time::sleep(limit)));
-        }
-        match timer.as_mut().as_pin_mut().map(|timer| timer.poll(cx)) {
-            Some(Poll::Ready(())) => Poll::Ready(Err(Late(crate::extract::waited()))),
-            _ => Poll::Pending,
-        }
+        waited_until(timer.as_mut(), limit, cx)
     })
     .await
+}
+
+/// Like `within`, with one more possible stage: filling a page that no typed route has filled.
+async fn within_late(
+    limit: Option<std::time::Duration>,
+    fut: impl Future<Output = Response>,
+    signal: &crate::Signal,
+) -> Result<Response, Late> {
+    use std::{future::Future, pin::pin, task::Poll};
+    let mut fut = pin!(Some(fut));
+    let mut timer = pin!(None::<tokio::time::Sleep>);
+    let mut fill: Option<std::pin::Pin<Box<dyn Future<Output = Response> + Send>>> = None;
+    std::future::poll_fn(|cx| {
+        if limit.is_some() {
+            crate::extract::forget_wait();
+        }
+        if let Some(answer) = fut.as_mut().as_pin_mut() {
+            if let Poll::Ready(res) = answer.poll(cx) {
+                // A page the middleware (or a raw route) made early can still have places.
+                // Only that answer needs a fill, under the existing deadline and panic catch.
+                if res.extensions().get::<crate::layout::Pending>().is_none() {
+                    return Poll::Ready(Ok(res));
+                }
+                // The middleware's future is finished; do not hold it across the reads.
+                fut.set(None);
+                let shared = signal.shared().expect("late writes belong to an app");
+                fill = Some(Box::pin(crate::layout::fill_made_early(shared.clone(), res)));
+            }
+        }
+        if let Some(fill) = &mut fill {
+            if let Poll::Ready(res) = fill.as_mut().poll(cx) {
+                return Poll::Ready(Ok(res));
+            }
+        }
+        let Some(limit) = limit else { return Poll::Pending };
+        waited_until(timer.as_mut(), limit, cx)
+    })
+    .await
+}
+
+#[inline]
+fn waited_until<T>(
+    mut timer: std::pin::Pin<&mut Option<tokio::time::Sleep>>,
+    limit: std::time::Duration,
+    cx: &mut std::task::Context<'_>,
+) -> std::task::Poll<Result<T, Late>> {
+    use std::task::Poll;
+    if timer.is_none() {
+        timer.set(Some(tokio::time::sleep(limit)));
+    }
+    match timer.as_pin_mut().map(|timer| timer.poll(cx)) {
+        Some(Poll::Ready(())) => Poll::Ready(Err(Late(crate::extract::waited()))),
+        _ => Poll::Pending,
+    }
 }
 
 thread_local! {
@@ -4072,5 +4263,36 @@ mod carried_tests {
         let res = carried(kept, res);
         let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(HeaderValue::as_bytes).collect();
         assert_eq!(vary, [&b"corten, accept"[..], b"Origin", b"cookie", b"caf\xe9"]);
+    }
+
+    /// A runtime says it draws a write's own page whole as an HTTP preference (RFC 7240): the first
+    /// `corten-draws` across every `Prefer` line, its name case aside, its value as written (a
+    /// token or a quoted string), its parameters and other preferences aside (#1370).
+    #[test]
+    fn a_write_s_own_page_is_whole_for_a_runtime_that_prefers_it() {
+        let whole = |lines: &[&'static str]| {
+            let mut headers = HeaderMap::new();
+            for line in lines {
+                headers.append(PREFER, HeaderValue::from_static(line));
+            }
+            prefers_whole(&headers)
+        };
+        assert!(whole(&[DRAWS_WHOLE]));
+        assert!(whole(&["respond-async, Corten-Draws = \"whole\"; seen=\"a;b\", wait=10"]));
+        assert!(whole(&["return=minimal", "corten-draws=whole"]));
+        assert!(!whole(&[]));
+        assert!(!whole(&["corten-draws"]));
+        assert!(!whole(&["corten-draws=WHOLE"]));
+        assert!(!whole(&["corten-draws=main, corten-draws=whole"]));
+        assert!(!whole(&["corten-draws=main", "corten-draws=whole"]));
+        assert!(!whole(&[r#"note="x, corten-draws=whole""#]));
+        assert!(!whole(&["corten-drawsx=whole"]));
+        // Only a write the runtime sent, never a `GET` or `HEAD`.
+        let mut headers = HeaderMap::new();
+        headers.insert(PREFER, HeaderValue::from_static(DRAWS_WHOLE));
+        assert!(own_page_whole(Mode::Action, &http::Method::POST, &headers));
+        assert!(!own_page_whole(Mode::Action, &http::Method::GET, &headers));
+        assert!(!own_page_whole(Mode::Action, &http::Method::HEAD, &headers));
+        assert!(!own_page_whole(Mode::Document, &http::Method::POST, &headers));
     }
 }

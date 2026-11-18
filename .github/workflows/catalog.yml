@@ -93,6 +93,16 @@ jobs:
       # This workflow does not measure/publish performance or touch nightly state.
       - name: Build and verify both catalog sources
         run: node bench/catalog/run.mjs c1 --apps ${{ matrix.app }} --build --check-only
+      - name: Verify Nuxt catalog header navigation and prefetch
+        if: matrix.app == 'nuxt'
+        run: |
+          app=$(docker run -d --cpus 2 --memory 512m \
+            -v "$PWD/bench/catalog/fixtures:/fixtures:ro" -e CATALOG_SOURCE=fixture -e CATALOG_FIXTURE_PATH=/fixtures/catalog.json cb-catalog-nuxt)
+          trap 'docker rm -f -v "$app" >/dev/null' EXIT
+          version=$(node -p 'require("./package.json").devDependencies["@playwright/test"]')
+          docker run --rm --init --network "container:$app" --memory 2g --shm-size 1g \
+            -v "$PWD:/repo:ro" -w /repo -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright "mcr.microsoft.com/playwright:v${version}-noble" \
+            node bench/fullstack/apps/nuxt/check-catalog-browser.mjs http://127.0.0.1:8080
       - name: Test native Gin catalog under a private umask
         if: matrix.app == 'gin'
         run: node --test bench/catalog/gin-permissions.test.mjs

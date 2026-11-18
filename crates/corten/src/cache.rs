@@ -490,6 +490,12 @@ pub(crate) struct Says {
 /// A `Cache-Control` line's directives, split at the commas outside a quoted value
 /// (`no-cache="a, b"` is one directive, RFC 9110 5.6.4).
 fn directives(line: &[u8]) -> impl Iterator<Item = &[u8]> {
+    split_unquoted(line, b',')
+}
+
+/// `line` split at each `at` outside a quoted string, a backslash escaping the byte after it
+/// inside one (RFC 9110 5.6.4): a list's elements at `,`, an element's parameters at `;`.
+pub(crate) fn split_unquoted(line: &[u8], at: u8) -> impl Iterator<Item = &[u8]> {
     let mut quoted = false;
     let mut escaped = false;
     line.split(move |&b| {
@@ -499,7 +505,7 @@ fn directives(line: &[u8]) -> impl Iterator<Item = &[u8]> {
             escaped = true;
         } else if b == b'"' {
             quoted = !quoted;
-        } else if b == b',' && !quoted {
+        } else if b == at && !quoted {
             return true;
         }
         false

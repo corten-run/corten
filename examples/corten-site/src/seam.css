@@ -109,14 +109,14 @@
   border-color: var(--bone);
 }
 
-.pick:checked + span {
+:where(.cuts) .pick:checked + span {
   background: var(--bone);
   border-color: var(--bone);
   color: var(--ink);
   font-weight: 600;
 }
 
-.pick:focus-visible + span {
+:where(.cuts) .pick:focus-visible + span {
   outline: 3px solid var(--ember);
   outline-offset: 3px;
 }
@@ -157,7 +157,7 @@
 
 /* Where the system's colors replace the page's, the pick is marked by more than its color. */
 @media (forced-colors: active) {
-  .pick:checked + span {
+  :where(.cuts) .pick:checked + span {
     outline: 3px solid Highlight;
     outline-offset: -3px;
   }

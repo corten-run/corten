@@ -307,7 +307,9 @@ impl FieldValue<Untyped> for &str {
 
 impl<'c, K> Call<'c, K> {
     /// Asks as the runtime or a data client does: [`Mode::Action`] for a `data-patch` form's
-    /// submit, [`Mode::Navigation`] for a link the runtime follows, [`Mode::Data`] for a client
+    /// submit (with `Prefer: corten-draws=whole`, as the runtime sends it, so a write's own page is
+    /// the whole document, #1370; a `prefer` of `corten-draws=main` set with [`Call::header`] comes
+    /// first and asks as a runtime from before), [`Mode::Navigation`] for a link the runtime follows, [`Mode::Data`] for a client
     /// that asks for JSON. Without it (or with [`Mode::Document`]) the request asks for HTML as a
     /// browser's page load does, which the page the runtime fetches whole after a write renders as
     /// too. An `Accept` the test sets with [`Call::header`] is kept; with
@@ -368,6 +370,9 @@ impl<'c, K> Call<'c, K> {
             }
             Mode::Action => {
                 headers.insert(MODE_HEADER, HeaderValue::from_static("action"));
+                // As the runtime sends a form: it draws a write's own page whole. After any `Prefer`
+                // the test set, so a `corten-draws` of its own comes first and is the one read.
+                headers.append(crate::page::PREFER, HeaderValue::from_static(crate::page::DRAWS_WHOLE));
             }
             Mode::Data => {
                 let accept = headers.entry(header::ACCEPT).or_insert(HeaderValue::from_static("application/json"));
@@ -551,8 +556,11 @@ mod tests {
         let (parts, body) = req.into_parts();
         let body = crate::body::to_bytes(body, 1 << 16).await.unwrap();
         let h = |name: &str| parts.headers.get_all(name).iter().map(|v| v.to_str().unwrap()).collect::<Vec<_>>().join("|");
+        // `prefer` only when sent, so every other line reads as it did.
+        let prefer = h("prefer");
+        let prefer = if prefer.is_empty() { String::new() } else { format!(" prefer={prefer}") };
         format!(
-            "{} {} accept={} corten={} cookie={} type={} lang={} body={}",
+            "{} {} accept={} corten={} cookie={} type={} lang={}{} body={}",
             parts.method,
             parts.uri,
             h("accept"),
@@ -560,6 +568,7 @@ mod tests {
             h("cookie"),
             h("content-type"),
             h("accept-language"),
+            prefer,
             String::from_utf8(body.to_vec()).unwrap()
         )
     }
@@ -643,6 +652,23 @@ mod tests {
         assert!(own.text().contains("accept=*/* "), "{}", own.text());
         let own = client().get(&url::Echo).header(http::header::ACCEPT, "application/json, */*;q=0.1").mode(Mode::Data).await;
         assert!(own.text().contains("accept=application/json, */*;q=0.1 "), "{}", own.text());
+    }
+
+    /// A test's write asks as the runtime does, which draws its own page whole (#1370); a `prefer`
+    /// the test sets comes first, so `corten-draws=main` asks as a runtime from before.
+    #[tokio::test]
+    async fn an_action_prefers_its_own_page_whole_after_any_preference_the_test_sets() {
+        let action = client().post(&url::Echo).mode(Mode::Action).await;
+        assert!(action.text().contains(" corten=action "), "{}", action.text());
+        assert!(action.text().ends_with(" prefer=corten-draws=whole body="), "{}", action.text());
+        let older = client()
+            .post(&url::Echo)
+            .mode(Mode::Action)
+            .header(http::HeaderName::from_static("prefer"), "corten-draws=main")
+            .await;
+        assert!(older.text().ends_with(" prefer=corten-draws=main|corten-draws=whole body="), "{}", older.text());
+        let page = client().post(&url::Echo).mode(Mode::Navigation).await;
+        assert!(!page.text().contains("prefer="), "{}", page.text());
     }
 
     #[tokio::test]

@@ -29,12 +29,13 @@ use crate::view::Render;
 /// load, a reload, the page a write redirects to), after the app's and the area's middleware, so it
 /// runs beside the handler's own reads, and draws its [`LayoutRead::view`] where the layout put
 /// [`later`] once the handler has answered, before the app's middleware sees the page. A client
-/// navigation or a form the runtime submits keeps the layout the page has, so the read is not
-/// started for it; neither is it for a `HEAD`, an API, a data client, a route that answers
-/// something other than a page (a file, text, JSON) or Corten's own paths. A [`crate::Public`]
-/// page is the same for everyone, so it draws no one's value. A write that draws a page rather
-/// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
-/// answered. The error page for a failure Corten finds the request at fault for (an unknown
+/// navigation, a `GET` form the runtime submits and a patch keep the layout the page has, so the
+/// read is not started for them; neither is it for a `HEAD`, an API, a data client, a route that
+/// answers something other than a page (a file, text, JSON) or Corten's own paths. A
+/// [`crate::Public`] page is the same for everyone, so it draws no one's value. A write that draws
+/// its own page rather than redirect (a refused form, a partial result), with JavaScript or without,
+/// answers it whole and starts the reads its page draws once it has answered, so the runtime draws
+/// what the write changed around `<main>`. The error page for a failure Corten finds the request at fault for (an unknown
 /// address, a wrong method, the router's `501` for a method no route in the app has, a refusal
 /// other than a 429 by an extractor or by the handler's own `Refused` (a 429 slows a client
 /// down), a request that does not parse) starts the reads not started yet and waits for them as a
@@ -514,6 +515,117 @@ struct Here {
     gives: &'static [fn() -> TypeId],
     /// The values a filled page gave itself, kept for an error page made of it.
     given: Vec<Gift>,
+}
+
+/// A page route's answer to a write the runtime sent ([`at_late_route`]), filled when it is a
+/// page with places: the reads it draws start now, after the handler, from the request's head
+/// `kept` as the route was called, and are waited for as a whole document's are. Anything else (a
+/// patch, a redirect, an error) is returned as it is.
+pub(crate) async fn fill_after(
+    (shared, until, kept): (Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts),
+    answer: impl Future<Output = Response>,
+) -> Response {
+    let res = answer.await;
+    if res.extensions().get::<Pending>().is_none() {
+        return res;
+    }
+    let here = StartHere::new(shared, until);
+    here.lock().kept = Some(kept);
+    here.fill(res).await
+}
+
+/// On a page with places made with a `Req` the app's or an area's middleware took for a write
+/// whose own page is filled after it answers: the request's head as it was then
+/// ([`fill_made_early`]).
+#[derive(Clone)]
+pub(crate) struct EarlyHead(pub(crate) Arc<Parts>);
+
+/// A page with places that no route filled, for a write the runtime sent in an app with layout
+/// reads: one the app's or an area's middleware made with `Req` (a sign-in page in the route's
+/// place, a refusal drawn as a page), or a route given by hand made. Its reads start now,
+/// from the head that `Req` was taken with ([`EarlyHead`]), as a plain write's page made there
+/// starts them from the head its `Req` kept ([`StartHere::extracted`]). One from a route whose
+/// answer type says it is no page, or that is `Public`, starts none.
+pub(crate) async fn fill_made_early(shared: Arc<crate::page::Shared>, mut res: Response) -> Response {
+    let until = res.extensions().get::<EarlyHead>().and_then(|EarlyHead(head)| LateWrite::until(&head.extensions));
+    let here = StartHere::new(shared, until);
+    if res.extensions().get::<NotAPageAnswer>().is_some() {
+        here.lock().state = State::NotAPage;
+    } else if let Some(EarlyHead(head)) = res.extensions_mut().remove::<EarlyHead>() {
+        // The middleware has answered, so no page made later is the answer: the request's early
+        // heads are let go now (dropped outside the signal's lock), which leaves this one the only
+        // owner of its head, taken without a copy.
+        // A read that takes `Req` itself keeps no head of its own.
+        if let Some(signal) = head.extensions.get::<crate::Signal>() {
+            signal.release_early_heads();
+        }
+        here.lock().kept = Some(Arc::unwrap_or_clone(head));
+    }
+    here.fill(res).await
+}
+
+/// On a page with places whose route's answer type says it is not a page (`Answer::PAGE`): no
+/// read is started for it, as none is for such a route's `GET` ([`fill_made_early`]).
+#[derive(Clone, Copy)]
+pub(crate) struct NotAPageAnswer;
+
+/// Marks a typed route reached for a write eligible for late fill.
+#[inline]
+pub(crate) fn reaches_late_route(req: &mut crate::http::Request) -> bool {
+    if matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
+        return false;
+    }
+    let extensions = req.extensions_mut();
+    extensions.get::<crate::Signal>().is_some_and(crate::Signal::fills_late) && LateWrite::reach(extensions)
+}
+
+/// Keep the route's request head before calling a handler that may consume it and answer with
+/// a page. Nothing reads beside the handler, whose reads must see what it wrote.
+#[inline(never)]
+pub(crate) fn at_late_route(req: &crate::http::Request) -> (Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts) {
+    let shared =
+        req.extensions().get::<crate::Signal>().and_then(crate::Signal::shared).expect("late writes belong to an app").clone();
+    let until = LateWrite::until(req.extensions());
+    // Copied field by field from the request in place, rather than taken apart, cloned and put
+    // back: a read is given the whole head (`LayoutRead::start` takes `&Parts`, and an app's read
+    // may look at any of it), so the headers and extensions are cloned all the same.
+    let mut kept = http::Request::new(()).into_parts().0;
+    kept.method = req.method().clone();
+    kept.uri = req.uri().clone();
+    kept.version = req.version();
+    kept.headers = req.headers().clone();
+    kept.extensions = req.extensions().clone();
+    (shared, until, kept)
+}
+
+/// One dispatch's late fill state. Its own deadline follows the head through middleware.
+/// Only the head forwarded to a typed endpoint is marked, not the head middleware may still hold.
+#[derive(Clone, Copy)]
+pub(crate) struct LateWrite {
+    until: Option<tokio::time::Instant>,
+    at_route: bool,
+}
+
+impl LateWrite {
+    #[inline(never)]
+    pub(crate) fn stage(req: &mut crate::http::Request, deadline: Option<std::time::Duration>) {
+        // A forwarded or replayed head can already carry another dispatch's deadline and mark.
+        let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
+        req.extensions_mut().insert(Self { until, at_route: false });
+    }
+
+    fn until(extensions: &http::Extensions) -> Option<tokio::time::Instant> {
+        extensions.get::<Self>().and_then(|late| late.until)
+    }
+
+    pub(crate) fn reached(extensions: &http::Extensions) -> bool {
+        extensions.get::<Self>().is_some_and(|late| late.at_route)
+    }
+
+    #[inline(never)]
+    fn reach(extensions: &mut http::Extensions) -> bool {
+        extensions.get_mut::<Self>().is_some_and(|late| !std::mem::replace(&mut late.at_route, true))
+    }
 }
 
 /// `gives(CartCount)` on a route in a `#[corten::routes]` module: the layout reads its `GET`
