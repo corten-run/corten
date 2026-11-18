@@ -1,17 +1,14 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable changes to Corten. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- `corten check` refuses a missing or stale `Cargo.lock` before formatting or compiling and
-  keeps lint, build and tests locked. Run `cargo build` or `corten dev`, then commit the lock
-  (at the workspace root for workspace members). `corten new` writes the app's lock and
-  `corten ui add` updates it when it adds `corten-ui`, so `corten check` passes straight after
-  either. The starter and seven example images build with `--locked` too, instead of resolving a
-  different graph during deployment; card-market's waits on its paired benchmark recipe
-  ([#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)).
+Pending entries are in [changelog.d/](changelog.d/).
+
+- CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
+  for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
@@ -85,6 +82,10 @@ Corten is pre-1.0, so any minor version may change the API.
   cloud inbox through timing replay; a version label alone is not an audit.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
+- Catalog Contract selects affected parity apps on pull requests and runs all parity and JSON
+  jobs for unrecognized app paths. Benchmark Evidence runs portable source-custody checks when
+  captured sources change and native kernel checks when their own inputs change. Both scope
+  against the full Git diff and cancel superseded pull request runs, not main runs.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
