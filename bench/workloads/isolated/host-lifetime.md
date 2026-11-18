@@ -107,32 +107,18 @@ cancellation; the final scope was empty, but replay remained blocked. The archiv
 does not identify the failing PID, time the failed reads or measure the nested
 guest's scheduler wait.
 
-A bounded reproduction on Linux under WSL2 used the same Node 26.13.1 and
-Docker 29.1.3 bytes and the matching buildx 0.30.1 package. An ordinary build
-startup targeted a private Unix socket that held requests without executing them;
-short CLI commands supplied real membership churn. Cold runs evicted only
-private executable copies and checked their residency before launch. In the
-instrumented unpaused pair:
+To check the distinction between a slow first read and a missing executable,
+run the two catalog regression tests from the repository root:
 
-| First observation of Docker and buildx | Cold | Warm |
-| --- | ---: | ---: |
-| Executable reads, total | 273 ms | 129 ms |
-| SHA-256 updates, total | 579 ms | 449 ms |
-| Whole collector tick | 888 ms | 596 ms |
-| Sampler thread runnable wait in that tick | 32 ms | 33 ms |
+```sh
+node --test --test-name-pattern='catalog pins|listed catalog PID' bench/workloads/isolated/host-lifetime-churn.test.mjs
+```
 
-SHA-256 used almost as much CPU time as wall time in both runs. Live group
-census reads and ordinary membership-race retries were much smaller; a warm
-page cache did not avoid the first digest for each new inode in the observer.
-With the same controlled 700 ms pause at the first buildx stat read, real
-membership churn exhausted the old retry budget (1,496 ms cold and 1,416 ms warm
-gaps). Moving executable reads and digest work to finish kept those gaps to
-815 ms and 801 ms, including a real executable-open ENOENT followed by a fresh
-complete census. Without the pause, the fixed gaps were 103 ms and 104 ms.
-All four fixed probes retained the actual identities and an empty terminal scope.
-The WSL host lacked delegated CPU and cpuset controls; accounting replay remained
-blocked. This isolates a resource cost and a failure mechanism, not the cause of
-every millisecond in the original nested guest or a native campaign qualification.
+The first test uses a controlled clock: the sampler must retain the executable
+without reading the whole file, then reproduce its digest at finish. The second
+shows why an empty final scope is not enough: a listed member whose executable
+remains unreadable still blocks replay. Neither test measures build speed or
+qualifies a native catalog run.
 
 ## Ordered Asynchronous Storage
 

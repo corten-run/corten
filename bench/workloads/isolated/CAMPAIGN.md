@@ -219,8 +219,10 @@ Observations add driver work; they are not a claim of zero observer overhead or 
 timing result. Source-bound observation code is part of the campaign's evidence conditions.
 
 The fresh IPC-gated bootstrap's real executable is hashed before the initial empty-scope
-sample. Attachment rechecks the executable identity/cache key; slow startup hashing does
-not consume an unobserved interval between samples. The one-second gap gate is unchanged.
+sample. For commands using deferred hashing, attachment independently pins the live
+executable and rechecks its inode identity; it does not compare it to that initial
+hash. Other commands recheck the executable cache key. Startup hashing therefore does
+not consume an interval between samples. The one-second gap gate is unchanged.
 The Linux fixture delays that real read to test ordering, without replacing kernel data.
 
 Each phase contains `command-N-host/{binding.json,samples.jsonl,terminal.json,processes/**}`.
