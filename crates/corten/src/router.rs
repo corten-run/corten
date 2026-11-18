@@ -44,6 +44,10 @@ pub(crate) type Answering = Pin<Box<dyn Future<Output = Response> + Send>>;
 /// A route's handler for one or more methods, with its state: what the router calls.
 pub(crate) trait Endpoint: Send + Sync + 'static {
     fn call(&self, req: Request) -> Answering;
+
+    fn action_patches(&self) -> bool {
+        false
+    }
 }
 
 /// The handler the router chose for a request, which the stages call last.
@@ -60,6 +64,10 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     #[inline]
     fn call(&self, req: Request) -> Answering {
         Box::pin(self.handler.clone().call(req, self.state.clone()))
+    }
+
+    fn action_patches(&self) -> bool {
+        H::ACTION_PATCHES
     }
 }
 
@@ -98,6 +106,10 @@ impl Endpoint for Giving {
         req.extensions_mut().insert(crate::layout::Gives(self.gives));
         self.inner.call(req)
     }
+
+    fn action_patches(&self) -> bool {
+        self.inner.action_patches()
+    }
 }
 
 /// A page's `POST` handler when it has named posts (`post(hold) = ..`): the one the `do` of the
@@ -109,6 +121,7 @@ impl Endpoint for Giving {
 struct Chooser {
     plain: Option<Route>,
     actions: Box<[(&'static str, Route)]>,
+    patches: bool,
 }
 
 impl Endpoint for Chooser {
@@ -124,9 +137,19 @@ impl Endpoint for Chooser {
             None => self.refuse(req.uri().query()),
         }
     }
+
+    fn action_patches(&self) -> bool {
+        self.patches
+    }
 }
 
 impl Chooser {
+    fn new(plain: Option<Route>, actions: Box<[(&'static str, Route)]>) -> Self {
+        // A mixed chooser stays eligible without reading the query before dispatch.
+        let patches = plain.iter().chain(actions.iter().map(|(_, route)| route)).all(|route| route.action_patches());
+        Self { plain, actions, patches }
+    }
+
     /// The `400` for a post no handler of the page's is for, its text written for a developer
     /// (the error page shows it under `corten dev`).
     #[cold]
@@ -158,6 +181,10 @@ impl Endpoint for Posts {
     fn call(&self, mut req: Request) -> Answering {
         req.extensions_mut().insert(HasPosts);
         self.inner.call(req)
+    }
+
+    fn action_patches(&self) -> bool {
+        self.inner.action_patches()
     }
 }
 
@@ -666,7 +693,7 @@ impl Router {
             // no other request, and no post to a route without them, reads its query.
             if !methods.actions.is_empty() {
                 let actions = methods.actions.into_iter().map(|(name, slot)| (name, slot.route())).collect();
-                slots[POST] = Some(Arc::new(Chooser { plain: slots[POST].take(), actions }));
+                slots[POST] = Some(Arc::new(Chooser::new(slots[POST].take(), actions)));
                 // A debug build marks the route's requests, so only a page of a route with named
                 // posts is checked for a post form that would send to one again (`Req`).
                 #[cfg(debug_assertions)]

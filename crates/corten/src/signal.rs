@@ -147,7 +147,28 @@ struct Inner {
     /// the same reason: the limit XOR the default, so a signal made without one (`Default`, 0)
     /// has the default and every limit, 0 too, is kept.
     body_limit: usize,
+    /// A write's whole-page decision ([`WHOLE`]), or a request to recheck after middleware
+    /// ([`RECHECK_WHOLE`]). When the app has layout reads, it is filled after it answers (#1370):
+    /// [`LATE`] marks eligibility and [`EARLY_CLOSED`] stops new head captures at cleanup. A byte, in the
+    /// padding beside the others; its deadline is not kept here (`crate::layout::LateWrite`), as
+    /// any more would make every request's signal a larger allocation.
+    late: AtomicU8,
 }
+
+/// [`Inner::late`]: a write eligible for late fill, so a whole page the app's or an area's
+/// middleware makes with `Req` carries the head it was made with.
+const LATE: u8 = 1;
+/// [`Inner::late`]: the slot cannot accept more heads, even from a detached extractor.
+const EARLY_CLOSED: u8 = 2;
+/// [`Inner::late`], beside the others: a `Req` kept a head on the signal
+/// ([`EarlyHeads`]), to be let go when the write is answered.
+const EARLY_KEPT: u8 = 4;
+/// [`Inner::late`]: the runtime draws its own page whole, with or without layout reads.
+const WHOLE: u8 = 8;
+/// [`Inner::late`]: middleware can change the preference, so use the current request's headers.
+const RECHECK_WHOLE: u8 = 16;
+
+type EarlyHeads = Vec<Arc<http::request::Parts>>;
 
 impl Signal {
     /// A request's signal in an app.
@@ -225,6 +246,80 @@ impl Signal {
     /// The app's shared state, for a request an app serves.
     pub(crate) fn shared(&self) -> Option<&Arc<crate::page::Shared>> {
         self.0.shared.as_ref()
+    }
+
+    /// The runtime draws the write's own page whole (`page::render_errors`). A late-filled page
+    /// made with `Req` also writes its places for layout reads.
+    pub(crate) fn mark_whole(&self, late: bool) {
+        self.0.late.store(if late { WHOLE | LATE } else { WHOLE }, Ordering::Relaxed);
+    }
+
+    pub(crate) fn recheck_whole(&self, late: bool) {
+        self.0.late.store(if late { RECHECK_WHOLE | LATE } else { RECHECK_WHOLE }, Ordering::Relaxed);
+    }
+
+    /// For an action write: use the staged decision unless middleware could change it.
+    pub(crate) fn draws_whole(&self, headers: &http::HeaderMap) -> bool {
+        let flags = self.0.late.load(Ordering::Relaxed);
+        if flags & RECHECK_WHOLE != 0 {
+            crate::page::prefers_whole(headers)
+        } else {
+            flags & WHOLE != 0
+        }
+    }
+
+    /// Late fill is available. The handler can choose to render a
+    /// whole page regardless of the mode and preference it receives.
+    pub(crate) fn fills_late(&self) -> bool {
+        self.0.late.load(Ordering::Relaxed) & LATE != 0
+    }
+
+    /// A late write whose cleanup has not yet closed the slot.
+    pub(crate) fn accepts_early_heads(&self) -> bool {
+        self.0.late.load(Ordering::Relaxed) & (LATE | EARLY_CLOSED) == LATE
+    }
+
+    /// Keeps a head copied by `Req`, returning its number (from 1). Cloning
+    /// extensions can run app code, so the copy is made before the lock and the mark is checked
+    /// again here. If release follows this mark, it has to take the lock to remove the slot.
+    pub(crate) fn keep_early_head(&self, head: http::request::Parts) -> u8 {
+        let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.0.late.fetch_or(EARLY_KEPT, Ordering::Relaxed) & EARLY_CLOSED != 0 {
+            return 0;
+        }
+        let slot = match found.iter().position(|kept| kept.is::<EarlyHeads>()) {
+            Some(at) => &mut found[at],
+            None => {
+                found.push(Arc::new(EarlyHeads::new()));
+                found.last_mut().expect("just added")
+            }
+        };
+        let heads = Arc::get_mut(slot).and_then(|slot| slot.downcast_mut::<EarlyHeads>()).expect("owned by the signal");
+        // A request takes `Req` a few times at most; past 255 the last number is reused.
+        if heads.len() < usize::from(u8::MAX) {
+            heads.push(Arc::new(head));
+        }
+        heads.len() as u8
+    }
+
+    /// The early head numbered `at`, none for 0 or after release.
+    pub(crate) fn early_head(&self, at: u8) -> Option<Arc<http::request::Parts>> {
+        let at = usize::from(at).checked_sub(1)?;
+        let found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        found.iter().find_map(|kept| kept.downcast_ref::<EarlyHeads>())?.get(at).cloned()
+    }
+
+    /// Closes the slot before releasing the heads (which hold this signal in turn).
+    pub(crate) fn release_early_heads(&self) {
+        if self.0.late.fetch_or(EARLY_CLOSED, Ordering::Relaxed) & EARLY_KEPT != 0 {
+            let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.0.late.fetch_and(!EARLY_KEPT, Ordering::Relaxed);
+            if let Some(at) = found.iter().position(|kept| kept.is::<EarlyHeads>()) {
+                let heads = found.swap_remove(at);
+                drop(found);
+                drop(heads);
+            }
+        }
     }
 
     /// Whether the signal has aborted: a cheap check for a loop on a blocking thread.

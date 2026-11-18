@@ -2,7 +2,8 @@
 //! a live stream whose one event is larger than a page's usual patch and is followed by nothing,
 //! a page whose handler is given text with an apostrophe, quotes, `&` and `<` in it, as an
 //! argument and as the value an element gives its ref, a patch drawn with this area's
-//! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
+//! stylesheet, which a form on a page outside the area is answered with, a write that answers with its own
+//! page, and a dialog and a
 //! `<details>` drawn closed that a form outside each asks for again, a screen whose data a
 //! script reads (`corten/read`), a form whose fields a handler is given as its controls, and view
 //! classes (`corten/views`) whose holes are in a form, past one and a form's whole text, beside
@@ -38,6 +39,18 @@ pub mod url {
     /// outside it (the test writes the form into the watchlist).
     #[route("/smoke/styled", post = styled)]
     pub struct Styled;
+
+    /// A form whose write answers with its own page, as a form drawn again with what it refused
+    /// does: the page is whole with JavaScript too, so the runtime draws what the write changed
+    /// around `<main>` (#1370).
+    #[route("/smoke/written", get = unwritten, post = written)]
+    pub struct Written;
+
+    /// The same form on a page that reads itself again each second (`ReadAgain`), whose write's own
+    /// page does too, so a write that failed in view can be seen to stay shown while the page reads
+    /// itself again, after a write whose own page drew as well (#1370).
+    #[route("/smoke/written/again", get = unwritten_again, post = written_again)]
+    pub struct WrittenAgain;
 
     /// A page with a dialog drawn empty and closed and a `data-patch` form outside it that asks
     /// for it (#1371).
@@ -351,6 +364,48 @@ fn LargeList() -> impl Render {
             }
         </ul>
     }
+}
+
+async fn unwritten(req: Req) -> HtmlResult {
+    written_page(&req, false, None)
+}
+
+async fn unwritten_again(req: Req) -> HtmlResult {
+    written_page(&req, false, Some(ReadAgain { after: std::time::Duration::from_secs(1) }))
+}
+
+async fn written(req: Req) -> HtmlResult {
+    written_page(&req, true, None)
+}
+
+async fn written_again(req: Req) -> HtmlResult {
+    written_page(&req, true, Some(ReadAgain { after: std::time::Duration::from_secs(1) }))
+}
+
+/// The form, and once it is sent the write's own page, in the layout the smoke's other pages draw.
+/// The write's page draws a component with a script the form's page has not loaded, so the test
+/// can hold the page on its way in while the write is done, and leave it by a link to a page in
+/// the same area, which a navigation swaps into this document. A page that reads itself again
+/// posts to its own address, whose page reads itself again too.
+fn written_page(req: &Req, written: bool, again: Option<ReadAgain>) -> HtmlResult {
+    let reads_again = again.is_some();
+    let inner = html! {
+        if written {
+            <p>"Written by the form's own page."</p>
+            <Quoted />
+        }
+        <button>"Write"</button>
+    };
+    req.page(html! {
+        <Layout req={req} title={if written { "Written" } else { "Write" }} viewer={None} head={again}>
+            <a href={url::Quoted}>"Quoted arguments"</a>
+            if reads_again {
+                <form method="post" action={url::WrittenAgain} data-patch>{inner}</form>
+            } else {
+                <form method="post" action={url::Written} data-patch>{inner}</form>
+            }
+        </Layout>
+    })
 }
 
 /// What `/smoke/reading` shows and its script reads: a name and enough rows that the answer is

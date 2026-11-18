@@ -26,7 +26,11 @@ mod tests {
 ```
 
 1. Cover each mode a handler serves: the default (a browser's page load, the whole document),
-   `.mode(Mode::Action)` (the patch) and `.mode(Mode::Data)` (data screens). The address is a
+   `.mode(Mode::Action)` (the patch) and `.mode(Mode::Data)` (data screens). `Mode::Action`
+   sends `Prefer: corten-draws=whole`, as the runtime does, so a write whose handler answers its
+   page (`req.page(..)`) gets the whole document; to ask as a runtime from before that and get
+   `<main>`, add `.header(corten::http::HeaderName::from_static("prefer"), "corten-draws=main")`,
+   which is sent first and so is the one read. The address is a
    route, or a `corten::Local` read from an answer (`res.location()`); fields are the form's
    `FIELDS` with values of their types, a forged value goes through `FIELDS.x.untyped()`, and a
    `SubmitKey` field takes `corten::testing::submit_key()`. `.cookie(name, value)`,

@@ -302,10 +302,11 @@ is dropped unused. A `Public` answer draws no read's value however it was starte
 page, Corten draws the read's `view` where the layout put `later`, before the app's middleware sees
 the page; one read fills every place that names it. A place goes in the `<body>` around `<main>`:
 `<head>` and its `<title>` are sent with each navigation, which does not start the read, so a debug
-build refuses a page that draws one there. A write that draws a page rather than redirect (a refused
-form without JavaScript) starts the reads its page draws once it has answered, so it waits for them.
-A navigation or a `data-patch` action keeps the header the full load drew, so the read is not
-started for it, nor for an API or a data client. A `Public` page is the same for everyone, so it
+build refuses a page that draws one there. A write that draws its own page rather than redirect (a
+refused form, a partial result), with JavaScript or without, starts the reads its page draws once it
+has answered, so it waits for them (below). A navigation, a `GET` form the runtime sends and a patch
+keep the header the full load drew, so the read is not started for them, nor for an API or a data
+client. A `Public` page is the same for everyone, so it
 draws nothing there, and a `Public` page route never starts the read. An answer that draws no layout
 (a redirect) drops a read still running, which stops it; one already in stays for an error page the
 app's middleware makes of the answer. So do the values a page drew, for an error page the
@@ -363,18 +364,26 @@ starts none, so it draws nothing there. On a `Public` or JSON route it changes n
 is started for one.
 
 A value both the page and the layout use (who is signed in, which the page greets by name) stays
-a prop the handler passes. A read the handler itself needs and wants started early is a
+a prop the handler passes. A read the page itself needs and wants started early is a
 `corten::Ahead`, `Ahead::start(read)` in an extractor and awaited where it is used; `Mode::of`
-reads the request's mode before the handler has its `Req`. `Ahead` is `tokio::spawn` with the two
+reads the request's mode before the handler has its `Req`. A value the layout shows is a layout
+read, not an `Ahead`: Corten starts a layout read only for a page that draws the layout, and an
+extractor that started the count ahead for every request but a navigation would start it on every
+write the runtime sends, one that answers a patch too, before the write. `Ahead` is `tokio::spawn` with the two
 things a request needs and a bare task lacks: dropped, it stops the read (a bare task would run on
-after the client left), and its panic fails the request.
+after the client left), and its panic fails the request. It starts before the handler, so on a
+write it may not see what the write did: a value that depends on the write (the count after an item
+is added) is read or given by the handler after the write, or is a layout read, which a write's own
+page starts once the handler has answered.
 
 A write that redirects (`req.redirect`, `req.redirect_with_notice`) needs nothing more: the
 runtime fetches the page it sends the browser to whole, as a full load does (`Mode::Document`, so
 the layout read starts), swaps in `<main>` and replaces each element around it that
 the server now draws otherwise, in the same document. The header shows the count the write made,
-with JavaScript as without, and only the navigation after a write pays the layout's reads; every
-other navigation still keeps the header. When that page reads itself again
+with JavaScript as without, and only a navigation that may follow a change the layout has not
+drawn pays the layout's reads (the one after a write, one that cuts a write off and the one after
+it, the first to another page after a write that failed in view, below); every other navigation
+still keeps the header. When that page reads itself again
 ([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), while the write's read
 catches up), each read is whole too, until one that no longer asks: a count the layout could not
 read yet is drawn when a read finds it, as the reload a browser without JavaScript makes draws it,
@@ -426,11 +435,71 @@ replaced whole, live region and all, so a script adds its own markup beside the 
 fetched as a document, so when it redirects again, `fetch` follows that redirect itself: a
 `#id` on the second one is not kept, and one to another site loads in full.
 
-A write that answers in place, with a patch rather than a redirect, draws what it changed itself.
-The badge is a component the layout renders and a patch can carry (an `#[derive(Id)]` on it), and
-the write reads the value directly, not through the extractor above (which skips the read for its
-`Mode::Action` answer), and only for the patch: without JavaScript the redirect's next page is a
-full load that reads it.
+A write that answers with its own page rather than a redirect (a form drawn again with what it
+refused, a bulk add whose failed lines the page lists) needs nothing more either. `req.page(..)` for
+a write is the whole document in document mode or an action with `Prefer: corten-draws=whole`: the layout
+reads it draws start once the handler has answered with it, so they see what the write did (nothing
+runs beside the handler of such a write, and one that answers a patch or a redirect starts none), a
+value the handler read after the write is given with `.give::<CartCount>(n)`, and the runtime draws
+it as it draws that page, swapping in `<main>` and each element around it that changed, in the same
+document and at the same address; until it is in, a navigation reads the whole page, so one that
+leaves it on its way still shows what the write changed. With two writes out at once, whichever
+page is drawn last may be older than the other write, so the next navigation reads the whole page
+again. So does one after a write a navigation cut off before its answer, which the server may have
+applied, and the navigation after that one, since the server may still have been running the write
+when that page was read. A patch that took a write counts too: one that drew a layout element (a
+count with an id), drawn over by an older write's own page that came after it, leaves the next
+navigation to read the whole page. A write that failed in view (the network failed, a 5xx, or its
+answer was cut off after its headers came) may still have been applied. A navigation to another
+page reads the whole page. While the failure is undrawn, a same-page poll uses a partial response,
+even if another write is undrawn; a whole [`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet)
+poll already on its way is skipped and retried. If another write drew while a 5xx body was still
+arriving, the failure counts again when it is shown, whether that body arrived or was cut off.
+A partial draw can still replace `<main>` and
+page-owned layout elements; it does not redraw the rest of the layout. Browsers without the
+Navigation API reload for `ReadAgain`. A page the app's or an area's middleware makes with `Req` in the
+route's place (a sign-in page) is filled the same way, from the request's head as it had it.
+This also works when middleware takes `Req` from a head it retained and replaces the response
+after the route returns. The fill stays within the request's deadline, and a failure to fill it
+gets the error page. A `GET` form's page
+(a search) still answers `<main>` alone, as a navigation's does, since a `GET` changes nothing the
+layout shows. Such an answer
+costs the layout's markup and its reads; a page that differs from the one on screen in more than
+such elements (another frame, another number of elements around `<main>`) swaps in `<main>` and
+the layout's elements that are the page's (`page` in `html!`), as a navigation does, and the next
+navigation reads the whole page. Where a navigation's page would load in full instead (a section
+stylesheet that does not load, a page element with no place on screen), so does the write's: its
+address is loaded, which draws the page there, not the write's answer (a refused form's messages
+and values), though its notice is kept. The runtime says it draws the whole page
+(`Prefer: corten-draws=whole` on the write, an HTTP preference a server that does not know it
+ignores); a runtime that does not (a tab open across the deploy that
+brought this) gets `<main>` alone, as it did before, and keeps its layout until a full load. A
+runtime that gets `<main>` alone for a write (a server from before, halfway through a deploy) has
+the next navigation read the whole page.
+
+A patch is not a page: it carries elements by id and fills no layout read's place, and a read's
+`view` drawn at two places has no id to carry. So a write whose answer must change a layout read
+answers its page, not a patch: `req.page(..)`, with the read's value given or read again. A patch
+changes the layout only through an element the layout draws with an id, from a value the handler
+passes it, as a prop, not a layout read. The badge is a component the layout renders and a patch
+can carry (an `#[derive(Id)]` on it), and the write reads the value itself after the write, and
+only for the patch: without JavaScript the redirect's next page is a full load that reads it.
+In an app with layout reads a typed write route whose answer type can be a page (`HtmlResult`)
+keeps a copy of the request's head on a preferred submit or a swap write that reaches it through
+middleware. It keeps the head even if middleware removes the preference: the handler may still set
+`req.mode = Mode::Document`. A fragment starts no layout reads.
+A handler forwarding the request into another Corten router does not suppress that router's
+layout reads. Each app's layout reads follow its own deadline. When one Corten app forwards a
+write to another, the outer app's request timer still bounds the whole response. To leave slow
+places empty rather than time out, set the inner app's deadline no longer than the time the outer
+request has left when it forwards, allowing for any outer work after the inner answer. With an
+outer one-second deadline, an inner app with `deadline(None)` waiting on a two-second read will
+get cut off and the outer app will answer 503.
+A handler that answers only patches (`req.patch_or`, `action.patch`, `req.invalid`) can return
+`HtmlResult<Patches>` to skip the typed route's copy. With no middleware that could answer a
+page in its place, it skips whole-page negotiation and late filling too. Middleware or a raw
+`Table` handler taking `Req` can still copy the head
+([Requests and forms](requests-and-forms.md#request-modes)).
 
 ```rust,ignore
 #[component]
@@ -448,9 +517,8 @@ async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> H
 }
 ```
 
-Corten has no layout slot that fills itself: the layout is the app's component ([design Choice 10](../design.md#choice-app-owns-document)),
-so the value reaches it as a prop, and the read stays where the handler can see it, its failure
-included.
+Either way there is one answer that brings a layout read up to date after a write, a page: the page
+the write redirects to, or its own ([design Choice 66](../design.md#choice-write-own-page-whole)).
 
 A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}>"News"</a>`:
 `href`, `data-nav` and `aria-current="page"` when it is the page (`req.nav_section` for a link

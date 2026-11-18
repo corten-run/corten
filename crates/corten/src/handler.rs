@@ -239,6 +239,9 @@ impl<S> std::ops::DerefMut for State<S> {
 /// impl from another's. Public in a private module: functions an app calls name it as a bound,
 /// and an app cannot name or implement it.
 pub trait Handler<T, S>: Clone + Send + Sync + Sized + 'static {
+    /// The typed route's answer is a patch in action mode.
+    const ACTION_PATCHES: bool = false;
+
     /// The answer to `req`.
     fn call(self, req: Request, state: S) -> impl Future<Output = Response> + Send + 'static;
 }

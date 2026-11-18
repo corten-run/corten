@@ -498,8 +498,9 @@ rules something out.
    title for a data client; the title, head tags and `<main>` for a navigation), so a layout
    costs a navigation nothing: on the item page a full document got about 7% faster than with
    the shell and a navigation stayed within noise (`render_cost` medians of alternating runs,
-   same bytes). The one navigation that reads the whole document is the one after a `data-patch`
-   write that redirects, so what the write changed in the layout is drawn as a full load draws it.
+   same bytes). The answers the runtime reads whole are the two pages that follow a `data-patch`
+   write, the page it redirects to and its own ([Choice 66](#choice-write-own-page-whole)), so what
+   the write changed in the layout is drawn as a full load draws it.
    An element of the layout that depends on the page (a section's nav) is marked `page` and sent
    with `<main>`'s children, in place of the one on screen by its id, rather than adding a value
    to the shell key: a key would turn every link across sections into a full load, and a layout
@@ -532,15 +533,76 @@ rules something out.
    answer to that fetch is the browser's alone, as a navigation's is. The mode would move to a
    standard header that says "part of a page" and that a script may set.
 
-   Stands on: platform (no registered media type tells a navigation from an action; a script cannot
-   set `Sec-Fetch-*`, and data clients send none); reasoned (a media type parameter would mix the
-   mode into content negotiation).
+   A write the runtime sends also says that it draws its own page whole
+   ([Choice 66](#choice-write-own-page-whole)), and says it in the standard header for that, as an
+   HTTP preference (RFC 7240): `Prefer: corten-draws=whole`. A preference is what this is, one the
+   server may ignore, and RFC 7240 has a server that does not know one ignore it, which is the
+   deploy crossing both ways: a runtime from before (a tab open across a deploy) sends none and gets
+   `<main>` alone, an answer it draws, and a server from before reads the request as it did. A
+   header of Corten's own (`corten-draws: whole`, as this was first written) would do the same, and
+   a new value of `corten` would not, since a server that does not know a value of `corten` reads
+   the request as a whole document's. Not `return=representation`: it asks for the resource's state
+   after a successful request, where a refused form (422) is the answer that most needs the whole
+   page, and `<main>` and the whole document are both representations of the page; what the runtime
+   says is what it can draw, so the preference is one Corten names. It is not in RFC 7240's registry
+   (a specification is required, and an unregistered preference is ignored as an unknown one is,
+   as the RFC's own examples show); neither is `corten`. Weighed and not a reason against it: it adds
+   no CORS preflight, since `Prefer` is not a safelisted header but `corten` beside it is not either,
+   so a submit to another origin was preflighted already (and the app's pages refuse cross-site
+   writes); an intermediary may act on a preference it defines (`respond-async`), not on one it does
+   not know; the server reads it only for a write the runtime sent: the line the runtime sends,
+   `corten-draws=whole` alone, is compared whole, which costs a write no more than looking up a
+   header of its own did (a patch took 62 instructions less, within the runs' range), and any other
+   line is split at the commas and semicolons outside quotes (`cache::split_unquoted`, as
+   `Cache-Control` is read), about 820 instructions more
+   ([Choice 66](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
+   7240 (3) keeps it for when it is not apparent whether a preference was applied, and here the
+   answer says what it is (`corten-shell` and no `corten-page` on a whole page, `corten-page` on
+   every `<main>`, a navigation's too, as the runtime reads them), so it would add its bytes to every
+   whole page and change nothing the runtime does. No `Vary` names it: RFC 7240 asks for one where
+   applying a preference can vary what a cache does, and here none can. Only a write's answer
+   varies with it, never a `GET`'s or `HEAD`'s (`page::own_page_whole`); a cache sends a `POST` on
+   to the server, whatever it stored (RFC 9111, 4: an unsafe request is written through), and reuses
+   a `POST`'s answer only for a later `GET` of its address, and only when it has explicit freshness
+   and a `Content-Location` naming that address (RFC 9110, 9.3.3), which a page's answer does not
+   (it is private and `no-cache` unless the app says otherwise, and Corten sends no
+   `Content-Location`); and the PWA's worker passes every request but a `GET` to the network
+   (`pwa.rs`).
 
-   Revisit when: a standard header says "part of a page" and a script may set it.
+   The preference is sent by the runtime and by the module it loads to send a progress upload
+   (`corten-upload`), and a server answers a module's address, whatever version it names, with its
+   own bytes, so across a deploy a runtime may load the other version's module. A module the runtime
+   loads keeps its signature compatible from one version to the next: the upload module keeps its
+   arguments in their old order and takes the runtime's headers last, so a runtime from before,
+   passing none, sends the action header alone and is answered with `<main>`, and a runtime from
+   after, handed the module from before, sends the upload without the preference and draws the
+   `<main>` it gets. The watchlist smoke checks both.
+
+   Stands on: platform (no registered media type tells a navigation from an action; a script cannot
+   set `Sec-Fetch-*`, and data clients send none; a server answers any version's module address with
+   its own bytes); reasoned (a media type parameter would mix the
+   mode into content negotiation; RFC 7240: a server ignores a preference it does not
+   know, `Preference-Applied` only where it is not apparent, `Vary` only where a cache's handling
+   can vary; RFC 9110, 9.3.3 and RFC 9111, 4: a `POST`'s answer never answers a `POST`, and a `GET`
+   only with freshness and `Content-Location`); measured (the preference's cost on a write, by
+   callgrind).
+
+   Revisit when: a standard header says "part of a page" and a script may set it; or a registered
+   preference says what a client can draw of an answer, which would replace `corten-draws`.
 
    Last checked: 2026-10-30, no registered media type for a request's mode, as written at
    `1e5c56e2`; 2026-11-06, a script's `Sec-Fetch-Mode` and `Sec-Fetch-Dest` replaced by the
-   browser's, probed in Chromium 156, Firefox 157 and WebKit 27.2.
+   browser's, probed in Chromium 156, Firefox 157 and WebKit 27.2; 2026-11-15, `Prefer` weighed
+   against a header of Corten's own, RFC 7240's text and its registry of preferences (`respond-async`,
+   `return`, `wait`, `handling` and others, none about what a client draws) read, the CORS
+   safelist (`Accept`, `Accept-Language`, `Content-Language`, `Content-Type`, `Range`) checked,
+   and the cost of reading it measured by callgrind on `914f4781e`, with and without the whole
+   line compared first (as `70b69a3db` has it), against `5d0bf7599`, three alternating rounds;
+   2026-11-16, the upload module called with an older runtime's arguments and the runtime handed the
+   older module, both passing in the watchlist smoke in Chromium, Firefox and WebKit on `3587a1b18`,
+   and the same two cases by a one-off probe in Chromium against that build (not a repository
+   check), each failing with `3dc461f6e`'s module or runtime served in its place: called the older
+   way, that module throws, and that runtime handed the older module sends no upload.
 
 12. <a id="choice-own-prefetch"></a>**The runtime prefetches links itself, not with Speculation Rules or `rel="prefetch"`.** A
    navigation the runtime makes asks with `corten: nav` and gets the title, head tags and
@@ -6028,9 +6090,365 @@ rules something out.
     1.0.19, `cargo update --workspace` kept 1.0.0, and for a standalone app with no lock the two
     wrote identical locks.
 
+66. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
+    that prefers it; a patch does not fill a layout read.** A `data-patch` write that answers with its
+    own result (a form drawn again with what it refused, a bulk add whose failed lines the page
+    lists) could not bring a layout read up to date: `req.page` in `Mode::Action` rendered `<main>`
+    alone, and a patch carries elements by id where a read's view, drawn at two places, has none. So
+    the shell's count was right without JavaScript and stale with it, the split
+    [#538 A data-patch write that redirects leaves the layout as the full load drew it, so a layout value the write changed stays stale with JavaScript and is right without it](https://github.com/corten-run/corten/issues/538)
+    closed for a write that redirects
+    ([#1370 A write that answers its own result with JavaScript (a patch, or its page) cannot bring a layout read up to date: only a redirect redraws the shell, so a partial result must choose between its detail and the shell's count](https://github.com/corten-run/corten/issues/1370)).
+    Now a write's `req.page` (any method but `GET` and `HEAD`) is the whole document with
+    JavaScript as without, for a runtime that says it draws it (`Prefer: corten-draws=whole`,
+    [Choice 11](#choice-corten-request-header)): a runtime from before (a tab open across the deploy)
+    gets `<main>` alone, as it did, since it would take a whole page for an answer it does not
+    draw, say the write failed, and a resend would be a new write. A runtime given `<main>` for
+    a write with a matching shell key has the next navigation read the whole page. Across a
+    mixed-version deploy, different runtime bytes change the shell key: either runtime keeps the
+    shell boundary and reloads the current address without resending, losing the write's answer
+    (including a refusal's input and messages). The layout reads a whole answer
+    draws start once the handler has answered with it
+    (nothing runs beside the handler, whose reads must see what it wrote), `give` is honored, and
+    the runtime applies it with the comparison it runs on the page a write redirects to
+    ([Choice 10](#choice-app-owns-document)), drawing `<main>` and each element around it that
+    changed, in the same document. Until it is in, every navigation reads the whole page, as after a
+    write that redirects, so one that leaves it on its way still shows what the write changed. The
+    runtime keeps the writes whose change no layout has drawn, numbered as their outcomes come: a
+    write's whole own page, a redirect, and a patch (or `<main>`) that took the write, each
+    undrawn until it is in. A page's layout stands for those answered before it was asked for and
+    the write it answers, and drawing it makes every other write answered since it was asked for
+    undrawn again: with two writes out, whichever page is drawn last, its layout may be older than
+    the other write, so the next navigation reads the whole page. That holds for a patch too: one
+    that drew a layout element (a count with an id) and is then drawn over by an older write's own
+    page is undrawn again, so the next navigation reads the whole page. A navigation that cuts off a write not yet drawn (waiting
+    for its answer, or a patch that took it whose scripts are loading; only a navigation does: a
+    newer submit of the form waits for it) reads the whole page,
+    and the write, which the server may have applied, counts too, numbered as the navigation starts
+    and after the writes that page draws: the server may still be running it as that page is read,
+    so the navigation after reads the whole page again. One that failed in view (the network failed,
+    a 5xx, or the body of an answer that took it was cut off, or did not draw, after its headers
+    came), which the server may have applied too, counts for a navigation to another page.
+    When an error is shown, a cut body or a completed 5xx marks the same write undrawn again,
+    even if a later write's layout covered it while the body was on its way.
+    An undrawn failure vetoes a whole `ReadAgain` poll even if another write is undrawn or the
+    page normally polls whole while its write lands. If a whole poll is already waiting for its
+    answer or assets, it skips the draw and schedules the next read. This avoids replacing the
+    whole layout, not every failure message: a partial draw can still replace `<main>` and page-owned
+    layout parts. Without the Navigation API, `ReadAgain` reloads.
+    A write the server applies after the navigation
+    after its cut-off (a slow write still running then) shows at the next whole page read for another
+    reason (another write, a reload). A page the app's or an area's
+    middleware makes with `Req` in the route's place is filled as the middleware answers, under the
+    request's deadline and before the error page, from the head that `Req` was taken with, as the
+    route's own page is. Middleware can take `Req` from a retained head after the route answers
+    and replace its response. Only the forwarded request's extensions tell `Req` not to copy the
+    head at a typed endpoint, where a page-capable route takes its own copy and a patch-only
+    route needs none. Each dispatch that stages late fill replaces the record, so a write forwarded
+    to another router can still start its layout reads. The record holds the route mark and only
+    this dispatch's optional deadline as values, without a separate deadline allocation. The
+    receiving app's layout reads follow its own deadline, not one from forwarded or copied
+    extensions. The enclosing app's request timer still bounds the entire response from the inner
+    app, as with any slow service. Set the inner deadline no longer than the outer one if slow
+    places should be left empty instead of the outer timer answering 503. With no inner deadline,
+    an outer one-second timer cuts off a response waiting on a two-second inner read. Replaying a
+    retained head starts a fresh dispatch; the signal still closes head publication independently.
+    A head retained by middleware is kept on the request's `Signal` (a `Req` stays the size it
+    was on `main`), which the head's extensions hold in turn, so it is let go when the write is answered
+    or its future dropped unanswered (the client gone, a middleware's timeout). Publication checks
+    the closed mark under the slot lock, so a detached extraction cannot recreate the cycle after
+    cleanup. The route and middleware fills run only for responses with places. A typed patch-only
+    route with no app or scoped middleware skips the preference and late fill entirely. A named
+    POST with only patch handlers does too; the router works that out at startup. A mixed POST
+    stays eligible without reading its query twice. Middleware can answer in the route's place or
+    change the mode or preference, so a page made with `Req` honors the headers it was taken with.
+    In an app with reads, a swap write that goes through middleware can enter the late timeout
+    poller even if its incoming request did not prefer a whole page. The page-capable route or
+    early `Req` keeps the head regardless of the preference middleware leaves: a handler may
+    still set `req.mode = Mode::Document` ([Choice 50](#choice-patch-routes)). Only a whole page
+    with places fills late; a fragment starts no reads.
+    A `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
+    layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
+    page's, as a navigation does, and the next navigation reads the whole page; it cannot load in
+    full, as the redirect's page does, since loading the address would not draw the write's answer.
+    The limit: where a navigation's page loads in full (a section stylesheet that fails to load, a
+    page element with no place on screen), so does the write's, as its `<main>` did before: its
+    address is loaded and its answer is lost (a refused form's messages and values), its notice kept.
 
+    Not chosen: a patch that gives a value (`action.patch(..)?.give::<CartCount>(n)`) filling each
+    place on screen. Every page with a layout read would carry a marker per place for the runtime to
+    find, a cost on every page to serve the few writes that answer in place, and it would be a second
+    way to bring a read up to date beside the page (Values 5). A notice that carries a list, so the
+    write can redirect: narrower, since a form drawn again is no notice. A built-in client behavior
+    or a second handler model: what the issue asks for is a page, which the server already draws.
+    So a patch still fills no layout read; a write whose answer must change one answers its page,
+    and a layout value a patch updates is a component with an id, passed its value as a prop.
 
+    Not chosen either: the runtime's record of the writes (the numbers, the undrawn and failed
+    sets, `drew`) in a script module of its own, loaded before a page's first write is sent, as
+    `upload.js` is for a form with progress, with only the calls to it in the runtime. Built with
+    the runtime's settings (esbuild and terser, gzip by Node's `zlib`), the runtime would be 44,971
+    bytes and 16,029 with gzip where it is 45,027 and 16,074, 45 less, and the module 490 and 326:
+    a page that writes would load 281 bytes more in all, and its first write would wait for one more
+    script before it is sent: a module of Corten's own (`corten-upload.js`) imported cold from the
+    watchlist over loopback takes a median of 10.3 ms in Chromium, 33 in Firefox and 22 in WebKit
+    (25 fresh pages each, Playwright, on a loaded host; 8.8 to 287), and over a network at least one
+    round trip more. A navigation reads the record as it starts, before it
+    can wait for anything, so one that starts while the module loads would need a record of its own
+    in the runtime for the writes it cuts off. 45 bytes on every page do not pay for a slower first
+    write and a second record (Values 1 and 2).
 
+    Historical measurements: a write's own page in `Mode::Action` sends the layout's markup and waits for its
+    reads, which start only once the handler has answered. In the crate's test app (two layout
+    reads, a small layout, a route of a routes module), with a read that takes 20 ms, the whole page
+    is 506 bytes and answers in 21.3 ms (median of 25, three runs, 20.2 to 25.8), where `<main>` was
+    37 bytes in 0.04 ms: the user waits for the layout's reads after the write, as a browser
+    without JavaScript does. In the watchlist (its real layout, no layout reads) the write's own page
+    is 2,632 bytes, 1,123 with gzip, where `<main>` is 911 and 471 (the smoke's write to
+    `/smoke/written`, fetched by Node three times each, the same each time, gzip by Node's `zlib` at
+    its default level). In instructions (callgrind, release, `70031a793` against `main` at
+    `1c72b037` with the harness tests added), it takes 62,450 where its `<main>` swap took 24,781;
+    the same write from a browser without JavaScript, the same whole document, takes 57,595 (57,182
+    before), and a `GET` of the whole document 53,072, so the runtime's write pays 4,855 more than
+    the same write without JavaScript: the copy of the request's head that its reads start from
+    (made before the handler, since the handler takes the request), the fill's two boxes and the
+    preference. In an app without layout reads it takes 28,199 where it took 24,683 (the document's
+    head and layout). A runtime that does not prefer it gets `<main>` in 23,885 (23,244 before: the
+    look for the preference and the route's look at the request's mark; not traced further). A write
+    that answers something else starts no read, since nothing runs beside its handler. In an app
+    with layout reads only a route whose answer type can be a page keeps a copy of the request's
+    head, known where the route is called: one that answers patches alone (`HtmlResult<Patches>`),
+    JSON or text keeps none, and its patch takes 25,716 where it took 23,532. An `HtmlResult` route
+    keeps it, since its handler may answer either: a `data-patch` form whose handler is
+    `req.patch_or(view, page)` answers a patch with JavaScript and its page without, so it is
+    `HtmlResult` and pays the copy on each patch, 31,180 where it took 22,900, 8,280 more; such a
+    handler may return `HtmlResult<Patches>` instead, as the guides say. The historical gap between
+    the two patches was 5,464 on `70031a793` (31,180 less 25,716), as on `bb7562d9d` and
+    `70b69a3db`. That gap included more than the copy: it also included the route continuation
+    and the dropped head.
+    The head is copied field by field from the request in place. Before `main`'s named posts were
+    merged in, that version's patch-to-patch gap was 5,395 (`914f4781e`, 30,930 less 25,535).
+    Taking the request apart and putting it back gave a gap of 5,535
+    (`17f285075`, 31,132 less 25,597), 140 more. With named
+    posts merged in, the field-by-field version's patch-to-patch gap was 5,464
+    (`70b69a3db`, 31,017 less 25,553), 69 more than its earlier gap, not traced. The headers and
+    extensions are cloned either way, since a read is given the whole head. A route given by hand (`Table`)
+    copies the head as its `Req` is taken, whatever it answers, and so does a `Req` the app's or an
+    area's middleware takes before a write's route, a second copy beside the route's: the own page
+    takes 66,413 and an `HtmlResult` patch 35,580 with a middleware that takes `Req` and passes the
+    request on, about 2,100 and 2,550 more than without it once the `Req` itself (1,847 before) is
+    counted (at `70031a793`, where that head and the request's signal kept each other and were never
+    freed; see below for what freeing them costs). Other requests pay a little: in an app without layout reads a patch takes 23,269 where
+    it took 22,752, a navigation in an app with them 22,358 where it took 22,221, and a whole
+    document 53,072 where it took 52,782. Of the whole document's 290 (`callgrind_annotate`, each
+    function's own instructions, `main` against the head): 145 is the test's own search of the
+    answer (`str::contains`, called as often in both; not the server's work, and why it reads more
+    is not traced); 87 is copying, two more copies a request in `At::run`'s future (58; the request
+    is moved into its future by a function that first looks for the preference, which a variant with
+    the look inside the future cost the whole document 995 over `main`, a slot of the request kept
+    in each of its states) and a `Req` 8 bytes larger (29); 24 in `At::run` itself, 12 in taking
+    `Req`, and 10 in the head's extensions cloned under another name. So about 145 is the server's,
+    all of it moving bytes. The navigation's 137 and the patch's 517 are not traced. The watchlist's
+    watch (an app without layout reads) takes 81,585 where it took 80,551, and `main` takes 81,697
+    for the same request with the preference, which `corten::testing` now sends for `Mode::Action`
+    and `main` ignores: the watch's rise is the test client's one header more, and what the server
+    adds to it is within its runs' range (up to 430 instructions here, against at most 3 on the
+    crate's patch) and is not resolved. The route's
+    fill is boxed: with the box only around the reads, past the handler, an `HtmlResult` patch took
+    262 less but every other write about 480 to 590 more, as each route's future grew. Letting go of
+    the heads a `Req` kept before the route (a mark on the signal, looked at as the write ends, and
+    the heads taken off it only where one was kept) costs a write the runtime sent in an app with
+    layout reads about 90 to 150 instructions (callgrind, release, `what_a_write_answering_in_an_action_costs`,
+    the head against `ef35919bb`, which leaked them, three alternating rounds, median [range]): its own
+    page 62,569 [62,546 to 62,581] where it took 62,482 [62,478 to 62,511], an `HtmlResult` patch
+    31,329 [31,328 to 31,329] where it took 31,180, a `Patches` one 25,862 where it took 25,716; the
+    same write without JavaScript is unchanged (57,619 [57,618 to 57,625] against 57,622 [57,576 to
+    57,644]). With a middleware that takes `Req` the own page takes 69,873 [69,804 to 69,891] where it
+    took 66,448 [66,447 to 66,498], and an `HtmlResult` patch 37,523 where it took 35,578: that is
+    the head and the request's signal freed where before they leaked, `_int_free`, `free` and
+    `malloc_consolidate` 4,253 more per request and `malloc` and `_int_malloc` 1,669 less
+    (`callgrind_annotate`, each function's own instructions, 1,200 requests of each build), the
+    memory the leak took handed back. In that historical comparison the runtime was 1,181 bytes larger raw and 462 with gzip
+    (15,612 to 16,074 at zlib's default level, against `main` at `27c29d7d2`), numbering the
+    writes a layout draws and which of them failed in view.
+
+    The no-read paths neither install nor mutate the late-fill extension. The generic route
+    still has to negotiate: it can answer a whole page even in an app without reads. That is
+    not an attribution of its entire measured cost to negotiation. The remaining overhead and
+    the 496 more gzip bytes on pages that load core are accepted so the same handler's own-page
+    answer shows what the write changed with or without JavaScript, without adding a marker
+    to every layout place or a second way to update it. Apps with reads still pay for the late
+    path when eligible, and generic routes can capture the head even when they answer a patch.
+    These instruction counts do not establish elapsed time.
+
+    Fresh Callgrind instruction counts from `write_request_cost`, main `4f1b085df` against `5a553e247`.
+    Measured median instructions per request [range]; paired increases are calculated before
+    rounding. Cases with reads use `READS=1 MIDDLEWARE=1` (pass-through middleware); legacy
+    leaves out the whole-page preference.
+
+    | Request | Layout reads and middleware | Main | Head | Paired increase |
+    |---|---|---:|---:|---:|
+    | Document GET | No | 19,045.50 [19,045.47 to 19,045.52] | 19,162.51 [19,161.04 to 19,162.51] | +116.99 [115.54 to 117.04] (0.61%) |
+    | Navigation GET | No | 17,680.41 [17,680.37 to 17,680.42] | 17,807.45 [17,807.42 to 17,807.46] | +127.05 [127.00 to 127.08] (0.72%) |
+    | Direct typed patch | No | 18,141.72 [18,141.69 to 18,141.72] | 18,327.73 [18,327.71 to 18,327.73] | +186.01 [186.00 to 186.01] (1.03%) |
+    | Generic patch | No | 18,168.72 [18,168.69 to 18,168.76] | 18,643.72 [18,643.69 to 18,643.76] | +474.97 [474.96 to 475.07] (2.61%) |
+    | Typed patch, legacy | Yes | 17,395.75 [17,394.37 to 17,395.76] | 19,080.42 [19,079.44 to 19,082.08] | +1,685.06 [1,684.67 to 1,686.33] (9.69%) |
+    | Typed patch, preferred | Yes | 18,215.74 [18,215.69 to 18,215.77] | 19,987.55 [19,987.48 to 19,987.57] | +1,771.78 [1,771.75 to 1,771.88] (9.73%) |
+    | Generic patch, legacy | Yes | 17,419.79 [17,419.79 to 17,419.84] | 21,693.29 [21,693.26 to 21,693.33] | +4,273.49 [4,273.42 to 4,273.55] (24.53%) |
+    | Generic patch, preferred | Yes | 18,242.76 [18,242.73 to 18,242.79] | 22,960.68 [22,960.68 to 22,963.17] | +4,717.92 [4,717.89 to 4,720.45] (25.86%) |
+
+    With reads and middleware, the paired generic increase net of the typed increase is
+    2,588.43 [2,587.22 to 2,588.75] when legacy and 2,946.14 [2,946.05 to 2,948.67] when preferred.
+    Neither patch starts a read, and the net increase does not isolate head copying.
+
+    Stands on: measured (callgrind, release, `write_request_cost`,
+    `what_a_write_answering_in_an_action_costs`, `what_a_page_with_layout_reads_costs` and the
+    watchlist's `what_a_watch_costs`, the difference
+    of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every range within
+    140 instructions but the watch's (up to 430); `what_a_writes_own_page_costs_in_time_and_bytes` for the time and bytes; the
+    runtime's size by Node's `zlib`, once each build); reasoned (a patch carries elements by id, and
+    a layout read's view at two places has none, so filling it needs a marker on every page; a
+    write's own answer is not at an address a full load would draw; a handler takes the request, so
+    the head its page's reads start from is copied before it runs, and only the answer type says
+    beforehand that no page will come, and request extensions are not evidence that one dispatch
+    is enclosed by another); value (the page shows the same values with JavaScript as
+    without, Values 3; one answer brings a layout read up to date after a write, a page, Values 5;
+    correctness before performance, the order of the values).
+
+    Revisit when: an app needs a patch to change a layout read and cannot answer its page (a write
+    whose page is too costly to draw again), which would reopen markers on the places; or a route
+    can have the request's head back from its handler once it has answered (an extractor that hands
+    it on), which would take the copy off an `HtmlResult` route's patch; or the paired
+    `write_request_cost` controls show a repeatable increase beyond the measured ranges in the
+    generic-only cost or in the cost of the late-write machinery. With `READS=1 MIDDLEWARE=1`,
+    pair both preferred and legacy typed and generic patches with main. Both kinds of request
+    can enter the late poller, and a generic route can keep the head for either. Compare the
+    generic and typed deltas separately for each preference. Separate the capture, boxed
+    continuation and drop by profiling, not by calling the generic-minus-typed gap a copy.
+    Also revisit if the paired no-read patch or GET controls
+    show a repeatable increase beyond the measured ranges, or apps cannot set a receiving app's
+    deadline short enough to leave its slow places empty before the enclosing app times out.
+    The 5,467-instruction threshold was historical: it compared the generic and typed patches in
+    `what_a_write_answering_in_an_action_costs`, not a standalone head copy.
+
+    Last checked: 2026-11-18, measured against main `4f1b085df` at `5a553e247` with the same
+    `write_request_cost` fixture on both (release, all features, Rust 1.99.1, Callgrind 3.19.0 and
+    jemalloc, three alternating 1,200-minus-200 pairs divided by 1,000). The fixture uses the
+    checked action patch builder on both sides, with assertions outside the counted loop. Gzip
+    by Node's `zlib`: core 15,612 to 16,108 bytes, upload 539 to 559. The paused-clock forwarding
+    tests start the inner read once and verify that the outer app returns 503 when the inner app
+    has no deadline, and returns 200 with a slow place empty when the inner deadline is shorter.
+    Independent writes with copied extensions and replays of finished dispatches fill under
+    their own deadlines. The 503 and concurrent copied-extension tests fail with the old
+    inheritance code at `1fc806635`. An earlier check used release Callgrind 3.19.0 with jemalloc and
+    Rust 1.99.1, `cc81e15bb` against `a6665d11a` before merging main, with the same `write_request_cost`
+    fixture and three alternating 1,200-minus-200 pairs. No-read median instructions per request
+    [range], before to after: document GET 19,174.47 [19,173.03 to 19,174.50] to 19,158.51
+    [19,158.47 to 19,159.96], navigation GET 17,815.45 [17,815.41 to 17,815.45] to 17,803.41
+    [17,803.41 to 17,804.88], direct typed patch 18,323.72 [18,323.72 to 18,323.77] to 18,311.68
+    [18,310.29 to 18,311.72], and generic patch 18,647.72 [18,647.72 to 18,647.73] to 18,631.71
+    [18,631.68 to 18,633.41]. Median paired savings [range] were 14.54 [14.52 to 16.00],
+    12.00 [10.58 to 12.04], 12.04 [12.00 to 13.48] and 16.01 [14.32 to 16.06], respectively.
+    With reads and pass-through middleware, the typed patch saved 83.01 [82.99 to 84.44]
+    when legacy and 84.48 [83.04 to 84.57] when preferred. The generic patch saved 135.02
+    [134.97 to 135.06] when legacy and 134.97 [134.96 to 135.04] when preferred.
+    A write forwarded through a typed endpoint to another router returned a whole page with an
+    empty cart header on `a6665d11a`. The receiving router now fills the header and starts its
+    cart read exactly once, with and without a deadline.
+    The previous check compared `251a1792c` against main `5599e451c`, with the same fixture and three
+    alternating 1,200-minus-200 pairs. Median additional instructions per request without reads:
+    document GET 122 (paired range 121 to 122), navigation GET 128 (128 to 128), direct typed
+    patch 188 (186 to 188), generic patch 485 (485 to 485). Those medians are 19, 15, 16 and 20
+    higher, respectively, than the prior check. With reads and no middleware the typed patch
+    adds 197 (197 to 198), the generic patch 4,643 (4,643 to 4,643), and the own page 13,972
+    (13,972 to 13,972), drawing a document instead of a fragment. With reads and pass-through
+    middleware, the typed patch adds 1,533 (1,532 to 1,533) when legacy and 1,620 (1,620 to 1,620)
+    when preferred. The generic patch adds 4,191 (4,189 to 4,191) when legacy and 4,633
+    (4,633 to 4,633) when preferred. The paired generic delta net of the typed delta is 2,657
+    (2,656 to 2,659) when legacy and 3,012 (3,012 to 3,012) when preferred. Neither isolates
+    the copy. Neither patch starts a read, and the typed patch still skips the head copy.
+    Both the generic and typed-patch regressions return a whole page with unfilled layout reads on
+    `41f6ae507` when middleware replaces the patch with a page from a retained request head.
+    On `251a1792c` the replacement fills its layout and starts exactly one read in each case;
+    2026-11-18, release Callgrind 3.19.0 with jemalloc, `7d8253ceb` against
+    main `70dd920cc`, with the same `write_request_cost` fixture and three alternating
+    1,200-minus-200 pairs. Median additional instructions per request without reads: document
+    GET 103 (range 103 to 103), navigation GET 113 (113 to 113), direct typed patch 172
+    (172 to 172), generic patch 465 (465 to 465). Each delta moved by one instruction from the
+    previous check. With reads and no middleware the typed patch adds 179 (178 to 180), the
+    generic patch 4,367 (4,367 to 4,367), and the own page 13,696 (13,694 to 13,696), drawing a
+    document instead of a fragment. With reads and pass-through middleware, the typed patch
+    adds 1,359 (1,359 to 1,359) when legacy and 1,446 (1,446 to 1,447) when preferred. The generic
+    patch adds 3,913 (3,912 to 3,913) when legacy and 4,357 (4,357 to 4,357) when preferred. The
+    paired generic delta net of the typed delta is 2,553 (2,552 to 2,554) when legacy and 2,910
+    (2,910 to 2,910) when preferred. Neither isolates the copy. The legacy generic patch now
+    pays for head retention in case its handler overrides the mode, but starts no read. The
+    typed patch still skips the capture. Core gzip remains 15,612 to 16,108 bytes and upload
+    gzip 539 to 559;
+    2026-11-18, `010f04f23` against
+    main `70dd920cc`. Using the same `write_request_cost` fixture on both builds, three alternating
+    1,200-minus-200 pairs measured these median additional instructions per request without reads:
+    document GET 102 (range 102 to 104), navigation GET 112 (112 to 113), direct typed patch
+    173 (173 to 173), generic patch 466 (466 to 466). These are 6 to 14 more than the preceding
+    check's deltas. They do not measure named-route dispatch in isolation. With reads and no
+    middleware the typed patch adds 180 (180 to 180), the generic patch 4,374 (4,374 to 4,374),
+    and the own page 13,703 (13,703 to 13,703), drawing a document instead of a fragment.
+    With reads and pass-through middleware, both legacy and preferred writes can enter late
+    staging at that revision, but only the preferred generic patch retains the head. The typed
+    patch adds 1,778 (1,777 to 1,778) when legacy and 1,967 (1,966 to 1,967)
+    when preferred. The preferred-minus-legacy difference, net of main, is 189 (189 to 189)
+    for typed patches and another 2,905 (2,905 to 2,907) for the generic-only path. Neither
+    patch starts a read. Core gzip remains 15,612 to 16,108 bytes and upload gzip 539 to 559;
+    2026-11-18, `7adced7ed` against main `9de7529fc`, using the same method and fixture: the
+    no-read deltas were 96 (95 to 96) for document GET, 102 (102 to 102) for navigation GET,
+    159 (159 to 159) for typed patch and 454 (454 to 454) for generic patch. In that version
+    the preferred versus legacy controls measured 1,086 (1,086 to 1,088) for the late-write
+    path and 2,905 (2,904 to 2,905) more for the generic-only path. One profile of the generic
+    patch without middleware counted 1,512 in the inclusive capture. Core gzip measured 15,612 to
+    16,108 bytes, upload gzip 539 to 559. The watchlist smoke covers named form controls in
+    the frame fallback and both cut and completed 503 bodies after another write draws;
+    2026-11-18, release Callgrind 3.19.0 with jemalloc, `e80694ef7` against merged
+    main `9de7529fc`, using the same earlier `write_request_cost` fixture on both. Three alternating
+    1,200-minus-200 runs, with assertions outside the counted loop. Median instructions per
+    request, main to head: without reads, document GET 19,022 to 19,121, nav GET 17,651 to 17,757,
+    typed patch 18,101 to 18,547 and generic patch 18,128 to 18,579. With reads configured, typed
+    patch 18,175 to 19,274 and generic patch 18,202 to 22,194. Preferred versus legacy typed patches,
+    net of the same comparison on main, measured 537 additional instructions for negotiation,
+    the late mark and cleanup, the deadline extension and the pending-page check at that head.
+    The equivalent generic comparison adds 2,888 instructions beyond that then-shared path,
+    including 1,512 in the inclusive `at_late_route` capture. The remainder includes the captured
+    head's cleanup and its boxed route continuation. Core gzip 15,612 to 16,079 bytes, upload gzip
+    539 to 559;
+    2026-11-17, callgrind (valgrind 3.19.0) on `32ea2c896` against `ef35919bb`
+    (the early heads let go against leaked; `main` at `76b5126b7` merged), three alternating rounds,
+    the middleware case's own instructions per function compared by `callgrind_annotate`, the
+    runtime's size against `27c29d7d2` by Node's `zlib` (the head merges it), the on-demand record
+    built by the runtime's settings on that merge, a module's cold import timed by Playwright, and the watchlist's own-page
+    checks in three engines (the own page drawn over a patch, the body cut off after its headers and
+    the read again after a whole own page failing with `6790fa5da`'s runtime);
+    2026-11-16, callgrind (valgrind 3.19.0) on `70031a793` against `main` at
+    `1c72b037` with the harness tests added and `bb7562d9d` as a third build, three alternating
+    rounds each, the whole document's own instructions per function compared by `callgrind_annotate`,
+    and the runtime's size against `dbe1a34c7` by Node's `zlib` (the head merges `main` at
+    `30bed57ed`, `2b33cd568` and then `dbe1a34c7` after `70031a793`; those merges are not
+    measured by callgrind); 2026-11-15, callgrind on `70b69a3db`
+    against `main` at `83a9c9fbd` with the harness tests added, and `914f4781e` with and without the whole `Prefer`
+    line compared first against `17f285075` (the round before, `5d0bf7599` merged), three
+    alternating rounds each, the time and bytes in release on `70b69a3db` (three runs of 25), the
+    watchlist's bytes on `70b69a3db`, and the runtime's size against `83a9c9fbd` by Node's `zlib`;
+    2026-11-15, callgrind on `e2c5cec0c` against `ef7570f63`, and the fill's box past the handler
+    measured as a third build (earlier rounds: `04000147b` against `02ac51d9e`, `e59c32c28` against `934c94367`,
+    `e760a5385` and `de46e974b` against the change as it was, `0d2d818cd` with the harness);
+    2026-11-15, a patch answered before a navigation left it drawn by that page, and an upload's
+    headers, by the watchlist smoke on `70b69a3db`, each failing with the runtime of `17f285075` in
+    Chromium; 2026-11-15, a write without the preference answered `<main>` and drawn with no failure, and a
+    navigation that leaves a patch before it is drawn, by the watchlist smoke, each failing with the
+    runtime of `e2c5cec0c` in Chromium; 2026-11-15, a write that failed in view by the watchlist smoke
+    in Chromium and Firefox, failing on `fba53d131` in Chromium; 2026-11-14, the writes a layout draws
+    in either order and a write cut off before its answer by the watchlist smoke in Chromium and
+    Firefox (WebKit, without the Navigation API, skips them) on `04000147b`, each failing on
+    `3eeba8d8d` in Chromium, and a middleware's page filled under the deadline and before the error
+    page by the crate's tests on `04000147b`, failing without it.
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

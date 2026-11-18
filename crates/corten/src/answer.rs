@@ -2574,6 +2574,12 @@ fn marked<O: Answer>(mut res: Response) -> Response {
     if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
         res.extensions_mut().insert(Answered);
     }
+    // A page with places from a route whose answer type says it is not one: a write's own page,
+    // filled after its handler, starts no read for it, as such a route's `GET` does not
+    // (`crate::layout::fill_made_early`). Also a constant for a page route.
+    if !O::PAGE && res.extensions().get::<crate::layout::Pending>().is_some() {
+        res.extensions_mut().insert(crate::layout::NotAPageAnswer);
+    }
     res
 }
 
@@ -2584,6 +2590,8 @@ where
     S: Send + 'static,
     T: 'static,
 {
+    const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
+
     #[inline]
     fn call(self, mut req: Request, state: S) -> impl Future<Output = Response> + Send + 'static {
         // A whole document's layout reads (`crate::LayoutRead`) start as its page route is called,
@@ -2599,7 +2607,24 @@ where
                 signal.mark_for_everyone();
             }
         }
-        futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>)
+        // For a write eligible for late fill (#1370), only a route whose answer type can be a
+        // page keeps the request's head, and fills it if the handler renders a whole page.
+        // Known here, as a constant: a route that answers patches alone
+        // (`HtmlResult<Patches>`), JSON or text keeps none. A `GET` or `HEAD` looks no further.
+        let page = O::PAGE && !Self::ACTION_PATCHES && !self.shared;
+        let late = crate::layout::reaches_late_route(&mut req);
+        // Each answer is made where it is returned: made first and then moved into its variant, the
+        // handler's future (which holds the request) was copied twice more on every request
+        // (callgrind, a whole `GET`).
+        if late && page {
+            // Boxed, so every other request's future stays the size it was.
+            futures_util::future::Either::Right(Box::pin(crate::layout::fill_after(
+                crate::layout::at_late_route(&req),
+                futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>),
+            )) as std::pin::Pin<Box<dyn Future<Output = Response> + Send>>)
+        } else {
+            futures_util::future::Either::Left(futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>))
+        }
     }
 }
 

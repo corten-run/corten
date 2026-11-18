@@ -66,6 +66,7 @@ service is a server of the test's own, not Corten ([Testing an app](app.md#testi
 | `GET` with `corten: nav` | runtime, same-origin link or back/forward | the same call: `<title>`, head tags and the page only | swaps `<main>` |
 | `GET` with `corten: page` | runtime, the page a write sends the browser to | the same call: the whole document, as a first load gets it (`req.mode` is `Mode::Document`) | swaps the page and draws its layout again |
 | `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `action.patch(view)` from `Some(action) = req.action()` ([where a form posts](#where-a-form-posts)) | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
+| `POST` with `corten: action` and `Prefer: corten-draws=whole`, answered with a page | runtime, a write that draws its own page (a refused form, a partial result) | `req.page(doc)`: the whole document, its layout reads started, as without JavaScript (`<main>` alone for a runtime that does not prefer it) | swaps the page and draws its layout again |
 | `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
 | any, `Accept: application/json` | native screen, agent, a page's script ([`read()`](scripts.md#a-screens-data)), test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
@@ -80,20 +81,40 @@ is `req.patch_or_with(|action| async move { .. action.patch(view) }, || async { 
 sides are closures and only the one the request asks for runs (the part's may answer
 `action.patch_with_status`, or set headers on its response, for a status or headers of its own);
 a refusal whose
-form needs a read is `req.invalid_with` (below). A route with no screen goes under
+form needs a read is `req.invalid_with` (below). A write that answers with its own page instead
+sends it whole in document mode or in an action with `Prefer: corten-draws=whole`, and the runtime
+draws what changed around `<main>` as after a redirect, so a layout read (a cart's count) is
+current; a patch fills no layout read, so a write
+whose answer must change one answers its page ([layout reads](views.md#the-document)). A route with no screen goes under
 [`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
-loads only ([the document](views.md#the-document)); every page carries a key hashed from the
+loads and on a write's own page ([the document](views.md#the-document)), not on a navigation; every page carries a key hashed from the
 caller its handler read (if any; by value, so a rule that holds only another caller keys as that
 one does), the deploy and its layout, and when a navigation answers with a different key
 (sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
 never stale.
 
+For an action write, the page uses the mode and drawing preference in the request as middleware
+leaves it. Removing the preference, replacing it with `corten-draws=main`, or forwarding the
+request in navigation mode gives a fragment unless the handler overrides the mode. If the handler
+sets `req.mode = Mode::Document`, its whole page still fills the layout reads after the write.
+
+During a mixed-version deploy, an older server can answer a new runtime's preferred write with
+`<main>` alone. With the same shell key, the runtime draws that fragment and reads the layout on
+the next navigation. With a different key, it reloads the current address instead: the write is
+not sent again, but its answer is lost, including the fields and messages in a refusal. The same
+shell check applies when a tab with the old runtime submits to the new server.
+
 A `data-patch` form may send to any route. One whose handler answers its page in
-`Mode::Action` (`req.page`, no `patch_or`) gets that page swapped in, its title and `<main>`, as a
-navigation's would be: the form works, and every submit sends and draws the whole page, which a
-small page with no ids may want. Nothing checks that a form's handler answers a patch. A part of
+`Mode::Action` (`req.page`, no `patch_or`) gets that page drawn as a redirect's is, its title,
+`<main>` and each element of the layout that changed: the form works, and every submit sends and
+draws the whole page, which a small page with no ids may want. Nothing checks that a form's handler answers a patch. A part of
 the page read again from its route (`ReadAgain::from`, [below](#a-read-that-has-not-caught-up-yet))
-is the one thing that needs one, so it takes only a route that says `patches`.
+is the one thing that needs one, so it takes only a route that says `patches`. A write whose
+handler answers only patches (`req.patch_or`, `action.patch`, `req.invalid`) may return
+`HtmlResult<Patches>` too: in an app with layout reads a typed `HtmlResult` route keeps a copy of
+the request's head on every preferred submit, in case it answers a page. `HtmlResult<Patches>`
+skips that route's copy, not the copy made by a raw `Table` handler or by middleware taking
+`Req` from its own request head, even after the route answers.
 
 Controls may be named `parentElement`, `parentNode`, `id`, `elements` or other DOM members. A
 control, in the form or joined to it by `form=`, is the form's member of its name, so Corten reads
@@ -869,8 +890,8 @@ a field each need an id of their own, so each takes `name={f.size}`. Each checkb
 `{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the
 element around the radios takes it, as a `role="radiogroup"` (a plain `<fieldset>` may not
 carry `aria-invalid` either).
-The runtime focuses the first invalid field (unless the user has moved on to another part of the
-page while waiting).
+The runtime focuses the first invalid field and scrolls it into view (unless the user has moved
+on to another part of the page while waiting).
 
 A group of fields several forms share (an address) is a `Fields` struct of its own, put in a form
 with `#[fields(group)]`. Its fields post under the field's name, `ship_to.street`, so a form can

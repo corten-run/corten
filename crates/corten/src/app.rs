@@ -2335,6 +2335,14 @@ pub(crate) struct Next<'a, S: Steps> {
 }
 
 impl<'a, S: Steps> Next<'a, S> {
+    pub(crate) fn has_middleware(&self) -> bool {
+        S::has_middleware(&self.scope)
+    }
+
+    pub(crate) fn route_can_answer_action_page(&self) -> bool {
+        !self.route.as_ref().is_some_and(|route| route.action_patches())
+    }
+
     // Not an `async fn`: a layer of its own would move the request once more.
     #[inline]
     pub(crate) fn run(self, req: Request) -> impl Future<Output = Response> + Send + 'a {
@@ -2350,6 +2358,8 @@ pub(crate) trait Steps: Send + Sync + 'static {
     type Scope<'a>: Send;
 
     fn scope<'a>(&'a self, scope: &'a Scope) -> Self::Scope<'a>;
+
+    fn has_middleware(scope: &Self::Scope<'_>) -> bool;
 
     fn run<'a>(
         &'a self,
@@ -2368,6 +2378,10 @@ impl<M: Middleware> Steps for Plain<M> {
     #[inline]
     fn scope<'a>(&'a self, _: &'a Scope) {}
 
+    fn has_middleware(_: &()) -> bool {
+        std::any::TypeId::of::<M>() != std::any::TypeId::of::<()>()
+    }
+
     #[inline]
     fn run<'a>(&'a self, req: Request, route: Option<Route>, (): ()) -> impl Future<Output = Response> + Send + 'a {
         self.0.call(req, crate::middleware::Handle(route))
@@ -2383,6 +2397,10 @@ impl<M: Middleware> Steps for Scoped<M> {
     #[inline]
     fn scope<'a>(&'a self, scope: &'a Scope) -> Self::Scope<'a> {
         &scope.middleware
+    }
+
+    fn has_middleware(stack: &Self::Scope<'_>) -> bool {
+        !stack.is_empty() || Plain::<M>::has_middleware(&())
     }
 
     #[inline]

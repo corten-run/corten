@@ -405,6 +405,10 @@ async fn call_with(
     let mut req = Request::builder().method(method).uri(uri);
     if let Some(mode) = mode {
         req = req.header("corten", mode);
+        // A form submit, as the runtime sends one: it draws a write's own page whole (#1370).
+        if mode == "action" {
+            req = req.header("prefer", "corten-draws=whole");
+        }
     }
     if let Some(accept) = accept {
         req = req.header("accept", accept);
@@ -15350,6 +15354,48 @@ mod layout_reads {
 
         #[route("/page-or-file", get = page_or_file)]
         pub struct PageOrFile;
+
+        #[route("/typed-write", post = typed_write)]
+        pub struct TypedWrite;
+
+        #[route("/document-write", post = document_write)]
+        pub struct DocumentWrite;
+
+        #[route("/patches-only", post = patches_only)]
+        pub struct PatchesOnly;
+
+        #[route("/named-patches", get = typed, post = patches_only, post(save) = patches_only, post(remove) = patches_only)]
+        pub struct NamedPatches;
+
+        #[route("/any-patch", post = any_patch)]
+        pub struct AnyPatch;
+    }
+
+    /// A write named in a routes module that answers a patch, from a handler whose answer type
+    /// (`HtmlResult`) may be a page too.
+    async fn any_patch(req: Req) -> HtmlResult {
+        req.action().ok_or_else(Error::not_found)?.patch(html! { <p id={MsgId}>"too short"</p> })
+    }
+
+    /// A write named in a routes module whose answer can be a page: drawn again with what it refused.
+    async fn typed_write(req: Req) -> HtmlResult {
+        refused(&req, "typed write")
+    }
+
+    async fn document_write(mut req: Req) -> HtmlResult {
+        assert_eq!(req.mode, Mode::Action);
+        assert!(!req.whole_action);
+        req.mode = Mode::Document;
+        refused(&req, "document write")
+    }
+
+    /// A write named in a routes module that answers patches alone.
+    async fn patches_only(req: Req) -> HtmlResult<crate::Patches> {
+        let mut patch = req.action().ok_or_else(Error::not_found)?.patch(html! { <p id={MsgId}>"patched"</p> })?;
+        if req.whole_action {
+            patch.headers_mut().insert("x-draws-whole", http::HeaderValue::from_static("yes"));
+        }
+        Ok(patch)
     }
 
     /// A handler's own check refuses the request (#890).
@@ -16074,14 +16120,742 @@ mod layout_reads {
         assert!(began.elapsed() < Duration::from_secs(2), "{:?}", began.elapsed());
     }
 
+    /// A write the runtime sent (`corten: action`) that answers its own page answers it whole, with
+    /// the layout reads its page draws and the value it gives, as it does without JavaScript, so the
+    /// runtime can draw what the write changed around `<main>` (#1370). A `GET` form's page, a
+    /// patch, a redirect and a refused write's error page are as they were, and start no read.
+    #[tokio::test]
+    async fn a_writes_own_page_in_an_action_is_whole_with_its_layout_reads() {
+        let count = CartCount::default();
+        let routes = Table::new()
+            .route(
+                "/form",
+                crate::router::post(|req: Req| async move { refused(&req, "too short") })
+                    .put(|req: Req| async move {
+                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"given"</p> } })
+                            .map(|page| page.give::<CartCount>(9))
+                    })
+                    .get(|req: Req| async move { refused(&req, "searched") }),
+            )
+            .route(
+                "/patch",
+                crate::router::post(|req: Req| async move {
+                    req.action().ok_or_else(Error::not_found)?.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> })
+                }),
+            )
+            .route("/away", crate::router::post(|req: Req| async move { req.redirect::<ForOne>(&Done) }))
+            .route("/refused", crate::router::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }));
+        let router = App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware(AsViewer(Some("ada")))
+            .router();
+        // The page, whole: the layout with the count in both its places, and no swap's header.
+        let (status, headers, body) = call_with(router.clone(), "POST", "/form", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && headers.contains_key("corten-shell"), "{headers:?}");
+        assert!(body.starts_with("<!DOCTYPE html>") && body.contains("<main><p>too short</p></main>"), "{body}");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+        assert!(body.contains(r#"<footer><span class="count">3</span></footer>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        // A value the page gives is drawn, and its read is not started.
+        let (_, _, body) = call_with(router.clone(), "PUT", "/form", Some("action"), None).await;
+        assert!(body.contains(r#"<footer><span class="count">9</span></footer>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        // A `GET` form's page is a swap, as a navigation's is: a `GET` changes nothing the layout shows.
+        let (_, headers, body) = call_with(router.clone(), "GET", "/form", Some("action"), None).await;
+        assert!(headers.contains_key("corten-page") && !body.contains("<header>") && body.contains("<p>searched</p>"), "{body}");
+        // A patch, a redirect and a refused write's error page.
+        let (_, headers, _) = call_with(router.clone(), "POST", "/patch", Some("action"), None).await;
+        assert!(headers.contains_key("corten-patch"), "{headers:?}");
+        let (status, headers, _) = call_with(router.clone(), "POST", "/away", Some("action"), None).await;
+        assert!(status == StatusCode::NO_CONTENT && headers.contains_key("corten-location"), "{status} {headers:?}");
+        let (status, headers, body) = call_with(router.clone(), "POST", "/refused", Some("action"), None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(headers.contains_key("corten-page") && body.contains("<p>403</p>") && !body.contains("count"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        // A runtime that does not say it draws a write's own page whole (one from before this, in
+        // a tab open across a deploy) gets `<main>` alone, as it always did, which it swaps in;
+        // a whole page it would take for an answer it cannot draw. No read starts for it. Nor for
+        // another value of the preference, a later one than the first, or one in another's quotes.
+        for draws in [
+            None,
+            Some("corten-draws=main"),
+            Some("corten-draws=main, corten-draws=whole"),
+            Some(r#"x="corten-draws=whole""#),
+            Some("corten-draws=WHOLE"),
+        ] {
+            let mut req = Request::builder().method("POST").uri("/form").header("corten", "action");
+            if let Some(draws) = draws {
+                req = req.header("prefer", draws);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            let (parts, body) = res.into_parts();
+            let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            assert_eq!(parts.status, StatusCode::OK, "{draws:?} {body}");
+            assert!(parts.headers.contains_key("corten-page"), "{draws:?} {:?}", parts.headers);
+            assert!(!body.contains("<!DOCTYPE") && !body.contains("<header>") && body.contains("<p>too short</p>"), "{body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 1, "{draws:?}");
+        }
+    }
+
+    /// A write the runtime sent to a route of a routes module: one whose answer type can be a page
+    /// answers its own page whole, filled after the handler as the route answers, before the app's
+    /// middleware sees it; one that answers patches alone (`HtmlResult<Patches>`) keeps no head
+    /// (no copy of the request's extensions is made) and starts no read (#1370).
+    #[tokio::test]
+    async fn a_routes_module_write_fills_its_own_page_and_a_patches_route_keeps_nothing() {
+        let count = CartCount::default();
+        let copies = Arc::new(AtomicUsize::new(0));
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), CountsCopies(copies.clone()), SeesFilled))
+            .router();
+        let (status, headers, body) = call_with(router.clone(), "POST", "/typed-write", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && headers["x-filled"] == "yes", "{headers:?}");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+        assert!(body.contains("<main><p>typed write</p></main>") && !body.contains("corten-later"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        assert!(copies.swap(0, Ordering::SeqCst) > 0, "a route whose answer can be a page keeps the head");
+        let (status, headers, body) = call_with(router, "POST", "/patches-only", Some("action"), None).await;
+        assert!(
+            status == StatusCode::OK && headers.contains_key("corten-patch") && body.contains("patched"),
+            "{headers:?} {body}"
+        );
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "a patch starts no read");
+        assert_eq!(copies.load(Ordering::SeqCst), 0, "a route that answers patches alone keeps no head");
+    }
+
+    struct Draws(Option<&'static str>, Option<&'static str>);
+
+    impl crate::Middleware for Draws {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let headers = req.headers_mut();
+            if let Some(mode) = self.0 {
+                headers.insert("corten", http::HeaderValue::from_static(mode));
+            }
+            if let Some(prefer) = self.1 {
+                headers.insert("prefer", http::HeaderValue::from_static(prefer));
+            } else {
+                headers.remove("prefer");
+            }
+            next.run(req).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_writes_page_honors_the_mode_and_preference_left_by_middleware() {
+        async fn page(req: Req) -> HtmlResult {
+            req.page(Shell { req: &req, title: "Write", head: (), children: html! { <p>"write answer"</p> } })
+        }
+
+        for (mode, prefer) in [(None, None), (None, Some("corten-draws=main")), (Some("nav"), Some("corten-draws=whole"))] {
+            let routes = Table::new().route("/", crate::router::post(page));
+            let router = App::new(Routes::from(routes)).middleware(Draws(mode, prefer)).router();
+            let (status, headers, body) = call(router, "POST", Some("action")).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(headers.contains_key("corten-page"), "{mode:?} {prefer:?} {headers:?}");
+            assert!(!body.contains("<!DOCTYPE") && body.contains("<p>write answer</p>"), "{body}");
+        }
+
+        let count = CartCount::default();
+        let router =
+            App::new(shop_url::router()).layout_read(count.clone()).layout_read(SignedIn).middleware(Draws(None, None)).router();
+        let (status, headers, body) = call_with(router, "POST", "/typed-write", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(
+            headers.contains_key("corten-page") && !body.contains("<header>") && body.contains("<p>typed write</p>"),
+            "{headers:?} {body}"
+        );
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((Draws(None, Some("corten-draws=whole")), SeesFilled))
+            .router();
+        let req = Request::post("/typed-write").header("corten", "action").body(Body::empty()).unwrap();
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(!res.headers().contains_key("corten-page") && res.headers()["x-filled"] == "yes");
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let body = std::str::from_utf8(&bytes).unwrap();
+        assert!(body.contains(r#"<footer><span class="count">3</span></footer>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware(Draws(Some("page"), None))
+            .router();
+        let (status, headers, body) = call_with(router, "POST", "/typed-write", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && body.contains(r#"<footer><span class="count">3</span></footer>"#));
+        assert_eq!(count.started.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_writes_document_override_fills_the_layout_after_middleware_removes_the_preference() {
+        let table = Table::new().route("/document-write", crate::router::post(document_write));
+        for routes in [shop_url::router(), Routes::from(table)] {
+            let count = CartCount::default();
+            let router = App::new(routes).layout_read(count.clone()).layout_read(SignedIn).middleware(Draws(None, None)).router();
+            let (status, headers, body) = call_with(router, "POST", "/document-write", Some("action"), None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(!headers.contains_key("corten-page") && body.starts_with("<!DOCTYPE html>"), "{headers:?} {body}");
+            assert!(body.contains("<main><p>document write</p></main>"), "{body}");
+            assert!(body.contains(r#"<footer><span class="count">3</span></footer>"#), "{body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn middleware_replaces_a_generic_patch_with_a_whole_page() {
+        middleware_replaces_a_patch("/any-patch").await;
+    }
+
+    #[tokio::test]
+    async fn middleware_replaces_a_typed_patch_with_a_whole_page() {
+        middleware_replaces_a_patch("/patches-only").await;
+    }
+
+    async fn middleware_replaces_a_patch(uri: &str) {
+        struct ReplacesPatch;
+
+        impl crate::Middleware for ReplacesPatch {
+            async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+                use crate::extract::FromRequestParts;
+                let (mut original, body) = req.into_parts();
+                let mut forwarded = original.clone();
+                forwarded.headers.remove("prefer");
+                let patch = next.run(Request::from_parts(forwarded, body)).await;
+                assert_eq!(patch.status(), StatusCode::OK);
+                assert!(patch.headers().contains_key("corten-patch") && !patch.headers().contains_key("x-draws-whole"));
+                let req = Req::from_request_parts(&mut original, &()).await.unwrap();
+                refused(&req, "replacement").into_response()
+            }
+        }
+
+        let count = CartCount::default();
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), ReplacesPatch))
+            .router();
+        let (status, headers, body) = call_with(router, "POST", uri, Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && !headers.contains_key("corten-patch"), "{headers:?}");
+        assert!(body.contains("<main><p>replacement</p></main>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "{body}");
+        assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{body}");
+    }
+
+    #[tokio::test]
+    async fn a_write_forwarded_to_another_router_fills_its_layout_once() {
+        #[crate::routes(state = crate::Router)]
+        mod forward_url {
+            #[route("/typed-write", post = forward)]
+            pub struct Forward;
+        }
+
+        #[crate::routes]
+        mod destination_url {
+            #[route("/typed-write", post = page)]
+            pub struct Destination;
+        }
+
+        async fn forward(crate::extract::State(inner): crate::extract::State<Router>, req: crate::http::Request) -> crate::Relay {
+            let (parts, body) = inner.oneshot(req).await.unwrap().into_parts();
+            crate::Relay::new(parts.status, parts.headers, body)
+        }
+
+        async fn page(req: Req) -> HtmlResult {
+            req.page(html! {
+                <html>
+                    <head>
+                        <title>"Shop"</title>
+                        <Corten />
+                    </head>
+                    <body>
+                        <header>{later::<CartCount>()}</header>
+                        <main>"typed write"</main>
+                    </body>
+                </html>
+            })
+        }
+
+        for deadline in [None, Some(Duration::from_secs(2))] {
+            let outer_count = CartCount::default();
+            let inner_count = CartCount::default();
+            let inner = App::new(destination_url::router()).layout_read(inner_count.clone()).deadline(deadline).router();
+            let outer =
+                App::new(forward_url::router(inner)).layout_read(outer_count.clone()).middleware(AsViewer(Some("ada"))).router();
+            let (status, headers, body) = call_with(outer, "POST", "/typed-write", Some("action"), None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(!headers.contains_key("corten-page") && headers.contains_key("corten-shell"), "{headers:?}");
+            assert!(body.contains(r#"<header><span class="count">3</span></header>"#), "{body}");
+            assert_eq!(inner_count.started.load(Ordering::SeqCst), 1);
+            assert_eq!(outer_count.started.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_forwarded_to_a_fallback_without_a_deadline_can_time_out_in_the_outer_app() {
+        for outer_reads in [false, true] {
+            let (status, _, body) = forward_slow_write(outer_reads, Duration::from_secs(1), None).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert!(body.contains("Not available"), "{body}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_forwarded_to_a_fallback_uses_an_earlier_inner_layout_deadline() {
+        let (status, headers, body) = forward_slow_write(true, Duration::from_secs(3), Some(Duration::from_secs(1))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && headers.contains_key("corten-shell"), "{headers:?}");
+        assert!(body.contains("<main><p>typed write</p></main>") && body.contains("<footer></footer>"), "{body}");
+        assert!(body.contains("<header>Cart <b>guest</b></header>"), "{body}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_forwarded_write_uses_the_inner_layout_deadline_for_a_page_from_middleware() {
+        let count = CartCount { delay: Duration::from_secs(2), ..CartCount::default() };
+        let inner = App::new(early_middleware_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware(AnswersEarly)
+            .deadline(Duration::from_secs(1))
+            .router();
+        let outer = App::new(Routes::from(Table::new())).middleware(Fallback(inner)).deadline(Duration::from_secs(3)).router();
+        let (status, _, body) = call_with(outer, "POST", "/early", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("<main><p>early</p></main>") && body.contains("<footer></footer>"), "{body}");
+        assert!(body.contains("<header>Cart <b>guest</b></header>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        assert_eq!(count.finished.load(Ordering::SeqCst), 0);
+    }
+
+    struct Fallback(Router);
+
+    impl crate::Middleware for Fallback {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (head, body) = req.into_parts();
+            let res = next.run(Request::from_parts(head.clone(), Body::empty())).await;
+            assert_eq!(res.status(), StatusCode::NOT_FOUND);
+            self.0.clone().oneshot(Request::from_parts(head, body)).await.unwrap()
+        }
+    }
+
+    async fn forward_slow_write(
+        outer_reads: bool,
+        outer_deadline: Duration,
+        inner_deadline: Option<Duration>,
+    ) -> (StatusCode, http::HeaderMap, String) {
+        let outer_count = CartCount::default();
+        let inner_count = CartCount { delay: Duration::from_secs(2), ..CartCount::default() };
+        let inner =
+            App::new(shop_url::router()).layout_read(inner_count.clone()).layout_read(SignedIn).deadline(inner_deadline).router();
+        let outer = App::new(Routes::from(Table::new()));
+        let outer = if outer_reads { outer.layout_read(outer_count.clone()) } else { outer };
+        let outer = outer.middleware(Fallback(inner)).deadline(outer_deadline).router();
+        let (status, headers, body) = call_with(outer, "POST", "/typed-write", Some("action"), None).await;
+        assert_eq!(inner_count.started.load(Ordering::SeqCst), 1);
+        assert_eq!(inner_count.finished.load(Ordering::SeqCst), 0);
+        assert_eq!(outer_count.started.load(Ordering::SeqCst), 0);
+        (status, headers, body)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn copied_extensions_do_not_cap_an_independent_writes_layout_deadline() {
+        writes_with_retained_heads(false).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_replayed_head_does_not_inherit_a_finished_writes_layout_state() {
+        writes_with_retained_heads(true).await;
+    }
+
+    async fn writes_with_retained_heads(replay: bool) {
+        type SendHead = tokio::sync::oneshot::Sender<http::request::Parts>;
+        type Retain = Arc<std::sync::Mutex<Option<SendHead>>>;
+
+        #[crate::routes(state = Retain)]
+        mod retain_url {
+            #[route("/typed-write", post = retain)]
+            pub struct RetainsHead;
+        }
+
+        async fn retain(crate::extract::State(send): crate::extract::State<Retain>, req: crate::http::Request) -> HtmlResult {
+            send.lock().unwrap().take().unwrap().send(req.into_parts().0).unwrap();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            Err(crate::Error::not_found())
+        }
+
+        let (send, head) = tokio::sync::oneshot::channel();
+        let original = App::new(retain_url::router(Arc::new(std::sync::Mutex::new(Some(send)))))
+            .layout_read(CartCount::default())
+            .deadline(Duration::from_secs(1))
+            .router();
+        let original = tokio::spawn(call_with(original, "POST", "/typed-write", Some("action"), None));
+        let head = head.await.unwrap();
+        assert!(crate::layout::LateWrite::reached(&head.extensions));
+
+        let count = CartCount { delay: Duration::from_secs(2), ..CartCount::default() };
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .deadline(if replay { None } else { Some(Duration::from_secs(3)) })
+            .router();
+        let res = if replay {
+            assert_eq!(original.await.unwrap().0, StatusCode::NOT_FOUND);
+            router.oneshot(Request::from_parts(head, Body::empty())).await.unwrap()
+        } else {
+            let mut req = Request::post("/typed-write")
+                .header("corten", "action")
+                .header("prefer", "corten-draws=whole")
+                .body(Body::empty())
+                .unwrap();
+            *req.extensions_mut() = head.extensions.clone();
+            let independent = tokio::spawn(router.oneshot(req));
+            assert_eq!(original.await.unwrap().0, StatusCode::NOT_FOUND);
+            assert_eq!(count.started.load(Ordering::SeqCst), 1);
+            assert_eq!(count.finished.load(Ordering::SeqCst), 0);
+            independent.await.unwrap().unwrap()
+        };
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let body = std::str::from_utf8(&bytes).unwrap();
+        assert!(body.contains(r#"<footer><span class="count">3</span></footer>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        assert_eq!(count.finished.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_patch_only_write_without_middleware_does_not_negotiate_a_whole_answer() {
+        let count = CartCount::default();
+        let app = App::new(shop_url::router());
+        for router in [app.router(), App::new(shop_url::router()).layout_read(count.clone()).router()] {
+            for uri in ["/patches-only", "/named-patches", "/named-patches?do=save", "/named-patches?do=remove"] {
+                let (status, headers, body) = call_with(router.clone(), "POST", uri, Some("action"), None).await;
+                assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+                assert!(headers.contains_key("corten-patch") && !headers.contains_key("x-draws-whole"), "{uri}: {headers:?}");
+            }
+        }
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    /// An extension that counts its copies: a request's head kept with its extensions copies it.
+    struct Copied(Arc<AtomicUsize>);
+
+    impl Clone for Copied {
+        fn clone(&self) -> Self {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Copied(self.0.clone())
+        }
+    }
+
+    /// The app's middleware, putting [`Copied`] in each request.
+    struct CountsCopies(Arc<AtomicUsize>);
+
+    impl crate::Middleware for CountsCopies {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            req.extensions_mut().insert(Copied(self.0.clone()));
+            next.run(req).await
+        }
+    }
+
+    /// The app's middleware, saying whether the page the route answered was filled by the time it
+    /// sees it (`x-filled`): no place for a layout read is left in it.
+    struct SeesFilled;
+
+    impl crate::Middleware for SeesFilled {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (mut head, body) = next.run(req).await.into_parts();
+            let bytes = body.collect().await.unwrap().to_bytes();
+            let filled = !String::from_utf8_lossy(&bytes).contains("corten-later");
+            head.headers.insert("x-filled", http::HeaderValue::from_static(if filled { "yes" } else { "no" }));
+            crate::response::Response::from_parts(head, Body::from(bytes))
+        }
+    }
+
+    /// The app's middleware, answering `/early` with a page of its own made with `Req`, before the
+    /// route (a sign-in page in the route's place).
+    struct AnswersEarly;
+
+    impl crate::Middleware for AnswersEarly {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            if req.uri().path() != "/early" {
+                return next.run(req).await;
+            }
+            use crate::extract::FromRequestParts;
+            let (mut parts, _) = req.into_parts();
+            let req = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            refused(&req, "early").into_response()
+        }
+    }
+
+    #[crate::routes]
+    mod early_middleware_url {
+        #[route("/early", post = patches_only)]
+        pub struct Early;
+
+        #[route("/patch", post = patches_only)]
+        pub struct Patch;
+    }
+
+    /// A page the app's middleware makes with `Req` before a write's route draws the layout's
+    /// values, from the head the middleware had (the viewer it added), with JavaScript as without
+    /// (#1370); a patch in the same app starts no read.
+    #[tokio::test]
+    async fn a_page_middleware_makes_for_a_write_draws_its_layout_reads() {
+        let count = CartCount::default();
+        let router = App::new(early_middleware_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), AnswersEarly))
+            .router();
+        for (n, mode) in [None, Some("action")].into_iter().enumerate() {
+            let (status, headers, body) = call_with(router.clone(), "POST", "/early", mode, None).await;
+            assert_eq!(status, StatusCode::OK, "{mode:?} {body}");
+            assert!(!headers.contains_key("corten-page"), "{mode:?} {headers:?}");
+            assert!(body.contains("<main><p>early</p></main>"), "{mode:?} {body}");
+            assert!(body.contains(r#"<header>Cart <span class="count">3</span><b>ada</b></header>"#), "{mode:?} {body}");
+            assert!(
+                body.contains(r#"<footer><span class="count">3</span></footer>"#) && !body.contains("corten-later"),
+                "{mode:?} {body}"
+            );
+            assert_eq!(count.started.load(Ordering::SeqCst), n + 1, "{mode:?}");
+        }
+        let (_, headers, body) = call_with(router, "POST", "/patch", Some("action"), None).await;
+        assert!(headers.contains_key("corten-patch") && body.contains("patched"), "{headers:?} {body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 2, "a patch starts no read");
+    }
+
+    /// Counts a request as dropped only after every copy of its head is gone.
+    struct TrackedRequest(Arc<AtomicUsize>);
+
+    impl Drop for TrackedRequest {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[derive(Clone)]
+    struct Alive {
+        _held: Arc<TrackedRequest>,
+    }
+
+    struct Tracks {
+        dropped: Arc<AtomicUsize>,
+        parked: Arc<tokio::sync::Notify>,
+    }
+
+    impl crate::Middleware for Tracks {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            req.extensions_mut().insert(Alive { _held: Arc::new(TrackedRequest(self.dropped.clone())) });
+            if req.uri().path() == "/early" {
+                return next.run(req).await;
+            }
+            use crate::extract::FromRequestParts;
+            let (mut parts, body) = req.into_parts();
+            let taken = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            drop(taken);
+            match parts.uri.path() {
+                "/panic" => panic!("middleware panicked after taking Req"),
+                "/parked" => {
+                    self.parked.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                _ => {}
+            }
+            next.run(crate::http::Request::from_parts(parts, body)).await
+        }
+    }
+
+    /// The head a `Req` taken before a write's route keeps for a page made with it is let go
+    /// when the request is answered, or dropped unanswered: nothing of the request outlives it,
+    /// whether the middleware made the page, passed on to a patch, or the request was cut off
+    /// (#1370).
+    #[tokio::test]
+    async fn the_head_a_req_keeps_before_a_writes_route_goes_with_the_request() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let parked = Arc::new(tokio::sync::Notify::new());
+        let drops = || dropped.load(Ordering::SeqCst);
+        let routes = Table::new()
+            .route("/early", crate::router::post(|req: Req| async move { refused(&req, "the route") }))
+            .route(
+                "/passes",
+                crate::router::post(|req: Req| async move {
+                    req.action().ok_or_else(Error::not_found)?.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> })
+                }),
+            )
+            .route("/panic", crate::router::post(|| async { StatusCode::OK }))
+            .route("/parked", crate::router::post(|| async { StatusCode::OK }));
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware((Tracks { dropped: dropped.clone(), parked: parked.clone() }, AnswersEarly))
+            .router();
+        let (status, _, body) = call_with(router.clone(), "POST", "/early", Some("action"), None).await;
+        assert!(status.is_success() && body.contains("<p>early</p>") && body.contains("count"), "{body}");
+        assert_eq!(drops(), 1, "middleware answered with its own page");
+        let (_, headers, body) = call_with(router.clone(), "POST", "/passes", Some("action"), None).await;
+        assert!(headers.contains_key("corten-patch") && body.contains("saved"), "{headers:?} {body}");
+        assert_eq!(drops(), 2, "middleware passed on to the patch route");
+        let (status, _, _) = call_with(router.clone(), "POST", "/panic", Some("action"), None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(drops(), 3, "middleware panicked, caught by the app");
+        {
+            let mut cut = std::pin::pin!(call_with(router.clone(), "POST", "/parked", Some("action"), None));
+            tokio::select! {
+                _ = &mut cut => panic!("answered before getting parked in middleware"),
+                reached = tokio::time::timeout(Duration::from_secs(5), parked.notified()) => reached.unwrap(),
+            }
+            assert_eq!(drops(), 3, "still parked in middleware");
+        }
+        assert_eq!(drops(), 4, "dropped while parked in middleware");
+    }
+
+    /// A detached extractor can see the early mark, then be parked in an extension's clone
+    /// until the request has closed its slot and released the heads.
+    #[tokio::test]
+    async fn a_detached_req_cannot_publish_an_early_head_after_its_request_ends() {
+        use crate::extract::FromRequestParts;
+        use std::sync::mpsc;
+        use tokio::sync::oneshot;
+
+        struct ParkClone {
+            reached: Arc<tokio::sync::Notify>,
+            resume: Arc<std::sync::Mutex<Option<mpsc::Receiver<()>>>>,
+        }
+
+        impl Clone for ParkClone {
+            fn clone(&self) -> Self {
+                let resume = self.resume.lock().unwrap().take();
+                if let Some(resume) = resume {
+                    self.reached.notify_one();
+                    resume.recv().unwrap();
+                }
+                Self { reached: self.reached.clone(), resume: self.resume.clone() }
+            }
+        }
+
+        struct Detaches {
+            dropped: Arc<AtomicUsize>,
+            resume: Arc<std::sync::Mutex<Option<mpsc::Receiver<()>>>>,
+            task: std::sync::Mutex<Option<oneshot::Sender<tokio::task::JoinHandle<()>>>>,
+        }
+
+        impl crate::Middleware for Detaches {
+            async fn call(&self, req: crate::http::Request, _: impl crate::middleware::Next) -> crate::response::Response {
+                let (mut parts, _) = req.into_parts();
+                let reached = Arc::new(tokio::sync::Notify::new());
+                parts.extensions.insert(Alive { _held: Arc::new(TrackedRequest(self.dropped.clone())) });
+                parts.extensions.insert(ParkClone { reached: reached.clone(), resume: self.resume.clone() });
+                let runtime = tokio::runtime::Handle::current();
+                let task = tokio::task::spawn_blocking(move || {
+                    runtime.block_on(Req::from_request_parts(&mut parts, &())).unwrap();
+                });
+                self.task.lock().unwrap().take().unwrap().send(task).unwrap();
+                tokio::time::timeout(Duration::from_secs(5), reached.notified()).await.unwrap();
+                StatusCode::NO_CONTENT.into_response()
+            }
+        }
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let (resume, waiting) = mpsc::channel();
+        let (task, running) = oneshot::channel();
+        let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::OK }));
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .middleware(Detaches {
+                dropped: dropped.clone(),
+                resume: Arc::new(std::sync::Mutex::new(Some(waiting))),
+                task: std::sync::Mutex::new(Some(task)),
+            })
+            .router();
+        let (status, _, _) = call_with(router, "POST", "/", Some("action"), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0, "detached extraction still owns the head");
+        resume.send(()).unwrap();
+        running.await.unwrap().await.unwrap();
+        assert_eq!(dropped.load(Ordering::SeqCst), 1, "no head was published after cleanup");
+    }
+
+    /// [`AnswersEarly`]'s page with a body that never ends, or one that fails as it is read.
+    struct AnswersEarlyBroken {
+        fails: bool,
+    }
+
+    impl crate::Middleware for AnswersEarlyBroken {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            if req.uri().path() != "/early" {
+                return next.run(req).await;
+            }
+            use crate::extract::FromRequestParts;
+            let (mut parts, _) = req.into_parts();
+            let req = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            let (head, _) = refused(&req, "early").into_response().into_parts();
+            let body = if self.fails {
+                Body::from_stream(futures_util::stream::iter([Err::<bytes::Bytes, _>(std::io::Error::other("cut off"))]))
+            } else {
+                Body::from_stream(futures_util::stream::pending::<Result<bytes::Bytes, std::io::Error>>())
+            };
+            crate::response::Response::from_parts(head, body)
+        }
+    }
+
+    /// A page the app's middleware makes for a write the runtime sent is filled under the request's
+    /// deadline, and a failure to fill it gets the app's error page, as the route's own page does
+    /// (#1370).
+    #[tokio::test]
+    async fn a_page_middleware_makes_for_a_write_is_filled_within_the_deadline_and_its_failure_gets_the_error_page() {
+        for fails in [false, true] {
+            let routes = Table::new().route("/early", crate::router::post(|req: Req| async move { refused(&req, "the route") }));
+            let router = App::new(Routes::from(routes))
+                .deadline(Duration::from_millis(20))
+                .error_page(
+                    |failure: Failure, req: Req| async move {
+                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"failed "{failure.status().as_u16()}</p> } })
+                    },
+                    (),
+                )
+                .layout_read(CartCount::default())
+                .layout_read(SignedIn)
+                .middleware((AsViewer(Some("ada")), AnswersEarlyBroken { fails }))
+                .router();
+            let answer = call_with(router, "POST", "/early", Some("action"), None);
+            let Ok((status, _, body)) = tokio::time::timeout(Duration::from_secs(2), answer).await else {
+                panic!("fails {fails}: not answered at the deadline");
+            };
+            let expected = if fails { 500 } else { 503 };
+            assert_eq!(status.as_u16(), expected, "fails {fails}: {body}");
+            assert!(body.contains(&format!("<p>failed {expected}</p>")), "fails {fails}: {body}");
+        }
+    }
+
     #[tokio::test]
     async fn a_public_answer_draws_no_ones_value_whatever_started_the_read() {
         // A route of Corten's own takes `Req`, which starts the reads before its answer is known.
-        let routes = Table::new().route("/", get(for_all));
-        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
-        let (status, headers, body) = call(router, "GET", None).await;
+        let routes = Table::new().route("/", get(for_all).post(for_all));
+        let count = CartCount::default();
+        let router = App::new(Routes::from(routes)).layout_read(count.clone()).layout_read(SignedIn).router();
+        let (status, headers, body) = call(router.clone(), "GET", None).await;
         assert!(status.is_success() && !body.contains("count") && !body.contains("corten-later"), "{body}");
         assert!(headers[http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+        // A write's own page in an action, whose reads would start after the handler (#1370).
+        let (status, _, body) = call_with(router, "POST", "/", Some("action"), None).await;
+        assert!(status.is_success() && body.contains("<header>") && !body.contains("count"), "{body}");
+        assert!(!body.contains("corten-later"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "only the GET's route of Corten's own started it");
     }
 
     /// A count whose view panics.
@@ -16528,23 +17302,26 @@ mod layout_reads {
 
     #[crate::routes]
     mod wrapped_url {
-        #[route("/wrapped", get = wrapped)]
+        #[route("/wrapped", get = wrapped, post = wrapped)]
         pub struct Wrapped;
     }
 
     /// A page from an answer type that does not say it is one starts no read: a debug build says
-    /// why rather than draw the layout without its values.
+    /// why rather than draw the layout without its values. So does a write's own page from it, in
+    /// an action too, whose reads start after the handler (#1370).
     // A debug build's check.
     #[cfg(debug_assertions)]
     #[tokio::test]
     async fn a_page_whose_answer_type_is_not_a_page_is_an_error() {
         let count = CartCount::default();
         let router = App::new(wrapped_url::router()).layout_read(count.clone()).layout_read(SignedIn).dev(false).router();
-        let (status, _, body) = call_with(router, "GET", "/wrapped", None, None).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-        // Named where a router test, with no logger and outside `corten dev`, sees it.
-        assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
-        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+        for (method, mode) in [("GET", None), ("POST", None), ("POST", Some("action"))] {
+            let (status, _, body) = call_with(router.clone(), method, "/wrapped", mode, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{method} {mode:?}: {body}");
+            // Named where a router test, with no logger and outside `corten dev`, sees it.
+            assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 0, "{method} {mode:?}");
+        }
     }
 
     #[cfg(debug_assertions)]
@@ -16699,8 +17476,9 @@ mod layout_reads {
     }
 
     /// What a whole document that draws two layout reads costs: `READ_PAGES` (200) requests in
-    /// process, one at a time. Counting it under callgrind at two numbers of requests gives the
-    /// instructions per request. Run in release:
+    /// process, one at a time; with `READ_MODE=nav`, a navigation's `<main>` in the same app, which
+    /// draws none. Counting it under callgrind at two numbers of requests gives the instructions per
+    /// request. Run in release:
     /// `READ_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_layout_reads_costs`
     #[test]
     #[ignore]
@@ -16726,13 +17504,130 @@ mod layout_reads {
             .middleware(AsViewer(Some("ada")))
             .router();
         let (path, count) = if gives { ("/cart", 7) } else { ("/page", 3) };
+        let nav = std::env::var("READ_MODE").is_ok_and(|v| v == "nav");
         let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         runtime.block_on(async {
             for _ in 0..pages {
+                if nav {
+                    let (status, _, body) = call_with(router.clone(), "GET", path, Some("nav"), None).await;
+                    assert!(status == StatusCode::OK && body.contains("<p>page</p>") && !body.contains("count"), "{body}");
+                    continue;
+                }
                 let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
                 assert!(status == StatusCode::OK && body.contains(&format!(r#"<span class="count">{count}</span>"#)), "{body}");
             }
         });
+    }
+
+    /// What a write the runtime sent (`corten: action`) costs, to a route of a routes module, answered
+    /// with its own page (a form drawn again, `/typed-write`) or, with `WRITE_ANSWER=patch`, a patch
+    /// from a route whose answer type may be a page too (`HtmlResult`, `/any-patch`), or with
+    /// `WRITE_ANSWER=patches`, a patch from a route that answers patches alone
+    /// (`HtmlResult<Patches>`, `/patches-only`): `WRITE_REQUESTS` (200) requests in process, one at a
+    /// time, in an app with two layout reads or, with `WRITE_READS=0`, none. With `WRITE_MODE=page`
+    /// the same write comes from a browser without JavaScript (no `corten` header), whose page is the
+    /// same whole document; with `WRITE_MODE=main` from a runtime that does not draw a write's own
+    /// page whole (no `Prefer: corten-draws=whole`), which gets `<main>`. With
+    /// `WRITE_MIDDLEWARE=req` the app's middleware takes `Req` before the route. Counting it under callgrind at two numbers of
+    /// requests gives the instructions per request (#1370). Run in release:
+    /// `WRITE_REQUESTS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_write_answering_in_an_action_costs`
+    #[test]
+    #[ignore]
+    fn what_a_write_answering_in_an_action_costs() {
+        let requests: usize = std::env::var("WRITE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let answer = std::env::var("WRITE_ANSWER").unwrap_or_default();
+        let path = match answer.as_str() {
+            "patch" => "/any-patch",
+            "patches" => "/patches-only",
+            _ => "/typed-write",
+        };
+        let reads = !std::env::var("WRITE_READS").is_ok_and(|v| v == "0");
+        let mode = std::env::var("WRITE_MODE").unwrap_or_default();
+        let app = App::new(shop_url::router());
+        let app = if reads { app.layout_read(CartCount::default()).layout_read(SignedIn) } else { app };
+        let router = if std::env::var("WRITE_MIDDLEWARE").is_ok_and(|v| v == "req") {
+            app.middleware((AsViewer(Some("ada")), TakesReq)).router()
+        } else {
+            app.middleware(AsViewer(Some("ada"))).router()
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            for _ in 0..requests {
+                let mut req = Request::builder().method("POST").uri(path);
+                match mode.as_str() {
+                    "page" => {}
+                    "main" => req = req.header("corten", "action"),
+                    _ => req = req.header("corten", "action").header("prefer", "corten-draws=whole"),
+                }
+                let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+                let status = res.status();
+                let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+                assert!(
+                    status == StatusCode::OK
+                        && (body.contains("too short") || body.contains("patched") || body.contains("typed write")),
+                    "{status} {body}"
+                );
+            }
+        });
+    }
+
+    /// What a write's own page costs at the user's end, in time and bytes, against the `<main>` a
+    /// runtime that does not draw it whole gets (main's answer before #1370): `WRITE_TIMES` (25)
+    /// writes of each, alternating, in an app whose count read takes `WRITE_READ_MS` (20) ms. The
+    /// whole page waits for the read, which starts once the handler has answered; `<main>` starts
+    /// none. Prints the median and range of each, and each answer's bytes. Run in release:
+    /// `cargo test --release -p corten-run --all-features --lib -- --ignored --nocapture what_a_writes_own_page_costs_in_time_and_bytes`
+    #[test]
+    #[ignore]
+    fn what_a_writes_own_page_costs_in_time_and_bytes() {
+        let times: usize = std::env::var("WRITE_TIMES").ok().and_then(|n| n.parse().ok()).unwrap_or(25);
+        let read: u64 = std::env::var("WRITE_READ_MS").ok().and_then(|n| n.parse().ok()).unwrap_or(20);
+        let count = CartCount { delay: Duration::from_millis(read), ..CartCount::default() };
+        let router =
+            App::new(shop_url::router()).layout_read(count).layout_read(SignedIn).middleware(AsViewer(Some("ada"))).router();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (mut whole, mut main, mut sizes) = (Vec::new(), Vec::new(), (0, 0));
+        runtime.block_on(async {
+            for _ in 0..times {
+                for draws in [true, false] {
+                    let mut req = Request::builder().method("POST").uri("/typed-write").header("corten", "action");
+                    if draws {
+                        req = req.header("prefer", "corten-draws=whole");
+                    }
+                    let began = std::time::Instant::now();
+                    let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+                    let body = res.into_body().collect().await.unwrap().to_bytes();
+                    let took = began.elapsed().as_secs_f64() * 1000.0;
+                    if draws {
+                        whole.push(took);
+                        sizes.0 = body.len();
+                    } else {
+                        main.push(took);
+                        sizes.1 = body.len();
+                    }
+                }
+            }
+        });
+        let say = |name: &str, mut ms: Vec<f64>, bytes: usize| {
+            ms.sort_by(f64::total_cmp);
+            println!("{name}: median {:.2} ms [{:.2}-{:.2}], {bytes} bytes", ms[ms.len() / 2], ms[0], ms[ms.len() - 1]);
+        };
+        say("own page whole", whole, sizes.0);
+        say("<main>", main, sizes.1);
+    }
+
+    /// The app's middleware, taking `Req` before the route (as one that may answer with a page in
+    /// the route's place does) and passing the request on.
+    struct TakesReq;
+
+    impl crate::Middleware for TakesReq {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            use crate::extract::FromRequestParts;
+            let (mut parts, body) = req.into_parts();
+            let taken = Req::from_request_parts(&mut parts, &()).await.unwrap();
+            drop(taken);
+            next.run(crate::http::Request::from_parts(parts, body)).await
+        }
     }
 
     /// A page the app's middleware throws away after it was filled, answering an error itself: the
