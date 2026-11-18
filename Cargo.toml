@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/*", "examples/*"]
 exclude = ["bench"]
 
-# Every published crate shares one version, released together (CONTRIBUTING.md, Releasing).
+# Every published crate shares one version, released together (RELEASING.md).
 [workspace.package]
 version = "0.2.0"
 license = "MIT"
