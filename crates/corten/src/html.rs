@@ -89,6 +89,8 @@ pub(crate) struct Tag<'a> {
     /// in, `<col data-note='` without its quote's end or its `>`). Read by the debug check only.
     #[cfg(any(debug_assertions, test))]
     pub complete: bool,
+    #[cfg(debug_assertions)]
+    within: Within,
 }
 
 impl Tag<'_> {
@@ -102,10 +104,9 @@ impl Tag<'_> {
     pub(crate) fn has_text(&self, html: &str) -> bool {
         let mut at = self.end;
         let mut depth = 1;
-        // Track open tags only within SVG or MathML, including their HTML integration points.
-        let mut open: Vec<(&str, Within)> = Vec::new();
-        if let Some((true, within)) = placed(Within::Html, self) {
-            open.push((&self.name, within));
+        let mut open = Foreign::default();
+        if self.within != Within::Html {
+            open.0.push((&self.name, self.within));
         }
         while let Some(found) = html[at..].find('<') {
             let lt = at + found;
@@ -119,22 +120,14 @@ impl Tag<'_> {
                     if depth == 0 {
                         return false;
                     }
-                    if let Some(index) = name.and_then(|name| open.iter().rposition(|(tag, _)| name.eq_ignore_ascii_case(tag))) {
-                        open.truncate(index);
-                    }
+                    open.end(name);
                     at = end;
                 }
                 b'!' | b'?' => at = declaration_end(html, lt),
                 _ => {
                     let (name, end, self_closing) = read_tag(html, lt + 1, |_, _| {});
                     at = (end + 1).min(html.len());
-                    let parent = open.last().map_or(Within::Html, |&(_, within)| within);
-                    let (foreign, within) =
-                        if parent == Within::Html && !name.eq_ignore_ascii_case("svg") && !name.eq_ignore_ascii_case("math") {
-                            (false, Within::Html)
-                        } else {
-                            placed(parent, &start_tag(html, lt)).unwrap_or((false, Within::Html))
-                        };
+                    let (foreign, _) = open.start(name, self_closing, |parent| placed(parent, &start_tag(html, lt)));
                     if let Some(&raw) = RAW_TEXT.iter().find(|raw| !foreign && name.eq_ignore_ascii_case(raw)) {
                         let close = if raw == "script" { script_end(html, at) } else { raw_text_end(html, at, raw) };
                         if raw == "textarea" && !html[at..close].trim().is_empty() {
@@ -144,16 +137,9 @@ impl Tag<'_> {
                             return false;
                         }
                         at = end_tag(html, close).1;
+                        open.end(Some(name));
                     } else {
                         depth += usize::from(!self_closing && name.eq_ignore_ascii_case(&self.name));
-                        let opens = if foreign {
-                            !self_closing
-                        } else {
-                            !open.is_empty() && !VOID.iter().any(|void| name.eq_ignore_ascii_case(void))
-                        };
-                        if opens {
-                            open.push((name, within));
-                        }
                     }
                 }
             }
@@ -178,6 +164,8 @@ pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
         self_closing,
         #[cfg(any(debug_assertions, test))]
         complete: end < html.len(),
+        #[cfg(debug_assertions)]
+        within: Within::Html,
     }
 }
 
@@ -267,6 +255,8 @@ fn declaration_end(html: &str, at: usize) -> usize {
 /// `<` that starts no tag (`1 <2`, in markup placed with `raw`) as text, as the browser does.
 pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
     let mut i = 0;
+    #[cfg(debug_assertions)]
+    let mut open = Foreign::default();
     std::iter::from_fn(move || loop {
         let at = i + html.get(i..)?.find('<')?;
         let bytes = html.as_bytes();
@@ -276,6 +266,13 @@ pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
         }
         match bytes[at + 1] {
             b'/' => {
+                #[cfg(debug_assertions)]
+                if !open.0.is_empty() {
+                    let (name, end) = end_tag(html, at);
+                    open.end(name);
+                    i = end;
+                    continue;
+                }
                 let rest = &bytes[at + 2..];
                 // A `>` can be quoted only after an `=`. Ordinary end tags need no attribute scan.
                 let stop = rest.iter().position(|&c| c == b'>' || c == b'=')?;
@@ -289,7 +286,14 @@ pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
             _ => {}
         }
         let tag = start_tag(html, at);
+        #[cfg(debug_assertions)]
+        let tag = {
+            let name = &html[at + 1..at + 1 + tag.name.len()];
+            let (_, within) = open.start(name, tag.self_closing, |parent| placed(parent, &tag));
+            Tag { within, ..tag }
+        };
         i = tag.end;
+        // Only the hint text scan uses the context; discovery still skips raw text by name.
         if RAW_TEXT.contains(&tag.name.as_str()) {
             i = raw_text_end(html, i, &tag.name);
         }
@@ -803,6 +807,48 @@ enum Within {
     Math,
     /// As MathML's but an `<svg>`: in an `<annotation-xml>` that is not an HTML integration point.
     AnnotationXml,
+}
+
+/// Open tags in SVG or MathML, including HTML descendants of their integration points.
+#[cfg(debug_assertions)]
+#[derive(Default)]
+struct Foreign<'a>(Vec<(&'a str, Within)>);
+
+#[cfg(debug_assertions)]
+impl<'a> Foreign<'a> {
+    fn parent(&self) -> Within {
+        self.0.last().map_or(Within::Html, |&(_, within)| within)
+    }
+
+    fn start(
+        &mut self,
+        name: &'a str,
+        self_closing: bool,
+        place: impl FnOnce(Within) -> Option<(bool, Within)>,
+    ) -> (bool, Within) {
+        let parent = self.parent();
+        if self.0.is_empty() && !name.eq_ignore_ascii_case("svg") && !name.eq_ignore_ascii_case("math") {
+            return (false, Within::Html);
+        }
+        let (foreign, within) = place(parent).unwrap_or_else(|| {
+            while !matches!(self.parent(), Within::Html | Within::MathText) {
+                self.0.pop();
+            }
+            (false, Within::Html)
+        });
+        if (foreign && !self_closing)
+            || (!foreign && !self.0.is_empty() && !VOID.iter().any(|void| name.eq_ignore_ascii_case(void)))
+        {
+            self.0.push((name, within));
+        }
+        (foreign, within)
+    }
+
+    fn end(&mut self, name: Option<&str>) {
+        if let Some(index) = name.and_then(|name| self.0.iter().rposition(|(tag, _)| name.eq_ignore_ascii_case(tag))) {
+            self.0.truncate(index);
+        }
+    }
 }
 
 /// An element open in a patch: its name, whether it is foreign content's (an SVG or MathML

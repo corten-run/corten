@@ -2781,6 +2781,24 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[test]
+    fn a_hint_in_foreign_content_can_follow_a_self_closing_title() {
+        let hints = ["qty-hint".to_string()];
+        for (foreign, hint) in [("svg", "text"), ("math", "mrow")] {
+            let html = format!("<input id=qty><{foreign}><{hint} id=qty-hint><title />Visible hint</{hint}></{foreign}>");
+            assert_eq!(unnamed_hint(&html, &hints, true), Some("qty-hint"), "{foreign}");
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_can_follow_html_raw_text_after_a_foreign_breakout() {
+        let hints = ["qty-hint".to_string()];
+        let html = "<input id=qty><div id=qty-hint><svg><br><style><!--ignored</style>Visible hint</div>";
+        assert_eq!(unnamed_hint(html, &hints, true), Some("qty-hint"));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
     fn a_hint_can_follow_html_raw_text_in_an_integration_point() {
         let hints = ["qty-hint".to_string()];
         for (foreign, point) in [("svg", "foreignObject"), ("math", "mtext")] {
