@@ -42,7 +42,8 @@ it prints that command's usage and exits successfully without inspecting or chan
 `corten help <command>` does the same, and refuses a command it does not know. `corten --help`,
 or `corten help` alone, prints all commands. A `--help` that is the value of an option that takes one
 (`--name`, `--corten-path`, `--port`) is that value, not a request for help; `--` does not end a
-command's options, so a `--help` after it still asks for help. An option given twice is refused.
+command's options, so a `--help` after it still asks for help. Help is answered before anything else
+is checked; otherwise `--name`, `--corten-path` or `--port` given twice is refused.
 
 `corten check` names each step on stderr before running it, then reports its elapsed time and
 whether it finished or failed, even when output is redirected. Cargo's own output still goes
