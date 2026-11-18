@@ -365,6 +365,26 @@ struct TrailingInto(u64);
 #[serde(from = "u64", try_from = "u64" + "u8")]
 struct TrailingTryFrom(u64);
 
+#[derive(corten::FromJson)]
+#[serde(transparent, from = 42)]
+struct NumberFrom(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into =)]
+struct MissingInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into = "u64"junk)]
+struct SuffixedInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into = r"u64"raw_junk)]
+struct RawSuffixedInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into = "u64" unrelated)]
+struct UnseparatedInto(u64);
+
 fn main() {}
 "#,
         &["json"],
@@ -379,8 +399,45 @@ fn main() {}
         r#"FromJson: use #[serde(into = "...")]"#,
         r#"expected serde into attribute to be a string: `into = "..."`"#,
         r#"expected serde try_from attribute to be a string: `try_from = "..."`"#,
+        r#"expected serde from attribute to be a string: `from = "..."`"#,
+        "unexpected end of input, expected an expression",
+        "unexpected suffix `junk` on string literal",
+        "unexpected suffix `raw_junk` on string literal",
+        "expected `,`",
     ] {
         let expected = format!("error: {said}");
         assert!(stderr.lines().any(|line| line == expected), "missing {expected}: {stderr}");
     }
+}
+
+#[test]
+fn json_derives_accept_serde_attributes_with_empty_macro_visibility() {
+    let (ok, stderr) = build_main_with(
+        "json-macro-visibility",
+        r#"
+macro_rules! shapes {
+    ($vis:vis $name:ident) => {
+        #[derive(corten::ToJson, corten::FromJson)]
+        $vis struct $name {
+            #[serde(rename = "wire" $vis)]
+            value: u64,
+        }
+
+        #[derive(corten::FromJson)]
+        #[serde(bound(deserialize = "") $vis)]
+        $vis struct Bounded(u64);
+    };
+}
+
+shapes!(Renamed);
+
+fn main() {
+    let renamed = corten::json::from_str::<Renamed>("{\"wire\":42}").unwrap();
+    assert_eq!(corten::json::ToJson::to_json(&renamed), "{\"wire\":42}");
+    assert_eq!(corten::json::from_str::<Bounded>("42").unwrap().0, 42);
+}
+"#,
+        &["json"],
+    );
+    assert!(ok, "empty macro visibility should not change a serde attribute: {stderr}");
 }

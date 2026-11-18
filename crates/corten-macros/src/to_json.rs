@@ -267,43 +267,81 @@ pub(crate) fn serde_args_for(attrs: &[Group], derive: &str) -> Result<Vec<Arg>, 
         if path.to_string() != "serde" {
             continue;
         }
-        for arg in split(args.stream(), ',') {
+        for arg in split(serde_tokens(args.stream()).collect(), ',') {
             let Some(TokenTree::Ident(key)) = arg.first() else {
                 return err(args.span(), format!("{derive}: expected #[serde(key)] or #[serde(key = \"value\")]"));
             };
-            // A value a `macro_rules!` passed in (`rename_all = $rule`) comes in an invisible group.
-            let literal = match arg.get(2..) {
-                Some([TokenTree::Group(g)]) if g.delimiter() == Delimiter::None => {
-                    let mut inner = g.stream().into_iter();
-                    match (inner.next(), inner.next()) {
-                        (Some(TokenTree::Literal(l)), None) => Some(l),
-                        _ => None,
-                    }
-                }
-                Some([TokenTree::Literal(l)]) => Some(l.clone()),
-                _ => None,
-            };
             let name = key.to_string();
+            let span = key.span();
             let value = match arg.as_slice() {
                 [_] => Value::Bare,
-                [_, TokenTree::Punct(p), ..] if p.as_char() == '=' => {
-                    if let Some(s) = literal.as_ref().and_then(string_value) {
-                        Value::Str(s)
-                    } else if derive == "FromJson" && matches!(name.as_str(), "from" | "try_from" | "into") {
-                        return err(key.span(), format!("expected serde {name} attribute to be a string: `{name} = \"...\"`"));
-                    } else if let Some(l) = literal {
-                        return err(l.span(), format!("{derive}: expected a string"));
-                    } else {
-                        return err(key.span(), format!("{derive}: expected #[serde(key)] or #[serde(key = \"value\")]"));
-                    }
+                [_, TokenTree::Punct(p), rhs @ ..] if p.as_char() == '=' => {
+                    Value::Str(serde_arg_string(derive, &name, span, rhs)?)
                 }
                 [_, TokenTree::Group(g)] => Value::Group(g.stream()),
-                _ => return err(key.span(), format!("{derive}: expected #[serde(key)] or #[serde(key = \"value\")]")),
+                _ => return err(span, format!("{derive}: expected #[serde(key)] or #[serde(key = \"value\")]")),
             };
-            out.push(Arg { key: name, value, span: key.span() });
+            out.push(Arg { key: name, value, span });
         }
     }
     Ok(out)
+}
+
+// An empty `$vis:vis` from `macro_rules!` contributes no tokens to the serde attribute.
+fn serde_tokens(tokens: TokenStream) -> impl Iterator<Item = TokenTree> {
+    tokens
+        .into_iter()
+        .filter(|token| !matches!(token, TokenTree::Group(g) if g.delimiter() == Delimiter::None && g.stream().is_empty()))
+}
+
+fn serde_arg_string(derive: &str, name: &str, span: Span, rhs: &[TokenTree]) -> Result<String, Error> {
+    // A forwarded value (`rename_all = $rule`) may be wrapped in an invisible group.
+    if let [TokenTree::Group(g)] = rhs {
+        if g.delimiter() == Delimiter::None {
+            return serde_arg_string(derive, name, span, &serde_tokens(g.stream()).collect::<Vec<_>>());
+        }
+    }
+    let conversion = derive == "FromJson" && matches!(name, "from" | "try_from" | "into");
+    if let [TokenTree::Literal(literal), rest @ ..] = rhs {
+        if let Some(suffix) = string_suffix(literal) {
+            return err(literal.span(), format!("unexpected suffix `{suffix}` on string literal"));
+        }
+        if rest.is_empty() {
+            if let Some(value) = string_value(literal) {
+                return Ok(value);
+            }
+            if !conversion {
+                return err(literal.span(), format!("{derive}: expected a string"));
+            }
+        }
+        // A second literal or an adjacent word (other than a cast) cannot continue this expression.
+        if conversion
+            && matches!(rest.first(), Some(TokenTree::Ident(_) | TokenTree::Literal(_)))
+            && !is_ident(rest.first(), "as")
+        {
+            return err(rest[0].span(), "expected `,`");
+        }
+    }
+    if conversion {
+        return match rhs.first() {
+            None => err(span, "unexpected end of input, expected an expression"),
+            Some(first) => err(first.span(), format!("expected serde {name} attribute to be a string: `{name} = \"...\"`")),
+        };
+    }
+    err(span, format!("{derive}: expected #[serde(key)] or #[serde(key = \"value\")]"))
+}
+
+fn string_suffix(literal: &Literal) -> Option<String> {
+    let text = literal.to_string();
+    let (body, tail) = text.rsplit_once('"')?;
+    let suffix = if body.starts_with('"') {
+        tail
+    } else if body.starts_with("r\"") || body.starts_with("r#") {
+        tail.trim_start_matches('#')
+    } else {
+        return None;
+    };
+    (!suffix.is_empty()).then(|| suffix.to_owned())
 }
 
 #[derive(Default)]

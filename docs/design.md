@@ -1719,7 +1719,8 @@ rules something out.
     preserving path punctuation, the `compile_fail,E0391` doctest at `4f83d633` (focused form
     doctests with `--show-output`, 61 passed, one ignored); 2026-11-17, serde_derive 1.0.229's
     `check_transparent` and `check_from_and_try_from` against the `FromJson` compile errors in
-    `crates/corten/src/json.rs`.
+    `crates/corten/src/json.rs`; 2026-11-18, serde_derive 1.0.229's conversion argument diagnostics
+    against the compile errors in `crates/corten/tests/handler_message.rs`.
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or

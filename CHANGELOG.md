@@ -7,7 +7,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - `#[derive(FromJson)]` rejects `#[serde(transparent)]` combined with `from`, `try_from`
   or `into`, using serde's compile error messages. It also reports `from` and `try_from`
-  together as a conflict instead of an unsupported attribute.
+  together as a conflict instead of an unsupported attribute, after checking that each conversion
+  has a string literal argument.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
