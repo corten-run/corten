@@ -1404,9 +1404,7 @@ async function run(browser) {
   const sortMachine = await sales.evaluate((table) => {
     const body = table.tBodies[0];
     const rows = [...body.rows];
-    const cells = rows.map((row) => /** @type {HTMLElement} */ (row.cells[row.cells.length - 1]));
-    const attr = "data-ref-value";
-    const was = cells.map((td) => /** @type {const} */ ([[...td.childNodes], td.getAttribute(attr)]));
+    const cells = rows.map((row) => row.cells[row.cells.length - 1]);
     const link = /** @type {HTMLElement} */ (table.querySelector("thead th:last-child a"));
     const header = /** @type {HTMLElement} */ (link.closest("th"));
     const heads = [.../** @type {HTMLTableSectionElement} */ (table.tHead).rows[0].cells];
@@ -1414,14 +1412,27 @@ async function run(browser) {
     const stop = (/** @type {Event} */ e) => e.preventDefault();
     window.addEventListener("click", stop);
     // Built with the DOM: the page requires Trusted Types for HTML.
-    const run = (/** @type {[string, string, string][]} */ parts) => {
-      cells.forEach((td, i) => {
-        const [tag, value, text] = parts[i];
-        td.removeAttribute(attr);
-        const part = document.createElement(tag);
-        part.setAttribute(tag === "time" ? "datetime" : "value", value);
-        part.textContent = text;
-        td.replaceChildren(part);
+    let current = cells;
+    const run = (/** @type {[string | null, string, string, string?][]} */ parts) => {
+      current = current.map((old, i) => {
+        const [tag, value, text, refValue] = parts[i];
+        const td = /** @type {HTMLTableCellElement} */ (cells[i].cloneNode(false));
+        if (refValue !== undefined) {
+          td.setAttribute("data-ref-value", refValue);
+        } else {
+          td.removeAttribute("data-ref");
+          td.removeAttribute("data-ref-value");
+        }
+        if (tag) {
+          const part = document.createElement(tag);
+          part.setAttribute(tag === "time" ? "datetime" : "value", value);
+          part.textContent = text;
+          td.replaceChildren(part);
+        } else {
+          td.textContent = text;
+        }
+        old.replaceWith(td);
+        return td;
       });
       header.removeAttribute("aria-sort");
       link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
@@ -1439,24 +1450,28 @@ async function run(browser) {
       ["time", "2025-12-25T01:00:00Z", "Dec 25, 1 AM UTC"],
       ["time", "2025-12-01", "Dec 1"],
     ]);
+    // Only the last cell has a ref. Its zero beats both its machine value and its text.
+    const mixed = run([
+      ["data", "10", "-20"],
+      [null, "", "5"],
+      ["data", "100", "200", "0"],
+    ]);
     window.removeEventListener("click", stop);
-    cells.forEach((td, i) => {
-      td.replaceChildren(...was[i][0]);
-      if (was[i][1] !== null) td.setAttribute(attr, was[i][1]);
-    });
+    current.forEach((td, i) => td.replaceWith(cells[i]));
     for (const row of rows) body.append(row);
     heads.forEach((th, i) => {
       const aria = arias[i];
       if (aria) th.setAttribute("aria-sort", aria);
       else th.removeAttribute("aria-sort");
     });
-    return { data, times };
+    return { data, times, mixed };
   });
   check(
     "a cell's <data value> and <time datetime> are what it sorts by, not its text",
     sortMachine.data === "twelve ten|twelve fifty|eighty" && sortMachine.times === "Dec 1|Dec 25, 1 AM UTC|Dec 24, 11 PM EST",
     JSON.stringify(sortMachine),
   );
+  check("a zero ref wins over machine value and text, and cells without refs use machine value or text", sortMachine.mixed === "200|5|-20", sortMachine.mixed);
   // The kit's looks for corten-ui's ChoiceGroup, NumberField and CheckboxGroup (#610): a segmented
   // choice with the chosen one raised, the number field's parts at the controls' height in a row,
   // and the group's fieldset without the browser's border.

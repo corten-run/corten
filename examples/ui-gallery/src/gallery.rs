@@ -140,7 +140,7 @@ pub enum Period {
 
 /// A sale in the month's list.
 struct LastSale {
-    /// The day, as the table sorts it (`data-sort`).
+    /// The sort key for the Sold column.
     on: &'static str,
     day: &'static str,
     buyer: &'static str,
