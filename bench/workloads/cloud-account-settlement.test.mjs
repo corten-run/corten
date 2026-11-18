@@ -11,6 +11,7 @@ import { providerTransport } from "./cloud-provider.mjs";
 import { productionMain } from "./cloud-production.mjs";
 import { providerFailure, controllerFailure } from "./cloud-options.mjs";
 import { accountId, commit, context, harness, syntheticProviderRequest } from "./cloud-fixtures.mjs";
+import { beforeProvisioning, settlementControl } from "./test-fixtures/provider-settlement-control.mjs";
 
 const account = ["account", "get", "--output", "json", "--context", context];
 const raw = "SYNTHETIC_ONLY_CREDENTIAL_A";
@@ -25,7 +26,7 @@ async function api(t, mode, h) {
     res.writeHead = (status, ...rest) => { responses.push({ method, path, status }); return writeHead(status, ...rest); };
     if (mode === "refused-create" && method === "POST") { res.writeHead(503); res.end(raw); return; }
     const mutation = mode === "action" && path === "/v2/actions/456" || mode === "post" && method === "POST" || mode === "delete" && method === "DELETE";
-    const fail = armed && !injected && (mutation || (!h || existsSync(join(h.local, "job.sh"))) && path === "/v2/account");
+    const fail = armed && !injected && (mutation || path === "/v2/account" && (!h || beforeProvisioning(h.local)));
     if (fail && mode !== "success") {
       injected = true;
       if (["action", "post", "delete"].includes(mode)) { req.socket.destroy(); return; }
@@ -43,13 +44,14 @@ async function api(t, mode, h) {
   t.after(async () => { server.closeAllConnections(); await new Promise((done) => server.close(done)); assert.equal(sockets.size, 0); });
   return { port: server.address().port, calls, responses, arm(value) { armed = value; }, get injected() { return injected; } };
 }
-function worker(t, api, { mode = "ordinary", receive = (value) => value, interrupted = () => false } = {}) {
+function worker(t, api, { mode = "ordinary", receive = (value) => value, interrupted = () => false, onExit } = {}) {
   const root = mkdtempSync(join(tmpdir(), "account-settlement-test-")), output = join(root, "observed.json");
   let child; const messages = [];
   const run = providerTransport({ repo: resolve("."), interrupted, launch(path, args, options) {
     assert.deepEqual(args.slice(0, 2), ["--input-type=module", "-"]);
     child = spawn(path, [fileURLToPath(new URL("cloud-account-settlement-fixture.mjs", import.meta.url)), String(api.port), output, mode],
       { ...options, env: { ...options.env, NODE_OPTIONS: "--max-old-space-size=256" } });
+    if (onExit) child.once("exit", onExit);
     const emit = child.emit.bind(child);
     child.emit = (name, ...values) => {
       if (name === "message") messages.push(values[0]);
@@ -182,14 +184,13 @@ test("typed proof rejects wrong nonce/sequence/grammar/version and unexpected ex
 
 test("allocated failed account read settles before unlock, fresh ordinary collect retires once with exact404", { timeout: 15000 }, async (t) => {
   const h = harness(t), a = await api(t, "invalid-json", h), workers = []; let approval;
-  const deps = { repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
-    providerFactory() { const w = worker(t, a); workers.push(w); return w.run; },
-    spawn(binary, argv, options) {
-      assert.notEqual(binary, "doctl");
-      if (binary === "git" && argv[0] === "show") return { status: 0, stdout: readFileSync(resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") };
-      const args = [...argv];
-      if (binary === "ssh") args[args.length - 1] = options.input.replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
-      return h.run(binary, args, options.timeout);
+  let locksAtWorkerExit;
+  const deps = { ...settlementControl(t, h), repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
+    providerFactory() {
+      const w = worker(t, a, { onExit() {
+        if (workers[1] === w) locksAtWorkerExit = [join(h.local, "operation.lock"), join(h.base, ".groups-launch.lock")].map(existsSync);
+      } });
+      workers.push(w); return w.run;
     } };
   const args = ["r21", "--state-dir", h.base, "--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
   await productionMain([...args, "--print-approval"], deps);
@@ -199,6 +200,9 @@ test("allocated failed account read settles before unlock, fresh ordinary collec
   const launched = workers[1]; assert.equal(launched.child.exitCode, 0);
   assert.equal(launched.state().consumes, 1);
   assert.equal(h.saved().status, "preparing"); assert.equal(h.saved().fullGroupQualified, false);
+  assert.equal(h.saved().id, "123"); assert.deepEqual(h.saved().control.ledger, []);
+  assert.equal(a.injected, true); assert.deepEqual(a.calls.at(-1), { method: "GET", path: "/v2/account" });
+  assert.deepEqual(locksAtWorkerExit, [true, true]);
   assert.equal(existsSync(join(h.local, "operation.lock")), false); assert.equal(existsSync(join(h.base, ".groups-launch.lock")), false);
   assert.equal(a.calls.filter((v) => v.method === "POST").length, 1); assert.equal(a.calls.filter((v) => v.method === "DELETE").length, 0);
   assert.equal(h.calls.some((row) => row[0] === "scp" || row[0] === "ssh" && row.at(-1).startsWith("systemctl start")), false);
@@ -208,7 +212,9 @@ test("allocated failed account read settles before unlock, fresh ordinary collec
   assert.equal(h.saved().status, "retired"); assert.equal(h.saved().retirement.kind, "unused"); assert.ok(h.saved().destroyedAt);
   assert.equal(h.saved().fullGroupQualified, false); assert.equal(h.saved().validation, undefined);
   assert.equal(workers[3].state().consumes, 1); assert.equal(workers[3].child.exitCode, 0);
-  assert.ok(a.responses.some((row) => row.method === "GET" && row.path === "/v2/droplets/123" && row.status === 404));
+  const deletedAt = a.responses.findIndex((row) => row.method === "DELETE" && row.path === "/v2/droplets/123" && row.status === 204);
+  assert.ok(deletedAt >= 0);
+  assert.ok(a.responses.slice(deletedAt + 1).some((row) => row.method === "GET" && row.path === "/v2/droplets/123" && row.status === 404));
   assert.ok(h.calls.some((row) => row[0] === "ssh" && row.at(-1).includes("benchmark-unused-host/v1")));
   assert.ok(existsSync(join(h.local, "unused-host.json"))); assert.ok(h.saved().deletionIntentAt);
   assert.equal(a.calls.filter((v) => v.method === "DELETE").length, 1);
@@ -224,33 +230,47 @@ test("composed unknown/unclosed/cancel/deadline/mutation failures retain exclusi
     const h = harness(t);
     if (mode === "delete") { h.seed(); h.change((s) => { s.status = "preparing"; }); }
     const a = await api(t, mode, h), workers = []; let approval;
-    const deps = { repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
+    const deps = { ...settlementControl(t, h), repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
       providerFactory() {
         const w = worker(t, a, { mode, interrupted: () => mode === "cancel" && a.injected,
           receive: (message) => mode === "unknown" && message.schema === "cloud-provider-account-failed/v2" ? { ...message, disposition: "unknown" } : message });
         workers.push(w);
         const run = (args, timeout, ...rest) => w.run(args, Math.min(timeout, 2000), ...rest);
         run.close = w.run.close; return run;
-      },
-      spawn(binary, argv, options) {
-        assert.notEqual(binary, "doctl");
-        if (binary === "git" && argv[0] === "show") return { status: 0, stdout: readFileSync(resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") };
-        const args = [...argv];
-        if (binary === "ssh") args[args.length - 1] = options.input.replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
-        return h.run(binary, args, options.timeout);
       } };
     const args = mode === "delete" ? ["r21", "--state-dir", h.base, "--collect"]
       : ["r21", "--state-dir", h.base, "--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
-    await productionMain([...args, "--print-approval"], deps);
-    await assert.rejects(productionMain([...args, "--approve-reviewed-merged-ready", approval], deps), (error) => {
+    const approved = async (args) => {
+      assert.equal(await productionMain([...args, "--print-approval"], deps), 3);
+      return productionMain([...args, "--approve-reviewed-merged-ready", approval], deps);
+    };
+    await assert.rejects(approved(args), (error) => {
       assert.equal(error.controlUncertain, true); assert.equal(error.controlTreeUncertain, true); return true;
     });
     assert.ok(existsSync(join(h.local, "operation.lock")));
     if (mode !== "delete") assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
     else assert.ok(h.saved().deletionIntentAt);
     assert.equal(h.saved().fullGroupQualified, false); assert.equal(h.saved().destroyedAt, undefined);
-    assert.ok(a.calls.filter((v) => v.method === "POST").length <= 1); assert.ok(a.calls.filter((v) => v.method === "DELETE").length <= 1);
-    const before = h.calls.length; await assert.rejects(h.task().collect(), { code: "EEXIST" }); assert.equal(h.calls.length, before);
+    assert.equal(a.injected, true);
+    assert.equal(a.calls.filter((v) => v.method === "POST").length, mode === "delete" ? 0 : 1);
+    assert.equal(a.calls.filter((v) => v.method === "DELETE").length, mode === "delete" ? 1 : 0);
+    assert.deepEqual(a.calls.at(-1), mode === "action" ? { method: "GET", path: "/v2/actions/456" }
+      : mode === "post" ? { method: "POST", path: "/v2/droplets" }
+      : mode === "delete" ? { method: "DELETE", path: "/v2/droplets/123" } : { method: "GET", path: "/v2/account" });
+    const before = h.calls.length, providerBefore = a.calls.length, saved = h.saved();
+    const locks = [join(h.local, "operation.lock"), ...(mode === "delete" ? [] : [join(h.base, ".groups-launch.lock")])];
+    const custody = locks.map((path) => readFileSync(path));
+    const collect = ["r21", "--state-dir", h.base, "--collect"];
+    if (["action", "post"].includes(mode)) {
+      // The unbound create is refused before collect can try the operation lock.
+      await assert.rejects(approved(collect), { controllerStage: "controller-collect", message: /monitor not registered; preserve pending reservation/ });
+      await assert.rejects(approved(args), { controllerStage: "controller-launch", code: "EEXIST" });
+    } else await assert.rejects(approved(collect), { controllerStage: "controller-collect", code: "EEXIST" });
+    assert.ok(workers.slice(2).every((w) => w.child === undefined));
+    assert.deepEqual(h.calls.slice(before).filter(([binary]) => binary !== "git"), []);
+    assert.equal(a.calls.length, providerBefore);
+    assert.deepEqual(h.saved(), saved);
+    assert.deepEqual(locks.map((path) => readFileSync(path)), custody);
     await assert.rejects(workers[1].run.close(), (error) => error.controlUncertain === true);
     t.diagnostic(`${mode}: sticky uncertainty + retained operation lock; no repeated mutation`);
   });

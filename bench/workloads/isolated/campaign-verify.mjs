@@ -15,6 +15,8 @@ import { verifyHostBoundary } from "./host-observation.mjs";
 import { replayMixedSubject, validateMixedDelivery, validateMixedRun } from "./mixed-staging.mjs";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
+import { verifyControlAdmission } from "./control-admission.mjs";
+import { apparatusProof, verifyStreamAudit, verifyStreamDrain, verifyStreamSeal } from "./control-stream.mjs";
 
 export async function validateCampaign(input) {
   try {
@@ -37,7 +39,7 @@ export async function validateCampaign(input) {
     assert.equal(status.schema, "benchmark-isolated-campaign-status/v1");
     assert.equal(status.campaign, id); assert.equal(status.round, round); assert.equal(status.campaignSha256, plan.campaignSha256);
     assert.equal(status.controllerReady, false); assert.equal(status.isolation, "unverified");
-    const currentExecution = [2, 3].includes(status.executionVersion), mixedStaging = status.executionVersion === 3, groups = currentExecution ? executionGroups : supportedGroups;
+    const currentExecution = [2, 3, 4, 5].includes(status.executionVersion), mixedStaging = [3, 4, 5].includes(status.executionVersion), groups = currentExecution ? executionGroups : supportedGroups;
     assert.ok(!groupScoped || mixedStaging, "group campaigns require current audit and host lifetime gates");
     assert.ok(["finished", "preserved-uncertain"].includes(status.state));
     assert.deepEqual(status.outcomes.map((r) => r.group), plan.order, "every fixed registry group must be retained once");
@@ -58,6 +60,36 @@ export async function validateCampaign(input) {
       journal.push(event);
     }
     const replay = replayJournal(plan, id, journal, status);
+    let controlHost, apparatus, streamSeal, supervisedTerminal;
+    for (const [epoch, event] of replay.controlAdmissions) {
+      const bytes = readRegular(join(folder, id, event.path)); assert.equal(digest(bytes), event.sha256);
+      const admission = JSON.parse(bytes);
+      if (event.channel === "stream") {
+        assert.equal(status.executionVersion, 5); assert.ok(apparatus);
+        const group = epoch.slice(6), subject = group === "json-api" ? replay.reviewNeeded.subjectSha256 : replay.mixedReviewNeeded.subjectSha256;
+        verifyStreamAudit(event.binding, apparatus, admission, group, subject); assert.equal(admission.intent.campaign, id);
+        const delivery = readRegular(join(folder, id, `${group === "json-api" ? "json" : "mixed"}-audit-delivery.json`));
+        assert.equal(digest(delivery), admission.intent.sha256); assert.equal(delivery.length, admission.intent.bytes); continue;
+      }
+      verifyControlAdmission(event.binding, epoch, admission);
+      if (status.executionVersion === 5) { assert.equal(epoch, "bootstrap"); assert.ok(admission.apparatus); apparatus = admission.apparatus; }
+      else assert.equal(admission.apparatus, undefined, "legacy execution cannot claim supervised apparatus");
+      if (controlHost) assert.deepEqual(admission.host, controlHost);
+      else controlHost = admission.host;
+    }
+    if (status.executionVersion === 5 && replay.streamSeal) {
+      const event = replay.streamSeal, bytes = readRegular(join(folder, id, event.path)); assert.equal(digest(bytes), event.sha256);
+      streamSeal = JSON.parse(bytes); verifyStreamSeal(event.binding, streamSeal); assert.deepEqual(streamSeal.registration, apparatus);
+      if (status.state === "finished") {
+        const drained = read(`${id}/control-stream-drain.json`);
+        verifyStreamDrain(event.binding, apparatus, drained); assert.ok(BigInt(drained.monoNs) >= BigInt(streamSeal.sealedMonoNs));
+        supervisedTerminal = { registrationSha256: digest(JSON.stringify(apparatus)), sealSha256: event.sha256 };
+      }
+    }
+    if (controlHost && journal.some((event) => event.kind === "started")) {
+      const initial = read(`${id}/host-initial.json`);
+      for (const field of ["hostname", "bootId"]) assert.equal(initial[field], controlHost[field]);
+    }
     const lastEvent = read(`${id}/${events.at(-1).path}`);
     assert.ok(isDeepStrictEqual(lastEvent.status, status), "terminal journal and result disagree");
     const collectionEntry = subtree.entries.find((e) => e.path === "collection-manifest.json");
@@ -84,6 +116,16 @@ export async function validateCampaign(input) {
         assert.equal(phaseSnapshot(join(folder, id, entry.path), group === "json-api" && phase === "prepare").sha256,
           recorded.phaseManifestSha256, "phase host/native evidence differs from journal seal");
         hostBefore = read(`${id}/${entry.path}/host-before.json`);
+        if (status.executionVersion === 5) {
+          assert.deepEqual(hostBefore.controlApparatus?.registration, apparatus);
+          const after = read(`${id}/${entry.path}/host-after.json`);
+          const cpus = Object.fromEntries(Object.entries(recorded.binding.resources.expectedCpus ?? {}).map(([role, value]) => [role, value.cpuset]));
+          for (const observation of [hostBefore, after]) {
+            const sample = observation.controlApparatus.sample; apparatusProof(apparatus.binding, apparatus, sample, cpus);
+            if (streamSeal) assert.ok(BigInt(sample.monoNs) <= BigInt(streamSeal.sealedMonoNs));
+          }
+        }
+        if (controlHost) for (const field of ["hostname", "bootId"]) assert.equal(hostBefore[field], controlHost[field]);
         try { boundary = verifyHostBoundary(hostBefore, read(`${id}/${entry.path}/host-after.json`)); }
         catch { blockers.push(`${group}/${phase}: host boundary uncertain`); }
         if (replay.completed.has(group) && phase === "timing") { assert.ok(boundary); assert.ok(isDeepStrictEqual(status.outcomes[index].cleanup, boundary), "cleanup boundary differs"); }
@@ -241,6 +283,7 @@ export async function validateCampaign(input) {
       && verifiedGroups.length === plan.order.length && verifiedGroups.every((g, i) => g.group === plan.order[i]) && !blockers.length;
     const common = { schema: groupScoped ? "benchmark-isolated-group-campaign-inspection/v1" : "benchmark-isolated-campaign-inspection/v1", scope: "intrinsic-evidence",
       round, commit, campaign: id, campaignSha256: plan.campaignSha256, sourceSha256: plan.sourceSha256,
+      ...(supervisedTerminal ? { supervisedTerminal } : {}),
       selection: currentExecution ? { schema: registrySchema, groups: plan.bindings.map((b) => ({ group: b.request.group,
         contractSha256: b.selection.contractSha256, apps: b.selection.apps })) } : undefined, groups: verifiedGroups, blockers,
       collectionIntegrity: collectionEntry && !replay.incomplete && replay.pending.length === 0 ? "manifest-verified" : "unsealed-partial",
