@@ -138,8 +138,21 @@ mod tests {
             assert_eq!(weight(params.as_bytes()), Some(expected), "{params:?}");
         }
         for params in [
-            "q =0", "q\t=0", "q= 0", "Q =0.5", "q", "q=", "q=nan", "level=1;q =1", "\u{00a0}q=0", "q\u{00a0}=0", "q=0\u{00a0}",
-            "\x0bq=0", "q=1;q =0", "q=1;Q=0", "q=1;level=1;q=0",
+            "q =0",
+            "q\t=0",
+            "q= 0",
+            "Q =0.5",
+            "q",
+            "q=",
+            "q=nan",
+            "level=1;q =1",
+            "\u{00a0}q=0",
+            "q\u{00a0}=0",
+            "q=0\u{00a0}",
+            "\x0bq=0",
+            "q=1;q =0",
+            "q=1;Q=0",
+            "q=1;level=1;q=0",
         ] {
             assert_eq!(weight(params.as_bytes()), None, "{params:?}");
         }
