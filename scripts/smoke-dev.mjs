@@ -120,6 +120,7 @@ try {
         fallbackChild ? `@scope (.card) to (.slot) { @media (min-width: 900px) { ${fallbackChild} { display: grid !important; content: ""; } } }` : "",
         ...(skippedShapes ? [
           "@scope (.card) to (.slot) { :scope > .card-body { display: grid !important; } :scope dialog { display: none !important; } }",
+          "@scope (.card) to (.slot) { :scope > .card-body:not(.gone,.pending) { display: grid !important; outline-style: solid; } }",
           "@scope (.identity) { @media (min-width: 1px) { :scope > :scope { display: flex; outline-style: solid; } } }",
           "@scope (:scope) { @media (min-width: 1px) { .explicitScopeRoot { display: flex; outline-style: solid; } } }",
         ] : []),
@@ -248,6 +249,7 @@ try {
   const warnedOnSkip = (/** @type {string} */ id) => warnings.some((m) => m.startsWith(`corten: ${id} is a closed`));
   const cardDisplay = await drawn.locator("#skipCardBody").evaluate((el) => getComputedStyle(el).display);
   check("skipped important rules in an unrelated limited scope do not silence dialog.rail at 600px", await skippedLoad && cardDisplay === "grid" && warnings.some((m) => m.startsWith("corten: rail is a closed dialog that `.rail` in `@media (min-width: 900px)` gives display: flex")) && notes(":scope > .card-body") === 1 && notes(":scope dialog") === 1, cardDisplay);
+  check("the round 10 rule styles the card body but leaves the outside rail warning intact", warnedOnSkip("rail") && await drawn.locator("#skipCardBody").evaluate((el) => getComputedStyle(el).outlineStyle) === "solid" && warnings.some((m) => m.startsWith("corten: skipped `:scope > .card-body:not(")));
   check("a skip note names the selector and the check without a warning caveat", warnings.includes("corten: skipped `:scope > .card-body`: cannot compose its selector for the closed dialog and popover check"));
   check("nested implicit roots are skipped in every engine, including where WebKit applies them", await skippedImplicit && implicitLooks === (engine === "webkit" ? "solid" : "none") && !warnedOnSkip("implicitNested") && notes(":scope .implicitOuter > #implicitNested") === 1, implicitLooks);
   check("multiple scope references are skipped rather than matched to different roots", !warnedOnSkip("differentRoots") && notes(":scope > :scope") === 1);
@@ -369,6 +371,8 @@ try {
   check("one scoped rule is read once even with many candidates", many.ok && many.reads <= 2 && many.queries === 0 && many.matches <= 5 * count, many.detail);
   const endDialog = '<dialog class="workEnd" id="workEnd"></dialog>';
   const markerRule = "@media (min-width: 1px) { .workEnd { display: flex; } }";
+  const nonOverrides = await dialogWork(scopeRoot + dialog(0) + "</div>" + endDialog, scopedRule + "@scope (.workScope) to (.stop) { :scope > .workDialog:not(.gone,.pending) { display: grid; } :scope > .workDialog:has(*) { display: none !important; } }" + markerRule, 1, false, "workEnd");
+  check("a skipped normal display and a skipped display: none !important do not silence a warning even inside their root", nonOverrides.completed && nonOverrides.drawn && nonOverrides.warned.join(",") === "work0,workEnd" && nonOverrides.skipped.length === 2, nonOverrides.detail);
   const noise = Array.from({ length: 80 }, (_, i) => `.workNoise${i} { display: flex; }`).join("");
   const rail = ".workDialog.rail { display: flex; outline-style: solid; }";
   for (const rules of [noise + rail, rail + noise]) {
