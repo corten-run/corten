@@ -420,6 +420,9 @@ contract, and computed styles and element geometry with an independent static re
 Desktop and phone, light and dark, with and without JavaScript each submit the GET form and
 follow a related link. API probes change upstream records between requests, require exactly
 one read, reject a forwarded pre-serialized JSON body, and exercise upstream failures.
+Nuxt's header link does not prefetch the unrelated home page from a catalog record.
+Following the link still loads the home page; script and stylesheet failures still fail
+the checker.
 `styles.mjs --check` checks all twenty stylesheet copies byte-for-byte. After changing
 `catalog.css`, run `node bench/catalog/styles.mjs --write` and rebuild the images.
 
