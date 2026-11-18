@@ -396,8 +396,9 @@ poll already on its way is skipped and retried. A partial draw can still replace
 page-owned layout elements; it does not redraw the rest of the layout. Browsers without the
 Navigation API reload for `ReadAgain`. A page the app's or an area's middleware makes with `Req` in the
 route's place (a sign-in page) is filled the same way, from the request's head as it had it,
-within the request's deadline, and a failure to fill it gets the error page. Only a `GET` form's page (a search) is
-`<main>` alone, as a navigation's is, since a `GET` changes nothing the layout shows. Such an answer
+within the request's deadline, and a failure to fill it gets the error page. A `GET` form's page
+(a search) still answers `<main>` alone, as a navigation's does, since a `GET` changes nothing the
+layout shows. Such an answer
 costs the layout's markup and its reads; a page that differs from the one on screen in more than
 such elements (another frame, another number of elements around `<main>`) swaps in `<main>` and
 the layout's elements that are the page's (`page` in `html!`), as a navigation does, and the next
