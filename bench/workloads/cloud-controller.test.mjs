@@ -35,7 +35,9 @@ test("ambiguous/missing/crashed create and start acknowledgement loss never laun
     assert.ok(!h.calls.some((c) => c[0] === "ssh")); await assert.rejects(h.launch().launch(), /reserved/);
   }
   const h = harness(t, { startLost: true, active: true }); await assert.rejects(h.launch().launch());
-  assert.equal(h.saved().status, "starting"); assert.equal(await h.task().collect(), 3); assert.equal(h.creates, 1);
+  assert.equal(h.saved().status, "starting"); const calls = h.calls.length;
+  await assert.rejects(h.task().collect(), /monitor not registered; preserve pending reservation/);
+  assert.equal(h.calls.length, calls); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
 });
 test("preflight dirty/wrong HEAD/source/capacity/busy host rejects before create", async (t) => {
   for (const flags of [{ dirty: true }, { wrongHead: true }, { gitError: true }, { noCapacity: true }]) {
@@ -43,9 +45,9 @@ test("preflight dirty/wrong HEAD/source/capacity/busy host rejects before create
   }
   const h = harness(t); h.hosts(); await assert.rejects(h.launch().launch(), /already exists/); assert.equal(h.creates, 0);
 });
-test("bounded SSH readiness does not power cycle, rerun jobs or force terminate", async (t) => {
+test("one SSH readiness attempt does not retry, power cycle, rerun jobs or force terminate", async (t) => {
   const h = harness(t, { noSsh: true }); await assert.rejects(h.launch().launch(), /SSH unavailable/);
-  assert.equal(h.calls.filter((c) => c[0] === "ssh").length, 40); assert.equal(h.creates, 1);
+  assert.equal(h.calls.filter((c) => c[0] === "ssh").length, 1); assert.equal(h.creates, 1);
   assert.ok(!h.calls.some((c) => /power|reboot|restart|kill/.test(c.slice(1).join(" "))));
 });
 test("running collection takes one look, never packs, waits, downloads or deletes", async (t) => {

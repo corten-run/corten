@@ -12,7 +12,7 @@ test("real SIGTERM during production commands prevents every subsequent external
         { timeout: 10000, windowsHide: true, maxBuffer: 1024 * 1024, env: {} });
       assert.equal(stderr, "");
       const result = JSON.parse(stdout);
-      assert.equal(result.sent, true, "actual OS signal must be sent inside the fake command");
+      assert.equal(result.sent, true, "actual OS signal must be sent inside the fake command: " + JSON.stringify(result));
       assert.equal(result.code, 2, JSON.stringify(result));
       assert.equal(result.cancelObservedAtReturn, true, JSON.stringify(result));
       assert.equal(result.afterSignal, 0, JSON.stringify(result));
@@ -22,7 +22,11 @@ test("real SIGTERM during production commands prevents every subsequent external
       assert.equal(result.operationLock, false, "settled local command must release its operation lock");
       if (scenario !== "fetch") assert.equal(result.createIntent, true);
       if (scenario === "create") assert.equal(result.state, "creating");
-      if (scenario === "start") assert.equal(result.state, "starting");
+      if (["upload", "install", "start"].includes(scenario)) {
+        assert.equal(result.creates, 1);
+        assert.equal(result.signalCommand, scenario === "upload" ? "sftp" : "ssh");
+        assert.equal(result.state, scenario === "start" ? "starting" : "preparing");
+      }
       if (["final-unit", "final-ownership", "delete"].includes(scenario)) assert.equal(result.archive, true);
       assert.equal(result.deleteIntent, scenario === "delete");
       assert.equal(result.auditIntent, scenario === "audit-upload");

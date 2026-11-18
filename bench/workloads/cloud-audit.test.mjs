@@ -18,7 +18,8 @@ function fake(flags = {}, group = "json-api") {
   const subject = { ...body, subjectSha256: deploymentSha256(body) };
   delivery.subjectSha256 = delivery.review.subjectSha256 = subject.subjectSha256;
   if (flags.changedReceipt) delivery.bundle.receipts[0].identity = { ...delivery.bundle.receipts[0].identity, imageId: "synthetic-unapproved-image" };
-  const bytes = Buffer.from(JSON.stringify(delivery)), stage = `/bench/cloud-${prefix}-audit-${token}.json`, target = `${dir}/${prefix}-audit-delivery.json`;
+  const bytes = Buffer.from(JSON.stringify(delivery)), stage = `/bench/cloud-${prefix}-audit-${token}.json`,
+    target = `${dir}/${prefix}-audit-delivery${flags.control ? "-pending" : ""}.json`;
   const files = new Map([
     ["/bench/campaign/.host-attempt.json", JSON.stringify({ id: campaign, commit, campaignSha256: cp })],
     [`${dir}/plan.json`, JSON.stringify({ round: "r21", commit, campaignSha256: cp })],
@@ -42,7 +43,7 @@ function fake(flags = {}, group = "json-api") {
     readdirSync: () => ["plan.json", "00000-review-needed.json", `${prefix}-audit-subject.json`],
   };
   const intent = { group, campaign, sha256: createHash("sha256").update(bytes).digest("hex"), subjectSha256: subject.subjectSha256 };
-  const run = () => runInNewContext(auditProgram({ token, round: "r21", commit }, intent, true), {
+  const run = () => runInNewContext(auditProgram({ token, round: "r21", commit, ...(flags.control ? { control: {} } : {}) }, intent, true), {
     require(name) {
       if (name === "node:fs") return fs;
       if (name === "node:path") return path.posix;
@@ -83,4 +84,13 @@ test("fixed remote inbox publishes once, rebinds subject body, and never overwri
   }
   for (const field of ["round", "commit", "token"]) assert.throws(() => auditProgram({ round: "r21", commit, token: "0123456789abcdef", [field]: "'; arbitraryCommand #" },
     { campaign, sha256: "a".repeat(64), subjectSha256: "b".repeat(64) }));
+});
+
+test("registered audit publish leaves only pending delivery for the detached sealed-admission barrier", () => {
+  for (const group of ["json-api", "mixed-production"]) {
+    const h = fake({ control: true }, group); h.run();
+    assert.ok(h.files.has(h.target)); assert.ok(h.target.endsWith("-pending.json"));
+    assert.ok(!h.files.has(h.target.replace("-pending.json", ".json")));
+    assert.throws(h.run); assert.equal(h.moves, 1);
+  }
 });
