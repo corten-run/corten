@@ -6263,6 +6263,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
    custom-property reference. This leaves anchor, container, timeline, view-transition and
    font-palette names unchanged, even if they share a spelling with a registered property.
    A name computed at runtime, for example one built by a script or supplied by `attr()`, is not scoped.
+   This includes CSS-only lookups such as `var(var(--missing, --t), 1px)` and
+   `var(if(else: --t), 1px)`, where a fallback or branch supplies the name. A literal
+   `style()` test supplied by a `var()` fallback or nested `if()` branch to an `if()` condition
+   is scoped because the test itself names the property.
 
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use

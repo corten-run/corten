@@ -560,8 +560,10 @@ enum PropertyScan {
     Container,
     Supports,
     Style,
-    IfCondition,
-    IfValue,
+    Condition,
+    ConditionVarName,
+    IfCondition { condition_result: bool },
+    IfValue { condition_result: bool },
     Opaque,
 }
 
@@ -587,9 +589,10 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
     let mut stack = vec![mode];
     for (i, &(token, start, end)) in toks.iter().enumerate().skip(start) {
         let mode = *stack.last().unwrap();
+        let condition = matches!(mode, Condition | IfCondition { .. } | IfValue { condition_result: true });
         // Size queries and if() conditions can use substitutions without naming a property
         // with a bare identifier.
-        let substitutions = matches!(mode, Value | IfValue | Style | Container | IfCondition);
+        let substitutions = condition || matches!(mode, Value | IfValue { .. } | Style | Container | ConditionVarName);
         match token {
             Tok::Function => {
                 let name = decoded_name(&css[start..end - 1]).to_ascii_lowercase();
@@ -601,11 +604,16 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
                         } else if spelling(i + 1) == Some("{") && spelling(i + 3) == Some("}") && arg_end(i + 4) {
                             ident_ref(toks, i + 2, refs);
                         }
-                        Value
+                        // Only the fallback supplies condition tokens, not the lookup's name.
+                        if name == "var" && condition {
+                            ConditionVarName
+                        } else {
+                            Value
+                        }
                     }
-                    "if" if substitutions => IfCondition,
-                    "style" if matches!(mode, Container | IfCondition) => feature(i + 1, Style, refs),
-                    "supports" if mode == IfCondition => feature(i + 1, Supports, refs),
+                    "if" if substitutions => IfCondition { condition_result: condition },
+                    "style" if mode == Container || condition => feature(i + 1, Style, refs),
+                    "supports" if condition => feature(i + 1, Supports, refs),
                     _ if substitutions => Value,
                     _ => Opaque,
                 };
@@ -614,7 +622,8 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
             Tok::Open => {
                 let next = match (mode, &css[start..end]) {
                     (Supports | Style, "(") => feature(i + 1, mode, refs),
-                    (Container | IfCondition, "(") => mode,
+                    (Container, "(") => Container,
+                    (_, "(") if condition => Condition,
                     _ if substitutions => Value,
                     _ => Opaque,
                 };
@@ -623,8 +632,17 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
             Tok::Close if stack.len() > 1 => {
                 stack.pop();
             }
-            Tok::Colon if mode == IfCondition => *stack.last_mut().unwrap() = IfValue,
-            Tok::Semicolon if mode == IfValue => *stack.last_mut().unwrap() = IfCondition,
+            Tok::Comma if mode == ConditionVarName => *stack.last_mut().unwrap() = Condition,
+            Tok::Colon => {
+                if let IfCondition { condition_result } = mode {
+                    *stack.last_mut().unwrap() = IfValue { condition_result };
+                }
+            }
+            Tok::Semicolon => {
+                if let IfValue { condition_result } = mode {
+                    *stack.last_mut().unwrap() = IfCondition { condition_result };
+                }
+            }
             // A boolean style feature or a whole operand in a style range names a property.
             Tok::Ident
                 if mode == Style
@@ -3226,6 +3244,44 @@ mod tests {
             concat!(
                 "@property --x__t{syntax:'*';inherits:false;initial-value:else}",
                 ".x__a{width:if(var(--x__t): 24px; else: 1px);height:if(style(--x__t: else): 24px; else: 1px)}",
+            )
+        );
+    }
+
+    #[test]
+    fn registered_property_style_test_in_var_fallback_feeding_if_condition() {
+        let sheet = scope(
+            "@property --t { syntax: '<length>'; inherits: false; initial-value: 20px }
+             .a { width: if(var(--missing, style(--t: 20px)): 24px; else: 1px);
+                  --raw: var(--missing, style(--t: 20px)) }",
+            "x",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.css,
+            concat!(
+                "@property --x__t{syntax:'<length>';inherits:false;initial-value:20px}",
+                ".x__a{width:if(var(--missing, style(--x__t: 20px)): 24px; else: 1px);",
+                "--raw:var(--missing, style(--t: 20px))}",
+            )
+        );
+    }
+
+    #[test]
+    fn registered_property_style_test_in_if_branch_feeding_if_condition() {
+        let sheet = scope(
+            "@property --t { syntax: '<length>'; inherits: false; initial-value: 20px }
+             .a { width: if(if(else: style(--t: 20px)): 24px; else: 1px);
+                  --raw: if(else: style(--t: 20px)) }",
+            "x",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.css,
+            concat!(
+                "@property --x__t{syntax:'<length>';inherits:false;initial-value:20px}",
+                ".x__a{width:if(if(else: style(--x__t: 20px)): 24px; else: 1px);",
+                "--raw:if(else: style(--t: 20px))}",
             )
         );
     }

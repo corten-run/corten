@@ -293,10 +293,14 @@ the stock's value this way:
 The prefix applies to the registration, declarations, lookups such as `var(--share)` (including
 inside container size queries and `if()` conditions), style queries such as
 `@container style(--share: 50%)`, and property lists such as `transition-property: --share`.
+A literal `style()` test is also scoped when a `var()` fallback or a nested `if()` branch
+supplies it to an `if()` condition.
 A same-spelled anchor, container, timeline, view-transition name or font palette keeps its name.
 A bare name stored as a custom property's value is not a lookup, nor is the attribute name in
 `attr()`. A name computed at runtime, for example one built by a script or supplied by
-`attr()`, is not scoped. Use a literal name such as `var(--share)` for a scoped lookup.
+`attr()`, is not scoped. This also applies to CSS-only lookups such as
+`var(var(--missing, --share), 1px)` and `var(if(else: --share), 1px)`: the fallback or branch
+supplies the name, so the macro leaves it unchanged. Use `var(--share)` for a scoped lookup.
 
 A full page gets one `<style>` at `<Corten />`, after its stylesheets, with a rule for each
 distinct value (`[data-vars="--statement-table__share:12.5%"]{..}`), marked `!important`, as
