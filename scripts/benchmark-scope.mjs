@@ -71,7 +71,10 @@ export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd) 
     if (sha.test(PUSH_BEFORE ?? "") && PUSH_BEFORE !== "0".repeat(40)) {
       const base = spawnSync("git", ["cat-file", "-e", `${PUSH_BEFORE}^{commit}`], { cwd, stdio: "ignore" });
       if (base.error) throw base.error;
-      if (base.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd);
+      // A force-push's old tip is not an ancestor; its tree diff can hide changes.
+      const ancestor = base.status === 0 && spawnSync("git", ["merge-base", "--is-ancestor", PUSH_BEFORE, GITHUB_SHA], { cwd, stdio: "ignore" });
+      if (ancestor?.error) throw ancestor.error;
+      if (ancestor?.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd);
     }
     console.warn("Push base unavailable; selecting every benchmark job.");
   }

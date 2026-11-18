@@ -110,8 +110,9 @@ Run `node --test scripts/benchmark-scope.test.mjs` to check both selectors, incl
 the imports of the Catalog parity commands for each app.
 Both workflows compare the pull request merge commit with its first parent, using
 the full Git diff rather than GitHub's path-filter file list, and the before and after
-commits on a push. Newer pull request runs cancel older ones. A running `main` Catalog run
-finishes, and only the newest `main` push waits behind it; Evidence keeps every `main` run.
+commits on a push; a push whose before commit is unknown or not an ancestor of the new one (a
+force-push) tests everything. Newer pull request runs cancel older ones; `main` runs do not
+cancel one another, so each push's own diff is tested.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,

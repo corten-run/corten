@@ -6,10 +6,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# A newer PR run cancels the older one. Main runs share one group without cancelling, so the
-# running one finishes and only the newest waits; each main commit contains the ones before it.
+# Only newer PR runs supersede older ones; keep a run for every main commit, so each push's own
+# diff is scoped once and no main change goes untested.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'push' && 'main' || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

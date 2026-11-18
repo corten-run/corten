@@ -45,9 +45,9 @@ test("Catalog always starts its scope job and gates parity and JSON on the selec
   const step = scope.steps.find(step => step.run === "node scripts/benchmark-scope.mjs catalog");
   assert.equal(step.env.PUSH_BEFORE, "${{ github.event.before }}");
   assert.equal(scope.steps.find(step => step.uses?.startsWith("actions/checkout")).with["fetch-depth"], 0);
-  // Main pushes share one group and do not cancel: the running one finishes, the newest waits.
+  // Every main push keeps its own run: a replaced run would leave its push diff untested.
   assert.equal(workflow.concurrency.group,
-    "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.event_name == 'push' && 'main' || github.run_id }}");
+    "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}");
   assert.equal(workflow.concurrency["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}");
   assert.equal(harness.if, "needs.scope.outputs.apps != '[]' || needs.scope.outputs.json == 'true'");
   assert.equal(parity.if, "needs.scope.outputs.apps != '[]'");
@@ -256,6 +256,8 @@ test("a push to main scopes Catalog by its push diff, and an unknown base select
   const all = `apps=${JSON.stringify(allApps)}\njson=true\n`;
   assert.equal(scope("0".repeat(40), framework), all);
   assert.equal(scope("a".repeat(40), framework), all);
+  // A rewound or rewritten push compares with a base that is not its ancestor.
+  assert.equal(scope(framework, docs), all);
   for (const GITHUB_EVENT_NAME of ["workflow_dispatch", "schedule"]) {
     assert.deepEqual(selectScope(allApps, eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA: framework }, cwd)), { apps: allApps, json: true });
   }
