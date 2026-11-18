@@ -494,7 +494,9 @@ make TLS mandatory for the whole pool by default, including `nats://` URLs and r
   `require_tls(true)` and `tls_first()` both conflict with `tls_optional()` and must be
   removed before enabling it. In a mixed pool, `tls_server_name()` changes the name checked
   when TLS is used; it does not require TLS. A peer learned over TLS still uses TLS, but a peer
-  learned over plaintext can be dialed in plaintext if its INFO does not require TLS. For an
+  learned over plaintext can be dialed in plaintext if its INFO does not require TLS, and a
+  discovered alias of a `tls://` peer is not bound by that URL. So in a mixed pool also call
+  `ignore_discovered_servers()` and list every endpoint explicitly. For an
   all-TLS pool, leave `tls_optional()` off and use `require_tls(true)` to require TLS explicitly.
 - **Initial discovery over TLS:** When TLS starts after the first INFO, only lists received
   inside TLS count. Before nats-server 2.12, a single seed can connect without discovering
