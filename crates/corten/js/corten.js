@@ -2661,13 +2661,18 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   // `through`: the server may still be running it as this page is read, so it stays undrawn once
   // the page is drawn, for the next navigation to read whole again. One whose answer came is in the
   // record already (a patch not in yet is undrawn), numbered before the page is asked for.
-  const cutOff = again ? [] : Array.from(submits.values()).filter((pending) => pending.write && !pending.answered);
   // The writes answered before the page is asked for, which its layout draws.
   const through = redirected ? (askedAfter.get(redirected) ?? 0) : writesIn;
-  for (const pending of cutOff) if (pending.went) undrawn.add(++writesIn);
-  const cut = cutOff.length > 0;
-  // The page is about to change: replies to its pending submits would patch the wrong page.
-  if (!again) for (const pending of submits.values()) pending.controller.abort();
+  let cut = false;
+  if (!again) {
+    for (const pending of submits.values()) {
+      if (!pending.write || pending.answered) continue;
+      cut = true;
+      if (pending.went) undrawn.add(++writesIn);
+    }
+    // Replies would patch the wrong page. Record every cut-off before aborting any of them.
+    for (const pending of submits.values()) pending.controller.abort();
+  }
   // A whole draw can replace the layout's failure UI. Leave it to another page, even if another
   // write is undrawn or the last whole page asked to be read again while its write lands.
   const written = !!event.info?.[WRITTEN] ||
@@ -3224,9 +3229,8 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     } else if (fromHere(res.url) && (res.headers.has("corten-patch") || res.headers.has("corten-shell"))) {
       // A write's own page, whole: the write is done, and what it changed around `<main>` is drawn
       // only once the page is in. Until then (its modules loading, or a navigation that leaves it),
-      // every navigation reads the whole page, as after a write that redirects. One a server that
-      // does not draw it whole answered with `<main>` alone (a fleet halfway through a deploy) leaves
-      // that to the next navigation.
+      // every navigation reads the whole page, as after a write that redirects. A `<main>`
+      // answer with a matching shell key leaves that to the next navigation.
       const patch = res.headers.has("corten-patch");
       const whole = !patch && !res.headers.has("corten-page");
       // Its page whole, or one that took it (a patch, `<main>`), is numbered as it comes, undrawn
@@ -3295,8 +3299,10 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // did not draw) may have been applied too: the next navigation reads the whole page, but not the
     // page reading itself again, which would draw away the failure shown.
     if (signal.aborted) return;
-    if (pending.n) failedInView.add(pending.n);
-    else if (pending.went && !pending.answered && method !== "GET") failedWrite();
+    if (pending.n) {
+      failedInView.add(pending.n);
+      undrawn.add(pending.n);
+    } else if (pending.went && !pending.answered && method !== "GET") failedWrite();
     // Offline, the server unreachable, or the browser leaving the page (a full navigation without
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
     // that waited goes with it, since it would fail the same way, and the user sends it again.

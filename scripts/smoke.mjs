@@ -5319,29 +5319,50 @@ async function run(browser) {
     );
     await own.context().close();
   }
-  // A write whose own page's headers came, and whose body was then cut off (the page's `text()` of
-  // that answer rejects, as it does when the connection drops mid-body): the server applied it, and
-  // the page shows the failure in its layout. The page reading itself again keeps it shown; the
-  // next navigation reads the whole page, with what the write changed.
-  const cutBodyName = "a write whose own page is cut off after its headers is a failure in view: the page reading itself again keeps it shown, and the next page is read whole";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(cutBodyName, "without the Navigation API a link is a full load");
-  else {
-    const { own, seen } = await writtenPage(brand, undefined, "/smoke/written/again");
-    await own.evaluate(() => {
+  // A write's body fails after its headers, optionally after another form's whole page has
+  // already drawn over its ledger entry. Keep the first form in an unchanged layout element so
+  // its error still bubbles. A poll leaves that failure in view; a link reads the layout anew.
+  for (const overlap of [false, true]) {
+    const cutBodyName = overlap
+      ? "a body failure remains visible to polls after a second write's whole page has drawn"
+      : "a write whose own page is cut off after its headers is a failure in view: the page reading itself again keeps it shown, and the next page is read whole";
+    if (!(await page.evaluate(() => "navigation" in window))) {
+      skip(cutBodyName, "without the Navigation API a link is a full load");
+      continue;
+    }
+    const outside = (/** @type {string} */ body) =>
+      overlap ? body.replace("</header>", '</header><aside><form id="held-write" method="post" action="/smoke/written/again" data-patch><button>Write first</button></form></aside>') : body;
+    const { own, seen } = await writtenPage(
+      (body, _writes, headers) => outside(brand(body)).replace(">Watchlist, written</span>", overlap && !headers ? ">Poll brand</span>" : ">Watchlist, written</span>"),
+      outside,
+      "/smoke/written/again",
+    );
+    await own.evaluate((overlap) => {
+      const state = /** @type {any} */ (window);
       addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", ""));
-      // The write's answer only (the runtime's one POST here): its headers are in, its body fails.
       const fetch_ = window.fetch;
       let cut = false;
       window.fetch = async function (input, init) {
         const res = await fetch_.call(this, input, init);
         if (!cut && init?.method === "POST") {
           cut = true;
-          res.text = () => Promise.reject(new TypeError("network error"));
+          res.text = () => new Promise((_resolve, reject) => {
+            const fail = () => reject(new TypeError("network error"));
+            if (overlap) state.__failBody = fail;
+            else fail();
+          });
         }
         return res;
       };
-    });
-    await own.click("main form button");
+    }, overlap);
+    await own.click(overlap ? "#held-write button" : "main form button");
+    let drewOver = true;
+    if (overlap) {
+      await own.waitForFunction(() => typeof (/** @type {any} */ (window)).__failBody === "function");
+      await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+      drewOver = await brandBecomes(own, "Watchlist, written");
+      await own.evaluate(() => (/** @type {any} */ (window)).__failBody());
+    }
     const failed = await own
       .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
       .then(
@@ -5358,8 +5379,9 @@ async function run(browser) {
     const shown = await shownOf(own);
     check(
       cutBodyName,
-      failed && seen.answers === 1 && again === "GET /smoke/written/again nav" && kept && arrived && shown.brand === "Watchlist, written" && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ failed, answers: seen.answers, again, kept, arrived, asked: seen.asked, shown }),
+      drewOver && failed && seen.answers === (overlap ? 2 : 1) && again === "GET /smoke/written/again nav" && kept && arrived &&
+        shown.brand === (overlap ? "Poll brand" : "Watchlist, written") && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ drewOver, failed, answers: seen.answers, again, kept, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
   }
@@ -5549,6 +5571,29 @@ async function run(browser) {
         shown.same &&
         seen.asked.includes("GET /smoke/quoted page"),
       JSON.stringify({ drawn, page: seen.answered["corten-page"] ?? null, between: between.brand, failed, arrived, asked: seen.asked, shown }),
+    );
+    await own.context().close();
+  }
+  // A real mixed deployment has different runtime bytes and therefore a different shell key.
+  // Keep the shell guard: reload the current URL, without drawing or resending the refusal.
+  {
+    const { own, seen } = await writtenPage((body, _writes, headers) => {
+      if (!headers) return body;
+      headers["corten-shell"] = "old-deploy";
+      return body.replace("Written by the form's own page.", "An old server refused this write.");
+    });
+    seen.draws = false;
+    seen.status = 422;
+    const reloaded = own.waitForEvent("framenavigated", { predicate: (frame) => frame === own.mainFrame(), timeout: 5000 }).then(() => true, () => false);
+    await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+    const loaded = await reloaded;
+    const shown = await shownOf(own);
+    const refused = await own.locator("main").textContent();
+    check(
+      "a legacy action answer with a different shell key reloads without drawing or resending the refusal",
+      loaded && "corten-page" in seen.answered && !shown.same && shown.path === "/smoke/written" && seen.writes === 1 &&
+        seen.asked.filter((ask) => ask === "GET /smoke/written -").length === 2 && !refused?.includes("refused this write"),
+      JSON.stringify({ loaded, shown, writes: seen.writes, asked: seen.asked, refused }),
     );
     await own.context().close();
   }

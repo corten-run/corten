@@ -546,11 +546,8 @@ pub(crate) struct EarlyHead(pub(crate) Arc<Parts>);
 /// from the head that `Req` was taken with ([`EarlyHead`]), as a plain write's page made there
 /// starts them from the head its `Req` kept ([`StartHere::extracted`]). One from a route whose
 /// answer type says it is no page, or that is `Public`, starts none.
-pub(crate) async fn fill_made_early(
-    shared: Arc<crate::page::Shared>,
-    until: Option<tokio::time::Instant>,
-    mut res: Response,
-) -> Response {
+pub(crate) async fn fill_made_early(shared: Arc<crate::page::Shared>, mut res: Response) -> Response {
+    let until = res.extensions().get::<EarlyHead>().and_then(|EarlyHead(head)| LateUntil::of(&head.extensions));
     let here = StartHere::new(shared, until);
     if res.extensions().get::<NotAPageAnswer>().is_some() {
         here.lock().state = State::NotAPage;
@@ -572,35 +569,30 @@ pub(crate) async fn fill_made_early(
 #[derive(Clone, Copy)]
 pub(crate) struct NotAPageAnswer;
 
-/// As a route of a `#[corten::routes]` module is called for a write that is not a `GET`: for a
-/// write the runtime sent in an app with layout reads, whose own page is whole (#1370), the route
-/// is marked reached, so a `Req` its handler takes keeps no head of its own, and when its answer
-/// type can be a page (`page`: `Answer::PAGE`, not `HtmlResult<Patches>`, not `Public`) the
-/// request's head is kept for the page the handler may answer with, with the app and deadline its
-/// reads need. Nothing runs beside the handler, whose reads must see what it wrote, and nothing is
-/// started for a patch, a redirect or an error, which answer with no page; an `HtmlResult` route
-/// keeps the head because it may answer either. A route that answers patches alone, or no page
-/// (JSON, text), keeps none: a page it still makes (an answer type of the app's own that wraps one
-/// and does not say so) is filled with none of its reads ([`NotAPageAnswer`]). Any other request
-/// passes with one look at its extensions: the mark is the request's `Signal`, so its extensions
-/// stay within their first allocation.
-#[inline(never)]
-pub(crate) fn at_late_route(
-    req: &crate::http::Request,
-    page: bool,
-) -> Option<(Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts)> {
+/// Marks a typed route reached for a preferred action write. A `Req` its handler takes keeps
+/// no early head: a page-capable route takes its own snapshot; other routes need none.
+#[inline]
+pub(crate) fn reaches_late_route(req: &crate::http::Request) -> Option<&crate::Signal> {
+    if matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
+        return None;
+    }
     let signal = req.extensions().get::<crate::Signal>()?;
     if signal.late_write() != Some(false) {
         return None;
     }
     signal.keep_head();
-    if !page {
-        return None;
-    }
-    let shared = signal.shared()?.clone();
-    // Outside the write's scope (a middleware that runs the route on a task of its own) its reads
-    // have no deadline of their own, and the request's still ends it.
-    let until = LATE_UNTIL.try_with(|until| *until).ok().flatten();
+    Some(signal)
+}
+
+/// Keep the route's request head before calling a handler that may consume it and answer with
+/// a page. Nothing reads beside the handler, whose reads must see what it wrote.
+#[inline(never)]
+pub(crate) fn at_late_route(
+    req: &crate::http::Request,
+    signal: &crate::Signal,
+) -> (Arc<crate::page::Shared>, Option<tokio::time::Instant>, Parts) {
+    let shared = signal.shared().expect("late writes belong to an app").clone();
+    let until = LateUntil::of(req.extensions());
     // Copied field by field from the request in place, rather than taken apart, cloned and put
     // back: a read is given the whole head (`LayoutRead::start` takes `&Parts`, and an app's read
     // may look at any of it), so the headers and extensions are cloned all the same.
@@ -610,15 +602,18 @@ pub(crate) fn at_late_route(
     kept.version = req.version();
     kept.headers = req.headers().clone();
     kept.extensions = req.extensions().clone();
-    Some((shared, until, kept))
+    (shared, until, kept)
 }
 
-tokio::task_local! {
-    /// A write's deadline, which the reads its own page starts stop at ([`at_late_route`]), set
-    /// around its middleware and route (`page::FillsLate`). Not on its `Signal`, where it would
-    /// make every request's signal a larger allocation (24 bytes more), nor a request extension,
-    /// which would grow the request's map of them for each such write.
-    pub(crate) static LATE_UNTIL: Option<tokio::time::Instant>;
+/// A preferred action write's deadline in an app with layout reads. It follows the request
+/// through middleware without a task-local scope or adding to the size of every signal.
+#[derive(Clone, Copy)]
+pub(crate) struct LateUntil(pub(crate) tokio::time::Instant);
+
+impl LateUntil {
+    fn of(extensions: &http::Extensions) -> Option<tokio::time::Instant> {
+        extensions.get::<Self>().map(|until| until.0)
+    }
 }
 
 /// `gives(CartCount)` on a route in a `#[corten::routes]` module: the layout reads its `GET`

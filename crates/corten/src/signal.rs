@@ -151,7 +151,7 @@ struct Inner {
     /// answers (#1370), here for the same reason: 0 for any other request, [`LATE`] until its
     /// route is reached, [`HEAD_KEPT`] once its route is reached (and, if its answer can be a page,
     /// has kept the request's head for it: [`crate::layout::at_late_route`]). A byte, in the
-    /// padding beside the others; its deadline is not kept here (`crate::layout::LATE_UNTIL`), as
+    /// padding beside the others; its deadline is not kept here (`crate::layout::LateUntil`), as
     /// any more would make every request's signal a larger allocation.
     late: AtomicU8,
 }

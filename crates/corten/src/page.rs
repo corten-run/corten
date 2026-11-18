@@ -80,8 +80,8 @@ pub enum Mode {
     /// The runtime is navigating to a page and will swap it into `<main>`.
     Navigation,
     /// The runtime submitted a `<form data-patch>`: it applies a patch's fragments by id, follows a
-    /// redirect, and draws a page, a `GET` form's into `<main>` and a write's own whole, its layout
-    /// included, as a full load draws it.
+    /// redirect, and draws a page. A write's own is whole, layout included, when the runtime
+    /// prefers it (`Prefer: corten-draws=whole`); otherwise it draws a fragment, as for `GET` and `HEAD`.
     Action,
     /// A client that renders by itself (a native screen, an agent) asked for
     /// `Accept: application/json`. [`Req::screen`] answers with the page's data; [`Req::page`]
@@ -95,8 +95,9 @@ impl Mode {
     /// a patch replaces elements by id, so the layout around `<main>` (the header, a cart's count in
     /// it) stays as the full load drew it. What a write changed there is drawn by the two answers to
     /// a write that are pages: the page it redirects to, which the runtime fetches as a
-    /// [`Mode::Document`], and its own page ([`Req::page`] for an action that is not a `GET`), which
-    /// is whole in every mode. A value only the layout shows is a [`crate::LayoutRead`], which Corten
+    /// [`Mode::Document`], and its own page ([`Req::page`] for a method other than `GET` or `HEAD`),
+    /// which is whole in document mode or an action with `Prefer: corten-draws=whole`.
+    /// A value only the layout shows is a [`crate::LayoutRead`], which Corten
     /// starts for those answers and no others; code that reads such a value itself before the
     /// handler (an [`crate::Ahead`] in an extractor) skips it only for a swap that is no write:
     ///
@@ -105,7 +106,8 @@ impl Mode {
     ///
     /// /// Whether the answer to this request can draw the layout: a write's may be its own page.
     /// fn may_draw_the_layout(parts: &Parts) -> bool {
-    ///     !Mode::of(&parts.headers).swaps() || parts.method != Method::GET
+    ///     let mode = Mode::of(&parts.headers);
+    ///     !mode.swaps() || (mode == Mode::Action && !matches!(parts.method, Method::GET | Method::HEAD))
     /// }
     /// # let _ = may_draw_the_layout;
     /// ```
@@ -1445,9 +1447,9 @@ impl Req {
     /// (`html! { <Layout req={req} title="About">..</Layout> }`). A browser gets all of it; a
     /// client navigation (and a `GET` form the runtime sends) gets the title, the page's head tags
     /// and `<main>`'s children, and the rest of the layout does not run. A write's own page is whole
-    /// in every mode, with JavaScript as without, so what the write changed in the layout is drawn
-    /// (the runtime draws what differs around `<main>`, as for the page a write redirects to), its
-    /// [`crate::LayoutRead`]s included.
+    /// in document mode or an action with `Prefer: corten-draws=whole`; navigation mode and a legacy
+    /// action still get a fragment. For a whole action answer the runtime draws what differs around
+    /// `<main>`, including its [`crate::LayoutRead`]s, as for the page a write redirects to.
     pub fn page<For>(&self, doc: impl Document) -> crate::Result<HtmlResponse<For>> {
         self.page_with_status(StatusCode::OK, doc)
     }
@@ -3201,27 +3203,27 @@ pub(crate) struct AsIs;
 /// ([`crate::api`]). A request a [`crate::Caller`] sent to sign in is redirected there.
 pub(crate) fn render_errors<'s, 'n, 'g, 'm, S: crate::app::Steps>(
     shared: &'s Arc<Shared>,
-    req: Request,
+    mut req: Request,
     next: Next<'n, S>,
     deadline: Option<std::time::Duration>,
     signal: &'g crate::Signal,
     api: Option<&'m crate::api::Mount>,
     (mode, fetched): (Mode, bool),
 ) -> impl Future<Output = Response> + Send + use<'s, 'n, 'g, 'm, S> {
-    // A write the runtime sent may answer its own page, which is whole for a runtime that draws one
-    // (#1370). Looked up only in an app with layout reads, and once: its `Req` reads the mark.
-    // Looked up before the future is made, so the request is moved into it once, as it was: a
-    // request borrowed in the future kept a slot of its own in each of its later states (240 bytes
-    // more on every whole document's and navigation's future), and read through a binding of its
-    // own it was moved twice more, each a copy of its head (`-Zprint-type-sizes` and callgrind).
-    let action_write = api.is_none()
-        && mode != Mode::Data
+    // Only a preferred action write in an app with layout reads needs a late fill.
+    // Inspect the head before moving the request into the future so it keeps no extra slot.
+    let late = mode == Mode::Action
         && !shared.layout_reads.is_empty()
+        && api.is_none()
         && own_page_whole(mode, req.method(), req.headers());
-    errors_rendered(shared, req, next, deadline, signal, api, (mode, fetched), action_write)
+    if late {
+        if let Some(limit) = deadline {
+            req.extensions_mut().insert(crate::layout::LateUntil(tokio::time::Instant::now() + limit));
+        }
+    }
+    errors_rendered(shared, req, next, deadline, signal, api, (mode, fetched), late)
 }
 
-/// [`render_errors`], once it knows whether the request is a write whose own page is whole.
 #[allow(clippy::too_many_arguments)]
 async fn errors_rendered<S: crate::app::Steps>(
     shared: &Arc<Shared>,
@@ -3231,14 +3233,18 @@ async fn errors_rendered<S: crate::app::Steps>(
     signal: &crate::Signal,
     api: Option<&crate::api::Mount>,
     (mode, fetched): (Mode, bool),
-    action_write: bool,
+    late: bool,
 ) -> Response {
     if api.is_some() || mode == Mode::Data {
         let shape = api.and_then(|mount| mount.errors.as_ref());
-        return crate::api::json_failure(run(req, next, deadline, signal).await, shared.dev, shape).await;
+        return crate::api::json_failure(run(req, next, deadline, signal, false).await, shared.dev, shape).await;
     }
-    if shared.layout_reads.is_empty() || (mode.swaps() && !action_write) {
-        return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
+    if shared.layout_reads.is_empty() || mode.swaps() {
+        let _release = late.then(|| {
+            signal.mark_late();
+            ReleasesEarlyHeads(signal)
+        });
+        return page_or_error(shared, req, next, deadline, signal, (mode, fetched), late).await;
     }
     // A whole document: a page route starts the layout's reads as it is called, and they are
     // polled with the handler on this task, then drawn into whichever page answers: the
@@ -3247,51 +3253,14 @@ async fn errors_rendered<S: crate::app::Steps>(
     // is moved as it is polled, and with the reads' state inline each request ran about 9.5k more
     // instructions, 8.4k of them copying (callgrind, the item page).
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
-    // A write the runtime sent runs no read beside its handler, whose reads must see what it wrote:
-    // a route whose answer can be a page keeps the request's head, and only a page it answers with
-    // starts the reads that page draws and is filled (`layout::at_late_route`). A route that answers
-    // patches alone (`HtmlResult<Patches>`) or no page (JSON, text) keeps none, and a patch or a
-    // redirect starts no read; its error page is a swap of `<main>`, which draws none.
-    // A page the app's or an area's middleware made with `Req` before the route is filled as the
-    // middleware answers ([`FillsLate`]), under the deadline and before the error page, as the
-    // route's own page was filled as the route answered. Anything else passes with one look at its
-    // extensions.
-    // Boxed, as the whole document's is below, so every other request's future stays the size it
-    // was: with the fill's state inline, a navigation and a patch in an app without layout reads
-    // each ran about 200 more instructions, most of them copying, where the box costs each such
-    // write about 1,000 (callgrind, #1370).
-    if action_write {
-        return late_write(shared, req, next, deadline, signal, (mode, fetched), until).await;
-    }
     let mut req = req;
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
     let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
-        let res = here.beside(page_or_error(shared, req, next, deadline, signal, (mode, fetched))).await;
+        let res = here.beside(page_or_error(shared, req, next, deadline, signal, (mode, fetched), false)).await;
         here.fill(res).await
     });
     filled.await
-}
-
-/// A write the runtime sent in an app with layout reads ([`render_errors`]), marked and its answer
-/// boxed (#1370).
-fn late_write<'f, 's: 'f, 'n: 'f, 'g: 'f, S: crate::app::Steps + 'f>(
-    shared: &'s Arc<Shared>,
-    req: Request,
-    next: Next<'n, S>,
-    deadline: Option<std::time::Duration>,
-    signal: &'g crate::Signal,
-    asked: (Mode, bool),
-    until: Option<tokio::time::Instant>,
-) -> std::pin::Pin<Box<dyn Future<Output = Response> + Send + 'f>> {
-    signal.mark_late();
-    let next = FillsLate { next, shared, until };
-    // Moved into the future, so it goes with it whether it is answered or dropped unpolled.
-    let release = ReleasesEarlyHeads(signal);
-    Box::pin(async move {
-        let _release = release;
-        page_or_error(shared, req, next, deadline, signal, asked).await
-    })
 }
 
 /// Lets go of the heads `Req`s took before a late write's route once the write
@@ -3307,58 +3276,15 @@ impl Drop for ReleasesEarlyHeads<'_> {
     }
 }
 
-/// What answers a request under its deadline and panic catch: the app's middleware and the route
-/// ([`Next`]), and for a write the runtime sent in an app with layout reads, the fill of a page the
-/// middleware made after them ([`FillsLate`]).
-pub(crate) trait Answers: Send {
-    fn answer(self, req: Request) -> impl Future<Output = Response> + Send;
-}
-
-impl<S: crate::app::Steps> Answers for Next<'_, S> {
-    #[inline]
-    fn answer(self, req: Request) -> impl Future<Output = Response> + Send {
-        self.run(req)
-    }
-}
-
-/// A write the runtime sent, in an app with layout reads (#1370): a page the app's or an area's
-/// middleware made with `Req` in the route's place is filled as the middleware answers, from the
-/// head that `Req` was taken with (`layout::fill_made_early`), so its reads stop at the request's
-/// deadline and a failure to fill it gets the error page, as the route's own page does. Anything
-/// else passes with one look at its extensions. Only such a write comes here, so no other request's
-/// future carries it.
-pub(crate) struct FillsLate<'a, 'b, S: crate::app::Steps> {
-    next: Next<'a, S>,
-    shared: &'b Arc<Shared>,
-    until: Option<tokio::time::Instant>,
-}
-
-impl<S: crate::app::Steps> Answers for FillsLate<'_, '_, S> {
-    fn answer(self, req: Request) -> impl Future<Output = Response> + Send {
-        let FillsLate { next, shared, until } = self;
-        // The route may be reached as the middleware is called or as it is polled.
-        let answer = crate::layout::LATE_UNTIL.sync_scope(until, || next.run(req));
-        let answer = crate::layout::LATE_UNTIL.scope(until, answer);
-        async move {
-            let res = answer.await;
-            if res.extensions().get::<crate::layout::Pending>().is_none() {
-                return res;
-            }
-            let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send>> =
-                Box::pin(crate::layout::fill_made_early(shared.clone(), until, res));
-            filled.await
-        }
-    }
-}
-
 /// The handler's page, or the error page in its place.
-async fn page_or_error(
+async fn page_or_error<S: crate::app::Steps>(
     shared: &Arc<Shared>,
     req: Request,
-    next: impl Answers,
+    next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     (mode, fetched): (Mode, bool),
+    late: bool,
 ) -> Response {
     use http_body::Body as HttpBody;
     let offline = req.method() == http::Method::GET && shared.offline.as_deref() == Some(req.uri().path());
@@ -3375,7 +3301,7 @@ async fn page_or_error(
     // answers it as the whole document at the address it asked; its method, for what it is told.
     #[cfg(debug_assertions)]
     let plain = (browser && !fetched && mode == Mode::Document && top_level(req.headers())).then(|| req.method().clone());
-    let res = run(req, next, deadline, signal).await;
+    let res = run(req, next, deadline, signal, late).await;
     #[cfg(debug_assertions)]
     let res = refresh_header_is_an_error(res, shared.dev);
     #[cfg(debug_assertions)]
@@ -3583,13 +3509,19 @@ fn sign_in_loops(path: &str, to: &HeaderValue) -> Option<String> {
 
 /// The handler's response, through [`within_deadline`]; a handler that panics is answered as a
 /// handler error (500), whose message only `corten dev` shows.
-async fn run(req: Request, next: impl Answers, deadline: Option<std::time::Duration>, signal: &crate::Signal) -> Response {
+async fn run<S: crate::app::Steps>(
+    req: Request,
+    next: Next<'_, S>,
+    deadline: Option<std::time::Duration>,
+    signal: &crate::Signal,
+    late: bool,
+) -> Response {
     use std::{future::Future, panic::AssertUnwindSafe, pin::pin, task::Poll};
     // For the log only: a method and a URI clone without allocating.
     let (method, uri) = (req.method().clone(), req.uri().clone());
     // A handler that panics fails its request like one that returned an error, instead of
     // dropping the connection with no answer. Nothing runs unless it panics.
-    let mut fut = pin!(within_deadline(req, next, deadline, signal, (&method, &uri)));
+    let mut fut = pin!(within_deadline(req, next, deadline, signal, (&method, &uri), late));
     let outcome = std::future::poll_fn(|cx| match std::panic::catch_unwind(AssertUnwindSafe(|| fut.as_mut().poll(cx))) {
         Ok(Poll::Ready(res)) => Poll::Ready(Ok(res)),
         Ok(Poll::Pending) => Poll::Pending,
@@ -3614,23 +3546,25 @@ async fn run(req: Request, next: impl Answers, deadline: Option<std::time::Durat
 
 /// The handler's response, or once it has waited past `deadline` an empty 503, or a 408 when it
 /// was waiting for the client to send the body (the 413 while a body over its limit is read past).
-async fn within_deadline(
+async fn within_deadline<S: crate::app::Steps>(
     req: Request,
-    next: impl Answers,
+    next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     (method, uri): (&http::Method, &Uri),
+    late: bool,
 ) -> Response {
-    let Some(limit) = deadline else {
-        return next.answer(req).await;
-    };
-    match within(limit, next.answer(req)).await {
+    if deadline.is_none() && !late {
+        return next.run(req).await;
+    }
+    match within(deadline, next.run(req), late, signal).await {
         Ok(res) => res,
         // The handler was waiting for the client to send the rest of the body: the request had
         // not arrived whole in time, which is the client's 408 (a stalled upload with the
         // defaults, whose idle time is longer than the deadline), not the server's 503. Still
         // warned of, as the 503 is: a large upload still being sent says the deadline is short.
         Err(Late(Waited::Body)) => {
+            let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline waiting for the request's body", uri.path());
             Error::new("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
@@ -3645,6 +3579,7 @@ async fn within_deadline(
             .into_response()
         }
         Err(Late(Waited::Nothing)) => {
+            let limit = deadline.expect("timed out");
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline", uri.path());
             let mut res = StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -3666,15 +3601,37 @@ fn accepts_html(headers: &HeaderMap) -> bool {
 /// is not ready, so a handler that answers at once (a page rendered from memory) never registers
 /// one: about 600 ns a request measured with `tokio::time::timeout`. Each poll of `fut` starts
 /// with no wait for the body marked, so the mark read when the timer fires is that poll's.
-async fn within<F: std::future::Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
+async fn within(
+    limit: Option<std::time::Duration>,
+    fut: impl Future<Output = Response>,
+    late: bool,
+    signal: &crate::Signal,
+) -> Result<Response, Late> {
     use std::{future::Future, pin::pin, task::Poll};
     let mut fut = pin!(fut);
     let mut timer = pin!(None::<tokio::time::Sleep>);
+    let mut fill: Option<std::pin::Pin<Box<dyn Future<Output = Response> + Send>>> = None;
     std::future::poll_fn(|cx| {
-        crate::extract::forget_wait();
-        if let Poll::Ready(out) = fut.as_mut().poll(cx) {
-            return Poll::Ready(Ok(out));
+        if limit.is_some() {
+            crate::extract::forget_wait();
         }
+        if fill.is_none() {
+            if let Poll::Ready(res) = fut.as_mut().poll(cx) {
+                // A page the middleware (or a raw route) made early can still have places.
+                // Only that answer needs a fill, under the existing deadline and panic catch.
+                if !late || res.extensions().get::<crate::layout::Pending>().is_none() {
+                    return Poll::Ready(Ok(res));
+                }
+                let shared = signal.shared().expect("late writes belong to an app");
+                fill = Some(Box::pin(crate::layout::fill_made_early(shared.clone(), res)));
+            }
+        }
+        if let Some(fill) = &mut fill {
+            if let Poll::Ready(res) = fill.as_mut().poll(cx) {
+                return Poll::Ready(Ok(res));
+            }
+        }
+        let Some(limit) = limit else { return Poll::Pending };
         if timer.is_none() {
             timer.set(Some(tokio::time::sleep(limit)));
         }
