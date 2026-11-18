@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { assertFleetCensus, ownedDroplet, reservation, tags, terminalUnit, validateFleet } from "./cloud-contract.mjs";
@@ -12,8 +12,8 @@ import { campaignOutcome, controllerFailure, controllerState, full, providerAcco
 import { auditDelivery, auditProtocol, auditScript } from "./cloud-audit.mjs";
 import { inspectCampaign } from "./cloud-validation.mjs";
 import { mixedCancelScript, mixedSignalObservation, mixedWait, ownedMixedWait, verifyMixedCancellation, verifyMixedSignal } from "./cloud-cancellation.mjs";
-import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript,
-  verifyFailedNativeCustody, verifyFailedNativeRetirement } from "./cloud-retirement.mjs";
+import { failedNativeArchive, failedNativeObservation, failedNativeScript, setupEvidence, terminalSetupScript, unusedBootstrap, unusedEvidence, unusedHostScript,
+  verifyFailedNativeCustody, verifyFailedNativeRetirement, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { controlRequest, controlRegistration, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { controlCheckpoint } from "./cloud-transport.mjs";
 
@@ -27,7 +27,7 @@ export function command(binary, args, timeout = 60000, allowFail = false) {
 }
 const outside = (root, path) => { const r = relative(root, path); return isAbsolute(r) || r === ".." || r.startsWith(`..${sep}`); };
 export function controller(input, { run = command, repo = checkout, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit } = {}) {
+  inspect, interrupted = () => false, settle = async () => {}, mergedHead = "origin/main", now = () => Date.now(), recoveryApproval, authorizeAudit, unusedBootstrapApproval } = {}) {
   const options = validateOptions(input); repo = realpathSync(repo);
   if (mergedHead !== "origin/main") full(mergedHead, /[a-f0-9]{40}/, "exact observed main commit required");
   const fleet = options.group === undefined ? undefined : validateFleet(JSON.parse(regular(options.fleet, 1024 * 1024)));
@@ -139,8 +139,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     }
     assert.fail(uncertain);
   };
-  const own = async () => {
-    const found = state.id ? await exactHost() : undefined;
+  const own = async (remaining) => {
+    const found = state.id ? await exactHost(remaining) : undefined;
     const d = ownedDroplet(state.id ? found ? [found] : [] : await list(), state), ips = d.networks?.v4?.filter((n) => n.type === "public");
     assert.equal(ips?.length, 1, "ambiguous public host address");
     if (state.ip) assert.equal(ips[0].ip_address, state.ip);
@@ -151,8 +151,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     state.id = String(d.id); state.ip = d.networks.v4.find((n) => n.type === "public").ip_address;
     state.status = state.status === "creating" ? "preparing" : state.status; save();
   };
-  const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${join(local, "known_hosts").replaceAll("\\", "/")}`,
-    "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"];
+  const sshLimits = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"];
+  const sshOptions = ["-o", "StrictHostKeyChecking=accept-new", "-o", `UserKnownHostsFile=${join(local, "known_hosts").replaceAll("\\", "/")}`, ...sshLimits];
   const transport = async (binary, args, timeout, allowFail) => {
     await own(); assert.ok(state.id && state.ip, "bound host required");
     const mixedRecovery = state.group === "mixed-production" && (options.cancelMixedWait || options.retireFailedNative);
@@ -173,6 +173,27 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   };
   const ssh = (script, timeout = 60000, allowFail = false) => transport("ssh", [`root@${state.ip}`, script], timeout, allowFail);
   const scp = (from, to) => transport("scp", ["-q", from, to], 15 * 60000);
+  async function waitForSsh() {
+    const windowMs = 120000, spacingMs = 5000, attempts = windowMs / spacingMs;
+    let previous = now(); const deadline = previous + windowMs;
+    const remaining = () => {
+      check(); const current = now();
+      assert.ok(Number.isFinite(current) && Number.isFinite(deadline) && current >= previous && current < deadline, "SSH unavailable within readiness budget");
+      previous = current; return Math.max(1, Math.floor(deadline - current));
+    };
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      await own(remaining);
+      const known = join(local, "known_hosts");
+      if (lstatSync(known, { throwIfNoEntry: false })) regular(known, 1024 * 1024);
+      // No guardian or other remote write is dispatched by this probe. Only a
+      // settled SSH client failure can advance to another identical no-op.
+      const result = await execute("ssh", [...sshOptions, `root@${state.ip}`, "true"], 20000, true, undefined, remaining);
+      if (result.status === 0 && !result.error && !result.signal) return;
+      assert.equal(result.status, 255, "SSH unavailable; readiness did not return an SSH transport status");
+      if (attempt + 1 < attempts) await sleep(Math.min(spacingMs, remaining()));
+    }
+    assert.fail("SSH unavailable within readiness budget");
+  }
   const unit = async () => terminalUnit((await ssh(unitQuery(state))).stdout, state);
   const requireActiveStartup = async (message) => {
     const { stdout } = await ssh(unitQuery(state));
@@ -293,8 +314,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
   const verifyRetirementRecord = (bytes, kind) => {
     const setup = kind === "setup-failed";
     const record = JSON.parse(bytes), raw = JSON.stringify(record.observation);
-    const expected = setup ? setupEvidence(raw, state, terminalSetupScript(state, setupExit(), state.control ? record.observation.control.requests.length - 1 : undefined), setupExit(), record.startedAtMs, record.finishedAtMs, local)
-      : unusedEvidence(raw, state, unusedHostScript(state), record.startedAtMs, record.finishedAtMs);
+    if (!setup) return verifyUnusedEvidence(record, state);
+    const expected = setupEvidence(raw, state, terminalSetupScript(state, setupExit(), state.control ? record.observation.control.requests.length - 1 : undefined), setupExit(), record.startedAtMs, record.finishedAtMs, local);
     assert.deepEqual(record, expected, "retirement evidence differs");
   };
   const verifyRetirement = () => {
@@ -303,9 +324,26 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     assert.equal(digest(bytes), state.retirement.evidenceSha256, "retirement evidence changed");
     verifyRetirementRecord(bytes, state.retirement.kind);
   };
+  const requireUnusedBootstrapCustody = () => {
+    assert.ok(unusedBootstrapApproval && unusedBootstrap(state), "exact approved unused bootstrap required");
+    assert.equal(digest(regular(statePath, 1024 * 1024)), unusedBootstrapApproval.reservationSha256, "locked unused bootstrap reservation changed");
+    const present = (path) => lstatSync(path, { throwIfNoEntry: false });
+    assert.ok(!present(join(base, ".groups-launch.lock")) && (!state.group || !present(join(dirname(base), ".fleet-operation.lock"))),
+      "original launch custody remains; preserve locks and host");
+    assert.ok(readdirSync(local).every((name) => ["state.json", "operation.lock", "known_hosts", "unused-host.json"].includes(name)
+      || /^unused-host\.interrupted-[a-f0-9]{64}\.json$/.test(name)), "unexpected local bootstrap custody; preserve host");
+  };
   const retire = async (kind, evidence, finishedAtMs) => {
+    const pinned = options.unusedBootstrapKnownHosts !== undefined;
+    const deleteProofExpiresAtMs = pinned ? evidence.startedAtMs + 60000 : undefined;
+    const requireFreshProof = () => {
+      const current = Date.now();
+      assert.ok(current >= finishedAtMs && (pinned ? current < deleteProofExpiresAtMs : current - finishedAtMs <= 60000),
+        "retirement proof expired before deletion");
+    };
     await own(); check();
-    assert.ok(Date.now() >= finishedAtMs && Date.now() - finishedAtMs <= 60000, "retirement proof expired before deletion");
+    if (pinned) requireUnusedBootstrapCustody();
+    requireFreshProof();
     const bytes = `${JSON.stringify(evidence, null, 2)}\n`;
     assert.ok(Buffer.byteLength(bytes) <= (state.control && kind === "setup-failed" ? 8 * 1024 * 1024 : 4096), "bounded retirement record required");
     const path = join(local, retirementFile(kind));
@@ -322,17 +360,56 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       unlinkSync(path); syncDirectory(local);
     }
     durable(path, bytes);
+    if (pinned) requireFreshProof();
     Object.assign(state, { status: "retired", retirement: { kind, evidenceSha256: digest(bytes) }, deletionIntentAt: new Date().toISOString() }); save();
     verifyRetirement();
-    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
+    await execute("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000, false, deleteProofExpiresAtMs);
     await confirmDeleted();
     state.destroyedAt = new Date().toISOString(); save(); return 1;
   };
   const retireUnused = async () => {
     assert.equal(state.status, "preparing", "only a never-started allocation can be retired as unused");
-    const script = unusedHostScript(state), startedAtMs = Date.now();
-    const raw = (await ssh(script, 30000)).stdout, finishedAtMs = Date.now();
-    const evidence = unusedEvidence(raw, state, script, startedAtMs, finishedAtMs);
+    const bootstrap = options.unusedBootstrapKnownHosts !== undefined, script = unusedHostScript(state, { bootstrap });
+    let raw, startedAtMs, knownHostsSha256;
+    if (!bootstrap) {
+      assert.ok(!state.control?.monitor || state.control.ledger.length > 0, "unused bootstrap requires an approved pinned observation");
+      startedAtMs = Date.now(); raw = (await ssh(script, 30000)).stdout;
+    } else {
+      await own();
+      const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
+      knownHostsSha256 = digest(key);
+      assert.equal(knownHostsSha256, unusedBootstrapApproval.knownHostsSha256, "approved host-key file changed");
+      // Stay under the private state root, but outside the durable reservation.
+      const dir = mkdtempSync(join(base, ".unused-host-key-")), path = join(dir, "known_hosts"), identity = lstatSync(dir, { bigint: true });
+      let fileIdentity;
+      try {
+        durable(path, key);
+        fileIdentity = lstatSync(path, { bigint: true });
+        const pinned = ["-o", "StrictHostKeyChecking=yes", "-o", "GlobalKnownHostsFile=none", "-o", "UpdateHostKeys=no",
+          "-o", `UserKnownHostsFile=${process.platform === "win32" ? path.replaceAll("\\", "/") : path}`];
+        // Do not install a guardian or turn a missing acknowledgement into a receipt.
+        startedAtMs = Date.now();
+        raw = (await execute("ssh", [...pinned, ...sshLimits, `root@${state.ip}`, script], 30000)).stdout;
+        assert.equal(digest(regular(path, 1024 * 1024)), knownHostsSha256, "private host-key snapshot changed");
+      } finally {
+        if (!preserveOperationLock) {
+          physical(dir);
+          const current = lstatSync(dir, { bigint: true });
+          assert.ok(current.dev === identity.dev && current.ino === identity.ino, "private host-key directory changed");
+          const files = readdirSync(dir);
+          if (files.length) {
+            assert.deepEqual(files, ["known_hosts"], "unexpected private host-key artifacts; preserve");
+            const file = lstatSync(path, { bigint: true });
+            assert.ok(fileIdentity && file.dev === fileIdentity.dev && file.ino === fileIdentity.ino
+              && digest(regular(path, 1024 * 1024)) === knownHostsSha256, "private host-key snapshot changed; preserve");
+            unlinkSync(path);
+          }
+          rmdirSync(dir);
+        }
+      }
+    }
+    const finishedAtMs = Date.now();
+    const evidence = unusedEvidence(raw, state, script, startedAtMs, finishedAtMs, knownHostsSha256);
     return retire("unused", evidence, finishedAtMs);
   };
   const retireFailedSetup = async () => {
@@ -439,6 +516,7 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
           assert.ok(Array.isArray(completed) && completed.length === 1 && Number.isSafeInteger(completed[0]?.id)
             && completed[0].id > 0 && String(completed[0].id) === state.id,
           "completed create and owned host differ; preserve reservation without provisioning");
+          await waitForSsh();
           assert.equal((await ssh("true", 30000, true)).status, 0, "SSH unavailable; never retry or relaunch");
           await ssh("mkdir -m 700 /bench && touch /bench/run.log");
           for (const [name, content] of Object.entries(remoteFiles(state))) {
@@ -473,6 +551,12 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
     },
     async collect() {
       assert.ok(options.collect, "collect options required");
+      if (options.unusedBootstrapKnownHosts !== undefined) return locked(async () => {
+        requireUnusedBootstrapCustody();
+        if (state.status === "preparing") return retireUnused();
+        verifyRetirement(); await confirmDeleted();
+        state.destroyedAt ??= new Date().toISOString(); save(); return 1;
+      });
       const observed = read();
       let failedMonitorRecovery = false;
       const neverProvisioned = (s) => s.control?.monitor?.phase === "pending" && !s.control.monitor.registrationSha256
@@ -501,6 +585,8 @@ export function controller(input, { run = command, repo = checkout, sleep = (ms)
       }
       return locked(async () => {
         if (unusedCandidate) assert.ok(neverProvisioned(state), "unused allocation changed; preserve host");
+        assert.ok(!(state.status === "preparing" && state.control?.monitor?.phase === "pending"
+          && state.control.ledger.length === 0), "unused bootstrap requires an approved pinned observation");
         assert.equal(!!state.preBootstrapTerminal, setupCandidate, "pre-bootstrap reservation changed; preserve host");
         if (setupCandidate) assert.ok(beforeRegistration(state), "ambiguous pre-bootstrap custody; preserve host");
         if (state.status === "retired") {

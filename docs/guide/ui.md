@@ -140,9 +140,12 @@ A table whose page has every row of it sorts in place: `corten_ui::rows::sort` i
 sort header's link calls (the kit's `SortHeader`, `on:sort={rows::sort(event, target)}`). It
 sorts each body of the link's table by the column of the clicked header, ascending and then
 descending on the next click, and sets `aria-sort` on that header (the kit draws the arrow from
-it) and removes it from the others. Each cell sorts by its `data-sort`, a value the server writes
-(a price in cents, a date as `2026-10-30`, never the cell's formatted text), or else by its text,
-leaving out what is `hidden` or `aria-hidden` (a stacked table's `CellLabel`). A column whose
+it) and removes it from the others. A cell sorts by its one `<time datetime>` or `<data value>`
+when it has one, else by its text, leaving out what is `hidden` or `aria-hidden` (a stacked
+table's `CellLabel`). To give cells an explicit value, put `ref={cell.with(value)}` on them
+and pass the ref to `rows::sortByNumber(event, target, cell)` for numbers (a price in cents)
+or `rows::sortByText(event, target, cell)` for strings (a date as `2026-10-30`). Cells without
+that ref still sort by their contents. A column whose
 values are all decimal numbers (`-2`, `12.5`) sorts as numbers; any other by an `Intl.Collator`
 in the page's `lang`, with digits in numeric order (`Item 2` before `Item 10`). Equal values are
 in the order the page drew them, whatever earlier clicks did (the server's order for them when the
@@ -231,20 +234,30 @@ the page the server sorts, which the click then does not use. A cell can also so
 `<time datetime>` or `<data value>` it holds (outside its hidden parts), so corten-ui's
 `LocalTime` sorts by its time, not its text. A time sorts as an instant when it is a date or a date
 and time with `Z` or an offset, as `LocalTime` writes it; a duration, a week, or a number written
-for the reader's language (`12,5`) needs `data-sort`. List `corten_ui::COMPONENTS` and it is served.
-`data-sort` is the one `data-*` attribute an app writes for a script to read: `rows::sort` predates
-ref values ([scripts guide](scripts.md)), and moving it onto one is [#1387](https://github.com/corten-run/corten/issues/1387).
+for the reader's language (`12,5`) needs a machine or [ref value](scripts.md).
+List `corten_ui::COMPONENTS` and it is served.
 
 ```rust,ignore
-<thead data-no-prefetch>
-<SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price) }}
-    descending={&url::Sales { sold: Some(SoldBy::PriceDown) }} first={Sort::Ascending} class={TableNumeric {}}
-    on:sort={rows::sort(event, target)} />
-..
-<td class={TableNumeric {}} data-sort={sale.cents}>{t.money(Minor(sale.cents), USD)}</td>
+let price = refs();
+html! {
+    <table>
+        <thead data-no-prefetch>
+            <tr>
+                <SortHeader label="Price" sort={by_price} ascending={&url::Sales { sold: Some(SoldBy::Price) }}
+                    descending={&url::Sales { sold: Some(SoldBy::PriceDown) }} first={Sort::Ascending} class={TableNumeric {}}
+                    on:sort={rows::sortByNumber(event, target, price)} />
+            </tr>
+        </thead>
+        <tbody>
+            for sale in sales {
+                <tr><td class={TableNumeric {}} ref={price.with(sale.cents)}>{t.money(Minor(sale.cents), USD)}</td></tr>
+            }
+        </tbody>
+    </table>
+}
 ```
 
-`rows::sort` stays the way to sort a table that shows all of its rows when other routes read its
+Sorting in place stays the way to sort a table that shows all of its rows when other routes read its
 order too (a part read again, a form whose answer is the page, a link that carries the order),
 rather than a header that navigates to the page the server sorts. That navigation would be correct
 by construction, since the server draws the order every reader gets, but each sort would wait for a

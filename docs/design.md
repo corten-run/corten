@@ -499,7 +499,7 @@ rules something out.
    costs a navigation nothing: on the item page a full document got about 7% faster than with
    the shell and a navigation stayed within noise (`render_cost` medians of alternating runs,
    same bytes). The answers the runtime reads whole are the two pages that follow a `data-patch`
-   write, the page it redirects to and its own ([Choice 65](#choice-write-own-page-whole)), so what
+   write, the page it redirects to and its own ([Choice 66](#choice-write-own-page-whole)), so what
    the write changed in the layout is drawn as a full load draws it.
    An element of the layout that depends on the page (a section's nav) is marked `page` and sent
    with `<main>`'s children, in place of the one on screen by its id, rather than adding a value
@@ -534,7 +534,7 @@ rules something out.
    standard header that says "part of a page" and that a script may set.
 
    A write the runtime sends also says that it draws its own page whole
-   ([Choice 65](#choice-write-own-page-whole)), and says it in the standard header for that, as an
+   ([Choice 66](#choice-write-own-page-whole)), and says it in the standard header for that, as an
    HTTP preference (RFC 7240): `Prefer: corten-draws=whole`. A preference is what this is, one the
    server may ignore, and RFC 7240 has a server that does not know one ignore it, which is the
    deploy crossing both ways: a runtime from before (a tab open across a deploy) sends none and gets
@@ -555,7 +555,7 @@ rules something out.
    header of its own did (a patch took 62 instructions less, within the runs' range), and any other
    line is split at the commas and semicolons outside quotes (`cache::split_unquoted`, as
    `Cache-Control` is read), about 820 instructions more
-   ([Choice 65](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
+   ([Choice 66](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
    7240 (3) keeps it for when it is not apparent whether a preference was applied, and here the
    answer says what it is (`corten-shell` and no `corten-page` on a whole page, `corten-page` on
    every `<main>`, a navigation's too, as the runtime reads them), so it would add its bytes to every
@@ -6017,7 +6017,42 @@ rules something out.
     a separate no-JavaScript probe confirming the precise-end counterexample in Chromium and
     WebKit.
 
-65. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
+65. <a id="choice-locked-check"></a>**Checking and shipping use the lock; local builds update it.**
+    `corten check` uses `--locked` on the full Cargo metadata it already reads, before formatting
+    or compiling, and on lint, build and tests. The starter Dockerfile and the examples' also
+    build with `--locked`, all but card-market's, which changes with its paired benchmark recipe
+    ([#1584 card-market's image and its paired bench recipe still build without --locked](https://github.com/corten-run/corten/issues/1584)). A missing or stale lock is an error, not a successful check that silently
+    repairs the dependency graph and leaves CI's committed graph unchecked. Cargo finds the
+    workspace-root lock even from a member, including a library. The CLI does not require a
+    member-local lock or inspect Git's index: the developer commits the resolved lock.
+    A command that writes the manifest writes the lock to match: `corten new` and `corten ui add`
+    (when it adds `corten-ui`) run `cargo update --workspace` in the app's directory, which
+    honors Cargo's configuration there and adds what the lock lacks without moving the versions
+    a workspace's lock already has, so their output passes the check with no step between.
+    `corten dev`, `corten build` and ordinary Cargo builds keep Cargo's normal lock updates;
+    those are the edit loop, while a check verifies what is ready to commit and ship.
+    Not chosen: an opt-in `corten check --locked` or an opt-out that lets CI silently repair
+    the graph; an additional metadata subprocess when the check already resolves metadata;
+    `cargo generate-lockfile` in `corten new`, which rebuilds an existing workspace lock with
+    every package at its newest version when the app is created as a member.
+
+    Stands on: reasoned (locking the existing resolution adds no Cargo invocation; using Cargo
+    rather than locating a lock ourselves preserves workspace semantics; a lock rewritten by
+    CI is not the lock an image receives); value (correctness before developer convenience,
+    one way to check and good defaults, README Values).
+
+    Revisit when: the check no longer reads full Cargo metadata before its other steps, or an
+    app needs to verify a graph without retaining a lock and cannot use ordinary Cargo checks,
+    or Cargo gains a lock-writing command that `corten new` should use instead.
+
+    Last checked: 2026-11-17, the check's metadata and Cargo-step order read at `7d9bbbf1e`;
+    2026-11-17, `corten new` then `corten check`, and `corten ui add --all` then `corten check`,
+    each with no step between, on the change after `dd4baf7a4`; 2026-11-17, Cargo 1.99.1 on a
+    new member of a workspace whose lock held `itoa` 1.0.0: `cargo generate-lockfile` moved it to
+    1.0.19, `cargo update --workspace` kept 1.0.0, and for a standalone app with no lock the two
+    wrote identical locks.
+
+66. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
     that prefers it; a patch does not fill a layout read.** A `data-patch` write that answers with its
     own result (a form drawn again with what it refused, a bulk add whose failed lines the page
     lists) could not bring a layout read up to date: `req.page` in `Mode::Action` rendered `<main>`
@@ -6359,8 +6394,6 @@ rules something out.
     Firefox (WebKit, without the Navigation API, skips them) on `04000147b`, each failing on
     `3eeba8d8d` in Chromium, and a middleware's page filled under the deadline and before the error
     page by the crate's tests on `04000147b`, failing without it.
-
-
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

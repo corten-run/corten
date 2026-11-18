@@ -552,9 +552,7 @@ component that puts a parent's ref with values on its element names its type
 `Ref<el::HTMLTableRowElement, NoRows, ts::Number>` (`corten::script::{NoRows, ts}`). A `data-`
 attribute a script reads through `dataset` is text on both sides that nothing checks: write one
 for CSS or for the runtime (`data-selected`, `data-reload`), and give a value a script reads with
-the element's ref. The one exception is an attribute a corten-ui handler that predates ref values
-documents, such as `rows::sort`'s `data-sort` ([UI guide](ui.md)); moving those onto ref values is
-[#1387](https://github.com/corten-run/corten/issues/1387).
+the element's ref.
 
 **Values the markup owns.** `html!` owns what it captures (a view lent to a prop,
 `action={&html! { .. }}`, borrows from the view around it instead), so a value borrowed from one

@@ -142,7 +142,7 @@ pub enum Period {
 
 /// A sale in the month's list.
 struct LastSale {
-    /// The day, as the table sorts it (`data-sort`).
+    /// The sort key for the Sold column.
     on: &'static str,
     day: &'static str,
     buyer: &'static str,
@@ -331,19 +331,10 @@ pub fn Gallery<'a>(
         url::Home { tab: shown_tab, sale: None, period: Some(Period::Week), sold, sales },
         url::Home { tab: shown_tab, sale: None, period: None, sold, sales },
     );
-    // Each sort header links to the page sorted by its column; the script sorts in place instead.
-    let sorted = move |by| url::Home { tab: shown_tab, sale: None, period: shown_period, sold: Some(by), sales };
     // The other page of the month's sales, in the order the page was drawn with; its link takes the
     // order on screen (`ordered::link`), also after a sort in place.
     let other_sales =
         url::Home { tab: shown_tab, sale: None, period: shown_period, sold, sales: (!earlier).then_some(SalesPage::Earlier) };
-    // With no order chosen the rows are by day, so Sold is drawn sorted.
-    let by_day = column(sold.or(Some(SoldBy::Day)), SoldBy::Day, SoldBy::DayDown);
-    let by_buyer = column(sold, SoldBy::Buyer, SoldBy::BuyerDown);
-    let by_price = column(sold, SoldBy::Price, SoldBy::PriceDown);
-    let (day, day_down) = (sorted(SoldBy::Day), sorted(SoldBy::DayDown));
-    let (buyer, buyer_down) = (sorted(SoldBy::Buyer), sorted(SoldBy::BuyerDown));
-    let (price, price_down) = (sorted(SoldBy::Price), sorted(SoldBy::PriceDown));
     let period = Chosen { id: PeriodId, value: period };
     html! {
         <div class={Intro}>
@@ -480,63 +471,7 @@ pub fn Gallery<'a>(
                         // to the card, so the table scrolls in its wrapper and the page does not.
                         <ShownFor choice={&period} values={&[Period::Month]}>
                             <Table layout={TableLayout::Scroll}>
-                                <table id={LastSalesId}>
-                                    <caption>
-                                        if earlier {
-                                            "This month's earlier sales, sorted among themselves"
-                                        } else {
-                                            "This month's last sales, sorted among themselves"
-                                        }
-                                    </caption>
-                                    // Each sorts the rows in place, by the day and price each
-                                    // cell sorts by and the buyer's name; without the script, the
-                                    // link is the page the server sorts. A hover does not fetch that
-                                    // page, which a click does not use.
-                                    <thead data-no-prefetch>
-                                        <tr>
-                                            <SortHeader
-                                                label="Sold"
-                                                sort={by_day}
-                                                ascending={&day}
-                                                descending={&day_down}
-                                                first={Sort::Ascending}
-                                                class={()}
-                                                on:sort={rows::sort(event, target)}
-                                            />
-                                            <SortHeader
-                                                label="Buyer"
-                                                sort={by_buyer}
-                                                ascending={&buyer}
-                                                descending={&buyer_down}
-                                                first={Sort::Ascending}
-                                                class={()}
-                                                on:sort={rows::sort(event, target)}
-                                            />
-                                            <th scope="col">"Condition"</th>
-                                            <th scope="col">"Ships to"</th>
-                                            <SortHeader
-                                                label="Price"
-                                                sort={by_price}
-                                                ascending={&price}
-                                                descending={&price_down}
-                                                first={Sort::Ascending}
-                                                class={TableNumeric {}}
-                                                on:sort={rows::sort(event, target)}
-                                            />
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        for s in last_sales(sold, earlier) {
-                                            <tr>
-                                                <td data-sort={s.on}>{s.day}</td>
-                                                <td>{s.buyer}</td>
-                                                <td>{s.condition}</td>
-                                                <td>{s.to}</td>
-                                                <td class={TableNumeric {}} data-sort={s.cents}>{s.price}</td>
-                                            </tr>
-                                        }
-                                    </tbody>
-                                </table>
+                                <SalesTable tab={shown_tab} period={shown_period} sold={sold} earlier={earlier} />
                             </Table>
                             // Its pages read the table's order: each link opens its page in the
                             // order on screen.
@@ -696,6 +631,81 @@ pub fn Gallery<'a>(
         if sale {
             <SaleSheet />
         }
+    }
+}
+
+/// The month's sales, with a scope for the refs their sort headers use.
+#[component]
+fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldBy>, earlier: bool) -> impl Render {
+    let (day_value, price_value) = refs();
+    let sales = earlier.then_some(SalesPage::Earlier);
+    // Each sort header links to the page sorted by its column; the script sorts in place instead.
+    let sorted = |by| url::Home { tab, sale: None, period, sold: Some(by), sales };
+    // With no order chosen the rows are by day, so Sold is drawn sorted.
+    let by_day = column(sold.or(Some(SoldBy::Day)), SoldBy::Day, SoldBy::DayDown);
+    let by_buyer = column(sold, SoldBy::Buyer, SoldBy::BuyerDown);
+    let by_price = column(sold, SoldBy::Price, SoldBy::PriceDown);
+    let (day, day_down) = (sorted(SoldBy::Day), sorted(SoldBy::DayDown));
+    let (buyer, buyer_down) = (sorted(SoldBy::Buyer), sorted(SoldBy::BuyerDown));
+    let (price, price_down) = (sorted(SoldBy::Price), sorted(SoldBy::PriceDown));
+    html! {
+        <table id={LastSalesId}>
+            <caption>
+                if earlier {
+                    "This month's earlier sales, sorted among themselves"
+                } else {
+                    "This month's last sales, sorted among themselves"
+                }
+            </caption>
+            // Each sorts the rows in place, by the day and price each
+            // cell sorts by and the buyer's name; without the script, the
+            // link is the page the server sorts. A hover does not fetch that
+            // page, which a click does not use.
+            <thead data-no-prefetch>
+                <tr>
+                    <SortHeader
+                        label="Sold"
+                        sort={by_day}
+                        ascending={&day}
+                        descending={&day_down}
+                        first={Sort::Ascending}
+                        class={()}
+                        on:sort={rows::sortByText(event, target, day_value)}
+                    />
+                    <SortHeader
+                        label="Buyer"
+                        sort={by_buyer}
+                        ascending={&buyer}
+                        descending={&buyer_down}
+                        first={Sort::Ascending}
+                        class={()}
+                        on:sort={rows::sort(event, target)}
+                    />
+                    <th scope="col">"Condition"</th>
+                    <th scope="col">"Ships to"</th>
+                    <SortHeader
+                        label="Price"
+                        sort={by_price}
+                        ascending={&price}
+                        descending={&price_down}
+                        first={Sort::Ascending}
+                        class={TableNumeric {}}
+                        on:sort={rows::sortByNumber(event, target, price_value)}
+                    />
+                </tr>
+            </thead>
+            <tbody>
+                for s in last_sales(sold, earlier) {
+                    <tr>
+                        <td ref={day_value.with(s.on)}>{s.day}</td>
+                        <td>{s.buyer}</td>
+                        <td>{s.condition}</td>
+                        <td>{s.to}</td>
+                        <td class={TableNumeric {}} ref={price_value.with(s.cents)}>{s.price}</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
     }
 }
 

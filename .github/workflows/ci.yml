@@ -68,11 +68,14 @@ jobs:
           node "$RUNNER_TEMP/ts6/node_modules/typescript/bin/tsc" -p jsconfig.json
       - name: Pinned compiler checks the template's scripts
         run: cargo test -p corten-cli the_pinned_repository_compiler_checks_template_scripts -- --ignored --nocapture
+      # No cargo build between the commands: corten new and corten ui add write the lock the
+      # check requires, so this is the path a developer takes straight after creating the app.
       - name: corten new writes an app that passes corten check, and so does every kit component in it
         run: |
           cargo build -q -p corten-cli
           target/debug/corten new "$RUNNER_TEMP/app" --corten-path crates/corten
-          cd "$RUNNER_TEMP/app" && CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
+          cd "$RUNNER_TEMP/app"
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
           "$GITHUB_WORKSPACE/target/debug/corten" ui init && "$GITHUB_WORKSPACE/target/debug/corten" ui add --all
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
       - name: PATH compiler checks an app without the checkout alias
@@ -99,8 +102,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      # rustfmt: `corten ui add` lays out the copies it writes with it, and its tests run it.
-      - run: rustup toolchain install stable --profile minimal --component rustfmt && rustup default stable
+      # The CLI integration tests run `corten check` (Clippy and rustfmt); the kit tests use rustfmt too.
+      - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --workspace --all-features
 

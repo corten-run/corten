@@ -18,7 +18,7 @@ ENV ZSTD_SYS_USE_PKG_CONFIG=1
 RUN --mount=type=cache,id=corten-examples.registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=corten-examples.target,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
-    && cargo build --release -p auction-room \
+    && cargo build --release --locked -p auction-room \
     && mkdir -p /out && cp target/release/auction-room /out/server
 
 FROM debian:bookworm-slim

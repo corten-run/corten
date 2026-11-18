@@ -126,7 +126,7 @@ test("mismatched create identity retains owned host for unused cleanup without c
   await assert.rejects(h.launch().launch());
   assert.equal(h.saved().id, "123"); assert.equal(h.saved().status, "preparing");
   assert.ok(!h.calls.some(([binary]) => binary === "ssh" || binary === "scp"));
-  assert.equal(await h.task().collect(), 1);
+  assert.equal(await h.pinnedUnused().collect(), 1);
   assert.equal(h.saved().status, "retired"); assert.ok(h.saved().destroyedAt);
   assert.equal(h.creates, 1); assert.equal(h.deletes, 1);
 });

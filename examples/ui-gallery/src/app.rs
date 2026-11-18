@@ -622,7 +622,7 @@ mod tests {
         assert!(at("Ada Lovelace") < at("Grace Hopper") && at("Grace Hopper") < at("Alan Turing"), "{page}");
         assert!(page.contains(r#"aria-sort="descending"><a class="#) && page.contains(r#"href="/?sold=price""#), "{page}");
         assert!(page.contains(r#"href="/?sold=day""#) && page.contains(r#"href="/?sold=buyer""#), "{page}");
-        assert!(page.contains(r#"data-sort="1240""#), "{page}");
+        assert!(page.contains(r#"data-ref="price_value" data-ref-value='1240'"#), "{page}");
         // A hover does not fetch the sorted page, which a click sorting in place does not use.
         assert!(page.contains("<thead data-no-prefetch>"), "{page}");
         // With no order asked, the rows are in day order, and Sold says so and links to the other way.

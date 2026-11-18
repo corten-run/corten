@@ -618,7 +618,7 @@ What it sends is what the app's own pages send, typed the same way:
    no `GET`, gets a 500 that says why ([Where a form posts](requests-and-forms.md#where-a-form-posts)).
    `Mode::Action` sends `Prefer: corten-draws=whole` as the runtime does, so a write that answers
    its own page (`req.page(..)`) is answered with the whole document, layout and layout reads
-   included ([Choice 65](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
+   included ([Choice 66](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
    that, which is answered with `<main>`, add
    `.header(HeaderName::from_static("prefer"), "corten-draws=main")` (`corten::http::HeaderName`):
    a preference the test sets is sent first, and the first is the one read.

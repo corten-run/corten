@@ -1271,11 +1271,18 @@ fn add_to(root: &Path, args: &[String], out: &mut dyn Write) -> Result<(), Strin
     for step in todo {
         let _ = writeln!(out, "  to do: {step}");
     }
+    // corten-ui in the lock too, so the app's next `corten check`, which refuses a stale lock, passes.
+    let locked = if files.iter().any(|(path, _)| path.ends_with("Cargo.toml")) {
+        crate::new::lock(root).map_err(|e| format!("added corten-ui to Cargo.toml, but {e}"))
+    } else {
+        Ok(())
+    };
     if !conflicted.is_empty() {
         // Written, as git writes a merge it could not finish, and a failure, as git's is.
-        return Err(format!("merged with conflicts to resolve:\n  {}", conflicted.join("\n  ")));
+        let lock = locked.err().map(|e| format!("\n{e}")).unwrap_or_default();
+        return Err(format!("merged with conflicts to resolve:\n  {}{lock}", conflicted.join("\n  ")));
     }
-    Ok(())
+    locked
 }
 
 /// The kit's tokens that `pieces'` stylesheets read and the app declares nowhere: not in a theme
