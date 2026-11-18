@@ -244,20 +244,26 @@ try {
         @scope { @media (min-width: 1px) { #adoptedImplicit { display: flex; outline-style: solid } } }
         @scope (.nest) { @scope { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } } }
         @scope (.limited) to (.stop) { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } }
-        @media (min-width: 900px) { #adoptedWide, #adoptedOverride { display: flex } }
+        @media (min-width: 900px) { #adoptedWide, .adoptedRail { display: flex } }
         @media (min-width: 1px) { .parentOnly { display: flex } }
-        @scope { @media (min-width: 900px) { #adoptedOverride { display: grid !important } } }
-        @scope { #adoptedOverride { outline-style: solid } }
+        @scope (.override) { @media (min-width: 900px) { .adoptedRail { display: grid !important } } }
       `);
       document.adoptedStyleSheets.push(sheet);
+      const inactive = new CSSStyleSheet({ media: "not all" });
+      inactive.replaceSync("#adoptedMedia { display: grid !important; outline: solid }");
+      const disabled = new CSSStyleSheet({ disabled: true });
+      disabled.replaceSync("#adoptedDisabled { display: grid !important; outline: solid }");
+      document.adoptedStyleSheets.push(inactive, disabled);
     });
     await dialogFixture(adopted,
       '<div class="outer"><dialog id="adoptedExplicit"></dialog></div><dialog id="adoptedOutside"></dialog>' +
       '<dialog id="adoptedImplicit"></dialog><div class="nest"><dialog id="adoptedNested"></dialog></div>' +
       '<div class="limited"><dialog id="adoptedInsideLimit"></dialog><div class="stop"><dialog id="adoptedPastLimit"></dialog></div></div>' +
       '<div class="parentOnly"><dialog id="adoptedChild"></dialog></div>' +
-      '<dialog id="adoptedWide"></dialog><dialog id="adoptedOverride"></dialog><dialog id="fixtureEnd"></dialog>',
-      "@media (min-width: 1px) { #fixtureEnd { display: flex } }");
+      '<dialog id="adoptedWide"></dialog><div class="override"><dialog id="adoptedOverride" class="adoptedRail"></dialog></div>' +
+      '<dialog id="adoptedOutsideOverride" class="adoptedRail"></dialog>' +
+      '<dialog id="adoptedMedia"></dialog><dialog id="adoptedDisabled"></dialog><dialog id="fixtureEnd"></dialog>',
+      "@media (min-width: 1px) { #adoptedMedia, #adoptedDisabled, #fixtureEnd { display: flex } }");
     const done = adopted.waitForEvent("console", { predicate: (m) => m.text().startsWith("corten: fixtureEnd "), timeout: 10000 }).then(() => true, () => false);
     await adopted.goto(base + "/");
     const completed = await done;
@@ -266,14 +272,157 @@ try {
       return { id: el.id, display, styled: outlineStyle === "solid" };
     }));
     const styled = states.filter((e) => e.styled).map((e) => e.id);
-    const expected = states.filter(({ id, styled }) => id === "adoptedOverride" ? !styled : id === "adoptedWide" || styled).map((e) => e.id);
-    const restored = await adopted.evaluate(() => document.adoptedStyleSheets.length === 1);
-    check("adopted sheets warn at breakpoints, including implicit scopes only where the browser applies them",
-      completed && restored && states.every((e) => e.display === "none") && styled.includes("adoptedExplicit") && styled.includes("adoptedInsideLimit") &&
+    const linked = ["adoptedMedia", "adoptedDisabled"];
+    check("adopted breakpoints use resolvable scopes, without guessing about implicit roots or scope limits",
+      completed && states.every((e) => e.display === "none") && styled.includes("adoptedExplicit") && styled.includes("adoptedInsideLimit") &&
       !styled.includes("adoptedOutside") && !styled.includes("adoptedPastLimit") &&
-      warned.join(",") === expected.join(","), `styled: ${styled}; warnings: ${warned}; expected: ${expected}`);
+      warned.filter((id) => !linked.includes(id)).join(",") === "adoptedExplicit,adoptedWide,adoptedOutsideOverride",
+      `styled: ${styled}; warnings: ${warned}`);
+    check("inactive and disabled adopted sheets cannot suppress linked warnings",
+      completed && linked.every((id) => warned.includes(id) && !styled.includes(id)), warned.join(","));
   } finally {
     await adopted.close();
+  }
+
+  const mixed = await browser.newPage();
+  try {
+    /** @type {string[]} */
+    const warned = [];
+    /** @type {string[]} */
+    const errors = [];
+    mixed.on("console", (m) => {
+      if (m.type() === "warning" && m.text().includes("is a closed dialog")) warned.push(m.text().split(" ")[1] ?? "");
+    });
+    mixed.on("pageerror", (e) => errors.push(e.message));
+    await mixed.addInitScript(() => {
+      const active = new CSSStyleSheet();
+      active.replaceSync("@media (min-width: 1px) { #collision { display: block } } @scope (.mixed) { @media (min-width: 1px) { #mixedScoped { display: flex } } }");
+      const later = new CSSStyleSheet();
+      document.adoptedStyleSheets.push(active);
+      const sheets = [active];
+      const computed = window.getComputedStyle;
+      const read = () => {
+        const collision = document.getElementById("collision");
+        const style = collision && computed(collision);
+        return { marker: style?.getPropertyValue("--corten-dev--0"), width: style?.width };
+      };
+      let changed = false;
+      let observedProbe = false;
+      /** @type {string[]} */
+      const transitions = [];
+      for (const type of ["transitionrun", "transitionstart", "transitioncancel", "transitionend"]) {
+        document.addEventListener(type, (e) => {
+          if (e.target instanceof Element && e.target.id === "collision") transitions.push(type);
+        });
+      }
+      Math.random = () => 0;
+      window.getComputedStyle = (el, pseudo) => {
+        if (el.id === "mixedUnreadable") throw new Error("app could not read this element's style");
+        if (el.id === "mixedEnd" && !changed) {
+          changed = true;
+          read(); // Start from the settled width before a diagnostic could change it.
+          document.adoptedStyleSheets.push(later);
+          sheets.push(later);
+        }
+        if (document.adoptedStyleSheets.some((sheet) => !sheets.includes(sheet))) {
+          observedProbe = true;
+          read(); // A native style read while the probe is installed can start a transition.
+          const reentrant = new CSSStyleSheet();
+          document.adoptedStyleSheets.push(reentrant);
+          sheets.push(reentrant);
+          throw new Error("style read reentered with a diagnostic stylesheet installed");
+        }
+        return computed(el, pseudo);
+      };
+      Object.assign(window, { mixedState: () => ({
+        changed, observedProbe, transitions,
+        identities: document.adoptedStyleSheets.length === sheets.length &&
+          sheets.every((sheet, i) => document.adoptedStyleSheets[i] === sheet),
+        ...read(),
+      }) });
+    });
+    await dialogFixture(mixed,
+      '<div id="collision"></div><div class="mixed"><dialog id="mixedScoped"></dialog></div>' +
+      '<dialog id="mixedEnd"></dialog>',
+      "#collision { width: var(--corten-dev--0, 123px); transition: width 10s } " +
+      "@media (min-width: 1px) { #mixedEnd, #mixedDrawn { display: flex } }");
+    /** @param {string} id */
+    const mixedReport = (id) => mixed.waitForEvent("console", {
+      predicate: (m) => m.text().startsWith(`corten: ${id} is a closed dialog`), timeout: 10000,
+    }).then(() => true, () => false);
+    const done = mixedReport("mixedEnd");
+    await mixed.goto(base + "/");
+    const completed = await done;
+    const state = await mixed.evaluate(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return /** @type {any} */ (window).mixedState();
+    });
+    check("adopted diagnostic leaves exact app sheet identities and transition styles alone during reentrant style reads",
+      state.changed && !state.observedProbe && state.identities && !state.marker && state.width === "123px" && !state.transitions.length && !errors.length,
+      JSON.stringify({ ...state, errors }));
+    check("linked and scoped adopted warnings both report after a reentrant style read",
+      completed && warned.includes("mixedScoped"), warned.join(","));
+    const drawn = mixedReport("mixedDrawn");
+    await mixed.evaluate(() => {
+      const group = document.createElement("div");
+      for (const id of ["mixedUnreadable", "mixedDrawn"]) group.append(Object.assign(document.createElement("dialog"), { id }));
+      document.body.append(group);
+    });
+    check("linked warnings still report on a later draw when another element's style read throws", (await drawn) && !errors.length);
+  } finally {
+    await mixed.close();
+  }
+
+  const noBreakpoint = await browser.newPage();
+  try {
+    await noBreakpoint.addInitScript(() => {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(Array.from({ length: 1000 }, (_, i) => `#unused${i} { display: flex }`).join("\n"));
+      document.adoptedStyleSheets.push(sheet);
+      const computed = window.getComputedStyle;
+      let reads = 0;
+      let selectors = 0;
+      let extraSheet = false;
+      const selectorText = Object.getOwnPropertyDescriptor(CSSStyleRule.prototype, "selectorText");
+      Object.defineProperty(CSSStyleRule.prototype, "selectorText", {
+        ...selectorText,
+        get() {
+          if (this.parentStyleSheet === sheet) selectors++;
+          return selectorText?.get?.call(this) ?? "";
+        },
+      });
+      window.getComputedStyle = (el, pseudo) => {
+        if (el.id.startsWith("noBreakpoint")) {
+          reads++;
+          extraSheet ||= document.adoptedStyleSheets.some((entry) => entry !== sheet);
+        }
+        return computed(el, pseudo);
+      };
+      Object.assign(window, { noBreakpointState: () => ({ reads, selectors, extraSheet }) });
+    });
+    await noBreakpoint.route("**/*.css", (route) => route.fulfill({ contentType: "text/css", body: "" }));
+    await dialogFixture(noBreakpoint, Array.from({ length: 20 }, (_, i) => `<dialog id="noBreakpoint${i}"></dialog>`).join(""),
+      "dialog:where(:not([open], [popover])) { display: none !important }");
+    await noBreakpoint.goto(base + "/");
+    const state = await noBreakpoint.waitForFunction(() => {
+      const current = /** @type {any} */ (window).noBreakpointState();
+      return current.reads >= 20 && current;
+    }).then((handle) => handle.jsonValue(), () => null);
+    check("adopted rules with no breakpoint need no selector reads or additional style reads",
+      state?.reads === 20 && state.selectors === 0 && !state.extraSheet, JSON.stringify(state));
+    const later = noBreakpoint.waitForEvent("console", {
+      predicate: (m) => m.text().startsWith("corten: lateBreakpoint is a closed dialog"), timeout: 10000,
+    }).then(() => true, () => false);
+    await noBreakpoint.evaluate(() => {
+      document.adoptedStyleSheets[0]?.insertRule(
+        "@scope (.lateScope) { @media (min-width: 1px) { #lateBreakpoint { display: flex } } }");
+      const host = Object.assign(document.createElement("div"), { className: "lateScope" });
+      host.append(Object.assign(document.createElement("dialog"), { id: "lateBreakpoint" }));
+      document.body.append(host);
+    });
+    check("a later draw checks a nested adopted breakpoint even without linked breakpoints", await later);
+  } finally {
+    await noBreakpoint.close();
   }
   /**
    * The expected IDs are the warnings from main, also replayed from the Git blob when supplied.

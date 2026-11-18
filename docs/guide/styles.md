@@ -152,8 +152,8 @@ selectors use unescaped ASCII type, class, ID or presence-attribute selectors, `
 and child combinators, and `:is()`, `:not()` or `:where()` around one simple type, class, ID or
 presence-attribute selector, such as `dialog:not([open])`.
 
-If any root, limit, nesting parent or rule selector cannot be composed or read, the check
-handles the whole rule as before: it treats `@scope` as a grouping rule, keeps ordinary style
+In linked sheets, if any root, limit, nesting parent or rule selector cannot be composed or
+read, the check handles the whole rule as before: it treats `@scope` as a grouping rule, keeps ordinary style
 nesting and does not use any of the scope bounds. This includes implicit roots, scopes with a
 `to` limit, scopes nested in style rules, sheets with `@namespace`, a top-level root referring to
 itself, unsupported selectors, selectors over 1,024 characters before or after composition,
@@ -168,13 +168,13 @@ The check does not evaluate the cascade. Three known limits for closed rails wit
 - `@scope (.card) { .rail:not(.gone,.pending) { display: flex } }` and `@scope (.other) { .rail { display: grid !important } }` at the same breakpoint can warn for a rail outside both roots: the `:not()` list uses the old flat match, but the override does not.
 - `@scope (.card) { :scope > .rail { display: flex } }` and `@scope (.other) { @supports (display: future-layout) { .rail { display: grid !important } } }` can suppress the warning for a rail in `.card`: the override's rejected `@supports` (or `@starting-style`) falls back to the old flat match, which ignores `.other`.
 
-The check also reads the document's adopted stylesheets. It asks the browser which selectors
-match by temporarily adopting a copy of their selector and scope rules with inert markers
-instead of the original declarations. This keeps implicit scope roots and `to` limits as the
-browser uses them, while checking media and container queries even when they are inactive.
-It skips disabled or namespaced adopted sheets, rules in unsupported `@supports` or
-`@starting-style` blocks, and styles inside shadow roots. This affects only the diagnostic,
-not which styles the browser applies.
+The check also reads the document's adopted stylesheets without changing them or applying
+diagnostic styles to the page. It matches ordinary selectors and the supported explicit scopes
+described above. If it cannot resolve an adopted selector (including nested selectors outside
+the supported forms), an implicit scope root or a `to` limit, it skips the rule rather than
+matching it without its bounds. It skips disabled, namespaced or media-inactive adopted sheets,
+rules in unsupported `@supports` or `@starting-style` blocks, and styles inside shadow roots.
+Within an eligible sheet it still checks media and container breakpoints even when inactive.
 When only areas have stylesheets, each area's file starts with these rules. An app with no
 component stylesheet has neither file, so if its `static/style.css` gives a hidden element, a
 popover or a dialog a `display` (styling corten-ui's parts there, say), it adds them itself:
