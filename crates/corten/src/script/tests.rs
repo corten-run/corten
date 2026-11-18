@@ -515,6 +515,17 @@ fn shared_modules_and_events_are_components() {
     assert_eq!(html, r#"<p data-on='click:shared.log("hi",2,true)'>x</p>"#);
 }
 
+#[test]
+fn repeated_handler_calls_share_one_attribute() {
+    let html = scoped("x", || {
+        html! {
+            <p on:click={shared::log("first", 1, true)} on:click={shared::log("second", 2, false)}>"x"</p>
+        }
+        .to_html()
+    });
+    assert_eq!(html, r#"<p data-on='click:shared.log("first",1,true) click:shared.log("second",2,false)'>x</p>"#);
+}
+
 // The module docs' script, shared here.
 script::script!(mod js = "../stock_grid.js");
 
