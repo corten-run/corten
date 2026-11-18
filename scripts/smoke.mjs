@@ -5436,15 +5436,16 @@ async function run(browser) {
     const failed = await own
       .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
       .then(() => true, () => false);
-    const after = seen.asked.length;
-    release();
     // Once the held poll is out of the way, the next one asks for a partial response. A whole
     // draw of the held answer would have replaced the header and lost its failure mark.
-    const deadline = Date.now() + 5000;
-    while (Date.now() < deadline && !seen.asked.slice(after).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
-    const retry = seen.asked.slice(after).find((a) => a.startsWith("GET /smoke/written/again"));
+    const next = own.waitForResponse((res) => new URL(res.url()).pathname === "/smoke/written/again" && res.request().method() === "GET", { timeout: 5000 }).catch(() => null);
+    release();
+    const response = await next;
+    await response?.finished();
+    const retry = response?.request().headers().corten;
     const kept = await own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Watchlist, written");
-    check(waitingPollName, drew && waiting && failed && retry === "GET /smoke/written/again nav" && kept, JSON.stringify({ drew, waiting, failed, retry, kept, asked: seen.asked }));
+    check(waitingPollName, drew && waiting && failed && retry === "nav" && kept, JSON.stringify({ drew, waiting, failed, retry, kept, asked: seen.asked }));
+    await own.unrouteAll({ behavior: "ignoreErrors" });
     await own.context().close();
   }
   // A write's own page that refuses it (422), with a field marked invalid below the fold: drawn in
