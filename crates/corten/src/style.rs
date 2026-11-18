@@ -1162,7 +1162,7 @@ mod tests {
 
     #[test]
     fn position_comments_do_not_change_startup_stylesheet_checks() {
-        let html = html! { <p class={PositionComments}></p> }.to_html();
+        let html = html! { <p class={Popup}></p> }.to_html();
         assert_eq!(html, r#"<p class="position-comments__popup"></p>"#);
         let style = PositionComments.style.unwrap();
         assert!(style.media.is_empty());
