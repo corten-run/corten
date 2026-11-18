@@ -5796,6 +5796,13 @@ rules something out.
     that midpoint. Keep the ordinary native hints instead of trying to encode exclusivity in
     an inclusive attribute, or replacing number inputs with a parser or input mask.
 
+    Known limit: even with unshifted hints, Chromium and WebKit can block a server-valid
+    decimal spelling about one float step inside an exclusive end. For an `f64` minimum of
+    `0.0010000000000000002` (emitted as `1.0000000000000002e-3`), both block the fixed
+    spelling `0.0010000000000000005`, which `Bounds::read` accepts as the next float.
+    Keep native feedback for ordinary fields. An app that needs these values can omit the
+    native range hint on that field and enforce the exclusive rule on the server alone.
+
     Any-step bounds and programmatic prefills share one formatter, using exponent notation
     past 18 digits written out. The digit budget governs notation, not logical ranges.
     Plain inputs use `Bounds::input_value`, which `NumberField` also uses; it preserves
@@ -5809,12 +5816,16 @@ rules something out.
     Stands on: platform ([HTML's number state](https://html.spec.whatwg.org/multipage/input.html#number-state-(type=number))
     and [floating-point syntax](https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#floating-point-numbers));
     measured (gallery POSTs at and just inside the `f64` minimum and `f32` maximum in three
-    engines); value (correctness, standards first, and HTML that works without JavaScript).
+    engines, and the precise-end counterexample above); value (correctness, standards first,
+    and HTML that works without JavaScript).
 
-    Revisit when: HTML gains an attribute for exclusive number bounds.
+    Revisit when: HTML gains an attribute for exclusive number bounds, or browsers compare
+    native range hints at full double precision.
 
     Last checked: 2026-11-18, gallery POSTs with JavaScript disabled in Chromium, Firefox and
-    WebKit (Playwright 1.64.1): endpoints got 422 and inward values got 200.
+    WebKit (Playwright 1.64.1), with 422 for ordinary endpoints and 200 for inward values, and
+    a separate no-JavaScript probe confirming the precise-end counterexample in Chromium and
+    WebKit.
 
 ## Rules
 

@@ -440,6 +440,13 @@ more than catching every invalid value before it is sent. The hint is advisory: 
 can send the endpoint, and the handler's authoritative `Bounds` check refuses it with a typed
 field error and HTTP 422. Show the logical rule in a visible hint and in the field error.
 
+Even an unshifted hint can block a server-valid decimal spelling about one float step inside
+an exclusive end in Chromium and WebKit. For example, with an `f64` minimum of
+`0.0010000000000000002`, the server accepts `0.0010000000000000005` but those browsers can
+block it before submission. If the field must accept such spellings, leave `{..BOUNDS}` off
+the input and use `step="any"` without the offending `min` or `max` hint. Keep the exclusive
+`Bounds::read` check in the handler. See [Choice 62](../design.md#choice-exclusive-ends).
+
 ```rust,ignore
 const DISCOUNT: Bounds<f64, AnyStep> =
     Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();

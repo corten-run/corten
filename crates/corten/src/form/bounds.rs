@@ -1,8 +1,6 @@
 //! A number field's allowed values, written once for the input and the handler.
 
-use std::borrow::Cow;
-
-use crate::view::{quoted, Attrs, Render};
+use crate::view::{quoted, AttrValue, Attrs, Render};
 
 /// The values a number field allows: from `min` to `max`, in steps of `step` counted from
 /// `min` (1 unless set, as in HTML). One constant gives the input its `min`, `max` and `step`
@@ -265,11 +263,8 @@ impl<T: Numeric, S: Spacing<T>> Bounds<T, S> {
     /// native validation problems with long fixed spellings. Like [`super::Entry`], this leaves
     /// out an unset value.
     #[inline]
-    pub fn input_value<'a>(&self, entry: &'a super::Entry<T>) -> Option<Cow<'a, str>> {
-        match entry.text() {
-            Some(text) => Some(Cow::Borrowed(text)),
-            None => entry.value().map(|value| Cow::Owned(self.step.show_value(value))),
-        }
+    pub fn input_value<'a>(&self, entry: &'a super::Entry<T>) -> impl AttrValue + use<'a, T, S> {
+        InputValue { entry, step: self.step }
     }
 
     /// What a typed field reads as when it is a number these bounds hold: `None` when it is blank,
@@ -284,6 +279,22 @@ impl<T: Numeric, S: Spacing<T>> Bounds<T, S> {
     /// what native validation admitted.
     pub fn holds(&self, value: T) -> bool {
         S::holds(self, value)
+    }
+}
+
+struct InputValue<'a, T, S> {
+    entry: &'a super::Entry<T>,
+    step: S,
+}
+
+impl<T: Numeric, S: Spacing<T>> AttrValue for InputValue<'_, T, S> {
+    #[inline]
+    fn write_attr(&self, name: &str, out: &mut String) {
+        if let Some(text) = self.entry.text() {
+            text.write_attr(name, out);
+        } else if let Some(value) = self.entry.value() {
+            self.step.write_value_attr(name, value, out);
+        }
     }
 }
 
@@ -307,7 +318,7 @@ pub trait Spacing<T: Numeric>: Copy + sealed::Sealed + 'static {
     #[doc(hidden)]
     fn render_attrs(bounds: &Bounds<T, Self>, out: &mut String);
     #[doc(hidden)]
-    fn show_value(self, value: T) -> String;
+    fn write_value_attr(self, name: &str, value: T, out: &mut String);
 }
 
 impl<T: Numeric> Spacing<T> for T {
@@ -325,8 +336,8 @@ impl<T: Numeric> Spacing<T> for T {
         quoted(" step", &bounds.step, out);
     }
 
-    fn show_value(self, value: T) -> String {
-        value.shown(self)
+    fn write_value_attr(self, name: &str, value: T, out: &mut String) {
+        quoted(name, &value.shown(self), out);
     }
 }
 
@@ -354,10 +365,8 @@ impl<T: Float> Spacing<T> for AnyStep {
         out.push_str(r#" step="any""#);
     }
 
-    fn show_value(self, value: T) -> String {
-        let mut text = String::new();
-        value.write_value(&mut text);
-        text
+    fn write_value_attr(self, name: &str, value: T, out: &mut String) {
+        number_attr(name, value, out);
     }
 }
 
@@ -607,7 +616,7 @@ impl<const N: usize> std::fmt::Write for Buf<N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::view::AttrValue;
+    use crate::form::Entry;
 
     #[test]
     fn whole_numbers_hold_from_min_to_max_on_a_step() {
@@ -782,6 +791,18 @@ mod tests {
     }
 
     #[test]
+    fn a_precise_exclusive_end_keeps_its_exact_hint() {
+        // Choice 62 (docs/design.md#choice-exclusive-ends): Chromium and WebKit can block
+        // the fixed spelling of the next float, but we keep the unshifted native hint.
+        let min = 0.0010000000000000002_f64;
+        let bounds = Bounds::<f64>::any_step(min, 1.0).exclusive_min();
+        let mut out = String::new();
+        bounds.render_attrs(&mut out);
+        assert_eq!(out, r#" min="1.0000000000000002e-3" max="1" step="any""#);
+        assert_eq!(bounds.read(&Entry::typed("0.0010000000000000005")), Some(min.next_up()));
+    }
+
+    #[test]
     fn exclusive_f32_ends_keep_the_inclusive_hints() {
         use super::super::Entry;
 
@@ -817,11 +838,23 @@ mod tests {
     }
 
     #[test]
-    fn a_native_value_preserves_typed_text_and_omits_unset_values() {
+    fn a_native_value_escapes_typed_text_and_omits_unset_values() {
         let bounds = Bounds::<f64>::any_step(0.0, 100.0).exclusive_min();
-        let sent = super::super::Entry::typed("0.00000000000000000001");
-        assert_eq!(bounds.input_value(&sent), Some(Cow::Borrowed("0.00000000000000000001")));
-        assert_eq!(bounds.input_value(&super::super::Entry::default()), None);
+        let mut out = String::new();
+        bounds.input_value(&Entry::default()).write_attr(" value", &mut out);
+        assert!(out.is_empty());
+        bounds.input_value(&Entry::typed("0.00000000000000000001")).write_attr(" value", &mut out);
+        bounds.input_value(&Entry::typed("\"<&")).write_attr(" value", &mut out);
+        assert_eq!(out, r#" value="0.00000000000000000001" value="&quot;&lt;&amp;""#);
+    }
+
+    #[test]
+    fn a_native_prefill_uses_the_bounds_spacing() {
+        let mut out = String::new();
+        Bounds::<f64>::any_step(0.0, 100.0).input_value(&Entry::from(1e-20)).write_attr(" value", &mut out);
+        Bounds::<f32>::any_step(0.0, 100.0).input_value(&Entry::from(0.5)).write_attr(" value", &mut out);
+        Bounds::new(0.0, 100.0).step(0.01).input_value(&Entry::from(12.5)).write_attr(" value", &mut out);
+        assert_eq!(out, r#" value="1e-20" value="0.5" value="12.50""#);
     }
 
     #[test]
