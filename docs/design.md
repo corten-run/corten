@@ -6801,9 +6801,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
    drawn. It is not built, and the scan answers the reported case, a styled component no list
    names
    ([#980 Check at startup that a listed component's styled children are served with it, so the list check runs in every build and covers areas](https://github.com/corten-run/corten/issues/980)).
-10. <a id="limit-tested-browsers"></a>`corten-ui` is tested in Chromium, Firefox and WebKit (Playwright's builds). Its popups are placed by the design system's CSS with
-   anchor positioning (Baseline since January 2026); a browser without it shows them where
-   `popover` puts them by default, centered. Tabs are horizontal.
+10. <a id="limit-tested-browsers"></a>`corten-ui` is tested in Playwright's builds: Chromium
+    159.0.8154.6, Firefox 159.0 and WebKit 27.2 (revision 2388) in Playwright 1.65.1.
+    Its popups are placed by the design system's CSS with anchor positioning (Baseline since
+    January 2026); a browser without it shows them where `popover` puts them by default, centered.
+    Tabs are horizontal.
     Its names in the page are prefixed (`ui.combo_box.js`, `data-scope="ui-combo-box"`) through
     `[package.metadata.corten] scripts = "ui"`, so an app's own components never collide with
     them. Two of an app's own scripts with one file name are a startup error that names both.
