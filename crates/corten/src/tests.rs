@@ -18432,3 +18432,23 @@ async fn a_page_at_an_actions_address_with_a_post_form_without_action_is_an_erro
     // A route with no named posts may have a `do` of its own: its page is not read.
     assert_eq!(elsewhere.get(&crate::Local::parse("/?do=x").unwrap()).await.status(), StatusCode::OK, "no named posts, no check");
 }
+
+/// The future the stages box for each request holds the request once, not once or twice in
+/// every stage ([`crate::app::Inbound`]): a stage that takes the request by value again, or holds
+/// something large across its route, shows here before it shows in a profile. A count of
+/// instructions barely sees it; the box and the copies do. Measured for a page route with no
+/// middleware (2,128 bytes in a release build and 2,608 in a debug one, where it was 4,952 and
+/// 5,672), and for a small handler's own boxed future with no stage around it (512). The bounds
+/// are those sizes with a little room, under one more copy of the request: raise one only with
+/// the number that says the new size costs nothing.
+#[test]
+fn the_stages_future_stays_within_its_size() {
+    use tower_service::Service;
+    let request = || Request::builder().uri("/").body(Body::empty()).unwrap();
+    let staged = App::new(Routes::from(routes())).router().call(request()).boxed_bytes();
+    let handler = Router::from(routes()).call(request()).boxed_bytes();
+    // A debug build's stages hold their checks' state too.
+    let limit = if cfg!(debug_assertions) { 2_800 } else { 2_320 };
+    assert!(staged <= limit, "the stages' future is {staged} bytes, past {limit}");
+    assert!(handler <= 640, "a small handler's future is {handler} bytes, past 640");
+}

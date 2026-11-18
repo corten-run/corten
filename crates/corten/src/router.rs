@@ -888,6 +888,14 @@ pub struct RouterFuture {
     fix: Option<Fix>,
 }
 
+#[cfg(test)]
+impl RouterFuture {
+    /// The bytes of the future boxed for this request: its stages', or with none its handler's.
+    pub(crate) fn boxed_bytes(&self) -> usize {
+        std::mem::size_of_val(&*self.answering)
+    }
+}
+
 impl Future for RouterFuture {
     type Output = Result<Response, Infallible>;
 

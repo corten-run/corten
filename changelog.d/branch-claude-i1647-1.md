@@ -1,0 +1,1 @@
+- The stages around a route hold the request once and borrow it, where each stage kept a copy or two of its own. The future boxed for each staged request is less than half the size it was, and a test now bounds it, with a small handler's future, so neither grows unnoticed.

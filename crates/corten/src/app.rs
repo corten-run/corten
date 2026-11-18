@@ -2295,13 +2295,34 @@ struct At<S> {
     scope: Option<Arc<Scope>>,
 }
 
+/// The request on its way to its route, held once for the stages around it: each stage borrows
+/// it, and its route takes it. A stage that took it by value kept a copy or two in its own future
+/// (an `async fn` holds each argument, and again whatever it holds across an await), so the
+/// future [`At::run`] boxes carried about twelve of them: 4,952 bytes for a page route in a
+/// release build, where it is now 2,128 (`the_stages_future_stays_within_its_size` bounds it).
+pub(crate) struct Inbound(Option<Request>);
+
+impl Inbound {
+    /// The request, for a stage before its route.
+    pub(crate) fn request(&mut self) -> &mut Request {
+        self.0.as_mut().expect("a stage reads the request before its route takes it")
+    }
+
+    /// The request, for its route: once.
+    pub(crate) fn take(&mut self) -> Request {
+        self.0.take().expect("a request reaches its route once")
+    }
+}
+
 /// The stages around each staged route, as the router runs them: one boxed future per request,
 /// beside the handler's own. Not axum's `from_fn`, which boxes the rest of the stack again for
 /// every request (`Next`) on top of the future.
 impl<S: Steps> crate::router::Stages for At<S> {
     fn run(self: Arc<Self>, req: Request, route: &Route) -> crate::router::Answering {
         let route = route.clone();
-        Box::pin(async move { self.layer.handle(req, route, self.scope.as_deref()).await })
+        // Held here, outside the block, so the block's future holds it once.
+        let mut inbound = Inbound(Some(req));
+        Box::pin(async move { self.layer.handle(&mut inbound, route, self.scope.as_deref()).await })
     }
 }
 
@@ -2433,14 +2454,14 @@ struct Layer<S> {
 
 impl<S: Steps> Layer<S> {
     /// `scope` is the request's route's, when its route says it.
-    async fn handle(&self, req: Request, route: Route, scope: Option<&Scope>) -> Response {
+    async fn handle(&self, inbound: &mut Inbound, route: Route, scope: Option<&Scope>) -> Response {
         #[cfg(feature = "compress")]
-        let coding = crate::compress::negotiate(req.headers());
+        let coding = crate::compress::negotiate(inbound.request().headers());
         #[cfg(feature = "compress")]
         let accepts_coding = coding.any();
         #[cfg(not(feature = "compress"))]
-        let accepts_coding = cache::accepts_a_coding(req.headers());
-        let res = self.secure(req, route, accepts_coding, scope).await;
+        let accepts_coding = cache::accepts_a_coding(inbound.request().headers());
+        let res = self.secure(inbound, route, accepts_coding, scope).await;
         #[cfg(feature = "compress")]
         let res = crate::compress::finish(res, coding).await;
         res
@@ -2448,10 +2469,11 @@ impl<S: Steps> Layer<S> {
 
     /// The security policy around the request: the host and same-origin checks first, the
     /// headers last.
-    async fn secure(&self, mut req: Request, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
+    async fn secure(&self, inbound: &mut Inbound, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
+        let req = inbound.request();
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
-        if !self.policy.answers(&req) {
+        if !self.policy.answers(req) {
             let mut res = crate::security::misdirected();
             self.policy.headers(&mut res, None, &self.policy.csp);
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
@@ -2496,7 +2518,7 @@ impl<S: Steps> Layer<S> {
             let swap = page::Mode::of(req.headers()).swaps();
             let mut refused = match mount {
                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,
-                None => match self.cross_site(&mut req) {
+                None => match self.cross_site(req) {
                     Some((asked, watch)) => {
                         let page = page::error_page(&self.shared, asked, Failure::CrossSite).await;
                         signal::follow(page, watch, self.zoned())
@@ -2548,7 +2570,7 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let (mut res, caller, (mode, fetched)) = self.run(req, route, mount, deadline, body_limit, steps).await;
+        let (mut res, caller, (mode, fetched)) = self.run(inbound, route, mount, deadline, body_limit, steps).await;
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
@@ -2630,7 +2652,7 @@ impl<S: Steps> Layer<S> {
     /// runtime sent it ([`page::Mode::asked`]).
     async fn run<'a>(
         &'a self,
-        mut req: Request,
+        inbound: &mut Inbound,
         route: Option<Route>,
         api: Option<&Mount>,
         deadline: Option<Duration>,
@@ -2639,11 +2661,12 @@ impl<S: Steps> Layer<S> {
     ) -> (Response, bool, (Mode, bool)) {
         // Dropped with this future if the client leaves first; then the response's. The zone the
         // browser reported is read once, here.
+        let req = inbound.request();
         let watch = Watch(self.signal(req.headers(), body_limit));
         req.extensions_mut().insert(watch.0.clone());
         let mode = page::Mode::asked(req.headers());
         let next = Next { steps: &self.steps, scope, route };
-        let res = page::render_errors(&self.shared, req, next, deadline, &watch.0, api, mode).await;
+        let res = page::render_errors(&self.shared, inbound, next, deadline, &watch.0, api, mode).await;
         let personal = watch.0.is_personal();
         (signal::follow(res, watch, self.zoned()), personal, mode)
     }
