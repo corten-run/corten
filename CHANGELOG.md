@@ -6,10 +6,10 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - Decimal fields can use `Bounds::<f64>::any_step` (also for `f32`) for `step="any"`,
-  with optional exclusive endpoints. Constants reject non-finite, reversed, empty, or
-  unsupported exclusive ranges. The browser gets an advisory inward bound and the
-  server enforces the logical rule. Stepped fields and standalone `Entry` keep their
-  formatting. The gallery's discount shows its exclusive limits.
+  with optional exclusive endpoints. Constants reject non-finite, reversed, or empty ranges.
+  The browser gets advisory inward bounds and the server enforces the logical rule.
+  `Bounds::input_value` shares `NumberField`'s exponent notation for tiny prefills with plain
+  number inputs. Existing stepped fields and standalone `Entry` attributes keep their formatting.
   See [Choice 62](docs/design.md#choice-exclusive-ends) and
   [#1412 Bounds cannot say step any or an exclusive end (above 0, below 1), so most decimal fields keep hand-written rules beside their Entry](https://github.com/corten-run/corten/issues/1412).
 

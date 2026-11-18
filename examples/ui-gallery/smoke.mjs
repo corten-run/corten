@@ -5093,6 +5093,18 @@ async function run(browser) {
     const [valid, status] = tiny.split(" ");
     check(`no script: a discount of ${typed} is held by the handler (browser: ${valid})`, status === "200" && (browsers === "either" || valid === browsers), tiny.slice(0, 80));
   }
+  await plain.goto(`${base}/help`);
+  const prefill = plain.getByLabel("Example discount (%)");
+  const defaultDiscount = await prefill.inputValue();
+  const discountMin = await prefill.getAttribute("min");
+  const [prefilled] = await Promise.all([
+    plain.waitForResponse((r) => new URL(r.url()).pathname === "/" && r.request().method() === "POST"),
+    plain.getByRole("button", { name: "Try listing with this discount" }).click(),
+  ]);
+  const postedDiscount = new URLSearchParams(prefilled.request().postData() ?? "").get("discount");
+  check("no script: a plain any-step input posts its tiny prefill unchanged",
+    defaultDiscount === "1e-20" && discountMin === "5e-324" && postedDiscount === defaultDiscount && prefilled.status() === 200,
+    `${defaultDiscount} min=${discountMin} posted=${postedDiscount} ${prefilled.status()}`);
   await plain.goto(`${base}/`);
   const plainFloor = plain.getByLabel("Lowest offer");
   check("no script: the lowest offer is enabled and optional (the handler checks it)", (await plainFloor.isEnabled()) && !(await plainFloor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required)));

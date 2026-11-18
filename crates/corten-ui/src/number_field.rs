@@ -167,12 +167,7 @@ pub fn NumberField<'a, I: Id, T: Numeric, S: Spacing<T>>(field: &'a Number<'a, I
     let stepless = f.bounds.is_any_step();
     let at_min = stepless || number.is_some_and(|v| v <= f.bounds.min());
     let at_max = stepless || number.is_some_and(|v| v >= f.bounds.max());
-    // What was sent, as typed; a number made in code with its step's decimals, or as it is
-    // (`1e-20` in exponent form, which every browser reads as it).
-    let shown = match f.value.text() {
-        Some(text) => Some(std::borrow::Cow::Borrowed(text)),
-        None => number.map(|v| std::borrow::Cow::Owned(f.bounds.shown(v))),
-    };
+    let shown = f.bounds.input_value(&f.value);
     html! {
         <div on:connect={js::connect(decrease, input, increase, signal)}>
             <button

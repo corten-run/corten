@@ -5592,43 +5592,45 @@ rules something out.
 
 62. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
     on the server.** HTML has no exclusive number bound. Draw the next representable float
-    inside a refused end to block ordinary spellings and keep native arrows off the end.
-    The handler checks the logical ends. Show them in a visible hint and in the field error:
-    the browser can only describe inclusive attributes.
+    inside a refused end to block ordinary spellings and keep native arrows off the end;
+    omit the native attribute if its spelling does not round-trip to that float. The handler
+    checks the logical ends and refuses out-of-range input with 422. Show the rule in a visible
+    hint and in the field error: the browser can only describe inclusive attributes.
 
-    Reopened after Chromium and WebKit admitted the fixed spelling of `1e-20` below the
-    drawn `9.999999999999998e-21`, and the negative mirror. Their decimal range check can
-    spend its digit budget on fractional zeros even when `valueAsNumber` and Rust read the
-    number correctly. Leave room for a shortest round-trip mantissa in 18 fixed-notation
-    digits: nonzero exclusive ends require magnitude at least 0.1 for `f64` (up to 17
-    significant digits) or 1e-9 for `f32` (up to 9), and below 1e18 for both. Zero is exact
-    in fixed notation. Both tiny declarations fail const evaluation; inclusive ends can
-    still span the finite type. Any-step bounds and prefilled any-step `NumberField` values
-    use exponent notation past 18 digits written out. Stepped fields and standalone
-    `Entry` attributes keep their existing writer.
+    Reopened after the fixed-notation magnitude restriction rejected useful exclusive ends
+    such as 0.01, even though all three engines accepted the inward hints in exponent form.
+    The digit budget governs notation, not logical ranges. Any-step bounds and programmatic
+    prefills share one formatter, using exponent notation past 18 digits written out. Plain
+    inputs use `Bounds::input_value`, which `NumberField` also uses: Chromium and WebKit
+    block a fixed prefill `0.00000000000000000001` against `min="5e-324"`, but submit `1e-20`
+    unchanged. The helper still preserves submitted text on redisplay. Existing stepped
+    fields and standalone `Entry` attributes keep their formatting.
 
-    Native checks are advisory: the same engines may refuse `4e-324` above zero (Rust rounds
-    it to `5e-324`), or admit `0.00000000000000999999999999999999e16` below 100 (Rust rounds it
-    to 100 and rejects it). No inclusive HTML range can constrain every spelling. The server
-    runs its check for every submission.
+    Native checks are advisory: Chromium and WebKit may admit the fixed spelling of `1e-20`
+    below `9.999999999999998e-21`, or `0.00000000000000999999999999999999e16` below 100 (Rust
+    rounds it to 100 and rejects it). They can also refuse `4e-324` above zero (Rust rounds it
+    to `5e-324`). No inclusive HTML range can constrain every spelling. The server runs its
+    check for every submission.
 
     Not chosen: rendering the unshifted end, which admits ordinary spellings and lets
     arrows land on it; a new parser or input mask, which replaces HTML and cannot help
     without JavaScript; empty or non-finite HTML ranges, which can be invalid or ignored.
-    Concrete `f32` and `f64` constructors reject these ranges using stable const comparisons
-    and adjacent-float operations. A stepped bound stays off an end by starting one step in.
+    Concrete `f32` and `f64` constructors reject non-finite or reversed ranges, or ranges with
+    no representable member, using stable const comparisons and adjacent-float operations.
+    A stepped bound stays off an end by starting one step in.
 
     Stands on: platform ([HTML's number state](https://html.spec.whatwg.org/multipage/input.html#number-state-(type=number))
     and [floating-point syntax](https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#floating-point-numbers));
-    measured (two tiny endpoint submissions, the long spelling of 100, and one mixed-notation
-    stepped underflow, in both engines); value (standards first,
-    compile-time safety, and HTML that works without JavaScript).
+    measured (one native submission per spelling and end for both sides of 0.01, tiny and
+    extreme inward hints, and fixed and exponent prefills in three engines); value (standards
+    first, compile-time safety, and HTML that works without JavaScript).
 
     Revisit when: HTML gains exclusive number bounds, browser range checks use the same
-    rounding as Rust, or a shortest spelling of a supported end gets past its shifted hint.
+    rounding as Rust, or a shortest spelling of an exclusive end gets past its shifted hint
+    or a prefill written by `Bounds::input_value` is blocked by that hint.
 
-    Last checked: 2026-11-17, typed submissions in Chromium 156 and WebKit 27.2
-    (Playwright 1.64.1).
+    Last checked: 2026-11-17, native submissions in Chromium 156, Firefox 157 and WebKit 27.2
+    (Playwright 1.64.1), and a Rust 1.89 const check of both 0.01 ranges.
 
 ## Rules
 

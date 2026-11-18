@@ -1,5 +1,7 @@
 //! A number field's allowed values, written once for the input and the handler.
 
+use std::borrow::Cow;
+
 use crate::view::{quoted, Attrs, Render};
 
 /// The values a number field allows: from `min` to `max`, in steps of `step` counted from
@@ -42,10 +44,10 @@ use crate::view::{quoted, Attrs, Render};
 /// `Bounds::<f64>::any_step` or `Bounds::<f32>::any_step`, HTML's `step="any"`: a
 /// `Bounds<T, AnyStep>`, which holds every finite number from `min` to `max`. Its ends, and
 /// only its, can be refused ("above 0", "below 1"): `exclusive_min` and `exclusive_max`. HTML
-/// has no exclusive `min` or `max`, so the input says the type's next number inside the end
-/// (`5e-324` above 0 in an `f64`) for the browser's range check and arrow keys. Native
-/// validation is advisory: a browser and Rust can round a decimal differently. The handler's
-/// check is authoritative:
+/// has no exclusive `min` or `max`, so the input uses the type's next number inside the end
+/// (`5e-324` above 0 in an `f64`) for the browser's range check and arrow keys. A hint whose
+/// spelling cannot round-trip as that number is omitted. Native validation is advisory: a
+/// browser and Rust can round a decimal differently. The handler's check is authoritative:
 ///
 /// ```
 /// use corten::prelude::*;
@@ -57,10 +59,11 @@ use crate::view::{quoted, Attrs, Render};
 /// const DISCOUNT: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
 ///
 /// let f = Listing::FIELDS;
-/// let view = html! { <input type="number" name={f.discount} {..DISCOUNT}> };
+/// let discount = Entry::from(1e-20);
+/// let view = html! { <input type="number" name={f.discount} value={DISCOUNT.input_value(&discount)} {..DISCOUNT}> };
 /// assert_eq!(
 ///     view.to_html(),
-///     r#"<input type="number" name="discount" min="5e-324" max="99.99999999999999" step="any">"#
+///     r#"<input type="number" name="discount" value="1e-20" min="5e-324" max="99.99999999999999" step="any">"#
 /// );
 ///
 /// assert!(DISCOUNT.holds(37.5) && DISCOUNT.holds(5e-324));
@@ -110,9 +113,20 @@ use crate::view::{quoted, Attrs, Render};
 /// A step not above zero holds nothing, so every value is refused: a browser ignores such a step
 /// and steps by 1, and the handler must not agree to values the input never offered.
 ///
-/// Any-step bounds require finite ends and at least one representable value. Nonzero exclusive
-/// ends also require a magnitude from 0.1 (for `f64`) or 1e-9 (for `f32`) up to but not including
-/// 1e18. Outside this range, even ordinary fixed notation can exhaust a browser's digit budget.
+/// Any-step bounds require finite, ordered ends and at least one representable value. The
+/// notation used for native hints does not limit the logical range:
+///
+/// ```
+/// use corten::prelude::*;
+/// const LESS: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(0.0, 0.01).exclusive_max();
+/// const MORE: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(0.01, 1.0).exclusive_min();
+/// assert!(LESS.holds(0.01_f64.next_down()) && !LESS.holds(0.01));
+/// assert!(MORE.holds(0.01_f64.next_up()) && !MORE.holds(0.01));
+/// assert_eq!(html! { <input type="number" {..LESS}> }.to_html(),
+///     r#"<input type="number" min="0" max="9.999999999999998e-3" step="any">"#);
+/// assert_eq!(html! { <input type="number" {..MORE}> }.to_html(),
+///     r#"<input type="number" min="1.0000000000000002e-2" max="1" step="any">"#);
+/// ```
 ///
 /// ```compile_fail,E0080
 /// use corten::prelude::*;
@@ -155,17 +169,7 @@ use crate::view::{quoted, Attrs, Render};
 /// const BELOW_MIN: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(f64::MIN, f64::MIN).exclusive_max();
 /// ```
 ///
-/// ```compile_fail,E0080
-/// use corten::prelude::*;
-/// const TINY_MAX: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(0.0, 1e-20).exclusive_max();
-/// ```
-///
-/// ```compile_fail,E0080
-/// use corten::prelude::*;
-/// const TINY_MIN: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(-1e-20, 0.0).exclusive_min();
-/// ```
-///
-/// The spread writes `min`, `max` and `step`, so a tag that writes one of them as well does
+/// The spread owns `min`, `max` and `step`, so a tag that writes one of them as well does
 /// not compile:
 ///
 /// ```compile_fail,E0080
@@ -195,7 +199,7 @@ impl<T: Numeric> Bounds<T> {
 }
 
 macro_rules! any_step {
-    ($t:ty, $smallest:literal) => {
+    ($t:ty) => {
         impl Bounds<$t> {
             /// Every finite number from `min` to `max`, both included: HTML's `step="any"`.
             /// Panics if an end is not finite or `min > max`; a constant fails to compile.
@@ -207,40 +211,31 @@ macro_rules! any_step {
         }
 
         impl Bounds<$t, AnyStep> {
-            /// Refuses `min` itself. The input says the type's next number above it.
-            /// Panics if this leaves no value or the end is outside the supported range
-            /// (see [`Bounds`]); a constant fails to compile.
+            /// Refuses `min` itself. The input's hint is the type's next number above it.
+            /// Panics if this leaves no value; a constant fails to compile.
             pub const fn exclusive_min(mut self) -> Self {
                 self.step.above = true;
-                self.check_exclusive_end(self.min)
+                self.check_nonempty()
             }
 
-            /// Refuses `max` itself. The input says the type's next number below it.
-            /// Panics if this leaves no value or the end is outside the supported range
-            /// (see [`Bounds`]); a constant fails to compile.
+            /// Refuses `max` itself. The input's hint is the type's next number below it.
+            /// Panics if this leaves no value; a constant fails to compile.
             pub const fn exclusive_max(mut self) -> Self {
                 self.step.below = true;
-                self.check_exclusive_end(self.max)
+                self.check_nonempty()
             }
 
-            const fn check_exclusive_end(self, end: $t) -> Self {
+            const fn check_nonempty(self) -> Self {
                 let min = if self.step.above { self.min.next_up() } else { self.min };
                 let max = if self.step.below { self.max.next_down() } else { self.max };
                 assert!(min <= max, "any-step bounds must hold at least one number");
-                // Reserve the browser's fixed-notation digit budget for the shortest float
-                // mantissa (up to 17 digits for f64, 9 for f32). Zero needs no mantissa.
-                let size = end.abs();
-                assert!(
-                    size == 0.0 || ($smallest <= size && size < 1e18),
-                    "nonzero exclusive end is outside the supported decimal magnitude range"
-                );
                 self
             }
         }
     };
 }
-any_step!(f64, 0.1);
-any_step!(f32, 1e-9);
+any_step!(f64);
+any_step!(f32);
 
 impl<T: Numeric, S: Spacing<T>> Bounds<T, S> {
     /// Steps of `step` from `min`: `0.01` for cents, `5` for a count in fives.
@@ -265,10 +260,17 @@ impl<T: Numeric, S: Spacing<T>> Bounds<T, S> {
         S::ANY_STEP
     }
 
-    /// A programmatically set value as corten-ui's `NumberField` shows it.
-    #[doc(hidden)]
-    pub fn shown(&self, value: T) -> String {
-        self.step.show_value(value)
+    /// The `value` of an `<input type="number">` using these bounds. Text sent back by a form
+    /// stays as typed. A programmatic value is shown with the step's decimals, or with any step,
+    /// uses exponent notation if writing it out would take more than 18 digits. In particular,
+    /// `1e-20` can be submitted unchanged against `min="5e-324"` in browsers that treat its long
+    /// fixed spelling as underflow. Like [`super::Entry`], this leaves out an unset value.
+    #[inline]
+    pub fn input_value<'a>(&self, entry: &'a super::Entry<T>) -> Option<Cow<'a, str>> {
+        match entry.text() {
+            Some(text) => Some(Cow::Borrowed(text)),
+            None => entry.value().map(|value| Cow::Owned(self.step.show_value(value))),
+        }
     }
 
     /// What a typed field reads as when it is a number these bounds hold: `None` when it is blank,
@@ -352,8 +354,8 @@ impl<T: Float> Spacing<T> for AnyStep {
         // inside it. The constructors have already checked that the drawn range is nonempty.
         let min = if bounds.step.above { bounds.min.next(true) } else { bounds.min };
         let max = if bounds.step.below { bounds.max.next(false) } else { bounds.max };
-        number_attr(" min", min, out);
-        number_attr(" max", max, out);
+        number_attr(" min", min, bounds.step.above, out);
+        number_attr(" max", max, bounds.step.below, out);
         out.push_str(r#" step="any""#);
     }
 
@@ -379,11 +381,19 @@ trait Float: Numeric {
     fn write_value(self, out: &mut String);
 }
 
-fn number_attr<T: Float>(name: &str, value: T, out: &mut String) {
+fn number_attr<T: Float>(name: &str, value: T, inward: bool, out: &mut String) {
+    let start = out.len();
     out.push_str(name);
     out.push_str("=\"");
+    let text = out.len();
     value.write_value(out);
-    out.push('"');
+    if inward && T::read(&out[text..]) != Some(value) {
+        // A hint must spell the adjacent value, not round back to the refused end or tighten
+        // the range. Prefer no attribute to a different bound.
+        out.truncate(start);
+    } else {
+        out.push('"');
+    }
 }
 
 /// A number a [`Bounds`] holds: an integer or a float. Sealed.
@@ -812,6 +822,33 @@ mod tests {
         ALL.render_attrs(&mut out);
         assert_eq!(out, r#" min="-3.4028235e38" max="3.4028235e38" step="any""#);
         assert!(ALL.holds(f32::MIN) && ALL.holds(f32::MAX));
+    }
+
+    #[test]
+    fn tiny_and_extreme_exclusive_ends_render_in_exponent_form() {
+        const TINY: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(-1e-20, 1e-20).exclusive_min().exclusive_max();
+        const WIDE: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(f64::MIN, f64::MAX).exclusive_min().exclusive_max();
+        let mut out = String::new();
+        TINY.render_attrs(&mut out);
+        assert_eq!(out, r#" min="-9.999999999999998e-21" max="9.999999999999998e-21" step="any""#);
+        out.clear();
+        WIDE.render_attrs(&mut out);
+        assert_eq!(out, r#" min="-1.7976931348623155e308" max="1.7976931348623155e308" step="any""#);
+    }
+
+    #[test]
+    fn a_hint_that_does_not_round_trip_is_omitted() {
+        let mut out = String::from("<input");
+        number_attr(" min", f64::INFINITY, true, &mut out);
+        assert_eq!(out, "<input");
+    }
+
+    #[test]
+    fn a_native_value_preserves_typed_text_and_omits_unset_values() {
+        let bounds = Bounds::<f64>::any_step(0.0, 100.0).exclusive_min();
+        let sent = super::super::Entry::typed("0.00000000000000000001");
+        assert_eq!(bounds.input_value(&sent), Some(Cow::Borrowed("0.00000000000000000001")));
+        assert_eq!(bounds.input_value(&super::super::Entry::default()), None);
     }
 
     #[test]

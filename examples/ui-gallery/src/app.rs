@@ -9,10 +9,10 @@
 //! | `POST /?do=save` | saving the draft, answered with a toast; without JavaScript, back to the view of the draft it was on, whose toaster says it (`req.redirect_with_notice`) |
 //! | `POST /?do=publish` | publishing the draft: refused (409, the card sold meanwhile), answered with a failed toast |
 //! | `POST /?do=rename` | the rename dialog's form: refused (no name, or the other draft's, which the form's own message says in `FormAlert`), the dialog drawn open; else back to the view of the draft it was on, whose toaster says it was renamed (`req.redirect_with_notice`) |
-//! | `GET /help` | the menu's link |
+//! | `GET /help` | the menu's link, with a plain number input showing a precise discount |
 //! | `GET /orders?page=2` | the seller's orders, a page of them: the kit's other components |
 //! | `POST /orders/settings` | the shipping settings: back to the orders, whose toaster says they were saved |
-use corten::{Component, Refusal, i18n::Currency, prelude::*, route::FromUrl};
+use corten::{Component, Refusal, form::HintId, i18n::Currency, prelude::*, route::FromUrl};
 use std::time::{Duration, SystemTime};
 
 use corten_ui::{Toast, Toaster};
@@ -410,7 +410,13 @@ async fn settings(req: Req, Form(form): Form<SettingsForm>) -> HtmlResult {
     )
 }
 
+#[derive(Id)]
+struct ExampleDiscountId;
+
 async fn help(req: Req) -> HtmlResult {
+    let f = SellForm::FIELDS;
+    let t: Msg = req.t();
+    let discount = Entry::from(1e-20);
     req.page(html! {
         <Layout req={&req} title="Help | corten-ui" toast={QUIET}>
             <h1>"Listing a card"</h1>
@@ -427,6 +433,25 @@ async fn help(req: Req) -> HtmlResult {
                 <dt>"Archive and Watch"</dt>
                 <dd>"Archiving puts the draft away without listing it. Watching tells you when this card's market low moves."</dd>
             </dl>
+            <form method="post" action={DRAFT}>
+                <input type="hidden" name={f.qty} value={1}>
+                <input type="hidden" name={f.price} value="12.50">
+                <input type="hidden" name={f.weight} value={0.5}>
+                <input type="hidden" name={f.condition} value={Condition::LightlyPlayed}>
+                <input type="hidden" name={f.ships} value={Region::Us}>
+                <input type="hidden" name={f.pricing} value={Pricing::Fixed}>
+                <label for={ExampleDiscountId}>"Example discount (%)"</label>
+                <input
+                    type="number"
+                    id={ExampleDiscountId}
+                    name={f.discount}
+                    aria-describedby={HintId(&ExampleDiscountId)}
+                    value={DISCOUNT.input_value(&discount)}
+                    {..DISCOUNT}
+                >
+                <p id={HintId(&ExampleDiscountId)}>{discount_rule(t)}</p>
+                <button>"Try listing with this discount"</button>
+            </form>
             <p><a href={url::Home { tab: None, sale: None, period: None, sold: None, sales: None }}>"Back to the draft"</a></p>
         </Layout>
     })
