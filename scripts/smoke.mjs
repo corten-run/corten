@@ -6815,13 +6815,68 @@ async function run(browser) {
       twiceOpen && twice.patched && twice.redrawn && twice.heard === "" && again.focused === "One" && [...again.log].sort().join("|") === heardOne(""),
       JSON.stringify({ twiceOpen, twice, ...again }),
     );
+    for (const how of ["result", "reuse", "reopen", "remove-first"]) {
+      const opened = await press("One", modalOne);
+      const observed = await closing.evaluate(async (how) => {
+        const { patch } = await import("corten");
+        const old = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-one"));
+        const id = old.id;
+        const closed = `<dialog id="${id}"><p>Closed</p></dialog>`;
+        const remove = `<template id="${id}" data-remove></template>`;
+        const add = `<template id="smoke-closing" data-append>${closed}</template>`;
+        const heard = [];
+        let closing = 0;
+        old.addEventListener("beforetoggle", (event) => {
+          if (event.newState === "closed") closing++;
+        });
+        old.returnValue = "saved";
+        const abort = new AbortController();
+        for (const type of ["toggle", "close"]) {
+          document.addEventListener(type, (event) => {
+            const to = event.target;
+            if (!(to instanceof HTMLDialogElement) || to.id !== id || (event instanceof ToggleEvent && event.newState !== "closed")) return;
+            heard.push([type, to.returnValue]);
+            if (how === "result" && heard.length === 1) to.returnValue = "handler-value";
+          }, { capture: true, signal: abort.signal });
+        }
+        if (how === "remove-first") {
+          await patch(__html(remove + `<div id="smoke-closing">${closed}</div>`));
+        } else {
+          await patch(__html(closed));
+          if (how === "reuse") await patch(__html(remove + add));
+          if (how === "reopen") {
+            await patch(__html(`<dialog id="${id}" open><p>New session</p></dialog>`));
+            /** @type {HTMLDialogElement} */ (document.getElementById(id)).returnValue = "new-session";
+          }
+        }
+        // Both native events have had a chance to run; toggle can arrive on a rendering frame.
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50))));
+        abort.abort();
+        const to = /** @type {HTMLDialogElement} */ (document.getElementById(id));
+        return { heard, closing, replaced: to !== old && !old.isConnected, open: to.open, value: to.returnValue };
+      }, how);
+      const { heard, closing: closes, replaced, open, value } = observed;
+      const [name, correct] = {
+        result: ["forwarding the second dialog event preserves the first handler's returnValue change",
+          heard.length === 2 && new Set(heard.map(([type]) => type)).size === 2 && heard[0]?.[1] === "saved" && heard[1]?.[1] === "handler-value" && value === "handler-value"],
+        reuse: ["a dialog removed after a close does not forward events to a new dialog with its id",
+          closes === 1 && heard.length === 0 && !open && value === ""],
+        reopen: ["a dialog drawn open before a queued close does not hear the previous session's events",
+          closes === 1 && heard.length === 0 && open && value === "new-session"],
+        "remove-first": ["a dialog removed before its parent redraw in the same patch does not close",
+          closes === 0 && heard.length === 0 && !open && value === ""],
+      }[/** @type {"result" | "reuse" | "reopen" | "remove-first"} */ (how)];
+      check(name, opened && replaced && correct, JSON.stringify(observed));
+    }
     await closing.close();
   }
   // A write's page that draws closed the dialogs the server drew open in a layout element it draws
   // in place (one holding a live region) closes them as a patch does (#1455): the inner of two
   // nested ones first, and one whose content changes shape, and is replaced, is still heard by the
   // listeners of the page, on the dialog that took its place.
-  if (swaps) {
+  // The primary WebKit page runs with swaps disabled. This isolated context uses its native
+  // Navigation API, as the section stylesheet probe does.
+  if (swaps || engine === "webkit") {
     const morph = await (await browser.newContext()).newPage();
     /** @type {string[]} */
     const morphErrors = [];
@@ -6838,13 +6893,23 @@ async function run(browser) {
         const open = morphs++ ? "" : " open";
         const more = open ? "" : "<p>Two</p>";
         const drawn =
-          `<div role="status"></div><dialog id="smoke-morph-outer"${open}><button>Outer</button>` +
-          `<dialog id="smoke-morph-inner"${open}><button>Inner</button></dialog></dialog>` +
+          `<div role="status"></div><button id="smoke-morph-opener">Opener</button><dialog id="smoke-morph-outer"${open}><button>Outer</button>` +
+          `<dialog data-smoke-dialog="smoke-morph-inner"${open}><button>Inner</button></dialog></dialog>` +
           `<dialog id="smoke-morph-one"${open}><p>One</p>${more}</dialog>`;
         await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(/(<header\b[^>]*>)/, `$1${drawn}`) });
       },
     );
     await morph.goto(`${base}/news#briefing`);
+    await morph.evaluate(() => {
+      const opener = /** @type {HTMLButtonElement} */ (document.getElementById("smoke-morph-opener"));
+      opener.focus();
+      for (const selector of ["#smoke-morph-outer", "[data-smoke-dialog]"]) {
+        const dialog = /** @type {HTMLDialogElement} */ (document.querySelector(selector));
+        dialog.removeAttribute("open");
+        dialog.showModal();
+      }
+    });
+    await morph.waitForFunction(() => document.activeElement?.textContent === "Inner");
     await morph.evaluate(() => {
       /** @type {string[]} */
       const heard = [];
@@ -6855,7 +6920,9 @@ async function run(browser) {
           (event) => {
             const el = /** @type {Element} */ (event.target);
             const state = event instanceof ToggleEvent ? `:${event.newState}` : "";
-            if (el.id.startsWith("smoke-morph-")) heard.push(`${el.id} ${type}${state} ${el.isConnected ? "on" : "off"}`);
+            if (event instanceof ToggleEvent && event.newState !== "closed") return;
+            const label = el.getAttribute("data-smoke-dialog") ?? el.id;
+            if (label.startsWith("smoke-morph-")) heard.push(`${label} ${type}${state} ${el.isConnected ? "on" : "off"}`);
           },
           true,
         );
@@ -6870,11 +6937,12 @@ async function run(browser) {
     const morphed = await morph.evaluate(() => ({
       heard: /** @type {string[]} */ (/** @type {any} */ (window).__heard),
       open: Array.from(document.querySelectorAll("dialog[open]"), (el) => el.id),
+      focus: document.activeElement?.id || document.activeElement?.textContent?.trim(),
     }));
     const morphCloses = morphed.heard.filter((line) => line.includes(" close"));
     check(
       "a write's page that draws closed open dialogs in a layout element it draws in place closes the inner one first, and one replaced is heard on the dialog that took its place",
-      morphDrawn && !morphErrors.length && morphed.open.length === 0 &&
+      morphDrawn && !morphErrors.length && morphed.open.length === 0 && morphed.focus === "smoke-morph-opener" &&
         [...morphed.heard].sort().join("|") ===
           "smoke-morph-inner close on|smoke-morph-inner toggle:closed on|smoke-morph-one close on|smoke-morph-one toggle:closed on|smoke-morph-outer close on|smoke-morph-outer toggle:closed on" &&
         morphCloses.indexOf("smoke-morph-inner close on") < morphCloses.indexOf("smoke-morph-outer close on"),

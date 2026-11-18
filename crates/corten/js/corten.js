@@ -1061,39 +1061,70 @@ async function apply(html, signal, sent, took, own, asked, within) {
   // the next patch that links it tries again.
   await Promise.all([modulesOf(content), stylesOf(content)]);
   if (signal?.aborted) return;
-  closeDrawn(Array.from(content.children, (el) => /** @type {[Element | null, Element]} */ ([document.getElementById(idOf(el) ?? ""), el])));
+  const elements = Array.from(content.children);
+  const closes = !!queryOne(content, CLOSED_DIALOG);
   /** The elements this patch puts on the page. @type {Element[]} */
   const put = [];
   let again;
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
-  for (const el of Array.from(content.children)) {
-    // Read from the attribute, as `target.id` is a control named id when the target is a form.
-    const id = idOf(el) ?? "";
-    const target = id ? document.getElementById(id) : null;
-    if (hasAttr(el, "data-corten-read-again")) again = el;
-    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
-      // Focus in it goes to the nearest element around it that can take focus.
-      const parent = target && parentElementOf(target);
-      const up = !!target && holds(target, document.activeElement) && parent;
-      navs ||= !!target && holdsNav(target);
-      if (parent) changedIn(parent, ["x", id, []]);
-      if (target) elementOwn.remove.call(target);
-      if (up) focusNear(up);
+  /** @param {HTMLDialogElement[]} [shut] */
+  const draw = (shut) => {
+    /** @type {Element[]} */
+    const detached = [];
+    for (const el of elements) {
+      if (hasAttr(el, "data-corten-read-again")) {
+        if (!shut) again = el;
+        continue;
+      }
+      // Read from the attribute, as `target.id` is a control named id when the target is a form.
+      const id = idOf(el) ?? "";
+      const target = id ? document.getElementById(id) : null;
+      const remove = el instanceof HTMLTemplateElement && hasAttr(el, "data-remove");
+      const append = el instanceof HTMLTemplateElement && hasAttr(el, "data-append");
+      if (shut) {
+        // Only the first operation that detaches a dialog can close it. Later operations can
+        // draw its id again, but do not see the original dialog.
+        if (target && (remove || !append)) {
+          if (!remove) collectCloses(target, el, shut, detached);
+          detached.push(target);
+        }
+      } else if (remove) {
+        // Focus in it goes to the nearest element around it that can take focus.
+        const parent = target && parentElementOf(target);
+        const up = !!target && holds(target, document.activeElement) && parent;
+        navs ||= !!target && holdsNav(target);
+        if (parent) changedIn(parent, ["x", id, []]);
+        if (target) elementOwn.remove.call(target);
+        if (up) focusNear(up);
+      } else if (!target) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
+      else if (append) {
+        put.push(...Array.from(el.content.children));
+        serve(el.content);
+        changedIn(target, ["a", id, Array.from(childNodesOf(el.content))]);
+        elementOwn.append.call(target, el.content);
+      } else {
+        // A preceding operation can have installed a new target or dialog.
+        if (closes && elements.length > 1) {
+          /** @type {HTMLDialogElement[]} */
+          const next = [];
+          collectCloses(target, el, next);
+          closeDrawn(next);
+        }
+        const parent = parentElementOf(target);
+        if (parent) changedIn(parent, ["r", id, [el]]);
+        replaceKeeping(target, el, sent, took, true, within);
+        put.push(el);
+      }
     }
-    else if (!target) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
-    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
-      put.push(...Array.from(el.content.children));
-      serve(el.content);
-      changedIn(target, ["a", id, Array.from(childNodesOf(el.content))]);
-      elementOwn.append.call(target, el.content);
-    } else {
-      const parent = parentElementOf(target);
-      if (parent) changedIn(parent, ["r", id, [el]]);
-      replaceKeeping(target, el, sent, took, true, within);
-      put.push(el);
-    }
+  };
+  if (closes) {
+    /** @type {HTMLDialogElement[]} */
+    const shut = [];
+    draw(shut);
+    closeDrawn(shut);
   }
+  draw();
   // The server marked a nav link in the patch against the request that made it (a form's action),
   // not this page: mark it as a navigation would. Only then: a patch without one (a ticker's)
   // only looks through what it put.
@@ -1371,16 +1402,23 @@ function opened(root, fresh, ids, within) {
   const later = [];
   for (const el of [root, ...Array.from(queryAll(root, "details, dialog, [popover]"))]) {
     const dialog = el instanceof HTMLDialogElement;
+    const pending = dialog && pendingCloses.get(el);
     const toggles = dialog || el instanceof HTMLDetailsElement;
     const popover = hasAttr(el, "popover");
     const shown = popover && matchesOf(el, ":popover-open");
     const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
     // Left as the server sent it, and not a shown popover: the fresh markup says, so its
     // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing).
-    if (!shown && (!toggles || (served.has(el) && served.get(el) === now))) continue;
+    if (!shown && !pending && (!toggles || (served.has(el) && served.get(el) === now))) continue;
     // A dialog or popover only by id: by place, another row's could open over the page.
     const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || localNameOf(to) !== localNameOf(el)) continue;
+    if (pending && !el.open && to instanceof HTMLDialogElement && !to.open && (el === root || idOf(el))) {
+      pendingCloses.delete(el);
+      pending.on = to;
+      to.returnValue = el.returnValue;
+      pendingCloses.set(to, pending);
+    }
     if (shown && hasAttr(to, "popover")) later.push(() => HTMLElement.prototype.showPopover.call(to));
     if (!toggles) continue;
     const drawnOpen = /** @type {HTMLDialogElement} */ (to).open;
@@ -1473,50 +1511,50 @@ function replaceKeeping(root, fresh, sent, took, focus = true, within) {
   if (inside && document.activeElement === document.body) focusNear(focused, root, fresh);
 }
 
-/**
- * Closes as the browser closes one each dialog the server drew open, still open, that the markup
- * drawn for its part of the page draws closed: in `pairs`, each element about to be replaced or
- * drawn again with the server's new markup for it, where the dialog is the element itself or one
- * with its id. One the user opened stays open ({@link opened}). A patch's, a swap's and a layout's
- * close together, before any of their elements is replaced, so each gives focus back to what had
- * it when it opened (`close()`) while that is still on the page: replacing it then carries focus
- * to its counterpart, as for any focus. The one holding focus goes first, the innermost of them,
- * so nested modals each give focus back in turn; then the rest, the last found first. Its
- * `toggle` and `close` come later, as tasks. If it has left the page by then, where the document's
- * listener cannot hear them, each is dispatched again, with its `returnValue`, on the dialog with
- * its id on the page then (the one that took its place, or what took that one's), whose handlers
- * (`on:close`) hear them as the browser's; one removed hears nothing. A handler of its
- * `beforetoggle`, which runs at once, may change the page: the dialogs were found before.
- * @param {[Element | null, Element, ...unknown[]][]} pairs
- */
-function closeDrawn(pairs) {
-  /** @type {[HTMLDialogElement, Element][]} */
-  const shut = [];
-  for (const [root, fresh] of pairs) {
-    // A patch's template that removes or adds (or reads again) is no dialog and has none by id.
-    if (!root) continue;
-    for (const el of [root, ...Array.from(queryAll(root, "dialog[open]"))]) {
-      const to = el instanceof HTMLDialogElement && el.open && served.get(el) && counterpart(root, fresh, el, true);
-      if (to instanceof HTMLDialogElement && !to.open) shut.push([/** @type {HTMLDialogElement} */ (el), to]);
-    }
+const CLOSED_DIALOG = "dialog:not([open])";
+
+/** @param {Element} el */
+const drawsClosed = (el) => matchesOf(el, CLOSED_DIALOG) || !!queryOne(el, CLOSED_DIALOG);
+
+/** @param {Element} root @param {Element} fresh @param {HTMLDialogElement[]} shut @param {Element[]} [detached] */
+function collectCloses(root, fresh, shut, detached) {
+  for (const to of [fresh, ...Array.from(queryAll(fresh, CLOSED_DIALOG))]) {
+    if (!(to instanceof HTMLDialogElement) || to.open) continue;
+    const id = idOf(to);
+    const el = to === fresh ? root : id && queryOne(root, `#${CSS.escape(id)}`);
+    if (el instanceof HTMLDialogElement && el.open && served.get(el) && !detached?.some((old) => holds(old, el))) shut.push(el);
   }
+}
+
+/** Queued native events follow replacements, not ids. @type {WeakMap<HTMLDialogElement, { on: HTMLDialogElement }>} */
+const pendingCloses = new WeakMap();
+
+/**
+ * Close before detaching any opener. Follow focus back out through nested or sibling modals.
+ * @param {HTMLDialogElement[]} shut
+ */
+function closeDrawn(shut) {
   while (shut.length) {
-    // The last holding focus, or else the last (-1).
-    const at = shut.map(([dialog]) => holds(dialog, document.activeElement)).lastIndexOf(true);
-    const [[dialog, to]] = /** @type {[[HTMLDialogElement, Element]]} */ (shut.splice(at, 1));
-    if (!dialog.open) continue;
-    const id = idOf(dialog);
-    for (const type of ["toggle", "close"]) {
-      const again = (/** @type {Event} */ event) => {
-        // The one with its id on the page now, or `to` when it has none.
-        const now = (id && document.getElementById(id)) || to;
-        if (inPage(dialog) || !(now instanceof HTMLDialogElement) || !inPage(now)) return;
-        now.returnValue = dialog.returnValue;
-        // The same kind of event, with the same states for a toggle.
-        now.dispatchEvent(new /** @type {typeof Event} */ (event.constructor)(type, event));
-      };
-      dialog.addEventListener(type, again, { once: true });
+    const focused = document.activeElement;
+    let at = shut.length - 1;
+    for (let i = at - 1; i >= 0; i--) {
+      const [next, earlier] = /** @type {[HTMLDialogElement, HTMLDialogElement]} */ ([shut[at], shut[i]]);
+      if (holds(next, earlier) || (!holds(next, focused) && holds(earlier, focused))) at = i;
     }
+    const [dialog] = /** @type {[HTMLDialogElement]} */ (shut.splice(at, 1));
+    if (!dialog.open || !inPage(dialog)) continue;
+    const pending = { on: dialog };
+    pendingCloses.set(dialog, pending);
+    let left = 2;
+    /** @param {Event} event */
+    const forward = (event) => {
+      const to = pending.on;
+      if (pendingCloses.get(to) !== pending) return;
+      if (--left === 0) pendingCloses.delete(to);
+      if (dialog !== to && !to.open && inPage(to)) to.dispatchEvent(new /** @type {typeof Event} */ (event.constructor)(event.type, event));
+    };
+    dialog.addEventListener("toggle", forward, { once: true });
+    dialog.addEventListener("close", forward, { once: true });
     dialog.close();
   }
 }
@@ -1564,7 +1602,7 @@ function focusNear(el, root, fresh) {
  * @param {boolean} [stay] keep the user's place: the scroll position (Chromium can reset it when
  *   <main> empties), what scrolls inside the page and the `<details>` open on screen
  * @param {Notice} [notice] the answer's, kept if the page has to load in full instead
- * @param {{ drawn: () => [Element, Element, ...unknown[]][], apply: () => void } | null} [layout] what changes around `<main>`, drawn in the same
+ * @param {{ apply: (shut?: HTMLDialogElement[], parts?: [Element, Element][]) => void } | null} [layout] what changes around `<main>`, drawn in the same
  *   frame as the page ({@link swapDocument})
  * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
  * @returns {Promise<boolean>} false when it loaded the page in full instead
@@ -1628,7 +1666,13 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const typed = traverse ? typedIn.get(key ?? "") : undefined;
   if (typed) putTyped(content, typed);
   serve(content);
-  closeDrawn([...parts, ...(layout?.drawn() ?? [])]);
+  if (parts.length || layout) {
+    /** @type {HTMLDialogElement[]} */
+    const shut = [];
+    for (const [old, part] of parts) collectCloses(old, part, shut);
+    layout?.apply(shut, parts);
+    closeDrawn(shut);
+  }
   const [x, y] = [scrollX, scrollY];
   for (const [old, part] of parts) {
     // One inside an element the layout drew changes what a write's page is compared with, as a
@@ -1795,7 +1839,7 @@ let frame = { parts: new Set(frameOf(document)), sent: null };
  * around `<main>`, more or fewer elements beside one, or another frame ({@link frameOf}). One that
  * shows the notice the page drew is replaced even when its markup is the same, since the last one
  * a script hid (a toast) is drawn again by the same text.
- * @param {Document} doc @param {Notice} notice @returns {{ fresh: Element[], drawn: () => [Element, Element, ...unknown[]][], apply: () => void } | null}
+ * @param {Document} doc @param {Notice} notice
  */
 function layoutChanges(doc, notice) {
   const said = notice?.has("d") ? notice.get("m") || null : null;
@@ -1827,29 +1871,38 @@ function layoutChanges(doc, notice) {
   if (here !== document.body || there !== doc.body) return null;
   // One a patch replaced, or changed inside, while the page was on its way is newer than the
   // page: it stays.
-  const current = () => changed.filter(([old, , was]) => inPage(old) && drawn.get(old) === was);
   return {
     fresh: changed.map(([, el]) => el),
-    // What `apply` draws, whose dialogs it draws closed close first ({@link closeDrawn}).
-    drawn: current,
-    apply() {
-      // An entry the load had and this page lacks stays: the runtime cannot tell the server's (a
-      // theme it stopped writing) from a script's or an extension's (a theme set before first paint).
-      frame = { parts: frame.parts, sent };
-      stale = false;
-      for (const [old, el, was] of current()) {
+    /** @param {HTMLDialogElement[]} [shut] @param {[Element, Element][]} [parts] */
+    apply(shut, parts) {
+      if (!shut) {
+        // An entry the load had and this page lacks stays: the runtime cannot tell the server's
+        // from a script's (a theme it set before first paint) or an extension's.
+        frame = { parts: frame.parts, sent };
+        stale = false;
+      }
+      for (const [old, el, was] of changed) {
+        if (!inPage(old) || drawn.get(old) !== was) continue;
+        // An earlier page part can take out this element or change its baseline (changedIn),
+        // in which case this layout draw will be skipped.
+        if (shut && (!drawsClosed(el) || parts?.some(([part]) => holds(part, old) || (!drawn.has(part) && holds(old, part))))) continue;
+        const as = was === undefined ? null : drawnAs(was);
+        const before = as === null ? null : parse(as).firstElementChild;
+        if (shut) {
+          drawLayout(old, el, before, said, false, shut);
+          continue;
+        }
         const markup = markupOf(el);
         // The server's markup of each page's part in it, before drawing adds what the user had
         // (a <details> they opened) or a focus move's tabindex.
-        const parts = [el, ...Array.from(queryAll(el, "[data-corten-page]"))]
+        const pageParts = [el, ...Array.from(queryAll(el, "[data-corten-page]"))]
           .filter((part) => hasAttr(part, "data-corten-page"))
           .map((part) => /** @type {const} */ ([part, part === el ? markup : markupOf(part)]));
-        const as = was === undefined ? null : drawnAs(was);
-        drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said);
+        drawLayout(old, el, before, said);
         const now = inPage(old) ? old : el;
         drawn.set(now, markup);
         // A page's part the write's page drew anew is what the next navigation compares with.
-        if (now !== old) for (const [part, sent] of parts) partSent.set(part, sent);
+        if (now !== old) for (const [part, sent] of pageParts) partSent.set(part, sent);
         setVars(now);
       }
     },
@@ -1874,10 +1927,43 @@ const shows = (el, said) =>
  * earlier markup, when known) stays as it is, with what a script did to it (a toaster's button it
  * showed), unless it shows the notice (`said`); anything else of the same shape is drawn in place,
  * so an element a script holds stays the one it holds, and one of another shape is replaced.
- * @param {Element} old @param {Element} fresh @param {Element | null} before @param {string | null} said @param {boolean} [inside]
+ * With `shut`, only collect the closes from these same drawing decisions, before the draw can
+ * detach an opener. A live region's discarded children aren't matched.
+ * @param {Element} old @param {Element} fresh @param {Element | null} before @param {string | null} said @param {boolean} [inside] @param {HTMLDialogElement[]} [shut]
  */
-function drawLayout(old, fresh, before, said, inside = false) {
-  if (localNameOf(old) !== localNameOf(fresh) || !(inside || matchesOf(old, LIVE) || queryOne(old, LIVE))) return replaceKeeping(old, fresh, null);
+function drawLayout(old, fresh, before, said, inside = false, shut) {
+  const replace = () => shut ? collectCloses(old, fresh, shut) : replaceKeeping(old, fresh, null);
+  if (localNameOf(old) !== localNameOf(fresh) || !(inside || matchesOf(old, LIVE) || queryOne(old, LIVE))) return replace();
+  const live = matchesOf(fresh, LIVE);
+  const [mine, theirs] = [Array.from(childNodesOf(old)), Array.from(childNodesOf(fresh))];
+  if (!live && (mine.length !== theirs.length || mine.some((n, i) => nodeNameOf(n) !== nodeNameOf(/** @type {Node} */ (theirs[i]))))) return replace();
+  if (shut) {
+    if (old instanceof HTMLDialogElement && old.open && served.get(old) && !hasAttr(fresh, "open")) shut.push(old);
+  } else morphLayoutNode(old, fresh);
+  if (live) {
+    if (!shut) {
+      const content = document.createDocumentFragment();
+      content.append(...theirs);
+      serve(content);
+      elementOwn.replaceChildren.call(old, content);
+    }
+    return;
+  }
+  const then = before && childNodesOf(before).length === theirs.length ? childNodesOf(before) : null;
+  mine.forEach((n, i) => {
+    const [there, was] = [/** @type {ChildNode} */ (theirs[i]), then?.[i]];
+    if (!(n instanceof Element)) {
+      if (!shut && was?.nodeValue !== there.nodeValue && n.nodeValue !== there.nodeValue) n.nodeValue = there.nodeValue;
+      return;
+    }
+    const fresh = /** @type {Element} */ (there);
+    const same = was instanceof Element && localNameOf(was) === localNameOf(n) && comparable(outerOf(was)) === markupOf(fresh);
+    if (!same || shows(fresh, said)) drawLayout(n, fresh, was instanceof Element ? was : null, said, true, shut);
+  });
+}
+
+/** @param {Element} old @param {Element} fresh */
+function morphLayoutNode(old, fresh) {
   // Changed in place: a page's part that is or holds it is drawn by the next navigation.
   partSent.delete(/** @type {Element} */ (closestOf(old, "[data-corten-page]")));
   const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => attrOf(old, a)).join("\n");
@@ -1891,12 +1977,14 @@ function drawLayout(old, fresh, before, said, inside = false) {
   for (const a of Array.from(attributesOf(fresh))) if (attrOf(old, a.name) !== a.value && !(toggles && a.name === "open")) elementOwn.setAttribute.call(old, a.name, a.value);
   if (toggles) {
     const [now, want] = [old.open, hasAttr(fresh, "open")];
-    // Left as the server sent it: the server's state now. A dialog drawn closed was closed before
-    // the layout was drawn ({@link closeDrawn}), unless it is found only by its place, as here.
+    // Left as the server sent it: the server's state now. The dialog was closed when the layout's
+    // closes were collected, unless a beforetoggle handler changed the tree in between.
     if ((!served.has(old) || served.get(old) === now) && now !== want) {
       if (!(old instanceof HTMLDialogElement)) old.open = want;
-      else if (want) old.show();
-      else closeDrawn([[old, fresh]]);
+      else if (want) {
+        pendingCloses.delete(old);
+        old.show();
+      } else if (served.get(old)) closeDrawn([old]);
     }
     served.set(old, want);
   }
@@ -1906,28 +1994,6 @@ function drawLayout(old, fresh, before, said, inside = false) {
     scan(old, names);
     for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
   }
-  if (matchesOf(old, LIVE)) {
-    const content = document.createDocumentFragment();
-    content.append(...Array.from(childNodesOf(fresh)));
-    serve(content);
-    elementOwn.replaceChildren.call(old, content);
-    return;
-  }
-  const [mine, theirs] = [Array.from(childNodesOf(old)), Array.from(childNodesOf(fresh))];
-  if (mine.length !== theirs.length || mine.some((n, i) => nodeNameOf(n) !== (theirs[i] ? nodeNameOf(theirs[i]) : undefined))) return replaceKeeping(old, fresh, null);
-  const then = before && childNodesOf(before).length === theirs.length ? childNodesOf(before) : null;
-  mine.forEach((n, i) => {
-    const [there, was] = [theirs[i], then?.[i]];
-    // The same length as `mine`, checked above.
-    if (!there) return;
-    if (!(n instanceof Element)) {
-      if (was?.nodeValue !== there.nodeValue && n.nodeValue !== there.nodeValue) n.nodeValue = there.nodeValue;
-      return;
-    }
-    const fresh = /** @type {Element} */ (there);
-    const same = was instanceof Element && localNameOf(was) === localNameOf(n) && comparable(outerOf(was)) === markupOf(fresh);
-    if (!same || shows(fresh, said)) drawLayout(n, fresh, was instanceof Element ? was : null, said, true);
-  });
 }
 
 /**
@@ -1970,6 +2036,10 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
       return false;
     }
     // Its section stylesheets are the page's, which are on the page already.
+    /** @type {HTMLDialogElement[]} */
+    const shut = [];
+    layout.apply(shut);
+    closeDrawn(shut);
     layout.apply();
     readAgainLater();
     return true;
