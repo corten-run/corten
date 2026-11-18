@@ -1,0 +1,1 @@
+- Run framework CI on Node 26.13.1, refresh Playwright and its browser builds and the OpenAPI validator, and update the release attestation action.
