@@ -230,6 +230,224 @@ try {
     });
     await page.route(base + "/dialog-fixture.css", (route) => route.fulfill({ contentType: "text/css", body: css }));
   }
+  const adopted = await browser.newPage({ viewport: { width: 600, height: 800 } });
+  try {
+    /** @type {string[]} */
+    const warned = [];
+    adopted.on("console", (m) => {
+      if (m.type() === "warning" && m.text().startsWith("corten: adopted")) warned.push(m.text().split(" ")[1] ?? "");
+    });
+    await adopted.addInitScript(() => {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(String.raw`
+        @scope (.outer) { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } }
+        @scope { @media (min-width: 1px) { #adoptedImplicit { display: flex; outline-style: solid } } }
+        @scope (.nest) { @scope { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } } }
+        @scope (.limited) to (.stop) { @media (min-width: 1px) { dialog { display: flex; outline-style: solid } } }
+        @media (min-width: 900px) { #adoptedWide, .adoptedRail { display: flex } }
+        @media (min-width: 1px) { .parentOnly { display: flex } }
+        @scope (.override) to (.stop) { @media (min-width: 900px) { .adoptedRail { display: grid !important } } }
+        :where(#adoptedLoses) { display: grid !important; outline-style: solid }
+        #adoptedShown { display: grid !important }
+        @media (min-width: 1px) {
+          [data-label="R&D"], :is(:scope, #adoptedScopeReference), [data-label=":scope, tag"],
+          :is([data-label=plain], .unused), #adoptedEscape\&, #adoptedComma\, { display: flex; outline-style: solid }
+        }
+      `);
+      document.adoptedStyleSheets.push(sheet);
+      const inactive = new CSSStyleSheet({ media: "not all" });
+      inactive.replaceSync("@media (min-width: 1px) { #adoptedMedia { display: grid !important; outline: solid } }");
+      const disabled = new CSSStyleSheet({ disabled: true });
+      disabled.replaceSync("@media (min-width: 1px) { #adoptedDisabled { display: grid !important; outline: solid } }");
+      document.adoptedStyleSheets.push(inactive, disabled);
+    });
+    await dialogFixture(adopted,
+      '<div class="outer"><dialog id="adoptedExplicit"></dialog></div><dialog id="adoptedOutside"></dialog>' +
+      '<dialog id="adoptedImplicit"></dialog><div class="nest"><dialog id="adoptedNested"></dialog></div>' +
+      '<div class="limited"><dialog id="adoptedInsideLimit"></dialog><div class="stop"><dialog id="adoptedPastLimit"></dialog></div></div>' +
+      '<div class="parentOnly"><dialog id="adoptedChild"></dialog></div>' +
+      '<dialog id="adoptedWide"></dialog><div class="override"><dialog id="adoptedOverride" class="adoptedRail"></dialog>' +
+      '<div class="stop"><dialog id="adoptedPastOverride" class="adoptedRail"></dialog></div></div>' +
+      '<dialog id="adoptedOutsideOverride" class="adoptedRail"></dialog>' +
+      '<dialog id="adoptedMedia"></dialog><dialog id="adoptedDisabled"></dialog><dialog id="adoptedLoses"></dialog><dialog id="adoptedShown"></dialog>' +
+      '<dialog id="adoptedAmp" data-label="R&amp;D"></dialog><dialog id="adoptedScopeReference"></dialog>' +
+      '<dialog id="adoptedScopeText" data-label=":scope, tag"></dialog><dialog id="adoptedPlain" data-label="plain"></dialog>' +
+      '<dialog id="adoptedEscape&amp;"></dialog><dialog id="adoptedComma,"></dialog><dialog id="fixtureEnd"></dialog>',
+      "@media (min-width: 1px) { #adoptedLoses, #adoptedShown, #fixtureEnd { display: flex } }");
+    const done = adopted.waitForEvent("console", { predicate: (m) => m.text().startsWith("corten: fixtureEnd "), timeout: 10000 }).then(() => true, () => false);
+    await adopted.goto(base + "/");
+    const completed = await done;
+    const states = await adopted.locator('dialog[id^="adopted"]').evaluateAll((els) => els.map((el) => {
+      const { display, outlineStyle } = getComputedStyle(el);
+      return { id: el.id, display, styled: outlineStyle === "solid" };
+    }));
+    const styled = states.filter((e) => e.styled).map((e) => e.id);
+    const inactive = ["adoptedMedia", "adoptedDisabled"];
+    const selectors = ["adoptedAmp", "adoptedScopeText", "adoptedPlain", "adoptedEscape&", "adoptedComma,"];
+    const rails = ["adoptedOverride", "adoptedPastOverride", "adoptedOutsideOverride"];
+    const otherCases = [...inactive, "adoptedLoses", ...selectors, ...rails];
+    check("adopted breakpoints use resolvable scopes, without guessing about implicit roots or scope limits",
+      completed && states.every((e) => e.display === (e.id === "adoptedShown" ? "grid" : "none")) &&
+      styled.includes("adoptedExplicit") && styled.includes("adoptedInsideLimit") &&
+      !styled.includes("adoptedOutside") && !styled.includes("adoptedPastLimit") &&
+      warned.filter((id) => !otherCases.includes(id)).join(",") === "adoptedExplicit,adoptedWide",
+      `styled: ${styled}; warnings: ${warned}`);
+    check("eligible adopted sheets warn, but media-inactive and disabled adopted sheets do not",
+      completed && warned.includes("adoptedWide") && inactive.every((id) => !warned.includes(id) && !styled.includes(id)),
+      `styled: ${styled}; warnings: ${warned}`);
+    check("a losing adopted !important cannot suppress a linked warning, but a dialog the browser shows does not warn",
+      completed && styled.includes("adoptedLoses") && warned.includes("adoptedLoses") && !warned.includes("adoptedShown"), warned.join(","));
+    check("an adopted selector list keeps ordinary members with quoted or escaped characters, but skips an actual scope reference",
+      completed && [...selectors, "adoptedScopeReference"].every((id) => styled.includes(id)) &&
+      selectors.every((id) => warned.includes(id)) && !warned.includes("adoptedScopeReference"), `styled: ${styled}; warnings: ${warned}`);
+    await adopted.setViewportSize({ width: 1000, height: 800 });
+    const wide = await adopted.locator(".adoptedRail").evaluateAll((els) => els.map((el) => getComputedStyle(el).display).join(","));
+    check("a skipped adopted to-limited override can leave a warning for a dialog that shows at another width",
+      completed && rails.every((id) => warned.includes(id)) && wide === "grid,none,none", `wide: ${wide}; warnings: ${warned}`);
+  } finally {
+    await adopted.close();
+  }
+
+  const mixed = await browser.newPage();
+  try {
+    /** @type {string[]} */
+    const warned = [];
+    /** @type {string[]} */
+    const errors = [];
+    mixed.on("console", (m) => {
+      if (m.type() === "warning" && m.text().includes("is a closed dialog")) warned.push(m.text().split(" ")[1] ?? "");
+    });
+    mixed.on("pageerror", (e) => errors.push(e.message));
+    await mixed.addInitScript(() => {
+      const active = new CSSStyleSheet();
+      active.replaceSync("@media (min-width: 1px) { #collision { display: block } } @scope (.mixed) { @media (min-width: 1px) { #mixedScoped { display: flex } } }");
+      const later = new CSSStyleSheet();
+      document.adoptedStyleSheets.push(active);
+      const sheets = [active];
+      const computed = window.getComputedStyle;
+      const read = () => {
+        const collision = document.getElementById("collision");
+        const style = collision && computed(collision);
+        return { marker: style?.getPropertyValue("--corten-dev--0"), width: style?.width };
+      };
+      let changed = false;
+      let observedProbe = false;
+      /** @type {string[]} */
+      const transitions = [];
+      for (const type of ["transitionrun", "transitionstart", "transitioncancel", "transitionend"]) {
+        document.addEventListener(type, (e) => {
+          if (e.target instanceof Element && e.target.id === "collision") transitions.push(type);
+        });
+      }
+      Math.random = () => 0;
+      window.getComputedStyle = (el, pseudo) => {
+        if (el.id === "mixedUnreadable") throw new Error("app could not read this element's style");
+        if (el.id === "mixedEnd" && !changed) {
+          changed = true;
+          read(); // Start from the settled width before a diagnostic could change it.
+          document.adoptedStyleSheets.push(later);
+          sheets.push(later);
+        }
+        if (document.adoptedStyleSheets.some((sheet) => !sheets.includes(sheet))) {
+          observedProbe = true;
+          read(); // A native style read while the probe is installed can start a transition.
+          const reentrant = new CSSStyleSheet();
+          document.adoptedStyleSheets.push(reentrant);
+          sheets.push(reentrant);
+          throw new Error("style read reentered with a diagnostic stylesheet installed");
+        }
+        return computed(el, pseudo);
+      };
+      Object.assign(window, { mixedState: () => ({
+        changed, observedProbe, transitions,
+        identities: document.adoptedStyleSheets.length === sheets.length &&
+          sheets.every((sheet, i) => document.adoptedStyleSheets[i] === sheet),
+        ...read(),
+      }) });
+    });
+    await dialogFixture(mixed,
+      '<div id="collision"></div><div class="mixed"><dialog id="mixedScoped"></dialog></div>' +
+      '<dialog id="mixedEnd"></dialog>',
+      "#collision { width: var(--corten-dev--0, 123px); transition: width 10s } " +
+      "@media (min-width: 1px) { #mixedEnd, #mixedDrawn { display: flex } }");
+    /** @param {string} id */
+    const mixedReport = (id) => mixed.waitForEvent("console", {
+      predicate: (m) => m.text().startsWith(`corten: ${id} is a closed dialog`), timeout: 10000,
+    }).then(() => true, () => false);
+    const done = mixedReport("mixedEnd");
+    await mixed.goto(base + "/");
+    const completed = await done;
+    const state = await mixed.evaluate(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return /** @type {any} */ (window).mixedState();
+    });
+    check("adopted diagnostic leaves exact app sheet identities and transition styles alone during reentrant style reads",
+      state.changed && !state.observedProbe && state.identities && !state.marker && state.width === "123px" && !state.transitions.length && !errors.length,
+      JSON.stringify({ ...state, errors }));
+    check("linked and scoped adopted warnings both report after a reentrant style read",
+      completed && warned.includes("mixedScoped"), warned.join(","));
+    const drawn = mixedReport("mixedDrawn");
+    await mixed.evaluate(() => {
+      const group = document.createElement("div");
+      for (const id of ["mixedUnreadable", "mixedDrawn"]) group.append(Object.assign(document.createElement("dialog"), { id }));
+      document.body.append(group);
+    });
+    check("linked warnings still report on a later draw when another element's style read throws", (await drawn) && !errors.length);
+  } finally {
+    await mixed.close();
+  }
+
+  const noBreakpoint = await browser.newPage();
+  try {
+    await noBreakpoint.addInitScript(() => {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(Array.from({ length: 1000 }, (_, i) => `#unused${i} { display: flex }`).join("\n"));
+      document.adoptedStyleSheets.push(sheet);
+      const computed = window.getComputedStyle;
+      let reads = 0;
+      let selectors = 0;
+      let extraSheet = false;
+      const selectorText = Object.getOwnPropertyDescriptor(CSSStyleRule.prototype, "selectorText");
+      Object.defineProperty(CSSStyleRule.prototype, "selectorText", {
+        ...selectorText,
+        get() {
+          if (this.parentStyleSheet === sheet) selectors++;
+          return selectorText?.get?.call(this) ?? "";
+        },
+      });
+      window.getComputedStyle = (el, pseudo) => {
+        if (el.id.startsWith("noBreakpoint")) {
+          reads++;
+          extraSheet ||= document.adoptedStyleSheets.some((entry) => entry !== sheet);
+        }
+        return computed(el, pseudo);
+      };
+      Object.assign(window, { noBreakpointState: () => ({ reads, selectors, extraSheet }) });
+    });
+    await noBreakpoint.route("**/*.css", (route) => route.fulfill({ contentType: "text/css", body: "" }));
+    await dialogFixture(noBreakpoint, Array.from({ length: 20 }, (_, i) => `<dialog id="noBreakpoint${i}"></dialog>`).join(""),
+      "dialog:where(:not([open], [popover])) { display: none !important }");
+    await noBreakpoint.goto(base + "/");
+    const state = await noBreakpoint.waitForFunction(() => {
+      const current = /** @type {any} */ (window).noBreakpointState();
+      return current.reads >= 20 && current;
+    }).then((handle) => handle.jsonValue(), () => null);
+    check("adopted rules with no breakpoint need no selector reads or additional style reads",
+      state?.reads === 20 && state.selectors === 0 && !state.extraSheet, JSON.stringify(state));
+    const later = noBreakpoint.waitForEvent("console", {
+      predicate: (m) => m.text().startsWith("corten: lateBreakpoint is a closed dialog"), timeout: 10000,
+    }).then(() => true, () => false);
+    await noBreakpoint.evaluate(() => {
+      document.adoptedStyleSheets[0]?.insertRule(
+        "@scope (.lateScope) { @media (min-width: 1px) { #lateBreakpoint { display: flex } } }");
+      const host = Object.assign(document.createElement("div"), { className: "lateScope" });
+      host.append(Object.assign(document.createElement("dialog"), { id: "lateBreakpoint" }));
+      document.body.append(host);
+    });
+    check("a later draw checks a nested adopted breakpoint even without linked breakpoints", await later);
+  } finally {
+    await noBreakpoint.close();
+  }
   /**
    * The expected IDs are the warnings from main, also replayed from the Git blob when supplied.
    * Compare full messages in that mode to check the legacy suggestion as well as warn/no warn.
