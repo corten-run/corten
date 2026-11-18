@@ -26,8 +26,8 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
 
 | You write | Corten checks or generates |
 |---|---|
-| `offer_list.css` next to `OfferList` | every class prefixed, `.offer-list__row`; a rule that does not start at one of the file's classes does not compile, so a component cannot style what it does not render. A merge conflict's marker left in the file (`<<<<<<<`, `\|\|\|\|\|\|\|`, `=======` or `>>>>>>>` starting a line, outside comments and strings) does not compile either: a browser would drop the rule it starts |
-| `@scope (.list) to (.slot) { li { padding: 0; } }` | the root and limit prefixed as any selector is, `@scope (.offer-list__list) to (.offer-list__slot)`, so the rules reach the list's elements down to a slot and no further (CSS Cascade 6). At the top of the file, when the root names one of the file's classes, a rule inside starts anywhere (`:scope`, `li`, `> li`), since it matches only under the root; under any other root, `@scope ([data-theme="dark"]) { .list { .. } }`, each rule must start at one of the classes, as at the top, so `:scope` or `li` alone there does not compile. A root nested in a rule, or in an `@scope` whose root names one of the file's classes, is relative to that one's elements and is not checked; one nested in any other `@scope` is checked as at the top. A class in the limit is this component's too, so the limit can stop at its own classes, never at a nested component's root. `@scope` with no root, which scopes to the element around the page's stylesheet link, outside every component, does not compile; nor does a pseudo-element in the root or limit, or a prelude other than `(root)` and `to (limit)`, since the browser would drop the rule |
+| `offer_list.css` next to `OfferList` | every class prefixed, `.offer-list__row`; every top-level selector must require one of the file's classes. A merge conflict's marker left in the file (`<<<<<<<`, `\|\|\|\|\|\|\|`, `=======` or `>>>>>>>` starting a line, outside comments and strings) does not compile either: a browser would drop the rule it starts |
+| `@scope (.list) to (.slot) { li { padding: 0; } }` | the root and limit prefixed as any selector is, `@scope (.offer-list__list) to (.offer-list__slot)`, so the rules reach the list's elements down to a slot and no further. An owned root lets its rules start anywhere (`:scope`, `li`, `> li`) and bounds nested scopes. A root that can start outside the component only filters; the rules under it still need proof of ownership. Classes in the limit are this component's too. A missing root, a pseudo-element outside a forgiving arm, or a prelude other than `(root)` with an optional `to (limit)` does not compile |
 | `class={Row}`, `class={[Row, Selected]}` | static markup, `class="offer-list__row"`; a class the file lacks, another component's class, or one of the file's classes written as text (`class="row"`) does not compile |
 | `.card` in `Card`'s own stylesheet | `class={Card}` in its markup is the class, `card__card`: name the root class after the component |
 | `class={(Row, cond.then_some(Selected), extra)}` | joined when the page renders; `None` adds nothing, an empty list leaves the attribute out |
@@ -38,6 +38,70 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
 | `App::components(&[TOKENS, OfferList, ...])` | one `components.css` in the listed order, linked from `<head>` and precached by the PWA; a component rendered but not listed is an error in a debug build (a router test, `cargo run`, `corten dev`) |
 | `var(--color-accent)` in a component's stylesheet | a startup error unless a stylesheet on the same pages declares it (the token file, a listed component's, a `.css` file in the static directory, or for an area's component one linked from its area), naming the file and the property; `var(--x, fallback)` is not checked |
 | `App::area(\|area\| admin::area(area).components(&[SalesChart, ...]))` | those stylesheets in a file of their own, `sections/admin.css`, linked only from pages at and under `/admin`, and from the patches their handlers answer; a component listed in two places, or tokens in an area, is a startup error, and a page or a patch handler outside the area that renders one is an error in a debug build |
+
+Every comma-separated selector must match only elements the component owns: the element it
+styles, or one that element is inside (by a descendant or child combinator), has one of the
+file's classes. A sibling of such an element shares what it is inside, so `.list li + li`
+compiles, but `+` and `~` from the class's own element lead beside it, so `.list + main` does
+not. A [matches-any function](https://www.w3.org/TR/selectors-4/#matches-pseudo) (`:is()` or
+`:where()`) counts when every matchable selector in it does. The check ignores some invalid arms,
+such as an empty arm, a pseudo-element arm, or one with a leading, trailing or doubled
+combinator. It does not remove those arms from the emitted list. Malformed strings,
+unquoted `url()` tokens and mismatched block delimiters in selectors are compile errors, even
+in a forgiving arm: the compiler does not guess where an arm ends. Remove the arm or correct
+the token. A comment directly between two parts of a selector or an `@scope` prelude cannot
+be kept or removed safely by the scoper. Write the intended selector without it: for a
+compound selector, write `.list.selected`, not `.list/**/.selected`.
+The scoper also refuses a custom property value with a `{ ... }` block at its outer level
+rather than treating it as a nested rule. Removing the braces would turn the block's
+declarations into real ones, so put such a declaration in the app's `static/style.css`. A block
+inside a function or square brackets (`--x: f({ .. })`) is kept as written.
+Both restrictions can be lifted by
+[#1602 Component stylesheets need one CSS Syntax tokenizer shared by the macro and the startup scanner](https://github.com/corten-run/corten/issues/1602).
+Component class names use ASCII without escapes; a nonbreaking space is part of a
+CSS name, not a separator, including in at-rule names, `@scope` roots and limits, and next to
+`to`. A non-ASCII at-rule name does not compile; the diagnostic escapes the name so an
+invisible character is visible.
+`:is(.list, .grid) p`, `:is(.list,) p` and `.list:has(img) p` compile; `:is(.list, main) p`,
+`:not(.list) p` and `main:has(.list) p` do not. Classes inside other functions are still
+prefixed, but only filter. A nested selector is checked where its `&` stands, so
+`.list { :not(&) { .. } }` and `.list { & + main { .. } }` do not compile, while
+`.list { p { .. } }` and `.list { > :not(&) { .. } }` do. An unescaped `&` in an invalid
+arm can still turn off implicit nesting: write `& :is(main, [foo=&])` (or remove the invalid
+arm) if you mean descendants of the parent. The same test decides whether an `@scope` root is
+owned, at the top of the file or nested in a rule. A scope without an owned root can still
+filter independently anchored style rules, as in
+`@scope (body) { @scope (:scope > main) { .list p { .. } } }`. An inner scope under an unowned
+outer scope proves ownership for its body only if each root selector requires a positive class
+on the root element or an ancestor. Neither `&` nor implicit nesting proves ownership there:
+browsers can resolve them through the outer scope rather than the intervening style rule.
+
+A selector that compiled before this check may need its anchor written out:
+
+| Before | After |
+|---|---|
+| `main:has(.list) p`, meaning the list's paragraphs | `.list p`, or `main .list p` to keep the condition |
+| `:not(.list) p` or `:is(.list, main) p` | `.list p` for the component's paragraphs, or the rule in the app's `static/style.css` when it styles the page |
+| `.pick:checked + span` | `:where(.cuts) .pick:checked + span`: `:where()` adds no specificity |
+| `.list { :not(&) { .. } }` | the rule in the app's `static/style.css`, or `@scope (.list) to (.slot) { .. }` for the list's elements down to a slot |
+| `@scope (body) { .list { @scope (&) { p { .. } } } }` | hoist the intended root: `@scope (body) { @scope (.list) { p { .. } } }` |
+| `@scope (body) { .list { @scope (main) { p { .. } } } }` | to keep the intended descendant-`main` condition, hoist `@scope (.list main)` inside the outer scope. If the list is itself a `main`, use `@scope (main.list)` instead |
+| `.list::before, .list > p { & + p { .. } }` | change the inner selector to `:where(.list) & + p`. The browser ignores the pseudo-element arm when resolving `&`, but the check does not infer that; the anchor adds no specificity |
+| `:is(.list, :not(::before)) p` or a similar forgiving list in a scope root or limit | remove the invalid `:not(::before)` arm; the browser already ignores it, but the check does not recognize it as invalid |
+| `:nth-child(2 of .list)` | `:nth-child(2 of .list):where(.list)`: write the required class on the subject, without adding specificity |
+| `main:has(> :is(.list > p))` | `main:where(.list):has(> :is(.list > p))`: the direct child relationship implies that `main` has the class, but the check does not infer it |
+| `:scope > *` in `@scope (main) to (:scope > :not(.list))` | `:scope > :where(.list)`: the limit already excludes the other children, but the check does not infer ownership from limits |
+
+When a rule really is page-wide, move it to `static/style.css`. If you flatten a nested style
+rule, substitute the enclosing selector for `&`, wrapping a selector list in `:is(...)`.
+In a style rule directly in an `@scope`, `&` refers to the scope root; in a further nested
+style rule it refers to the parent style selector. Give the markup a global marker
+rather than hard-coding the generated class prefix. For example, `.list { :not(&) { .. } }`
+becomes `:not([data-offer-list]) { .. }`, with `data-offer-list` alongside `class={List}`.
+For `.list, .grid { & + p { .. } }`, use `:is([data-list], [data-grid]) + p` with the two
+global markers. Without `:is(...)`, the comma would make the first marker a separate selector.
+For an app with a copied kit stepper, run `corten ui add --merge stepper` with the updated CLI
+to upgrade the copy while retaining nonconflicting local edits.
 
 Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks the
 class, so adding a variant without a rule does not compile. A component library is a crate that
@@ -138,14 +202,13 @@ renamed there too. Nested block at-rules inside them are copied raw (font featur
 page margin `@top-left`, and others), not independently selector-checked. The statement parser
 recognizes lowercase `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded,
 since the generated stylesheet is UTF-8). It refuses unknown statements even inside raw
-bodies unless it recognizes a prefix, as in `@layer_other` (copied).
+bodies.
 
 `@import` does not compile: imported CSS is not checked or owned by the component. Put it in
 `static/style.css`. `@custom-media` does not compile either: the token file defines breakpoints,
 and the component names them with `@media (--md)`. Unrecognized rules such as `@namespace`
-and `@document` are refused outside raw bodies; use the global stylesheet for them. Some
-unknown block at-rules with a known prefix, such as `@supports_other`, are copied with their
-bodies processed as that prefix's rule.
+and `@document` are refused outside raw bodies; use the global stylesheet for them. At-rule
+names must match whole names: `@supports_other` and `@layer_other` are not supported.
 An `@scope` without a root is refused because its implicit root is outside the component.
 Escaped at-rule and class names are not supported.
 
@@ -176,9 +239,9 @@ an option: at its top level, in a `var()`, `env()`, `attr()` or `inherit()` fall
 but its `var()` lookup still gets the property prefix. In
 `if(style(--above: 1): --above; else: flip-block)`, only the branch value names an option.
 Function calls (`--above()`), anchor names, strings, URLs and other functions' arguments are
-not position references. Comments and whitespace are normalized as in other declarations. This
-can change token boundaries in unprefixed options: `--externa\6c  flip-block` loses the extra
-space, so the browser reads one name (`--externalflip-block`) instead of a name and a tactic.
+not position references. Comments and whitespace are normalized as in other declarations.
+In `--externa\6c  flip-block`, the first space terminates the hex escape and the second remains
+a separator, so the browser still reads a name and a tactic.
 A name that reaches `position-try` through a
 custom property's value (`--choice: --above`) is not rewritten, since the macro cannot know where
 that value goes; name the option in the declaration itself. Other raw named rules remain global
