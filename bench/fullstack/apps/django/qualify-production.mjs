@@ -7,6 +7,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire, findPackageJSON } from "node:module";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { loadChromium } from "../../../marketplace/check.mjs";
 import { qualify } from "../../../marketplace/qualify.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
@@ -36,6 +37,7 @@ const core = lockedPackage("playwright-core", () => {
 });
 assert.ok(wrapper.version === playwright.version && playwright.version === core.version,
   "the locked Playwright packages must agree on the browser image version");
+await loadChromium();
 const checkerImage = `mcr.microsoft.com/playwright:v${core.version}-noble`;
 const output = resolve(process.argv[2] ?? resolve(here, "work/production"));
 const image = process.argv[3] ?? "cb-marketplace-django-granian:local";

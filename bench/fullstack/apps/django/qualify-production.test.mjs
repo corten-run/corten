@@ -1,7 +1,7 @@
 // Execute the actual driver with injected Docker results, not a cleanup-helper copy.
 // node --experimental-vm-modules --test bench/fullstack/apps/django/qualify-production.test.mjs
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -9,6 +9,8 @@ import test from "node:test";
 import vm from "node:vm";
 
 const driver = new URL("./qualify-production.mjs", import.meta.url);
+const sourceRoot = new URL("../../../../", import.meta.url);
+const checkerPath = "bench/marketplace/check.mjs";
 let sequence = 0;
 async function exercise(options) {
   const repo = mkdtempSync(join(tmpdir(), "corten-django-driver-"));
@@ -17,12 +19,13 @@ async function exercise(options) {
 }
 
 async function run(repo, { failRun = 1, failRemove = false, failNetwork = false, foreign = false, failCreate = false,
-  installedVersion = "1.64.1", lockedVersion = installedVersion, missing, stale, shadow } = {}) {
+  installedVersion = "1.64.1", lockedVersion = installedVersion, missing, missingEntry, stale, shadow } = {}) {
   const output = join(repo, "results");
   const driverPath = join(repo, "bench/fullstack/apps/django/qualify-production.mjs");
   const packages = {
     "@playwright/test": { exports: { ".": "./index.mjs" }, entry: "index.mjs", source: 'export * from "playwright/test";' },
-    playwright: { exports: { "./test": "./test.mjs" }, entry: "test.mjs", source: 'import "./index.js";' },
+    playwright: { exports: { "./test": "./test.mjs" }, entry: "test.mjs",
+      source: 'import "./index.js"; export const chromium = { launch() { throw new Error("preflight must not launch Chromium"); } };' },
     "playwright-core": { exports: { ".": "./index.js" }, entry: "index.js", source: "" },
   };
   const install = (root, name, version) => {
@@ -30,7 +33,7 @@ async function run(repo, { failRun = 1, failRemove = false, failNetwork = false,
     const path = join(root, "node_modules", name);
     mkdirSync(path, { recursive: true });
     writeFileSync(join(path, "package.json"), JSON.stringify({ name, version, exports: { ...exports, "./package.json": "./package.json" } }));
-    writeFileSync(join(path, entry), source);
+    if (name !== missingEntry) writeFileSync(join(path, entry), source);
     if (name === "playwright") writeFileSync(join(path, "index.js"), 'module.exports = require("playwright-core");');
   };
   writeFileSync(join(repo, "package-lock.json"), JSON.stringify({ packages: Object.fromEntries(
@@ -39,12 +42,6 @@ async function run(repo, { failRun = 1, failRemove = false, failNetwork = false,
     if (name !== missing) install(repo, name, name === stale ? "1.65.1" : installedVersion);
   }
   if (shadow) install(join(repo, "node_modules/@playwright/test"), "playwright", "1.65.1");
-  if (missing === "playwright") {
-    const checker = join(repo, "bench/marketplace/check.mjs");
-    mkdirSync(dirname(checker), { recursive: true });
-    writeFileSync(checker, 'import "@playwright/test";');
-    await assert.rejects(import(pathToFileURL(checker)), { code: "ERR_MODULE_NOT_FOUND", message: /Cannot find package 'playwright'/ });
-  }
   const calls = [], containers = new Map(), networks = new Map();
   let runs = 0;
   const reply = (stdout = "", status = 0, stderr = "") => ({ stdout, stderr, status });
@@ -82,7 +79,19 @@ async function run(repo, { failRun = 1, failRemove = false, failNetwork = false,
   const url = pathToFileURL(driverPath).href;
   const module = new vm.SourceTextModule(readFileSync(driver, "utf8"), { context, identifier: url, initializeImportMeta(meta) { meta.url = url; } });
   await module.link(async (specifier) => {
+    // Load the real checker in the fixture so Node resolves its Playwright imports there.
+    if (specifier === "../../../marketplace/check.mjs") {
+      for (const file of [checkerPath, "bench/marketplace/contract.mjs", "bench/marketplace/records.mjs",
+        "bench/marketplace/labels.json", "bench/marketplace/reference.mjs", "bench/catalog/check.mjs",
+        "bench/catalog/contract.mjs", "bench/catalog/group.mjs", "bench/catalog/record-attempt.mjs",
+        "bench/fullstack/inventory.mjs", "bench/fullstack/passes.mjs", "bench/workloads/registry.mjs", "scripts/steady.mjs"]) {
+        const target = join(repo, file);
+        mkdirSync(dirname(target), { recursive: true });
+        copyFileSync(new URL(file, sourceRoot), target);
+      }
+    }
     const exports = specifier === "node:child_process" ? { spawnSync } :
+      specifier === "../../../marketplace/check.mjs" ? await import(pathToFileURL(join(repo, checkerPath))) :
       specifier.endsWith("/qualify.mjs") ? { qualify: async () => ({ eligible: true }) } : await import(specifier);
     return new vm.SyntheticModule(Object.keys(exports), function () { for (const [key, value] of Object.entries(exports)) this.setExport(key, value); }, { context });
   });
@@ -171,3 +180,13 @@ for (const [options, name] of [
   assert.equal(r.madeOutput, false, "preflight created the output directory");
   assert.match(String(r.error), new RegExp(`\\b${name}\\b`));
 });
+
+for (const [name, entry] of [["@playwright/test", "index.mjs"], ["playwright", "test.mjs"]]) {
+  test(`missing ESM entry ${name}/${entry} is rejected before output or Docker`, async () => {
+    const r = await exercise({ failRun: 0, missingEntry: name });
+    assert.equal(r.calls.length, 0, "preflight reached Docker");
+    assert.equal(r.madeOutput, false, "preflight created the output directory");
+    assert.equal(r.error?.code, "ERR_MODULE_NOT_FOUND");
+    assert.ok(r.error.message.replaceAll("\\", "/").includes(`${name}/${entry}`), r.error.message);
+  });
+}

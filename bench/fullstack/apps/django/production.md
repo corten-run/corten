@@ -63,7 +63,8 @@ deployment/process/thread inventory, complete browser results and server logs,
 then removes its containers and network. Run the commands from the repository
 root: before creating results or starting Docker, the helper checks the checker's
 resolved `@playwright/test`, `playwright`, and `playwright-core` versions against the
-root lockfile and uses the matching Noble image. This is capability and
+root lockfile and loads the checker's Playwright entry without launching a browser.
+It then uses the matching Noble image. This is capability and
 functional-parity evidence, not load/performance evidence. A missing feature
 leaves `eligible: false`; failures are retained and the helper exits nonzero.
 The baseline image must never be relabeled as the production image, or vice versa.
