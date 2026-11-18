@@ -9126,10 +9126,11 @@ async function run(browser) {
       const submit = /** @type {HTMLButtonElement} */ (button);
       const field = document.querySelector("input[name=above]");
       const spacer = document.createElement("div");
-      spacer.style.height = "200vh";
-      field?.closest("form")?.before(spacer);
+      spacer.id = "smoke-refusal-spacer";
+      spacer.append(...Array.from({ length: 200 }, () => document.createElement("br")));
+      document.querySelector("main")?.prepend(spacer);
       submit.focus({ preventScroll: true });
-      scrollTo(0, 0);
+      scrollTo({ top: 0, behavior: "instant" });
       const below = !!field && field.getBoundingClientRect().top >= innerHeight;
       submit.click();
       return below;
@@ -9138,12 +9139,14 @@ async function run(browser) {
     const refused = await page.evaluate(() => {
       const field = /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"));
       const rect = field?.getBoundingClientRect();
-      return {
+      const result = {
         message: document.getElementById("alert-form-above-error")?.textContent,
         focused: document.activeElement === field,
         value: field?.value,
         inView: !!rect && rect.bottom > 0 && rect.top < innerHeight && scrollY > 0,
       };
+      document.getElementById("smoke-refusal-spacer")?.remove();
+      return result;
     });
     check(
       "a refused patch field below the fold comes back marked, with its message and focus in view",
