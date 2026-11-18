@@ -1,0 +1,1 @@
+- Keep the supervised benchmark audit fixture alive until a failed startup releases its locks.
