@@ -5,7 +5,7 @@
 //! messages only") before any feed loads. A patch published before a load began was committed
 //! before it, so the load's rows include it; a patch that arrives while a load runs is buffered and
 //! applied after it, and `Feed::apply` drops the ones the load already had. A gap (a lost message,
-//! a consumer restart) reloads the feed and tells its live clients to resync.
+//! a consumer restart) or a reload marker reloads the feed and tells its live clients to resync.
 //!
 //! A load also reads the feed's last `REPLAY` patches from the outbox into the replay log, so an
 //! instance that loads a feed late (it just restarted, and its peer died) still resumes the cursors
@@ -31,11 +31,16 @@ use futures_util::StreamExt;
 use sqlx::PgPool;
 use tokio::sync::watch;
 
-use crate::{store, valid_key, Error, Options, Source};
+use crate::{store, valid_key, Error, Options, Source, RELOAD_HEADER};
 
 struct Message {
     generation: String,
-    json: String,
+    update: Update,
+}
+
+enum Update {
+    Patch(String),
+    Reload(u64),
 }
 
 enum Slot<T: corten::feed::Row> {
@@ -242,12 +247,16 @@ impl<S: Source> Hub<S> {
         }
     }
 
-    /// Applies one patch. False means the feed needs a reload (a gap or another generation).
+    /// Applies a patch or checks a reload marker. False means the feed needs a reload.
     fn apply(&self, feed: &Feed<S::Row>, key: &str, message: &Message) -> bool {
         if message.generation != feed.generation() {
             return false;
         }
-        match feed.apply(&message.json) {
+        let json = match &message.update {
+            Update::Patch(json) => json,
+            Update::Reload(seq) => return feed.seq() >= *seq,
+        };
+        match feed.apply(json) {
             Ok(_) => true,
             Err(ApplyError::Gap { have, got }) => {
                 tracing::warn!(
@@ -438,8 +447,18 @@ pub(crate) async fn start<S: Source>(hub: Arc<Hub<S>>, js: jetstream::Context) -
                             .and_then(|h| h.get("Feed-Generation"))
                             .map(|v| v.as_str().to_string())
                             .unwrap_or_default();
-                        let Ok(json) = String::from_utf8(msg.payload.to_vec()) else { continue };
-                        hub.on_message(key, Message { generation, json });
+                        let update =
+                            match msg.headers.as_ref().filter(|_| msg.payload.is_empty()).and_then(|h| h.get(RELOAD_HEADER)) {
+                                Some(header) => {
+                                    let Ok(seq) = header.as_str().parse() else { continue };
+                                    Update::Reload(seq)
+                                }
+                                _ => {
+                                    let Ok(json) = String::from_utf8(msg.payload.to_vec()) else { continue };
+                                    Update::Patch(json)
+                                }
+                            };
+                        hub.on_message(key, Message { generation, update });
                     }
                     Err(e) => {
                         let error: &(dyn std::error::Error + 'static) = &e;
@@ -502,14 +521,14 @@ pub(crate) async fn unload_idle<S: Source>(hub: Arc<Hub<S>>, after: Duration) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use corten::feed::{patch_json, Change, Feed, Row};
     use serde::{Deserialize, Serialize};
     use sqlx::{postgres::PgPoolOptions, PgConnection};
 
-    use super::{Hub, Message};
-    use crate::{Error, Options, Source};
+    use super::{Hub, Message, Update};
+    use crate::{tests::Capture, Error, Options, Source};
 
     #[derive(Clone, Debug, Serialize, Deserialize, Row)]
     struct Item {
@@ -529,34 +548,6 @@ mod tests {
         }
     }
 
-    /// Each event as "LEVEL target field=value ..", in the order they came.
-    struct Capture(Arc<Mutex<Vec<String>>>);
-
-    impl tracing::Subscriber for Capture {
-        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-            true
-        }
-        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-            tracing::span::Id::from_u64(1)
-        }
-        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-        fn event(&self, event: &tracing::Event<'_>) {
-            struct Fields(String);
-            impl tracing::field::Visit for Fields {
-                fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                    use std::fmt::Write;
-                    let _ = write!(self.0, " {}={value:?}", field.name());
-                }
-            }
-            let mut fields = Fields(format!("{} {}", event.metadata().level(), event.metadata().target()));
-            event.record(&mut fields);
-            self.0.lock().unwrap().push(fields.0);
-        }
-        fn enter(&self, _: &tracing::span::Id) {}
-        fn exit(&self, _: &tracing::span::Id) {}
-    }
-
     #[tokio::test]
     async fn a_gap_and_a_dropped_patch_are_warnings_the_apps_subscriber_sees_with_the_feed() {
         // Never connected: applying a patch reads nothing from Postgres.
@@ -564,15 +555,18 @@ mod tests {
         let hub = Hub::new(pool, NoRows, Arc::new(Options { instance: "a1".into(), ..Options::default() }));
         let feed = Feed::follow("g1", 10, vec![Item { id: "i".into(), n: 0 }]);
         let item = Item { id: "i".into(), n: 1 };
-        let skips = Message { generation: "g1".into(), json: patch_json(12, &[Change::Upsert { id: "i", value: &item }]) };
-        let broken = Message { generation: "g1".into(), json: "{\"seq\":11}".into() };
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let (gap, dropped) = tracing::subscriber::with_default(Capture(seen.clone()), || {
-            (hub.apply(&feed, "k1", &skips), hub.apply(&feed, "k1", &broken))
-        });
+        let skips = Message {
+            generation: "g1".into(),
+            update: Update::Patch(patch_json(12, &[Change::Upsert { id: "i", value: &item }])),
+        };
+        // Older subscribers ignore the header of an empty reload marker and take this path.
+        let broken = Message { generation: "g1".into(), update: Update::Patch(String::new()) };
+        let seen = Capture::default();
+        let (gap, dropped) =
+            tracing::subscriber::with_default(seen.clone(), || (hub.apply(&feed, "k1", &skips), hub.apply(&feed, "k1", &broken)));
         assert!(!gap, "a gap reloads the feed");
         assert!(dropped, "an invalid patch is dropped and the feed goes on");
-        let seen = seen.lock().unwrap();
+        let seen = seen.0.lock().unwrap();
         assert_eq!(seen.len(), 2, "{seen:?}");
         assert!(seen[0].starts_with("WARN corten::feed"), "{}", seen[0]);
         for field in ["instance=a1", "feed=k1", "have=10", "got=12"] {
@@ -580,5 +574,15 @@ mod tests {
         }
         assert!(seen[1].starts_with("WARN corten::feed"), "{}", seen[1]);
         assert!(seen[1].contains("feed=k1") && seen[1].contains("patch dropped"), "{}", seen[1]);
+    }
+
+    #[tokio::test]
+    async fn a_reload_marker_only_reloads_if_the_feed_does_not_have_its_update() {
+        let pool = PgPoolOptions::new().connect_lazy("postgres://localhost/unused").unwrap();
+        let hub = Hub::new(pool, NoRows, Arc::new(Options::default()));
+        let feed = Feed::<Item>::follow("g1", 10, []);
+        assert!(hub.apply(&feed, "k1", &Message { generation: "g1".into(), update: Update::Reload(10) }));
+        assert!(!hub.apply(&feed, "k1", &Message { generation: "g1".into(), update: Update::Reload(11) }));
+        assert!(!hub.apply(&feed, "k1", &Message { generation: "g2".into(), update: Update::Reload(1) }));
     }
 }

@@ -504,16 +504,89 @@ inbox prefix; this does not change the key or subject prefix limits.
 querying Postgres, and the snapshot and live routes answer 404.
 
 The relay logs and drops pending rows with invalid keys from an older version or external
-SQL, then publishes the remaining rows in order. Look on `corten::feed` for the outbox row
-ID and key. The relay uses the existing `published_at` marker to take the skipped row out
-of the queue; it did not deliver that patch. Ordinary pruning can remove it. There is no
-schema migration. An older instance holding the relay lease can still stall on a bad row
-until a new relay takes over. Publish and acknowledgement failures, including message size
-limits, still retry ([Choice 63](../design.md#choice-cluster-feed-subjects)).
+SQL, then keeps publishing the remaining rows. Look on `corten::feed`
+for the outbox row ID and key. The relay uses the existing `published_at` marker to take
+the skipped row out of the queue; it did not deliver that patch. Ordinary pruning can remove
+it. An older instance holding the relay lease can still stall on a bad row
+until a new relay takes over ([Choice 63](../design.md#choice-cluster-feed-subjects)).
 
 To replace an invalid key, write a new feed with a valid key using the app's current
 committed data, and point clients and future writes at it. Do not rename queued rows or
 try to replay the dropped patches.
+
+Size the JetStream stream's `MaxMsgSize` and every eligible NATS broker's
+[`max_payload`](https://docs.nats.io/reference/config/) for the largest serialized patch,
+including NATS headers. Leave `MaxMsgSize` unlimited or set it to at least that size; keep
+the same broker limit on all servers the relay can connect to. Both limits must at least
+fit a reload marker for the longest feed key you use: the key's length in bytes plus up to
+135 bytes of header overhead (1,159 bytes for a 1,024-byte key). The overhead is 65 fixed
+bytes plus two copies each of the generation and sequence. Look on `corten::feed` for these cases:
+
+- JetStream's per-publish `10054` acknowledgement logs `published reload marker: JetStream
+  size refusal (10054); patch kept for inspection` at error level after a new marker is
+  acknowledged and the row marked done. The log includes the
+  configured stream and its current `MaxMsgSize` when the stream-info lookup succeeds.
+  Raise the stream's `MaxMsgSize` or keep future patches smaller.
+- A refusal before sending, from the client's cached `max_payload`, logs `published reload
+  marker: refused by the connection's cached limit; patch kept for inspection` at error
+  level after a new marker is acknowledged and the row marked done. The error includes
+  the cached limit and the checked size including headers. Raise
+  `max_payload` on every eligible broker if needed, or keep future patches smaller. After
+  changing the broker limit, refresh the connections of all eligible relay instances as
+  needed; use `relay active` to identify the lease holder and the NATS client's `max_payload()`
+  on that instance to verify the advertised limit it is using. Corten never forces a reconnect.
+- A broker can close the connection if it receives a publish over its actual `max_payload`.
+  Its protocol error names no row, so the relay cannot use it to drop a patch on a shared
+  connection. An unacknowledged publish follows the ordinary retry path (`relay standing by`
+  on failure). A disconnect can interrupt other feeds and other users of the shared client.
+  The relay sends a batch before waiting for its acknowledgements, so JetStream can store
+  later patches from the same feed ahead of a failed one when the broker disconnects mid-batch
+  ([#1633 A relay batch interrupted by a broker disconnect can store a feed's later patches before the one that failed](https://github.com/corten-run/corten/issues/1633)).
+  If the reconnected client refuses the row locally, the relay tries a marker as above.
+
+The patch size-refusal logs include the outbox row ID, feed key, and patch body size (not
+the headers). Inspect the row by its logged `id` before ordinary pruning removes it, without
+printing the body:
+
+```sql
+SELECT id, feed, generation, seq, octet_length(body), created_at, published_at
+FROM corten_outbox WHERE id = $1;
+```
+
+`published_at` does not distinguish an acknowledged patch from an acknowledged marker. Within
+[JetStream's configured deduplication window](https://docs.nats.io/learn/jetstream/publishing#avoiding-duplicate-writes),
+a duplicate marker acknowledgement also retires the row, but logs
+`duplicate reload marker acknowledgement`: a notification with that ID was
+already accepted, and it could be the patch or the marker. After the window, both can be
+stored; followers ignore an update they already have in that feed generation. Install the
+app's `tracing` subscriber before `Cluster::start` to capture these diagnostics during startup.
+The original patch stays in Postgres, including for replay.
+
+The marker is an empty JetStream message with a `Corten-Reload` header carrying the patch's
+sequence, on the same subject with the same generation and deduplication ID as the patch.
+This lets followers reload committed state from Postgres even if it was the feed's last
+patch. A follower still loading checks the marker against its snapshot and reloads if needed;
+a ready follower behind the marker reloads and sends its live clients `sync`. A follower
+first loaded after the marker reads committed state from Postgres. If a marker cannot be
+sent or acknowledged, its row stays pending for retry while the relay retires the other
+acknowledged rows. Each failed row takes one batch slot; a failed marker can stall the
+queue when no row in a full batch (256 rows) can be retired. The marker sends and
+acknowledgements share a deadline of half the lease from its last renewal, not half a lease
+per marker. Consistently late acknowledgements can stall a full batch even when the markers
+fit. When that deadline expires, look for `reload marker publish failed` with
+`deadline has elapsed`. Check broker and database latency; if the relay needs more time,
+increase `Options::lease`.
+
+For size refusals, check `reload marker refused for size` for the feed key, marker size
+including headers, and the applicable limit (the stream limit is reported when the lookup
+succeeds). Raise the limit if it cannot fit the marker.
+An affected loaded feed can otherwise stay stale until a later patch reveals the gap
+or the feed reloads from Postgres.
+
+Older followers ignore a same-generation marker as an invalid empty patch; they can stay
+stale until a later patch reveals the gap. Upgrade or restart instances still serving stale
+copies so they load from Postgres. Reconnecting the relay or reloading the browser alone does
+not refresh those copies ([Choice 63](../design.md#choice-cluster-feed-subjects)).
 
 In the failover
 benchmark (200 clients, 50 writes a second, each instance killed and restarted under load),

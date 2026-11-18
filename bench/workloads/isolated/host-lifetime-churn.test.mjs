@@ -171,16 +171,17 @@ for (const failure of ["helper-error", "invalid-json"]) test(`failed executable 
   f.pending.close(); assert.equal(f.held.size, 0);
 });
 
-async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs = 0) {
+async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs = 0, catalog = false) {
   const original = Object.fromEntries(["readFileSync", "writeFileSync", "mkdirSync", "rmdirSync", "lstatSync", "statSync", "readlinkSync", "readdirSync", "fsyncSync", "openSync", "closeSync", "writeSync"]
     .map((key) => [key, fs[key]]));
   const exec = childProcess.execFileSync;
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
   const temporary = fs.mkdtempSync(join(tmpdir(), "host-snapshot-churn-")), directory = join(temporary, "host");
   const f = { members: [], children: [], clock: 10000, wallOffset: 0, reads: [], cpu: 10, override() {}, scope: null };
-  const binding = { request: { group: browser ? "fullstack-browser" : "client-heavy", round: "churn-control", commit: "a".repeat(40) } };
+  const binding = { request: { group: browser ? "fullstack-browser" : catalog ? "catalog-page" : "client-heavy", round: "churn-control", commit: "a".repeat(40) } };
   const executable = join(temporary, "executable"), nextExecutable = join(temporary, "next-executable"), held = new Set();
-  if (browser) { fs.writeFileSync(executable, "original executable"); fs.writeFileSync(nextExecutable, "next executable"); }
+  const deferred = browser || catalog, executableFor = (path) => f.nextExecutable || path === `/proc/${f.nextPid}/exe` ? nextExecutable : executable;
+  if (deferred) { fs.writeFileSync(executable, "original executable"); fs.writeFileSync(nextExecutable, "next executable"); }
   const invocation = { executable: "node", argv: ["control"] }, campaign = "r21-0000000000000001", pid = nativePids[0] ?? 4242;
   const result = { terminal: true, code: 0, signal: null, cancelled: false, forced: false, success: true, error: null };
   let observer, finished = false;
@@ -188,7 +189,7 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
   t.after(async () => {
     try {
       f.releaseWrite?.();
-      if (browser && observer && !finished) {
+      if (deferred && observer && !finished) {
         f.failSampleWrite = false; f.override = () => {}; f.members = []; f.children = [];
         try { await observer.finish(result); } catch { /* Failed storage must remain unsealed. */ }
       }
@@ -206,9 +207,10 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
   }
   t.mock.method(globalThis, "setInterval", (callback) => { f.tick = callback; return 1; });
   t.mock.method(globalThis, "clearInterval", () => {});
-  if (browser) {
+  if (deferred) {
     t.mock.method(childProcess, "execFileSync", (file, argv, options) => {
       if (argv[1] !== "--hash-open-executables") {
+        assert.equal(browser, true, "catalog proof does not query the Docker daemon");
         assert.deepEqual(argv, ["--host", "unix:///var/run/docker.sock", "container", "ls", "-aq", "--no-trunc"]);
         return "";
       }
@@ -219,7 +221,8 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
     });
     t.mock.method(fs, "openSync", (path, ...args) => {
       if (!/^\/proc\/\d+\/exe$/.test(String(path))) return original.openSync(path, ...args);
-      const fd = original.openSync(f.nextExecutable ? nextExecutable : executable, ...args); held.add(fd); return fd;
+      f.override(String(path), "open");
+      const fd = original.openSync(executableFor(path), ...args); held.add(fd); return fd;
     });
     t.mock.method(fs, "closeSync", (fd) => { held.delete(fd); return original.closeSync(fd); });
     f.held = held;
@@ -269,12 +272,12 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
     ? { isSymbolicLink: () => false } : original.lstatSync(path, ...args));
   t.mock.method(fs, "statSync", (path, ...args) => {
     if (!/^\/proc\/\d+\/exe$/.test(String(path)) || nativePids.includes(Number(String(path).split("/")[2]))) return original.statSync(path, ...args);
-    return browser ? original.statSync(f.nextExecutable ? nextExecutable : executable, ...args)
+    return deferred ? original.statSync(executableFor(path), ...args)
       : { dev: 1, ino: 1, size: 10, mtimeMs: 1, ctimeMs: 1 };
   });
   t.mock.method(fs, "readlinkSync", (path, ...args) => {
     if (/^\/proc\/\d+\/exe$/.test(String(path))) {
-      const value = f.override(String(path));
+      const value = f.override(String(path), "link");
       return value ?? (nativePids.includes(Number(String(path).split("/")[2])) ? original.readlinkSync(path, ...args) : "/bin/node");
     }
     return original.readlinkSync(path, ...args);
@@ -297,7 +300,7 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
       const member = Number(proc[1]);
       if (nativePids.includes(member) && proc[2] !== "cgroup") return original.readFileSync(path, ...args);
       if (proc[2] === "stat") return stat(member);
-      if (proc[2] === "exe") return Buffer.from("executable");
+      if (proc[2] === "exe") return f.readExecutable?.(text) ?? Buffer.from("executable");
       if (proc[2] === "cgroup") return `0::${f.scope}\n`;
       return Buffer.from("node\0");
     }
@@ -321,6 +324,47 @@ async function fixture(t, nativePids = [], browser = false, onFault, attachGapMs
   };
   return f;
 }
+
+test("catalog pins a newly seen executable inside the remaining continuity budget and seals its exact bytes at finish", async (t) => {
+  let faults = 0, reads = 0;
+  const f = await fixture(t, [], false, () => faults++, 0, true);
+  f.clock += 700;
+  f.members.push(5000); f.nextPid = 5000;
+  f.readExecutable = (path) => {
+    if (path === "/proc/5000/exe") { reads++; f.clock += 450; }
+  };
+  await f.tick();
+  assert.equal(faults, 0, "first-sighting executable bytes must not consume the sampling deadline");
+  assert.equal(reads, 0);
+  assert.equal(f.held.size, 2);
+  assert.throws(f.proof, { code: "ENOENT" });
+  assert.equal(f.hasTerminal(), false);
+  const sample = f.samples().at(-1);
+  assert.equal(sample.at - f.samples().at(-2).at, 700);
+  assert.equal(sample.groups[0].files["cgroup.procs"], "4242\n5000\n");
+  const replay = await f.finish();
+  assert.equal(replay.status, "verified"); assert.equal(f.terminal.empty, true);
+  assert.ok(f.removed); assert.equal(f.held.size, 0);
+  assert.deepEqual(replay.identities.map((p) => [p.pid, p.startTicks, p.executableSha256]), [
+    [4242, "42420", createHash("sha256").update("original executable").digest("hex")],
+    [5000, "50000", createHash("sha256").update("next executable").digest("hex")],
+  ]);
+});
+
+test("a listed catalog PID with an unreadable executable still blocks after an empty terminal", async (t) => {
+  let faults = 0, attempts = 0;
+  const f = await fixture(t, [], false, () => faults++, 0, true);
+  f.clock += 995; f.members.push(5000);
+  f.override = (path, operation) => {
+    if (path === "/proc/5000/exe" && ["open", "link"].includes(operation)) { attempts++; throw missing(); }
+  };
+  await f.tick();
+  assert.equal(faults, 1); assert.ok(attempts > 1); assert.equal(f.samples().length, 2);
+  assert.equal((await f.finish()).status, "blocked"); assert.equal(f.terminal.empty, true);
+  assert.equal(f.terminal.observerFailures.first.operation, "executable-capture");
+  assert.equal(f.terminal.observerFailures.first.code, "ENOENT");
+  assert.equal(f.held.size, 0);
+});
 
 test("a rejected pre-admission sample keeps prior accepted executable proof and releases only new captures", async (t) => {
   const f = await fixture(t, [], true), [acceptedFD] = f.held;

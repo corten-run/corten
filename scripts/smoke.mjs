@@ -237,12 +237,11 @@ function trusting(browser) {
     await context.addInitScript(() => {
       /** @type {{ createHTML: (html: string) => unknown } | undefined} */
       let policy;
-      try {
-        policy = /** @type {any} */ (globalThis).trustedTypes?.createPolicy("smoke", { createHTML: (/** @type {string} */ html) => html });
-      } catch {
-        // A page whose policy does not name it (another app's): the test writes no markup there.
-      }
-      Object.defineProperty(window, "__html", { value: (/** @type {string} */ html) => (policy ? policy.createHTML(html) : html) });
+      Object.defineProperty(window, "__html", { value: (/** @type {string} */ html) => {
+        // This init script also runs on redirect destinations where the test writes no markup.
+        policy ??= /** @type {any} */ (globalThis).trustedTypes?.createPolicy("smoke", { createHTML: (/** @type {string} */ html) => html });
+        return policy ? policy.createHTML(html) : html;
+      } });
     });
     return context;
   };
@@ -1807,20 +1806,26 @@ async function run(browser) {
     const imported = status === "live" && tries > 2;
     check("a script module whose first two requests fail is imported again, and its on:connect handler runs", imported, `${status}, ${tries} requests${imported ? "" : `: ${seen.join("; ")}`}`);
   }
-  // Corten's own modules retry the same way. The format module answered 503 twice (the page's
-  // module script, then the runtime's import): the on:connect handler that takes a format waits
-  // for it, through the wait after the second failure, and runs once a third request loads it.
+  // Corten's own modules retry the same way. Fail the format module until the runtime's import
+  // rejects: a browser can make multiple requests before rejecting it. Measure the wait from
+  // that failure, after which the on:connect handler that takes a format can run.
   {
     const refused = await browser.newPage();
-    /** @type {number[]} */
-    const at = [];
+    let failedAt;
+    let retriedAt;
+    let requests = 0;
     let status = null;
     try {
+      refused.on("console", (m) => {
+        if (m.type() === "error" && /^corten: script module .*\/corten-format\.js did not load/.test(m.text())) failedAt ??= performance.now();
+      });
       await refused.route(
         (url) => url.pathname.endsWith("/scripts/corten-format.js"),
         (route) => {
-          at.push(Date.now());
-          return at.length <= 2 ? route.fulfill({ status: 503, body: "Service Unavailable" }) : route.continue();
+          requests++;
+          if (failedAt === undefined) return route.fulfill({ status: 503, body: "Service Unavailable" });
+          retriedAt ??= performance.now();
+          return route.continue();
         },
       );
       await refused.goto(base);
@@ -1829,11 +1834,11 @@ async function run(browser) {
     } finally {
       await refused.close();
     }
-    const gap = at.length > 2 ? at[2] - at[1] : -1;
+    const gap = failedAt !== undefined && retriedAt !== undefined ? retriedAt - failedAt : -1;
     check(
-      "a format module answered 503 twice is asked for again after its wait, and the on:connect handler that takes a format runs",
-      status === "live" && at.length > 2 && gap >= 400,
-      `${status}, ${at.length} requests, ${gap} ms between the second and third`,
+      "a format module that failed to import is asked for again after its wait, and the on:connect handler that takes a format runs",
+      status === "live" && requests > 2 && gap >= 400,
+      `${status}, ${requests} requests, ${Math.round(gap)} ms between import failure and retry`,
     );
   }
   // A link from a page with no fields to one with them: the swapped-in page waits for the field

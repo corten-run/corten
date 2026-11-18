@@ -60,8 +60,14 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
   const upstreamBase = `http://127.0.0.1:${upstream.address().port}`;
   let source = "fixture";
   let broken = false;
+  let scriptUnavailable = false;
   const app = createServer(async (req, res) => {
     const url = new URL(req.url, "http://catalog");
+    if (url.pathname === "/required.js") {
+      res.writeHead(scriptUnavailable ? 503 : 200, { "Content-Type": "text/javascript" });
+      res.end(scriptUnavailable ? "unavailable" : "globalThis.requiredScript = true;");
+      return;
+    }
     const match = /^(\/api)?\/catalog\/(record_[1-9]\d*)$/.exec(url.pathname);
     if (!match) { res.writeHead(404); res.end("not found"); return; }
     const json = !!match[1];
@@ -74,7 +80,8 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
     }
     if (!record) { res.writeHead(404); res.end("not found"); return; }
     res.writeHead(200, { "Content-Type": json ? "application/json" : "text/html" });
-    res.end(json ? JSON.stringify(broken ? { ...record, fields: [] } : record) : referenceHtml(record, url.searchParams.get("field") ?? ""));
+    res.end(json ? JSON.stringify(broken ? { ...record, fields: [] } : record) :
+      referenceHtml(record, url.searchParams.get("field") ?? "").replace("</head>", '<script defer src="/required.js"></script></head>'));
   });
   app.listen(0, "127.0.0.1");
   await once(app, "listening");
@@ -90,6 +97,18 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
       if (source === "api") assert.equal(result.upstream.readsPerRequest, 1);
     }
     source = "fixture";
+    scriptUnavailable = true;
+    await assert.rejects(checkApp({ base, catalog, source, upstream: upstreamBase, browser }),
+      (error) => error.actual?.includes(`${base}/required.js: HTTP 503`));
+    scriptUnavailable = false;
+    const newContext = browser.newContext.bind(browser);
+    browser.newContext = async (options) => {
+      const context = await newContext(options);
+      await context.route(`${base}/required.js`, (route) => route.abort("aborted"));
+      return context;
+    };
+    await assert.rejects(checkApp({ base, catalog, source, upstream: upstreamBase, browser }),
+      (error) => error.actual?.includes(`${base}/required.js: net::ERR_ABORTED`));
     broken = true;
     await assert.rejects(checkApp({ base, catalog, source: "fixture", upstream: upstreamBase, browser }), /fixture mismatch/);
   } finally {

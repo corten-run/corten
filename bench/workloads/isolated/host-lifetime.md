@@ -89,6 +89,37 @@ the accepted census. Nothing reconstructs an unobserved executable or repairs ol
 evidence. The r21 process-read ENOENT records identify failed operations, not every
 native runner failure or the cause of an exception-free accounting gap.
 
+## Catalog Build Startup
+
+Catalog commands use the same pinned executable descriptors as browser commands.
+The sampler still reads each member's PID, start ticks, name, cgroup and executable
+bookends, with both recursive membership censuses. It seals the exact executable
+bytes after the final resource sample, using the existing bounded helper. Catalog
+does not query Docker for participant inventory and its gated bootstrap check is
+unchanged.
+
+In [#1643 Grouped catalog diagnostic: host observer cancels the first image build after a 1,791 ms sample gap](https://github.com/corten-run/corten/issues/1643),
+the saved nonofficial run had a 915 ms gap before Docker appeared in an accepted
+sample. At 14:17:06.923 UTC, sample 12 listed Node and Docker. The first caught
+`process-cgroup` ENOENT was 1,644 ms later, the last `executable-link` ENOENT was
+1,738 ms later, and the next sample was 1,791 ms later. The build reported
+cancellation; the final scope was empty, but replay remained blocked. The archive
+does not identify the failing PID, time the failed reads or measure the nested
+guest's scheduler wait.
+
+To check the distinction between a slow first read and a missing executable,
+run the two catalog regression tests from the repository root:
+
+```sh
+node --test --test-name-pattern='catalog pins|listed catalog PID' bench/workloads/isolated/host-lifetime-churn.test.mjs
+```
+
+The first test uses a controlled clock: the sampler must retain the executable
+without reading the whole file, then reproduce its digest at finish. The second
+shows why an empty final scope is not enough: a listed member whose executable
+remains unreadable still blocks replay. Neither test measures build speed or
+qualifies a native catalog run.
+
 ## Ordered Asynchronous Storage
 
 One in-process `fs/promises` FIFO writes initial process records and samples. It
@@ -163,6 +194,12 @@ controls are not delegated-cgroup or host qualification. They test whole-snapsho
 discard, recursive membership changes, persistent missing reads, immediate
 permission/I/O failures, PID/start mismatches, monotonic retry exhaustion, and the
 separate accounting-only block for a coherent 1,909 ms gap.
+
+The catalog controls charge a first-sighting full executable read against the
+remaining window, prove that pinned reads preserve identity and exact digests
+through terminal cleanup, and keep a persistently unreadable listed member
+blocked even with an empty terminal.
+
 Pending-capture controls use real owned file descriptors with synthetic
 membership and Docker reads. They check descriptor bounds, earlier accepted
 inputs, final hash membership, enclosing-bookend and sample-write failures. Linux

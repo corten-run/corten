@@ -22,4 +22,4 @@ tokio = { version = "1", features = ["rt", "macros", "sync", "time"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "net", "rt-multi-thread", "macros", "sync", "time"] }
