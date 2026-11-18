@@ -14,6 +14,9 @@ Corten is pre-1.0, so any minor version may change the API.
   refuse non-ASCII class names, and check required `var()` references after an escaped slash;
   match statement at-rule names case-insensitively and document the complete component CSS
   at-rule inventory, including raw bodies and global names.
+- Document script testing without runtime stubs: import-free shared logic in Node, including
+  Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
+
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
