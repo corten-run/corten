@@ -80,6 +80,10 @@ Corten is pre-1.0, so any minor version may change the API.
   cloud inbox through timing replay; a version label alone is not an audit.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
+- Catalog Contract selects affected parity apps on pull requests and runs all parity and JSON
+  jobs for unrecognized app paths. Benchmark Evidence runs portable source-custody checks when
+  captured sources change and native kernel checks when their own inputs change. Both scope
+  against the full Git diff and cancel superseded pull request runs, not main runs.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
