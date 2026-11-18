@@ -4,17 +4,39 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { createRequire, findPackageJSON } from "node:module";
+import { join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { qualify } from "../../../marketplace/qualify.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repo = resolve(here, "../../../..");
-const locked = JSON.parse(readFileSync(resolve(repo, "package-lock.json"), "utf8")).packages["node_modules/@playwright/test"].version;
-const { version } = JSON.parse(readFileSync(resolve(repo, "node_modules/@playwright/test/package.json"), "utf8"));
-assert.match(locked, /^\d+\.\d+\.\d+$/, "Playwright must have a pinned image-compatible version");
-assert.equal(version, locked, "installed Playwright does not match the root lockfile; run npm ci at the repository root");
-const checkerImage = `mcr.microsoft.com/playwright:v${version}-noble`;
+const locked = JSON.parse(readFileSync(resolve(repo, "package-lock.json"), "utf8")).packages;
+function lockedPackage(name, locate) {
+  const reinstall = "run npm ci at the repository root";
+  let manifest;
+  try { manifest = locate(); }
+  catch (cause) { throw new Error(`cannot resolve checker dependency ${name}; ${reinstall}`, { cause }); }
+  assert.ok(manifest && relative(repo, manifest) === join("node_modules", name, "package.json"),
+    `checker did not resolve the root ${name} package; ${reinstall}`);
+  const expected = locked[`node_modules/${name}`]?.version;
+  assert.match(expected ?? "", /^\d+\.\d+\.\d+$/, `${name} must have a pinned image-compatible lock version`);
+  const { version } = JSON.parse(readFileSync(manifest, "utf8"));
+  assert.equal(version, expected, `installed ${name} does not match the root lockfile; ${reinstall}`);
+  return { manifest, version };
+}
+// Follow the checker's ESM imports, then Playwright's CommonJS browser entry.
+const checker = new URL("../../../marketplace/check.mjs", import.meta.url);
+const wrapper = lockedPackage("@playwright/test", () => findPackageJSON("@playwright/test", checker));
+const playwright = lockedPackage("playwright", () => findPackageJSON("playwright/test", pathToFileURL(wrapper.manifest)));
+const core = lockedPackage("playwright-core", () => {
+  const require = createRequire(playwright.manifest);
+  require.resolve("playwright-core");
+  return require.resolve("playwright-core/package.json");
+});
+assert.ok(wrapper.version === playwright.version && playwright.version === core.version,
+  "the locked Playwright packages must agree on the browser image version");
+const checkerImage = `mcr.microsoft.com/playwright:v${core.version}-noble`;
 const output = resolve(process.argv[2] ?? resolve(here, "work/production"));
 const image = process.argv[3] ?? "cb-marketplace-django-granian:local";
 mkdirSync(output, { recursive: true });

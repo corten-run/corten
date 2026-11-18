@@ -1,19 +1,50 @@
 // Execute the actual driver with injected Docker results, not a cleanup-helper copy.
 // node --experimental-vm-modules --test bench/fullstack/apps/django/qualify-production.test.mjs
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import vm from "node:vm";
 
 const driver = new URL("./qualify-production.mjs", import.meta.url);
-const work = new URL("./work/", import.meta.url);
 let sequence = 0;
-async function exercise({ failRun = 1, failRemove = false, failNetwork = false, foreign = false, failCreate = false,
-  installedVersion = "1.64.1", lockedVersion = installedVersion } = {}) {
-  mkdirSync(work, { recursive: true });
-  const output = mkdtempSync(join(fileURLToPath(work), "driver-test-"));
+async function exercise(options) {
+  const repo = mkdtempSync(join(tmpdir(), "corten-django-driver-"));
+  try { return await run(repo, options); }
+  finally { rmSync(repo, { recursive: true, force: true }); }
+}
+
+async function run(repo, { failRun = 1, failRemove = false, failNetwork = false, foreign = false, failCreate = false,
+  installedVersion = "1.64.1", lockedVersion = installedVersion, missing, stale, shadow } = {}) {
+  const output = join(repo, "results");
+  const driverPath = join(repo, "bench/fullstack/apps/django/qualify-production.mjs");
+  const packages = {
+    "@playwright/test": { exports: { ".": "./index.mjs" }, entry: "index.mjs", source: 'export * from "playwright/test";' },
+    playwright: { exports: { "./test": "./test.mjs" }, entry: "test.mjs", source: 'import "./index.js";' },
+    "playwright-core": { exports: { ".": "./index.js" }, entry: "index.js", source: "" },
+  };
+  const install = (root, name, version) => {
+    const { exports, entry, source } = packages[name];
+    const path = join(root, "node_modules", name);
+    mkdirSync(path, { recursive: true });
+    writeFileSync(join(path, "package.json"), JSON.stringify({ name, version, exports: { ...exports, "./package.json": "./package.json" } }));
+    writeFileSync(join(path, entry), source);
+    if (name === "playwright") writeFileSync(join(path, "index.js"), 'module.exports = require("playwright-core");');
+  };
+  writeFileSync(join(repo, "package-lock.json"), JSON.stringify({ packages: Object.fromEntries(
+    Object.keys(packages).map((name) => [`node_modules/${name}`, { version: lockedVersion }])) }));
+  for (const name of Object.keys(packages)) {
+    if (name !== missing) install(repo, name, name === stale ? "1.65.1" : installedVersion);
+  }
+  if (shadow) install(join(repo, "node_modules/@playwright/test"), "playwright", "1.65.1");
+  if (missing === "playwright") {
+    const checker = join(repo, "bench/marketplace/check.mjs");
+    mkdirSync(dirname(checker), { recursive: true });
+    writeFileSync(checker, 'import "@playwright/test";');
+    await assert.rejects(import(pathToFileURL(checker)), { code: "ERR_MODULE_NOT_FOUND", message: /Cannot find package 'playwright'/ });
+  }
   const calls = [], containers = new Map(), networks = new Map();
   let runs = 0;
   const reply = (stdout = "", status = 0, stderr = "") => ({ stdout, stderr, status });
@@ -48,24 +79,17 @@ async function exercise({ failRun = 1, failRemove = false, failNetwork = false, 
   };
   const context = vm.createContext({ process: { argv: [process.execPath, fileURLToPath(driver), output], pid: process.pid + ++sequence },
     console: { log() {}, error() {} }, fetch: async () => ({ status: 200, arrayBuffer: async () => new ArrayBuffer(0) }), AbortSignal, setTimeout, URL });
-  const module = new vm.SourceTextModule(readFileSync(driver, "utf8"), { context, identifier: driver.href, initializeImportMeta(meta) { meta.url = driver.href; } });
+  const url = pathToFileURL(driverPath).href;
+  const module = new vm.SourceTextModule(readFileSync(driver, "utf8"), { context, identifier: url, initializeImportMeta(meta) { meta.url = url; } });
   await module.link(async (specifier) => {
-    let exports = specifier === "node:child_process" ? { spawnSync } :
+    const exports = specifier === "node:child_process" ? { spawnSync } :
       specifier.endsWith("/qualify.mjs") ? { qualify: async () => ({ eligible: true }) } : await import(specifier);
-    if (specifier === "node:fs") exports = { ...exports, readFileSync(path) {
-      const repo = fileURLToPath(new URL("../../../../", driver));
-      if (path === join(repo, "package-lock.json")) {
-        return JSON.stringify({ packages: { "node_modules/@playwright/test": { version: lockedVersion } } });
-      }
-      assert.equal(path, join(repo, "node_modules/@playwright/test/package.json"));
-      return JSON.stringify({ version: installedVersion });
-    } };
     return new vm.SyntheticModule(Object.keys(exports), function () { for (const [key, value] of Object.entries(exports)) this.setExport(key, value); }, { context });
   });
   let error;
   try { await module.evaluate(); } catch (caught) { error = caught; }
-  try { return { error, calls, containers, networks, receipt: (() => { try { return JSON.parse(readFileSync(join(output, "run-failures.json"))); } catch { return null; } })() }; }
-  finally { rmSync(output, { recursive: true, force: true }); }
+  return { error, calls, containers, networks, madeOutput: existsSync(output),
+    receipt: (() => { try { return JSON.parse(readFileSync(join(output, "run-failures.json"))); } catch { return null; } })() };
 }
 
 test("create-success/start-failure removes the attempted owned container", async () => {
@@ -130,6 +154,20 @@ for (const version of ["1.64.1", "1.65.1"]) test(`both browser runs select the r
 
 test("a stale Playwright install is rejected before starting Docker", async () => {
   const r = await exercise({ installedVersion: "1.64.1", lockedVersion: "1.65.1" });
-  assert.match(String(r.error), /installed Playwright does not match the root lockfile/);
+  assert.match(String(r.error), /installed @playwright\/test does not match the root lockfile/);
   assert.deepEqual(r.calls, []);
+  assert.equal(r.madeOutput, false);
+});
+
+for (const [options, name] of [
+  [{ missing: "playwright" }, "playwright"],
+  [{ missing: "playwright-core" }, "playwright-core"],
+  [{ stale: "playwright" }, "playwright"],
+  [{ stale: "playwright-core" }, "playwright-core"],
+  [{ shadow: true }, "playwright"],
+]) test(`an incomplete or mixed Playwright install is rejected before output or Docker: ${JSON.stringify(options)}`, async () => {
+  const r = await exercise({ failRun: 0, ...options });
+  assert.equal(r.calls.length, 0, "preflight reached Docker");
+  assert.equal(r.madeOutput, false, "preflight created the output directory");
+  assert.match(String(r.error), new RegExp(`\\b${name}\\b`));
 });

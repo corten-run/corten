@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 
 test("browser CI keeps its pinned Playwright base and prepares immutable-source Git", () => {
@@ -35,4 +37,11 @@ test("benchmark evidence supplies the installed, locked Playwright base explicit
   assert.ok(install >= 0 && install < build);
   assert.match(steps[build].run, /image="mcr\.microsoft\.com\/playwright:v\$\(node -p 'require\("@playwright\/test\/package\.json"\)\.version'\)-noble"/);
   assert.match(steps[build].run, /docker build --build-arg PLAYWRIGHT_IMAGE="\$image" -f bench\/workloads\/test-tools\.Dockerfile/);
+});
+
+test("Django qualification checks its Playwright install and resource cleanup without Docker", () => {
+  const suite = fileURLToPath(new URL("../fullstack/apps/django/qualify-production.test.mjs", import.meta.url));
+  const run = spawnSync(process.execPath, ["--experimental-vm-modules", "--test", suite], { encoding: "utf8", timeout: 30000 });
+  assert.ifError(run.error);
+  assert.equal(run.status, 0, run.stdout + run.stderr);
 });
