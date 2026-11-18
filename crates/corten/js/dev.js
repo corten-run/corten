@@ -96,100 +96,104 @@ function within(root, selector) {
 }
 
 const MAX_SELECTOR = 1024;
-const SCOPE_REF = /:scope(?![-\w\u0080-\uffff])|&/gi;
-// Keep scoped composition to selector lists with no nested lists, ambiguous tokens or
-// sibling escapes. A single scope reference can stand for any matching root.
-const UNSUPPORTED = /[\\/'"()+~|]|::/;
-const SIMPLE_PSEUDO = /:(?:is|not|where)\(\s*(?:[.#]?[-\w]+|\[[-\w]+\])\s*\)/gi;
+const SCOPE_REF = /:scope(?![-\w])|&/gi;
+// Only descendant and child combinators, with no references inside functions or attributes.
+const SCOPE_MEMBER = /^(?:[-\w.#*\s>]|\[[-\w]+\]|:(?:is|not|where)\(\s*(?:[.#]?[-\w]+|\[[-\w]+\])\s*\)|:scope(?![-\w])|&)+$/i;
 
-/** @param {string} selector */
-const unsupported = (selector) => UNSUPPORTED.test(selector.replace(SIMPLE_PSEUDO, ""));
-
-/** @param {string} selector @param {string | null} parent @param {boolean} scoped */
-function resolved(selector, parent, scoped) {
-  if (selector.length > MAX_SELECTOR || parent === "" || scoped && unsupported(selector)) return "";
-  if (parent === null) return selector;
-  const anchor = `:is(${parent})`;
+/** @param {string} selector @param {string | null} parent @param {boolean} [styleParent] */
+function composed(selector, parent, styleParent = false) {
+  if (selector.length > MAX_SELECTOR || /[^\x09-\x0d\x20-\x7e]/.test(selector)) return null;
+  const anchor = parent && `:is(${parent})`;
   let out = "";
-  for (const part of scoped ? selector.split(",") : [selector]) {
+  for (const part of selector.split(",")) {
     const member = part.trim();
-    const parts = member.split(scoped ? SCOPE_REF : /&/g);
-    const refs = parts.length - 1;
-    const relative = /^[>+~]/.test(member);
-    if (scoped && (refs > 1 || refs && relative)) return "";
-    const length = refs ? parts.reduce((n, p) => n + p.length, refs * anchor.length)
-      : member.length + anchor.length + (scoped || relative ? 1 : 6);
-    if (out.length + length + (out ? 1 : 0) > MAX_SELECTOR) return "";
-    out += (out ? "," : "") + (refs ? parts.join(anchor)
-      : scoped || relative ? anchor + " " + member : anchor + " :is(" + member + ")");
+    if (!SCOPE_MEMBER.test(member)) return null;
+    const refs = member.match(SCOPE_REF);
+    const relative = member.startsWith(">");
+    if (refs && (refs.length !== 1 || relative || !anchor || styleParent && refs[0] !== "&")) return null;
+    if (relative && !anchor) return null;
+    // A plain inner root needs a strict ancestor. Only an explicit reference can
+    // bind to the same element; in a nested style rule & binds to that style's selector.
+    const next = !anchor ? member : refs ? member.replace(SCOPE_REF, anchor) : `${anchor} ${member}`;
+    out += (out ? "," : "") + next;
+    if (out.length > MAX_SELECTOR) return null;
   }
-  return out;
+  // Validate even intermediate selectors before embedding them in forgiving :is() lists.
+  return CSS.supports(`selector(:is(${out}))`) ? out : null;
 }
 
-/** @type {Set<string>} */
-const skipped = new Set();
-
-/** @typedef {{ selector: string, written: string, display: string, condition: string | null, important: boolean, scoped: boolean }} Display */
-/** @typedef {{ root: string, standalone: string, outer: Scope | null, limited: boolean }} Scope */
-/** @typedef {{ selector: string, plain: string, scope: Scope | null }} Override */
-
 /**
- * Read each display rule once, then match only the candidate dialogs and popovers.
+ * A nested rule's selector as one that matches on its own: `&` is the parent's, and a selector
+ * without one is inside it.
+ * @param {string} selector
+ * @param {string | null} parent
  */
+const resolved = (selector, parent) => {
+  if (!parent) return selector;
+  if (selector.includes("&")) return selector.replaceAll("&", `:is(${parent})`);
+  return /^\s*[>+~]/.test(selector) ? `:is(${parent}) ${selector}` : `:is(${parent}) :is(${selector})`;
+};
+
+/** @typedef {{ selector: string, written: string }} Selector */
+/** @typedef {Selector & { display: string, condition: string | null, important: boolean, scope?: Selector }} Display */
+// Read display rules again on each check, since a dev server's stylesheets can change.
 function displays() {
   /** @type {Display[]} */
   const found = [];
-  /** @type {Override[]} */
-  const possibleOverrides = [];
   /**
    * @param {CSSRuleList} rules
    * @param {string | null} condition
    * @param {string | null} selector
    * @param {string | null} written
-   * @param {Scope | null} scope
+   * @param {Selector | null} [scope]
    */
   const walk = (rules, condition, selector, written, scope) => {
     for (const rule of rules) {
-      if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule) {
-        const start = rule.start;
-        const standalone = start && !start.match(SCOPE_REF) ? start : "";
-        const root = !start || (!scope && selector !== null) || (selector === null && !standalone)
-          ? "" : resolved(start, selector, true);
-        walk(rule.cssRules, condition, root, start || "@scope", { root, standalone, outer: scope, limited: !!scope?.limited || !!rule.end });
-        continue;
-      }
+      if (rule.type === CSSRule.NAMESPACE_RULE) scope = null;
+      const style = /** @type {CSSStyleRule} */ (rule).style;
+      // A nested rule's own selector, or a nested block of declarations, which has its parent's.
       const styled = rule instanceof CSSStyleRule;
-      const style = styled || (globalThis.CSSNestedDeclarations && rule instanceof CSSNestedDeclarations) ? rule.style : null;
       const asWritten = styled ? rule.selectorText : written;
-      const own = styled ? resolved(asWritten ?? "", selector, !!scope) : selector;
-      if (style?.display && asWritten && own !== null) {
-        const display = style.display;
-        const important = style.getPropertyPriority("display") === "important";
-        const skip = !own || scope?.limited;
-        if (important && display !== "none") {
-          const plain = !own && asWritten.length <= MAX_SELECTOR && !unsupported(asWritten) && !asWritten.match(SCOPE_REF) && !/(^|,)\s*>/.test(asWritten) ? asWritten : "";
-          possibleOverrides.push({ selector: own, plain, scope });
-        } else if (!skip) {
-          found.push({ selector: own, written: asWritten, display, condition, important, scoped: !!scope });
+      const own = styled ? resolved(asWritten ?? "", selector) : selector;
+      let scoped = scope;
+      // undefined: outside any scope; null: an incomplete chain, never resumed further in.
+      if (scope !== null) {
+        try {
+          if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule) {
+            const start = rule.start;
+            const root = start && !selector && rule.end === null && composed(start, scope?.selector ?? null);
+            scoped = root && start ? { selector: root, written: start } : null;
+          } else if (scope && styled && asWritten) {
+            const child = composed(asWritten, scope.selector, selector !== null);
+            scoped = child ? { selector: child, written: asWritten } : null;
+          }
+        } catch {
+          scoped = null;
         }
-        if (skip && !skipped.has(asWritten)) {
-          skipped.add(asWritten);
-          console.warn(`corten: skipped \`${asWritten}\`: cannot compose its selector for the closed dialog and popover check`);
-        }
+      }
+      const scopeDisplay = scoped && (styled || globalThis.CSSNestedDeclarations && rule instanceof CSSNestedDeclarations) ? scoped : null;
+      if (style && own && asWritten && style.display) {
+        /** @type {Display} */
+        const entry = { selector: own, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" };
+        if (scopeDisplay) entry.scope = scopeDisplay;
+        found.push(entry);
+      } else if (scopeDisplay && style?.display) {
+        // Declarations on a scope root have no legacy selector.
+        found.push({ selector: "", written: "", display: style.display, condition, important: style.getPropertyPriority("display") === "important", scope: scopeDisplay });
       }
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
       // A width (or a container's size) is a breakpoint; @supports is not, and passes its own on.
       const query = rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
-      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), scope && styled ? "" : own, asWritten, scope);
+      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), own, asWritten, scoped);
     }
   };
   for (const sheet of document.styleSheets) {
     try {
-      walk(sheet.cssRules, null, null, null, null);
+      walk(sheet.cssRules, null, null, null);
     } catch {}
   }
-  return { found, possibleOverrides };
+  return found;
 }
 
 /** @param {Element} el @param {string} selector */
@@ -197,78 +201,55 @@ const matching = (el, selector) => {
   try {
     return own.matches.call(el, selector);
   } catch {
-    return null;
+    return false;
   }
 };
 
-/** Keep every known root when a selector cannot be composed or read. Ignore scope limits.
- * @param {Element} el @param {Scope} scope
- */
-function inside(el, scope) {
-  let matched = false;
-  for (let bound = /** @type {Scope | null} */ (scope); bound; bound = bound.outer) {
-    try {
-      // A composed root already includes the outer roots.
-      if (bound.root) return !!own.closest.call(el, bound.root);
-    } catch {}
-    if (!bound.standalone || bound.standalone === bound.root) continue;
-    try {
-      const root = own.closest.call(el, bound.standalone);
-      if (!root) return false;
-      el = root;
-      matched = true;
-    } catch {}
+/** @param {Element} el @param {Display[]} rules */
+function scopedMatches(el, rules) {
+  const applies = [];
+  for (const r of rules) {
+    if (r.scope) {
+      try {
+        if (own.matches.call(el, r.scope.selector)) applies.push({ ...r, ...r.scope, composed: true });
+        continue;
+      } catch {}
+    }
+    if (r.selector && matching(el, r.selector)) applies.push(r);
   }
-  return matched;
+  return applies;
 }
 
-/** @param {Element} el @param {Override} rule */
-function couldOverride(el, { selector, plain, scope }) {
-  const match = selector ? matching(el, selector) : null;
-  return match ?? ((!plain || matching(el, plain) !== false) && (scope ? inside(el, scope) : !selector));
-}
-
-/**
- * Warns of each closed dialog or popover in or at `root` that components.css keeps hidden while a
- * matching rule inside `@media` or `@container` gives it a `display` (at the viewport's width now
- * or any other). That is either one drawn in place
- * from a breakpoint (a filters rail that is a modal on a phone), which is then simply not drawn,
- * or the open one's look written for a width, which is right; the page cannot tell which, so the
- * warning gives the rule for each. A look outside a query (a card) is the hidden rule's own case
- * and is not reported, nor is one the app already draws with an `!important` rule of its own
- * or one a skipped rule could draw with its own `!important` display.
- * @param {Element} root
- */
+/** Warn about a closed dialog or popover kept hidden despite a breakpoint display. @param {Element} root */
 function inPlace(root) {
   // One the app hides with `hidden` is meant to be hidden, whatever its rules say.
   const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !own.hasAttribute.call(el, "hidden"));
   if (!closed.length) return;
-  const { found, possibleOverrides } = displays();
+  const rules = displays();
+  const scoped = rules.some((r) => r.scope);
   for (const el of closed) {
     if (getComputedStyle(el).display !== "none") continue;
-    const applies = found.filter((r) => matching(el, r.selector));
+    const applies = scoped ? scopedMatches(el, rules) : rules.filter((r) => matching(el, r.selector));
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
     if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
     const drawn = applies.find((r) => r.condition && r.display !== "none");
-    if (!drawn || possibleOverrides.some((r) => couldOverride(el, r))) continue;
+    if (!drawn || applies.some((r) => r.important && r.display !== "none")) continue;
     reported.add(el);
     const dialog = el instanceof HTMLDialogElement && !own.hasAttribute.call(el, "popover");
-    const kind = dialog ? "dialog" : "popover";
-    const warning = `corten: ${labelOf(el)} is a closed ${kind} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed.`;
-    if (drawn.scoped) {
-      console.warn(warning, el);
+    if ("composed" in drawn) {
+      console.warn(`corten: ${labelOf(el)} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed.`, el);
       continue;
     }
     const state = dialog ? "[open]" : ":popover-open";
     // Not [hidden] either, so a rail the app hides with the attribute stays hidden.
     const closedState = dialog ? "[open],[hidden]" : ":popover-open,[hidden]";
     // The class as the component's file writes it (`.filters`, which Corten prefixes:
-    // `.search-page__filters`), from the resolved selector.
+    // `.search-page__filters`), from the rule's own selector.
     const cls = [...drawn.selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "").find((c) => /** @type {DOMTokenList} */ (Reflect.get(own, "classList", el)).contains(c))?.split("__").pop();
     const id = attrOf(el, "id");
     const named = cls ? "." + cls : Reflect.get(own, "localName", el) + (id ? "#" + id : "");
-    console.warn(`${warning} To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${kind}'s look, write it as \`${named}${state}\``, el);
+    console.warn(`corten: ${labelOf(el)} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);
   }
 }
 

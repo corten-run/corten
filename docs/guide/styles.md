@@ -73,32 +73,32 @@ the media query, `.filters:not([open],[hidden]) { display: block !important }`. 
 dialog at a width goes under `[open]` (`.modal[open] { display: grid }`), as the kit's dialog and
 sheet do. Since nothing fails when a rail is missing (the page answers, the rail is simply not
 drawn), `corten dev` warns in the console of each closed dialog or popover that a rule inside
-`@media` or `@container` gives a `display`, at the width the page is at or any other. Outside
-`@scope` it suggests both rules: the page cannot tell a rail from an open look written without
+`@media` or `@container` gives a `display`, at the width the page is at or any other. It
+normally suggests both rules: the page cannot tell a rail from an open look written without
 `[open]`. The suggestion uses a matching class from the resolved selector, including in nested
-rules written with `&`. Within a scope it names the rule without suggesting a replacement selector.
-With an explicit `@scope` root, the check anchors each plain selector-list member below the root, binds a single
-`:scope` or `&` to it, and checks declarations written directly in the scope on the root itself.
-It accepts `:is()`, `:not()` and `:where()` with a single type, class, ID or attribute presence
-selector, such as `dialog:not([open])`.
-It can compose nested scopes the same way, with at most one native selector match per eligible
-candidate for a composed selector the browser can read. It skips scopes with a `to` limit or no
-explicit root, explicit top-level roots that refer to the scope itself (such as `@scope (:scope)`), scopes nested in style rules,
-and rules or declarations nested in a scoped style rule. It also skips scoped
-selectors with multiple root references in one member, a leading combinator combined with a
-root reference, other functional pseudo-classes, sibling or column combinators, pseudo-elements,
-quotes, escapes or namespaces. Selectors longer than 1,024 characters before or after composition
-cannot cause a warning, including in ordinary CSS nesting. No skipped display rule can cause one.
-It can only withhold one if it declares a non-`none` `display` with `!important` and the check
-cannot rule out the candidate. For a limited scope it uses the composed selector when supported,
-ignoring the limit but keeping the root. When a scoped selector cannot be composed or read, an override can
-only withhold a warning inside the roots the check can match, including any known outer roots.
-If it cannot match any root, the rule cannot withhold a warning. Skip notes are deduplicated by
-CSSOM selector text. Adopted stylesheets are not inspected
+rules written with `&`. When the check composes an entire `@scope` selector chain, it names
+the rule without suggesting a replacement selector that would drop the scope.
+
+The check composes explicit, unlimited `@scope` roots outside style rules. Plain selector-list
+members and plain inner roots start below their parent; a leading `>` requires a direct child.
+A single `:scope` or `&` can name the root explicitly. In a nested style rule, `&` instead names
+the parent style rule's composed selector; that form does not compose `:scope` references.
+Declarations on a scope root or its nested style rules use their enclosing selector. Supported
+selectors use unescaped ASCII type, class, ID or presence-attribute selectors, `*`, descendant
+and child combinators, and `:is()`, `:not()` or `:where()` around one simple type, class, ID or
+presence-attribute selector, such as `dialog:not([open])`.
+
+If any root, limit, nesting parent or rule selector cannot be composed or read, the check
+handles the whole rule as before: it treats `@scope` as a grouping rule, keeps ordinary style
+nesting and does not use any of the scope bounds. This includes implicit roots, scopes with a
+`to` limit, scopes nested in style rules, sheets with `@namespace`, a top-level root referring to
+itself, unsupported selectors, selectors over 1,024 characters before or after composition,
+and selectors the browser rejects. Unscoped rules are unchanged, including long selectors. This affects only
+the diagnostic, not which styles the browser applies. Adopted stylesheets are not inspected
 ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
-When only areas have stylesheets, each area's file starts with these rules. An app with no component stylesheet has
-neither file, so if its `static/style.css` gives a hidden element, a popover or a dialog a
-`display` (styling corten-ui's parts there, say), it adds them itself:
+When only areas have stylesheets, each area's file starts with these rules. An app with no
+component stylesheet has neither file, so if its `static/style.css` gives a hidden element, a
+popover or a dialog a `display` (styling corten-ui's parts there, say), it adds them itself:
 
 ```css
 [hidden]:where(:not([hidden=until-found i])) { display: none !important; }

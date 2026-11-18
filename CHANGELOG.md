@@ -5,20 +5,10 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- `corten dev`'s closed-dialog and popover check keeps explicit `@scope` roots for descendant
-  selectors (including `dialog:not([open])`), a single `:scope` or `&` per selector-list member,
-  and declarations directly on the root. It makes at most one native match per eligible candidate
-  for a composed selector the browser can read. It skips scopes with `to` limits, implicit roots,
-  explicit top-level roots such as `@scope (:scope)`, other
-  [unsupported shapes](docs/guide/styles.md#styles), and selectors longer than 1,024 characters
-  before or after composition. Only skipped rules with non-`none` `display: ... !important` can
-  withhold a warning for a candidate the check cannot rule out. It ignores `to` limits, but keeps
-  known scope roots, including outer roots, even when a selector cannot be composed or read.
-  Skip notes are deduplicated by CSSOM selector text. Scoped warnings do not suggest replacement
-  selectors; unscoped suggestions use a matching class from the resolved selector, including
-  with ordinary CSS nesting. Adopted
-  stylesheets are not inspected
-  ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
+- `corten dev`'s closed-dialog and popover check keeps explicit `@scope` roots, including for
+  `:scope`, `&` and declarations on a root, when it can compose the
+  [whole selector chain](docs/guide/styles.md#styles). Unsupported scopes and unscoped rules
+  use the existing check unchanged.
 - The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
   `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 
