@@ -18439,8 +18439,10 @@ async fn a_page_at_an_actions_address_with_a_post_form_without_action_is_an_erro
 /// instructions barely sees it; the box and the copies do. Measured for a page route with no
 /// middleware (2,128 bytes in a release build and 2,608 in a debug one, where it was 4,952 and
 /// 5,672), and for a small handler's own boxed future with no stage around it (512). The bounds
-/// are those sizes with a little room, under one more copy of the request: raise one only with
-/// the number that says the new size costs nothing.
+/// are those sizes with a little room, under one more copy of the request. The sizes are the
+/// compiler's layout of the futures, so a new toolchain may move them with no change here:
+/// measure again then, and otherwise raise a bound only with the number that says the new size
+/// costs nothing.
 #[test]
 fn the_stages_future_stays_within_its_size() {
     use tower_service::Service;

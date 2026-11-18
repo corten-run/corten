@@ -2295,22 +2295,24 @@ struct At<S> {
     scope: Option<Arc<Scope>>,
 }
 
-/// The request on its way to its route, held once for the stages around it: each stage borrows
-/// it, and its route takes it. A stage that took it by value kept a copy or two in its own future
-/// (an `async fn` holds each argument, and again whatever it holds across an await), so the
-/// future [`At::run`] boxes carried about twelve of them: 4,952 bytes for a page route in a
-/// release build, where it is now 2,128 (`the_stages_future_stays_within_its_size` bounds it).
-pub(crate) struct Inbound(Option<Request>);
+/// The request on its way to its route, held once for the stages around it ([`At::run`] holds
+/// it): each stage reads it through this and hands this on, and its route takes it. A stage that
+/// took the request by value kept a copy or two in its own future (an `async fn` holds each
+/// argument, and again whatever it holds across an await), so the future `At::run` boxes carried
+/// about twelve of them (`the_stages_future_stays_within_its_size` bounds it). Handed on by
+/// value, so a stage that reads the request after the stage it called, or a second take, does
+/// not compile.
+pub(crate) struct Inbound<'a>(&'a mut Option<Request>);
 
-impl Inbound {
+impl Inbound<'_> {
     /// The request, for a stage before its route.
     pub(crate) fn request(&mut self) -> &mut Request {
-        self.0.as_mut().expect("a stage reads the request before its route takes it")
+        self.0.as_mut().expect("only its route takes the request, and that ends this")
     }
 
-    /// The request, for its route: once.
-    pub(crate) fn take(&mut self) -> Request {
-        self.0.take().expect("a request reaches its route once")
+    /// The request, for its route.
+    pub(crate) fn take(self) -> Request {
+        self.0.take().expect("only its route takes the request, and that ends this")
     }
 }
 
@@ -2321,8 +2323,8 @@ impl<S: Steps> crate::router::Stages for At<S> {
     fn run(self: Arc<Self>, req: Request, route: &Route) -> crate::router::Answering {
         let route = route.clone();
         // Held here, outside the block, so the block's future holds it once.
-        let mut inbound = Inbound(Some(req));
-        Box::pin(async move { self.layer.handle(&mut inbound, route, self.scope.as_deref()).await })
+        let mut held = Some(req);
+        Box::pin(async move { self.layer.handle(Inbound(&mut held), route, self.scope.as_deref()).await })
     }
 }
 
@@ -2454,7 +2456,7 @@ struct Layer<S> {
 
 impl<S: Steps> Layer<S> {
     /// `scope` is the request's route's, when its route says it.
-    async fn handle(&self, inbound: &mut Inbound, route: Route, scope: Option<&Scope>) -> Response {
+    async fn handle(&self, mut inbound: Inbound<'_>, route: Route, scope: Option<&Scope>) -> Response {
         #[cfg(feature = "compress")]
         let coding = crate::compress::negotiate(inbound.request().headers());
         #[cfg(feature = "compress")]
@@ -2469,7 +2471,7 @@ impl<S: Steps> Layer<S> {
 
     /// The security policy around the request: the host and same-origin checks first, the
     /// headers last.
-    async fn secure(&self, inbound: &mut Inbound, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
+    async fn secure(&self, mut inbound: Inbound<'_>, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
         let req = inbound.request();
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
@@ -2652,7 +2654,7 @@ impl<S: Steps> Layer<S> {
     /// runtime sent it ([`page::Mode::asked`]).
     async fn run<'a>(
         &'a self,
-        inbound: &mut Inbound,
+        mut inbound: Inbound<'_>,
         route: Option<Route>,
         api: Option<&Mount>,
         deadline: Option<Duration>,

@@ -3341,7 +3341,7 @@ pub(crate) struct AsIs;
 /// ([`crate::api`]). A request a [`crate::Caller`] sent to sign in is redirected there.
 pub(crate) fn render_errors<'s, 'n, 'g, 'm, 'r, S: crate::app::Steps>(
     shared: &'s Arc<Shared>,
-    inbound: &'r mut Inbound,
+    mut inbound: Inbound<'r>,
     next: Next<'n, S>,
     deadline: Option<std::time::Duration>,
     signal: &'g crate::Signal,
@@ -3372,7 +3372,7 @@ pub(crate) fn render_errors<'s, 'n, 'g, 'm, 'r, S: crate::app::Steps>(
 #[allow(clippy::too_many_arguments)]
 async fn errors_rendered<S: crate::app::Steps>(
     shared: &Arc<Shared>,
-    inbound: &mut Inbound,
+    mut inbound: Inbound<'_>,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
@@ -3428,7 +3428,7 @@ impl Drop for ReleasesEarlyHeads<'_> {
 /// The handler's page, or the error page in its place.
 async fn page_or_error<S: crate::app::Steps, const LATE_FILL: bool>(
     shared: &Arc<Shared>,
-    inbound: &mut Inbound,
+    mut inbound: Inbound<'_>,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
@@ -3657,7 +3657,7 @@ fn sign_in_loops(path: &str, to: &HeaderValue) -> Option<String> {
 /// The handler's response, through [`within_deadline`]; a handler that panics is answered as a
 /// handler error (500), whose message only `corten dev` shows.
 async fn run<S: crate::app::Steps, const LATE_FILL: bool>(
-    inbound: &mut Inbound,
+    mut inbound: Inbound<'_>,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
@@ -3696,7 +3696,7 @@ async fn run<S: crate::app::Steps, const LATE_FILL: bool>(
 /// The handler's response, or once it has waited past `deadline` an empty 503, or a 408 when it
 /// was waiting for the client to send the body (the 413 while a body over its limit is read past).
 async fn within_deadline<S: crate::app::Steps, const LATE_FILL: bool>(
-    inbound: &mut Inbound,
+    inbound: Inbound<'_>,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
