@@ -1595,7 +1595,7 @@ fn scan_chunk(src: &str, i: &mut usize) -> Result<Chunk, (usize, &'static str)> 
     let mut pending_comment = None;
     let mut joined_comment = None;
     let mut url = None;
-    let mut prev = None;
+    let mut prev = (None, "");
     for (kind, start, end) in lexer(&src[from..]) {
         let spelling = &src[from + start..from + end];
         *i = from + start;
@@ -1605,7 +1605,7 @@ fn scan_chunk(src: &str, i: &mut usize) -> Result<Chunk, (usize, &'static str)> 
                 continue;
             }
             Tok::Comment { .. } => {
-                pending_comment.get_or_insert(*i);
+                pending_comment.get_or_insert((*i, space));
                 continue;
             }
             Tok::Url { closed: true } => {
@@ -1631,20 +1631,24 @@ fn scan_chunk(src: &str, i: &mut usize) -> Result<Chunk, (usize, &'static str)> 
         }
         let comment = pending_comment.take();
         if !text.is_empty() {
-            if space {
-                text.push(' ');
-            } else if let Some(at) = comment {
-                // Keep a token separator without inventing descendant whitespace or attaching
-                // the following token to a hex escape. The selector policy still refuses joined
-                // comments, except between the two colons of a pseudo-element.
-                text.push_str("/**/");
-                if joined_comment.is_none() && !(prev == Some(Tok::Colon) && kind == Tok::Colon) {
+            if let Some((at, space_before)) = comment {
+                // A space after a comment is not an escape terminator: removing the comment
+                // from `\61/**/ b` lets the escape take the space and the ident take `b`.
+                if !space || (!space_before && prev.1.contains('\\')) {
+                    text.push_str("/**/");
+                }
+                // The selector proof still refuses joined comments, except between the
+                // two colons of a pseudo-element.
+                if !space && joined_comment.is_none() && !(prev.0 == Some(Tok::Colon) && kind == Tok::Colon) {
                     joined_comment = Some(at);
                 }
             }
+            if space {
+                text.push(' ');
+            }
         }
         space = false;
-        prev = Some(kind);
+        prev = (Some(kind), spelling);
         text.push_str(spelling);
     }
     *i = src.len();
