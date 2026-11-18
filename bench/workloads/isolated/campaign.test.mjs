@@ -512,7 +512,8 @@ for (const group of groupNames) test(`${group}: one complete group runs and repl
   assert.equal(saved.schema, "benchmark-isolated-group-campaign-inspection/v1");
   assert.deepEqual(saved.selection.groups, [{ group, apps: s.plan.bindings[0].selection.apps, contractSha256: undefined }]);
   assert.deepEqual(saved.groups.map((r) => r.group), [group]); assert.equal(Object.hasOwn(saved, "group"), false);
-  if (group === "hardening") assert.ok(saved.groups[0].appOutcomes.every(r => r.outcome === "passed" && !r.comparisonEligible));
+  if (group === "hardening") assert.deepEqual(saved.groups[0].appOutcomes, s.plan.bindings[0].selection.apps
+    .map(app => ({ app, outcome: "passed", comparisonEligible: false })));
   assert.equal(Object.hasOwn(saved, "qualified"), false); assert.equal(Object.hasOwn(saved, "deletionAuthorized"), false);
   assert.equal(saved.collectionIntegrity, "manifest-verified"); assert.equal(saved.commandLifecycle, "observed-terminal");
   assert.deepEqual(saved.uncollectedNativeRoots, []);
