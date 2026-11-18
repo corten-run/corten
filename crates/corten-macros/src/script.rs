@@ -157,11 +157,17 @@ impl Module {
             let ty = format!("{at}{name}").parse().expect("a type path parses");
             let path = Path::new(import);
             // Bare specifiers can be mapped by the app's TypeScript configuration.
-            let declaration = if import.starts_with("./") || import.starts_with("../") || path.is_absolute() {
-                let path = Path::new(&self.path).parent().expect("a script has a directory").join(path).with_extension("d.ts");
-                q("::core::option::Option::Some(__A0)", &[literal(&path.to_string_lossy())])
-            } else {
-                q("::core::option::Option::None", &[])
+            let path = (import.starts_with("./") || import.starts_with("../") || path.is_absolute()).then(|| {
+                let path = Path::new(&self.path).parent().expect("a script has a directory").join(path);
+                if import.ends_with(".js") {
+                    path.with_extension("d.ts")
+                } else {
+                    path
+                }
+            });
+            let declaration = match path.as_deref().and_then(Path::to_str) {
+                Some(path) => q("::core::option::Option::Some(__A0)", &[literal(path)]),
+                None => q("::core::option::Option::None", &[]),
             };
             types.extend(q("(__A0, __A1, ::corten::script::__private::ts::<__A2>()),", &[literal(name), declaration, ty]));
         }
@@ -1350,15 +1356,16 @@ fn generated_import(ty: &str) -> Option<(&str, &str)> {
     let rest = ty.trim().strip_prefix("import(")?;
     let (path, name) = rest.split_once(").")?;
     let path = path.trim().trim_matches(['"', '\'']);
-    let path = path.strip_suffix(".js").or_else(|| path.strip_suffix(".d.ts")).unwrap_or(path);
     let name = name.trim();
     let plain = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     (generated_path(path) && plain).then_some((path, name))
 }
 
-/// The path of the declarations `corten::types` writes: `types/app` as whole segments.
+/// The path of the declarations `corten::types` writes: `types/app` as whole segments,
+/// with an optional extension.
 fn generated_path(path: &str) -> bool {
+    let path = path.strip_suffix(".js").or_else(|| path.strip_suffix(".d.ts")).unwrap_or(path);
     path == "types/app" || path.ends_with("/types/app")
 }
 
@@ -1369,7 +1376,6 @@ fn mentions_generated(ty: &str) -> bool {
     ty.match_indices("import(").any(|(at, _)| {
         let rest = &ty[at + "import(".len()..];
         let path = rest.split(')').next().unwrap_or("").trim().trim_matches(['"', '\'']);
-        let path = path.strip_suffix(".js").or_else(|| path.strip_suffix(".d.ts")).unwrap_or(path);
         generated_path(path)
     })
 }
@@ -1802,7 +1808,6 @@ fn jsdoc_generated_imports(block: &str) -> Vec<(String, String)> {
         let Some(from) = after.trim_start().strip_prefix("from").map(str::trim_start) else { continue };
         let Some(quote) = from.chars().next().filter(|c| matches!(c, '"' | '\'')) else { continue };
         let Some((path, _)) = from[1..].split_once(quote) else { continue };
-        let path = path.strip_suffix(".js").or_else(|| path.strip_suffix(".d.ts")).unwrap_or(path);
         if !generated_path(path) {
             continue;
         }
@@ -2463,7 +2468,7 @@ function helper() {}
     #[test]
     fn a_generated_type_is_the_rust_type_and_a_literal_union_does_not_compile() {
         let (handlers, _) = parse(
-            "/** @typedef {import(\"../types/app\").SortBy} SortBy */\n/** @param {SortBy} a @param {import(\"../../types/app.js\").Step} b @param {import(\"./other\").Thing} c */\nexport function f(a, b, c) {}",
+            "/** @typedef {import(\"../types/app\").SortBy} SortBy */\n/** @param {SortBy} a @param {import(\"../../types/app.js\").Step} b @param {import(\"./other\").Thing} c @param {import(\"../types/app.d.ts\").Ready} d */\nexport function f(a, b, c, d) {}",
         )
         .unwrap();
         assert_eq!(
@@ -2473,10 +2478,11 @@ function helper() {}
         );
         assert_eq!(
             handlers[0].params[1].1,
-            Param::Generated { name: "Step".into(), import: "../../types/app".into() },
+            Param::Generated { name: "Step".into(), import: "../../types/app.js".into() },
             "written in place"
         );
         assert!(unchecked_call(&handlers[0].params[2].1), "not the generated declarations");
+        assert_eq!(handlers[0].params[3].1, Param::Generated { name: "Ready".into(), import: "../types/app.d.ts".into() });
         for (source, what) in [
             ("/** @param {\"name\" | \"price\"} by */\nexport function f(by) {}", "a union"),
             ("/** @param {'grid'} by */\nexport function f(by) {}", "one literal"),

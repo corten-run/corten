@@ -45,9 +45,11 @@ use crate::script::{
 /// The set of types one app sends to the browser.
 pub struct Types {
     base: Declarations,
-    // The output path is not known until sync. Keep registrations after the first handler
-    // in order so filtering out another file's handlers does not renumber this file's types.
+    // The output path is not known until sync. Replay adds after the first handler in order,
+    // since that handler may or may not have reserved a name in the file being generated.
     pending: Vec<Registration>,
+    // Event references are generated, so they can take numbered names after handlers.
+    events: Vec<EventDef>,
     /// Each view's class in `corten/views`, by name.
     views: BTreeMap<&'static str, &'static str>,
 }
@@ -62,8 +64,12 @@ struct Declarations {
 #[derive(Clone, Copy)]
 enum Registration {
     Add(TsType, &'static str),
-    Event(EventDef),
     Handler(&'static str, HandlerType),
+}
+
+enum Output<'a> {
+    JsonSchema,
+    TypeScript(Option<&'a Path>),
 }
 
 impl Default for Types {
@@ -74,7 +80,7 @@ impl Default for Types {
 
 impl Types {
     pub fn new() -> Self {
-        Types { base: Declarations::default(), pending: Vec::new(), views: BTreeMap::new() }
+        Types { base: Declarations::default(), pending: Vec::new(), events: Vec::new(), views: BTreeMap::new() }
     }
 
     /// Adds `T` and every type it refers to, under their Rust names. Use this for types
@@ -84,16 +90,13 @@ impl Types {
     /// whose type has no schema ([`crate::json::schema`]). After handler arguments have been
     /// collected, those checks wait until the declarations are generated.
     pub fn add<T: ToJsonSchema>(mut self) -> Self {
-        self.register(Registration::Add(T::json_schema, std::any::type_name::<T>()));
-        self
-    }
-
-    fn register(&mut self, entry: Registration) {
+        let entry = Registration::Add(T::json_schema, std::any::type_name::<T>());
         if self.pending.is_empty() {
-            self.base.register(entry);
+            self.base.register(entry, false);
         } else {
             self.pending.push(entry);
         }
+        self
     }
 
     /// Adds the typed events among the app's components (the list it gives `App::components`)
@@ -101,42 +104,46 @@ impl Types {
     /// views (`#[component(view)]`) to `corten/views`. Also adds the named `ToJson` types the
     /// scripts' checked handler parameters use, and the types those refer to.
     /// [`Types::sync`] collects and checks only the handler arguments imported from the file
-    /// being written, when the import path is known. Generation panics if a checked handler
+    /// being written, when the import path is known. TypeScript generation panics if a checked handler
     /// imports a different name from the one assigned to its Rust type.
     pub fn components(mut self, components: &[crate::Component]) -> Self {
         for view in components.iter().filter_map(|c| c.view) {
             self.views.insert(view.class, view.ts);
         }
         let imported = components.iter().filter_map(|c| c.script).flat_map(|s| s.events);
-        for event in components.iter().chain(imported).filter_map(|c| c.event) {
-            self.register(Registration::Event(event));
-        }
+        self.events.extend(components.iter().chain(imported).filter_map(|c| c.event));
         for script in components.iter().filter_map(|c| c.script.as_ref()) {
             self.pending.extend(script.types.iter().map(|ty| Registration::Handler(script.file, *ty)));
         }
         self
     }
 
-    fn declarations(&self, path: Option<&Path>) -> Cow<'_, Declarations> {
-        if self.pending.is_empty() {
+    fn declarations(&self, output: Output<'_>) -> Cow<'_, Declarations> {
+        if self.pending.is_empty() && self.events.is_empty() {
             return Cow::Borrowed(&self.base);
         }
-        let path = path.map(declaration_path);
+        let (path, check_names) = match output {
+            Output::JsonSchema => (None, false),
+            Output::TypeScript(path) => (path.and_then(declaration_path), true),
+        };
         let mut out = self.base.clone();
         for &entry in &self.pending {
             if matches!(entry, Registration::Handler(_, (_, Some(import), _))
-                if path.as_ref().is_some_and(|path| *path != declaration_path(Path::new(import))))
+                if path.as_deref().is_some_and(|path| !may_import_declarations(import, path)))
             {
                 continue;
             }
-            out.register(entry);
+            out.register(entry, check_names);
+        }
+        for &event in &self.events {
+            out.add_event(event);
         }
         Cow::Owned(out)
     }
 
     /// Every definition as JSON Schema (draft 2020-12): `{"$defs": {...}}`.
     pub fn json_schema(&self) -> Value {
-        let defs: Map<String, Value> = self.declarations(None).definitions().into_iter().collect();
+        let defs: Map<String, Value> = self.declarations(Output::JsonSchema).definitions().into_iter().collect();
         serde_json::json!({ "$schema": "https://json-schema.org/draft/2020-12/schema", "$defs": defs })
     }
 
@@ -146,7 +153,7 @@ impl Types {
     }
 
     fn typescript_for(&self, path: Option<&Path>) -> String {
-        let declarations = self.declarations(path);
+        let declarations = self.declarations(Output::TypeScript(path));
         let mut out = String::from(
             "// Generated by corten::types from the Rust types; do not edit. The test that calls\n// Types::sync rewrites this file when they change.\n",
         );
@@ -213,12 +220,14 @@ impl Types {
 }
 
 impl Declarations {
-    fn register(&mut self, entry: Registration) {
+    fn register(&mut self, entry: Registration, check_names: bool) {
         match entry {
             Registration::Add(describe, name) => {
                 self.add_schema(describe, &format!("Types::add::<{name}>()"));
             }
-            Registration::Event(event) => self.add_event(event),
+            Registration::Handler(_, (_, _, describe)) if !check_names => {
+                describe(&mut self.generator);
+            }
             Registration::Handler(file, (name, _, describe)) => {
                 let source = format!("{file}: handler argument {name}");
                 let schema = self.add_schema(describe, &source);
@@ -267,8 +276,8 @@ impl Declarations {
 }
 
 /// Compare import and output paths even when the declarations file does not yet exist.
-fn declaration_path(path: &Path) -> PathBuf {
-    let absolute = std::path::absolute(path).expect("resolve declaration path");
+fn declaration_path(path: &Path) -> Option<PathBuf> {
+    let absolute = std::path::absolute(path).ok()?;
     let mut path = PathBuf::new();
     for part in absolute.components() {
         if part == PathComponent::ParentDir {
@@ -277,7 +286,21 @@ fn declaration_path(path: &Path) -> PathBuf {
             path.push(part);
         }
     }
-    path
+    if cfg!(windows) {
+        path = PathBuf::from(path.to_str()?.to_lowercase());
+    }
+    Some(path)
+}
+
+/// A known declaration file or either candidate for an extensionless import.
+fn may_import_declarations(import: &str, target: &Path) -> bool {
+    let matches = |candidate: &Path| declaration_path(candidate).is_none_or(|path| path == target);
+    let path = Path::new(import);
+    if import.ends_with(".d.ts") {
+        matches(path)
+    } else {
+        matches(&path.with_extension("d.ts")) || matches(&path.join("index.d.ts"))
+    }
 }
 
 fn doc(out: &mut String, indent: &str, text: &str) {
@@ -412,6 +435,7 @@ mod tests {
     use crate::json::ToJson;
 
     const APP_DECLARATIONS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/types/app.d.ts");
+    const LIBRARY_DECLARATIONS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/library/types/app.d.ts");
 
     /// A card on the watchlist.
     #[derive(ToJson)]
@@ -496,24 +520,64 @@ mod tests {
             applied: bool,
         }
 
+        #[crate::script::event]
+        #[allow(dead_code)]
+        pub(super) struct LibraryChanged {
+            change: Change,
+        }
+
         crate::script::script!(mod report = "type_tests/library/src/library_change.js");
 
         // Model the served names of a component crate with a scripts prefix.
         const SCRIPT: crate::Script = crate::Script { name: "library.library_change", ..report::COMPONENT.script.unwrap() };
-        pub(super) const COMPONENTS: &[crate::Component] =
-            &[crate::Component { name: SCRIPT.name, script: Some(SCRIPT), ..report::COMPONENT }];
+        pub(super) const REPORT: crate::Component =
+            crate::Component { name: SCRIPT.name, script: Some(SCRIPT), ..report::COMPONENT };
     }
 
     #[test]
     fn a_prefixed_library_can_generate_its_own_handler_declarations() {
-        let library = concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/library/types/app.d.ts");
-        let app_component = [ConfirmChange];
-
-        let combined = Types::new().components(&app_component).components(library::COMPONENTS);
+        let combined = Types::new().components(&[ConfirmChange, library::REPORT]);
         combined.sync(APP_DECLARATIONS);
-        combined.sync(library);
-        Types::new().components(library::COMPONENTS).components(&app_component).sync(APP_DECLARATIONS);
-        Types::new().components(library::COMPONENTS).sync(library);
+        combined.sync(LIBRARY_DECLARATIONS);
+        Types::new().components(&[library::REPORT]).components(&[ConfirmChange]).sync(APP_DECLARATIONS);
+        Types::new().components(&[library::REPORT]).sync(LIBRARY_DECLARATIONS);
+    }
+
+    #[test]
+    fn a_handler_import_can_resolve_to_a_directory_index() {
+        let index = Path::new(APP_DECLARATIONS).with_file_name("app").join("index.d.ts");
+        let types = Types::new().components(&[ConfirmChange]);
+        assert_eq!(types.typescript_for(Some(&index)), types.typescript());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_handler_import_matches_a_windows_path_in_a_different_case() {
+        let target = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests\\TYPES/App.d.ts"));
+        let types = Types::new().components(&[ConfirmChange]);
+        assert_eq!(types.typescript_for(Some(target)), types.typescript());
+    }
+
+    #[test]
+    fn an_in_file_handler_claims_its_name_before_an_event_field() {
+        let combined = Types::new().components(&[library::LibraryChanged, library::REPORT, ConfirmChange]);
+        let app = combined.typescript_for(Some(Path::new(APP_DECLARATIONS)));
+        assert!(app.contains("export type Change = "), "{app}");
+        assert!(app.contains("export interface Change2 {\n  applied: boolean;"), "{app}");
+        assert!(app.contains("readonly change: Change2;"), "{app}");
+
+        let library = combined.typescript_for(Some(Path::new(LIBRARY_DECLARATIONS)));
+        assert!(library.contains("export interface Change {\n  applied: boolean;"), "{library}");
+        assert!(library.contains("readonly change: Change;"), "{library}");
+        assert!(!library.contains("Change2"), "{library}");
+    }
+
+    #[test]
+    fn json_schema_exports_both_handler_types_with_the_same_name() {
+        let combined = Types::new().components(&[ConfirmChange, library::REPORT]);
+        let schema = combined.json_schema();
+        assert!(schema["$defs"]["Change"]["oneOf"].is_array(), "{schema}");
+        assert_eq!(schema["$defs"]["Change2"]["properties"]["applied"]["type"], "boolean", "{schema}");
     }
 
     #[test]

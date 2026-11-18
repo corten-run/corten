@@ -70,17 +70,22 @@ fn script_types_match_the_server() {
 Give `Types::components` the same component lists as `App::components`. It declares typed
 events, views, and the named `ToJson` types in the scripts' checked handler parameters,
 including the types those values contain. `Types::sync` collects handler argument types for the
-file it writes: relative JSDoc imports are resolved from each script's directory. A component
-library can write its own declarations while the app still collects its events and views.
+file it writes. Use a relative JSDoc import from the script to the generated file:
+`../types/app` can name either `../types/app.d.ts` or `../types/app/index.d.ts`. A component
+library can write its own declarations while the app still collects its events and views. If
+the file cannot be determined, as with a bare specifier or a TypeScript path alias, every
+`sync` includes the handler type and checks the imported name.
 Use `Types::add` for other types, such as feed rows or screen data the script receives from a
 URL. A type already collected through a component or added by hand is declared only once.
 
 If two Rust types have the same name, the generator numbers later declarations (for example,
-`Payload2`), just as it does for types reached through `Types::add`. Type generation fails if
-a handler imports from that file under a different name from the declaration for its Rust
-type. Give handler argument types in the same file distinct Rust names. A renamed Rust alias
-does not create a declaration: use the underlying type's declared name, or define a newtype
-that derives `ToJson`.
+`Payload2`), just as it does for types reached through `Types::add`. Handler types are
+registered before event fields, whose generated references can use the numbered names.
+TypeScript generation fails if a handler imports from that file under a different name from
+the declaration for its Rust type. Give handler argument types in the same file distinct Rust
+names. A renamed Rust alias does not create a declaration: use the underlying type's declared
+name, or define a newtype that derives `ToJson`. `Types::json_schema` includes all handler
+types in `$defs` without checking the names their scripts import.
 
 ### Where the types come from
 
