@@ -30,6 +30,9 @@ pub mod url {
     #[route("/smoke/scoped", get = scoped_page)]
     pub struct ScopedPage;
 
+    #[route("/smoke/scoped/replace", get = replace_scoped_part)]
+    pub struct ReplaceScopedPart;
+
     /// A patch whose component is listed in this area only, for a `data-patch` form on a page
     /// outside it (the test writes the form into the watchlist).
     #[route("/smoke/styled", post = styled)]
@@ -74,9 +77,13 @@ pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm, Rea
 #[derive(Id)]
 struct ScopedReadyId;
 
+#[derive(Id)]
+struct ScopedPartId;
+
 #[component(js)]
-fn ScopedPage() -> impl Document {
+fn ScopedPage(replaced: bool) -> impl Document {
     let ready = refs();
+    let part: corten::script::SharedRef<el::HTMLParagraphElement> = refs();
     html! {
         <!DOCTYPE html>
         <html lang="en">
@@ -85,14 +92,27 @@ fn ScopedPage() -> impl Document {
                 <Corten />
             </head>
             <body>
-                <main><output id={ScopedReadyId} ref={ready} on:connect={js::ready(ready)}></output></main>
+                <main>
+                    <output id={ScopedReadyId} ref={ready} on:connect={js::ready(ready)}></output>
+                    <button type="button" on:click={js::show_part(part, ready)}>"Read part"</button>
+                    <form method="get" action={url::ReplaceScopedPart} data-patch><button>"Replace part"</button></form>
+                    {scoped_part(ScopedPageRefs, replaced)}
+                </main>
             </body>
         </html>
     }
 }
 
 async fn scoped_page(req: Req) -> HtmlResult {
-    req.page(ScopedPage {})
+    req.page(ScopedPage { replaced: false })
+}
+
+fn scoped_part(refs: ScopedPageRefs, replaced: bool) -> impl Patch {
+    html! { <p id={ScopedPartId} ref={refs.part()}>{if replaced { "Replacement" } else { "Original" }}</p> }
+}
+
+async fn replace_scoped_part(req: Req) -> HtmlResult {
+    req.patch_or(scoped_part(ScopedPageRefs, true), || async { req.page(ScopedPage { replaced: true }) }).await
 }
 
 /// The text the handler is given, as itself and in a JSON array. `data-on` is single-quoted, so it

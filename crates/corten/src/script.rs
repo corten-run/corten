@@ -1818,12 +1818,50 @@ pub trait DomEvent {
 /// `K` is whether its elements have keys, for a handler that takes them by key
 /// (`@param {Map<string, HTMLTableCellElement>} cells`): [`Keyed`] when the markup puts it on
 /// every element with a `key={..}`, [`NoKey`] when on none.
-pub struct Ref<T = el::HTMLElement, V = NoRows, W = NoValue, K = NoKey> {
+/// [`SharedRef`] uses the same types but always writes an owner-qualified attribute.
+pub struct Ref<T = el::HTMLElement, V = NoRows, W = NoValue, K = NoKey, const QUALIFIED: bool = false> {
     scope: &'static str,
     name: &'static str,
     kind: PhantomData<fn() -> (T, V)>,
     value: PhantomData<fn() -> (W, K)>,
 }
+
+/// A component's ref that a part can write when rendered on its own. Declare it at the top of
+/// a `#[component(js)]` body with `let name: SharedRef<El> = refs();`. The macro makes a
+/// `ComponentNameRefs` value with one getter per shared ref. Pass that value to the same
+/// part function from both the owner and the patch handler. In either render `ref={..}` writes
+/// the owner-qualified name, and the part belongs under that owner's root in the page.
+///
+/// Only the declaring component's bundle fits a part that takes it:
+///
+/// ```compile_fail,E0308
+/// use corten::{prelude::*, script::SharedRef};
+///
+/// #[component(js)]
+/// fn CountBadge() -> impl Render {
+///     let out: SharedRef<el::HTMLOutputElement> = refs();
+///     html! { <div><output ref={out}></output></div> }
+/// }
+///
+/// #[component(js)]
+/// fn ModeSwitch() -> impl Render {
+///     let out: SharedRef<el::HTMLOutputElement> = refs();
+///     html! { <div><output ref={out}></output></div> }
+/// }
+///
+/// #[derive(Id)]
+/// struct ResultId;
+///
+/// fn part(refs: CountBadgeRefs) -> impl Patch {
+///     html! { <output id={ResultId} ref={refs.out()}></output> }
+/// }
+///
+/// # fn main() {
+/// let _ = part(CountBadgeRefs);
+/// let _ = part(ModeSwitchRefs); // Same ref name and element type, but the wrong owner.
+/// # }
+/// ```
+pub type SharedRef<T = el::HTMLElement, V = NoRows, W = NoValue, K = NoKey> = Ref<T, V, W, K, true>;
 
 /// A ref whose element the markup fills with something other than one view's rows.
 pub enum NoRows {}
@@ -2009,21 +2047,21 @@ pub const fn view_id(name: &str) -> u64 {
     hash
 }
 
-impl<T, V, W, K> Clone for Ref<T, V, W, K> {
+impl<T, V, W, K, const QUALIFIED: bool> Clone for Ref<T, V, W, K, QUALIFIED> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<T, V, W, K> Copy for Ref<T, V, W, K> {}
+impl<T, V, W, K, const QUALIFIED: bool> Copy for Ref<T, V, W, K, QUALIFIED> {}
 
-impl<T, V, W, K> std::fmt::Debug for Ref<T, V, W, K> {
+impl<T, V, W, K, const QUALIFIED: bool> std::fmt::Debug for Ref<T, V, W, K, QUALIFIED> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Ref({}/{})", self.scope, self.name)
     }
 }
 
-impl<T, V, W, K> Ref<T, V, W, K> {
+impl<T, V, W, K, const QUALIFIED: bool> Ref<T, V, W, K, QUALIFIED> {
     /// The element with this ref that holds the event's target, like the DOM's
     /// `event.target.closest(..)`: one handler on a list's container gets the row that was
     /// clicked. A handler with a `closest()` argument runs only for events inside such an
@@ -2165,7 +2203,7 @@ impl<T, V, W, K> Ref<T, V, W, K> {
     /// }
     /// # fn main() {}
     /// ```
-    pub fn with<X: RefValue<Kind = W>>(self, value: X) -> Valued<T, V, X, K> {
+    pub fn with<X: RefValue<Kind = W>>(self, value: X) -> Valued<T, V, X, K, QUALIFIED> {
         Valued { at: self, value }
     }
 }
@@ -2182,8 +2220,8 @@ impl<T> Clone for Closest<T> {
 impl<T> Copy for Closest<T> {}
 
 /// What [`Ref::with`] returns: the ref, put on an element with its value.
-pub struct Valued<T, V, X: RefValue, K = NoKey> {
-    at: Ref<T, V, X::Kind, K>,
+pub struct Valued<T, V, X: RefValue, K = NoKey, const QUALIFIED: bool = false> {
+    at: Ref<T, V, X::Kind, K, QUALIFIED>,
     value: X,
 }
 
@@ -3221,7 +3259,10 @@ pub mod __private {
 
     /// `let (rows, rest) = refs();`: each name, made by `#[component]`.
     #[inline]
-    pub const fn new_ref<T, V, W, K>(scope: &'static str, name: &'static str) -> Ref<T, V, W, K> {
+    pub const fn new_ref<T, V, W, K, const QUALIFIED: bool>(
+        scope: &'static str,
+        name: &'static str,
+    ) -> Ref<T, V, W, K, QUALIFIED> {
         Ref { scope, name, kind: PhantomData, value: PhantomData }
     }
 
@@ -3247,14 +3288,14 @@ pub mod __private {
     }
     /// ` data-ref="rows"`.
     #[inline]
-    fn data_ref<T, V, W, K: KeyKind>(r: &Ref<T, V, W, K>, out: &mut String) {
+    fn data_ref<T, V, W, K: KeyKind, const QUALIFIED: bool>(r: &Ref<T, V, W, K, QUALIFIED>, out: &mut String) {
         out.push_str(" data-ref=\"");
-        qualified(out, r.scope, SCOPE.with(Cell::get));
+        qualified(out, r.scope, if QUALIFIED { None } else { SCOPE.with(Cell::get) });
         out.push_str(r.name);
         out.push('"');
         K::written(r.scope, r.name);
     }
-    impl<E, V, K: KeyKind> RefAttr<E, V, K> for Ref<E, V, NoValue, K> {
+    impl<E, V, K: KeyKind, const QUALIFIED: bool> RefAttr<E, V, K> for Ref<E, V, NoValue, K, QUALIFIED> {
         #[inline]
         fn write_ref(&self, out: &mut String) {
             data_ref(self, out)
@@ -3262,7 +3303,7 @@ pub mod __private {
     }
     /// ` data-ref-value='1250'`: the value as JSON, single-quoted as `data-on` is, so a string
     /// keeps its quotes (`docs/design.md#choice-ref-values`).
-    impl<E, V, K: KeyKind, X: RefValue> RefAttr<E, V, K> for Valued<E, V, X, K> {
+    impl<E, V, K: KeyKind, X: RefValue, const QUALIFIED: bool> RefAttr<E, V, K> for Valued<E, V, X, K, QUALIFIED> {
         #[inline]
         fn write_ref(&self, out: &mut String) {
             data_ref(&self.at, out);
@@ -3476,7 +3517,7 @@ pub mod __private {
     impl<E: ev::SubOf<P>, P: ev::EventType> EventParam<E> for P {}
     impl<E> EventParam<E> for ts::Any {}
 
-    impl<T, V, W, K, P: RefParam<T, V, W, K>> Arg<P> for Ref<T, V, W, K> {
+    impl<T, V, W, K, P: RefParam<T, V, W, K>, const QUALIFIED: bool> Arg<P> for Ref<T, V, W, K, QUALIFIED> {
         fn write_arg(&self, ctx: &Ctx, out: &mut String) {
             out.push_str(P::SIGIL);
             qualified(out, self.scope, ctx.current);

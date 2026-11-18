@@ -1254,6 +1254,13 @@ the view's top-level parts. A `corten::live`
 fragment is already text, so debug builds check it when it is sent instead (it panics, naming the
 element).
 
+A plain function returning `impl Patch` can also draw the part for both the page and the action.
+If it writes the enclosing component's refs, give it the component's typed
+[`ComponentNameRefs` bundle](scripts.md#lists-and-larger-components) in both calls:
+`{set_picker(InventoryRefs, set)}` in the component and
+`action.patch(set_picker(InventoryRefs, set))` in the handler. The part's id still decides
+where it is drawn. Keep that target under the owner so the owner's script can resolve its refs.
+
 The runtime parses a patch as a `<template>`'s content, as the HTML standard's "in template"
 insertion mode reads it: the first top-level element other than a `<template>`, `<script>`,
 `<style>`, `<link>`, `<meta>`, `<title>` or another tag a document's head holds decides how

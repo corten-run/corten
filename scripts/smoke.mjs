@@ -1004,6 +1004,24 @@ async function run(browser) {
       "a scoped document keeps its doctype, standards mode and working refs under html",
       await scoped.evaluate(() => document.doctype?.name === "html" && document.documentElement.getAttribute("data-scope") === "scoped-page" && document.querySelector("output")?.closest("[data-scope]") === document.documentElement),
     );
+    const part = scoped.locator("#scoped-part");
+    const ref = await part.getAttribute("data-ref");
+    const readPart = scoped.getByRole("button", { name: "Read part" });
+    await readPart.click();
+    await scoped.waitForFunction(() => document.querySelector("output")?.value === "Original");
+    const answer = scoped.waitForResponse((r) => new URL(r.url()).pathname === "/smoke/scoped/replace");
+    await scoped.getByRole("button", { name: "Replace part" }).click();
+    const patch = await answer;
+    const body = await patch.text();
+    await scoped.getByText("Replacement", { exact: true }).waitFor();
+    await readPart.click();
+    await scoped.waitForFunction(() => document.querySelector("output")?.value === "Replacement");
+    check(
+      "a standalone patch keeps the page part's ref, and its owner finds the replacement",
+      ref === "scoped-page/part" && patch.headers()["corten-patch"] === "1" && body.includes(`data-ref="${ref}"`) &&
+        !body.includes("data-scope=") && (await part.getAttribute("data-ref")) === ref,
+      body,
+    );
     await scoped.close();
   }
   // Without the Navigation API every navigation is a full page load, the documented fallback: the

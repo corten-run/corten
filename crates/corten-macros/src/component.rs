@@ -324,7 +324,7 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
         }
         None => (None, None),
     };
-    let (body, has_refs) = refs(&body, &scope_name)?;
+    let (body, has_refs, shared_refs) = refs(&body, &scope_name, &name, &vis, script.is_some())?;
     // A script that keeps state (`keep`) keeps it on the component's root, one per instance.
     // In a part (`js = Owner`), the `scope` its owner's handlers take is the owner's root, so they
     // do not make the part a root; any other handler's `scope` does, as in any component.
@@ -372,7 +372,7 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
     ));
     out.extend([TokenTree::Group(Group::new(Delimiter::Brace, fields))]);
     let mut scope = TokenStream::new();
-    let mut items = TokenStream::new();
+    let mut items = shared_refs;
     // The names this component's constant takes for the whole program (`crate::id::guards`).
     let mut guarded: Vec<(&str, String, bool)> = Vec::new();
     // The constant the app lists: the component's script and its own stylesheet.
@@ -632,18 +632,63 @@ fn is_prop(attr: &[TokenTree]) -> bool {
     })
 }
 
-/// Replaces `let (rows, rest) = refs();` at the top level of the body with each ref, named and
-/// scoped to this component. Returns whether there were any.
-fn refs(body: &Group, scope: &str) -> Result<(Group, bool), Error> {
+/// Replaces `let (rows, rest) = refs();` with local refs, and `let row: SharedRef<..> = refs();`
+/// with a ref from the component's generated, named bundle. Both forms give the owner a root.
+fn refs(
+    body: &Group,
+    scope: &str,
+    component: &Ident,
+    vis: &[TokenTree],
+    own_script: bool,
+) -> Result<(Group, bool, TokenStream), Error> {
     let tokens: Vec<TokenTree> = body.stream().into_iter().collect();
     let mut out: Vec<TokenTree> = Vec::with_capacity(tokens.len());
     let mut found = false;
+    let mut local_names = Vec::new();
+    let mut shared_names = Vec::new();
+    let mut methods = TokenStream::new();
+    let bundle = || TokenTree::Ident(Ident::new(&format!("{component}Refs"), component.span())).into();
     let mut i = 0;
     while i < tokens.len() {
         let is_refs_call = |at: usize| {
             is_ident(tokens.get(at), "refs")
                 && matches!(tokens.get(at + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis && g.stream().is_empty())
         };
+        if is_ident(tokens.get(i), "let") && is_punct(tokens.get(i + 2), ':') {
+            // The type can contain groups and generic arguments. The exact RHS is three
+            // top-level tokens before the statement's semicolon: `= refs ()`.
+            let end = tokens[i + 3..].iter().position(|t| is_punct(Some(t), ';')).map(|offset| i + 3 + offset);
+            if let Some(eq) = end
+                .and_then(|end| end.checked_sub(3))
+                .filter(|&eq| eq > i + 3 && is_punct(tokens.get(eq), '=') && is_refs_call(eq + 1))
+            {
+                let Some(TokenTree::Ident(n)) = tokens.get(i + 1) else {
+                    return err(tokens[i + 1].span(), "a shared ref names one variable: let row: SharedRef<El> = refs();");
+                };
+                if !own_script {
+                    return err(n.span(), "only the owner of a script (#[component(js)]) can declare a shared ref");
+                }
+                let name = ref_name(n)?;
+                let ident = TokenTree::Ident(n.clone());
+                methods.extend(q(
+                    "#[doc = __A5] __A0 const fn __A1(self) -> __A2 { ::corten::script::__private::new_ref::<_, _, _, _, true>(__A3, __A4) }",
+                    &[
+                        stream(vis.iter().cloned()),
+                        ident.clone().into(),
+                        stream(tokens[i + 3..eq].iter().cloned()),
+                        literal(scope),
+                        literal(&name),
+                        literal(&format!(" The `{name}` ref of `{component}`.")),
+                    ],
+                ));
+                shared_names.push((name, n.span()));
+                out.extend(tokens[i..=eq].iter().cloned());
+                out.extend(q("__A0.__A1()", &[bundle(), ident.into()]));
+                found = true;
+                i = eq + 3;
+                continue;
+            }
+        }
         if is_ident(tokens.get(i), "let") && is_punct(tokens.get(i + 2), '=') && is_refs_call(i + 3) {
             let names: Vec<Ident> = match &tokens[i + 1] {
                 TokenTree::Ident(one) => vec![one.clone()],
@@ -660,23 +705,19 @@ fn refs(body: &Group, scope: &str) -> Result<(Group, bool), Error> {
                 }
                 other => return err(other.span(), "refs() names plain variables: let (rows, rest) = refs();"),
             };
-            for n in &names {
-                let text = n.to_string();
-                if !text.starts_with(|c: char| c.is_ascii_lowercase())
-                    || !text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                {
-                    return err(n.span(), format!("{text}: a ref is a snake_case variable, its name in the page"));
-                }
-            }
-            let make = |n: &Ident| {
-                q("::corten::script::__private::new_ref::<_, _, _, _>(__A0, __A1)", &[literal(scope), literal(&n.to_string())])
+            let mut make = |n: &Ident| {
+                let name = ref_name(n)?;
+                let tokens =
+                    q("::corten::script::__private::new_ref::<_, _, _, _, false>(__A0, __A1)", &[literal(scope), literal(&name)]);
+                local_names.push(name);
+                Ok::<_, Error>(tokens)
             };
             let value = if names.len() == 1 && matches!(tokens[i + 1], TokenTree::Ident(_)) {
-                make(&names[0])
+                make(&names[0])?
             } else {
                 let mut list = TokenStream::new();
                 for n in &names {
-                    list.extend(make(n));
+                    list.extend(make(n)?);
                     list.extend(q(",", &[]));
                 }
                 crate::tokens::parens(list)
@@ -693,9 +734,31 @@ fn refs(body: &Group, scope: &str) -> Result<(Group, bool), Error> {
         out.push(tokens[i].clone());
         i += 1;
     }
+    for (name, span) in &shared_names {
+        if local_names.contains(name) {
+            return err(*span, format!("{name}: a component's shared ref cannot also be a local ref"));
+        }
+    }
+    let items = if methods.is_empty() {
+        TokenStream::new()
+    } else {
+        let doc = format!(" The shared refs of `{component}`, for parts rendered inside it.");
+        q(
+            "#[doc = __A0] #[derive(Clone, Copy)] __A1 struct __A2; impl __A2 { __A3 }",
+            &[literal(&doc), stream(vis.iter().cloned()), bundle(), methods],
+        )
+    };
     let mut copy = Group::new(Delimiter::Brace, stream(out));
     copy.set_span(body.span());
-    Ok((copy, found))
+    Ok((copy, found, items))
+}
+
+fn ref_name(n: &Ident) -> Result<String, Error> {
+    let name = n.to_string();
+    if !name.starts_with(|c: char| c.is_ascii_lowercase()) || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return err(n.span(), format!("{name}: a ref is a snake_case variable, its name in the page"));
+    }
+    Ok(name)
 }
 
 /// True when a handler in the markup (`on:click={js::close(scope)}`) takes the keyword `scope`.

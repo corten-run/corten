@@ -587,6 +587,41 @@ fn AccountChooser<'a>(accounts: &'a [Account]) -> impl Render {
 }
 ```
 
+**Refs in a standalone part.** When a part is drawn in the page and also sent alone, the
+component that owns the script can share a ref with it. Give the ref a concrete
+`corten::script::SharedRef<El>` type in its `refs()` declaration. This makes a
+`ComponentNameRefs` value whose getters return just those declared refs. A part that takes
+`InventoryRefs` cannot be passed another component's bundle, even if both declare a ref of the
+same name and element type.
+
+```rust,ignore
+use corten::{prelude::*, script::SharedRef};
+
+#[derive(Id)]
+struct SetPickerId;
+
+#[component(js)]
+fn Inventory(set: &str) -> impl Render {
+    let picker: SharedRef<el::HTMLSelectElement> = refs();
+    html! {
+        <section>
+            <button type="button" on:click={js::focus_picker(picker)}>"Focus set"</button>
+            {set_picker(InventoryRefs, set)}
+        </section>
+    }
+}
+
+fn set_picker(refs: InventoryRefs, set: &str) -> impl Patch + '_ {
+    html! { <select id={SetPickerId} aria-label="Set" ref={refs.picker()}><option>{set}</option></select> }
+}
+```
+
+The handler is still a plain exported function (`focus_picker(picker)`, with
+`@param {HTMLSelectElement} picker`). The patch handler calls `set_picker(InventoryRefs, set)`
+too. Both renders write the same owner-qualified ref, and the patch goes under the original
+component root; the part has no root or script of its own. Refs that don't need to be shared
+keep the inferred `let name = refs();` form.
+
 A patch (with `action` from `req.action()`) removes rows as well as replacing them: `action.patch(html! { for id in &done { {Remove(RowId(id))} } })`
 (`corten::view::Remove`, a `<template id data-remove>` the runtime applies), and adds them with
 `view::Append(RowsId, rows)` (`<template id data-append>`). `RowId` is the
