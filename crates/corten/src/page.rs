@@ -526,6 +526,38 @@ impl Failure {
         }
     }
 
+    /// The default error page's English title and message, without any developer detail.
+    /// Use this wording in an app's own layout.
+    ///
+    /// ```
+    /// use corten::{Failure, http::StatusCode};
+    ///
+    /// let failure = Failure::Refused { status: StatusCode::TOO_MANY_REQUESTS };
+    /// assert_eq!(failure.default_text(), ("Too many requests", "Wait a moment and try again."));
+    /// ```
+    pub fn default_text(&self) -> (&'static str, &'static str) {
+        match self {
+            Failure::NotFound => ("Not found", "There is nothing at this address."),
+            Failure::CrossSite => ("Not allowed", "This request came from another site."),
+            Failure::Refused { status } if *status == StatusCode::UNAUTHORIZED => ("Sign in needed", "Sign in to see this page."),
+            Failure::Refused { status } if *status == StatusCode::TOO_MANY_REQUESTS => {
+                ("Too many requests", "Wait a moment and try again.")
+            }
+            Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+            Failure::Unidentified { .. } => ("Not available", "We could not check who you are. Try again in a moment."),
+            Failure::TimedOut | Failure::Offline => ("Not available", "Check your connection and try again."),
+            // The request did not arrive whole in time: an upload that stopped.
+            Failure::Failed { status, .. } if *status == StatusCode::REQUEST_TIMEOUT => {
+                ("Not received", "Check your connection and try again.")
+            }
+            Failure::WrongMethod
+            | Failure::UnknownMethod
+            | Failure::Rejected { .. }
+            | Failure::Failed { .. }
+            | Failure::Panicked { .. } => ("Something went wrong", "Please try again."),
+        }
+    }
+
     /// What went wrong, for the developer: set under `corten dev`, and logged instead in
     /// production. A debug build's error about the app's own code that the page's answer raises (a
     /// component the page draws that the app does not serve, a `Refresh` header, a write
@@ -635,26 +667,7 @@ pub(crate) async fn default_error_page(failure: Failure, req: Req) -> HtmlResult
 }
 
 fn default_error_document(req: &Req, failure: Failure) -> impl crate::view::Document + '_ {
-    let (title, text) = match failure {
-        Failure::NotFound => ("Not found", "There is nothing at this address."),
-        Failure::CrossSite => ("Not allowed", "This request came from another site."),
-        Failure::Refused { status } if status == StatusCode::UNAUTHORIZED => ("Sign in needed", "Sign in to see this page."),
-        Failure::Refused { status } if status == StatusCode::TOO_MANY_REQUESTS => {
-            ("Too many requests", "Wait a moment and try again.")
-        }
-        Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
-        Failure::Unidentified { .. } => ("Not available", "We could not check who you are. Try again in a moment."),
-        Failure::TimedOut | Failure::Offline => ("Not available", "Check your connection and try again."),
-        // The request did not arrive whole in time: an upload that stopped.
-        Failure::Failed { status, .. } if status == StatusCode::REQUEST_TIMEOUT => {
-            ("Not received", "Check your connection and try again.")
-        }
-        Failure::WrongMethod
-        | Failure::UnknownMethod
-        | Failure::Rejected { .. }
-        | Failure::Failed { .. }
-        | Failure::Panicked { .. } => ("Something went wrong", "Please try again."),
-    };
+    let (title, text) = failure.default_text();
     html! {
         <!DOCTYPE html>
         <html lang={req.lang()}>

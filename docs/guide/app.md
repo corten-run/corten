@@ -2849,10 +2849,34 @@ refused still sees themselves signed in, in their theme:
 
 ```rust,ignore
 async fn error_page(failure: Failure, req: Req, viewer: Option<Caller<Viewer>>) -> HtmlResult {
-    req.page(html! { <Layout req={&req} viewer={viewer.as_deref()} title="Not found">..</Layout> })
+    let (title, text) = match failure {
+        Failure::UnknownMethod => ("Method not supported", "This site does not support that request method."),
+        Failure::NotFound
+        | Failure::WrongMethod
+        | Failure::CrossSite
+        | Failure::Refused { .. }
+        | Failure::Unidentified { .. }
+        | Failure::Rejected { .. }
+        | Failure::Failed { .. }
+        | Failure::Panicked { .. }
+        | Failure::TimedOut
+        | Failure::Offline => failure.default_text(),
+    };
+    req.page(html! {
+        <Layout req={&req} viewer={viewer.as_deref()} title={title}>
+            <h1>{title}</h1>
+            <p>{text}</p>
+        </Layout>
+    })
 }
 // App::new(url::router()).error_page(error_page, store.clone())
 ```
+
+Match `Failure` exhaustively without a `_` arm, as the error page from `corten new` does.
+When Corten adds a variant, the compiler points to the place where you need to decide what
+its page should say instead of silently drawing a catch-all page for a new status. Group
+named variants in one arm with `failure.default_text()` to use the default page's English
+title and message in your own layout ([design Choice 67](../design.md#choice-exhaustive-failure)).
 
 Its extractors see the request's URL, `Cookie`, `Authorization`, `Accept-Language` and mode,
 not its body (a body extractor does not compile). The caller is looked up only when the error
@@ -2880,9 +2904,8 @@ a post to a path with no `GET`, a patch answering a browser's plain request
 ([Where a form posts](requests-and-forms.md#where-a-form-posts)))
 is the exception:
 it is set in every debug build, so a router test's error page names it.
-The error page `corten new` writes names every case without `_`, so when Corten adds one the
-app stops compiling instead of showing the wrong text. A JSON route's failures, a data
-client's and every failure under `App::api` are a JSON Problem Details document instead
+A JSON route's failures, a data client's and every failure under `App::api` are a JSON
+Problem Details document instead
 (`application/problem+json`, `{"title","status","detail"}`).
 
 When the error page came to take extractors (callgrind, release build, in-process `oneshot`,

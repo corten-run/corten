@@ -112,7 +112,13 @@ pub async fn error_page(
         Failure::Unidentified { .. } | Failure::TimedOut | Failure::Offline => {
             ("Unavailable", "The auction cannot answer right now. Try again in a moment.")
         }
-        _ => ("Something went wrong", "Try again, or go back to the lots."),
+        Failure::WrongMethod
+        | Failure::UnknownMethod
+        | Failure::CrossSite
+        | Failure::Refused { .. }
+        | Failure::Rejected { .. }
+        | Failure::Failed { .. }
+        | Failure::Panicked { .. } => ("Something went wrong", "Try again, or go back to the lots."),
     };
     req.page(html! {
         <Layout req={&req} title={title} you={you.as_ref()} head="">
