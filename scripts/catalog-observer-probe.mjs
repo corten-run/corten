@@ -57,13 +57,20 @@ try {
     first: capture(failures.first), last: capture(failures.last) }));
   const proof = inspectLifetime(binding, invocation, directory, { campaign, command: 0, pid, result });
   assert.equal(proof.manifestSha256, seal.sha256);
-  assert.ok(result.success && proof.status === "verified" && proof.cleanupComplete, "native command or host replay did not verify");
+  console.log(JSON.stringify({ hostVerified: proof.status === "verified", cleanupComplete: proof.cleanupComplete }));
+  assert.ok(proof.status === "verified" && proof.cleanupComplete, "host replay did not verify");
   stage = "cleanup";
   assert.ok(!existsSync("/sys/fs/cgroup" + proof.context.path), "command scope still present");
   stage = "native-checks";
   const summary = JSON.parse(readFileSync(join(folder, "summary.json")));
   assert.equal(summary.commit, commit); assert.equal(summary.dirty, false);
   assert.deepEqual(summary.options.apps, ["corten"]); assert.equal(summary.options.checkOnly, true);
+  const stages = ["build/image", "checks", "app logs", "suite", "upstream logs", "tree provenance", "artifact index"];
+  console.log(JSON.stringify({ nativeExit: number(result.code), failureCount: summary.failures.length,
+    cleanupFailures: summary.cleanupFailures.length, firstFailures: summary.failures.slice(0, 8).map(f => ({
+      stage: stages.includes(f.stage) ? f.stage : "unknown",
+      source: f.source === null ? null : ["api", "fixture"].includes(f.source) ? f.source : "unknown" })) }));
+  assert.ok(result.success, "native command failed");
   assert.equal(summary.complete, true); assert.equal(summary.checksPassed, true);
   assert.deepEqual(summary.failures, []); assert.deepEqual(summary.cleanupFailures, []);
   stage = "image";
