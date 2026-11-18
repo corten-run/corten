@@ -7,7 +7,8 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { mock, test } from "node:test";
 import { groupNames, selectedApps } from "../registry.mjs";
-import { result as jsonResult, failedResult } from "../../json-api/test-fixtures.mjs";
+import { productionFixture } from "../../json-api/production-fixtures.mjs";
+import { descriptor as jsonDescriptor } from "../../json-api/contract.mjs";
 import { apparatusSources } from "../../catalog/apparatus.mjs";
 
 const seams = new Map();
@@ -47,6 +48,16 @@ function fixture(t, group) {
     apps: Object.fromEntries(binding.selection.apps.map((a) => [a, { qualification: { fixture: { eligible: true }, api: { eligible: true } }, runs: {} }])) };
   writeFileSync(join(folder, "summary.json"), JSON.stringify(summary)); writeFileSync(join(folder, "raw.log"), "synthetic\n");
   return { folder, binding, summary };
+}
+async function jsonFixture(t, options) {
+  const f = fixture(t, "json-api"), raw = await productionFixture(f.folder, options), summary = raw.summary;
+  for (const path of raw.artifacts.keys()) writeFileSync(join(f.folder, path), raw.artifacts.get(path));
+  writeFileSync(join(f.folder, "summary.json"), JSON.stringify(summary));
+  Object.assign(f.binding, { request: { group: "json-api", round: summary.round, commit: summary.commit },
+    execution: { effectiveOptions: summary.options }, resources: { expectedCpus: summary.measurement.cpus },
+    sources: { commit: summary.commit, files: Object.entries(summary.producer.sources)
+      .map(([name, sha256]) => ({ path: `bench/json-api/${name}`, sha256 })) } });
+  return { ...f, summary };
 }
 
 test("catalog worker source receipts must match the bound commit even after fully rehashing", async (t) => {
@@ -139,11 +150,7 @@ test("all registry groups have fixed awaited native APIs, with the real strict J
     const report = await inspectNative(binding, folder); assert.equal(report.status, "verified", group);
     assert.deepEqual(report.outcomes.map((r) => r.app), selectedApps(group)); assert.equal(calls[0].group, group);
   }
-  const f = fixture(t, "json-api"), raw = jsonResult(), summary = raw.summary;
-  for (const [path, bytes] of raw.artifacts) writeFileSync(join(f.folder, path), bytes);
-  writeFileSync(join(f.folder, "summary.json"), JSON.stringify(summary));
-  Object.assign(f.binding, { request: { group: "json-api", round: summary.round, commit: summary.commit },
-    execution: { effectiveOptions: summary.options }, resources: { expectedCpus: summary.measurement.cpus } });
+  const f = await jsonFixture(t), summary = f.summary;
   assert.equal((await inspectNative(f.binding, f.folder)).status, "verified");
   summary.apps[summary.group.apps[0]].checks = {}; writeFileSync(join(f.folder, "summary.json"), JSON.stringify(summary));
   assert.equal((await inspectNative(f.binding, f.folder)).status, "invalid", "missing raw functional evidence is not success");
@@ -156,15 +163,13 @@ test("marketplace replay's actual summary return preserves observed exclusions a
 });
 
 test("real JSON raw replay composes a complete failed target without treating arbitrary invalid evidence as failure", async (t) => {
-  const f = fixture(t, "json-api"), raw = failedResult(), summary = raw.summary;
-  for (const [path, bytes] of raw.artifacts) writeFileSync(join(f.folder, path), bytes);
+  const f = await jsonFixture(t, { failure: { app: "corten", key: jsonDescriptor().cases[0].key, pass: 1,
+    phase: "fixed", responses: ["ok", "http429", "http503"] } }), summary = f.summary;
   const save = () => writeFileSync(join(f.folder, "summary.json"), JSON.stringify(summary)); save();
-  Object.assign(f.binding, { request: { group: "json-api", round: summary.round, commit: summary.commit },
-    execution: { effectiveOptions: summary.options }, resources: { expectedCpus: summary.measurement.cpus } });
   const report = await inspectNative(f.binding, f.folder);
   assert.equal(report.status, "failed"); assert.equal(report.attemptComplete, true); assert.equal(report.cleanupComplete, true);
   assert.deepEqual(report.outcomes, selectedApps("json-api").map((app) => ({ app, outcome: app === "corten" ? "failed" : "passed" })));
-  assert.deepEqual(report.comparisonEligibleApps, []);
+  assert.deepEqual(report.comparisonEligibleApps, selectedApps("json-api").filter((app) => app !== "corten"));
   delete summary.apps.corten.checks[summary.group.cases[0].key].native; save();
   const invalid = await inspectNative(f.binding, f.folder);
   assert.equal(invalid.status, "invalid"); assert.equal(invalid.attemptComplete, false);
