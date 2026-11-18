@@ -293,8 +293,10 @@ the stock's value this way:
 The prefix applies to the registration, declarations, lookups such as `var(--share)` (including
 inside container size queries and `if()` conditions), style queries such as
 `@container style(--share: 50%)`, and property lists such as `transition-property: --share`.
-A literal `style()` test is also scoped when a `var()` fallback or a nested `if()` branch
-supplies it to an `if()` condition.
+A literal `style()` test is also scoped when a substitution supplies it to an `if()` condition:
+in a `var()`, `inherit()`, `attr()` or `env()` fallback, a nested `if()` branch value, or a
+`random-item()` choice. The same text in an ordinary declaration value is not a test.
+This follows the arguments as written, not argument boundaries built by CSS spread syntax.
 A same-spelled anchor, container, timeline, view-transition name or font palette keeps its name.
 A bare name stored as a custom property's value is not a lookup, nor is the attribute name in
 `attr()`. A name computed at runtime, for example one built by a script or supplied by

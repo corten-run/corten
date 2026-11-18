@@ -6265,8 +6265,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
    A name computed at runtime, for example one built by a script or supplied by `attr()`, is not scoped.
    This includes CSS-only lookups such as `var(var(--missing, --t), 1px)` and
    `var(if(else: --t), 1px)`, where a fallback or branch supplies the name. A literal
-   `style()` test supplied by a `var()` fallback or nested `if()` branch to an `if()` condition
-   is scoped because the test itself names the property.
+   `style()` test is scoped when it supplies an `if()` condition through a result slot of a
+   [CSS arbitrary substitution function](https://drafts.csswg.org/css-values-5/#arbitrary-substitution-function):
+   a `var()`, `inherit()`, `attr()` or `env()` fallback, a nested `if()` branch value, or a
+   `random-item()` choice. This does not infer conditions assembled at runtime, follow
+   argument boundaries built by CSS spread syntax, or treat ordinary values as tests.
 
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use

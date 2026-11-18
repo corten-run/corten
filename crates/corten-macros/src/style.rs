@@ -561,11 +561,29 @@ enum PropertyScan {
     Supports,
     Style,
     Condition,
-    ConditionVarName,
+    SubstitutionInput,
     IfCondition { condition_result: bool },
     IfValue { condition_result: bool },
     Opaque,
 }
+
+enum SubstitutionResult {
+    AfterFirst { property_lookup: bool },
+    BranchValues,
+    NoResultArg,
+}
+
+// https://drafts.csswg.org/css-values-5/#arbitrary-substitution-function
+// Which arguments can supply literal result tokens. ident() constructs one identifier instead.
+const ARBITRARY_SUBSTITUTIONS: &[(&str, SubstitutionResult)] = &[
+    ("var", SubstitutionResult::AfterFirst { property_lookup: true }),
+    ("env", SubstitutionResult::AfterFirst { property_lookup: false }),
+    ("attr", SubstitutionResult::AfterFirst { property_lookup: false }),
+    ("inherit", SubstitutionResult::AfterFirst { property_lookup: true }),
+    ("if", SubstitutionResult::BranchValues),
+    ("ident", SubstitutionResult::NoResultArg),
+    ("random-item", SubstitutionResult::AfterFirst { property_lookup: false }),
+];
 
 fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: PropertyScan, refs: &mut Vec<(usize, usize)>) {
     use PropertyScan::*;
@@ -592,29 +610,33 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
         let condition = matches!(mode, Condition | IfCondition { .. } | IfValue { condition_result: true });
         // Size queries and if() conditions can use substitutions without naming a property
         // with a bare identifier.
-        let substitutions = condition || matches!(mode, Value | IfValue { .. } | Style | Container | ConditionVarName);
+        let substitutions = condition || matches!(mode, Value | IfValue { .. } | Style | Container | SubstitutionInput);
         match token {
             Tok::Function => {
                 let name = decoded_name(&css[start..end - 1]).to_ascii_lowercase();
                 let next = match name.as_str() {
                     "url" => Opaque,
-                    "var" | "inherit" if substitutions => {
-                        if arg_end(i + 2) {
-                            ident_ref(toks, i + 1, refs);
-                        } else if spelling(i + 1) == Some("{") && spelling(i + 3) == Some("}") && arg_end(i + 4) {
-                            ident_ref(toks, i + 2, refs);
-                        }
-                        // Only the fallback supplies condition tokens, not the lookup's name.
-                        if name == "var" && condition {
-                            ConditionVarName
-                        } else {
-                            Value
-                        }
-                    }
-                    "if" if substitutions => IfCondition { condition_result: condition },
                     "style" if mode == Container || condition => feature(i + 1, Style, refs),
                     "supports" if condition => feature(i + 1, Supports, refs),
-                    _ if substitutions => Value,
+                    _ if substitutions => match ARBITRARY_SUBSTITUTIONS.iter().find(|(function, _)| *function == name) {
+                        Some((_, SubstitutionResult::AfterFirst { property_lookup })) => {
+                            if *property_lookup {
+                                if arg_end(i + 2) {
+                                    ident_ref(toks, i + 1, refs);
+                                } else if spelling(i + 1) == Some("{") && spelling(i + 3) == Some("}") && arg_end(i + 4) {
+                                    ident_ref(toks, i + 2, refs);
+                                }
+                            }
+                            // The first argument is a lookup or key, not part of the result.
+                            if condition {
+                                SubstitutionInput
+                            } else {
+                                Value
+                            }
+                        }
+                        Some((_, SubstitutionResult::BranchValues)) => IfCondition { condition_result: condition },
+                        Some((_, SubstitutionResult::NoResultArg)) | None => Value,
+                    },
                     _ => Opaque,
                 };
                 stack.push(next);
@@ -624,6 +646,12 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
                     (Supports | Style, "(") => feature(i + 1, mode, refs),
                     (Container, "(") => Container,
                     (_, "(") if condition => Condition,
+                    // A leading brace pair can wrap a free-form argument without being part of it.
+                    (_, "{")
+                        if condition && matches!(kind(i - 1), Some(Tok::Function | Tok::Comma | Tok::Colon | Tok::Semicolon)) =>
+                    {
+                        Condition
+                    }
                     _ if substitutions => Value,
                     _ => Opaque,
                 };
@@ -632,7 +660,7 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
             Tok::Close if stack.len() > 1 => {
                 stack.pop();
             }
-            Tok::Comma if mode == ConditionVarName => *stack.last_mut().unwrap() = Condition,
+            Tok::Comma if mode == SubstitutionInput => *stack.last_mut().unwrap() = Condition,
             Tok::Colon => {
                 if let IfCondition { condition_result } = mode {
                     *stack.last_mut().unwrap() = IfValue { condition_result };
@@ -3282,6 +3310,56 @@ mod tests {
                 "@property --x__t{syntax:'<length>';inherits:false;initial-value:20px}",
                 ".x__a{width:if(if(else: style(--x__t: 20px)): 24px; else: 1px);",
                 "--raw:if(else: style(--t: 20px))}",
+            )
+        );
+    }
+
+    #[test]
+    fn registered_property_style_tests_in_substitution_results_feeding_if_conditions() {
+        for (input, scoped) in [
+            ("inherit(--missing, style(--t: 20px))", "inherit(--missing, style(--x__t: 20px))"),
+            ("attr(--t type(*), style(--t: 20px))", "attr(--t type(*), style(--x__t: 20px))"),
+            ("env(--t, style(--t: 20px))", "env(--t, style(--x__t: 20px))"),
+            (
+                "random-item(--t, style(--t: 20px), {style(--t: 20px)})",
+                "random-item(--t, style(--x__t: 20px), {style(--x__t: 20px)})",
+            ),
+            ("ident(--t)", "ident(--t)"),
+        ] {
+            let sheet = scope(
+                &format!(
+                    "@property --t {{ syntax: '<length>'; inherits: false; initial-value: 20px }}
+                     .a {{ width: if({input}: 24px; else: 1px); --raw: {input} }}"
+                ),
+                "x",
+            )
+            .unwrap();
+            assert_eq!(
+                sheet.css,
+                format!(
+                    "@property --x__t{{syntax:'<length>';inherits:false;initial-value:20px}}\
+                     .x__a{{width:if({scoped}: 24px; else: 1px);--raw:{input}}}"
+                ),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_substitution_result_slots_carry_the_enclosing_condition() {
+        let sheet = scope(
+            "@property --t { syntax: '*'; inherits: false }
+             .a { width: if({attr(var(--missing, data-test) type(*), {env(--t, style(--t: style(--t)))})}: 24px; else: 1px);
+                  --raw: if(else: attr(data-test type(*), style(--t))) }",
+            "x",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.css,
+            concat!(
+                "@property --x__t{syntax:'*';inherits:false}",
+                ".x__a{width:if({attr(var(--missing, data-test) type(*), {env(--t, style(--x__t: style(--t)))})}: 24px; else: 1px);",
+                "--raw:if(else: attr(data-test type(*), style(--t)))}",
             )
         );
     }
