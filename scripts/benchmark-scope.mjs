@@ -71,19 +71,21 @@ export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd) 
     if (sha.test(PUSH_BEFORE ?? "") && PUSH_BEFORE !== "0".repeat(40)) {
       const base = spawnSync("git", ["cat-file", "-e", `${PUSH_BEFORE}^{commit}`], { cwd, stdio: "ignore" });
       if (base.error) throw base.error;
-      if (base.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd);
+      // A force-push's old tip is not an ancestor; its tree diff can hide changes.
+      const ancestor = base.status === 0 && spawnSync("git", ["merge-base", "--is-ancestor", PUSH_BEFORE, GITHUB_SHA], { cwd, stdio: "ignore" });
+      if (ancestor?.error) throw ancestor.error;
+      if (ancestor?.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd);
     }
-    console.warn("Push base unavailable; running all Evidence jobs.");
+    console.warn("Push base unavailable; selecting every benchmark job.");
   }
   return undefined;
 }
 
 if (import.meta.main) {
-  const { GITHUB_EVENT_NAME, GITHUB_OUTPUT, PARITY_APPS } = process.env;
+  const { GITHUB_OUTPUT, PARITY_APPS } = process.env;
   const workflow = process.argv[2];
   if (workflow === "catalog") {
-    const paths = GITHUB_EVENT_NAME === "pull_request" ? eventPaths(process.env) : undefined;
-    const { apps, json } = selectScope(JSON.parse(PARITY_APPS), paths);
+    const { apps, json } = selectScope(JSON.parse(PARITY_APPS), eventPaths(process.env));
     appendFileSync(GITHUB_OUTPUT, `apps=${JSON.stringify(apps)}\njson=${json}\n`);
   } else if (workflow === "evidence") {
     const paths = eventPaths(process.env);
