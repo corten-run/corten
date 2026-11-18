@@ -5,10 +5,16 @@
 // dialog that a submit inside it got no answer, where the page's toaster cannot be seen.
 
 /** @import { CortenError } from "corten" */
+import { patchRoots } from "corten";
 
 /** @typedef {{ signal: AbortSignal }} ModalLife */
 
 let opened = 0;
+const [patchRoot, drawnOpen] = patchRoots();
+/** @type {WeakMap<HTMLDialogElement, { opener: Element | null }>} */
+const modals = new WeakMap();
+/** Dialogs that started or ended a native session while another modal was open. */
+const toggled = new WeakSet();
 /** @type {{ order: number, finish: () => void }[]} */
 const removed = [];
 
@@ -22,45 +28,73 @@ function afterRemoval(order, finish) {
   removed.push({ order, finish });
 }
 
+/** @param {Element | null} el @param {Element | null | undefined} root */
+function counterpart(el, root) {
+  const id = el && Element.prototype.getAttribute.call(el, "id");
+  if (!id || !root) return null;
+  return Element.prototype.getAttribute.call(root, "id") === id
+    ? root : Element.prototype.querySelector.call(root, `#${CSS.escape(id)}`);
+}
+
 /**
  * A dialog drawn `open` becomes modal: in the top layer over a backdrop, the page behind it inert,
  * Escape closes it, and focus goes to the first field the server marked invalid in it (else where
  * the browser puts it). A dialog drawn closed, or already modal, is left as it is.
- * On removal while still open, restore opener focus where possible and send one non-bubbling
- * `close` to a closed replacement with the same id. A replacement drawn open starts its own life.
+ * When a patch replaces or removes this modal while it is still open, restore opener focus and
+ * send one non-bubbling `close` to a closed replacement with the same id. An open replacement
+ * carries the original opener; a replacement that opened and closed natively needs no event.
  * @param {HTMLDialogElement} dialog
  * @param {ModalLife} options
  */
 export function modal(dialog, options) {
   if (!dialog.open || dialog.matches(":modal")) return;
   const doc = dialog.ownerDocument;
-  const opener = doc.activeElement;
-  const openerId = opener?.id;
+  const modalLife = { opener: doc.activeElement };
   const order = ++opened;
   // Without `open` rather than close(): no `close` event for a dialog the user saw stay open.
   dialog.removeAttribute("open");
   dialog.showModal();
   const signal = options?.signal;
   if (signal && !signal.aborted && dialog.matches(":modal")) {
+    modals.set(dialog, modalLife);
     let sameSession = true;
-    dialog.addEventListener("beforetoggle", (event) => {
-      if (event.isTrusted) sameSession = false;
-    }, { signal });
+    doc.addEventListener("beforetoggle", (event) => {
+      if (!event.isTrusted || !(event.target instanceof HTMLDialogElement)) return;
+      toggled.add(event.target);
+      if (event.target === dialog) sameSession = false;
+    }, { capture: true, signal });
     signal.addEventListener("abort", () => {
+      modals.delete(dialog);
       // Removing a modal takes it out of the top layer but leaves its open attribute. A
       // native close (even if the dialog then reopens) or removal of open is not ours to report.
       if (!sameSession || dialog.isConnected || !dialog.open) return;
-      const next = dialog.id ? doc.getElementById(dialog.id) : null;
-      if (next instanceof HTMLDialogElement && next.open) return;
+      const root = patchRoot(dialog);
+      if (root === undefined) return;
+      const next = counterpart(dialog, root);
+      const opener = modalLife.opener;
+      const back = opener && doc.contains(opener) ? opener : counterpart(opener, patchRoot(opener));
+      const focus = back instanceof HTMLElement && back.localName === opener?.localName ? back : null;
+      const to = next instanceof HTMLDialogElement ? next : null;
+      if (to?.open) {
+        const carried = modals.get(to);
+        if (carried) carried.opener = focus;
+        return;
+      }
+      if (to && (drawnOpen(to) || toggled.has(to))) return;
+      // A nested close handler or restoring focus can start a native session before we finish.
+      const pending = new AbortController();
+      let native = false;
+      to?.addEventListener("beforetoggle", (event) => { native ||= event.isTrusted; }, { signal: pending.signal });
       afterRemoval(order, () => {
-        if (dialog.isConnected || (next instanceof HTMLDialogElement && next.open)) return;
-        const back = opener?.isConnected ? opener : openerId ? doc.getElementById(openerId) : null;
-        if (back instanceof HTMLElement && back.localName === opener?.localName) back.focus({ preventScroll: true });
-        // Focusing, or a nested dialog's close handler, can change the tree. Never retarget
-        // the event to some other element that has since taken this id.
-        if (next instanceof HTMLDialogElement && next.isConnected && !next.open) {
-          next.returnValue = dialog.returnValue;
-          next.dispatchEvent(new Event("close"));
+        try {
+          if (dialog.isConnected || to?.open || native) return;
+          if (focus && doc.contains(focus)) focus.focus({ preventScroll: true });
+          if (to?.isConnected && !to.open && !native) {
+            to.returnValue = dialog.returnValue;
+            to.dispatchEvent(new Event("close"));
+          }
+        } finally {
+          pending.abort();
         }
       });
     }, { once: true });

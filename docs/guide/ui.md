@@ -96,10 +96,14 @@ List `corten_ui::COMPONENTS` and it is served.
 
 If a patch replaces a still-open modal made by `dialog::modal` or `dialog::modalClosedBy` with
 a closed dialog of the same id, the widget returns focus to the element focused before it opened
-(or its same-id replacement, when available). It then dispatches one non-bubbling `close` on the
+(or its same-id replacement from the patch). It then dispatches one non-bubbling `close` on the
 attached replacement, so its `on:close` runs and can read the previous dialog's `returnValue`.
-A removal without a replacement only restores focus; a replacement drawn open starts its own
-modal life. Nested removals finish innermost first. A native close, including Escape, is unchanged.
+A patch that removes the dialog without a replacement only restores focus. A modal drawn open
+again by a patch keeps its original opener for a later close. Nested removals finish innermost
+first. A native close, including one by the new dialog's own script, keeps its event and result.
+A navigation or script removal is not a patch: reusing an id does not send a close or restore
+focus. This does not change how patches treat a dialog the user opened rather than the widget,
+or how navigation updates a kept layout element in place.
 
 ```rust,ignore
 <button type="button" command="show-modal" commandfor={RenameId}>"Rename"</button>

@@ -21,6 +21,7 @@ pub enum Case {
     Reopen,
     ReplaceOpener,
     Link,
+    NativeConnect,
 }
 
 #[derive(Id)]
@@ -58,7 +59,7 @@ pub(super) async fn draw(req: Req, Params(route): Params<DialogDraw>) -> HtmlRes
             .await
         }
         case => {
-            let open = case == Case::Reopen;
+            let open = matches!(case, Case::Reopen | Case::NativeConnect);
             req.patch_or(area(case, open, "updated"), || async { document(&req, case, open) }).await
         }
     }
@@ -105,6 +106,8 @@ struct DrawOpenForm;
 fn DrawAreaPatch(case: Case, open: bool, stage: &str) -> impl Patch {
     let route = DialogDraw { case };
     let close = refs();
+    let outer = refs();
+    let next = DialogDraw { case: Case::Post };
     let nested = matches!(case, Case::Nested | Case::DropInner | Case::Mutate);
     let inner = nested && (open || case != Case::DropInner);
     html! {
@@ -119,17 +122,28 @@ fn DrawAreaPatch(case: Case, open: bool, stage: &str) -> impl Patch {
                     on:close={dialog_draw::closed(event, target, false)}
                 >
                     <a ref={close} href={route}>"Leave"</a>
+                    <a href={next} data-no-prefetch>"Next page"</a>
                     <form method="post" action={route.draw()} data-patch><button>"Change dialog"</button></form>
                 </dialog>
             } else {
                 <dialog
                     id={DrawOuter}
+                    ref={outer}
                     open={open}
                     aria-label="Outer modal"
                     on:connect={dialog::modal(target)}
                     on:close={dialog_draw::closed(event, target, false)}
                 >
                     <button type="button">"Inside outer"</button>
+                    if case == Case::Live {
+                        <a href={next} data-no-prefetch>"Next page"</a>
+                    }
+                    if case == Case::Reopen && stage == "updated" {
+                        <form method="get" action={route} data-patch><button>"Close redrawn dialog"</button></form>
+                    }
+                    if case == Case::NativeConnect && stage == "updated" {
+                        <span on:connect={dialog_draw::nativeClose(outer)}></span>
+                    }
                     if inner {
                         <dialog
                             id={DrawInner}

@@ -1841,6 +1841,113 @@ async function run(browser) {
         JSON.stringify(after),
       );
       if (held) await draws.unroute(incoming, delay);
+      if (mode === "reopen") {
+        await draws.getByRole("button", { name: "Close redrawn dialog" }).click();
+        await draws.locator("#draw-outer:not([open])").waitFor({ state: "attached" });
+        const closed = await draws.evaluate(() => ({
+          events: document.querySelector("output")?.value,
+          focus: document.activeElement?.id,
+        }));
+        check("a modal redrawn open returns focus to its original opener on a later close",
+          closed.events === outer && closed.focus === "draw-opener", JSON.stringify(closed));
+      }
+    }
+
+    for (const mode of ["navigation", "live-during-navigation", "unrelated-reuse"]) {
+      const live = mode === "live-during-navigation";
+      const reuse = mode === "unrelated-reuse";
+      const to = `${base}/dialog-draw/post`;
+      const stream = `${base}/dialog-draw-live`;
+      let releaseLive = () => {};
+      let releaseNav = () => {};
+      let asked = () => {};
+      const liveHeld = new Promise((resolve) => { releaseLive = () => resolve(undefined); });
+      const navHeld = new Promise((resolve) => { releaseNav = () => resolve(undefined); });
+      const navStarted = new Promise((resolve) => { asked = () => resolve(undefined); });
+      /** @param {import("@playwright/test").Route} route */
+      const holdLive = async (route) => { await liveHeld; await route.continue(); };
+      /** @param {import("@playwright/test").Route} route */
+      const holdNav = async (route) => { asked(); await navHeld; await route.continue(); };
+      if (live) {
+        await draws.route(stream, holdLive);
+        await draws.route(to, holdNav);
+      }
+      try {
+        await draws.goto(`${base}/dialog-draw/${live ? "live" : "link"}`);
+        if (!reuse && !await draws.evaluate(() => {
+          document.documentElement.dataset.dialogDraw = "here";
+          return "navigation" in window;
+        })) {
+          if (live) skip("a live patch delivers one close while navigation is pending", "no Navigation API");
+          skip(`${mode} does not close or focus unrelated same-id controls`, "no Navigation API");
+          continue;
+        }
+        if (reuse) await draws.evaluate(() => {
+          // A script removes the old markup and puts back unrelated controls with both ids.
+          const old = document.querySelector("#draw-area");
+          const opener = document.querySelector("#draw-opener");
+          const reuseIds = () => {
+            document.querySelector("#draw-area")?.remove();
+            document.querySelector("#draw-opener")?.replaceWith(/** @type {Node} */ (opener?.cloneNode(true)));
+            document.querySelector("main")?.append(/** @type {Node} */ (old?.cloneNode(true)));
+          };
+          document.addEventListener("reuse-ids", reuseIds, { once: true });
+        });
+        await draws.locator("#draw-opener").press("Enter");
+        await draws.locator("#draw-outer:modal").waitFor();
+        if (reuse) await draws.evaluate(() => document.dispatchEvent(new Event("reuse-ids")));
+        else {
+          const arrived = draws.waitForURL(to);
+          await draws.getByRole("link", { name: "Next page" }).click({ noWaitAfter: live });
+          if (live) {
+            await navStarted;
+            releaseLive();
+            await draws.locator('#draw-area[data-stage="updated"]').waitFor({ state: "attached" });
+            const events = await draws.locator("output").evaluate((el) => /** @type {HTMLOutputElement} */ (el).value);
+            check("a live patch delivers one close while navigation is pending", events === outer, events);
+            releaseNav();
+          }
+          await arrived;
+        }
+        await draws.locator('#draw-area[data-stage="initial"]').waitFor({ state: "attached" });
+        const after = await draws.evaluate(() => ({
+          events: document.querySelector("output")?.value,
+          focus: document.activeElement?.id,
+          swapped: document.documentElement.dataset.dialogDraw === "here",
+        }));
+        check(`${mode} does not close or focus unrelated same-id controls`,
+          (reuse || after.swapped) && after.events === "" && after.focus !== "draw-opener", JSON.stringify(after));
+      } finally {
+        releaseLive();
+        releaseNav();
+        if (live) {
+          await draws.unroute(stream, holdLive);
+          await draws.unroute(to, holdNav);
+        }
+      }
+    }
+
+    for (const mode of ["native-connect", "native-focus"]) {
+      await draws.goto(`${base}/dialog-draw/${mode === "native-connect" ? mode : "post"}`);
+      await draws.locator("#draw-opener").press("Enter");
+      await draws.locator("#draw-outer:modal").waitFor();
+      await draws.evaluate((mode) => {
+        const old = /** @type {HTMLDialogElement} */ (document.querySelector("#draw-outer"));
+        old.returnValue = "old";
+        if (mode === "native-focus") document.querySelector("#draw-opener")?.addEventListener("focus", () => {
+          const next = /** @type {HTMLDialogElement} */ (document.querySelector("#draw-outer"));
+          next.showModal();
+          next.close("new");
+        }, { once: true });
+      }, mode);
+      await draws.getByRole("button", { name: "Change dialog" }).click();
+      await draws.waitForFunction(() => document.querySelector("output")?.value.includes(":native:"));
+      const after = await draws.evaluate(() => ({
+        events: document.querySelector("output")?.value,
+        value: /** @type {HTMLDialogElement} */ (document.querySelector("#draw-outer")).returnValue,
+      }));
+      check(`${mode} delivers exactly one native close and keeps its returnValue`,
+        after.events === "draw-outer:native:target:new;" && after.value === "new", JSON.stringify(after));
     }
     await draws.close();
   }

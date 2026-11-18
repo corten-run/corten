@@ -237,9 +237,9 @@ pub mod dialog {
     pub use super::dialog_handlers::{failed, modalClosedBy, COMPONENT};
 
     /// Makes a server-drawn open dialog modal on connect and focuses its first invalid field.
-    /// If replaced with a closed dialog with the same id, restores opener focus where possible
-    /// and dispatches one `close` on the replacement. Removal without replacement only restores
-    /// focus. Native closes are unchanged.
+    /// A patch that draws it closed restores opener focus where possible and dispatches one
+    /// `close` on the same-id replacement. A patch that removes it only restores focus, and
+    /// an open redraw carries the opener forward. Navigation and native closes are unchanged.
     #[must_use]
     pub fn modal(dialog: impl Arg<HTMLDialogElement>) -> impl Bind {
         // Preserve modal(target) while passing the same element lifetime as the signal keyword.

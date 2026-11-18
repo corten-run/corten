@@ -1004,6 +1004,37 @@ async function run(browser) {
       "a scoped document keeps its doctype, standards mode and working refs under html",
       await scoped.evaluate(() => document.doctype?.name === "html" && document.documentElement.getAttribute("data-scope") === "scoped-page" && document.querySelector("output")?.closest("[data-scope]") === document.documentElement),
     );
+    const roots = await scoped.evaluate(async () => {
+      const { patch, patchRoots } = await import("corten");
+      const [patchRoot, drawnOpen] = patchRoots();
+      const __html = /** @type {any} */ (window).__html;
+      const out = /** @type {HTMLOutputElement} */ (document.querySelector("output"));
+      const wrapper = document.createElement("section");
+      wrapper.id = "smoke-patch-root";
+      out.before(wrapper);
+      wrapper.append(out);
+      await patch(__html('<section id="smoke-patch-root"><dialog id="smoke-patch-dialog" open></dialog></section>'));
+      const replaced = out.dataset.patchRoot;
+      const expired = patchRoot(out) === undefined;
+      const dialog = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-patch-dialog"));
+      dialog.removeAttribute("open");
+      const drawn = drawnOpen(dialog);
+      document.getElementById("smoke-patch-root")?.remove();
+      delete out.dataset.patchRoot;
+      document.querySelector("main")?.append(wrapper);
+      await Promise.resolve();
+      await patch(__html('<template id="smoke-patch-root" data-remove></template>'));
+      const removed = out.dataset.patchRoot;
+      delete out.dataset.patchRoot;
+      document.querySelector("main")?.append(wrapper);
+      await Promise.resolve();
+      wrapper.remove();
+      await Promise.resolve();
+      return { replaced, expired, drawn, removed, script: out.dataset.patchRoot };
+    });
+    check("abort sees the patch's replacement or removal, not a script's removal, and drawn open survives script edits",
+      roots.replaced === "smoke-patch-root" && roots.expired && roots.drawn && roots.removed === "removed" && roots.script === "none",
+      JSON.stringify(roots));
     await scoped.close();
   }
   // Without the Navigation API every navigation is a full page load, the documented fallback: the

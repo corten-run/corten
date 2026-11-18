@@ -8,6 +8,11 @@
  */
 export function closed(event, dialog, discardOuter) {
   const output = dialog.closest("main")?.querySelector("output");
-  if (output) output.value += `${dialog.id}:${event.isTrusted ? "native" : "patch"}:${event.bubbles ? "bubbles" : "target"};`;
+  if (output) output.value += `${dialog.id}:${event.isTrusted ? "native" : "patch"}:${event.bubbles ? "bubbles" : "target"}${dialog.returnValue ? `:${dialog.returnValue}` : ""};`;
   if (discardOuter) dialog.parentElement?.remove();
+}
+
+/** @param {HTMLDialogElement} dialog */
+export function nativeClose(dialog) {
+  dialog.close("new");
 }

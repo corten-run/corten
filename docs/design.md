@@ -4367,16 +4367,21 @@ rules something out.
     the answer draws it closed: it was tried and taken out, since `close()` queues its `close`
     event after the patch has detached the dialog (so a delegated `on:close` handler never hears
     it), closes nested modals outer-first (so focus lands on the page), and lets a `beforetoggle`
-    handler change the tree while the runtime walks it. The widget acts after replacement using
-    its connect signal instead, so other pages pay no core bytes or patch work. The pilot's workaround, a script that
-    replaces the closed dialog with an empty element before each submit, is the per-page script
-    this removes.
+    handler change the tree while the runtime walks it. The widget instead asks the runtime
+    which patch root took its modal away, during the existing connect signal's abort. It looks
+    for the counterpart only inside that root and acts after the sweep, innermost first. An
+    open redraw carries the opener forward; a native close takes precedence over a forwarded
+    one. A location guard loses a live close while a navigation is pending, and a page marker
+    or document-wide id lookup can mistake unrelated same-page markup for the replacement.
+    Neither navigation nor an arbitrary script removal is a patch. The pilot's workaround,
+    replacing the closed dialog with an empty element before each submit, is the per-page
+    script this removes.
 
     What it costs: the runtime is 386 bytes larger raw, 149 with gzip (15,069 to 15,218) and 124
     with brotli (13,601 to 13,725), paid once a release by every user. A submit reads the
     `closest` dialog or `<details>` around its control, once per one it is in (usually none),
     into a set, and with no submitter looks the focused element up among the form's controls; a patch pays an argument passed down, and the test runs for the patch's own root
-    only, after the checks that already find the user changed it, as one `Set.has`. All of this
+    only, after the checks that already find the user changed it, as one `Set.has`. That patch work
     is reasoned, not measured: a few calls where the root's state is already read.
 
     Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
@@ -4396,10 +4401,11 @@ rules something out.
     state (a Refresh beside a sheet the user closed on purpose), which would call for a way to say
     so; the platform gets markup for a shown popover, when an answer could ask for one; or a
     press inside an element is found to ask for it open (a Show more in a `<details>` the user
-    folded), when the rule would need the submitter's intent rather than its place; or the issue
-    on closing an open dialog as the browser does is fixed, when an answer's close may be done as
-    the browser's and the case of an answer that closes what the user opened can be decided with
-    it.
+    folded), when the rule would need the submitter's intent rather than its place; a real app
+    needs native close semantics for a user-opened dialog or for a kept layout dialog updated in
+    place, which this replacement-only widget does not address; or the platform provides a
+    native close that can be observed by an attached handler during replacement, so the
+    widget's forwarding and the core lookup can go.
 
     Last checked: 2026-11-14, the smoke's dialog and `<details>` reopen checks failing with main's
     runtime (`e59c32c28`, the checks as at `c264af2ac`) and passing on `bf1b2eaa2`, and its
