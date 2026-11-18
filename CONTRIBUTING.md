@@ -76,6 +76,12 @@ The bare `npx tsc` command may select the benchmark harness's classic 5.9.3 comp
 Grouped benchmark replay and observer controls also run in the separate
 `Benchmark Evidence` workflow: `npm run check:groups:evidence:core`,
 `npm run check:groups:evidence:contracts` and `npm run check:groups:evidence:browser`.
+On pull requests and pushes to `main`, its scope job starts the suites only when the
+benchmark, tooling, workflow or committed source-custody inputs change. These inputs
+include `docs/`, `crates/`, and the Cargo manifests and locks for the portable suites.
+The native Linux job scopes separately to benchmark, scripts, tooling and workflow inputs.
+A push with no usable base commit runs all Evidence jobs.
+Evidence is not a publication gate; Release calls CI only.
 They need Node 24 or later, the installed pinned Playwright Chromium, current Git,
 the full repository history and the integrity-checked npm cache used by `npm ci`.
 The portable jobs use the existing Git-capable Playwright image and serial test files;
@@ -93,6 +99,18 @@ check rejects any other omitted core test file. Browser CI runs every
 portable saved-verifier test, excluding only the optional historical `retained real w28`
 capture test. Native production-image and Docker collector controls are also separate;
 their absence cannot establish framework or host qualification.
+
+`Catalog Contract` runs the harness and Corten parity for framework-only changes; app
+changes run the harness and the affected apps, including consumers of shared drivers.
+Changes to shared benchmark inputs or the workflow, pushes to `main` and manual runs
+test all 20 parity apps and both JSON jobs. This also applies to unknown app directories
+and files directly in `bench/fullstack/apps/`. An `aspnet-aot` change runs the JSON jobs.
+Run `node --test scripts/benchmark-scope.test.mjs` to check both selectors, including
+the imports of the Catalog parity commands for each app.
+Both workflows compare the pull request merge commit with its first parent, using
+the full Git diff rather than GitHub's path-filter file list. Evidence compares the
+before and after commits on a push. Newer pull request runs cancel older ones;
+`main` runs do not cancel one another.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
@@ -183,7 +201,8 @@ builds on the oldest supported Rust, `rust-version` in the root `Cargo.toml`. Th
 (`.github/workflows/ci.yml`) runs the same checks on every pull request and push to `main`,
 side by side on runners of their own: the release tests apart from the other Rust checks, and the
 browser smokes in three groups, one engine of the watchlist's smoke in each. The required checks
-`rust` and `browser` pass only when every job under them ran and passed; a new smoke step names
+`rust` and `browser` pass only when every job under them ran and passed, and `msrv` checks the
+supported Rust floor. A new smoke step names
 its part in its condition and in exactly one group's `parts`, or `browser` fails.
 All three browser groups pull the pinned Playwright image. Only `chromium-examples`, which
 runs the `npm-check` part and the native workload group apparatus, builds the Git-capable
@@ -319,8 +338,22 @@ establish a general ranking.
    `main`, so a commit of the pull request's own passes there; a pull request that cites one is
    merged with a merge commit, which keeps it on `main`'s history, or pushes an evidence tag for
    it first, since a squash or rebase merge leaves it out.
-3. Update the guide in `docs/guide/` that describes the behavior, and add a line to
-   `CHANGELOG.md` under Unreleased.
+3. Update the guide in `docs/guide/` that describes the behavior and add a file in
+   [`changelog.d/`](changelog.d/) instead of editing `CHANGELOG.md`. Name it
+   `pr-<PR-number>-<entry>.md`, using the pull request number, not the issue number, and a
+   different positive integer suffix for each entry in the pull request. Before you have a PR
+   number, use `branch-<unique-slug>-<entry>.md`. Pick a branch slug unique in this repository
+   (lowercase letters, digits and hyphens; add the fork owner or another discriminator if needed).
+   Each file holds one top-level `- ` bullet: one to four spaces after the hyphen, then a
+   paragraph of visible text. Indent continuation lines with spaces to at least the start of the
+   first line's text. No blank lines or nested blocks. Start the bullet's text with
+   `**Breaking:**` followed by a space for a breaking change.
+   Use only single-line `[label](https://host/path)` links with a text label and a bare absolute
+   HTTPS destination, without a title. Percent-encode any parentheses in the destination.
+   These links work in both the pending file and the released changelog.
+   Use emphasis and single-line code spans for prose; put literal brackets, angle brackets,
+   backslashes, URLs, and link examples inside code spans. Do not use raw HTML, character
+   references, images, or reference links or definitions. `npm run check` validates this format.
 4. Commit messages say what changed and why, in plain sentences.
 5. The description says what changed and why, the checks run and their results, and the
    measurements from 2. It merges after its [review](#review).
