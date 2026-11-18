@@ -18,6 +18,8 @@
 //! 8. `data` on a route with no `get`, on an `unstaged` route or on a route with a type
 //!    parameter, `data` named twice or naming no type, and `data` with `rows` are each refused with
 //!    a message that says which (#1399).
+//! 9. `FromJson` names the conflicting serde attributes, or tells how to write a malformed
+//!    conversion attribute.
 //!
 //! Each app is built with `cargo`, offline, from the workspace's lock, in the target directory
 //! `link_clash` builds in, so they share the dependencies' builds.
@@ -156,7 +158,7 @@ fn a_part_read_again_from_a_route_that_may_answer_its_page_says_why() {
     let app = |patches: bool, answer: &str| {
         let patches = if patches { ", patches" } else { " " };
         format!(
-            "use std::time::Duration;\nuse corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/alerts\", get = alerts{patches})]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> {answer} {{\n    let again = ReadAgain {{ after: Duration::from_secs(1) }}.from(url::Alerts);\n    req.patch(html! {{ <ul id={{ListId}}></ul> {{again}} }})\n}}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
+            "use std::time::Duration;\nuse corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/alerts\", get = alerts{patches})]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> {answer} {{\n    let again = ReadAgain {{ after: Duration::from_secs(1) }}.from(url::Alerts);\n    req.action().ok_or_else(corten::Error::not_found)?.patch(html! {{ <ul id={{ListId}}></ul> {{again}} }})\n}}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
         )
     };
     let (ok, stderr) = build_main("patches-message", &app(false, "HtmlResult"));
@@ -185,7 +187,7 @@ fn a_part_read_again_from_a_route_that_may_answer_its_page_says_why() {
 fn a_patches_route_mounted_by_hand_with_a_page_handler_says_why() {
     let app = |answer: &str, method: &str| {
         format!(
-            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/alerts\", get = alerts, patches)]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> HtmlResult<Patches> {{\n    req.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nasync fn mounted(req: Req) -> {answer} {{\n    req.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nfn main() {{\n    let _ = alerts;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Alerts>({method}(mounted))).router();\n}}\n"
+            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/alerts\", get = alerts, patches)]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> HtmlResult<Patches> {{\n    req.action().ok_or_else(corten::Error::not_found)?.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nasync fn mounted(req: Req) -> {answer} {{\n    req.action().ok_or_else(corten::Error::not_found)?.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nfn main() {{\n    let _ = alerts;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Alerts>({method}(mounted))).router();\n}}\n"
         )
     };
     for (answer, method) in [("HtmlResult", "get"), ("HtmlResult<Patches>", "post")] {
@@ -259,7 +261,7 @@ fn patches_where_no_get_handler_can_answer_a_patch_says_why() {
             "use corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    {route}\n}}\n\n#[allow(unused_variables)]\n{handler}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
         )
     };
-    let patch = "async fn alerts(req: Req) -> HtmlResult<Patches> {\n    req.patch(html! {})\n}";
+    let patch = "async fn alerts(req: Req) -> HtmlResult<Patches> {\n    req.action().ok_or_else(corten::Error::not_found)?.patch(html! {})\n}";
     for (route, handler, said) in [
         (
             "#[route(\"/alerts\", post = alerts, patches)]\n    pub struct Alerts;",
@@ -323,4 +325,119 @@ fn data_where_no_get_handler_can_answer_it_says_why() {
         assert!(!ok, "{route} compiled");
         assert!(stderr.contains(said), "the reason for {route}: {stderr}");
     }
+}
+
+#[test]
+fn from_json_says_why_serde_container_attributes_are_refused() {
+    let (ok, stderr) = build_main_with(
+        "from-json-message",
+        r#"
+#[derive(corten::FromJson)]
+#[serde(transparent)]
+enum Marker { Present }
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into = "u64")]
+struct TransparentInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(from = "u64")]
+#[serde(transparent)]
+struct TransparentFrom(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, try_from = "u64")]
+struct TransparentTryFrom(u64);
+
+#[derive(corten::FromJson)]
+#[serde(try_from = "u64", from = "u64")]
+struct TwoConversions(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into)]
+struct MalformedInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into = "u64" + "u8")]
+struct TrailingInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(from = "u64", try_from = "u64" + "u8")]
+struct TrailingTryFrom(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, from = 42)]
+struct NumberFrom(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into =)]
+struct MissingInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into = "u64"junk)]
+struct SuffixedInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into = r"u64"raw_junk)]
+struct RawSuffixedInto(u64);
+
+#[derive(corten::FromJson)]
+#[serde(transparent, into = "u64" unrelated)]
+struct UnseparatedInto(u64);
+
+fn main() {}
+"#,
+        &["json"],
+    );
+    assert!(!ok, "incompatible serde attributes compiled");
+    for said in [
+        r#"#[serde(transparent)] is not allowed on an enum"#,
+        r#"#[serde(transparent)] is not allowed with #[serde(into = "...")]"#,
+        r#"#[serde(transparent)] is not allowed with #[serde(from = "...")]"#,
+        r#"#[serde(transparent)] is not allowed with #[serde(try_from = "...")]"#,
+        r#"#[serde(from = "...")] and #[serde(try_from = "...")] conflict with each other"#,
+        r#"FromJson: use #[serde(into = "...")]"#,
+        r#"expected serde into attribute to be a string: `into = "..."`"#,
+        r#"expected serde try_from attribute to be a string: `try_from = "..."`"#,
+        r#"expected serde from attribute to be a string: `from = "..."`"#,
+        "unexpected end of input, expected an expression",
+        "unexpected suffix `junk` on string literal",
+        "unexpected suffix `raw_junk` on string literal",
+        "expected `,`",
+    ] {
+        let expected = format!("error: {said}");
+        assert!(stderr.lines().any(|line| line == expected), "missing {expected}: {stderr}");
+    }
+}
+
+#[test]
+fn json_derives_accept_serde_attributes_with_empty_macro_visibility() {
+    let (ok, stderr) = build_main_with(
+        "json-macro-visibility",
+        r#"
+macro_rules! shapes {
+    ($vis:vis $name:ident) => {
+        #[derive(corten::ToJson, corten::FromJson)]
+        $vis struct $name {
+            #[serde(rename = "wire" $vis)]
+            value: u64,
+        }
+
+        #[derive(corten::FromJson)]
+        #[serde(bound(deserialize = "") $vis)]
+        $vis struct Bounded(u64);
+    };
+}
+
+shapes!(Renamed);
+
+fn main() {
+    let renamed = corten::json::from_str::<Renamed>("{\"wire\":42}").unwrap();
+    assert_eq!(corten::json::ToJson::to_json(&renamed), "{\"wire\":42}");
+    assert_eq!(corten::json::from_str::<Bounded>("42").unwrap().0, 42);
+}
+"#,
+        &["json"],
+    );
+    assert!(ok, "empty macro visibility should not change a serde attribute: {stderr}");
 }
