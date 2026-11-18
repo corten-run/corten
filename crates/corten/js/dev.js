@@ -100,10 +100,14 @@ const SCOPE_REF = /:scope(?![-\w\u0080-\uffff])|&/gi;
 // Keep scoped composition to selector lists with no nested lists, ambiguous tokens or
 // sibling escapes. A single scope reference can stand for any matching root.
 const UNSUPPORTED = /[\\/'"()+~|]|::/;
+const SIMPLE_PSEUDO = /:(?:is|not|where)\(\s*(?:[.#]?[-\w]+|\[[-\w]+\])\s*\)/gi;
+
+/** @param {string} selector */
+const unsupported = (selector) => UNSUPPORTED.test(selector.replace(SIMPLE_PSEUDO, ""));
 
 /** @param {string} selector @param {string | null} parent @param {boolean} scoped */
 function resolved(selector, parent, scoped) {
-  if (selector.length > MAX_SELECTOR || parent === "" || scoped && UNSUPPORTED.test(selector)) return "";
+  if (selector.length > MAX_SELECTOR || parent === "" || scoped && unsupported(selector)) return "";
   if (parent === null) return selector;
   const anchor = `:is(${parent})`;
   let out = "";
@@ -134,7 +138,7 @@ function displays() {
   /** @type {Display[]} */
   const found = [];
   /** @type {string[]} */
-  const uncertain = [];
+  const possibleOverrides = [];
   /**
    * @param {CSSRuleList} rules
    * @param {string | null} condition
@@ -156,14 +160,18 @@ function displays() {
       const asWritten = styled ? rule.selectorText : written;
       const own = styled ? resolved(asWritten ?? "", selector, scoped) : selector;
       if (style?.display && asWritten) {
-        if (own) found.push({ selector: own, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important", scoped });
+        const display = style.display;
+        const important = style.getPropertyPriority("display") === "important";
+        if (own) found.push({ selector: own, written: asWritten, display, condition, important, scoped });
         else if (own === "") {
-          // A plain selector can rule out a candidate even without its root. If it depends on
-          // context or is too long to inspect, do not use a failed match as evidence.
-          uncertain.push(asWritten.length <= MAX_SELECTOR && !UNSUPPORTED.test(asWritten) && !asWritten.match(SCOPE_REF) && !/(^|,)\s*>/.test(asWritten) ? asWritten : "");
+          if (important && display !== "none") {
+            // A plain selector can rule out a candidate even without its root. If it depends on
+            // context or is too long to inspect, do not use a failed match as evidence.
+            possibleOverrides.push(asWritten.length <= MAX_SELECTOR && !unsupported(asWritten) && !asWritten.match(SCOPE_REF) && !/(^|,)\s*>/.test(asWritten) ? asWritten : "");
+          }
           if (!skipped.has(asWritten)) {
             skipped.add(asWritten);
-            console.warn(`corten: skipped \`${asWritten}\`: cannot compose its selector for the closed dialog and popover check; it may mask a warning`);
+            console.warn(`corten: skipped \`${asWritten}\`: cannot compose its selector for the closed dialog and popover check`);
           }
         }
       }
@@ -179,7 +187,7 @@ function displays() {
       walk(sheet.cssRules, null, null, null, false);
     } catch {}
   }
-  return { found, uncertain };
+  return { found, possibleOverrides };
 }
 
 /** @param {Element} el @param {string} selector @param {boolean} [fallback] */
@@ -193,20 +201,20 @@ const matching = (el, selector, fallback = false) => {
 
 /**
  * Warns of each closed dialog or popover in or at `root` that components.css keeps hidden while a
- * rule inside `@media` or `@container` gives it a `display` (at the viewport's width now or any
- * other) with no `[open]` or `:popover-open` in its selector. That is either one drawn in place
+ * matching rule inside `@media` or `@container` gives it a `display` (at the viewport's width now
+ * or any other). That is either one drawn in place
  * from a breakpoint (a filters rail that is a modal on a phone), which is then simply not drawn,
  * or the open one's look written for a width, which is right; the page cannot tell which, so the
  * warning gives the rule for each. A look outside a query (a card) is the hidden rule's own case
  * and is not reported, nor is one the app already draws with an `!important` rule of its own
- * or one a skipped display rule could style.
+ * or one a skipped rule could draw with its own `!important` display.
  * @param {Element} root
  */
 function inPlace(root) {
   // One the app hides with `hidden` is meant to be hidden, whatever its rules say.
   const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !own.hasAttribute.call(el, "hidden"));
   if (!closed.length) return;
-  const { found, uncertain } = displays();
+  const { found, possibleOverrides } = displays();
   for (const el of closed) {
     if (getComputedStyle(el).display !== "none") continue;
     const applies = found.filter((r) => matching(el, r.selector));
@@ -214,7 +222,7 @@ function inPlace(root) {
     // browser's own, which an app's rule outranks.
     if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
     const drawn = applies.find((r) => r.condition && r.display !== "none");
-    if (!drawn || applies.some((r) => r.important && r.display !== "none") || uncertain.some((s) => !s || matching(el, s, true))) continue;
+    if (!drawn || applies.some((r) => r.important && r.display !== "none") || possibleOverrides.some((s) => !s || matching(el, s, true))) continue;
     reported.add(el);
     const dialog = el instanceof HTMLDialogElement && !own.hasAttribute.call(el, "popover");
     const kind = dialog ? "dialog" : "popover";

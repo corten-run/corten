@@ -82,6 +82,8 @@ try {
       '<dialog id="keyframeRail" class="keyframeRail"></dialog>',
       '<dialog class="anonymousRail"></dialog>',
       '<div class="overridePanel"><dialog id="insideOverride" class="overrideRail"></dialog></div><dialog id="outsideOverride" class="overrideRail"></dialog>',
+      '<div class="panel"><dialog id="closedInsidePanel"></dialog></div><dialog id="closedOutsidePanel"></dialog>',
+      '<div class="card"><div id="skipCardBody" class="card-body"></div><div class="slot"></div></div>',
       '<dialog id="lastrail" class="rail"></dialog>',
     ].join("");
     const sheet = '<link rel="stylesheet" href="/dialog-in-place.css">';
@@ -92,7 +94,7 @@ try {
       contentType: "text/css",
       body: [
         ".card { display: flex; }",
-        "@media (min-width: 9999px) { .rail { display: block; } }",
+        skippedShapes ? "@media (min-width: 900px) { .rail { display: flex; } }" : "@media (min-width: 9999px) { .rail { display: block; } }",
         "@media (min-width: 1px) { .kept { display: block; } .kept:not([open],[hidden]) { display: block !important; } }",
         "@media (min-width: 1px) { .gone { display: none; } }",
         "@media (min-width: 1px) { .inplace { display: block; } .modal[open] { display: grid; } }",
@@ -110,7 +112,9 @@ try {
         "@media (min-width: 1px) { @scope (.keyframeRail) { @keyframes unused { to { display: flex; } } } }",
         "@media (min-width: 1px) { @scope (.anonymousRail) { :scope { display: flex; } } }",
         "@media (min-width: 900px) { .overrideRail { display: flex; } @scope (.overridePanel) to (.stop) { .overrideRail { display: flex !important; } } }",
+        "@scope (.panel) { @media (min-width: 1px) { dialog:not([open]) { display: flex; outline-style: solid; } } }",
         ...(skippedShapes ? [
+          "@scope (.card) to (.slot) { :scope > .card-body { display: grid; } :scope dialog { display: none !important; } }",
           "@scope (.identity) { @media (min-width: 1px) { :scope > :scope { display: flex; outline-style: solid; } } }",
           "@scope (:scope) { @media (min-width: 1px) { .explicitScopeRoot { display: flex; outline-style: solid; } } }",
         ] : []),
@@ -130,10 +134,12 @@ try {
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
   const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
   const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
-  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,listPlain,listExplicit,relativeChild,scopedPopover,doubleScope,dialog,lastrail", railNames);
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,listPlain,listExplicit,relativeChild,scopedPopover,doubleScope,dialog,closedInsidePanel,lastrail", railNames);
   const warned = new Set(railOnLoad.map((e) => e.split(" ")[1]));
   check("a plain scoped dialog rule does not warn outside its root", warned.has("scopedPlain") && !warned.has("outsidePlain"), railNames);
   check(":scope > dialog warns only inside its root", warned.has("scopedRoot") && !warned.has("outsideRoot"), railNames);
+  const closedStateLooks = await drawn.locator("#closedInsidePanel, #closedOutsidePanel").evaluateAll((els) => els.map((el) => getComputedStyle(el).outlineStyle).join(","));
+  check("dialog:not([open]) warns only inside its scope root", closedStateLooks === "solid,none" && railOnLoad.some((m) => m.startsWith("corten: closedInsidePanel ") && m.includes("`dialog:not([open])` in")) && !warned.has("closedOutsidePanel"), closedStateLooks);
   check("declarations directly in @scope warn on the root", railOnLoad.some((m) => m.startsWith("corten: scopedDeclarations ") && m.includes("`.scopedDeclarations` in")), railNames);
   const reproLooks = await drawn.evaluate(() => ["scopedPlain", "outsidePlain", "scopedRoot", "outsideRoot", "scopedDeclarations"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle).join(","));
   check("native styles apply only to the three scope repros' positive controls", reproLooks === "solid,none,solid,none,solid", reproLooks);
@@ -225,21 +231,24 @@ try {
   const largeOverride = await overrideDisplays();
   check("the native scoped override draws only the inside rail at 1000px", await wideRail && largeOverride === "flex,none" && !warnings.some((m) => /^corten: (insideOverride|outsideOverride) /.test(m)) && notes(".overrideRail") === 1, largeOverride);
 
-  // A skipped selector that depends on a root cannot be ruled out for other candidates.
-  // Check those shapes on a separate load so they do not mask the positive controls.
+  await drawn.setViewportSize({ width: 600, height: 800 });
   skippedShapes = true;
   warnings.length = 0;
+  const skippedLoad = reportOf("lastrail");
   const skippedImplicit = drawn.waitForEvent("console", { predicate: (m) => m.text().startsWith("corten: skipped `:scope .implicitOuter > #implicitNested`:"), timeout: 10000 }).then(() => true, () => false);
   await drawn.reload();
   const implicitLooks = await drawn.locator("#implicitNested").evaluate((el) => getComputedStyle(el).outlineStyle);
   const warnedOnSkip = (/** @type {string} */ id) => warnings.some((m) => m.startsWith(`corten: ${id} is a closed`));
+  const cardDisplay = await drawn.locator("#skipCardBody").evaluate((el) => getComputedStyle(el).display);
+  check("a skipped normal display and a skipped display: none !important do not silence dialog.rail at 600px", await skippedLoad && cardDisplay === "grid" && warnings.some((m) => m.startsWith("corten: rail is a closed dialog that `.rail` in `@media (min-width: 900px)` gives display: flex")) && notes(":scope > .card-body") === 1 && notes(":scope dialog") === 1, cardDisplay);
+  check("a skip note names the selector and the check without a warning caveat", warnings.includes("corten: skipped `:scope > .card-body`: cannot compose its selector for the closed dialog and popover check"));
   check("nested implicit roots are skipped in every engine, including where WebKit applies them", await skippedImplicit && implicitLooks === (engine === "webkit" ? "solid" : "none") && !warnedOnSkip("implicitNested") && notes(":scope .implicitOuter > #implicitNested") === 1, implicitLooks);
   check("multiple scope references are skipped rather than matched to different roots", !warnedOnSkip("differentRoots") && notes(":scope > :scope") === 1);
   check("top-level explicit :scope roots are skipped", !warnedOnSkip("explicitScopeRoot") && notes(".explicitScopeRoot") === 1 && await drawn.locator("#explicitScopeRoot").evaluate((el) => getComputedStyle(el).outlineStyle) === "solid");
   await drawn.close();
   // Count work, not elapsed time: rule reads, fixture matches, and queries (including their results).
   // Time from the start of the closed-element check to its last fixture match.
-  /** @param {string} markup @param {string} css @param {number} count @param {boolean} [patch] @param {string | null} [last] */
+  /** @param {string} markup @param {string} css @param {number} count @param {boolean} [patch] @param {string} [last] */
   async function dialogWork(markup, css, count, patch = false, last = `work${count - 1}`) {
     const many = await browser.newPage();
     /** @type {string[]} */
@@ -292,7 +301,7 @@ try {
       await route.fulfill({ response: res, body: (await res.text()).replace("</head>", '<link rel="stylesheet" href="/dialog-work.css"></head>').replace("</body>", `${markup}</body>`) });
     });
     await many.route(base + "/dialog-work.css", (route) => route.fulfill({ contentType: "text/css", body: css }));
-    const done = many.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: ${last ?? "skipped"} `), timeout: 30000 }).then(() => true, () => false);
+    const done = many.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: ${last} `), timeout: 30000 }).then(() => true, () => false);
     await many.goto(base + "/");
     if (patch) {
       // Wait for the startup check and observer before drawing one dialog in a small patch.
@@ -325,7 +334,7 @@ try {
   const rail = ".workDialog.rail { display: flex; outline-style: solid; }";
   for (const rules of [noise + rail, rail + noise]) {
     const result = await dialogWork('<section class="workScope"><dialog class="workDialog rail" id="work0"></dialog></section>', `@scope (.workScope) to (.stop) { @media (min-width: 1px) { ${noise} } } @scope (.workScope) { @media (min-width: 1px) { ${rules} } }`, 1);
-    check(`unrelated rules cannot starve a supported rail (${rules === noise + rail ? "last" : "first"})`, result.ok && result.matches === 161 && result.skipped.length === 80, result.detail);
+    check(`unrelated rules cannot starve a supported rail (${rules === noise + rail ? "last" : "first"})`, result.ok && result.matches === 81 && result.skipped.length === 80, result.detail);
   }
   // The marker ends the measured span even when the rule under test is skipped.
   const depth = 320;
@@ -333,13 +342,13 @@ try {
   const deep = await dialogWork(deepMarkup, `@scope (.workScope) { @scope (.workScope) { ${scopedRule} } } ${markerRule}`, 1, false, "workEnd");
   check("overlapping roots at depth 320 use one match per rule and dialog", deep.completed && deep.drawn && deep.warned.includes("work0") && deep.matches === 4 && deep.span < 1000, deep.detail);
   const limit = await dialogWork(deepMarkup, `@scope (.workScope) to (:scope > .workScope) { ${scopedRule} } ${markerRule}`, 1, false, "workEnd");
-  check("a direct-child limit at depth 320 uses only the plain selector for the override check", limit.completed && limit.drawn && !limit.warned.includes("work0") && limit.matches === 3 && limit.skipped.length === 1 && limit.span < 1000, limit.detail);
+  check("a direct-child limit at depth 320 skips the rule without matching its normal display as an override", limit.completed && limit.drawn && !limit.warned.includes("work0") && limit.matches === 2 && limit.skipped.length === 1 && limit.span < 1000, limit.detail);
   const wide = await dialogWork('<div class="a">'.repeat(18) + dialog(0) + '</div>'.repeat(18) + endDialog, "@scope (.a, .b) {".repeat(18) + scopedRule + "}".repeat(18) + markerRule, 1, false, "workEnd");
-  check("18 nested two-member scope roots stop at the selector cap", wide.completed && wide.drawn && !wide.warned.includes("work0") && wide.matches === 3 && wide.skipped.length === 1 && wide.span < 1000, wide.detail);
+  check("18 nested two-member scope roots stop at the selector cap", wide.completed && wide.drawn && !wide.warned.includes("work0") && wide.matches === 2 && wide.skipped.length === 1 && wide.span < 1000, wide.detail);
   const overlongOverride = await dialogWork('<div class="a">'.repeat(18) + dialog(0) + '</div>'.repeat(18) + endDialog, scopedRule + "@scope (.a, .b) {".repeat(18) + "@media (min-width: 9999px) { .workDialog { display: flex !important; } }" + "}".repeat(18) + markerRule, 1, false, "workEnd");
   check("an over-long composition withholds a warning only for a candidate its plain selector could style", overlongOverride.completed && overlongOverride.drawn && !overlongOverride.warned.includes("work0") && overlongOverride.matches === 6 && overlongOverride.skipped.length === 1, overlongOverride.detail);
-  const repeated = await dialogWork(scopeRoot + dialog(0) + "</div>" + endDialog, ".workScope { " + "&:is(&) { ".repeat(16) + scopedRule.replace(".workDialog", "& .workDialog") + "}".repeat(17) + markerRule, 1, false, null);
-  check("expanding ordinary nesting stops at the selector cap; a context-dependent skip cannot rule out a candidate", repeated.completed && repeated.drawn && repeated.warned.length === 0 && repeated.matches === 2 && repeated.skipped.length === 1, repeated.detail);
+  const repeated = await dialogWork(scopeRoot + dialog(0) + "</div>" + endDialog, ".workScope { " + "&:is(&) { ".repeat(16) + scopedRule.replace(".workDialog", "& .workDialog") + "}".repeat(17) + markerRule, 1, false, "workEnd");
+  check("expanding ordinary nesting stops at the selector cap without silencing an unrelated warning", repeated.completed && repeated.drawn && repeated.warned.join(",") === "workEnd" && repeated.matches === 2 && repeated.skipped.length === 1, repeated.detail);
   const flatScopes = await dialogWork(scopeRoot + dialog(0) + "</div>" + (scopeRoot + "</div>").repeat(count - 1), `@scope (.workScope) { @media (min-width: 1px) { ${Array.from({ length: 64 }, (_, i) => `.workDialog, .workOther${i} { display: flex; outline-style: solid; }`).join("")} } }`, 1);
   check("64 scoped rules do not scan 1,600 sibling roots", flatScopes.ok && flatScopes.reads <= 64 && flatScopes.queries === 0 && flatScopes.matches <= 128, flatScopes.detail);
   const unscopedRules = Array.from({ length: 32 }, (_, i) => `.workDialog:not(.workSkip${i}, #workReady) { display: flex; outline-style: solid; }`).join("");

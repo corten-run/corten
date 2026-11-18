@@ -78,16 +78,18 @@ drawn), `corten dev` warns in the console of each closed dialog or popover that 
 `[open]`. Within a scope it names the rule without suggesting a replacement selector. With an explicit
 `@scope` root, the check anchors each plain selector-list member below the root, binds a single
 `:scope` or `&` to it, and checks declarations written directly in the scope on the root itself.
+It accepts `:is()`, `:not()` and `:where()` with a single type, class, ID or attribute presence
+selector, such as `dialog:not([open])`.
 It can compose nested scopes the same way, with at most one match per eligible candidate and
 inspected display rule. It skips scopes with a `to` limit or no explicit root, explicit top-level
 roots that refer to the scope itself (such as `@scope (:scope)`), scopes nested in style rules,
 and rules or declarations nested in a scoped style rule. It also skips scoped
 selectors with multiple root references in one member, a leading combinator combined with a
-root reference, functional pseudo-classes, sibling or column combinators, pseudo-elements,
+root reference, other functional pseudo-classes, sibling or column combinators, pseudo-elements,
 quotes, escapes or namespaces. Selectors longer than 1,024 characters before or after composition
-are skipped, including in ordinary CSS nesting. A skipped display rule cannot cause a warning,
-and the check withholds a warning for any candidate the skipped rule could style. Skip notes
-are deduplicated by CSSOM selector text. Adopted stylesheets
+are skipped, including in ordinary CSS nesting. A skipped display rule cannot cause a warning.
+It can only withhold one if it declares a non-`none` `display` with `!important` and could match
+the candidate. Skip notes are deduplicated by CSSOM selector text. Adopted stylesheets
 are not inspected ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
 When only areas have stylesheets, each area's file starts with these rules. An app with no component stylesheet has
 neither file, so if its `static/style.css` gives a hidden element, a popover or a dialog a
