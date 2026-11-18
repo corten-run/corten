@@ -5814,6 +5814,58 @@ rules something out.
     Last checked: 2026-11-17, Towncrier 26.9.0, Changesets 3.0.3, Keep a Changelog 1.1.0,
     and Corten's release procedure at `231225b9a`.
 
+63. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys use literal NATS subjects, not encoded names; the
+    relay skips rows with invalid legacy keys.** Corten requires nonempty dot-separated tokens
+    without whitespace, control characters, `*` or `>`. This is stricter than the broker: it may
+    accept an embedded `*` or a non-breaking space, but the documented naming rules reserve
+    wildcards and exclude whitespace. Control characters are not useful in names, and Postgres
+    cannot store NUL. UTF-8 and multiple tokens are allowed. The existing subjects and message
+    IDs for valid keys do not change.
+
+    Keys are limited to 1,024 bytes and the subject prefix to 255. These bounds leave room
+    for a 2,729-byte custom reply inbox prefix, a dot and a 22-byte token, and 64 bytes of
+    publish framing in NATS's default 4,096-byte control line. The key fits the feed primary
+    key and the outbox `(feed, seq)` entry under the
+    Postgres B-tree limit on standard 8 KB pages without depending on compression.
+    `create_feed` and `begin` return `InvalidFeedKey` before doing SQL. `Cluster::feed` checks
+    before loading an uncached key, returning `None` for an invalid one; only validated keys
+    get cache entries. `Cluster::start` checks both the subject prefix and the generated reply
+    inbox before changing the database or starting background work. NATS does not advertise
+    its control-line limit, so deployments that change it set `Options::max_control_line` to
+    match the lowest server limit the client can encounter.
+
+    The relay uses the same check, independent of the client or broker, for rows that an old
+    version or external SQL could have queued. It marks an invalid row done with the existing
+    `published_at` marker, logs the row ID and key at error level, and continues without
+    sending the patch. The marker means done, not delivered, in this case. Ordinary pruning
+    can remove the row; the app's committed data is not changed. No schema or index change is
+    needed. Only acknowledged valid rows get marked done; publish and acknowledgement
+    failures (including size limits) still retry. A server with a lower control-line limit
+    than the one configured in Corten can still reject a publish.
+
+    Not chosen: encoding arbitrary keys (a new wire mapping and migration of valid subjects),
+    restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
+    no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
+    in place. Using `Subject::is_valid` would copy the key and accept whitespace outside the
+    framing bytes.
+
+    Stands on: platform (the [NATS subject rules](https://docs.nats.io/nats-concepts/subjects)
+    exclude whitespace and reserve wildcards for subscriptions, the
+    [NATS server configuration](https://docs.nats.io/reference/config/) defaults to a 4 KB
+    control line, and [Postgres B-tree entries](https://www.postgresql.org/docs/16/btree-intro.html)
+    fit only about a third of a page); reasoned (a key that fails the same pure check at
+    every retry cannot be repaired by retrying, and marking it done also removes it from the
+    existing pending index); value (correctness and reliability first, early failure and a
+    small surface: README Values 4 and 6).
+
+    Revisit when: an app needs arbitrary text as a cluster key, the NATS server's default
+    control line or documented grammar changes, or deployments need automatic recovery for
+    previously accepted keys.
+
+    Last checked: 2026-11-17, NATS subject and configuration documentation and async-nats 0.52.0
+    source reviewed, and the pre-fix store and relay read at `056964945`.
+
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
