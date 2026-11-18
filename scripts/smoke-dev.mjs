@@ -256,9 +256,9 @@ try {
       `);
       document.adoptedStyleSheets.push(sheet);
       const inactive = new CSSStyleSheet({ media: "not all" });
-      inactive.replaceSync("#adoptedMedia { display: grid !important; outline: solid }");
+      inactive.replaceSync("@media (min-width: 1px) { #adoptedMedia { display: grid !important; outline: solid } }");
       const disabled = new CSSStyleSheet({ disabled: true });
-      disabled.replaceSync("#adoptedDisabled { display: grid !important; outline: solid }");
+      disabled.replaceSync("@media (min-width: 1px) { #adoptedDisabled { display: grid !important; outline: solid } }");
       document.adoptedStyleSheets.push(inactive, disabled);
     });
     await dialogFixture(adopted,
@@ -273,7 +273,7 @@ try {
       '<dialog id="adoptedAmp" data-label="R&amp;D"></dialog><dialog id="adoptedScopeReference"></dialog>' +
       '<dialog id="adoptedScopeText" data-label=":scope, tag"></dialog><dialog id="adoptedPlain" data-label="plain"></dialog>' +
       '<dialog id="adoptedEscape&amp;"></dialog><dialog id="adoptedComma,"></dialog><dialog id="fixtureEnd"></dialog>',
-      "@media (min-width: 1px) { #adoptedMedia, #adoptedDisabled, #adoptedLoses, #adoptedShown, #fixtureEnd { display: flex } }");
+      "@media (min-width: 1px) { #adoptedLoses, #adoptedShown, #fixtureEnd { display: flex } }");
     const done = adopted.waitForEvent("console", { predicate: (m) => m.text().startsWith("corten: fixtureEnd "), timeout: 10000 }).then(() => true, () => false);
     await adopted.goto(base + "/");
     const completed = await done;
@@ -292,8 +292,9 @@ try {
       !styled.includes("adoptedOutside") && !styled.includes("adoptedPastLimit") &&
       warned.filter((id) => !otherCases.includes(id)).join(",") === "adoptedExplicit,adoptedWide",
       `styled: ${styled}; warnings: ${warned}`);
-    check("inactive and disabled adopted sheets cannot suppress linked warnings",
-      completed && inactive.every((id) => warned.includes(id) && !styled.includes(id)), warned.join(","));
+    check("eligible adopted sheets warn, but media-inactive and disabled adopted sheets do not",
+      completed && warned.includes("adoptedWide") && inactive.every((id) => !warned.includes(id) && !styled.includes(id)),
+      `styled: ${styled}; warnings: ${warned}`);
     check("a losing adopted !important cannot suppress a linked warning, but a dialog the browser shows does not warn",
       completed && styled.includes("adoptedLoses") && warned.includes("adoptedLoses") && !warned.includes("adoptedShown"), warned.join(","));
     check("an adopted selector list keeps ordinary members with quoted or escaped characters, but skips an actual scope reference",
