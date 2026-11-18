@@ -1219,7 +1219,14 @@ out of it ([design Choice 54](../design.md#choice-html-parse-refusals)). Every o
 depends on what the patch began with or where the view is written, which a component's markup
 does not show: a `<p>` and then a `<tr>` lose the row on their own, but after a first `<tr>`
 both are kept, and an `<svg>` keeps a `<form>` of fields after a `<tr>` as written, so a
-component that writes them compiles. Debug builds check each patch as it is sent (`req.patch`,
+component that writes them compiles. Like every `html!` refusal, these rest only on the markup
+between the two elements: with output the markup does not show before the lost element's start
+tag (an expression, a component, or a `<script>` or `<style>` whose text holds a `<`, in the
+first element, between the two, or in a later element that holds the lost one, before it), the
+shape compiles (`raw("<table>")` there would keep the row), and the debug check finds it. What a
+lost top-level element holds does not save it, since the parse loses it at its start tag:
+`<tr id={RowId}></tr><table id={TableId}>{text}</table>` is still refused, and so is a row with
+an expression in it after a first `<table>`. Debug builds check each patch as it is sent (`req.patch`,
 `req.patch_or`, `req.invalid`, `form.draw` and `corten::live`, with the area's stylesheet
 links Corten adds after its elements): the request fails with a 500, or the stream panics, naming
 the element lost and the one that came first. Chromium and WebKit also let a leading `<title>`,

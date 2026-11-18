@@ -3554,10 +3554,12 @@ rules something out.
     `<span>` written straight into a `<tr>`, put before the `<table>`): when the table is a
     component's root, the moved element falls outside it, so the runtime does not find it there
     while the check counts it, and may stop on a duplicate the runtime does not see. Both are
-    markup a browser does not keep as written, not a correct render. A `data-key` written by hand
-    (`data-key="a"` beside the ref) is taken as the element's key, as `key="a"` is, though the
-    markup then names an attribute of Corten's as text, which `html!` refuses for `data-ref` and
-    `data-ref-value`; that is a known limit, not yet refused. The check decodes the five references
+    markup a browser does not keep as written, not a correct render. Literal HTML nesting whose
+    start tags close or discard an open element is now refused where the markup between the two
+    shows it ([Choice 54](#choice-html-parse-refusals)); nesting across a component or an
+    expression is not, and has the same edge.
+    A `data-key` written by hand is refused like `data-ref` and `data-ref-value`: `key={..}`
+    is the one way to key an element. The check decodes the five references
     Corten's escapers write and no others, and leaves
     out a key written with any other `&` (only an app's own `AttrValue` writes one), since guessing
     at what a browser reads there would repeat HTML's character reference rules or stop correct
@@ -3687,12 +3689,11 @@ rules something out.
     the `Swap` and `Title` parts; 1,000 renders each), with the test copied into the base,
     counted 131,623,718, 13,703,103 and 27,893,110 instructions for the three in every run of both
     builds, wrote the same bytes (23,408, 2,976 and 6,370 a render) and compiled to the same
-    instructions to the line (2,416 lines each, addresses aside). A document with refs cannot
-    write its doctype: `html!` takes a `<!DOCTYPE html>` for a second root beside the `<html>`,
-    and a component with refs renders one root element, so the harness writes the document
-    without one. That is not a choice but a gap, tracked in
-    [#1489 A document component with refs, scope or keep cannot write `<!DOCTYPE html>`, because mark_scope counts it as a second root, so the page renders in quirks mode](https://github.com/corten-run/corten/issues/1489): the HTML standard requires the doctype, and a page without it renders in
-    quirks mode. Card-market's `render_cost`,
+    instructions to the line (2,416 lines each, addresses aside). That harness omitted the
+    doctype because the macro then counted it as a second root. A scoped document now accepts
+    one leading `<!DOCTYPE html>` before its `<html>` root. The declaration is not an element,
+    and without it the browser uses quirks mode. The historical counts above predate that fix.
+    Card-market's `render_cost`,
     on `6575d4d8c` against `72a37a87e` (no generated code has changed since), counted
     `ItemDetail`'s render at 2,372,754,748 instructions (median; 2,372,507,167 to 2,372,779,152)
     on the base and 2,372,745,747 (2,369,854,428 to 2,372,790,283) on the branch, each difference
@@ -4497,10 +4498,11 @@ rules something out.
     `bd92c7435`, which decodes `do`, against those of `dea1788d2`, every run within 2 of the
     others; 2026-11-15, the watchlist and ui-gallery smokes on `bd92c7435` in Chromium 156,
     Firefox 157 and WebKit 27.2 (Playwright 1.64.1).
-54. <a id="choice-html-parse-refusals"></a>**`html!` refuses three kinds of markup a browser parses differently from how it
+54. <a id="choice-html-parse-refusals"></a>**`html!` refuses markup a browser parses differently from how it
     is written (an element in an element whose content is text, a `<plaintext>`, and an element
-    taken out of foreign content), and the shapes of a patch's top level the runtime's parse of it
-    loses wherever they are written, where the markup shows how a browser parses it, and acts
+    taken out of foreign content, and literal HTML nesting that closes or discards an open
+    element), and the shapes of a patch's top level the runtime's parse of it loses wherever they
+    are written, where the markup shows how a browser parses it, and acts
     nowhere else.** An element written in a
     `<textarea>`, an HTML `<title>`, a `<script>`, a `<style>`, an `<iframe>`, an `<xmp>`, a
     `<noembed>` or a `<noframes>` was written by `html!` as markup and read by the browser as
@@ -4557,8 +4559,9 @@ rules something out.
     empty, is kept as written in an `<svg>` or a `<math>`, where none of them is taken out, so it
     compiles, though few views will be written there: refusing it would refuse a component that is
     correct where its parent writes it, which the rule below does not allow. Those shapes, what a
-    component, an expression or a block writes, and a first element an `<svg>` keeps, are left to
-    the debug check that answers such a patch with a 500 when it is sent
+    component, an expression or a block writes, a refused shape with an expression or a component
+    at or between its two elements, and a first element an `<svg>` keeps, are left to the debug
+    check that answers such a patch with a 500 when it is sent
     ([Limit 2](#limit-whole-element-patches)); a release build sends them as drawn. Head tags
     before the first element do not change a refused shape: the standard and Firefox read them as
     a head's, and Chromium and WebKit, which let a leading `<title>`, `<base>`, `<basefont>`,
@@ -4572,18 +4575,25 @@ rules something out.
     text integration points, where a `<mglyph>` or a `<malignmark>` stays MathML's) and an
     `<annotation-xml>` whose first `encoding` (the one a browser keeps of an attribute written
     twice) is `text/html` or `application/xhtml+xml`, in any letter case; SVG in a
-    literal `<svg>`, where a `<textarea>`, `<title>` or `<style>` is SVG's and holds elements;
-    MathML in a literal `<math>`, outside those points, and in an `<annotation-xml>` whose first
+    literal `<svg>` written where the markup shows HTML, where a `<textarea>`, `<title>` or
+    `<style>` is SVG's and holds elements;
+    MathML in such a literal `<math>`, outside those points, and in an `<annotation-xml>` whose first
     `encoding` is another or that has none (where an `<svg>` is SVG's, as the standard's tree
     construction dispatcher has it), where they are MathML's and hold elements, and only an
     element taken out of foreign content is refused. At the top of a component's markup, which its
     parent may write into an `<svg>`, among a component's children, which go where the component
-    writes them, and in an `<annotation-xml>` where an expression or a spread comes before any
-    written `encoding` (either may write the first one), it does not know, and refuses nothing.
+    writes them, after an expression or a component (what it writes may open or close an `<svg>`
+    or an element read as text), and in an `<annotation-xml>` where an expression or a spread
+    comes before any written `encoding` (either may write the first one), it does not know, and
+    refuses nothing; nor in what an element read as text there holds, or a `<noscript>` anywhere,
+    which may be text (below). A literal `<svg>` or `<math>` written there is foreign wherever it lands, but
+    its namespace is not shown (a `<math>` in an `<svg>` is SVG's, an `<svg>` straight in a
+    `<math>` MathML's), so an element taken out of foreign content is refused straight in it, and
+    what any element that is an integration point of either namespace holds is not known.
     `html!` writes attributes in the order they are written, so the first `encoding` in the markup
     is the one a browser keeps. That is
-    the rule the refusals keep: markup that compiled before and that a browser keeps as written
-    still compiles, so a component that draws an SVG fragment without its `<svg>`
+    the rule the refusals keep: markup that compiled before and that a browser keeps as written,
+    drawn where it reads tags, still compiles, so a component that draws an SVG fragment without its `<svg>`
     (`<rect><title>"Sales "<b>"42"</b></title></rect>`) compiles, and where `html!` cannot know
     the context it misses a mistake rather than refuse correct markup. Its limit is the
     component's edge ([Limit 30](#limit-markup-context)). The accessible-name check and the named
@@ -4591,30 +4601,144 @@ rules something out.
     holds HTML, so an `<a>` in an `<svg>`'s `<title>` or `<desc>` is not held to them, as before:
     moving them to the standard's integration points would refuse markup that compiled.
 
-    Not chosen: refusing HTML a browser rearranges inside HTML: a `<div>` in a `<p>` (the
-    `<p>` closes before it), an `<a>` in an `<a>` or a `<form>` in a `<form>`, an `<li>` in an
-    `<li>`, a `<div>` written straight into a `<table>` (moved before the table). Most of these
-    are decided by the elements open around the tag in the same markup, as the holder chain the
-    refused kinds follow is (a `<p>` open in button scope, an `<a>` among the active formatting
-    elements, a `<form>` already open, an `<li>` open with no special element but an `<address>`,
-    `<div>` or `<p>` between); only the `<table>` case needs the insertion modes (foster
-    parenting). They are left out for this change's size, not because the macro could not see
-    them: each is its own list from the standard (the tags that close a `<p>`, the scopes that
-    stop the search, the formatting elements the adoption agency reopens) with its own errors and
-    examples, and each has the same component edge as the refused kinds (a `<div>` at the top of
-    a component whose parent writes it in a `<p>`; [Limit 30](#limit-markup-context)). They
-    compile as before. A ref in such an element can land outside its component's scope, tracked
-    in [#1505 A ref inside an element the browser closes early (a div in a p) lands outside its component's scope, and nothing refuses or documents it](https://github.com/corten-run/corten/issues/1505), and the key check's limit for a table is in [Choice 46](#choice-ref-values).
-    Refusing an attribute written twice on one element, which a browser parses as the first:
-    this change reads the first `encoding` as a browser does rather than refuse the second,
-    because a duplicate attribute is a mistake on any element, not one of parsing context, and
-    refusing it touches every attribute `html!` writes, spreads included, so it belongs in a
-    change of its own, tracked in [#1504 html! accepts an attribute written twice on one element, which the browser parses as the first and drops the rest](https://github.com/corten-run/corten/issues/1504). Refusing where the markup does not show the context, which would refuse a
+    Literal ancestors also establish the start-tag rules for HTML nesting: a block in a `<p>`
+    closes a paragraph in button scope; an `<li>`, `<dd>` or `<dt>` closes an earlier item when
+    no special element but an `<address>`, `<div>` or `<p>` intervenes; an `<a>` acts on an
+    active anchor before the last formatting-list marker; a `<button>` or `<nobr>` closes an
+    earlier one in scope; and a heading directly in a heading closes it. A nested `<select>` or `<input>` closes a select in
+    scope; option, option-group and ruby starts generate implied end tags where their scope
+    establishes it, keeping the exceptions for an `<option>` in an `<optgroup>` and an `<rt>`
+    in an `<rtc>`. These now fail at compile time, with or without refs,
+    since moved content can leave the component's scope.
+
+    Every refusal rests only on facts the literal markup of the same `html!` proves, between
+    the two elements it relates; what the markup does not show makes a fact unknown, and an
+    unknown fact never refuses. Unseen are the caller's context at the top of the markup, a
+    component's output (with or without children) and where it writes its children, an
+    expression's output, `raw` among them (trusted text with no promise to be balanced, so it may
+    open or close any element), what a `<script>` or `<style>` whose literal text holds a `<`
+    writes (`html!` writes that text as is, so `</script>` in it ends the element where the text
+    says and the rest is markup, `<!--<script>` keeps a script open past its end tag, and in an
+    `<svg>` or `<math>` any `<` may start an element; a `<` split across adjacent literals is in
+    one of them), and the namespace of a literal `<svg>` or `<math>` written
+    where the markup does not show HTML. Every component is unseen, `<Corten />` included: the
+    macro knows a component only by the name it is written with, which an app's own component may
+    share, and proving the path names `corten::Corten` would refuse such a component, which is
+    valid markup. Unseen output may also leave a browser reading text rather than tags: a
+    `<script>` it opens (or one whose text holds `<!--<script>`) runs past any literal
+    `</script>` until a second one, a `<plaintext>` to the end of the page, a comment to its
+    `-->`, a `<textarea>` to its end tag. So the tokenizer's state is a fact apart from the
+    namespace and the open elements, and a later literal start tag proves none of them: once
+    the walk or the parser passes an unseen node, nothing after it in the same `html!` is
+    refused, in a `<template>`, an `<svg>` or a `<foreignObject>` it opens too (one body of a
+    block does not follow another, so a refusal in a body with nothing unseen before it stands).
+    One context is taken as known rather than proven, and it is a precondition, not an
+    exception: `html!` output, a component's included, is drawn where a browser reads tags.
+    Writing a component into script or style text its caller left open is not supported, since a
+    script's text comes from a string, not markup: a component `TemplateMarkup` whose markup is
+    `<p><div>"Detail"</div></p>`, written after `<script type="text/x-template">"<!--<script>"</script>`
+    and before `{raw("</script>")}`, is refused for its `<div>`, though Chromium, Firefox and
+    WebKit keep the whole as the script's text (the sixth review's counterexample). The promise
+    that no context-dependent refusal stops markup a browser keeps as written holds for output
+    placed where the browser reads tags; this is the shape it does not cover. Inside a literal
+    element, where the markup does not show it is HTML's, what an element a browser parsing HTML
+    reads as text holds (`<iframe>`, `<textarea>`, `<title>`, `<style>`, `<script>`, `<xmp>`,
+    `<noembed>`, `<noframes>`, `<plaintext>`) is unseen, not tags: as HTML's it is text, as
+    SVG's or MathML's elements, so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a
+    component compiles (all three engines keep it as the iframe's text), and after a
+    `<plaintext>` there nothing is refused. What a `<noscript>` holds is unseen everywhere: text
+    with scripting on, markup without it. In an `<svg>` or `<math>` the markup places (a
+    literal `<svg>` under a `<div>`) they hold elements, which are read as before. Kind by kind:
+    an element read as text needs its holder to be parsed as HTML (an element that is HTML's
+    wherever it lands, or an integration point of an `<svg>` or `<math>` such an element holds,
+    with nothing unseen before the holder in the same `html!`) and the holder's content up to
+    the element to be literal; an expression there may write `</textarea>`. A `<plaintext>` needs the first of
+    those. An element taken out of foreign content needs to be written in a literal `<svg>` or
+    `<math>`, through elements that are an integration point in neither namespace, with nothing
+    unseen before it in the same `html!` (between them it may write a `<foreignObject>`, before
+    them leave a script open); it does not need the root's own
+    namespace, since a start tag of that list leaves SVG and MathML alike. A nesting rule needs
+    both elements to be HTML's, as above, every element open between them to be literal, and
+    nothing unseen before the inner one in the same `html!`: an expression between them may close the outer element
+    (`raw("</p>")`) or open a boundary that stops the browser's search (`<button>`, `<object>`,
+    `<ul>`, `<dl>`, a `<span>` under a heading or an option, a `<ruby>`, an `<svg>`, a
+    `<template>`), and browsers then keep the inner element where it is written. The search
+    starts at the inner element and stops at the first literal match or boundary within that
+    range, finding nothing past it; one before the outer element may leave a script open, which
+    makes both literal start tags text. A nested `<form>` is not refused: the form pointer is not
+    reset by scope and a template's content does not use it, so it needs the markup to show that
+    no `<template>` is open anywhere around the inner form. Only a document's markup shows that,
+    and a document's body follows its `<Corten />`, which is unseen, so no markup proves it, and
+    the rule is gone rather than kept for a document's `<head>`. A duplicate attribute and a hand-written `data-key` are refused by the one start tag
+    that writes them, which needs no context; after unseen output that start tag may be a
+    script's text, which a browser keeps, and it is refused still, since two values for one name,
+    or a key written two ways, is a mistake in the source wherever it lands. A patch's top-level shape needs its first element
+    and the later one to be literal top-level elements of a view that could be a patch, with
+    nothing unseen before the lost element's start tag: in the first element, between the two,
+    or in a later element that holds the lost one, before it. Unseen output there may leave an
+    element open (`raw("<table>")` keeps a later row in its table, `raw("<template>")` in the
+    first `<table>` keeps one in its content, as Chromium, Firefox and WebKit parse it), so after
+    an expression, a component, such a script or style, or a block or an element that holds one,
+    nothing is refused and the debug check finds the shape when it is sent. What a lost
+    top-level element holds does not save it, since the parse loses it at its start tag:
+    `<table id={..}>{text}</table>` after a first row is still refused, as is a row holding an
+    expression after a first `<table>`. That
+    gives up a `<form>` after a first table part with an expression in it, which the parse empties
+    at its start tag whatever the expression writes, as a miss. Where the patch lands is not
+    needed: the shapes are the ones lost wherever they are written.
+
+    `html/nesting.rs` walks the parsed nodes once in document order with a stack of literal
+    ancestors and stops refusing at the first unseen node; each control-flow body starts from
+    where its block does (any body is written first some time, and a refusal in a loop's first
+    run holds whenever it runs), what follows the block following any of them. The parser does
+    the same for the text-holder and foreign-content refusals: after an unseen node a literal
+    `<svg>`, a breakout element or a `<textarea>` shows neither the namespace nor a text holder.
+    That gives up the shapes a browser would change anyway whose proof crosses an unseen node:
+    `<p>{text}<div>` compiles though no text can keep the `<div>` in the `<p>`, and so does
+    `<svg><foreignObject><textarea><b>` at the top of a component, which a browser changes in
+    either namespace, and so does whatever follows a script or style whose text holds a `<`
+    without closing it (`if (a < b)`), and anything in a document's body, which follows its
+    `<Corten />`, and a nested `<form>` anywhere, and `<iframe><p><div>` at the top of a
+    component, which a browser changes only where its parent writes it into an `<svg>`, and
+    `<noscript><p><div>`, which it changes only with scripting off; misses, rather than refusals
+    that would also stop the shapes browsers keep.
+    It adds no render code: `Gen` writes what it wrote before this change (the `<Corten />`
+    assertion an earlier round of it added is gone). Its compile-time
+    cost, measured at `960b2d5a0` by the ignored `nesting_check_cost` test in a release build
+    (one Linux container, 4 CPUs): a 3,001-element list four elements deep, walked 1,000 times
+    a sample, took 308.2, 304.1 and 280.5 µs a walk (median 304.1 µs, about 0.1 µs an element).
+    Not measured: the whole macro expansion, the duplicate-attribute check, how the walk
+    grows with ancestor depth, and the walk as this round leaves it (one flag in place of the
+    unseen count and the template state, and no form rule, so no more work a node; nor the
+    seventh round's test for an element that may read as text, a few name comparisons an
+    element; not run again).
+    Each rule keeps its own scope boundaries; a nested list in a `<ul>` and a form in a
+    `<template>` still compile. The content of a `<template>` and of a foreign element (an
+    `<svg>`, a `<math>`, their integration points, or an element whose namespace the markup does
+    not show) starts with nothing open rather than modelling the tree builder further: an `<a>`
+    reached through a `<foreignObject>`, `<title>`, `<desc>`, `<mi>` or `<mtext>` inside an
+    outer `<a>` is kept by browsers and compiles.
+    A duplicate emitted HTML attribute name is refused case-insensitively, with an expression
+    value too: `ref`, bare `page` and `key` are compared as `data-ref`, `data-corten-page` and
+    `data-key`, so their uppercase literal names are distinct, as is `page=".."` beside bare
+    `page`. Repeated pseudo-attributes are still duplicates. Spreads remain opaque, so the first
+    `encoding` rule still matters when a spread precedes or follows a written one. Handler calls
+    (`on:..`) still combine in one `data-on` attribute, including repeated events.
+
+    Not chosen: a complete HTML validator or table insertion-mode simulation. A `<div>` straight
+    in a `<table>` still compiles (foster parenting), as does a `<table>` in a `<p>`, whose
+    closure depends on quirks mode, not just literal
+    ancestors. The key check's table limit is in [Choice 46](#choice-ref-values).
+    Refusing where the markup does not show the context, which would refuse a
     component's SVG fragment, valid wherever its parent writes it in an `<svg>`. Following the
     context across components, which the macro does not see: each component's render would
     report its namespace to the next, at a cost to every render for markup few apps write. A
     check in the browser (`dev.js`): it would find the mistake only on a page someone loads, and
-    a compile error finds it in every build ([Rule 8](#rule-compile-errors)). Leaving it: the
+    a compile error finds it in every build ([Rule 8](#rule-compile-errors)). Taking an
+    expression or a component to leave the open elements and the parsing context as they were,
+    which would keep the refusals across them: `raw` makes no such promise, and browsers keep the
+    shapes it can make (a `<button>` written in a `<p>` before a literal `<div>`), so that would
+    refuse kept markup. Leaving it: the
     markup is what a reader of the view sees, and it is not what the user gets.
 
     Stands on: platform (the HTML standard's tree construction: the elements whose content a
@@ -4630,13 +4754,26 @@ rules something out.
     template" insertion mode's head tags and table start tags, and what the table insertion
     modes do with the tags after them, which `TEMPLATE_HEAD` and `TABLE_PARTS` copy, held equal to
     the debug check's `HEAD_TAGS` and `TABLE_PARTS` in `crates/corten/src/html.rs` by a test there;
+    the tokenizer's script data, RAWTEXT and data states, in which an appropriate end tag ends a
+    `<script>` or `<style>` whatever the markup around it says, `<!--` and `<script` carry a
+    script past one, and in foreign content any `<` may start a tag, which is why `writes_tags`
+    takes any `<` in their text as unseen output;
     the tree construction dispatcher, which reads an `<svg>`'s or a `<math>`'s `<form>` as foreign
     content's whatever HTML element is around the drawing, so the third shape is not read into one;
     the browsers
     Playwright runs, which read an element in those holders as text and keep one in an `<svg>`'s
-    own `<title>`, and keep the first of a duplicated `encoding`); reasoned (an `html!` sees its
-    own markup and nothing around it, so what its top and a component's children land in is not
-    known; `html!` writes an element's attributes in the order they are written, spreads in their
+    own `<title>`, and keep the first of a duplicated `encoding`, and keep each kind's inner
+    element in its outer one across a boundary written where `html!` does not see it, and the
+    anchors of a `<math>` in an `<svg>` and of an `<svg>` in a `<math>`); reasoned (an `html!`
+    sees its own markup and nothing around it, so what its top and a component's children land
+    in is not known, nor what a component or an expression writes, since `raw` prints trusted
+    text as is with no promise that it is balanced, nor what a `<script>` or `<style>` writes,
+    whose text `Gen` writes as is, nor which component a path names (`<Corten />` may be an
+    app's); what any of those writes may leave the tokenizer in a script's, a comment's or a
+    `<plaintext>`'s text, which no later literal start tag leaves; an element HTML reads as text
+    holds text as HTML's and elements as SVG's or MathML's, so where the namespace is not shown
+    neither is what it holds, and a `<noscript>`'s depends on scripting; a component is drawn
+    where a browser reads tags, since script text is a string's, not markup's; `html!` writes an element's attributes in the order they are written, spreads in their
     place (`open_tag` in `crates/corten-macros/src/html.rs`), so the first `encoding` in the
     markup is the first the browser reads; the refusals add no code to what `html!`
     writes, so a view that compiles renders as before); value (correct output above the rest, the
@@ -4649,14 +4786,68 @@ rules something out.
     refusals go or change with it; or a browser keeps one of the refused patch shapes as written
     after some first element or in some place a view is written, when `patch-parsing.json`'s cases
     fail in the smoke (or the probe in Last checked, run again, finds it kept) and that refusal
-    goes; or an
-    app is found to write one of the refused shapes across a component's edge (a component whose
-    top-level element lands in an `<svg>` and writes an element there a browser moves out, or
-    children a component writes into a `<textarea>`), when following the context across
-    components ([Limit 30](#limit-markup-context)) would have to be weighed against its cost to
-    every render.
+    goes; or an app is found to write one of the refused shapes across a component's edge or an
+    expression (a component whose top-level element lands in an `<svg>` and writes an element
+    there a browser moves out, children a component writes into a `<textarea>`, a block in a `<p>`
+    after a text expression, a row after a `<table>` whose rows an expression writes), when
+    following the context across components ([Limit 30](#limit-markup-context)) would have to be
+    weighed against its cost to every render; or `raw` is made to promise balanced markup, when an
+    expression could be taken to leave the open elements as they were and the tokenizer reading
+    tags; or `html!` escapes a script's or a style's text (or refuses a `<` in it),
+    when such an element stops being unseen output; or an app needs components drawn inside
+    script text (a client-side template filled from a component's markup), when the precondition
+    that output is drawn where a browser reads tags goes too, and with it every refusal outside a
+    patch's top level but the two of a single start tag.
 
-    Last checked: 2026-11-15, the HTML standard's tree construction (its tokenization states for
+    Last checked: 2026-11-17, after a sixth review found refusals of kept markup in an element
+    HTML reads as text whose namespace the markup does not show, and a duplicate check that took
+    `key` (written `data-key`) and `KEY` for one attribute, the outputs of the new passing cases
+    (`<p><div>"Detail"</div></p>` in a top-level `<iframe>`, `<noscript>`, `<xmp>`, `<noembed>`,
+    `<noframes>`, `<style>` and `<script>`, and in a `<noscript>` in a `<div>`) serialized back
+    unchanged, and the same in a top-level `<textarea>` and `<title>` and in a `<textarea>` in an
+    `<svg>`'s `<foreignObject>` read back as text, in Chromium 156.0.8078.4, Firefox 157.0 and
+    WebKit 27.2, which also kept `data-key` and `KEY` as two attributes and the review's
+    counterexample (`<p><div>` in script text a caller left open) as the script's text, the shape
+    the precondition above leaves unsupported, and each new passing case was added to
+    `parsesAsHtmlMeans`;
+    2026-11-17, after a fifth review found refusals of kept markup after a script
+    left open (a later literal `<svg>`, `<p>` or `<textarea>` regained certainty) and asked that
+    every component, `<Corten />` included, be unseen, the outputs of the new passing cases (a
+    `<div>` in an `<svg>`, a `<div>` in a `<p>`, and a `<g>` in a `<textarea>`, each after a
+    script whose text holds `<!--<script>` and before `raw("</script>")`; the same after a script
+    `raw` opens, in a `<template>` too; and after one a component writes, in a `<foreignObject>`
+    too and as its children, and what a component named `Corten` writing `</span><button><span>`
+    makes of a `<div>` in a `<p>`) serialized back unchanged in Chromium 156.0.8078.4, Firefox
+    157.0 and WebKit 27.2, which still drop a nested form in a document's `<main>` (the miss),
+    and were added to `parsesAsHtmlMeans`; 2026-11-17, after a fourth review found refusals of kept markup across a
+    `<script>` whose text `html!` writes as is and across an app component named `Corten`, the
+    outputs of the new passing cases (a `<div>` in a `<p>` after `</script><button><script>` in a
+    script and after the same in a style, a nested form in a template a script's text opens in a
+    document's `<main>`, a `<g>` in a `<textarea>` in an `<svg>` a script's text opens, and what
+    a same-named `Corten` writing `raw("<button>")` makes of a `<div>` in a `<p>`) serialized
+    back unchanged in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2, and the first four
+    added to `parsesAsHtmlMeans`; 2026-11-17, the patch shapes read again against the same rule when
+    [#1538 Refuse the patch shapes a browser loses wherever they are written, and check the rest in debug builds](https://github.com/corten-run/corten/pull/1538)
+    and this change met, and the shapes
+    with `raw` between their two elements (a row after `raw("<table>")`, a row in a `<table>`
+    holding `raw("<template>")`, a `<p>` after a `<col>` and `raw("<template>")`, a `<table>` after
+    a first row and `raw("<template>")`, at the top level and in a `<div>`) parsed as a
+    `<template>`'s content in Chromium 156, Firefox 157 and WebKit 27.2, each of which kept every
+    one; 2026-11-17, each refusal's facts read again against `html/nesting.rs` and
+    the parser after a third review found refusals of kept markup across a component, an
+    expression and a foreign root's unseen namespace, and the kept shapes
+    (`parsesAsHtmlMeans` in `scripts/smoke.mjs`: one per nesting kind across a boundary written
+    by `raw`, a form pair in a template written by `raw` in a document's `<main>`, anchors across
+    a `<foreignObject>` and a `<template>` written by `raw`, and the anchors of a `<math>` in an
+    `<svg>` and of an `<svg>` in a `<math>`) parsed in Chromium 156, Firefox 157 and WebKit 27.2,
+    each of which kept every one as written; 2026-11-16, the HTML standard's "in body" start-tag rules, scope boundaries,
+    special elements and active-formatting markers, read against `html/nesting.rs` in this
+    change based on `f5f2132aa`, and each of its refusal rules, for every tag the rule names
+    (`refusedNesting` in `scripts/smoke.mjs`), parsed in Chromium 156, Firefox 157 and
+    WebKit 27.2, each of which moved or dropped the inner element, while keeping the template
+    and foreign-content cases, and again after review that the form pointer is the only rule that
+    depends on ancestors outside the markup (template contents do not use it); 2026-11-15, the
+    HTML standard's tree construction (its tokenization states for
     RCDATA, RAWTEXT, script data and PLAINTEXT, its HTML and MathML text integration points, its
     tree construction dispatcher, which keeps `<mglyph>` and `<malignmark>` MathML's at a text
     integration point and reads an `<svg>` in a MathML `<annotation-xml>` as SVG's, and its rules for parsing tokens in foreign content, which take the same
@@ -5714,8 +5905,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    wherever it lands in or around it ([Choice 54](#choice-html-parse-refusals)). The rest depend
    on what the patch began with or where the view is written (a `<p>` and a `<tr>` after it are
    kept after a first `<tr>`, and an `<svg>` keeps a `<form>` of fields after a `<tr>`), so for
-   them, and where a
-   component or an expression writes the first element, a debug build refuses such a patch, as
+   them, where a component or an expression writes the first element, and where one is written
+   between the two elements (it may leave an element open), a debug build refuses such a patch, as
    `html!` writes it, when it sends it, naming the element, but a release build sends it as drawn
    and the browser loses the part, so a mix that only some data draws is found only by a debug
    render that draws it
@@ -6124,9 +6315,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     form and a form a script adds are not seen. A patch is not read: the runtime applies it at the
     address the browser was already at.
 30. <a id="limit-markup-context"></a>An `html!` sees one component's markup, not what it lands in
-    or where a component writes its children, so `html!`'s refusals of three kinds of markup a
+    or where a component writes its children, so `html!`'s refusals of markup a
     browser parses differently from how it is written (an element in an element whose content is
-    text, a `<plaintext>`, an element taken out of foreign content;
+    text, a `<plaintext>`, an element taken out of foreign content, or literal HTML nesting
+    whose start tag closes or discards an open element;
     [Choice 54](#choice-html-parse-refusals)) and the debug check of a keyed ref's
     keys ([Choice 46](#choice-ref-values)) act only where that markup shows how a browser parses
     it (and the refusal of a patch's top level, only where the first element is written in it,
@@ -6144,11 +6336,33 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `<template>`, `<noscript>`, `<textarea>`, `<title>`, `<iframe>`, `<xmp>`, `<noembed>` or
     `<noframes>` there are not checked, though in an `<svg>` the runtime finds them. Among a
     component's children, which it may write into an `<svg>`'s `<desc>`, the same holds, unless
-    they are in an `<svg>` the children write themselves. An expression that writes an element a
-    browser moves out of an `<svg>` into one is not refused, and the check takes what follows for
-    the drawing's. Following the parsing context across components would lift this: each
+    they are in an `<svg>` the children write themselves under an element that shows HTML. A
+    literal `<svg>` or `<math>` at the top of the markup or among a component's children does not
+    show its namespace either (a `<math>` an `<svg>` holds is SVG's), so only an element taken out
+    of foreign content is refused straight in it, and nothing in its integration points. What an
+    element HTML reads as text holds is not read there either (as HTML's it is text, as SVG's
+    elements), so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a component compiles
+    and nothing after such a `<plaintext>` is refused, nor is what a `<noscript>` holds, anywhere
+    (text with scripting on). Nor does
+    the markup show what an expression or any component writes, `<Corten />` included (`raw`
+    may open or close any element), nor what a `<script>` or `<style>` whose literal text holds
+    a `<` writes: `html!` writes that text as is, so `</script>` in it ends the element and what
+    follows is markup, and `<!--<script>` keeps it open past its end tag. What one writes may
+    leave a browser reading a script's text, a comment or a `<plaintext>`, which a later
+    literal start tag does not end, so after one no refusal that depends on context acts in the
+    same `html!` (a duplicate attribute and a hand-written `data-key` still do), in a
+    `<template>` or an `<svg>` written after it too; `<p>{text}<div>` compiles, though a browser
+    closes the paragraph, and so does `<p><script>"if (a < b) go();"</script><div>`, and so does
+    anything in a document's body, which follows `<Corten />`. A nested `<form>` is refused
+    nowhere: only a document's markup could show that no `<template>` holds it, and its body
+    follows `<Corten />`. Every refusal assumes `html!` output, a component's included, is drawn
+    where a browser reads tags; writing a component into script or style text a caller left open
+    is not supported, since a script's text comes from a string, not markup, and a refused shape
+    there (the sixth review's `TemplateMarkup` with `<p><div>`, after
+    `<script type="text/x-template">"<!--<script>"</script>` and before `raw("</script>")`) is
+    kept by browsers as the script's text and refused still. Following the parsing context across components would lift the first of these: each
     component's render would tell the next what it is written into, at a cost to every render,
-    for markup few apps write.
+    for markup few apps write. What an expression writes is the app's: `raw` is trusted text.
 
 31. <a id="limit-read-redirect"></a>A script's `read()` follows no redirect and cannot see where one
     goes. It asks with `redirect: "manual"`, since the target is another route's answer and not
