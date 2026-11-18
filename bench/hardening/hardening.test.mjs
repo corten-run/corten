@@ -29,8 +29,8 @@ test("immutable effective profiles charge equal total budgets including every na
   }
 });
 
-test("same native socket injectors pass independent receiver controls for all six phases", async () => {
-  for (const phase of phases) {
+test("native socket scenarios retain their receiver controls; dependency recovery uses its HTTP probe", async () => {
+  for (const phase of phases.filter(phase => phase !== "dependency-recovery")) {
     const result = await controls(phase); assert.equal(result.passed, true); assert.equal(result.legitimate.ok, true);
   }
 });
@@ -105,7 +105,7 @@ test("attack payloads bind real form metadata and preserve incomplete heads/bodi
   assert.ok(body.includes("Content-Length: 4096\r\n\r\n"), "slow bodies must not accidentally exercise an oversized-body defense");
   assert.equal(payload("slow-readers", 0, target, b.attack, form).paused, true);
   assert.equal(payload("idle-connections", 0, target, b.attack, form).first, "");
-  assert.ok(payload("connection-pressure", 0, target, b.attack, form).first.includes("Connection: close"));
+  assert.throws(() => payload("connection-pressure", 0, target, b.attack, form));
   assert.deepEqual([0, 1, 2].map((i) => payload("oversized-requests", i, target, b.attack, form).variant), ["header-count", "header-size", "body-size"]);
 });
 

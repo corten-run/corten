@@ -196,6 +196,26 @@ test("semver snapshot pins same-read library bytes before actual worker executio
   assert.throws(h.capture, /validation unavailable/);
 });
 
+test("only required recovery replay sources extend the worker source budget", { timeout: 15000 }, async (t) => {
+  const paths = validationPaths.filter((path) => /^bench\/hardening\/(?:dependency-recovery-|resource-sample\.mjs$)/.test(path));
+  assert.deepEqual(paths, [
+    "bench/hardening/dependency-recovery-capture.mjs",
+    "bench/hardening/dependency-recovery-contract.mjs",
+    "bench/hardening/resource-sample.mjs",
+  ]);
+  const h = semverSnapshot(t), snapshot = h.capture();
+  assert.equal(snapshot.sources.length - paths.length, 211);
+  const task = validationTask(h.input, { snapshot, WorkerClass: class extends Worker {
+    constructor(entry, options) {
+      // Inject below the exact parent manifest check to exercise the worker's own bound.
+      options.workerData.sources = options.workerData.sources.map((row) =>
+        row.path === paths[0] ? { ...row, path: "bench/hardening/unlisted-control.mjs" } : row);
+      super(entry, options);
+    }
+  } });
+  await assert.rejects(task.result, /validation unavailable/);
+});
+
 test("semver snapshot rejects unpinned dependency declarations and absent captured members", { timeout: 15000 }, async (t) => {
   for (const edit of [({ manifest }) => { manifest.devDependencies.semver = "^7.8.6"; },
     ({ lock }) => { lock.packages[""].devDependencies.semver = "7.8.5"; },

@@ -132,6 +132,7 @@ mock.module("./native-replay.mjs", { exports: { ...nativeReplay,
 function completeNative(binding) {
   return { status: binding.request.group === "live-delivery" ? "failed" : "verified",
     attemptComplete: true, cleanupComplete: true, resources: "verified",
+    ...(binding.request.group === "hardening" ? { comparisonEligibleApps: [] } : {}),
     outcomes: binding.selection.apps.map((app, i) => ({ app, outcome: binding.request.group === "live-delivery" && i === 1 ? "failed" : "passed" })),
     blockers: [], ...(binding.request.group === "fullstack-browser" ? {
       qualificationPassed: true, expectedExitCode: 0, comparisonEligibleApps: [...binding.selection.apps],
@@ -511,6 +512,8 @@ for (const group of groupNames) test(`${group}: one complete group runs and repl
   assert.equal(saved.schema, "benchmark-isolated-group-campaign-inspection/v1");
   assert.deepEqual(saved.selection.groups, [{ group, apps: s.plan.bindings[0].selection.apps, contractSha256: undefined }]);
   assert.deepEqual(saved.groups.map((r) => r.group), [group]); assert.equal(Object.hasOwn(saved, "group"), false);
+  if (group === "hardening") assert.deepEqual(saved.groups[0].appOutcomes, s.plan.bindings[0].selection.apps
+    .map(app => ({ app, outcome: "passed", comparisonEligible: false })));
   assert.equal(Object.hasOwn(saved, "qualified"), false); assert.equal(Object.hasOwn(saved, "deletionAuthorized"), false);
   assert.equal(saved.collectionIntegrity, "manifest-verified"); assert.equal(saved.commandLifecycle, "observed-terminal");
   assert.deepEqual(saved.uncollectedNativeRoots, []);

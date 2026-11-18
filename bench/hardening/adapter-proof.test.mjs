@@ -17,7 +17,7 @@ test("fixed hardening adapter composes with actual native replay and never promo
     const commit = sourceGit(repository, ["rev-parse", "HEAD"]).toString().trim(), subjectSha256 = "b".repeat(64);
     const options = parseArgs(["w17", "--build", "--review", subjectSha256]), budget = budgets(), cells = matrix();
     const fixture = JSON.stringify(records()); mkdirSync(join(folder, "fixtures")); writeFileSync(join(folder, "fixtures/marketplace.json"), fixture);
-    const summary = { schema: "native-hardening-run/v1", registryDigest, commit, options, budget, semanticReceiptsVersion: 2, lifecycleVersion: 4,
+    const summary = { schema: "native-hardening-run/v2", registryDigest, commit, options, budget, semanticReceiptsVersion: 2, lifecycleVersion: 4,
       savedProofVersion, nativeControlsVersion: 1, deploymentQualificationVersion: 1, complete: false, groupReady: false, failures: [], cleanupFailures: [],
       cells, nativeGroup: nativeGroup(cells), fixtureSha256: digest(fixture), tools: Object.fromEntries(["node", "checker", "edge", "cert"].map((k) => [k, { Id: `sha256:${digest(k)}` }])) };
     writeFileSync(join(folder, "summary.json"), JSON.stringify(summary));

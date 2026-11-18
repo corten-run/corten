@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { composePhase } from "./composition.mjs";
 import { latestStableSchema, candidateLatestStableSchema, unsupportedSolidReason } from "../latest-stable.mjs";
+import { selectedApps } from "../registry.mjs";
 import { readLatestStable } from "../../client-heavy/build.mjs";
 const policy = (group, status = "not-applicable") => ({ schema: latestStableSchema, group, valid: true, status, groupComparisonEligible: status === "not-applicable" ? null : false });
 const binding = { request: { group: "live-delivery" }, latestStable: policy("live-delivery"), preparation: { fixtures: [] }, selection: { apps: ["a", "b", "c"] } };
@@ -11,6 +12,53 @@ const command = { terminal: true, code: 1, error: null, cancelled: false, forced
 test("complete observed failures stay selected; apparatus completion is not a successful baseline", () => {
   const result = composePhase(binding, native, { cleanupComplete: true, resources: "verified" }, [command]);
   assert.equal(result.outcome, "native-validated"); assert.deepEqual(result.appOutcomes.map((r) => r.comparisonEligible), [true, false, false]);
+});
+
+const hardeningApps = selectedApps("hardening");
+const hardeningBinding = { ...binding, request: { group: "hardening" }, latestStable: policy("hardening"),
+  selection: { apps: hardeningApps } };
+const hardeningNative = { ...native, blockers: [], comparisonEligibleApps: [],
+  outcomes: hardeningApps.map((app, i) => ({ app, outcome: i === 0 ? "failed" : i === 1 ? "unsupported" : "passed" })) };
+const hardeningHost = { cleanupComplete: true, resources: "verified" };
+const exitedZero = { ...command, code: 0, signal: null, success: true };
+const hardeningCommands = [exitedZero];
+
+test("hardening exit zero preserves replayed app dispositions without qualifying any comparison", () => {
+  const verified = { ...hardeningNative, status: "verified",
+    outcomes: hardeningNative.outcomes.map((row) => ({ ...row, outcome: row.outcome === "failed" ? "passed" : row.outcome })) };
+  const allPassed = { ...verified, outcomes: hardeningApps.map((app) => ({ app, outcome: "passed" })) };
+  for (const n of [hardeningNative, verified, allPassed]) {
+    const result = composePhase(hardeningBinding, n, hardeningHost, hardeningCommands);
+    assert.equal(result.outcome, "native-validated"); assert.equal(result.nativeStatus, n.status);
+    assert.equal(result.report.qualification, "native-replay-passed");
+    assert.deepEqual(result.appOutcomes, n.outcomes.map((row) => ({ ...row, comparisonEligible: false })));
+  }
+});
+
+test("hardening contradictions or incomplete proof never qualify the run or a comparison", () => {
+  const run = (n = hardeningNative, h = hardeningHost, c = hardeningCommands, audit = true) => {
+    const result = composePhase(hardeningBinding, n, h, c, audit);
+    assert.notEqual(result.outcome, "native-validated");
+    assert.equal(result.report.qualification, "blocked");
+    assert.ok(result.appOutcomes.every((row) => !row.comparisonEligible));
+  };
+  for (const patch of [
+    { status: "blocked" }, { status: "invalid" }, { status: "verified" },
+    { outcomes: hardeningNative.outcomes.map((row) => ({ ...row, outcome: "passed" })) },
+    { outcomes: hardeningNative.outcomes.map((row) => row === hardeningNative.outcomes[0] ? { ...row, outcome: "not-run" } : row) },
+    { attemptComplete: false }, { cleanupComplete: false }, { resources: "blocked" }, { resources: "invalid" },
+    { blockers: ["hardening-native-group-not-ready"] },
+    { comparisonEligibleApps: undefined }, { comparisonEligibleApps: "all" }, { comparisonEligibleApps: [hardeningApps.at(-1)] },
+  ]) run({ ...hardeningNative, ...patch });
+  for (const patch of [
+    { code: 1, success: false }, { code: 2, success: false }, { code: 137, success: false }, { code: null, success: false }, { code: "0" },
+    { terminal: false }, { signal: "SIGTERM" }, { cancelled: true }, { forced: true }, { error: "spawn error" }, { success: false },
+  ]) run(undefined, undefined, [{ ...exitedZero, ...patch }]);
+  run(undefined, undefined, []);
+  run(undefined, undefined, [exitedZero, exitedZero]);
+  run(undefined, { ...hardeningHost, cleanupComplete: false });
+  run(undefined, { ...hardeningHost, resources: "invalid" });
+  run(undefined, undefined, undefined, false);
 });
 
 test("browser intrinsic unsupported attempts use only the replayed qualification exit and never gain comparison eligibility", () => {
