@@ -89,6 +89,7 @@ use std::{
 };
 
 use crate::extract::{FromRequestParts, OptionalFromRequestParts};
+use crate::http::is_token;
 use crate::response::IntoResponse;
 use crate::response::Response;
 use http::request::Parts;
@@ -426,21 +427,6 @@ const fn eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
         at += 1;
     }
     true
-}
-
-/// A token (RFC 9110 5.6.2): one or more of its characters.
-const fn is_token(text: &[u8]) -> bool {
-    let mut at = 0;
-    while at < text.len() {
-        let c = text[at];
-        let symbol =
-            matches!(c, b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~');
-        if !(c.is_ascii_alphanumeric() || symbol) {
-            return false;
-        }
-        at += 1;
-    }
-    !text.is_empty()
 }
 
 /// A [`Refused`] a handler returned as its error (`Err(Refused::forbidden())?`), carried in a

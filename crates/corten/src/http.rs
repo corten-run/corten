@@ -30,6 +30,21 @@ pub use crate::body::{Body, BodyDataStream};
 pub use crate::handler::Request;
 pub use crate::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
 
+/// A token (RFC 9110 5.6.2): one or more of its characters.
+pub(crate) const fn is_token(text: &[u8]) -> bool {
+    let mut at = 0;
+    while at < text.len() {
+        let c = text[at];
+        let symbol =
+            matches!(c, b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~');
+        if !(c.is_ascii_alphanumeric() || symbol) {
+            return false;
+        }
+        at += 1;
+    }
+    !text.is_empty()
+}
+
 /// Byte ranges of list items, split on commas outside quoted strings. An item with an
 /// unterminated quote is skipped, then the rest is split on commas to recover valid siblings.
 pub(crate) fn list_items(header: &[u8]) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {

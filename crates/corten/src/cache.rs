@@ -318,6 +318,27 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     }
 }
 
+/// Whether the client explicitly accepts a coding other than identity. A positive wildcard counts:
+/// it allows a non-identity coding not named in the field (RFC 9110 12.5.3). An absent field is
+/// not an explicit signal for tagging, even though HTTP permits any coding in that case.
+#[cfg(not(feature = "compress"))]
+pub(crate) fn accepts_a_coding(headers: &HeaderMap) -> bool {
+    use crate::http::{is_token, list_items, weight};
+
+    headers.get_all(header::ACCEPT_ENCODING).iter().any(|value| {
+        let bytes = value.as_bytes();
+        list_items(bytes).any(|range| {
+            let item = &bytes[range];
+            let (name, params) = match item.iter().position(|&b| b == b';') {
+                Some(at) => (&item[..at], Some(&item[at + 1..])),
+                None => (item, None),
+            };
+            let name = name.trim_ascii();
+            !name.eq_ignore_ascii_case(b"identity") && is_token(name) && matches!(params.map_or(Some(1000), weight), Some(1..))
+        })
+    })
+}
+
 /// The key a page's tag is made with ([`tag`]): random for each process, so nobody outside it can
 /// make two bodies share a tag.
 static TAG_KEY: std::sync::LazyLock<std::hash::RandomState> = std::sync::LazyLock::new(std::hash::RandomState::new);

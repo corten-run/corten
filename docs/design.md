@@ -6918,11 +6918,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
     tag and have a client keep a page that changed. A tag from another process does not match: after
     a restart, or behind a load balancer that sends a client to another instance, the page is sent
     whole, as it was before pages had tags. WebKit 27.2 sends no `If-None-Match` on a reload or a
-    `fetch` (probed), so the runtime's navigations there always get the whole page. With the
-    `compress` feature, a client that accepts no compression and names no tag is sent none: it is
-    not a browser keeping pages (a benchmark, `curl`), and for a page the hash would cost about a
-    third of the render, so a CDN that fetches pages uncompressed cannot revalidate them. A file of
-    a type compression does not vary on (a PNG, a PDF, `no-transform`) is tagged for every other
+    `fetch` (probed), so the runtime's navigations there always get the whole page. A client that
+    does not explicitly accept a non-identity coding and sends no `If-None-Match` is sent no tag:
+    it is not a browser keeping pages (a benchmark, `curl`), and for a page the hash would cost
+    about a third of the render. A CDN that fetches pages without asking for a coding gets no tag
+    to revalidate them. With `compress`, only explicitly named codings Corten can send count.
+    Without it, any named non-identity coding with a positive weight counts, as does a positive
+    `*` (it allows unlisted codings, RFC 9110 section 12.5.3). An absent or empty
+    `Accept-Encoding` does not count in either build. A file of a type compression does not vary
+    on (a PNG, a PDF, `no-transform`) is tagged for every other
     client, since its `304` saves the whole body. Its `Vary` does not name `Accept-Encoding`, though
     whether it carries a tag depends on it, so a shared cache whose fetch of a public file accepted
     no compression and named no tag keeps a copy it cannot revalidate: a whole fetch, never a wrong

@@ -14470,6 +14470,34 @@ struct KeyedWrite {
 /// keep or that is immutable, one with a tag or an encoding of its own, a stream, a relayed page,
 /// an error, a write, an API's answer, the runtime.
 #[tokio::test]
+async fn a_page_get_needs_an_explicit_coding_for_an_unrequested_tag() {
+    let router = App::new(Routes::from(self::routes())).router();
+    for (encoding, tagged) in [
+        (Some("identity"), false),
+        (None, false),
+        (Some("identity;q=1, gzip;q=0"), false),
+        (Some("gzip, br"), true),
+        (Some("gzip;Q=0"), false),
+        (Some("br;q=0.000"), false),
+        (Some("*"), !cfg!(feature = "compress")),
+        (Some("*;q=0"), false),
+        (Some("*;q=0, gzip;q=0.001"), true),
+        (Some("gzip;q=0, *;q=0.500"), !cfg!(feature = "compress")),
+        (Some(""), false),
+        (Some("gzip;q=bogus"), false),
+        (Some("invalid coding"), false),
+        (Some("deflate"), !cfg!(feature = "compress")),
+    ] {
+        let mut req = Request::builder().uri("/");
+        if let Some(encoding) = encoding {
+            req = req.header(header::ACCEPT_ENCODING, encoding);
+        }
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!((res.status(), res.headers().contains_key(header::ETAG)), (StatusCode::OK, tagged), "{encoding:?}");
+    }
+}
+
+#[tokio::test]
 async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modified() {
     async fn send(router: Router, method: &str, uri: &str, headers: &[(&str, &str)]) -> (StatusCode, http::HeaderMap, Vec<u8>) {
         // As a browser asks, unless the case says otherwise.
@@ -14585,7 +14613,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     // one that names a tag is answered as a browser is.
     let identity = ("accept-encoding", "identity");
     let (_, headers, _) = send(router(), "GET", "/", &[identity]).await;
-    assert_eq!(headers.contains_key("etag"), !cfg!(feature = "compress"), "without compression every client: {headers:?}");
+    assert!(!headers.contains_key("etag"), "{headers:?}");
     let (status, ..) = send(router(), "GET", "/", &[identity, ("if-none-match", &tag)]).await;
     assert_eq!(status, StatusCode::NOT_MODIFIED);
 

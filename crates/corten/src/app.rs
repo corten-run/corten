@@ -2441,7 +2441,7 @@ impl<S: Steps> Layer<S> {
         #[cfg(feature = "compress")]
         let worth_a_tag = coding.any();
         #[cfg(not(feature = "compress"))]
-        let worth_a_tag = true;
+        let worth_a_tag = cache::accepts_a_coding(req.headers());
         let res = self.secure(req, route, worth_a_tag, scope).await;
         #[cfg(feature = "compress")]
         let res = crate::compress::finish(res, coding).await;
