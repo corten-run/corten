@@ -33,7 +33,7 @@ use std::{
     fmt::Write as _,
     fs,
     io::ErrorKind,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use serde_json::{Map, Value};
@@ -287,7 +287,10 @@ impl Declarations {
 /// For an extensionless import, TypeScript tries the declaration file before the index.
 /// If we cannot identify the file on disk, the handler must still be checked.
 fn resolve_declarations_import(import: &str) -> Option<PathBuf> {
-    let path = Path::new(import);
+    // TypeScript removes `dir/..` from the path before it looks on disk, so a symlinked `dir`
+    // does not change which file `..` names.
+    let lexical = lexically_normal(Path::new(import));
+    let path = lexical.as_path();
     let index;
     let candidate = if import.ends_with(".d.ts") {
         path
@@ -305,6 +308,22 @@ fn resolve_declarations_import(import: &str) -> Option<PathBuf> {
         return None;
     }
     fs::canonicalize(candidate).ok()
+}
+
+/// `path` with `.` dropped and each `name/..` folded away, without reading the disk.
+fn lexically_normal(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir if out.file_name().is_some() => {
+                out.pop();
+            }
+            Component::ParentDir if out.has_root() => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 fn doc(out: &mut String, indent: &str, text: &str) {
@@ -565,6 +584,28 @@ mod tests {
         std::fs::write(&index, without_handler.typescript()).unwrap();
         with_handler.sync(&direct);
         Types::new().add::<library::Change>().components(&[component]).sync(&index);
+    }
+
+    #[test]
+    fn a_handler_import_folds_dot_dot_before_following_a_symlink() {
+        assert_eq!(lexically_normal(Path::new("/a/./b/../c")), Path::new("/a/c"));
+        assert_eq!(lexically_normal(Path::new("/../a")), Path::new("/a"));
+        assert_eq!(lexically_normal(Path::new("../a/../../b")), Path::new("../../b"));
+        #[cfg(unix)]
+        {
+            let dir = crate::tests::Scratch::new("types-symlink");
+            let lexical = dir.join("types/app.d.ts");
+            let through_link = dir.join("real/types/app.d.ts");
+            std::fs::create_dir_all(lexical.parent().unwrap()).unwrap();
+            std::fs::create_dir_all(dir.join("real/sub")).unwrap();
+            std::fs::create_dir_all(through_link.parent().unwrap()).unwrap();
+            std::fs::write(&lexical, "").unwrap();
+            std::fs::write(&through_link, "").unwrap();
+            std::os::unix::fs::symlink(dir.join("real/sub"), dir.join("link")).unwrap();
+            let import = dir.join("link/../types/app");
+            let resolved = resolve_declarations_import(import.to_str().unwrap());
+            assert_eq!(resolved, Some(std::fs::canonicalize(&lexical).unwrap()));
+        }
     }
 
     fn confirm_change_importing(import: &Path) -> crate::Component {

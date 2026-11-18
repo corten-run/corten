@@ -74,7 +74,8 @@ are `types/app` or end in `/types/app` after removing an optional `.js` or `.d.t
 alias without that ending is neither checked nor collected by the macro.
 
 Use a relative JSDoc import from the script to the generated file. For `../types/app`,
-`Types::sync` looks for `../types/app.d.ts` first, then `../types/app/index.d.ts`. A component
+`Types::sync` looks for `../types/app.d.ts` first, then `../types/app/index.d.ts`, folding
+`dir/..` out of the path before it follows symlinks, as TypeScript does. A component
 library can write its own declarations while the app still collects its events and views.
 `sync` skips a handler only when its import and output can both be resolved on disk and refer
 to different files. If either cannot be resolved, for example on the first `sync` or with a
