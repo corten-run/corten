@@ -5795,14 +5795,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
    of the file's classes or are inside one (by a descendant or child combinator; `+`, `~` and `||`
    from the class's element lead outside it), directly or through every selector of an `:is()`
    or `:where()` the browser keeps. A class inside another function only filters, though it is
-   still prefixed. A nested selector is checked where its `&` stands, as the elements of the rule
-   it is in. The same check decides whether an `@scope` root, at the top or nested in a rule, is
+   still prefixed. A nested selector is relative when it starts with a combinator or contains
+   no `&` delimiter, even in an invalid arm; only a matchable `&` supplies an anchor at its own
+   position. The same check decides whether an `@scope` root, at the top or nested in a rule, is
    owned; if it is not, each selector in its body must pass on its own. A root in an owned
    `@scope` is relative to its elements and is not checked. The check reads selectors without a
    CSS parser, so it is conservative: a selector it cannot show is owned does not compile.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's
-   root.
+   root by naming that component's class. A limit does not supply proof of ownership.
    Keyframe names are not scoped, so an area's keyframes share one namespace with the rest.
    Every component listed in `App::components` is in one file, whether or not a page uses it: the
    item page's `components.css` (the hidden rules, tokens, two themes, two densities, utilities

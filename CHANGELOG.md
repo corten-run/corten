@@ -13,7 +13,8 @@ Corten is pre-1.0, so any minor version may change the API.
   alike. Write the anchor out: `main:has(.list) p` becomes `main .list p`, and
   `.pick:checked + span` becomes `:where(.cuts) .pick:checked + span`; page-wide rules belong in
   `static/style.css` (docs/guide/styles.md). The kit's `stepper.css` anchors its unit rules this
-  way; `corten ui diff stepper` shows the change for a copy.
+  way; `corten ui diff stepper` shows the change for a copy, and
+  `corten ui add --merge stepper` upgrades it.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 

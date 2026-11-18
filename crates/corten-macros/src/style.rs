@@ -765,20 +765,12 @@ impl Scoper<'_> {
             if selector.trim().is_empty() {
                 return Err(self.error(at, usage));
             }
-            if pseudo_element(selector) {
-                return Err(self.error(
-                    at,
-                    format!(
-                        "`@scope {prelude}`: a pseudo-element cannot be a scope's root or limit, and the browser drops the rule"
-                    ),
-                ));
-            }
         }
-        let (start, _, unowned) = self.prefixed(root.trim(), nest.unwrap_or_default(), at)?;
+        let (start, _, unowned) = self.prefixed(root.trim(), nest.unwrap_or_default(), Some(prelude), at)?;
         let mut out = format!("@scope ({start})");
         if let Some(limit) = limit {
             out.push_str(" to (");
-            out.push_str(&self.selector(limit.trim(), None, at)?.0);
+            out.push_str(&self.prefixed(limit.trim(), Anchor::default(), Some(prelude), at)?.0);
             out.push(')');
         }
         Ok((out, (nest.is_some() && unowned.is_some()).then(|| root.trim().to_string())))
@@ -950,7 +942,7 @@ impl Scoper<'_> {
     /// The selector with its classes prefixed, and what its elements require. With `nest`, what
     /// `&` requires, every selector in the list must match only elements the component owns.
     fn selector(&mut self, text: &str, nest: Option<Anchor>, at: usize) -> Result<(String, Anchor), String> {
-        match self.prefixed(text, nest.unwrap_or_default(), at)? {
+        match self.prefixed(text, nest.unwrap_or_default(), None, at)? {
             (_, _, Some(unowned)) if nest.is_some() => Err(self.unowned(&unowned, at)),
             (out, anchor, _) => Ok((out, anchor)),
         }
@@ -964,21 +956,27 @@ impl Scoper<'_> {
     /// descendant or child combinator; a sibling shares what it is inside (`.list > li + li`),
     /// but `+` and `~` from the class's element, or `||`, lead outside it. In `:is()` and
     /// `:where()` every selector must count, but those the browser drops from these forgiving
-    /// lists, one that is empty or starts or ends with a combinator (Selectors 4). A class in any
+    /// lists, such as one that is empty or has a pseudo-element (Selectors 4). A class in any
     /// other function, `:not()`, `:has()` or `:nth-child(2 of .row)`, is prefixed but only
-    /// filters. `&` is the parent rule's elements, `nest`; a nested selector with no `&` anywhere
-    /// in it is relative to them (CSS Nesting).
-    fn prefixed(&mut self, text: &str, nest: Anchor, at: usize) -> Result<(String, Anchor, Option<Unowned>), String> {
+    /// filters. `&` is the parent rule's elements, `nest`; a leading combinator or the absence of
+    /// any `&` delimiter makes a nested selector relative to them (CSS Nesting).
+    fn prefixed(
+        &mut self,
+        text: &str,
+        nest: Anchor,
+        scope: Option<&str>,
+        at: usize,
+    ) -> Result<(String, Anchor, Option<Unowned>), String> {
         let chars: Vec<char> = text.chars().collect();
         let mut out = String::with_capacity(text.len() + 16);
         let (mut i, mut brackets, mut parens) = (0, 0usize, 0usize);
         let mut quote = None;
         let mut part_start = 0;
         // The rule's selector list, the `:is()` and `:where()` lists open in it, and for the
-        // current selector, whether it has `&` and why it might not count.
+        // current selector, whether it has an `&` delimiter and why it might not count.
         let mut top = Branches::new();
         let mut lists = Vec::<Branches>::new();
-        let (mut nests, mut why) = (false, Why::default());
+        let (mut has_ampersand, mut why) = (false, Why::default());
         let mut all = Anchor::ALL;
         let mut unowned = None;
         while i < chars.len() {
@@ -997,13 +995,14 @@ impl Scoper<'_> {
             // In a compound selector of the list or an `:is()` in it, rather than in another
             // function or an attribute selector: a combinator, or a token that starts or continues
             // a compound selector.
-            if brackets == 0 && parens == lists.len() {
+            let in_list = parens == lists.last().map_or(0, |list| list.depth);
+            if brackets == 0 && in_list {
                 let list = lists.last_mut().unwrap_or(&mut top);
                 match c {
                     c if c.is_whitespace() => list.space(),
-                    '>' | '+' | '~' => list.combinator = Some(c),
+                    '>' | '+' | '~' => list.explicit_combinator(c),
                     '|' if chars.get(i + 1) == Some(&'|') => {
-                        list.combinator = Some('|');
+                        list.explicit_combinator('|');
                         out.push_str("||");
                         i += 2;
                         continue;
@@ -1028,23 +1027,39 @@ impl Scoper<'_> {
                 }
                 '[' => brackets += 1,
                 ']' => brackets = brackets.saturating_sub(1),
-                '&' if brackets == 0 => {
-                    nests = true;
-                    if parens == lists.len() {
+                '&' => {
+                    // Even an invalid arm can suppress implicit nesting. Only a matchable
+                    // nesting selector supplies an anchor.
+                    has_ampersand = true;
+                    if brackets != 0 {
+                        if in_list {
+                            lists.last_mut().unwrap_or(&mut top).invalid = true;
+                        }
+                    } else if in_list {
                         lists.last_mut().unwrap_or(&mut top).add(nest);
                     } else {
                         why.filtered = true;
                     }
                 }
-                ':' if brackets == 0 && parens == lists.len() => {
-                    if chars.get(i + 1) == Some(&':') {
-                        out.push_str("::");
-                        i += 2;
-                        continue;
-                    }
-                    if let Some(open) = positive_list_open(&chars, i + 1) {
-                        lists.push(Branches::new());
+                ':' if brackets == 0 => {
+                    let double_colon = chars.get(i + 1) == Some(&':');
+                    if double_colon || legacy_pseudo_element(&chars, i + 1) {
+                        if let Some(list) = lists.last_mut().filter(|_| in_list) {
+                            list.invalid = true;
+                        } else if let Some(prelude) = scope {
+                            return Err(self.error(
+                                at,
+                                format!("`@scope {prelude}`: a pseudo-element cannot be a scope's root or limit; remove it or move the rule outside `@scope`"),
+                            ));
+                        }
+                        if double_colon {
+                            out.push_str("::");
+                            i += 2;
+                            continue;
+                        }
+                    } else if let Some(open) = positive_list_open(&chars, i + 1) {
                         parens += 1;
+                        lists.push(Branches { depth: parens, ..Branches::new() });
                         out.extend(&chars[i..=open]);
                         i = open + 1;
                         continue;
@@ -1052,27 +1067,32 @@ impl Scoper<'_> {
                 }
                 '(' if brackets == 0 => parens += 1,
                 ')' if brackets == 0 => {
-                    if parens == lists.len() {
+                    parens = parens.saturating_sub(1);
+                    if in_list {
                         if let Some(mut list) = lists.pop() {
                             list.next();
-                            why.alternative |= list.any && !list.all.owned;
-                            lists.last_mut().unwrap_or(&mut top).add(list.all);
+                            let parent = lists.last_mut().unwrap_or(&mut top);
+                            if parens == parent.depth {
+                                why.alternative |= list.any && !list.all.owned;
+                                parent.add(list.all);
+                            } else {
+                                why.filtered = true;
+                            }
                         }
                     }
-                    parens = parens.saturating_sub(1);
                 }
-                ',' if brackets == 0 && parens == lists.len() => {
+                ',' if brackets == 0 && in_list => {
                     if let Some(list) = lists.last_mut() {
                         list.next();
                     } else {
-                        let anchor = top.end(!nests, true).unwrap_or_default();
+                        let anchor = top.end(true, !has_ampersand).unwrap_or_default();
                         all = all.and(anchor);
                         if !anchor.owned && unowned.is_none() {
                             unowned =
                                 Some(Unowned { part: chars[part_start..i].iter().collect::<String>().trim().to_string(), why });
                         }
                         part_start = i + 1;
-                        (nests, why) = (false, Why::default());
+                        (has_ampersand, why) = (false, Why::default());
                     }
                 }
                 '.' if brackets == 0 && ident_start(&chars[i + 1..]) => {
@@ -1098,7 +1118,7 @@ impl Scoper<'_> {
                     if !self.classes.contains(&class) {
                         self.classes.push(class);
                     }
-                    if parens == lists.len() {
+                    if in_list {
                         lists.last_mut().unwrap_or(&mut top).class();
                     } else {
                         why.filtered = true;
@@ -1111,7 +1131,7 @@ impl Scoper<'_> {
             out.push(c);
             i += 1;
         }
-        let anchor = top.end(!nests, true).unwrap_or_default();
+        let anchor = top.end(true, !has_ampersand).unwrap_or_default();
         all = all.and(anchor);
         if !anchor.owned && unowned.is_none() {
             unowned = Some(Unowned { part: chars[part_start..].iter().collect::<String>().trim().to_string(), why });
@@ -1179,6 +1199,7 @@ impl Anchor {
 
 /// A selector list being read: a rule's, or an `:is()` or `:where()` in it.
 struct Branches {
+    depth: usize,
     /// What every selector before the current one requires, and whether any is owned.
     all: Anchor,
     any: bool,
@@ -1191,11 +1212,13 @@ struct Branches {
     compound: bool,
     combinator: Option<char>,
     leading: bool,
+    invalid: bool,
 }
 
 impl Branches {
     fn new() -> Branches {
         Branches {
+            depth: 0,
             all: Anchor::ALL,
             any: false,
             now: Anchor::default(),
@@ -1203,6 +1226,7 @@ impl Branches {
             compound: false,
             combinator: None,
             leading: false,
+            invalid: false,
         }
     }
 
@@ -1210,6 +1234,11 @@ impl Branches {
         if self.compound && self.combinator.is_none() {
             self.combinator = Some(' ');
         }
+    }
+
+    fn explicit_combinator(&mut self, c: char) {
+        self.invalid |= self.combinator.is_some_and(|c| c != ' ');
+        self.combinator = Some(c);
     }
 
     /// A token of a compound selector: after a combinator, it starts the next one.
@@ -1234,12 +1263,12 @@ impl Branches {
         (self.now, self.nested) = (self.now.or(anchor), self.nested.or(anchor));
     }
 
-    /// The end of a selector: what it requires, written `nested` or not, or `None` when it is
-    /// empty, ends with a combinator or, not `relative`, starts with one.
-    fn end(&mut self, nested: bool, relative: bool) -> Option<Anchor> {
-        let valid = self.compound && (relative || !self.leading) && self.combinator.is_none_or(|c| c == ' ');
-        let anchor = if nested { self.nested } else { self.now };
-        *self = Branches { all: self.all, any: self.any, ..Branches::new() };
+    /// The end of a selector, or `None` for a statically invalid one. A leading combinator is
+    /// invalid inside a forgiving list, but makes a nested rule relative even with an `&`.
+    fn end(&mut self, relative: bool, implicit_parent: bool) -> Option<Anchor> {
+        let valid = !self.invalid && self.compound && (relative || !self.leading) && self.combinator.is_none_or(|c| c == ' ');
+        let anchor = if implicit_parent || self.leading { self.nested } else { self.now };
+        *self = Branches { depth: self.depth, all: self.all, any: self.any, ..Branches::new() };
         valid.then_some(anchor)
     }
 
@@ -1270,16 +1299,7 @@ fn positive_list_open(chars: &[char], mut start: usize) -> Option<usize> {
     while chars[start..].starts_with(&['/', '*', '*', '/']) {
         start += 4;
     }
-    let mut end = start;
-    while let Some(&c) = chars.get(end) {
-        if c.is_ascii_alphabetic() {
-            end += 1;
-        } else if c == '\\' {
-            end = escaped(chars, end + 1).1;
-        } else {
-            break;
-        }
-    }
+    let end = pseudo_ident_end(chars, start);
     if chars.get(end) != Some(&'(') {
         return None;
     }
@@ -1291,6 +1311,39 @@ fn positive_list_open(chars: &[char], mut start: usize) -> Option<usize> {
         }
         _ => None,
     }
+}
+
+fn pseudo_ident_end(chars: &[char], start: usize) -> usize {
+    let mut end = start;
+    while let Some(&c) = chars.get(end) {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '-') || !c.is_ascii() {
+            end += 1;
+        } else if c == '\\' {
+            end = escaped(chars, end + 1).1;
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+/// The four pseudo-elements that also have a single-colon form.
+fn legacy_pseudo_element(chars: &[char], start: usize) -> bool {
+    if !matches!(chars.get(start), Some('b' | 'B' | 'a' | 'A' | 'f' | 'F' | '\\')) {
+        return false;
+    }
+    let end = pseudo_ident_end(chars, start);
+    // `:before(...)` is not the legacy spelling; don't infer validity from its name.
+    if chars.get(end) == Some(&'(') {
+        return false;
+    }
+    let name = &chars[start..end];
+    const NAMES: [&str; 4] = ["before", "after", "first-line", "first-letter"];
+    if name.contains(&'\\') {
+        let name = unescape(&name.iter().collect::<String>());
+        return NAMES.iter().any(|n| name.eq_ignore_ascii_case(n));
+    }
+    NAMES.iter().any(|n| n.len() == name.len() && name.iter().zip(n.chars()).all(|(a, b)| a.eq_ignore_ascii_case(&b)))
 }
 
 fn ident_start(rest: &[char]) -> bool {
@@ -1330,38 +1383,6 @@ fn parenthesized(text: &str) -> Option<(&str, &str)> {
         i += 1;
     }
     None
-}
-
-/// Whether a selector names a pseudo-element (`::before`, or one of the four CSS 2 wrote with
-/// one colon, `:before`), outside strings and brackets.
-fn pseudo_element(selector: &str) -> bool {
-    let b = selector.as_bytes();
-    let (mut i, mut brackets) = (0, 0usize);
-    while i < b.len() {
-        match b[i] {
-            q @ (b'"' | b'\'') => {
-                i += 1;
-                while i < b.len() && b[i] != q {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-            }
-            b'\\' => i += 1,
-            b'[' => brackets += 1,
-            b']' => brackets = brackets.saturating_sub(1),
-            b':' if brackets == 0 => {
-                if b.get(i + 1) == Some(&b':') {
-                    return true;
-                }
-                let name: String = selector[i + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
-                if ["before", "after", "first-line", "first-letter"].iter().any(|n| name.eq_ignore_ascii_case(n)) {
-                    return true;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    false
 }
 
 /// Comments removed and whitespace collapsed, outside strings.
@@ -1929,6 +1950,61 @@ mod tests {
     }
 
     #[test]
+    fn an_ampersand_in_an_invalid_attribute_is_not_a_nesting_anchor() {
+        for css in [
+            ".list { :is(main, [foo=&]) { color: red } }",
+            ".list { @scope (:is(main, [foo=&])) to (.slot) { p { color: red } } }",
+        ] {
+            let error = scope(css, "t").expect_err(css);
+            assert!(error.contains("styles elements this component does not own"), "{css}: {error}");
+        }
+        for css in [r#".list { :is(main, [foo="&"]) { color: red } }"#, r".list { :is(main, [foo=\&]) { color: red } }"] {
+            assert!(scope(css, "t").is_ok(), "{css}");
+        }
+    }
+
+    #[test]
+    fn a_leading_combinator_is_relative_even_with_an_ampersand() {
+        let css = ".list { > :not(&), > :is(main, [foo=&]) { color: red } }";
+        assert_eq!(scope(css, "t").map(|s| s.css), Ok(".t__list{> :not(&), > :is(main, [foo=&]){color:red}}".into()));
+        assert!(scope(".list { + :not(&) { color: red } }", "t").is_err());
+    }
+
+    #[test]
+    fn pseudo_elements_and_doubled_combinators_are_dropped_in_forgiving_arms() {
+        for (input, expected) in [
+            (":is(.list, ::before) p { color: red }", ":is(.t__list, ::before) p{color:red}"),
+            (":where(.list, main + > p) p { color: red }", ":where(.t__list, main + > p) p{color:red}"),
+            ("@scope (:is(.list, ::before)) { p { color: red } }", "@scope (:is(.t__list, ::before)){p{color:red}}"),
+            (
+                "@scope (.list) to (:is(.slot, ::before)) { p { color: red } }",
+                "@scope (.t__list) to (:is(.t__slot, ::before)){p{color:red}}",
+            ),
+            ("@scope (:where(.list, :BeFoRe)) { p { color: red } }", "@scope (:where(.t__list, :BeFoRe)){p{color:red}}"),
+            (
+                "@scope (.list:not(:is(.slot, ::before))) { p { color: red } }",
+                "@scope (.t__list:not(:is(.t__slot, ::before))){p{color:red}}",
+            ),
+            (
+                "@scope (.list:is(:/* gap */:before,.row)) { p { color: red } }",
+                "@scope (.t__list:is(: :before,.t__row)){p{color:red}}",
+            ),
+        ] {
+            assert_eq!(scope(input, "t").map(|s| s.css), Ok(expected.to_string()), "{input}");
+        }
+        for css in [
+            ".list { :is(main, &::before) { color: red } }",
+            ".list { :is(main, & + > p) { color: red } }",
+            ":is(.list, main, ::before) p { color: red }",
+            ":where(.list, main + p) p { color: red }",
+            "@scope (.list) to (.slot::before) { p { color: red } }",
+            "@scope (:not(:is(.list, ::before))) { p { color: red } }",
+        ] {
+            assert!(scope(css, "t").is_err(), "{css}");
+        }
+    }
+
+    #[test]
     fn a_forgiving_list_drops_the_branches_the_browser_drops() {
         // Selectors 4: `:is()` and `:where()` drop an empty or invalid selector and match by
         // the rest; a relative one (`> p`) is invalid there.
@@ -2091,6 +2167,11 @@ mod tests {
             ("related_list.css", "`main:has(.list) p` styles elements this component does not own"),
             ("sibling_list.css", "`.list + main` styles elements this component does not own"),
             ("negated_nest.css", "`:not(&)` styles elements this component does not own"),
+            ("invalid_nest_ampersand.css", "`:is(main, [foo=&])` styles elements this component does not own"),
+            (
+                "invalid_scope_ampersand.css",
+                "`p` styles elements this component does not own: `@scope (:is(main, [foo=&]))` can start outside the component",
+            ),
             (
                 "sibling_scope.css",
                 "`p` styles elements this component does not own: `@scope (& + main)` can start outside the component",

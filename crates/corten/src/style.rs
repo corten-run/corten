@@ -371,6 +371,22 @@
 //! fn SiblingScope() -> impl ClassList { List }
 //! ```
 //!
+//! An unescaped `&` in an invalid arm can suppress implicit nesting but cannot supply an
+//! anchor. Here the browser can match an outside `main` or its paragraphs
+//! (`invalid_nest_ampersand.css` and `invalid_scope_ampersand.css`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn InvalidNestAmpersand() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn InvalidScopeAmpersand() -> impl ClassList { (List, Slot) }
+//! ```
+//!
 //! Nor does an `@scope` with no root (`rootless_scope.css` has `@scope { li { .. } }`), which
 //! scopes its rules to the element around the page's stylesheet link:
 //!
