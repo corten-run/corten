@@ -1,19 +1,14 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable changes to Corten. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- `corten-cluster` checks feed keys at creation, write and lookup. Corten's rule is stricter
-  than what the NATS broker accepts: it rejects names such as `a*b` and keys containing a
-  non-breaking space to follow the documented subject rules, excludes control characters, and
-  caps keys at 1,024 bytes so they fit NATS publish lines and Postgres indexes. Invalid keys
-  return `InvalidFeedKey` at `create_feed` and `begin`, and `None` at `Cluster::feed`.
-  Subject prefixes follow the same rules with a 255-byte limit. Startup also refuses custom
-  NATS reply inbox prefixes over 2,729 bytes at the default control-line limit. The relay
-  logs and drops pending rows with invalid legacy keys instead of stopping other feeds.
-  No schema change; publish and acknowledgement errors still retry.
+Pending entries are in [changelog.d/](changelog.d/).
+
+- CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
+  for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
@@ -87,6 +82,10 @@ Corten is pre-1.0, so any minor version may change the API.
   cloud inbox through timing replay; a version label alone is not an audit.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
+- Catalog Contract selects affected parity apps on pull requests and runs all parity and JSON
+  jobs for unrecognized app paths. Benchmark Evidence runs portable source-custody checks when
+  captured sources change and native kernel checks when their own inputs change. Both scope
+  against the full Git diff and cancel superseded pull request runs, not main runs.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 

@@ -52,8 +52,8 @@ const snapshotPins = freeze({
   "bench/live/parity.mjs": "b50bf096ae7a310a88c2a4cc226f60dbad812721bce28636511214caf2f23b74",
 });
 const clientSourceRoots = Object.freeze([...(clientParser?.sourceRoots ?? [])]);
-const sourceRoots = [...new Set(["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
-  "rust-toolchain.toml", "rust-toolchain", "README.md", "CONTRIBUTING.md", "AGENTS.md", "docs", "bench", "crates", "scripts", "examples/card-market", ...clientSourceRoots])];
+export const sourceRoots = Object.freeze([...new Set(["Cargo.toml", "Cargo.lock", "package.json", "package-lock.json", ".dockerignore", ".gitignore",
+  "rust-toolchain.toml", "rust-toolchain", "README.md", "CONTRIBUTING.md", "AGENTS.md", "docs", "bench", "crates", "scripts", "examples/card-market", ...clientSourceRoots])]);
 // Native client v2 snapshots every tracked input under its exported roots,
 // including historical browser/results files. Those bytes are inputs, not the
 // current untracked output. Keep the ordinary result exclusion elsewhere.
