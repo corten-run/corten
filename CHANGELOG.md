@@ -7,8 +7,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - `corten dev`'s closed-dialog and popover check keeps explicit `@scope` roots, including for
   `:scope`, `&` and declarations on a root, when it can compose the
-  [whole selector chain](docs/guide/styles.md#styles). Unsupported scopes and unscoped rules
-  use the existing check unchanged.
+  [whole selector chain](docs/guide/styles.md#styles). Unscoped rules, unsupported scopes,
+  false `@supports` groups and `@starting-style` still use the existing selector match.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including

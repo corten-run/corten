@@ -100,7 +100,7 @@ try {
         "@supports (display: grid) { .enhanced { display: grid; } }",
         "@media (min-width: 1px) { .nav { display: grid; } }",
         ".page { .side { @media (min-width: 1px) { display: block; } } }",
-        "@media (min-width: 1px) { @scope (.plainPage) { dialog.scopedPlain { display: flex; outline-style: solid; } } @scope (.rootPage) { :scope > dialog.scopedRoot { display: grid; outline-style: solid; } } @scope (.scoped) { & > .scopedAmp { display: block; } :scope > .scopedPopover { display: block; } } @scope (.scopedDeclarations) { display: flex; outline-style: solid; } }",
+        "@media (min-width: 1px) { @scope (.plainPage) { dialog.scopedPlain { display: flex; outline-style: solid; } } @scope (.rootPage) { @supports (display: grid) { :scope > dialog.scopedRoot { display: grid; outline-style: solid; } } } @scope (.scoped) { & > .scopedAmp { display: block; } :scope > .scopedPopover { display: block; } } @scope (.scopedDeclarations) { display: flex; outline-style: solid; } }",
         "@container (min-width: 1px) { @scope (.scoped) { :scope > .scopedContainer { display: flex; } } }",
         "@scope (.scopedSelf) { @media (min-width: 1px) { dialog.scopedSelf { display: grid; } } }",
         "@scope (.ancestorScope) { @media (min-width: 1px) { body #outsideAncestor { display: flex; } } }",
@@ -290,6 +290,16 @@ try {
       (sameMessages || head.ids !== main?.ids ? "" : `; messages differ: ${head.messages.join(" | ")} vs ${main?.messages.join(" | ")}`));
   }
   const rails = "@media (min-width: 900px) { .rail { display: flex } }";
+  for (const group of ["@supports (display: future-layout)", "@starting-style"]) {
+    await dialogParity(`${group} neither adds nor suppresses a warning through @scope`,
+      '<div class="panel"><dialog class="rail" id="caseInactive"></dialog><dialog class="fallback" id="caseActive"></dialog></div>',
+      `@scope (.panel) { ${group} {
+        @media (min-width: 900px) { :scope > .rail { display: flex } }
+        :scope > .fallback { display: grid !important }
+      } }
+      @media (min-width: 900px) { .fallback { display: flex } }`,
+      "caseActive", { wide: "none,none" });
+  }
   const cardBody = '<div class="card"><div class="card-body"><dialog class="rail" id="caseInside"></dialog></div><dialog class="rail" id="caseOutside"></dialog></div>';
   const wideRule = (/** @type {string} */ selector) => `@media (min-width: 900px) { ${selector} { display: grid !important; content: "" } }`;
   await dialogParity("limited scope preserves main's warnings for a plain rule on both sides of the limit",

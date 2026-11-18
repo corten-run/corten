@@ -156,10 +156,13 @@ function displays() {
       const asWritten = styled ? rule.selectorText : written;
       const own = styled ? resolved(asWritten ?? "", selector) : selector;
       let scoped = scope;
-      // undefined: outside any scope; null: an incomplete chain, never resumed further in.
+      // undefined: unscoped; null: legacy only, including descendants.
       if (scope !== null) {
         try {
-          if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule) {
+          if ((globalThis.CSSStartingStyleRule && rule instanceof CSSStartingStyleRule) ||
+              (rule instanceof CSSSupportsRule && !CSS.supports(rule.conditionText))) {
+            scoped = null;
+          } else if (globalThis.CSSScopeRule && rule instanceof CSSScopeRule) {
             const start = rule.start;
             const root = start && !selector && rule.end === null && composed(start, scope?.selector ?? null);
             scoped = root && start ? { selector: root, written: start } : null;
@@ -172,18 +175,13 @@ function displays() {
         }
       }
       const scopeDisplay = scoped && (styled || globalThis.CSSNestedDeclarations && rule instanceof CSSNestedDeclarations) ? scoped : null;
-      if (style && own && asWritten && style.display) {
-        /** @type {Display} */
-        const entry = { selector: own, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" };
-        if (scopeDisplay) entry.scope = scopeDisplay;
-        found.push(entry);
-      } else if (scopeDisplay && style?.display) {
-        // Declarations on a scope root have no legacy selector.
-        found.push({ selector: "", written: "", display: style.display, condition, important: style.getPropertyPriority("display") === "important", scope: scopeDisplay });
+      if (style?.display && (scopeDisplay || own && asWritten)) {
+        found.push({ selector: own ?? "", written: asWritten ?? "", display: style.display, condition,
+          important: style.getPropertyPriority("display") === "important", scope: scopeDisplay || undefined });
       }
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
-      // A width (or a container's size) is a breakpoint; @supports is not, and passes its own on.
+      // @media and @container mark breakpoints, whether currently active or not.
       const query = rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
       walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), own, asWritten, scoped);
     }
@@ -233,12 +231,16 @@ function inPlace(root) {
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
     if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
+    // In .card, a breakpoint .rail display can go unwarned if `@scope (.card) { & > * { display:grid !important } }` matches but loses.
+    // A .card scope's .rail:not(.gone,.pending) display can warn outside .card and .other despite a .other scope's .rail !important.
     const drawn = applies.find((r) => r.condition && r.display !== "none");
     if (!drawn || applies.some((r) => r.important && r.display !== "none")) continue;
     reported.add(el);
     const dialog = el instanceof HTMLDialogElement && !own.hasAttribute.call(el, "popover");
+    const kind = dialog ? "dialog" : "popover";
+    const message = `corten: ${labelOf(el)} is a closed ${kind} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed.`;
     if ("composed" in drawn) {
-      console.warn(`corten: ${labelOf(el)} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed.`, el);
+      console.warn(message, el);
       continue;
     }
     const state = dialog ? "[open]" : ":popover-open";
@@ -249,7 +251,7 @@ function inPlace(root) {
     const cls = [...drawn.selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "").find((c) => /** @type {DOMTokenList} */ (Reflect.get(own, "classList", el)).contains(c))?.split("__").pop();
     const id = attrOf(el, "id");
     const named = cls ? "." + cls : Reflect.get(own, "localName", el) + (id ? "#" + id : "");
-    console.warn(`corten: ${labelOf(el)} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);
+    console.warn(`${message} To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${kind}'s look, write it as \`${named}${state}\``, el);
   }
 }
 

@@ -93,8 +93,17 @@ handles the whole rule as before: it treats `@scope` as a grouping rule, keeps o
 nesting and does not use any of the scope bounds. This includes implicit roots, scopes with a
 `to` limit, scopes nested in style rules, sheets with `@namespace`, a top-level root referring to
 itself, unsupported selectors, selectors over 1,024 characters before or after composition,
-and selectors the browser rejects. Unscoped rules are unchanged, including long selectors. This affects only
-the diagnostic, not which styles the browser applies. Adopted stylesheets are not inspected
+and selectors the browser rejects. Rules under `@supports` conditions that `CSS.supports()` rejects
+or under `@starting-style` also use only the old match. Unscoped rules are unchanged, including long
+selectors.
+
+The check does not evaluate the cascade. Two known limits for closed rails with declarations at
+`min-width: 900px` (check at 600px):
+
+- `.rail { display: flex }` and `@scope (.card) { & > * { display: grid !important } }` can suppress the warning for a rail in `.card` even though the override loses to the hiding rule.
+- `@scope (.card) { .rail:not(.gone,.pending) { display: flex } }` and `@scope (.other) { .rail { display: grid !important } }` at the same breakpoint can warn for a rail outside both roots: the `:not()` list uses the old flat match, but the override does not.
+
+This affects only the diagnostic, not which styles the browser applies. Adopted stylesheets are not inspected
 ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
 When only areas have stylesheets, each area's file starts with these rules. An app with no
 component stylesheet has neither file, so if its `static/style.css` gives a hidden element, a
