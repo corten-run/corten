@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { stall } from "./stall.mjs";
 import { browserBug } from "./browser-bugs.mjs";
 import { checkMarkupScanner } from "./markup-scan.mjs";
+import { checkCssScanner } from "./css-scan.mjs";
 
 const base = process.argv[2] ?? "http://localhost:18480";
 const engines = { chromium, firefox, webkit };
@@ -1136,6 +1137,8 @@ async function run(browser) {
   }
   const markupCases = await checkMarkupScanner(browser);
   check(`the developer markup fixture agrees with the browser in ${markupCases} cases`, true);
+  const cssCases = await checkCssScanner(browser);
+  check(`the stylesheet fixture agrees with the browser in ${cssCases} cases`, true);
   // Patches generated from a fixed seed (`patch-generated.json`, which html.rs's
   // `generated_patches_carry_the_check_s_verdict` writes with the debug check's verdict on each):
   // the shapes above composed with the tokens the check has been found to misread. The check
