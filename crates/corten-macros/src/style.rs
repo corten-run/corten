@@ -620,12 +620,12 @@ fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: Pr
             Tok::Colon if mode == IfCondition => *stack.last_mut().unwrap() = IfValue,
             Tok::Semicolon if mode == IfValue => *stack.last_mut().unwrap() = IfCondition,
             // A boolean style feature or a whole operand in a style range names a property.
-            Tok::Ident if mode == Style => {
-                if (matches!(kind(i - 1), Some(Tok::Open | Tok::Function)) || comparison(i - 1))
-                    && (kind(i + 1) == Some(Tok::Close) || comparison(i + 1))
-                {
-                    refs.push((start, end));
-                }
+            Tok::Ident
+                if mode == Style
+                    && (matches!(kind(i - 1), Some(Tok::Open | Tok::Function)) || comparison(i - 1))
+                    && (kind(i + 1) == Some(Tok::Close) || comparison(i + 1)) =>
+            {
+                refs.push((start, end));
             }
             _ => {}
         }
