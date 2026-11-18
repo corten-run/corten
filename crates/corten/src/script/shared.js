@@ -4,6 +4,11 @@ export function log(text, n, loud) {
   console.log(loud ? text.toUpperCase() : text, n);
 }
 
+/** @param {HTMLElement} root */
+export function run(root) {
+  root.title = "Changed";
+}
+
 /** @param {HTMLElement} el @param {string[]} names */
 export function named(el, names) {
   el.title = names.join(", ");

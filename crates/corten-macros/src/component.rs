@@ -324,7 +324,7 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
         }
         None => (None, None),
     };
-    let (body, has_refs) = refs(&body, &scope_name)?;
+    let (body, has_refs, exported_refs) = refs(&body, &scope_name, &name, &vis, script.is_some())?;
     // A script that keeps state (`keep`) keeps it on the component's root, one per instance.
     // In a part (`js = Owner`), the `scope` its owner's handlers take is the owner's root, so they
     // do not make the part a root; any other handler's `scope` does, as in any component.
@@ -372,7 +372,7 @@ pub fn build(item: TokenStream, args: Args) -> Result<TokenStream, Error> {
     ));
     out.extend([TokenTree::Group(Group::new(Delimiter::Brace, fields))]);
     let mut scope = TokenStream::new();
-    let mut items = TokenStream::new();
+    let mut items = exported_refs;
     // The names this component's constant takes for the whole program (`crate::id::guards`).
     let mut guarded: Vec<(&str, String, bool)> = Vec::new();
     // The constant the app lists: the component's script and its own stylesheet.
@@ -632,18 +632,73 @@ fn is_prop(attr: &[TokenTree]) -> bool {
     })
 }
 
-/// Replaces `let (rows, rest) = refs();` at the top level of the body with each ref, named and
-/// scoped to this component. Returns whether there were any.
-fn refs(body: &Group, scope: &str) -> Result<(Group, bool), Error> {
+/// Replaces `let (rows, rest) = refs();` with local refs, and `let row: Ref<..> = refs();`
+/// with a ref from the component's generated, named bundle. Both forms give the owner a root.
+fn refs(
+    body: &Group,
+    scope: &str,
+    component: &Ident,
+    vis: &[TokenTree],
+    own_script: bool,
+) -> Result<(Group, bool, TokenStream), Error> {
     let tokens: Vec<TokenTree> = body.stream().into_iter().collect();
     let mut out: Vec<TokenTree> = Vec::with_capacity(tokens.len());
     let mut found = false;
+    let mut getters = TokenStream::new();
+    let bundle = || TokenTree::Ident(Ident::new(&format!("{component}Refs"), component.span())).into();
+    let visibility = stream(vis.iter().cloned());
+    let mut seen = std::collections::BTreeMap::new();
+    let mut record = |n: &Ident, exported| {
+        let name = ref_name(n)?;
+        if seen.insert(name.clone(), exported).is_some_and(|was_exported| was_exported || exported) {
+            return err(n.span(), format!("duplicate ref `{name}`: an exported ref's name must be unique in its component"));
+        }
+        Ok(name)
+    };
     let mut i = 0;
     while i < tokens.len() {
         let is_refs_call = |at: usize| {
             is_ident(tokens.get(at), "refs")
                 && matches!(tokens.get(at + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis && g.stream().is_empty())
         };
+        if is_ident(tokens.get(i), "let") && is_punct(tokens.get(i + 2), ':') {
+            // The type can contain groups and generic arguments. The exact RHS is three
+            // top-level tokens before the statement's semicolon: `= refs ()`.
+            let end = tokens[i + 3..].iter().position(|t| is_punct(Some(t), ';')).map(|offset| i + 3 + offset);
+            if let Some(eq) = end
+                .and_then(|end| end.checked_sub(3))
+                .filter(|&eq| eq > i + 3 && is_punct(tokens.get(eq), '=') && is_refs_call(eq + 1))
+            {
+                let Some(TokenTree::Ident(n)) = tokens.get(i + 1) else {
+                    return err(tokens[i + 1].span(), "an exported ref names one variable: let row: Ref<El> = refs();");
+                };
+                if !own_script {
+                    return err(n.span(), "only the owner of a script (#[component(js)]) can export a ref");
+                }
+                if let Some(span) = conditional_ref_attr(&tokens[..i]) {
+                    return err(span, "an exported ref cannot be conditional; put the condition on the component instead");
+                }
+                let name = record(n, true)?;
+                let ident = TokenTree::Ident(n.clone());
+                getters.extend(q(
+                    "#[doc = __A3] #[inline] __A0 const fn __A1(self) -> <__A2 as ::corten::script::__private::ExportRef>::Exported {
+                        ::corten::script::__private::new_exported_ref(__A4, __A5)
+                    }",
+                    &[
+                        visibility.clone(),
+                        ident.clone().into(),
+                        stream(tokens[i + 3..eq].iter().cloned()),
+                        literal(&format!(" The `{name}` ref of `{component}`.")),
+                        literal(scope),
+                        literal(&name),
+                    ],
+                ));
+                out.extend(q("let __A0 = __A1.__A0()", &[ident.into(), bundle()]));
+                found = true;
+                i = eq + 3;
+                continue;
+            }
+        }
         if is_ident(tokens.get(i), "let") && is_punct(tokens.get(i + 2), '=') && is_refs_call(i + 3) {
             let names: Vec<Ident> = match &tokens[i + 1] {
                 TokenTree::Ident(one) => vec![one.clone()],
@@ -660,23 +715,19 @@ fn refs(body: &Group, scope: &str) -> Result<(Group, bool), Error> {
                 }
                 other => return err(other.span(), "refs() names plain variables: let (rows, rest) = refs();"),
             };
-            for n in &names {
-                let text = n.to_string();
-                if !text.starts_with(|c: char| c.is_ascii_lowercase())
-                    || !text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                {
-                    return err(n.span(), format!("{text}: a ref is a snake_case variable, its name in the page"));
-                }
-            }
-            let make = |n: &Ident| {
-                q("::corten::script::__private::new_ref::<_, _, _, _>(__A0, __A1)", &[literal(scope), literal(&n.to_string())])
+            let mut make = |n: &Ident| {
+                let name = record(n, false)?;
+                Ok::<_, Error>(q(
+                    "::corten::script::__private::new_ref::<_, _, _, _>(__A0, __A1)",
+                    &[literal(scope), literal(&name)],
+                ))
             };
             let value = if names.len() == 1 && matches!(tokens[i + 1], TokenTree::Ident(_)) {
-                make(&names[0])
+                make(&names[0])?
             } else {
                 let mut list = TokenStream::new();
                 for n in &names {
-                    list.extend(make(n));
+                    list.extend(make(n)?);
                     list.extend(q(",", &[]));
                 }
                 crate::tokens::parens(list)
@@ -693,9 +744,42 @@ fn refs(body: &Group, scope: &str) -> Result<(Group, bool), Error> {
         out.push(tokens[i].clone());
         i += 1;
     }
+    let items = if getters.is_empty() {
+        TokenStream::new()
+    } else {
+        let doc = format!(" The exported refs of `{component}`, for parts rendered inside it.");
+        q(
+            "#[doc = __A0] #[derive(Clone, Copy)] __A1 struct __A2;
+             impl __A2 { __A3 }",
+            &[literal(&doc), visibility, bundle(), getters],
+        )
+    };
     let mut copy = Group::new(Delimiter::Brace, stream(out));
     copy.set_span(body.span());
-    Ok((copy, found))
+    Ok((copy, found, items))
+}
+
+fn conditional_ref_attr(mut before: &[TokenTree]) -> Option<Span> {
+    while let [rest @ .., TokenTree::Punct(hash), TokenTree::Group(attr)] = before {
+        if hash.as_char() != '#' || attr.delimiter() != Delimiter::Bracket {
+            break;
+        }
+        // A raw identifier (`r#cfg`) names the same attribute.
+        let name = attr.stream().into_iter().next().map(|t| t.to_string());
+        if matches!(name.as_deref().map(|n| n.strip_prefix("r#").unwrap_or(n)), Some("cfg" | "cfg_attr")) {
+            return Some(hash.span());
+        }
+        before = rest;
+    }
+    None
+}
+
+fn ref_name(n: &Ident) -> Result<String, Error> {
+    let name = n.to_string();
+    if !name.starts_with(|c: char| c.is_ascii_lowercase()) || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return err(n.span(), format!("{name}: a ref is a snake_case variable, its name in the page"));
+    }
+    Ok(name)
 }
 
 /// True when a handler in the markup (`on:click={js::close(scope)}`) takes the keyword `scope`.

@@ -1275,6 +1275,17 @@ the view's top-level parts. A `corten::live`
 fragment is already text, so debug builds check it when it is sent instead (it panics, naming the
 element).
 
+If a part writes the enclosing component's refs, give it the component's typed
+[`ComponentNameRefs` bundle](scripts.md#lists-and-larger-components) in both renders:
+`<SetPicker bundle={InventoryRefs} instance={instance} set={set} />` on the page and
+`action.patch(SetPicker { bundle: InventoryRefs, instance, set })` in the handler. The part uses
+the bundle's getter, `ref={bundle.picker()}`, in its markup. The bundle
+identifies the owner type, not an instance. A patch targets a document-wide ID, so when an
+owner appears more than once, give each part an instance-specific `#[derive(Id)]` ID such as
+`SetPickerId(instance)`. Keep that target under the intended owner so its script can resolve
+the refs. A missing target gets the normal patch diagnostic and nothing is inserted; the bundle
+does not check the target's ancestry if an ID is reused.
+
 The runtime parses a patch as a `<template>`'s content, as the HTML standard's "in template"
 insertion mode reads it: the first top-level element other than a `<template>`, `<script>`,
 `<style>`, `<link>`, `<meta>`, `<title>` or another tag a document's head holds decides how
