@@ -6038,17 +6038,31 @@ rules something out.
     it on), which would take the copy off an `HtmlResult` route's patch; or the paired
     `write_request_cost` controls show a repeatable increase beyond the measured ranges in the
     generic-only cost or in the cost of the late-write machinery. With `READS=1 MIDDLEWARE=1`,
-    pair both preferred and legacy typed patches with main: now both can enter the late poller,
-    so the legacy delta includes staging and the preferred-minus-legacy delta does not. The
-    equivalent generic preferred-minus-legacy comparison, net of the typed one, measures the
-    cost specific to the generic path. Separate the capture, boxed
+    pair both preferred and legacy typed and generic patches with main. Both kinds of request
+    can enter the late poller, and a generic route can keep the head for either. Compare the
+    generic and typed deltas separately for each preference. Separate the capture, boxed
     continuation and drop by profiling, not by calling the generic-minus-typed gap a copy.
     Also revisit if the paired no-read patch or GET controls
     show a repeatable increase beyond the measured ranges. The 5,467-instruction threshold was
     historical: it compared the generic and typed patches in
     `what_a_write_answering_in_an_action_costs`, not a standalone head copy.
 
-    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc, `010f04f23` against
+    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc, `7d8253ceb` against
+    main `70dd920cc`, with the same `write_request_cost` fixture and three alternating
+    1,200-minus-200 pairs. Median additional instructions per request without reads: document
+    GET 103 (range 103 to 103), navigation GET 113 (113 to 113), direct typed patch 172
+    (172 to 172), generic patch 465 (465 to 465). Each delta moved by one instruction from the
+    previous check. With reads and no middleware the typed patch adds 179 (178 to 180), the
+    generic patch 4,367 (4,367 to 4,367), and the own page 13,696 (13,694 to 13,696), drawing a
+    document instead of a fragment. With reads and pass-through middleware, the typed patch
+    adds 1,359 (1,359 to 1,359) when legacy and 1,446 (1,446 to 1,447) when preferred. The generic
+    patch adds 3,913 (3,912 to 3,913) when legacy and 4,357 (4,357 to 4,357) when preferred. The
+    paired generic delta net of the typed delta is 2,553 (2,552 to 2,554) when legacy and 2,910
+    (2,910 to 2,910) when preferred. Neither isolates the copy. The legacy generic patch now
+    pays for head retention in case its handler overrides the mode, but starts no read. The
+    typed patch still skips the capture. Core gzip remains 15,612 to 16,108 bytes and upload
+    gzip 539 to 559;
+    2026-11-18, `010f04f23` against
     main `70dd920cc`. Using the same `write_request_cost` fixture on both builds, three alternating
     1,200-minus-200 pairs measured these median additional instructions per request without reads:
     document GET 102 (range 102 to 104), navigation GET 112 (112 to 113), direct typed patch
@@ -6057,7 +6071,8 @@ rules something out.
     middleware the typed patch adds 180 (180 to 180), the generic patch 4,374 (4,374 to 4,374),
     and the own page 13,703 (13,703 to 13,703), drawing a document instead of a fragment.
     With reads and pass-through middleware, both legacy and preferred writes can enter late
-    staging: the typed patch adds 1,778 (1,777 to 1,778) when legacy and 1,967 (1,966 to 1,967)
+    staging at that revision, but only the preferred generic patch retains the head. The typed
+    patch adds 1,778 (1,777 to 1,778) when legacy and 1,967 (1,966 to 1,967)
     when preferred. The preferred-minus-legacy difference, net of main, is 189 (189 to 189)
     for typed patches and another 2,905 (2,905 to 2,907) for the generic-only path. Neither
     patch starts a read. Core gzip remains 15,612 to 16,108 bytes and upload gzip 539 to 559;
