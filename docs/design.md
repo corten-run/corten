@@ -5938,9 +5938,11 @@ rules something out.
 
     The relay sends markers after the batch's patch attempts, so a later patch may already
     have revealed the gap. It marks acknowledged rows done in one batch, even when another
-    row's marker cannot be sent or acknowledged. The failed row stays pending and takes one
-    slot on a retry; a full batch of unpublishable rows can stall the queue. The broker and
-    stream limits must fit the longest key plus up to 135 bytes of marker headers. Within
+    row's marker cannot be sent or acknowledged. Marker sends and acknowledgements share a
+    deadline of half the lease from its last renewal, leaving time to retire acknowledged rows.
+    The failed row stays pending and takes one slot on a retry; a full batch with nothing to
+    retire can stall the queue. The broker and stream limits must fit the longest key plus up
+    to 135 bytes of marker headers. Within
     JetStream's configured deduplication window, the shared ID deduplicates retries of either
     the original patch or its marker. A duplicate acknowledgement retires the row but does
     not identify which representation was first accepted; outside the window both can be
@@ -5997,8 +5999,10 @@ rules something out.
     NATS 2.15.2 with async-nats 0.52.0: both refusals publish markers while retaining the
     patch in Postgres. Ready and loading followers reload a refused tail, then apply the
     next patch normally, while a cold follower reads the committed state. A refused marker does
-    not stop unrelated rows crossing a batch boundary, and the longest marker overhead
-    measured 135 bytes. Retries deduplicate in both orders without reconnecting;
+    not stop unrelated rows crossing a batch boundary. With one marker acknowledgement
+    withheld, the acknowledged rows retire first. A retry retires the remaining row once
+    acknowledgements resume. The longest marker overhead measured 135 bytes. Retries
+    deduplicate in both orders without reconnecting;
     2026-11-17 at `056964945`, subject rules and control-line configuration.
 
 64. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends

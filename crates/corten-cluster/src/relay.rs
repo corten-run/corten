@@ -11,10 +11,13 @@
 //! other acknowledged rows. Patch bodies stay in Postgres until ordinary pruning.
 
 use std::{
+    future::{poll_fn, Future},
+    pin::pin,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    task::Poll,
     time::{Duration, Instant},
 };
 
@@ -200,6 +203,23 @@ fn marker_size_refused(options: &Options, row: &store::Pending, stream_limit: Op
         "reload marker refused for size; outbox row remains pending");
 }
 
+async fn poll_send_before<T>(deadline: tokio::time::Instant, send: impl Future<Output = T>) -> Option<T> {
+    let mut send = pin!(send);
+    // timeout_at polls its inner future first, even if the deadline has passed.
+    tokio::time::timeout_at(
+        deadline,
+        poll_fn(|cx| {
+            if tokio::time::Instant::now() >= deadline {
+                return Poll::Ready(None);
+            }
+            send.as_mut().poll(cx).map(Some)
+        }),
+    )
+    .await
+    .ok()
+    .flatten()
+}
+
 async fn finish_refusals(
     pool: &PgPool,
     js: &jetstream::Context,
@@ -223,17 +243,19 @@ async fn finish_refusals(
             completed.push((row, refusal, false));
             continue;
         }
-        match tokio::time::timeout_at(deadline, send(js, options, row, true)).await {
-            Ok(Ok(ack)) => markers.push((row, refusal, ack)),
-            Ok(Err(error)) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
+        held.check()?;
+        match poll_send_before(deadline, send(js, options, row, true)).await {
+            Some(Ok(ack)) => markers.push((row, refusal, ack)),
+            Some(Err(error)) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
                 marker_size_refused(options, row, None, &error);
             }
-            Ok(Err(error)) => marker_publish_failed(options, row, error),
-            Err(error) => marker_publish_failed(options, row, error),
+            Some(Err(error)) => marker_publish_failed(options, row, error),
+            None => marker_publish_failed(options, row, "deadline has elapsed"),
         }
     }
     let mut stream_failed_markers = Vec::new();
     for (row, refusal, ack) in markers {
+        // Unlike sends, an already-ready acknowledgement is useful even at the deadline.
         match tokio::time::timeout_at(deadline, ack).await {
             Ok(Ok(ack)) => {
                 sent.push(row.id);
@@ -288,4 +310,17 @@ async fn finish_refusals(
             error = error.as_ref().map(tracing::field::display), "{outcome}: {reason}; patch kept for inspection");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_expired_marker_deadline_does_not_attempt_a_publish() {
+        let deadline = tokio::time::Instant::now() - Duration::from_millis(1);
+        let mut publishes = 0;
+        poll_send_before(deadline, async { publishes += 1 }).await;
+        assert_eq!(publishes, 0);
+    }
 }

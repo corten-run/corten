@@ -784,6 +784,93 @@ async fn a_duplicate_marker_ack_retires_an_original_patch_without_claiming_a_mar
 }
 
 #[tokio::test]
+async fn an_unacknowledged_marker_does_not_block_other_retirements() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let logs = Capture::default();
+    let _capture = tracing::subscriber::set_default(logs.clone());
+    let schema = key("marker_ack_timeout_");
+    let pool = schema_pool(&db, &schema).await;
+    migrate(&pool).await.unwrap();
+    test_items(&pool).await;
+    sqlx::raw_sql(
+        "CREATE TABLE retirements (id bigint);
+         CREATE FUNCTION record_retirement() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+             INSERT INTO retirements VALUES (NEW.id);
+             RETURN NULL;
+         END $$;
+         CREATE TRIGGER record_retirement AFTER UPDATE OF published_at ON corten_outbox
+             FOR EACH ROW EXECUTE FUNCTION record_retirement();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for feed in ["delayed", "ready", "small"] {
+        new_feed(&pool, feed).await;
+    }
+    for feed in ["delayed", "ready"] {
+        let Begin::New(write) = begin(&pool, feed, None).await.unwrap() else { unreachable!() };
+        let item = Item { id: "x".repeat(LOW_PAYLOAD), n: 1 };
+        write.commit(&[Change::Upsert { id: &item.id, value: &item }]).await.unwrap();
+    }
+    set(&pool, "small", 1, None).await;
+    let rows = wait_pending(&pool, 3).await;
+    let delayed = &rows[0];
+
+    let observer = async_nats::connect(&nats).await.unwrap();
+    let js = jetstream::new(observer);
+    let stream = schema.to_uppercase();
+    let delayed_subject = format!("{schema}.delayed");
+    let mut config = jetstream::stream::Config {
+        name: format!("{stream}_DELAYED"),
+        subjects: vec![delayed_subject.clone()],
+        // Store the first marker, but suppress its publish ack and those of any retries.
+        no_ack: true,
+        ..Default::default()
+    };
+    let mut delayed_stream = js.create_stream(config.clone()).await.unwrap();
+    js.create_stream(jetstream::stream::Config {
+        name: stream.clone(),
+        subjects: vec![format!("{schema}.ready"), format!("{schema}.small")],
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    // Refuse the large patches before sending them so only their markers need a broker ack.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let proxy = tokio::spawn(payload_proxy(listener, nats.parse().unwrap(), LOW_PAYLOAD));
+    let publisher = async_nats::ConnectOptions::new().ignore_discovered_servers().connect(addr).await.unwrap();
+    assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
+    let options =
+        Options { stream: stream.clone(), subject_prefix: schema.clone(), lease: Duration::from_secs(4), ..Options::default() };
+    let relay = tokio::spawn(relay::run(pool.clone(), jetstream::new(publisher), Arc::new(options), Arc::default()));
+
+    let mut messages = stream_messages(&delayed_stream).await;
+    expect_reload(&mut messages, &delayed_subject, delayed).await;
+    let pending = wait_pending(&pool, 1).await;
+    assert_eq!(pending[0].id, delayed.id);
+    let warning = "WARN corten::feed message=reload marker publish failed; outbox row remains pending";
+    let fields = format!("id={} feed=\"delayed\" error=deadline has elapsed", delayed.id);
+    assert!(logs.0.lock().unwrap().iter().any(|line| line.starts_with(warning) && line.contains(&fields)));
+
+    // Let a retry's duplicate ack through. No second marker is stored and no row is retired twice.
+    config.no_ack = false;
+    js.update_stream(config.clone()).await.unwrap();
+    wait_pending(&pool, 0).await;
+    let retired: Vec<i64> = sqlx::query_scalar("SELECT id FROM retirements ORDER BY id").fetch_all(&pool).await.unwrap();
+    assert_eq!(retired, rows.iter().map(|row| row.id).collect::<Vec<_>>());
+    assert_eq!(delayed_stream.info().await.unwrap().state.messages, 1);
+
+    relay.abort();
+    assert!(relay.await.unwrap_err().is_cancelled());
+    proxy.abort();
+    js.delete_stream(&config.name).await.unwrap();
+    delete_test_stream_and_schema(&db, &js, &stream, &schema).await;
+}
+
+#[tokio::test]
 async fn a_marker_that_does_not_fit_does_not_block_other_batches() {
     assert_a_marker_refusal_does_not_block_other_batches(false).await;
 }

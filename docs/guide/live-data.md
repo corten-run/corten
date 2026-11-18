@@ -569,10 +569,17 @@ patch. A follower still loading checks the marker against its snapshot and reloa
 a ready follower behind the marker reloads and sends its live clients `sync`. A follower
 first loaded after the marker reads committed state from Postgres. If a marker cannot be
 sent or acknowledged, its row stays pending for retry while the relay retires the other
-acknowledged rows. Each failed row takes one batch slot; a marker refusal can stall the
-queue only when a full batch (256 rows) is unpublishable. Check `reload marker refused for
-size` for the feed key, marker size including headers, and the applicable limit (the stream
-limit is reported when the lookup succeeds). Raise the limit if it cannot fit the marker.
+acknowledged rows. Each failed row takes one batch slot; a failed marker can stall the
+queue when no row in a full batch (256 rows) can be retired. The marker sends and
+acknowledgements share a deadline of half the lease from its last renewal, not half a lease
+per marker. Consistently late acknowledgements can stall a full batch even when the markers
+fit. When that deadline expires, look for `reload marker publish failed` with
+`deadline has elapsed`. Check broker and database latency; if the relay needs more time,
+increase `Options::lease`.
+
+For size refusals, check `reload marker refused for size` for the feed key, marker size
+including headers, and the applicable limit (the stream limit is reported when the lookup
+succeeds). Raise the limit if it cannot fit the marker.
 An affected loaded feed can otherwise stay stale until a later patch reveals the gap
 or the feed reloads from Postgres.
 
