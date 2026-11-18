@@ -4,7 +4,9 @@
 //! but the relay lease is one row, so run them with `--test-threads=1`.
 
 use std::{
+    future::{poll_fn, Future},
     sync::Mutex,
+    task::Poll,
     time::{Duration, Instant},
 };
 
@@ -14,13 +16,15 @@ use async_nats::jetstream::{
         pull::{Ordered, OrderedConfig},
         DeliverPolicy,
     },
+    context::{ContextBuilder, PublishErrorKind},
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
+    sync::oneshot,
 };
 
 use corten::feed::Change;
@@ -490,13 +494,22 @@ const LOW_PAYLOAD: usize = 4096;
 /// Relay one connection to the real broker, substituting a stale-low initial INFO.
 async fn payload_proxy(listener: TcpListener, upstream: async_nats::ServerAddr, max_payload: usize) {
     let (mut client, _) = listener.accept().await.unwrap();
+    let mut server = advertise_payload(&mut client, &upstream, max_payload).await;
+    tokio::io::copy_bidirectional(&mut client, &mut server).await.unwrap();
+}
+
+async fn advertise_payload(
+    client: &mut TcpStream,
+    upstream: &async_nats::ServerAddr,
+    max_payload: usize,
+) -> BufReader<TcpStream> {
     let mut server = BufReader::new(TcpStream::connect((upstream.host(), upstream.port())).await.unwrap());
     let mut info = String::new();
     server.read_line(&mut info).await.unwrap();
     let mut advertised: serde_json::Value = serde_json::from_str(info.strip_prefix("INFO ").unwrap()).unwrap();
     advertised["max_payload"] = max_payload.into();
     client.write_all(format!("INFO {advertised}\r\n").as_bytes()).await.unwrap();
-    tokio::io::copy_bidirectional(&mut client, &mut server).await.unwrap();
+    server
 }
 
 // Single-threaded so the relay task runs with the test's tracing subscriber.
@@ -1000,6 +1013,211 @@ async fn the_relay_retries_an_acknowledgement_error_that_is_not_a_size_refusal()
     js.delete_stream(&stream_name).await.unwrap();
     let admin = PgPool::connect(&db).await.unwrap();
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_broker_disconnect_can_reorder_a_feed_but_the_follower_recovers() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("interrupted_");
+    let pool = schema_pool(&db, &schema).await;
+    migrate(&pool).await.unwrap();
+    test_items(&pool).await;
+    new_feed(&pool, "feed").await;
+    new_feed(&pool, "other").await;
+    let options = Arc::new(Options { stream: schema.to_uppercase(), subject_prefix: schema.clone(), ..Options::default() });
+    let observer = async_nats::connect(&nats).await.unwrap();
+    let js = jetstream::new(observer.clone());
+    let logs = Capture::default();
+    let _capture = tracing::subscriber::set_default(logs.clone());
+    let hub = hub::Hub::new(pool.clone(), Items, options.clone());
+    hub::start(hub.clone(), js.clone()).await.unwrap();
+    let follower = hub.feed("feed").await.unwrap().unwrap();
+    let other_follower = hub.feed("other").await.unwrap().unwrap();
+    assert_eq!(follower.seq(), 0);
+
+    // The real broker refuses feed patch 2 on a connection with stale-high INFO.
+    let oversized = observer.max_payload() + 1;
+    let advertised = oversized + 4096;
+    set(&pool, "feed", 1, None).await;
+    set(&pool, "other", 1, None).await;
+    set(&pool, "feed", 2, None).await;
+    sqlx::query("UPDATE corten_outbox SET body = body || repeat(' ', $1) WHERE feed = 'feed' AND seq = 2")
+        .bind(oversized as i32)
+        .execute(&pool)
+        .await
+        .unwrap();
+    set(&pool, "feed", 3, None).await;
+    let rows = wait_pending(&pool, 4).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let upstream: async_nats::ServerAddr = nats.parse().unwrap();
+    let (reconnecting, replacement) = oneshot::channel();
+    let (resume, allow_reconnect) = oneshot::channel();
+    let proxy = tokio::spawn(async move {
+        let (mut client, _) = listener.accept().await.unwrap();
+        let mut server = advertise_payload(&mut client, &upstream, advertised).await;
+        let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+        drop(client);
+        let (mut client, _) = listener.accept().await.unwrap();
+        reconnecting.send(()).unwrap();
+        allow_reconnect.await.unwrap();
+        let mut server = TcpStream::connect((upstream.host(), upstream.port())).await.unwrap();
+        let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+    });
+    let publisher = async_nats::ConnectOptions::new().ignore_discovered_servers().connect(addr).await.unwrap();
+    assert_eq!(publisher.max_payload(), advertised);
+    let relay_js = ContextBuilder::new().max_ack_inflight(4).backpressure_on_inflight(true).build(publisher.clone());
+    // Each probe has no matching stream. Its reply can arrive immediately, but the
+    // probe holds one publish permit until its ack future is awaited.
+    let probe = format!("permit.{schema}");
+    let before_refusal = relay_js.publish(probe.clone(), Default::default()).await.unwrap();
+    let before_reconnect = relay_js.publish(probe, Default::default()).await.unwrap();
+    let mut relay = Box::pin(relay::run(pool.clone(), relay_js, options.clone(), Arc::default()));
+    {
+        // Stop polling the relay when the failed attempt enters standby.
+        let failed = poll_fn(|cx| {
+            assert!(relay.as_mut().poll(cx).is_pending());
+            if logs.0.lock().unwrap().iter().any(|line| line.contains("relay standing by")) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        });
+        let failed = tokio::time::timeout(Duration::from_secs(15), failed);
+        tokio::pin!(failed);
+        tokio::select! {
+            result = &mut failed => panic!("relay stopped before reconnect: {result:?}"),
+            () = async {
+                // Two probe replies and two patch acknowledgements. Only then let patch
+                // 2 reach the old socket, so this attempt has an acknowledged prefix.
+                eventually("the two probes and the acknowledged patch prefix", || {
+                    publisher.statistics().in_messages.load(Ordering::Relaxed) == 4
+                }).await;
+                assert_eq!(before_refusal.await.unwrap_err().kind(), PublishErrorKind::StreamNotFound);
+                replacement.await.expect("the client started reconnecting");
+                assert_eq!(before_reconnect.await.unwrap_err().kind(), PublishErrorKind::StreamNotFound);
+            } => {}
+        }
+        // Poll the relay once with the final permit free but the new handshake held.
+        // It queues patch 3 and begins waiting for this batch's acknowledgements.
+        assert!(tokio::task::unconstrained(failed.as_mut()).now_or_never().is_none());
+        resume.send(()).unwrap();
+        failed.await.expect("the interrupted attempt failed");
+    }
+    let pending = store::pending(&pool, 257).await.unwrap();
+    let ids = |rows: &[store::Pending]| rows.iter().map(|r| r.id).collect::<Vec<_>>();
+    assert_eq!(ids(&pending), ids(&rows), "the failed attempt retires none of the selected rows");
+
+    eventually("the relay connection to be replaced", || publisher.statistics().connects.load(Ordering::Relaxed) == 2).await;
+    assert_eq!(publisher.max_payload(), observer.max_payload());
+    let mut stream = js.get_stream(&options.stream).await.unwrap();
+    let feed_subject = relay::subject(&options, "feed");
+    let other_subject = relay::subject(&options, "other");
+    let mut messages = stream_messages(&stream).await;
+    expect_patch(&mut messages, &feed_subject, 1, 1).await;
+    expect_patch(&mut messages, &other_subject, 2, 1).await;
+    // Patch 3 reached JetStream on the replacement socket, not from the retry below.
+    expect_patch(&mut messages, &feed_subject, 3, 3).await;
+
+    let relay = tokio::spawn(relay);
+    wait_pending(&pool, 0).await;
+    assert_eq!(stream.info().await.unwrap().state.messages, 4, "no extra messages within the dedup window");
+    expect_reload(&mut messages, &feed_subject, &rows[2]).await;
+    eventually("the feed to be ready at sequence 3", || hub.stats().iter().any(|(key, seq, _)| key == "feed" && *seq == 3)).await;
+    assert_eq!(follower.read(|rows| rows["a"].n), 3);
+    assert!(logs.0.lock().unwrap().iter().any(|log| log.contains("gap in the feed's patches: reloading it")));
+
+    // Omit message IDs so JetStream stores the old patch again and both stale markers.
+    // This tests follower handling, not expiry of JetStream's deduplication window.
+    let mut live =
+        corten::http::Body::new(follower.live(Since(Some(corten::feed::Cursor::new(follower.generation(), 3)))).into_body())
+            .into_data_stream();
+    let opening = live.next().await.unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&opening).starts_with("retry:"));
+    let before = follower.read(Clone::clone);
+    let mut headers = async_nats::HeaderMap::new();
+    headers.insert("Feed-Generation", rows[0].generation.as_str());
+    let duplicate =
+        js.publish_with_headers(feed_subject.clone(), headers.clone(), rows[0].body.clone().into()).await.unwrap().await.unwrap();
+    assert_eq!(duplicate.sequence, 5);
+    assert!(!duplicate.duplicate, "JetStream stored the repeated notification");
+    for (seq, stream_seq) in [("2", 6), ("3", 7)] {
+        headers.insert(RELOAD_HEADER, seq);
+        let stale =
+            js.publish_with_headers(feed_subject.clone(), headers.clone(), Default::default()).await.unwrap().await.unwrap();
+        assert_eq!(stale.sequence, stream_seq);
+        assert!(!stale.duplicate, "JetStream stored the stale marker");
+    }
+
+    // The hub's ordered consumer must have handled all three notifications before
+    // delivering this patch on the other feed.
+    assert_eq!(set(&pool, "other", 2, None).await.seq, Some(2));
+    eventually("the other feed to pass the stale notifications", || other_follower.seq() == 2).await;
+    assert!(hub.stats().iter().any(|(key, _, _)| key == "feed"), "stale notifications must not start a reload");
+    assert_eq!(follower.seq(), 3);
+    assert_eq!(follower.read(Clone::clone), before);
+
+    // On the same SSE connection the next frame must be patch 4, not a replay or sync.
+    assert_eq!(set(&pool, "feed", 4, None).await.seq, Some(4));
+    let frame = tokio::time::timeout(Duration::from_secs(10), live.next()).await.unwrap().unwrap().unwrap();
+    let frame = std::str::from_utf8(&frame).unwrap();
+    assert!(frame.starts_with(&format!("event: patch\nid: {}-4\ndata: ", follower.generation())), "{frame}");
+    assert_eq!(follower.seq(), 4);
+    assert_eq!(follower.read(|rows| rows["a"].n), 4);
+    wait_pending(&pool, 0).await;
+
+    relay.abort();
+    assert!(relay.await.unwrap_err().is_cancelled());
+    proxy.abort();
+    delete_test_stream_and_schema(&db, &js, &options.stream, &schema).await;
+}
+
+/// Healthy relay throughput, with startup but not setup timed. Alternate release binaries on
+/// the same Postgres and NATS, ignoring the first sample per binary. Each sample starts with a
+/// fresh schema and stream. Run alone: `cargo test --release -p corten-cluster -- --ignored
+/// --nocapture relay_throughput`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn relay_throughput() {
+    const ROWS: i64 = 16_384;
+    let (db, nats) = urls().expect("set the cluster integration URLs");
+    let js = jetstream::new(async_nats::connect(nats).await.unwrap());
+    for feeds in [256_i64, 16, 1] {
+        let schema = key("throughput_");
+        let pool = schema_pool(&db, &schema).await;
+        migrate(&pool).await.unwrap();
+        sqlx::query("INSERT INTO corten_outbox (feed, generation, seq, body)
+                     SELECT 'f' || (g % $1), 'test', (g / $1) + 1, json_build_object('seq', (g / $1) + 1, 'changes', '[]'::json)::text
+                     FROM generate_series(0, $2::bigint - 1) g ORDER BY g")
+            .bind(feeds)
+            .bind(ROWS)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let options = Arc::new(Options { stream: schema.to_uppercase(), subject_prefix: schema.clone(), ..Options::default() });
+        let mut stream = js
+            .create_stream(jetstream::stream::Config {
+                name: options.stream.clone(),
+                subjects: vec![format!("{schema}.>")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let started = Instant::now();
+        let relay = tokio::spawn(relay::run(pool.clone(), js.clone(), options.clone(), Arc::default()));
+        tokio::time::timeout(Duration::from_secs(60), async {
+            while !store::pending(&pool, 1).await.unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        println!("{feeds} feeds: {:.0} rows/s", ROWS as f64 / started.elapsed().as_secs_f64());
+        assert_eq!(stream.info().await.unwrap().state.messages, ROWS as u64);
+        relay.abort();
+        assert!(relay.await.unwrap_err().is_cancelled());
+        delete_test_stream_and_schema(&db, &js, &options.stream, &schema).await;
+    }
 }
 
 /// One write's latency until a follower has it (begin, statements, commit, relay, JetStream,
