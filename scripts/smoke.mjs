@@ -6729,6 +6729,89 @@ async function run(browser) {
   // its close event runs passes it on to the one on the page. Pressed with the keyboard, so the
   // opener has focus in every engine.
   {
+    const answer = { status: 200, contentType: "text/html", headers: { "corten-patch": "1" } };
+    const missing = await browser.newPage();
+    missing.on("pageerror", (e) => errors.push(`missing dialog module: ${e.message}`));
+    const diagnostics = [];
+    missing.on("console", (message) => {
+      if (message.type() === "error" && message.text().startsWith("corten:")) diagnostics.push(message.text());
+    });
+    let moduleRequests = 0;
+    await missing.route("**/dialog.js", (route) => {
+      moduleRequests++;
+      return route.fulfill({ status: 404 });
+    });
+    let posts = 0;
+    await missing.route("**/smoke/missing-dialog-module", (route) => {
+      if (route.request().method() !== "POST") return route.abort();
+      posts++;
+      return route.fulfill({ ...answer, body: '<dialog id="smoke-one"><p>Closed without handoff</p></dialog><p id="smoke-saved">Saved</p>' });
+    });
+    await missing.goto(`${base}/smoke/closing`);
+    const failed = await missing.evaluate(async () => {
+      const { patch } = await import("corten");
+      await patch(__html('<dialog id="smoke-one" open><form action="/smoke/missing-dialog-module" method="post" data-patch><button>Save</button></form></dialog>'));
+      const dialog = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-one"));
+      dialog.removeAttribute("open");
+      dialog.showModal();
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<p id="smoke-saved">Unsaved</p>'));
+      const form = /** @type {HTMLFormElement} */ (dialog.firstElementChild);
+      let errors = 0;
+      let heard = 0;
+      dialog.addEventListener("close", () => heard++);
+      document.addEventListener("close", () => heard++, true);
+      form.addEventListener("corten:error", () => errors++);
+      form.requestSubmit();
+      const until = performance.now() + 5000;
+      while (form.isConnected && form.hasAttribute("aria-busy") && performance.now() < until) await new Promise(requestAnimationFrame);
+      // A retry runs in a later task, and the browser queues close events.
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50))));
+      return {
+        errors,
+        saved: document.getElementById("smoke-saved")?.textContent,
+        closed: !dialog.isConnected && !!document.querySelector("#smoke-one:not([open])"),
+        heard,
+      };
+    });
+    check("a successful POST draws its whole patch with no close handoff, error event or retry when the dialog module is missing",
+      failed.errors === 0 && failed.saved === "Saved" && failed.closed && !failed.heard && posts === 1 && moduleRequests === 1 && diagnostics.length === 1,
+      JSON.stringify({ ...failed, posts, moduleRequests, diagnostics }));
+    await missing.close();
+
+    const cold = await browser.newPage();
+    cold.on("pageerror", (e) => errors.push(`read waiting for dialog module: ${e.message}`));
+    let releaseModule = () => {};
+    const holdModule = new Promise((resolve) => { releaseModule = () => resolve(undefined); });
+    await cold.route("**/dialog.js", async (route) => {
+      await holdModule;
+      await route.continue();
+    });
+    await cold.route("**/smoke/cold-dialog-read", (route) => route.fulfill({
+      ...answer, body: '<div id="smoke-cold-read"><dialog id="smoke-cold-dialog">Obsolete</dialog></div>',
+    }));
+    await cold.goto(`${base}/smoke/closing`);
+    const requested = cold.waitForRequest("**/dialog.js");
+    await cold.evaluate(async () => {
+      const { patch } = await import("corten");
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<div id="smoke-cold-read"></div>'));
+      await patch(__html('<div id="smoke-cold-read"><dialog id="smoke-cold-dialog" open>Reading</dialog></div><template data-corten-read-again="0" data-from="/smoke/cold-dialog-read"></template>'));
+    });
+    const moduleUrl = (await requested).url();
+    const dialog = await cold.evaluateHandle(async () => {
+      const { patch } = await import("corten");
+      await patch(__html('<div id="smoke-cold-read"><dialog id="smoke-cold-dialog" open>Newer</dialog></div>'));
+      return document.getElementById("smoke-cold-dialog");
+    });
+    releaseModule();
+    const newer = await cold.evaluate(async ({ url, dialog }) => {
+      await import(url);
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      return { same: dialog?.isConnected, open: dialog?.hasAttribute("open"), text: dialog?.textContent };
+    }, { url: moduleUrl, dialog });
+    check("a read waiting for the first dialog module leaves a newer patch's dialog alone",
+      newer.same && newer.open && newer.text === "Newer", JSON.stringify(newer));
+    await cold.close();
+
     const closing = await browser.newPage();
     closing.on("pageerror", (e) => errors.push(`closing: ${e.message}`));
     await closing.goto(`${base}/smoke/closing`);
@@ -6921,6 +7004,21 @@ async function run(browser) {
     });
     check("a synchronous beforetoggle mutation leaves the close in place, aborts the entire draw, and does not stop the next patch",
       mutationOpen && mutation.aborted && mutation.recovered, JSON.stringify(mutation));
+    const reopenOpen = await press("One", modalOne);
+    const reopened = await closing.evaluate(async () => {
+      const { patch } = await import("corten");
+      const old = /** @type {HTMLDialogElement} */ (document.getElementById("smoke-one"));
+      const opener = document.querySelector("#smoke-openers button");
+      opener?.addEventListener("focus", () => old.showModal(), { once: true });
+      const seen = [];
+      document.addEventListener("close", (event) => seen.push(event.target === old), { capture: true, once: true });
+      await patch(__html('<dialog id="smoke-one"><p>Must not replace</p></dialog>'));
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50))));
+      return { same: document.getElementById("smoke-one") === old, modal: old.matches(":modal"), focused: old.contains(document.activeElement), seen };
+    });
+    check("a focus handler that reopens a closing dialog keeps the new session and abandons the draw",
+      reopenOpen && reopened.same && reopened.modal && reopened.focused && reopened.seen.join() === "true",
+      JSON.stringify(reopened));
     await closing.close();
   }
   // A write's page that draws closed the dialogs the server drew open in a layout element it draws

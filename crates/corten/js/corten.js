@@ -1044,7 +1044,7 @@ export function patch(html, signal) {
 /**
  * {@link patch}, for a form's response: `sent` holds the values the form sent, so a field counts
  * as edited only when it changed after the request left; `took`, that the answer accepted them.
- * @param {string | TrustedHTML} html @param {AbortSignal | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
+ * @param {string | TrustedHTML} html @param {Pick<AbortSignal, "aborted"> | undefined} signal @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
  * @param {false | ((content: DocumentFragment) => void)} [own] false for a script's markup, which the
  *   runtime did not fetch ({@link parse}); a part's read (part.js) passes a function, shown what
  *   this call parsed before anything can run: an argument only the runtime and its part module
@@ -1060,9 +1060,7 @@ async function apply(html, signal, sent, took, own, asked, within) {
   const closes = queryOne(content, CLOSED_DIALOG);
   // A stylesheet that fails to load leaves the patch unstyled rather than lose a write's answer;
   // the next patch that links it tries again.
-  const ready = [modulesOf(content), stylesOf(content)];
-  if (closes && !dialogs) ready.push(loadDialogs());
-  await Promise.all(ready);
+  await Promise.all([modulesOf(content), stylesOf(content), closes && loadDialogs()]);
   if (signal?.aborted) return;
   const plan = closes && dialogs?.patchPlan(served);
   /** The elements this patch puts on the page. @type {Element[]} */
@@ -1100,10 +1098,10 @@ async function apply(html, signal, sent, took, own, asked, within) {
     const target = id ? document.getElementById(id) : null;
     const insert = el instanceof HTMLTemplateElement && hasAttr(el, "data-remove") ? null :
       el instanceof HTMLTemplateElement && hasAttr(el, "data-append") ? el.content : el;
-    if (plan && !plan.add(target, id, insert)) return;
-    if (!target) {
-      if (insert) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
-    } else if (!plan) draw(target, id, insert);
+    if (!target && insert) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
+    if (plan) {
+      if (!plan.add(target, id, insert)) return;
+    } else if (target) draw(target, id, insert);
   }
   if (plan && !plan.run(draw, signal)) return;
   // The server marked a nav link in the patch against the request that made it (a form's action),
@@ -1147,7 +1145,7 @@ function readPatchAgain(tag, put) {
   const page = swapped;
   const here = () => page === swapped && put.every(inPage);
   readLater(Number(tag.getAttribute("data-corten-read-again")), here, async () => {
-    for (;;) {
+    while (here()) {
       // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
       // part's order in it).
       const from = /** @type {string} */ (tag.getAttribute("data-from"));
@@ -1160,10 +1158,11 @@ function readPatchAgain(tag, put) {
       }
       const html = await res.text();
       if (!here()) return;
-      // Changed while the read was on its way: its answer is drawn for what was, so read again.
-      if (tag.isConnected && tag.getAttribute("data-from") !== from) continue;
-      await apply(html, undefined, null, undefined, undefined, tag);
-      return;
+      // The address can change on the way or while assets load: read again for the new one.
+      const changed = () => tag.isConnected && tag.getAttribute("data-from") !== from;
+      if (changed()) continue;
+      await apply(html, { get aborted() { return !here() || changed(); } }, null, undefined, undefined, tag);
+      if (!changed()) return;
     }
   });
 }
@@ -1394,7 +1393,7 @@ function opened(root, fresh, ids, within) {
     // A dialog or popover only by id: by place, another row's could open over the page.
     const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || localNameOf(to) !== localNameOf(el)) continue;
-    if (pending && to instanceof HTMLDialogElement && !to.open && (el === root || idOf(el))) pending(to);
+    if (pending) pending(to, el === root);
     if (shown && hasAttr(to, "popover")) later.push(() => HTMLElement.prototype.showPopover.call(to));
     if (!toggles) continue;
     const drawnOpen = /** @type {HTMLDialogElement} */ (to).open;
@@ -1491,7 +1490,13 @@ const CLOSED_DIALOG = "dialog:not([open])";
 const DIALOGS = "./dialog.js";
 /** @type {typeof import("./dialog.js") | undefined} */
 let dialogs;
-const loadDialogs = () => import(DIALOGS).then((module) => { dialogs = module; });
+/** @type {Promise<void> | undefined} */
+let loadingDialogs;
+// A deploy or network error can lose the optional module, not the answer that needs it.
+const loadDialogs = () => loadingDialogs ??= import(DIALOGS).then(
+  (module) => { dialogs = module; },
+  () => console.error("corten: dialog.js failed"),
+);
 
 /** @param {Element} el */
 const drawsClosed = (el) => matchesOf(el, CLOSED_DIALOG) || !!queryOne(el, CLOSED_DIALOG);
@@ -1547,7 +1552,7 @@ function focusNear(el, root, fresh) {
 async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html)) {
   preload(content);
   const [, styled] = await Promise.all([modulesOf(content), stylesOf(content),
-    !dialogs && html.includes(" data-corten-page") && queryOne(content, CLOSED_DIALOG) && loadDialogs()]);
+    html.includes(" data-corten-page") && queryOne(content, CLOSED_DIALOG) && loadDialogs()]);
   signal?.throwIfAborted();
   if (!styled) {
     reload(notice);
@@ -1584,9 +1589,9 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   }
   /** @type {HTMLDialogElement[]} */
   const shut = [];
-  if (dialogs) for (const [old, part] of parts) dialogs.collect(old, part, shut, served);
+  for (const [old, part] of parts) dialogs?.collect(old, part, shut, served);
   const draw = layout?.plan(shut, parts);
-  if (dialogs && !dialogs.closeDrawn(shut, signal)) return false;
+  if (dialogs?.closeDrawn(shut, signal) === false) return false;
   const title = content.querySelector("title");
   if (title) {
     document.title = textOf(title) ?? "";
@@ -1881,7 +1886,7 @@ function planLayout(old, fresh, before, said, steps, shut, inside = false) {
     steps.push(() => replaceKeeping(old, fresh, null));
     return;
   }
-  if (old instanceof HTMLDialogElement && old.open && served.get(old) && !hasAttr(fresh, "open")) shut.push(old);
+  dialogs?.collect(old, fresh, shut, served, true);
   steps.push(() => morphLayoutNode(old, fresh));
   if (live) {
     steps.push(() => {
@@ -1920,10 +1925,12 @@ function morphLayoutNode(old, fresh) {
   for (const a of Array.from(attributesOf(fresh))) if (attrOf(old, a.name) !== a.value && !(toggles && a.name === "open")) elementOwn.setAttribute.call(old, a.name, a.value);
   if (toggles) {
     const [now, want] = [old.open, hasAttr(fresh, "open")];
-    // Left as the server sent it: the server's state now. The plan has already closed dialogs.
+    // Left as the server sent it: the server's state now. The plan normally closes dialogs first;
+    // if the optional module did not load, close a kept dialog here as before.
     if ((!served.has(old) || served.get(old) === now) && now !== want) {
       if (!(old instanceof HTMLDialogElement)) old.open = want;
       else if (want) old.show();
+      else old.close();
     }
     served.set(old, want);
   }
@@ -1958,7 +1965,7 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
     return false;
   }
   preload(doc.head);
-  await Promise.all([...layout.fresh.map(modulesOf), !dialogs && layout.fresh.some(drawsClosed) && loadDialogs()]);
+  await Promise.all([...layout.fresh.map(modulesOf), layout.fresh.some(drawsClosed) && loadDialogs()]);
   signal.throwIfAborted();
   // What a navigation's answer holds: the title, the page's head tags, the section stylesheets and
   // the page.
@@ -1978,7 +1985,7 @@ async function swapDocument(html, signal, notice, again = false, stay = again) {
     /** @type {HTMLDialogElement[]} */
     const shut = [];
     const draw = layout.plan(shut);
-    if (dialogs && !dialogs.closeDrawn(shut, signal)) return false;
+    if (dialogs?.closeDrawn(shut, signal) === false) return false;
     draw();
     readAgainLater();
     return true;

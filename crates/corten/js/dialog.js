@@ -6,12 +6,12 @@ const { getAttribute, querySelector, querySelectorAll } = Element.prototype;
 
 /**
  * A replaced root, or a dialog by id within it, has a counterpart. Anonymous children of a
- * replacement are removed, not closed.
+ * replacement are removed, not closed. For a morph, the caller matches each child itself.
  * @param {Element} root @param {Element} fresh @param {HTMLDialogElement[]} shut
- * @param {WeakMap<Element, boolean>} served
+ * @param {WeakMap<Element, boolean>} served @param {boolean} [morph]
  */
-export function collect(root, fresh, shut, served) {
-  for (const dialog of [root, ...Array.from(querySelectorAll.call(root, "dialog[open][id]"))]) {
+export function collect(root, fresh, shut, served, morph) {
+  for (const dialog of morph ? [root] : [root, ...querySelectorAll.call(root, "dialog[open][id]")]) {
     if (!(dialog instanceof HTMLDialogElement) || !dialog.open || !served.get(dialog)) continue;
     const id = getAttribute.call(dialog, "id");
     const to = dialog === root ? fresh : id && querySelector.call(fresh, `#${CSS.escape(id)}`);
@@ -44,7 +44,7 @@ export function patchPlan(served) {
       }
       return true;
     },
-    /** @param {(...step: [Element, string, Element | DocumentFragment | null]) => void} draw @param {AbortSignal} [signal] */
+    /** @param {(...step: [Element, string, Element | DocumentFragment | null]) => void} draw @param {Pick<AbortSignal, "aborted">} [signal] */
     run(draw, signal) {
       if (!closeDrawn(shut.filter((dialog) => !plan.some(([old, , added]) => !added && contains.call(old, dialog))), signal)) return false;
       for (const step of plan) draw(...step);
@@ -55,8 +55,9 @@ export function patchPlan(served) {
 
 /**
  * Close before detaching any opener. If synchronous handlers change the tree or its ids, the
- * plan may no longer be valid: leave their changes and the completed closes, but don't draw.
- * @param {HTMLDialogElement[]} shut @param {AbortSignal} [signal]
+ * plan may no longer be valid. A handler can also reopen the dialog while focus returns to its
+ * opener. Leave the handler's changes and the completed closes, but don't draw.
+ * @param {HTMLDialogElement[]} shut @param {Pick<AbortSignal, "aborted">} [signal]
  */
 export function closeDrawn(shut, signal) {
   if (!shut.length) return true;
@@ -71,9 +72,12 @@ export function closeDrawn(shut, signal) {
       for (const [i, other] of shut.entries()) if (contains.call(shut[at], other)) at = i;
       const [dialog] = /** @type {[HTMLDialogElement]} */ (shut.splice(at, 1));
       if (!dialog.open) continue;
+      tree.observe(dialog, { attributeFilter: ["open"] });
       dialog.close();
+      const records = tree.takeRecords();
+      // The native close removes `open` once. Extra changes can include a reopen and close.
+      if (dialog.open || records.length > 1 || records.some((r) => r.target !== dialog || r.attributeName !== "open") || signal?.aborted) return false;
       followClose(dialog);
-      if (tree.takeRecords().length || signal?.aborted) return false;
     }
     return true;
   } finally {
@@ -81,7 +85,7 @@ export function closeDrawn(shut, signal) {
   }
 }
 
-/** Queued native closes follow replacements, not ids. @type {WeakMap<HTMLDialogElement, (to: HTMLDialogElement) => void>} */
+/** Queued native closes follow replacements, not ids. @type {WeakMap<HTMLDialogElement, (to: Element, root: boolean) => void>} */
 export const pending = new WeakMap();
 
 /** @param {HTMLDialogElement} dialog */
@@ -98,8 +102,9 @@ function followClose(dialog) {
     pending.set(on, move);
     watch.observe(on, { attributeFilter: ["open"] });
   }
-  /** @param {HTMLDialogElement} to */
-  function move(to) {
+  /** @param {Element} to @param {boolean} root */
+  function move(to, root) {
+    if (!(to instanceof HTMLDialogElement) || to.open || (!root && !getAttribute.call(on, "id"))) return;
     const opened = watch.takeRecords().length;
     stop();
     if (opened) return;
