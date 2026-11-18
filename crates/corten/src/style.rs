@@ -42,8 +42,9 @@
 //!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When its root matches
 //!   only elements the component owns, its rules can start anywhere (`:scope`, `li`, `> li`);
 //!   under any other root, such as `@scope ([data-theme="dark"])` or, in a rule,
-//!   `@scope (& + main)`, each style rule and inner scope root must prove ownership.
-//!   Neither `&` nor implicit nesting proves an inner scope root is owned there.
+//!   `@scope (& + main)`, the scope only filters, and its rules still need proof of ownership.
+//!   An inner root there supplies proof only with its own class anchor, not from `&` or implicit
+//!   nesting alone.
 //! - Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks
 //!   a class, so a variant without a rule does not compile.
 //! - A helper component shares another's stylesheet: `#[component(css = OfferList)]` in the same

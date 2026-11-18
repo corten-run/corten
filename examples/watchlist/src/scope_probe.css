@@ -1,4 +1,7 @@
 @scope (body) {
+    @scope (:scope > main) {
+        .list p { --smoke-filtered-scope: yes; }
+    }
     @scope (.list) {
         p { --smoke-hoisted-scope: yes; }
     }

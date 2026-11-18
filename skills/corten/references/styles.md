@@ -5,8 +5,9 @@ one of the file's classes or is inside one (`.list p`, `.list li + li`; not `.li
 `:not(.list) p` or `main:has(.list) p`); Corten prefixes them (`.offer-list__row`) and generates
 a constant for each. An `@scope` rule's root and limit are prefixed the same way
 (`@scope (.list) to (.slot)`); an owned root lets the rules inside start anywhere (`:scope`,
-`li`). Under an unowned root (`@scope ([data-theme="dark"])`), each style rule and inner
-scope root needs its own class anchor; `&` or implicit nesting alone cannot anchor an inner scope.
+`li`). An unowned root (`@scope ([data-theme="dark"])`) can filter independently anchored rules.
+An inner root under it supplies proof to its body only with its own class anchor, not from `&`
+or implicit nesting alone.
 
 ```css
 /* src/views/offer_list.css */

@@ -852,7 +852,7 @@ async function run(browser) {
     await quoted.close();
   }
 
-  if (engine === "chromium") {
+  {
     const scoped = await browser.newPage();
     await scoped.goto(`${base}/smoke/scope`);
     const probes = scoped.locator("[data-scope-probe]");
@@ -862,12 +862,13 @@ async function run(browser) {
       ["hoisted", "inside,section"],
       ["subject", "inside,section"],
       ["ancestor", "section"],
+      ["filtered", "inside,section"],
     ]) {
       const matched = await probes.evaluateAll(
         (probes, root) => probes.filter((p) => getComputedStyle(p).getPropertyValue(`--smoke-${root}-scope`) === "yes").map((p) => p.getAttribute("data-scope-probe")).join(","),
         root,
       );
-      check(`an inner scope with the ${root} class anchor styles only its owned paragraphs`, matched === expected, matched);
+      check(`the ${root} inner scope styles only its owned paragraphs`, matched === expected, matched);
     }
     await scoped.close();
   }

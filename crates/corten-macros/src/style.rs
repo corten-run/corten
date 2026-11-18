@@ -768,12 +768,6 @@ impl Scoper<'_> {
         // @scope instead of an intervening style rule. An unowned outer root supplies no proof.
         let root_nest = if self.scope_root.is_some() { Anchor::default() } else { nest.unwrap_or_default() };
         let (start, _, unowned) = self.prefixed(root.trim(), root_nest, Some(prelude), at)?;
-        if let (Some(_), Some(outer), Some(unowned)) = (nest, &self.scope_root, &unowned) {
-            return Err(self.error(
-                at,
-                format!("`@scope ({root})`: `{}` can start outside the component under `@scope ({outer})`. Give every inner root selector one of the stylesheet's classes on its element or an ancestor, or hoist `@scope (.list)`", unowned.part),
-            ));
-        }
         let mut out = format!("@scope ({start})");
         if let Some(limit) = limit {
             out.push_str(" to (");
@@ -949,9 +943,9 @@ impl Scoper<'_> {
     /// The selector with its classes prefixed, and what its elements require. With `nest`, what
     /// `&` requires, every selector in the list must match only elements the component owns.
     fn selector(&mut self, text: &str, nest: Option<Anchor>, at: usize) -> Result<(String, Anchor), String> {
-        match self.prefixed(text, nest.unwrap_or_default(), None, at)? {
-            (_, _, Some(unowned)) if nest.is_some() => Err(self.unowned(&unowned, at)),
-            (out, anchor, _) => Ok((out, anchor)),
+        match (nest, self.prefixed(text, nest.unwrap_or_default(), None, at)?) {
+            (Some(nest), (_, _, Some(unowned))) => Err(self.unowned(&unowned, nest, at)),
+            (_, (out, anchor, _)) => Ok((out, anchor)),
         }
     }
 
@@ -1146,9 +1140,15 @@ impl Scoper<'_> {
         Ok((out, all, unowned))
     }
 
-    /// The error for a selector that can match an element the component does not own.
-    fn unowned(&self, unowned: &Unowned, at: usize) -> String {
+    /// The error for a selector the checker cannot prove is owned.
+    fn unowned(&self, unowned: &Unowned, nest: Anchor, at: usize) -> String {
         let Unowned { part, why } = unowned;
+        if why.sibling && nest.owned {
+            return self.error(
+                at,
+                format!("cannot prove that `{part}` styles only elements this component owns. To keep a nested sibling condition and require a component ancestor without adding specificity, use an anchor like `:where(.list) & + p`"),
+            );
+        }
         let mut reason = String::new();
         if why.alternative {
             reason.push_str("; an `:is()` or `:where()` counts only when every matchable selector in it does; remove invalid arms the compiler cannot recognize");
@@ -1924,16 +1924,23 @@ mod tests {
         for css in [
             ".list { :not(&) { color: red } }",
             ".list { :is(&, main) { color: red } }",
-            ".list { & + main { color: red } }",
             ".list { + main { color: red } }",
             ".list { ~ p { color: red } }",
             ".list { p:has(&) { color: red } }",
-            ".list { &.on { & + main { color: red } } }",
             ".list { @media print { :not(&) { color: red } } }",
             ".list { @scope (& + main) { p { color: red } } }",
         ] {
             let error = scope(css, "t").expect_err(css);
             assert!(error.contains("styles elements this component does not own"), "{css}: {error}");
+        }
+        for css in [
+            ".list { & + main { color: red } }",
+            ".list { &.on { & + main { color: red } } }",
+            ".list::before, .list > p { & + p { color: red } }",
+        ] {
+            let error = scope(css, "t").expect_err(css);
+            assert!(error.contains("cannot prove"), "{css}: {error}");
+            assert!(error.contains("`:where(.list) & + p`"), "{css}: {error}");
         }
         let error = scope(".list { @scope (& + main) { p { color: red } } }", "t").unwrap_err();
         assert!(error.contains("`@scope (& + main)` can start outside the component"), "{error}");
@@ -2175,12 +2182,12 @@ mod tests {
     }
 
     #[test]
-    fn nested_scope_roots_need_their_own_anchor_under_an_unowned_scope() {
+    fn nested_scope_roots_cannot_borrow_an_anchor_under_an_unowned_scope() {
         for (file, root) in [("leaky_nested_scope_ampersand.css", "&"), ("leaky_nested_scope_relative.css", "main")] {
             let css = std::fs::read_to_string(Path::new("../corten/src").join(file)).expect("the example's stylesheet");
             let error = scope(&css, "x").expect_err(file);
             assert!(error.contains(&format!("`@scope ({root})`")), "{file}: {error}");
-            assert!(error.contains("hoist `@scope (.list)`"), "{file}: {error}");
+            assert!(error.contains("`p` styles elements this component does not own"), "{file}: {error}");
         }
         for (css, expected) in [
             ("@scope (body) { @scope (.list) { p { outline: solid } } }", "@scope (body){@scope (.x__list){p{outline:solid}}}"),
@@ -2196,10 +2203,41 @@ mod tests {
             assert_eq!(scope(css, "x").unwrap().css, expected);
         }
         for css in [
-            "@scope (body) { @scope (main) { .list p { outline: solid } } }",
             "@scope (body) { .list { @media print { @scope (& + main, .list) { p { outline: solid } } } } }",
+            "@scope (body) { @scope (:scope > main) { .list { @scope (&) { p { color: red } } } } }",
+            "@scope (body) { .list { @supports (display: block) { @scope (:is(&, .list)) { p { color: red } } } } }",
+            "@scope (body) { .list { @layer local { @scope (main) to (.slot) { p { color: red } } } } }",
         ] {
-            assert!(scope(css, "x").unwrap_err().contains("hoist `@scope (.list)`"), "{css}");
+            let error = scope(css, "x").unwrap_err();
+            assert!(error.contains("`p` styles elements this component does not own"), "{css}: {error}");
+        }
+    }
+
+    #[test]
+    fn unowned_nested_scopes_can_filter_owned_rules() {
+        for (input, expected) in [
+            ("@scope (body) { @scope (main) { .list p { color: red } } }", "@scope (body){@scope (main){.x__list p{color:red}}}"),
+            (
+                "@scope (body) { @scope (:scope > main) { .list p { color: red } } }",
+                "@scope (body){@scope (:scope > main){.x__list p{color:red}}}",
+            ),
+            (
+                "@scope (body) { @scope (:scope > main, .outer) { .list p { color: red } } }",
+                "@scope (body){@scope (:scope > main, .x__outer){.x__list p{color:red}}}",
+            ),
+            (
+                "@scope (body) { @supports (display: block) { @scope (:scope > main) { .list p { color: red } } } }",
+                "@scope (body){@supports (display: block){@scope (:scope > main){.x__list p{color:red}}}}",
+            ),
+            (
+                "@scope (body) { @scope (:scope > main) to (.slot) { .list p { color: red } } }",
+                "@scope (body){@scope (:scope > main) to (.x__slot){.x__list p{color:red}}}",
+            ),
+        ] {
+            assert_eq!(scope(input, "x").map(|sheet| sheet.css), Ok(expected.to_string()), "{input}");
+            let bare = input.replace(".list p", "p");
+            let error = scope(&bare, "x").unwrap_err();
+            assert!(error.contains("`p` styles elements this component does not own"), "{bare}: {error}");
         }
     }
 
