@@ -8,7 +8,8 @@ Corten is pre-1.0, so any minor version may change the API.
 - Parse `Accept-Language` and `Accept-Encoding` weights with the same RFC 9110 qvalue
   grammar (0 to 1, at most three decimals). Ignore items with malformed or repeated weights instead of
   accepting float syntax or treating a malformed compression weight as `1`. Ignore apparent
-  weights and list separators inside an unrelated quoted parameter.
+  weights and list separators inside an unrelated quoted parameter. Skip an item with an
+  unterminated quote and split the remaining text on commas to recover valid alternatives.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including

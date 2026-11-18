@@ -783,6 +783,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn negotiation_skips_a_coding_with_an_unterminated_quoted_parameter() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for (header, expected) in [
+            (r#"zstd;note="oops"#, None),
+            (r#"zstd;note="oops\"#, None),
+            (r#"zstd;q=0;note="oops, gzip"#, Some(Coding::Gzip)),
+            (r#"zstd;note="oops, gzip;q=0.5"#, Some(Coding::Gzip)),
+            (r#"zstd;note="a,br;q=1,b";other="oops, gzip;q=0.5"#, Some(Coding::Gzip)),
+            (r#"gzip;q=0.5, zstd;note="oops\"#, Some(Coding::Gzip)),
+        ] {
+            let headers = accept(header);
+            assert_eq!(accepted(&headers, &all), expected, "{header}");
+            assert_eq!(negotiate(&headers).streamed(), expected, "{header}");
+        }
+    }
+
     fn app() -> Compressed {
         let page = "<p>corten</p>".repeat(200);
         apply(

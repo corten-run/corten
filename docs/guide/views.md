@@ -796,8 +796,9 @@ Traditional Chinese readers lists `zh-TW` and `zh-HK` too, which Corten has data
 Weights follow RFC 9110's `qvalue` grammar: `0` to `1`, with at most three decimal places
 (`0.123`, `1.000`; a decimal point with no digits is allowed too). A missing weight means `1`,
 and equal weights keep header order. A range with a malformed or repeated weight is ignored.
-A comma inside another parameter's quoted value does not start a new range, and
-weight-like text inside that value is not a repeated weight.
+A comma inside another parameter's closed quoted value does not start a new range, and
+weight-like text inside that value is not a repeated weight. If the quote never closes, that
+range is ignored and the remaining text is split on commas to recover other ranges.
 For example, `nan`, `inf`, `1.5`, `-0`, an empty value and too many decimals are malformed.
 Only space and tab may surround the weight's `;`, and no whitespace may touch its `=`.
 If no range matches, the first locale is still the fallback.

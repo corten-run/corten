@@ -30,34 +30,47 @@ pub use crate::body::{Body, BodyDataStream};
 pub use crate::handler::Request;
 pub use crate::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
 
-/// Byte ranges of list items, split on commas outside quoted strings.
+/// Byte ranges of list items, split on commas outside quoted strings. An item with an
+/// unterminated quote is skipped, then the rest is split on commas to recover valid siblings.
 pub(crate) fn list_items(header: &[u8]) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
-    let has_quotes = memchr::memchr(b'"', header).is_some();
+    let mut has_quotes = memchr::memchr(b'"', header).is_some();
     let mut start = Some(0);
-    std::iter::from_fn(move || {
+    std::iter::from_fn(move || loop {
         let from = start?;
         let rest = &header[from..];
-        let comma = if has_quotes { unquoted_comma(rest) } else { memchr::memchr(b',', rest) };
+        let comma = if has_quotes {
+            match unquoted_comma(rest) {
+                Ok(comma) => comma,
+                Err(open) => {
+                    start = memchr::memchr(b',', &rest[open..]).map(|at| from + open + at + 1);
+                    has_quotes = false;
+                    continue;
+                }
+            }
+        } else {
+            memchr::memchr(b',', rest)
+        };
         let end = comma.map_or(header.len(), |at| from + at);
         start = comma.map(|_| end + 1);
-        Some(from..end)
+        return Some(from..end);
     })
 }
 
-fn unquoted_comma(item: &[u8]) -> Option<usize> {
-    let mut quoted = false;
+/// The next separator, or the byte offset of a quote that never closes.
+fn unquoted_comma(item: &[u8]) -> std::result::Result<Option<usize>, usize> {
+    let mut quote = None;
     let mut bytes = item.iter().enumerate();
     while let Some((at, &byte)) = bytes.next() {
         match byte {
-            b'"' => quoted = !quoted,
-            b'\\' if quoted => {
+            b'"' => quote = if quote.is_some() { None } else { Some(at) },
+            b'\\' if quote.is_some() => {
                 bytes.next();
             }
-            b',' if !quoted => return Some(at),
+            b',' if quote.is_none() => return Ok(Some(at)),
             _ => {}
         }
     }
-    None
+    quote.map_or(Ok(None), Err)
 }
 
 /// RFC 9110 section 12.4.2's qvalue, in thousandths, without rounding or float syntax.
@@ -87,8 +100,8 @@ pub(crate) fn qvalue(value: &[u8]) -> Option<u16> {
 }
 
 /// The weight among a list item's parameters (the text after its first `;`), in thousandths:
-/// 1000 without a `q` parameter, `None` for a malformed or repeated weight. RFC 9110
-/// (sections 5.6.6 and 12.4.2) allows only SP and HTAB around `;` and no whitespace around `=`.
+/// 1000 without a `q` parameter, `None` for a malformed or repeated weight or an unclosed quote.
+/// RFC 9110 (sections 5.6.6 and 12.4.2) allows only SP and HTAB around `;` and no whitespace around `=`.
 pub(crate) fn weight(params: &[u8]) -> Option<u16> {
     // A complete qvalue cannot contain a semicolon, so a valid bare weight needs no scan.
     if let [b'q' | b'Q', b'=', value @ ..] = params {
@@ -122,10 +135,10 @@ pub(crate) fn weight(params: &[u8]) -> Option<u16> {
                 return None;
             }
             if let Some(value) = pair.next().and_then(|value| value.strip_prefix(b"\"")) {
-                if !ends_quoted_string(value) {
-                    // Semicolons inside the string do not start parameters. If a backslash
-                    // ends a chunk, it quotes the discarded semicolon, not the next byte.
-                    params.by_ref().any(ends_quoted_string);
+                // Semicolons inside the string do not start parameters. If a backslash
+                // ends a chunk, it quotes the discarded semicolon, not the next byte.
+                if !ends_quoted_string(value) && !params.by_ref().any(ends_quoted_string) {
+                    return None;
                 }
             }
         }
@@ -214,6 +227,9 @@ mod tests {
             "q=1;level=1;q=0",
             r#"q=1;note="a;q=0;b";Q=0"#,
             r#"q="0.5""#,
+            r#"note="oops"#,
+            r#"note="oops\"#,
+            r#"q=1;note="oops;a"#,
         ] {
             assert_eq!(weight(params.as_bytes()), None, "{params:?}");
         }

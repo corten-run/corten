@@ -2034,6 +2034,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn negotiation_skips_a_range_with_an_unterminated_quoted_parameter() {
+        let locales = ["en", "fr", "de"];
+        for (header, expected) in [
+            (r#"fr;note="oops"#, "en"),
+            (r#"fr;note="oops\"#, "en"),
+            (r#"fr;q=0;note="oops, de;q=0.5"#, "de"),
+            (r#"fr;note="oops, de;q=0.5"#, "de"),
+            (r#"fr;note="a,de;q=1,b";other="oops, en;q=0.5"#, "en"),
+            (r#"de;q=0.5, fr;note="oops\"#, "de"),
+        ] {
+            assert_eq!(locales[negotiate(&locales, Some(header))], expected, "{header}");
+        }
+    }
+
     /// Callgrind in release at NEGOTIATION_REQUESTS=200 and 1200, difference / 1000:
     /// a request through the stages reading both Accept-Language and Accept-Encoding.
     #[cfg(feature = "compress")]
