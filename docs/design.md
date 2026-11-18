@@ -499,7 +499,7 @@ rules something out.
    costs a navigation nothing: on the item page a full document got about 7% faster than with
    the shell and a navigation stayed within noise (`render_cost` medians of alternating runs,
    same bytes). The answers the runtime reads whole are the two pages that follow a `data-patch`
-   write, the page it redirects to and its own ([Choice 62](#choice-write-own-page-whole)), so what
+   write, the page it redirects to and its own ([Choice 63](#choice-write-own-page-whole)), so what
    the write changed in the layout is drawn as a full load draws it.
    An element of the layout that depends on the page (a section's nav) is marked `page` and sent
    with `<main>`'s children, in place of the one on screen by its id, rather than adding a value
@@ -534,7 +534,7 @@ rules something out.
    standard header that says "part of a page" and that a script may set.
 
    A write the runtime sends also says that it draws its own page whole
-   ([Choice 62](#choice-write-own-page-whole)), and says it in the standard header for that, as an
+   ([Choice 63](#choice-write-own-page-whole)), and says it in the standard header for that, as an
    HTTP preference (RFC 7240): `Prefer: corten-draws=whole`. A preference is what this is, one the
    server may ignore, and RFC 7240 has a server that does not know one ignore it, which is the
    deploy crossing both ways: a runtime from before (a tab open across a deploy) sends none and gets
@@ -555,7 +555,7 @@ rules something out.
    header of its own did (a patch took 62 instructions less, within the runs' range), and any other
    line is split at the commas and semicolons outside quotes (`cache::split_unquoted`, as
    `Cache-Control` is read), about 820 instructions more
-   ([Choice 62](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
+   ([Choice 63](#choice-write-own-page-whole) has the numbers). No `Preference-Applied` is sent: RFC
    7240 (3) keeps it for when it is not apparent whether a preference was applied, and here the
    answer says what it is (`corten-shell` and no `corten-page` on a whole page, `corten-page` on
    every `<main>`, a navigation's too, as the runtime reads them), so it would add its bytes to every
@@ -5843,7 +5843,40 @@ rules something out.
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
     above, at `65ac1dc47` against `38587c414`.
 
-62. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
+62. <a id="choice-changelog-fragments"></a>**Unreleased changelog entries are per-change
+    Markdown bullets.** Pull requests add separate files rather than edit the same list. The
+    PR number and an entry suffix keep two pull requests for one issue from taking the same
+    path; before there is a PR number, a unique branch slug takes its place. Release preparation
+    collects the notes into the dated version section, with bullets starting with the Breaking
+    marker first and filename order within each group, and leaves the older changelog alone.
+    Fragments use prose with single-line inline HTTPS links so a link works before and after its
+    note moves, without rewriting it or depending on a reference definition.
+
+    [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) describes the published changelog,
+    not how to store fragments. Corten keeps its human-written, newest-first, dated versions
+    and an Unreleased section, which links to the pending notes. The new bullets are not
+    grouped into its recommended change categories: they are the same uncategorized list
+    Corten already uses, with upgrade notes brought to the front.
+    [Towncrier](https://towncrier.readthedocs.io/en/stable/tutorial.html#creating-news-fragments)
+    would bring a Python tool and put a category in each filename.
+    [Changesets](https://changesets.dev/guide/getting-started#what-is-a-changeset) would add npm
+    package and bump metadata to each note, duplicating the explicit Rust workspace version
+    bump in [release preparation](../RELEASING.md#prepare-the-candidate). Neither is a shared
+    fragment standard or needed to collect Markdown bullets with the Node tooling already here.
+
+    Stands on: platform (the two tools' input conventions and Keep a Changelog's published
+    guidance); reasoned (distinct paths avoid edits to the same Unreleased list, and one
+    workspace version is chosen for the whole release, not inferred from notes); value
+    (README Values 2 and 6: keep the published format familiar without adding a release dependency).
+
+    Revisit when: the workspace needs separate package bumps or categorized notes, or a
+    common Markdown fragment format can keep the existing release procedure without adding a
+    toolchain or duplicating version decisions.
+
+    Last checked: 2026-11-17, Towncrier 26.9.0, Changesets 3.0.3, Keep a Changelog 1.1.0,
+    and Corten's release procedure at `231225b9a`.
+
+63. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
     that prefers it; a patch does not fill a layout read.** A `data-patch` write that answers with its
     own result (a form drawn again with what it refused, a bulk add whose failed lines the page
     lists) could not bring a layout read up to date: `req.page` in `Mode::Action` rendered `<main>`
@@ -6126,6 +6159,7 @@ rules something out.
     Firefox (WebKit, without the Navigation API, skips them) on `04000147b`, each failing on
     `3eeba8d8d` in Chromium, and a middleware's page filled under the deadline and before the error
     page by the crate's tests on `04000147b`, failing without it.
+
 
 ## Rules
 

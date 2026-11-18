@@ -15,6 +15,16 @@ const gate = jobs["verify-archives"].steps.find((s) => s.name === "Verify every 
 const create = jobs["github-release"].steps.find((s) => s.run?.includes("gh release create"));
 const downloads = (job) => jobs[job].steps.filter((s) => s.uses?.startsWith("actions/download-artifact@"));
 
+test("the tagged commit must pass the pending-notes gate before binaries or publishing", () => {
+  const version = jobs.version.steps.find((s) => s.id === "version");
+  assert.equal(version.if, undefined);
+  assert.equal(version["continue-on-error"], undefined);
+  assert.match(version.run, /^node scripts\/changelog\.mjs --check-release$/m);
+  assert.ok(needs("binaries").includes("version"));
+  assert.ok(needs("publish").includes("version"));
+  assert.ok(needs("github-release").includes("version"));
+});
+
 test("each job downloads only the artifacts it means to", () => {
   for (const job of ["attest", "verify-archives", "github-release"]) {
     const matched = downloads(job).filter((s) => s.with?.pattern !== undefined);
