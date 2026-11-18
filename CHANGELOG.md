@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- `#[derive(FromJson)]` rejects `#[serde(transparent)]` combined with `from`, `try_from`
+  or `into`, using serde's compile error messages.
+
 - The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
   `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 

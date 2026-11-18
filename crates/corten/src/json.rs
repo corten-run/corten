@@ -137,7 +137,8 @@
 //! ```
 //!
 //! Neither do the attributes serde's derive refuses: a unit struct's `default` or `transparent`,
-//! and `rename_all_fields` on a struct:
+//! `transparent` on an enum or with a conversion attribute, `from` with `try_from`, and
+//! `rename_all_fields` on a struct:
 //!
 //! ```compile_fail
 //! #[derive(Default, corten::FromJson)]
@@ -149,6 +150,37 @@
 //! #[derive(corten::FromJson)]
 //! #[serde(transparent)]
 //! struct Marker;
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! enum Marker { Present }
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent, into = "u64")]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(from = "u64")]
+//! #[serde(transparent)]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent, try_from = "u64")]
+//! struct Cents(u64);
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(try_from = "u64", from = "u64")]
+//! struct Cents(u64);
 //! ```
 //!
 //! ```compile_fail

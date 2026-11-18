@@ -1717,7 +1717,9 @@ rules something out.
     their own type through another type and through `Rule<u8>`, the `compile_fail,E0391` doctests at
     `1e0bcd58`; 2026-11-16, rustc's E0391 naming `SHAPE` for a row written as `self::Step`, after
     preserving path punctuation, the `compile_fail,E0391` doctest at `4f83d633` (focused form
-    doctests with `--show-output`, 61 passed, one ignored).
+    doctests with `--show-output`, 61 passed, one ignored); 2026-11-17, serde_derive 1.0.229's
+    `check_transparent` and `check_from_and_try_from` against the `FromJson` compile errors in
+    `crates/corten/src/json.rs`.
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
