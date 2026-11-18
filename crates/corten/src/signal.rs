@@ -156,7 +156,7 @@ struct Inner {
     late: AtomicU8,
 }
 
-/// [`Inner::late`]: a write eligible for late fill, so a whole action page the app's or an area's
+/// [`Inner::late`]: a write eligible for late fill, so a whole page the app's or an area's
 /// middleware makes with `Req` before the route carries the head it was made with.
 const LATE: u8 = 1;
 /// [`Inner::late`]: its route is reached, and kept the head if it needs one.
@@ -269,16 +269,11 @@ impl Signal {
         }
     }
 
-    /// For a write entering a typed route: does the request as it arrived need late fill?
-    pub(crate) fn fills_late_at_route(&self, headers: &http::HeaderMap) -> bool {
+    /// Late fill is still available at the typed route. The handler can choose to render a
+    /// whole page regardless of the mode and preference it receives.
+    pub(crate) fn fills_late_at_route(&self) -> bool {
         let flags = self.0.late.load(Ordering::Relaxed);
         flags & (LATE | HEAD_KEPT) == LATE
-            && (flags & RECHECK_WHOLE == 0
-                || match crate::Mode::of(headers) {
-                    crate::Mode::Document => true,
-                    crate::Mode::Action => crate::page::prefers_whole(headers),
-                    _ => false,
-                })
     }
 
     /// Its route is reached, and keeps the head for a page it may answer with

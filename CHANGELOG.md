@@ -1180,6 +1180,8 @@ Corten is pre-1.0, so any minor version may change the API.
   `Prefer: corten-draws=whole`; a runtime without it (a tab open across the deploy) gets `<main>`
   alone, as before, and a server that does not know it ignores it. The page uses the mode and
   drawing preference as middleware leaves them, so middleware can still ask for a fragment.
+  A handler that then explicitly sets `req.mode = Mode::Document` still fills its whole page's
+  layout reads.
   A mismatched shell key still
   reloads the current address without resending the write; across a mixed-version deploy this can
   lose the write's answer, including a refusal. A typed write route whose handler

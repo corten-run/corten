@@ -5904,9 +5904,11 @@ rules something out.
     stays eligible without reading its query twice. Middleware can answer in the route's place or
     change the mode or preference, so a page made with `Req` honors the headers it was taken with.
     In an app with reads, a swap write that goes through middleware can enter the late timeout
-    poller even if its incoming request did not prefer a whole page; only a whole page with
-    places fills late. The deadline travels in a request extension. A
-    `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
+    poller even if its incoming request did not prefer a whole page. The page-capable route or
+    early `Req` keeps the head regardless of the preference middleware leaves: a handler may
+    still set `req.mode = Mode::Document` ([Choice 50](#choice-patch-routes)). Only a whole page
+    with places fills late; a fragment starts no reads. The deadline travels in a request extension.
+    A `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
     layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
     page's, as a navigation does, and the next navigation reads the whole page; it cannot load in
     full, as the redirect's page does, since loading the address would not draw the write's answer.

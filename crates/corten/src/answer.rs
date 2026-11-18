@@ -2582,9 +2582,9 @@ where
                 signal.mark_for_everyone();
             }
         }
-        // A write the runtime sent whose own page is whole (#1370), in an app with layout reads:
-        // only a route whose answer type can be a page keeps the request's head for it, and fills
-        // it after the handler. Known here, as a constant: a route that answers patches alone
+        // For a write eligible for late fill (#1370), only a route whose answer type can be a
+        // page keeps the request's head, and fills it if the handler renders a whole page.
+        // Known here, as a constant: a route that answers patches alone
         // (`HtmlResult<Patches>`), JSON or text keeps none. A `GET` or `HEAD` looks no further.
         let page = O::PAGE && !Self::ACTION_PATCHES && !self.shared;
         let late = crate::layout::reaches_late_route(&req);

@@ -1034,8 +1034,8 @@ pub struct Req {
     /// The runtime sent it ([`Mode::asked`]): a redirect to a place or another site is then
     /// named in `corten-location`, as `fetch` cannot follow one (#1034).
     fetched: bool,
-    /// Corten fills the page's places for layout reads ([`crate::later`]): a whole document in an
-    /// app with some. Otherwise they are removed as the page is rendered.
+    /// Layout reads are available if the handler draws a whole page. The handler can still
+    /// change `mode`; fragments never fill their places.
     fills: bool,
     /// For a write the runtime sent whose own page is filled after it answers, taken where no route
     /// kept the head for it (the app's or an area's middleware before the route, a route given by
@@ -1265,8 +1265,7 @@ impl Req {
             whole_action,
             fetched,
             fills: !shared.layout_reads.is_empty()
-                && (extensions.get::<crate::layout::StartHere>().is_some()
-                    || (write && (mode == Mode::Document || whole_action) && signal.late_write().is_some())),
+                && (extensions.get::<crate::layout::StartHere>().is_some() || (write && signal.late_write().is_some())),
             early: 0,
             shared,
             signal,

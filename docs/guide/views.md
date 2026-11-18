@@ -483,7 +483,9 @@ passes it, as a prop, not a layout read. The badge is a component the layout ren
 can carry (an `#[derive(Id)]` on it), and the write reads the value itself after the write, and
 only for the patch: without JavaScript the redirect's next page is a full load that reads it.
 In an app with layout reads a typed write route whose answer type can be a page (`HtmlResult`)
-keeps a copy of the request's head on each preferred submit, for the page its handler may answer.
+keeps a copy of the request's head on a preferred submit or a swap write that reaches it through
+middleware. It keeps the head even if middleware removes the preference: the handler may still set
+`req.mode = Mode::Document`. A fragment starts no layout reads.
 A handler that answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) can return
 `HtmlResult<Patches>` to skip the typed route's copy. With no middleware that could answer a
 page in its place, it skips whole-page negotiation and late filling too. Middleware or a raw

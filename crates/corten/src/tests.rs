@@ -15295,6 +15295,9 @@ mod layout_reads {
         #[route("/typed-write", post = typed_write)]
         pub struct TypedWrite;
 
+        #[route("/document-write", post = document_write)]
+        pub struct DocumentWrite;
+
         #[route("/patches-only", post = patches_only)]
         pub struct PatchesOnly;
 
@@ -15314,6 +15317,13 @@ mod layout_reads {
     /// A write named in a routes module whose answer can be a page: drawn again with what it refused.
     async fn typed_write(req: Req) -> HtmlResult {
         refused(&req, "typed write")
+    }
+
+    async fn document_write(mut req: Req) -> HtmlResult {
+        assert_eq!(req.mode, Mode::Action);
+        assert!(!req.whole_action);
+        req.mode = Mode::Document;
+        refused(&req, "document write")
     }
 
     /// A write named in a routes module that answers patches alone.
@@ -16161,25 +16171,25 @@ mod layout_reads {
         assert_eq!(copies.load(Ordering::SeqCst), 0, "a route that answers patches alone keeps no head");
     }
 
+    struct Draws(Option<&'static str>, Option<&'static str>);
+
+    impl crate::Middleware for Draws {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let headers = req.headers_mut();
+            if let Some(mode) = self.0 {
+                headers.insert("corten", http::HeaderValue::from_static(mode));
+            }
+            if let Some(prefer) = self.1 {
+                headers.insert("prefer", http::HeaderValue::from_static(prefer));
+            } else {
+                headers.remove("prefer");
+            }
+            next.run(req).await
+        }
+    }
+
     #[tokio::test]
     async fn a_writes_page_honors_the_mode_and_preference_left_by_middleware() {
-        struct Draws(Option<&'static str>, Option<&'static str>);
-
-        impl crate::Middleware for Draws {
-            async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
-                let headers = req.headers_mut();
-                if let Some(mode) = self.0 {
-                    headers.insert("corten", http::HeaderValue::from_static(mode));
-                }
-                if let Some(prefer) = self.1 {
-                    headers.insert("prefer", http::HeaderValue::from_static(prefer));
-                } else {
-                    headers.remove("prefer");
-                }
-                next.run(req).await
-            }
-        }
-
         async fn page(req: Req) -> HtmlResult {
             req.page(Shell { req: &req, title: "Write", head: (), children: html! { <p>"write answer"</p> } })
         }
@@ -16198,7 +16208,10 @@ mod layout_reads {
             App::new(shop_url::router()).layout_read(count.clone()).layout_read(SignedIn).middleware(Draws(None, None)).router();
         let (status, headers, body) = call_with(router, "POST", "/typed-write", Some("action"), None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
-        assert!(headers.contains_key("corten-page") && body.contains("<p>typed write</p>"), "{headers:?} {body}");
+        assert!(
+            headers.contains_key("corten-page") && !body.contains("<header>") && body.contains("<p>typed write</p>"),
+            "{headers:?} {body}"
+        );
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
 
         let router = App::new(shop_url::router())
@@ -16224,6 +16237,21 @@ mod layout_reads {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(!headers.contains_key("corten-page") && body.contains(r#"<footer><span class="count">3</span></footer>"#));
         assert_eq!(count.started.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn a_writes_document_override_fills_the_layout_after_middleware_removes_the_preference() {
+        let table = Table::new().route("/document-write", crate::router::post(document_write));
+        for routes in [shop_url::router(), Routes::from(table)] {
+            let count = CartCount::default();
+            let router = App::new(routes).layout_read(count.clone()).layout_read(SignedIn).middleware(Draws(None, None)).router();
+            let (status, headers, body) = call_with(router, "POST", "/document-write", Some("action"), None).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(!headers.contains_key("corten-page") && body.starts_with("<!DOCTYPE html>"), "{headers:?} {body}");
+            assert!(body.contains("<main><p>document write</p></main>"), "{body}");
+            assert!(body.contains(r#"<footer><span class="count">3</span></footer>"#), "{body}");
+            assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[tokio::test]

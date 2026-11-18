@@ -569,7 +569,7 @@ pub(crate) async fn fill_made_early(shared: Arc<crate::page::Shared>, mut res: R
 #[derive(Clone, Copy)]
 pub(crate) struct NotAPageAnswer;
 
-/// Marks a typed route reached for a preferred action write. A `Req` its handler takes keeps
+/// Marks a typed route reached for a write eligible for late fill. A `Req` its handler takes keeps
 /// no early head: a page-capable route takes its own snapshot; other routes need none.
 #[inline]
 pub(crate) fn reaches_late_route(req: &crate::http::Request) -> Option<&crate::Signal> {
@@ -577,7 +577,7 @@ pub(crate) fn reaches_late_route(req: &crate::http::Request) -> Option<&crate::S
         return None;
     }
     let signal = req.extensions().get::<crate::Signal>()?;
-    if !signal.fills_late_at_route(req.headers()) {
+    if !signal.fills_late_at_route() {
         return None;
     }
     signal.keep_head();
@@ -605,7 +605,7 @@ pub(crate) fn at_late_route(
     (shared, until, kept)
 }
 
-/// A preferred action write's deadline in an app with layout reads. It follows the request
+/// A late-filled write's deadline in an app with layout reads. It follows the request
 /// through middleware without a task-local scope or adding to the size of every signal.
 #[derive(Clone, Copy)]
 pub(crate) struct LateUntil(pub(crate) tokio::time::Instant);

@@ -95,7 +95,8 @@ never stale.
 
 For an action write, the page uses the mode and drawing preference in the request as middleware
 leaves it. Removing the preference, replacing it with `corten-draws=main`, or forwarding the
-request in navigation mode gives a fragment.
+request in navigation mode gives a fragment unless the handler overrides the mode. If the handler
+sets `req.mode = Mode::Document`, its whole page still fills the layout reads after the write.
 
 During a mixed-version deploy, an older server can answer a new runtime's preferred write with
 `<main>` alone. With the same shell key, the runtime draws that fragment and reads the layout on
