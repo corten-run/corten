@@ -16317,7 +16317,10 @@ mod layout_reads {
         async fn page(req: Req) -> HtmlResult {
             req.page(html! {
                 <html>
-                    <head><title>"Shop"</title><Corten /></head>
+                    <head>
+                        <title>"Shop"</title>
+                        <Corten />
+                    </head>
                     <body>
                         <header>{later::<CartCount>()}</header>
                         <main>"typed write"</main>
@@ -16330,10 +16333,8 @@ mod layout_reads {
             let outer_count = CartCount::default();
             let inner_count = CartCount::default();
             let inner = App::new(destination_url::router()).layout_read(inner_count.clone()).deadline(deadline).router();
-            let outer = App::new(forward_url::router(inner))
-                .layout_read(outer_count.clone())
-                .middleware(AsViewer(Some("ada")))
-                .router();
+            let outer =
+                App::new(forward_url::router(inner)).layout_read(outer_count.clone()).middleware(AsViewer(Some("ada"))).router();
             let (status, headers, body) = call_with(outer, "POST", "/typed-write", Some("action"), None).await;
             assert_eq!(status, StatusCode::OK, "{body}");
             assert!(!headers.contains_key("corten-page") && headers.contains_key("corten-shell"), "{headers:?}");

@@ -6106,11 +6106,19 @@ rules something out.
     (15,612 to 16,074 at zlib's default level, against `main` at `27c29d7d2`), numbering the
     writes a layout draws and which of them failed in view.
 
-    The decision accepts measured server overhead on document GETs, navigation GETs and both
-    typed and generic patches even in apps without layout reads, as well as 496 more gzip bytes
-    on every page that loads core. Apps with reads also pay for the late path when eligible, and
-    generic routes can pay for a head capture even if they answer a patch. The server counts below
-    are instructions, not elapsed time.
+    Reusing the deadline extension avoids a second entry on staged writes with a deadline.
+    The no-read paths neither install nor mutate it, and the staged mutation stays out of line.
+    The new no-read counts remove part of the last increase; the comparison does not isolate
+    which code generation changes account for that difference. Compared with the previously
+    measured main fixture below, the remaining no-read costs are about 106, 116, 176 and 469
+    instructions per request, respectively (0.55%, 0.66%, 0.97% and 2.58%). The generic route
+    still has to negotiate: it can answer a whole page even in an app without reads. That is
+    not an attribution of its entire measured cost to negotiation. The remaining overhead and
+    the 496 more gzip bytes on pages that load core are accepted so the same handler's own-page
+    answer shows what the write changed with or without JavaScript, without adding a marker
+    to every layout place or a second way to update it. Apps with reads still pay for the late
+    path when eligible, and generic routes can capture the head even when they answer a patch.
+    These instruction counts do not establish elapsed time.
 
     Stands on: measured (callgrind, release, `write_request_cost`,
     `what_a_write_answering_in_an_action_costs`, `what_a_page_with_layout_reads_costs` and the
@@ -6141,7 +6149,21 @@ rules something out.
     `what_a_write_answering_in_an_action_costs`, not a standalone head copy.
 
     Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc and Rust 1.99.1,
-    `251a1792c` against main `5599e451c`, with the same `write_request_cost` fixture and three
+    `cc81e15bb` against `a6665d11a` before merging main, with the same `write_request_cost`
+    fixture and three alternating 1,200-minus-200 pairs. No-read median instructions per request
+    [range], before to after: document GET 19,174.47 [19,173.03 to 19,174.50] to 19,158.51
+    [19,158.47 to 19,159.96], navigation GET 17,815.45 [17,815.41 to 17,815.45] to 17,803.41
+    [17,803.41 to 17,804.88], direct typed patch 18,323.72 [18,323.72 to 18,323.77] to 18,311.68
+    [18,310.29 to 18,311.72], and generic patch 18,647.72 [18,647.72 to 18,647.73] to 18,631.71
+    [18,631.68 to 18,633.41]. Median paired savings [range] were 14.54 [14.52 to 16.00],
+    12.00 [10.58 to 12.04], 12.04 [12.00 to 13.48] and 16.01 [14.32 to 16.06], respectively.
+    With reads and pass-through middleware, the typed patch saved 83.01 [82.99 to 84.44]
+    when legacy and 84.48 [83.04 to 84.57] when preferred. The generic patch saved 135.02
+    [134.97 to 135.06] when legacy and 134.97 [134.96 to 135.04] when preferred.
+    A write forwarded through a typed endpoint to another router returned a whole page with an
+    empty cart header on `a6665d11a`. The receiving router now fills the header and starts its
+    cart read exactly once, with and without a deadline.
+    The previous check compared `251a1792c` against main `5599e451c`, with the same fixture and three
     alternating 1,200-minus-200 pairs. Median additional instructions per request without reads:
     document GET 122 (paired range 121 to 122), navigation GET 128 (128 to 128), direct typed
     patch 188 (186 to 188), generic patch 485 (485 to 485). Those medians are 19, 15, 16 and 20
