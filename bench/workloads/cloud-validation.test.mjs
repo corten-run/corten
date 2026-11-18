@@ -186,7 +186,7 @@ function semverSnapshot(t, edit = () => {}) {
 
 test("semver snapshot pins same-read library bytes before actual worker execution", { timeout: 15000 }, async (t) => {
   const h = semverSnapshot(t), snapshot = h.capture();
-  assert.ok(snapshot.sources.length <= 200);
+  assert.equal(snapshot.sources.length, validationPaths.length + Object.keys(semverSources).length + 1);
   assert.equal(Object.keys(semverSources).length, 48);
   for (const path of ["index.js", "classes/range.js", "internal/re.js"])
     writeFileSync(join(h.repo, "node_modules/semver", path), `require("node:fs").writeFileSync(${JSON.stringify(h.marker)}, "unapproved");`);

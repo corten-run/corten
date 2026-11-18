@@ -3,9 +3,10 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { accountId, archive, commit, context, harness, metadata } from "./cloud-fixtures.mjs";
-import { fleetPlan } from "./cloud-contract.mjs";
+import { fleetPlan, reservation } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
 import { digest } from "./cloud-local.mjs";
+import { bootstrapMarker } from "./cloud-remote.mjs";
 import { setupEvidence, terminalSetupScript } from "./cloud-retirement.mjs";
 
 const noNative = { inspect: async () => { throw new Error("no native campaign began"); } };
@@ -13,18 +14,50 @@ function failedSetup(t, flags = {}, entries = metadata()) {
   const h = harness(t, flags); h.seed(); h.setArchive(archive(entries)); return h;
 }
 
-test("observed common bootstrap is retained provenance, not native entry or a cleanup dead end", async (t) => {
-  const h = harness(t, { active: true });
+function firstFleet() {
   const tokens = Object.fromEntries(groupNames.map((group, i) => [group, (i + 1).toString(16).padStart(16, "0")]));
-  const fleet = fleetPlan({ round: "r21", commit, token: "f".repeat(16), tokens, provider: { accountId, context }, sshKey: "42" });
-  const path = join(h.temp, "fleet.json"); writeFileSync(path, JSON.stringify(fleet));
-  await h.task({}, { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group: groupNames[0], fleet: path }).launch();
-  const bootstrap = h.saved().bootstrapReady; assert.ok(bootstrap);
-  h.flags.active = false; h.setArchive(archive([...metadata(), { name: "campaign/" }]));
+  return fleetPlan({ round: "r21", commit, token: "f".repeat(16), tokens, provider: { accountId, context }, sshKey: "42" });
+}
+
+test("observed common bootstrap is retained provenance, not native entry for legacy setup retirement", async (t) => {
+  const fleet = firstFleet(), { group, token } = fleet.jobs[0];
+  const h = failedSetup(t, { token }, [...metadata(), { name: "campaign/" }]);
+  // This saved reservation predates guarded provisioning and the monitor seal.
+  h.change(s => {
+    Object.assign(s, reservation({ round: s.round, commit, token, group, fleet }, s.createdAt), { status: s.status });
+    s.bootstrapReady = { sha256: digest(JSON.stringify(bootstrapMarker(s)) + "\n"), observedAt: new Date().toISOString() };
+  });
+  const bootstrap = h.saved().bootstrapReady;
   assert.equal(await h.task(noNative).collect(), 1);
   const s = h.saved(); assert.equal(s.retirement.kind, "setup-failed"); assert.equal(s.status, "retired");
   assert.deepEqual(s.bootstrapReady, bootstrap); assert.equal(s.validation, undefined); assert.equal(h.deletes, 1);
   assert.equal(await h.task(noNative).collect(), 1); assert.equal(h.deletes, 1);
+});
+
+test("observed common bootstrap with a lost monitor honors the close embargo and cannot retire as pre-entry after seal", async (t) => {
+  const h = harness(t, { active: true, monitorHold: true }), fleet = firstFleet();
+  const path = join(h.temp, "fleet.json"); writeFileSync(path, JSON.stringify(fleet));
+  const task = h.task({ run(...args) {
+    const result = h.run(...args);
+    if (args[5]?.request?.seal) h.flags.completeMonitor(false);
+    return result;
+  } }, { collect: undefined, detach: true, commit, sshKey: "42", accountId, context, group: fleet.jobs[0].group, fleet: path });
+  await assert.rejects(task.launch(), error => error.controlTreeUncertain === true);
+  const { bootstrapReady, control } = h.saved();
+  assert.ok(bootstrapReady); assert.equal(control.monitor.phase, "invalid"); assert.deepEqual(control.sealed, ["bootstrap"]);
+  h.flags.active = false; h.setArchive(archive([...metadata(), { name: "campaign/" }]));
+  const close = JSON.parse(readFileSync(join(h.local, "monitor-local-closed.json")));
+  const calls = h.calls.length;
+  t.mock.timers.enable({ apis: ["Date"], now: close.recoverAfterMs - 1 });
+  assert.equal(await h.task(noNative).collect(), 3);
+  assert.equal(h.calls.length, calls); assert.ok(!existsSync(join(h.local, "results.tgz")));
+  t.mock.timers.setTime(close.recoverAfterMs);
+  await assert.rejects(h.task(noNative).collect(), /sealed\/native entry cannot use pre-entry retirement/);
+  const s = h.saved();
+  assert.deepEqual(s.bootstrapReady, bootstrapReady); assert.equal(s.validation, undefined);
+  assert.ok(s.archiveSha256 && s.evidenceSha256); assert.equal(s.retirement, undefined); assert.equal(s.deletionIntentAt, undefined);
+  assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
+  assert.equal(h.deletes, 0);
 });
 test("ordinary collect preserves failed-setup archive and retires only after separate terminal no-entry proof", async (t) => {
   const h = failedSetup(t);

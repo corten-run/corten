@@ -39,19 +39,29 @@ test("entry retains live handle through review wait and exits nonzero for partia
   const directory = join(temporary, "job"); mkdirSync(directory);
   const handle = Object.freeze({ id: "r17-0123456789abcdef", directory });
   let state = "active", advances = 0, audit = false, mixed = false, policy, stopped = false, group = "json-api";
+  const admissions = [];
+  t.mock.module("./control-admission.mjs", { namedExports: {
+    bootstrapControl: () => ({ round: "r17", commit }), controlOperation: (_binding, mode) => assert.equal(mode, "activate"),
+    waitControlAdmission: async (_binding, epoch) => { admissions.push(epoch); return { epoch }; },
+  } });
   t.mock.module("./campaign-contract.mjs", { namedExports: { bindCampaign: (input) => input } });
   t.mock.module("./campaign-verify.mjs", { exports: { validateCampaign: async () => ({ status: "blocked", collectionIntegrity: "unsealed-partial" }) } });
   t.mock.module("./campaign.mjs", { namedExports: { createCampaign({ authorize }) {
     policy = authorize;
     const status = () => ({ state, auditGroup: group, auditSubjectSha256: "exact-subject", mixedAuditSubjectSha256: "exact-mixed-subject" });
     return {
-      async begin(plan, { stateRoot }) { assert.equal(stateRoot, "/bench/campaign"); assert.equal(plan.commit, commit);
+      async begin(plan, { stateRoot, control }) { assert.equal(stateRoot, "/bench/campaign"); assert.equal(plan.commit, commit);
+        assert.deepEqual(admissions, ["bootstrap"]); assert.equal(control.admission.epoch, "bootstrap");
         assert.equal(authorize({ action: "begin-campaign", commit, round: "r17" }), true); return handle; },
+      recordControlAdmission(h, proof) {
+        assert.equal(h, handle); assert.equal(proof.epoch, `audit-${group}`);
+        assert.equal(readAuditInbox(directory, group), null, "pending delivery must not be consumable before admission");
+      },
       status,
       async advance(h) {
         assert.equal(h, handle); advances++;
-        if (!audit) { state = "blocked-review-needed"; writeFileSync(join(directory, "json-audit-delivery.json"), '{"subjectSha256":"exact-subject"}', { mode: 0o600 }); }
-        else if (!mixed) { group = "mixed-production"; state = "blocked-review-needed"; writeFileSync(join(directory, "mixed-audit-delivery.json"), '{"subjectSha256":"exact-mixed-subject"}', { mode: 0o600 }); }
+        if (!audit) { state = "blocked-review-needed"; writeFileSync(join(directory, "json-audit-delivery-pending.json"), '{"subjectSha256":"exact-subject"}', { mode: 0o600 }); }
+        else if (!mixed) { group = "mixed-production"; state = "blocked-review-needed"; writeFileSync(join(directory, "mixed-audit-delivery-pending.json"), '{"subjectSha256":"exact-mixed-subject"}', { mode: 0o600 }); }
         else state = "finished";
         return status();
       },
@@ -73,12 +83,16 @@ test("entry retains live handle through review wait and exits nonzero for partia
   } } });
   const sigint = process.listenerCount("SIGINT"), sigterm = process.listenerCount("SIGTERM");
   assert.equal(await runCampaignEntry(args), 2); assert.equal(advances, 3); assert.equal(audit, true); assert.equal(mixed, true); assert.equal(stopped, false);
+  assert.deepEqual(admissions, ["bootstrap", "audit-json-api", "audit-mixed-production"]);
   assert.equal(policy({ action: "stage-json-audit", auditSubjectSha256: "exact-subject" }), false, "past delivery confers no retained transport authority");
   assert.equal(process.listenerCount("SIGINT"), sigint); assert.equal(process.listenerCount("SIGTERM"), sigterm);
 });
 test("group entry chooses the group binder and retains the same audit and terminal exits", async (t) => {
   let expectedGroup, state, checked, calls, delivered, savedStatus = "verified";
   const handle = { id: "r17-0123456789abcdef", directory: null };
+  t.mock.module("./control-admission.mjs", { namedExports: {
+    bootstrapControl: () => ({ round: "r17", commit }), controlOperation: () => {}, waitControlAdmission: async (_binding, epoch) => ({ epoch }),
+  } });
   t.mock.module("./campaign-contract.mjs", { exports: {
     bindCampaign() { assert.fail("group launch must not bind an all-group campaign"); },
     bindGroupCampaign(input) { assert.deepEqual(input, { round: "r17", commit, group: expectedGroup }); return { ...input, order: [input.group] }; },
@@ -108,10 +122,11 @@ test("group entry chooses the group binder and retains the same audit and termin
         if (["json-api", "mixed-production"].includes(expectedGroup) && !delivered) {
           state = "blocked-review-needed";
           const prefix = expectedGroup === "json-api" ? "json" : "mixed";
-          writeFileSync(join(handle.directory, `${prefix}-audit-delivery.json`), JSON.stringify({ subjectSha256: `${prefix}-subject` }), { mode: 0o600 });
+          writeFileSync(join(handle.directory, `${prefix}-audit-delivery-pending.json`), JSON.stringify({ subjectSha256: `${prefix}-subject` }), { mode: 0o600 });
         } else state = "finished";
         return status();
-      }, submitJsonAudit: submit, submitMixedAudit: submit,
+      }, recordControlAdmission(h, proof) { assert.equal(h, handle); assert.equal(proof.epoch, `audit-${expectedGroup}`); },
+      submitJsonAudit: submit, submitMixedAudit: submit,
       collect(h) { assert.equal(h, handle); assert.equal(state, "finished"); return {}; },
       stop() { assert.fail("completed entry does not stop or release the host"); },
     };
