@@ -1040,7 +1040,7 @@ pub struct Req {
     /// kept the head for it (the app's or an area's middleware before the route, a route given by
     /// hand): the request's head as it was then, which a page this makes carries, so its reads
     /// start from it (`layout::fill_made_early`). Its number among the heads kept on the request's
-    /// signal ([`EarlyHeads`]), 0 for none: a byte in the padding, where the head itself made
+    /// signal ([`crate::Signal::keep_early_head`]), 0 for none: a byte in the padding, where the head itself made
     /// every `Req` 8 bytes larger, which every request that takes one paid in a copy.
     early: u8,
     shared: Arc<Shared>,

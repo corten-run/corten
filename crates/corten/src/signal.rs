@@ -162,7 +162,7 @@ const LATE: u8 = 1;
 /// [`Inner::late`]: its route is reached, and kept the head if it needs one.
 const HEAD_KEPT: u8 = 2;
 /// [`Inner::late`], beside the others: a `Req` taken before its route kept a head on the signal
-/// (`page::EarlyHeads`), to be let go when the write is answered.
+/// ([`EarlyHeads`]), to be let go when the write is answered.
 const EARLY_KEPT: u8 = 4;
 
 type EarlyHeads = Vec<Arc<http::request::Parts>>;
