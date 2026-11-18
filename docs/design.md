@@ -5991,7 +5991,8 @@ rules something out.
 
     The control-line budget is separate from the payload limit. Starting with async-nats
     0.53, the client's cached payload limit follows later server INFO messages as well as
-    the handshake. This still is not a per-publish measurement of what JetStream will accept.
+    the handshake. The client cannot ask for a fresh limit, and an INFO is not a per-publish
+    measurement of what JetStream will accept.
 
     The relay uses the same check, independent of the client or broker, for rows that an old
     version or external SQL could have queued. It marks an invalid row done with the existing
@@ -6043,7 +6044,7 @@ rules something out.
     patch back in its original stream position. Refreshing a shared client to confirm its
     cached limit disrupts followers and other publishers, and a fresh connection's limit
     would still not be an acknowledgement. Discarding the queued publishes on connection loss
-    is not an operation async-nats 0.52 exposes. Dropping a handle does not cancel the connection
+    is not an operation async-nats 0.53 exposes. Dropping a handle does not cancel the connection
     task, `force_reconnect` queues a command, and `drain` flushes pending work. A fresh client
     per lease or batch would need the caller's connection configuration and still would not
     prevent its queue from crossing a socket failure. `max_reconnects(0)` means unlimited;
@@ -6070,11 +6071,11 @@ rules something out.
     [message-ID deduplication](https://github.com/nats-io/nats-server/blob/v2.15.2/server/stream.go#L7020-L7044);
     the [NATS broker](https://github.com/nats-io/nats-server/blob/v2.15.2/server/client.go#L2617-L2621)
     sends a connection error without a subject or reply ID, and
-    [async-nats 0.52](https://docs.rs/crate/async-nats/0.52.0/source/src/connector.rs)
-    caches the limit from its handshake and its
-    [publish queue](https://docs.rs/crate/async-nats/0.52.0/source/src/lib.rs) survives reconnect;
-    zero [maps to no reconnect limit](https://docs.rs/crate/async-nats/0.52.0/source/src/options.rs);
-    [client drain](https://docs.rs/crate/async-nats/0.52.0/source/src/client.rs) flushes pending work);
+    [async-nats 0.53](https://docs.rs/crate/async-nats/0.53.0/source/src/connector.rs)
+    caches the limit from its handshake and later INFOs, and its
+    [publish queue](https://docs.rs/crate/async-nats/0.53.0/source/src/lib.rs) survives reconnect;
+    zero [maps to no reconnect limit](https://docs.rs/crate/async-nats/0.53.0/source/src/options.rs);
+    [client drain](https://docs.rs/crate/async-nats/0.53.0/source/src/client.rs) flushes pending work);
     reasoned (retrying cannot repair a key that fails a pure check; the compact marker fits
     limits that refuse larger patches, provided they can carry the headers; the durable
     app state does not depend on the delta being sent, and followers can reload it even
@@ -6090,7 +6091,10 @@ rules something out.
     subject by a publisher-supplied predecessor ID without first waiting for the predecessor's
     stream sequence.
 
-    Last checked: 2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
+    Last checked: 2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
+    `corten-cluster` integration tests on Postgres 16.13 and NATS 2.15.2 with 0.53.0,
+    including both types of size refusals and follower recovery after a broker disconnect;
+    2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
     NATS 2.15.2 with async-nats 0.52.0: both refusals publish markers while retaining the
     patch in Postgres. Ready and loading followers reload a refused tail, then apply the
     next patch normally, while a cold follower reads the committed state. A refused marker does
