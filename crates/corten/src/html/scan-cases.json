@@ -55,5 +55,16 @@
   {"name":"shadowrootmode inside an inert template stays inert","html":"<input id=qty><div id=qty-hint><template><div><template shadowrootmode=open>< <input name=\"submit\" data-submit></template></div></template></div>","tags":["input id=qty","div id=qty-hint","template","div","template shadowrootmode=open","input data-submit="]},
   {"name":"a fake key in a script is not an element","html":"<script type=text/plain><input name=\"submit\" data-submit></script>","tags":["script"]},
   {"name":"a fake template in script and a real key","html":"<script type=text/plain><template></script><input name=\"submit\" data-submit>","tags":["script","input data-submit="],"key":true},
-  {"name":"implicit list-item close is still a tree-builder limit","html":"<input id=qty><ul><li id=qty-hint><li>Outside hint</ul>","tags":["input id=qty","ul","li id=qty-hint","li"],"scannerHint":true}
+  {"name":"implicit list-item close is still a tree-builder limit","html":"<input id=qty><ul><li id=qty-hint><li>Outside hint</ul>","tags":["input id=qty","ul","li id=qty-hint","li"],"scannerHint":true},
+  {"name":"an SVG input is not a submit-key field","html":"<svg><template><input name=\"submit\" data-submit></input></template></svg>","tags":["svg","template","input data-submit="]},
+  {"name":"an HTML input at an SVG integration point is a submit-key field","html":"<svg><foreignObject><input name=\"submit\" data-submit></foreignObject></svg>","tags":["svg","foreignobject","input data-submit="],"key":true},
+  {"name":"an intervening HTML element stops the foreign end-tag search","html":"<svg><foreignObject><div><math></svg><plaintext><g data-vars=real /></plaintext></math></div></foreignObject></svg>","tags":["svg","foreignobject","div","math","plaintext","g data-vars=real"]},
+  {"name":"a reachable foreign end tag closes its foreign descendants","html":"<svg><g></svg><plaintext><g data-vars=hidden /></plaintext>","tags":["svg","g","plaintext"]},
+  {"name":"HTML image aliases the void img before shadow attachment","html":"<input id=qty><div id=qty-hint><image><template shadowrootmode=open>< <form><input name=\"submit\" data-submit></form></template></div>","tags":["input id=qty","div id=qty-hint","img","template shadowrootmode=open","form","input data-submit="],"hint":true,"key":true},
+  {"name":"SVG image keeps its foreign name","html":"<svg><image /></svg>","tags":["svg","image"]},
+  {"name":"RCDATA NUL is nonblank replacement text","html":"<input id=qty><textarea id=qty-hint>\u0000</textarea>","tags":["input id=qty","textarea id=qty-hint"],"hint":true},
+  {"name":"HTML data NUL is discarded","html":"<input id=qty><div id=qty-hint>\u0000</div>","tags":["input id=qty","div id=qty-hint"]},
+  {"name":"closed declarative root supplies hint text and a keyless field","html":"<input id=qty><div id=qty-hint><template shadowrootmode=closed shadowrootserializable>< <form><input name=\"submit\" data-submit></form></template></div>","tags":["input id=qty","div id=qty-hint","template shadowrootmode=closed","form","input data-submit="],"closedShadowHost":"qty-hint","hint":true,"key":true},
+  {"name":"noscript fallback vars are text with scripting on","scripting":true,"html":"<noscript><div data-vars=\"--m:7%\">Fallback</div></noscript>","tags":["noscript"]},
+  {"name":"noscript fallback vars are markup with scripting off","scripting":false,"html":"<noscript><div data-vars=\"--m:7%\">Fallback</div></noscript>","tags":["noscript","div data-vars=--m:7%"]}
 ]

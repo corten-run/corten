@@ -3,7 +3,6 @@
 mod scan;
 #[cfg(any(debug_assertions, test))]
 use scan::{lone_lt, raw_text_end, script_end, Mode, Token, Tokens};
-#[cfg(debug_assertions)]
 pub(crate) use scan::{Event, Markup};
 
 /// Escapes text for use in HTML text or a quoted attribute.
@@ -106,6 +105,7 @@ fn start_tag(html: &str, start: usize) -> Tag<'_> {
 }
 
 /// Each start tag of a page, including those in inert templates that a script can copy.
+#[cfg(test)]
 pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
     scan::tags(html, true)
 }

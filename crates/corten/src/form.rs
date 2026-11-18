@@ -2168,7 +2168,7 @@ pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> O
             active.pop();
         }
         match event {
-            Event::Start { tag, opens, live: true } => {
+            Event::Start { tag, opens, live: true, .. } => {
                 if let Some(id) = tag.attr("id") {
                     if opens && hints.iter().any(|hint| hint == id) {
                         active.push((depth, tags.len()));
@@ -2176,8 +2176,12 @@ pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> O
                     tags.push((tag, false));
                 }
             }
-            Event::Text { text, literal } if !active.is_empty() => {
-                let shows = if literal { !text.trim_ascii().is_empty() } else { text_shows(text).unwrap_or(true) };
+            Event::Text { text, literal, rcdata } if !active.is_empty() => {
+                let shows = if literal {
+                    !text.trim_ascii().is_empty()
+                } else {
+                    (rcdata && text.contains('\0')) || text_shows(text).unwrap_or(true)
+                };
                 if shows {
                     for (_, i) in active.drain(..) {
                         tags[i].1 = true;
@@ -2198,8 +2202,8 @@ pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> O
 
 /// The first submit key with no value ([`SubmitKey::template_field`]) in `html` that is not inside
 /// a `<template>` a script copies, as written: a browser without JavaScript sends it empty, and the
-/// post is refused. A declarative shadow root (`<template shadowrootmode="open">`) is drawn in the page,
-/// so a field in one needs its own key. A page without one costs one search of its markup, and
+/// post is refused. A declarative shadow root that attaches is drawn in the page, so a field in one
+/// needs its own key. A page without one costs one search of its markup, and
 /// only a debug build makes it (also for a field drawn ahead, `req.rendered`, which needs nothing
 /// carried with it).
 #[cfg(debug_assertions)]
@@ -2210,7 +2214,7 @@ pub(crate) fn keyless_submit_field(html: &str) -> Option<&str> {
     }
     // With scripting off, a noscript fallback form also needs a key of its own.
     crate::html::Markup::new(html, true, false).find_map(|event| {
-        let crate::html::Event::Start { tag, live: true, .. } = event else { return None };
+        let crate::html::Event::Start { tag, foreign: false, live: true, .. } = event else { return None };
         let written = &html[tag.start..tag.end];
         (tag.name == "input" && tag.attr("data-submit") == Some("") && tag.attr("value").is_none() && written.ends_with(EMPTY))
             .then_some(written)

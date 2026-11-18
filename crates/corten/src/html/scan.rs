@@ -278,11 +278,12 @@ struct Element<'a> {
 
 #[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
 pub(crate) enum Event<'a> {
-    Start { tag: Tag<'a>, opens: bool, live: bool },
-    Text { text: &'a str, literal: bool },
+    Start { tag: Tag<'a>, foreign: bool, opens: bool, live: bool },
+    Text { text: &'a str, literal: bool, rcdata: bool },
     Other,
 }
 
+#[cfg(any(debug_assertions, test))]
 pub(super) fn tags(html: &str, scripting: bool) -> impl Iterator<Item = Tag<'_>> {
     Markup::new(html, false, scripting).filter_map(|event| match event {
         Event::Start { tag, .. } => Some(tag),
@@ -318,12 +319,16 @@ impl<'a> Iterator for Markup<'a> {
         let foreign = parent.is_some_and(|el| el.foreign);
         let token = self.tokens.next(mode, name, foreign)?;
         match token {
-            Token::Start(tag) if tag.complete => {
+            Token::Start(mut tag) if tag.complete => {
                 let within = parent.map_or(Within::Html, |el| el.within);
                 let (foreign, within) = placed(within, &tag).unwrap_or_else(|| {
                     self.pop_foreign();
                     placed(Within::Html, &tag).expect("HTML placement")
                 });
+                // In HTML, an image token is reprocessed as the void img element.
+                if !foreign && tag.name == "image" {
+                    tag.name = "img".into();
+                }
                 let mode = if foreign { Mode::Data } else { Mode::of(&tag.name, self.scripting) };
                 let template = !foreign && tag.name == "template";
                 let parent = self.open.last_mut();
@@ -352,14 +357,21 @@ impl<'a> Iterator for Markup<'a> {
                     let can_attach_shadow = self.page && !foreign && shadow_host(&tag.name);
                     self.open.push(Element { name, foreign, within, mode, inert, hidden, can_attach_shadow });
                 }
-                Some(Event::Start { tag, opens, live: !inside_inert && !attached })
+                Some(Event::Start { tag, foreign, opens, live: !inside_inert && !attached })
             }
             Token::End { name, .. } => {
-                if foreign && (name.eq_ignore_ascii_case("p") || name.eq_ignore_ascii_case("br")) {
+                let breakout = foreign && (name.eq_ignore_ascii_case("p") || name.eq_ignore_ascii_case("br"));
+                if breakout {
                     self.pop_foreign();
                 }
+                // The foreign end-tag rule hands off to HTML at the first HTML element.
+                // From there an explicit HTML close must not match a foreign ancestor.
+                let from_foreign = foreign && !breakout;
+                let mut foreign_walk = from_foreign;
                 if let Some(i) = self.open.iter().rposition(|el| {
-                    el.name.eq_ignore_ascii_case(name) || (!el.foreign && el.name.eq_ignore_ascii_case("template"))
+                    foreign_walk &= el.foreign;
+                    (!el.foreign || !from_foreign || foreign_walk)
+                        && (el.name.eq_ignore_ascii_case(name) || (!el.foreign && el.name.eq_ignore_ascii_case("template")))
                 }) {
                     if self.open[i].name.eq_ignore_ascii_case(name) {
                         self.open.truncate(i);
@@ -369,7 +381,7 @@ impl<'a> Iterator for Markup<'a> {
             }
             Token::Text(text) | Token::Cdata(text, _) if !parent.is_some_and(|el| el.hidden || el.inert) => {
                 let literal = matches!(token, Token::Cdata(..)) || matches!(mode, Mode::Rawtext | Mode::Plaintext);
-                Some(Event::Text { text, literal })
+                Some(Event::Text { text, literal, rcdata: mode == Mode::Rcdata })
             }
             _ => Some(Event::Other),
         }
@@ -426,6 +438,7 @@ fn browser_checked_markup_cases() {
         html: String,
         tags: Vec<String>,
         patch: bool,
+        scripting: bool,
         idless: bool,
         #[cfg(debug_assertions)]
         hint: bool,
@@ -436,8 +449,8 @@ fn browser_checked_markup_cases() {
     }
 
     let cases: Vec<Case> = serde_json::from_str(include_str!("scan-cases.json")).expect("browser fixture");
-    for Case { name, html, tags, patch, idless, .. } in &cases {
-        let got: Vec<_> = super::start_tags(html)
+    for Case { name, html, tags, patch, scripting, idless, .. } in &cases {
+        let got: Vec<_> = self::tags(html, *scripting)
             .map(|tag| {
                 use std::fmt::Write as _;
                 let mut signature = tag.name.clone();

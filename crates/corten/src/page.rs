@@ -4200,15 +4200,27 @@ impl<D: Document> Render for Parted<D> {
 #[cold]
 #[inline(never)]
 fn unruled_vars(page: &str, rules: &str) -> Result<()> {
-    for tag in crate::html::start_tags(page) {
-        let Some(value) = tag.attr("data-vars") else { continue };
-        if !rules.contains(&format!("[data-vars=\"{value}\"]")) {
-            return Err(Error::new(format!(
-                "the page has data-vars=\"{value}\" and no rule for it, so that size paints at its initial value: markup placed with raw() keeps no values; render the view into a corten::Rendered and place that"
-            )));
+    use crate::html::{Event, Markup};
+
+    let mut scripting = true;
+    loop {
+        let mut fallback = false;
+        for event in Markup::new(page, false, scripting) {
+            let Event::Start { tag, foreign, .. } = event else { continue };
+            fallback |= scripting && !foreign && tag.name == "noscript";
+            let Some(value) = tag.attr("data-vars") else { continue };
+            if !rules.contains(&format!("[data-vars=\"{value}\"]")) {
+                return Err(Error::new(format!(
+                    "the page has data-vars=\"{value}\" and no rule for it, so that size paints at its initial value: markup placed with raw() keeps no values; render the view into a corten::Rendered and place that"
+                )));
+            }
         }
+        if !fallback {
+            return Ok(());
+        }
+        // Without scripting, noscript has child markup and can change the parse after it too.
+        scripting = false;
     }
-    Ok(())
 }
 
 pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<HeaderName>) -> Response {
@@ -4248,6 +4260,18 @@ mod carried_tests {
         let raw = r#"<p>1 <2 <div data-vars="--m__fill:7%"></div></p>"#;
         let error = unruled_vars(raw, rules).expect_err("7% after a lone < has no rule").to_string();
         assert!(error.contains(r#"data-vars="--m__fill:7%" and no rule"#), "{error}");
+    }
+
+    #[test]
+    fn noscript_fallback_vars_need_rules() {
+        let fallback = r#"<noscript><div data-vars="--m:7%">Fallback</div></noscript>"#;
+        let error = unruled_vars(fallback, "").expect_err("the no-script div has no rule").to_string();
+        assert!(error.contains(r#"data-vars="--m:7%" and no rule"#), "{error}");
+        assert!(unruled_vars(fallback, r#"[data-vars="--m:7%"]{--m:7%!important}"#).is_ok());
+        // In the other parse, this raw-text close ends noscript but leaves the div in a comment.
+        let scripted = r#"<noscript><!--</noscript><div data-vars="--m:8%">Scripted</div>--></noscript>"#;
+        let error = unruled_vars(scripted, "").expect_err("the scripting-on div has no rule").to_string();
+        assert!(error.contains(r#"data-vars="--m:8%" and no rule"#), "{error}");
     }
 
     /// The failed answer's `Vary` names are added to the error page's, each name once whatever its

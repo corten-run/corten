@@ -7213,5 +7213,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     it does not decode attribute values, model the accessibility tree or follow slotting,
     script changes or custom-element registration. A patch uses a template fragment and
     does not attach declarative shadow roots. The hint, key and patch id checks run only
-    in debug builds; the `data-vars` check runs only with development mode enabled, even
-    in a release build.
+    in debug builds; the `data-vars` check runs only on full documents with development
+    mode enabled, even in a release build. It checks the scripting-on parse (including
+    templates whose contents can be copied) and, when it finds an HTML `<noscript>`, also
+    the scripting-off parse, where the fallback can contain markup.
