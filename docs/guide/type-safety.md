@@ -69,18 +69,23 @@ fn script_types_match_the_server() {
 
 Give `Types::components` the same component lists as `App::components`. It declares typed
 events, views, and the named `ToJson` types in the scripts' checked handler parameters,
-including the types those values contain. `Types::sync` collects handler argument types for the
-file it writes. Use a relative JSDoc import from the script to the generated file:
-`../types/app` can name either `../types/app.d.ts` or `../types/app/index.d.ts`. A component
-library can write its own declarations while the app still collects its events and views. If
-the file cannot be determined, as with a bare specifier or a TypeScript path alias, every
-`sync` includes the handler type and checks the imported name.
+including the types those values contain. The macro recognizes JSDoc import specifiers that
+are `types/app` or end in `/types/app` after removing an optional `.js` or `.d.ts` suffix. An
+alias without that ending is neither checked nor collected by the macro.
+
+Use a relative JSDoc import from the script to the generated file. For `../types/app`,
+`Types::sync` looks for `../types/app.d.ts` first, then `../types/app/index.d.ts`. A component
+library can write its own declarations while the app still collects its events and views.
+`sync` skips a handler only when its import and output can both be resolved on disk and refer
+to different files. If either cannot be resolved, for example on the first `sync` or with a
+recognized bare specifier, `sync` includes the handler type and checks the imported name.
 Use `Types::add` for other types, such as feed rows or screen data the script receives from a
 URL. A type already collected through a component or added by hand is declared only once.
 
 If two Rust types have the same name, the generator numbers later declarations (for example,
-`Payload2`), just as it does for types reached through `Types::add`. Handler types are
-registered before event fields, whose generated references can use the numbered names.
+`Payload2`), just as it does for types reached through `Types::add`. Handler types for the
+file are registered first; component events and explicit adds otherwise keep their builder
+order. Generated references can use the numbered names.
 TypeScript generation fails if a handler imports from that file under a different name from
 the declaration for its Rust type. Give handler argument types in the same file distinct Rust
 names. A renamed Rust alias does not create a declaration: use the underlying type's declared
