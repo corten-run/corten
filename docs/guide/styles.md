@@ -73,12 +73,42 @@ the media query, `.filters:not([open],[hidden]) { display: block !important }`. 
 dialog at a width goes under `[open]` (`.modal[open] { display: grid }`), as the kit's dialog and
 sheet do. Since nothing fails when a rail is missing (the page answers, the rail is simply not
 drawn), `corten dev` warns in the console of each closed dialog or popover that a rule inside
-`@media` or `@container` gives a `display`, at the width the page is at or any other, with both
-rules: the page cannot tell a rail from an open look written without `[open]`. When only areas
-have stylesheets,
-each area's file starts with these rules. An app with no component stylesheet has neither file,
-so if its `static/style.css` gives a hidden element, a popover or a dialog a `display` (styling
-corten-ui's parts there, say), it adds them itself:
+`@media` or `@container` gives a `display`, at the width the page is at or any other. It
+normally suggests both rules: the page cannot tell a rail from an open look written without
+`[open]`. The suggestion uses a matching class from the resolved selector, including in nested
+rules written with `&`. When the check composes an entire `@scope` selector chain, it names
+the rule without suggesting a replacement selector that would drop the scope.
+
+The check composes explicit, unlimited `@scope` roots outside style rules. Plain selector-list
+members and plain inner roots start below their parent; a leading `>` requires a direct child.
+A single `:scope` or `&` can name the root explicitly. In a nested style rule, `&` instead names
+the parent style rule's composed selector; that form does not compose `:scope` references.
+Declarations on a scope root or its nested style rules use their enclosing selector. Supported
+selectors use unescaped ASCII type, class, ID or presence-attribute selectors, `*`, descendant
+and child combinators, and `:is()`, `:not()` or `:where()` around one simple type, class, ID or
+presence-attribute selector, such as `dialog:not([open])`.
+
+If any root, limit, nesting parent or rule selector cannot be composed or read, the check
+handles the whole rule as before: it treats `@scope` as a grouping rule, keeps ordinary style
+nesting and does not use any of the scope bounds. This includes implicit roots, scopes with a
+`to` limit, scopes nested in style rules, sheets with `@namespace`, a top-level root referring to
+itself, unsupported selectors, selectors over 1,024 characters before or after composition,
+and selectors the browser rejects. Rules under `@supports` conditions that `CSS.supports()` rejects
+or under `@starting-style` also use only the old match. Unscoped rules are unchanged, including long
+selectors.
+
+The check does not evaluate the cascade. Three known limits for closed rails with declarations at
+`min-width: 900px` (check at 600px):
+
+- `.rail { display: flex }` and `@scope (.card) { & > * { display: grid !important } }` can suppress the warning for a rail in `.card` even though the override loses to the hiding rule.
+- `@scope (.card) { .rail:not(.gone,.pending) { display: flex } }` and `@scope (.other) { .rail { display: grid !important } }` at the same breakpoint can warn for a rail outside both roots: the `:not()` list uses the old flat match, but the override does not.
+- `@scope (.card) { :scope > .rail { display: flex } }` and `@scope (.other) { @supports (display: future-layout) { .rail { display: grid !important } } }` can suppress the warning for a rail in `.card`: the override's rejected `@supports` (or `@starting-style`) falls back to the old flat match, which ignores `.other`.
+
+This affects only the diagnostic, not which styles the browser applies. Adopted stylesheets are not inspected
+([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
+When only areas have stylesheets, each area's file starts with these rules. An app with no
+component stylesheet has neither file, so if its `static/style.css` gives a hidden element, a
+popover or a dialog a `display` (styling corten-ui's parts there, say), it adds them itself:
 
 ```css
 [hidden]:where(:not([hidden=until-found i])) { display: none !important; }
