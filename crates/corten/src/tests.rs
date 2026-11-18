@@ -16139,11 +16139,9 @@ mod layout_reads {
             )
             .route(
                 "/patch",
-                crate::router::post(
-                    |req: Req| async move {
-                        req.action().ok_or_else(Error::not_found)?.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> })
-                    },
-                ),
+                crate::router::post(|req: Req| async move {
+                    req.action().ok_or_else(Error::not_found)?.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> })
+                }),
             )
             .route("/away", crate::router::post(|req: Req| async move { req.redirect::<ForOne>(&Done) }))
             .route("/refused", crate::router::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }));
@@ -16605,11 +16603,9 @@ mod layout_reads {
             .route("/early", crate::router::post(|req: Req| async move { refused(&req, "the route") }))
             .route(
                 "/passes",
-                crate::router::post(
-                    |req: Req| async move {
-                        req.action().ok_or_else(Error::not_found)?.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> })
-                    },
-                ),
+                crate::router::post(|req: Req| async move {
+                    req.action().ok_or_else(Error::not_found)?.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> })
+                }),
             )
             .route("/panic", crate::router::post(|| async { StatusCode::OK }))
             .route("/parked", crate::router::post(|| async { StatusCode::OK }));
