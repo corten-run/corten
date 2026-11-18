@@ -26,6 +26,10 @@ pub mod url {
     #[route("/smoke/quoted", get = quoted)]
     pub struct Quoted;
 
+    /// A page for checking nested scope roots against elements inside and outside the component.
+    #[route("/smoke/scope", get = scope_page)]
+    pub struct ScopePage;
+
     /// A patch whose component is listed in this area only, for a `data-patch` form on a page
     /// outside it (the test writes the form into the watchlist).
     #[route("/smoke/styled", post = styled)]
@@ -65,7 +69,7 @@ pub mod url {
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm, Reader, FormNested, PastForm, FormText];
+pub const COMPONENTS: &[corten::Component] = &[Quoted, ScopeProbe, StyledNote, ShipForm, Reader, FormNested, PastForm, FormText];
 
 /// The text the handler is given, as itself and in a JSON array. `data-on` is single-quoted, so it
 /// is written with `&#39;`, `&amp;` and `&lt;` and its JSON's quotes as they are.
@@ -99,6 +103,26 @@ async fn quoted(req: Req) -> HtmlResult {
     req.page(html! {
         <Layout req={&req} title="Quoted arguments" viewer={None} head="">
             <Quoted />
+        </Layout>
+    })
+}
+
+#[component(css)]
+fn ScopeProbe() -> impl Render {
+    html! {
+        <article class={List}>
+            <p data-scope-probe="inside">"Inside"</p>
+            <section><p data-scope-probe="section">"Inside a section"</p></section>
+        </article>
+    }
+}
+
+async fn scope_page(req: Req) -> HtmlResult {
+    req.page(html! {
+        <Layout req={&req} title="Nested CSS scopes" viewer={None} head="">
+            <ScopeProbe />
+            <p data-scope-probe="outside">"Outside"</p>
+            <article><section><p data-scope-probe="other">"In another article"</p></section></article>
         </Layout>
     })
 }

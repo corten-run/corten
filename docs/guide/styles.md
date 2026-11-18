@@ -27,7 +27,7 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
 | You write | Corten checks or generates |
 |---|---|
 | `offer_list.css` next to `OfferList` | every class prefixed, `.offer-list__row`; every top-level selector must require one of the file's classes. A merge conflict's marker left in the file (`<<<<<<<`, `\|\|\|\|\|\|\|`, `=======` or `>>>>>>>` starting a line, outside comments and strings) does not compile either: a browser would drop the rule it starts |
-| `@scope (.list) to (.slot) { li { padding: 0; } }` | the root and limit prefixed as any selector is, `@scope (.offer-list__list) to (.offer-list__slot)`, so the rules reach the list's elements down to a slot and no further. A root is checked at the top level and when nested in a style rule. An owned root lets its rules start anywhere (`:scope`, `li`, `> li`) and bounds nested scopes. Under a root that can start outside the component, each rule must prove ownership on its own. Classes in the limit are this component's too. A missing root, a pseudo-element outside a forgiving arm, or a prelude other than `(root)` with an optional `to (limit)` does not compile |
+| `@scope (.list) to (.slot) { li { padding: 0; } }` | the root and limit prefixed as any selector is, `@scope (.offer-list__list) to (.offer-list__slot)`, so the rules reach the list's elements down to a slot and no further. An owned root lets its rules start anywhere (`:scope`, `li`, `> li`) and bounds nested scopes. Under a root that can start outside the component, each style rule and inner scope root must prove ownership. Classes in the limit are this component's too. A missing root, a pseudo-element outside a forgiving arm, or a prelude other than `(root)` with an optional `to (limit)` does not compile |
 | `class={Row}`, `class={[Row, Selected]}` | static markup, `class="offer-list__row"`; a class the file lacks, another component's class, or one of the file's classes written as text (`class="row"`) does not compile |
 | `.card` in `Card`'s own stylesheet | `class={Card}` in its markup is the class, `card__card`: name the root class after the component |
 | `class={(Row, cond.then_some(Selected), extra)}` | joined when the page renders; `None` adds nothing, an empty list leaves the attribute out |
@@ -44,7 +44,7 @@ styles, or one that element is inside (by a descendant or child combinator), has
 file's classes. A sibling of such an element shares what it is inside, so `.list li + li`
 compiles, but `+` and `~` from the class's own element lead beside it, so `.list + main` does
 not. A [matches-any function](https://www.w3.org/TR/selectors-4/#matches-pseudo) (`:is()` or
-`:where()`) counts when every selector in it does. The check ignores clearly invalid arms,
+`:where()`) counts when every matchable selector in it does. The check ignores some invalid arms,
 such as an empty arm, a pseudo-element arm, or one with a leading, trailing or doubled
 combinator. It does not remove those arms from the emitted list:
 `:is(.list, .grid) p`, `:is(.list,) p` and `.list:has(img) p` compile; `:is(.list, main) p`,
@@ -54,8 +54,11 @@ prefixed, but only filter. A nested selector is checked where its `&` stands, so
 `.list { p { .. } }` and `.list { > :not(&) { .. } }` do. An unescaped `&` in an invalid
 arm can still turn off implicit nesting: write `& :is(main, [foo=&])` (or remove the invalid
 arm) if you mean descendants of the parent. The same test decides whether an `@scope` root is
-owned, at the top of the file or nested in a rule: `@scope (:not(.list))` and `.list { @scope (& + main) { .. } }`
-can stay as filters, but a bare `p` in their body does not compile.
+owned, at the top of the file or nested in a rule. A scope without an owned root can still
+filter independently anchored style rules. But an inner scope under an unowned outer scope
+needs a positive class in each root selector, on the root element or an ancestor. Neither
+`&` nor implicit nesting proves ownership there: browsers can resolve them through the
+outer scope rather than the intervening style rule.
 
 A selector that compiled before this check may need its anchor written out:
 
@@ -65,15 +68,20 @@ A selector that compiled before this check may need its anchor written out:
 | `:not(.list) p` or `:is(.list, main) p` | `.list p` for the component's paragraphs, or the rule in the app's `static/style.css` when it styles the page |
 | `.pick:checked + span` | `:where(.cuts) .pick:checked + span`: `:where()` adds no specificity |
 | `.list { :not(&) { .. } }` | the rule in the app's `static/style.css`, or `@scope (.list) to (.slot) { .. }` for the list's elements down to a slot |
+| `@scope (body) { .list { @scope (&) { p { .. } } } }` (also an implicit root such as `@scope (main)`) | hoist the scope: `@scope (body) { @scope (.list) { p { .. } } }`, or use an explicit class in the inner root, such as `@scope (main.list)` if the list is itself a `main` |
+| `.list::before, .list > p { & + p { .. } }` | change the inner selector to `:where(.list) & + p`. The browser ignores the pseudo-element arm when resolving `&`, but the check does not infer that; the anchor adds no specificity |
+| `:is(.list, :not(::before)) p` or a similar forgiving list in a scope root or limit | remove the invalid `:not(::before)` arm; the browser already ignores it, but the check does not recognize it as invalid |
 | `:nth-child(2 of .list)` | `:nth-child(2 of .list):where(.list)`: write the required class on the subject, without adding specificity |
 | `main:has(> :is(.list > p))` | `main:where(.list):has(> :is(.list > p))`: the direct child relationship implies that `main` has the class, but the check does not infer it |
 | `:scope > *` in `@scope (main) to (:scope > :not(.list))` | `:scope > :where(.list)`: the limit already excludes the other children, but the check does not infer ownership from limits |
 
-When a rule really is page-wide, move it to `static/style.css`. Expand any `&` to its
-enclosing selector before moving it. Give the markup a global marker, such as `data-offer-list`,
-and use that marker in the global rule rather than hard-coding the generated class prefix.
-For example, the page-wide rule in `.list { :not(&) { .. } }` becomes
-`:not([data-offer-list]) { .. }`, with `data-offer-list` on the list as well as `class={List}`.
+When a rule really is page-wide, move it to `static/style.css`. If you flatten a nested style
+rule, substitute the enclosing selector for `&`, wrapping a selector list in `:is(...)`.
+In a scope body, `&` instead refers to the scope root. Give the markup a global marker
+rather than hard-coding the generated class prefix. For example, `.list { :not(&) { .. } }`
+becomes `:not([data-offer-list]) { .. }`, with `data-offer-list` alongside `class={List}`.
+For `.list, .grid { & + p { .. } }`, use `:is([data-list], [data-grid]) + p` with the two
+global markers. Without `:is(...)`, the comma would make the first marker a separate selector.
 For an app with a copied kit stepper, run `corten ui add --merge stepper` with the updated CLI
 to upgrade the copy while retaining nonconflicting local edits.
 

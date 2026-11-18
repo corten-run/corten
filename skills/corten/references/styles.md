@@ -4,9 +4,9 @@ A component's styles are `snake_name.css` next to it. Every selector styles an e
 one of the file's classes or is inside one (`.list p`, `.list li + li`; not `.list + main`,
 `:not(.list) p` or `main:has(.list) p`); Corten prefixes them (`.offer-list__row`) and generates
 a constant for each. An `@scope` rule's root and limit are prefixed the same way
-(`@scope (.list) to (.slot)`); when the root is one of the classes, the rules inside start
-anywhere (`:scope`, `li`), and under any other root (`@scope ([data-theme="dark"])`) each names
-one of them.
+(`@scope (.list) to (.slot)`); an owned root lets the rules inside start anywhere (`:scope`,
+`li`). Under an unowned root (`@scope ([data-theme="dark"])`), each style rule and inner
+scope root needs its own class anchor; `&` or implicit nesting alone cannot anchor an inner scope.
 
 ```css
 /* src/views/offer_list.css */

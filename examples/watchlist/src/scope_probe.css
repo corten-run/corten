@@ -1,0 +1,15 @@
+@scope (body) {
+    @scope (.list) {
+        p { --smoke-hoisted-scope: yes; }
+    }
+    .list {
+        @scope (article.list) {
+            p { --smoke-subject-scope: yes; }
+        }
+        @supports (display: block) {
+            @scope (.list > section) {
+                p { --smoke-ancestor-scope: yes; }
+            }
+        }
+    }
+}

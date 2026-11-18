@@ -5797,9 +5797,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
    or `:where()` the browser keeps. A class inside another function only filters, though it is
    still prefixed. A nested selector is relative when it starts with a combinator or contains
    no `&` delimiter, even in an invalid arm; only a matchable `&` supplies an anchor at its own
-   position. The same check decides whether an `@scope` root, at the top or nested in a rule, is
-   owned; if it is not, each selector in its body must pass on its own. A root in an owned
-   `@scope` is relative to its elements and is not checked. The check reads selectors without a
+   position. The same check decides whether an `@scope` root is owned; if it is not, each selector
+   in its body must pass on its own. An inner root under an unowned scope needs a class on its
+   element or an ancestor: neither explicit `&` nor implicit nesting can borrow proof from a
+   style rule there. An owned scope bounds its nested scopes. The check reads selectors without a
    CSS parser, so it is conservative: a selector it cannot show is owned does not compile.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's

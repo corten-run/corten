@@ -509,8 +509,7 @@ struct Scoper<'a> {
     /// The breakpoints its `@media` rules name, without the `--`.
     media: Vec<String>,
     prefix: &'a str,
-    /// The root of the `@scope` rule being read when it is at the top of the file and not the
-    /// component's, whose rules are checked as the file's are.
+    /// The enclosing unowned `@scope` root, whose rules must prove ownership themselves.
     scope_root: Option<String>,
 }
 
@@ -733,9 +732,8 @@ impl Scoper<'_> {
     /// An `@scope` prelude, `(.list) to (.slot)` (CSS Cascade 6: `(<scope-start>) to
     /// (<scope-end>)`, each a selector list), with the classes of its root and limit prefixed and
     /// recorded, and, unless `nest` is `None`, the root as written when it can match an element
-    /// the component does not own. Nested in a rule or an `@scope`, the root is relative to that
-    /// one's elements, `nest`. With no root, the scope is the parent of the stylesheet's owner
-    /// node, the element around the page's stylesheet link, which no component owns.
+    /// the component does not own. With no root, the scope is the parent of the stylesheet's
+    /// owner node, the element around the page's stylesheet link, which no component owns.
     fn scope_prelude(&mut self, prelude: &str, nest: Option<Anchor>, at: usize) -> Result<(String, Option<String>), String> {
         let prelude = prelude.trim();
         let usage = format!(
@@ -766,7 +764,16 @@ impl Scoper<'_> {
                 return Err(self.error(at, usage));
             }
         }
-        let (start, _, unowned) = self.prefixed(root.trim(), nest.unwrap_or_default(), Some(prelude), at)?;
+        // Chromium can resolve both explicit `&` and implicit nesting through the enclosing
+        // @scope instead of an intervening style rule. An unowned outer root supplies no proof.
+        let root_nest = if self.scope_root.is_some() { Anchor::default() } else { nest.unwrap_or_default() };
+        let (start, _, unowned) = self.prefixed(root.trim(), root_nest, Some(prelude), at)?;
+        if let (Some(_), Some(outer), Some(unowned)) = (nest, &self.scope_root, &unowned) {
+            return Err(self.error(
+                at,
+                format!("`@scope ({root})`: `{}` can start outside the component under `@scope ({outer})`. Give every inner root selector one of the stylesheet's classes on its element or an ancestor, or hoist `@scope (.list)`", unowned.part),
+            ));
+        }
         let mut out = format!("@scope ({start})");
         if let Some(limit) = limit {
             out.push_str(" to (");
@@ -1049,7 +1056,7 @@ impl Scoper<'_> {
                         } else if let Some(prelude) = scope {
                             return Err(self.error(
                                 at,
-                                format!("`@scope {prelude}`: a pseudo-element cannot be a scope's root or limit; remove it or move the rule outside `@scope`"),
+                                format!("`@scope {prelude}`: a pseudo-element cannot be a scope's root or limit; remove it or the invalid forgiving arm that contains it"),
                             ));
                         }
                         if double_colon {
@@ -1144,7 +1151,7 @@ impl Scoper<'_> {
         let Unowned { part, why } = unowned;
         let mut reason = String::new();
         if why.alternative {
-            reason.push_str("; an `:is()` or `:where()` counts only when every selector in it does");
+            reason.push_str("; an `:is()` or `:where()` counts only when every matchable selector in it does; remove invalid arms the compiler cannot recognize");
         }
         if why.filtered {
             reason.push_str("; a class or `&` in `:not()`, `:has()` or another function only filters");
@@ -1943,6 +1950,7 @@ mod tests {
             ".list { @scope (main) { p { color: red } } }",
             ".list { @scope (& > li) { color: red; p { color: red } } }",
             ".list { @scope (& + main) { .row { color: red } } }",
+            ".list::before, .list > p { :where(.list) & + p { color: red } }",
             "@scope (.list) { & + main { color: red } :not(&) { color: red } }",
         ] {
             assert!(scope(css, "t").is_ok(), "{css}: {:?}", scope(css, "t"));
@@ -2002,6 +2010,16 @@ mod tests {
         ] {
             assert!(scope(css, "t").is_err(), "{css}");
         }
+        let invalid_arm = ":not(::before)";
+        let css = format!(":is(.list, {invalid_arm}) p {{ color: red }}");
+        assert!(scope(&css, "t").unwrap_err().contains("remove invalid arms"));
+        for css in [
+            format!("@scope (:is(.list, {invalid_arm})) {{ p {{ color: red }} }}"),
+            format!("@scope (.list) to (:is(.slot, {invalid_arm})) {{ p {{ color: red }} }}"),
+        ] {
+            assert!(scope(&css, "t").unwrap_err().contains("remove it or the invalid forgiving arm"), "{css}");
+            assert!(scope(&css.replace(&format!(", {invalid_arm}"), ""), "t").is_ok(), "{css}");
+        }
     }
 
     #[test]
@@ -2031,7 +2049,7 @@ mod tests {
         assert!(related.contains("only filters"), "{related}");
         assert!(error(":not(.list) p { color: red }").contains("only filters"));
         let optional = error(":is(.list, main) p { color: red }");
-        assert!(optional.contains("every selector in it"), "{optional}");
+        assert!(optional.contains("every matchable selector in it"), "{optional}");
         assert!(!optional.contains("only filters"), "{optional}");
         assert!(error(".list + main { color: red }").contains("`+` and `~`"));
         assert!(error("h2 { color: red }").contains("one of the stylesheet's classes"));
@@ -2078,8 +2096,8 @@ mod tests {
             "@scope (.t__card) to (:scope > .t__body > *){gap:1px;:scope{padding:0}& > img{width:100%}p{margin:0}> .t__body{gap:2px}}"
         );
         assert_eq!(sheet.classes, ["card", "body"]);
-        // Nested in a style rule, `&` in the root is the rule's elements; nested in another
-        // `@scope`, the root is relative to the outer one.
+        // A style rule outside an @scope can supply the root's nesting anchor. An owned outer
+        // scope bounds its nested scopes.
         assert_eq!(
             scope(".card { @scope (& > .body) to (.slot) { p { margin: 0 } } }", "t").unwrap().css,
             ".t__card{@scope (& > .t__body) to (.t__slot){p{margin:0}}}"
@@ -2110,13 +2128,10 @@ mod tests {
             ("> p { margin: 0 }", "> p"),
             ("p { margin: 0 }", "p"),
             ("@media print { p { margin: 0 } }", "p"),
-            ("@scope (div) { :scope { margin: 0 } }", ":scope"),
         ] {
             let message = error(&format!("@scope ([data-theme=\"dark\"]) {{ {css} }}"));
             assert!(message.contains(&format!("`{part}` styles elements this component does not own")), "{message}");
-            if !css.starts_with("@scope") {
-                assert!(message.contains(outside), "{message}");
-            }
+            assert!(message.contains(outside), "{message}");
         }
         assert!(error("@scope (div) { color: plum }")
             .contains("styles the root of `@scope (div)`, which can be outside the component"));
@@ -2157,6 +2172,35 @@ mod tests {
             assert!(error(css).contains("a pseudo-element cannot be"), "{css}");
         }
         assert!(scope("@scope (.a[title=\"x::y\"]) { p { margin: 0 } }", "t").is_ok(), "an attribute's value is text");
+    }
+
+    #[test]
+    fn nested_scope_roots_need_their_own_anchor_under_an_unowned_scope() {
+        for (file, root) in [("leaky_nested_scope_ampersand.css", "&"), ("leaky_nested_scope_relative.css", "main")] {
+            let css = std::fs::read_to_string(Path::new("../corten/src").join(file)).expect("the example's stylesheet");
+            let error = scope(&css, "x").expect_err(file);
+            assert!(error.contains(&format!("`@scope ({root})`")), "{file}: {error}");
+            assert!(error.contains("hoist `@scope (.list)`"), "{file}: {error}");
+        }
+        for (css, expected) in [
+            ("@scope (body) { @scope (.list) { p { outline: solid } } }", "@scope (body){@scope (.x__list){p{outline:solid}}}"),
+            (
+                "@scope (body) { .list { @scope (main.list) { p { outline: solid } } } }",
+                "@scope (body){.x__list{@scope (main.x__list){p{outline:solid}}}}",
+            ),
+            (
+                "@scope (body) { .list { @supports (display: block) { @scope (.list > section) { p { outline: solid } } } } }",
+                "@scope (body){.x__list{@supports (display: block){@scope (.x__list > section){p{outline:solid}}}}}",
+            ),
+        ] {
+            assert_eq!(scope(css, "x").unwrap().css, expected);
+        }
+        for css in [
+            "@scope (body) { @scope (main) { .list p { outline: solid } } }",
+            "@scope (body) { .list { @media print { @scope (& + main, .list) { p { outline: solid } } } } }",
+        ] {
+            assert!(scope(css, "x").unwrap_err().contains("hoist `@scope (.list)`"), "{css}");
+        }
     }
 
     #[test]

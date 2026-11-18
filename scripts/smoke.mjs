@@ -851,6 +851,23 @@ async function run(browser) {
     );
     await quoted.close();
   }
+
+  if (engine === "chromium") {
+    const scoped = await browser.newPage();
+    await scoped.goto(`${base}/smoke/scope`);
+    for (const [root, expected] of [
+      ["hoisted", "inside,section"],
+      ["subject", "inside,section"],
+      ["ancestor", "section"],
+    ]) {
+      const matched = await scoped.locator("[data-scope-probe]").evaluateAll(
+        (probes, root) => probes.filter((p) => getComputedStyle(p).getPropertyValue(`--smoke-${root}-scope`) === "yes").map((p) => p.getAttribute("data-scope-probe")).join(","),
+        root,
+      );
+      check(`an inner scope with a ${root} class anchor styles only its owned paragraphs`, matched === expected, matched);
+    }
+    await scoped.close();
+  }
   // A handler given a form's fields (`js::fill(f.weight, ..)`) gets their controls when it runs,
   // found by name in its own form: a select, an input, a textarea, a checkbox, a radio group's
   // inputs and a row's field (`parcels[1].weight`), which a component with no refs draws. A call

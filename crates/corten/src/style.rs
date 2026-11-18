@@ -34,7 +34,7 @@
 //!   that element is inside (by a descendant or child combinator), has one of the file's classes.
 //!   `h2 { .. }` alone is a compile error; `.list h2 { .. }` is fine, and so is `.list li + li`,
 //!   whose siblings share the list, but not `.list + main`, which is beside it. A class in
-//!   `:is()` or `:where()` counts only if every selector in it does; classes inside other
+//!   `:is()` or `:where()` counts only if every matchable selector in it does; classes inside other
 //!   functions, such as `:not()` or `:has()`, are prefixed but only filter. A nested selector is
 //!   checked where its `&` stands (`.list { :not(&) { .. } }` does not compile).
 //!   Element defaults, resets and fonts belong in the app's `static/style.css`.
@@ -42,7 +42,8 @@
 //!   `@scope (.list) to (.slot)` is the list's elements down to a slot. When its root matches
 //!   only elements the component owns, its rules can start anywhere (`:scope`, `li`, `> li`);
 //!   under any other root, such as `@scope ([data-theme="dark"])` or, in a rule,
-//!   `@scope (& + main)`, each rule must name a class itself, as at the top.
+//!   `@scope (& + main)`, each style rule and inner scope root must prove ownership.
+//!   Neither `&` nor implicit nesting proves an inner scope root is owned there.
 //! - Variants are Rust: `match tone { Tone::Danger => Danger, Tone::Neutral => Neutral }` picks
 //!   a class, so a variant without a rule does not compile.
 //! - A helper component shares another's stylesheet: `#[component(css = OfferList)]` in the same
@@ -385,6 +386,22 @@
 //! use corten::prelude::*;
 //! #[component(css)]
 //! fn InvalidScopeAmpersand() -> impl ClassList { (List, Slot) }
+//! ```
+//!
+//! An inner scope under an unowned outer scope cannot take its proof from an intervening
+//! style rule. Browsers can resolve the inner root through the outer scope instead, whether
+//! the root uses an explicit `&` or implicit nesting.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn LeakyNestedScopeAmpersand() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn LeakyNestedScopeRelative() -> impl ClassList { List }
 //! ```
 //!
 //! Nor does an `@scope` with no root (`rootless_scope.css` has `@scope { li { .. } }`), which

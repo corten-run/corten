@@ -7,10 +7,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - **Breaking:** a component stylesheet's selector compiles only when the element it styles, or
   one that element is inside, has one of the file's classes, in every selector of the list and
-  of an `:is()` or `:where()` that supplies the class. A class only in `:not()` or `:has()`, or
-  reached through `+` or `~` (`.list + main`), no longer counts, and a nested selector is
-  checked where its `&` stands (`.list { :not(&) { .. } }`), for selectors and `@scope` roots
-  alike. Write the anchor out: `main:has(.list) p` becomes `main .list p`, and
+  every matchable arm of an `:is()` or `:where()` that supplies the class. A class only in
+  `:not()` or `:has()`, or reached through `+` or `~` (`.list + main`), no longer counts.
+  A nested selector is checked where its `&` stands (`.list { :not(&) { .. } }`). An owned
+  `@scope` root supplies the proof for its body; under an unowned scope, an inner root needs
+  its own class anchor rather than relying on `&` or implicit nesting.
+  Write the anchor out: `main:has(.list) p` becomes `main .list p`, and
   `.pick:checked + span` becomes `:where(.cuts) .pick:checked + span`; page-wide rules belong in
   `static/style.css` (docs/guide/styles.md). The kit's `stepper.css` anchors its unit rules this
   way; `corten ui diff stepper` shows the change for a copy, and
