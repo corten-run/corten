@@ -5,9 +5,9 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { allApps } from "../fullstack/apps.mjs";
-import { aggregate, cpuSettings, expectedPageChecks, phases, leanApps, leanProfile } from "./contract.mjs";
+import { aggregate, cpuSettings, expectedPageChecks, phases, leanApps, leanProfile, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
-import { inspectGroupEvidence } from "./group.mjs";
+import { groupDescriptor, inspectGroupEvidence } from "./group.mjs";
 import { dirname } from "node:path";
 
 const inventory = Object.keys(allApps).filter((name) => allApps[name].pages !== false);
@@ -31,6 +31,23 @@ const median = (values) => {
   return (sorted[Math.floor((sorted.length - 1) / 2)] + sorted[Math.floor(sorted.length / 2)]) / 2;
 };
 const range = (values) => values.length ? { median: median(values), min: Math.min(...values), max: Math.max(...values) } : null;
+const documentHeaderContract = groupDescriptor("catalog-page").documentHeaders;
+// Ungrouped runs since the document header contract check only the lean contenders, so
+// their twenty-app table mixes two correctness contracts. Legacy ungrouped runs carry
+// neither the recorded scope nor header evidence and keep their original report.
+function documentHeaderScope(summary, group, apps) {
+  const recorded = summary.measurement?.documentHeaders;
+  if (group) {
+    assert.equal(recorded, undefined, "group runs record their document header contract in the group descriptor");
+    return null;
+  }
+  if (recorded !== undefined) assert.deepEqual(recorded, { contract: documentHeaderContract, apps: [...leanApps] }, "catalog document header scope differs");
+  const evidence = Object.values(summary.apps).some((entry) => ["fixture", "api"].some((source) =>
+    entry?.checks?.[source] && Object.hasOwn(entry.checks[source], "documentHeaders")));
+  if (recorded === undefined && !evidence) return null;
+  return { contract: documentHeaderContract, scope: recorded === undefined ? "inferred from header evidence" : "recorded by the runner",
+    checked: apps.filter((app) => leanApps.includes(app)), unchecked: apps.filter((app) => !leanApps.includes(app)) };
+}
 function validCpuSettings(cpus) {
   try {
     const roles = ["app", "load", "api"];
@@ -58,7 +75,10 @@ export function inspectCatalog(summary, expectedCommit) {
   assert.ok(!timed || group?.descriptor.group === "catalog-page", "timed catalog reporting requires --group catalog-page");
   const expectedApps = group?.descriptor.apps ?? inventory;
   const reportKeys = group?.keys ?? keys;
+  const headerScope = documentHeaderScope(summary, group, expectedApps.filter((app) => Object.hasOwn(summary.apps, app)));
+  const mixed = headerScope !== null && headerScope.checked.length > 0 && headerScope.unchecked.length > 0;
   const warnings = [...(group?.warnings ?? [])];
+  if (mixed) warnings.push(`Mixed correctness contracts: ${headerScope.checked.length} apps were checked against ${headerScope.contract} and ${headerScope.unchecked.length} were not; this run is not a feature-parity comparison or baseline. Use --group catalog-page for a qualified comparison.`);
   const failures = [...summary.failures, ...summary.cleanupFailures].map((f) => `${f.app ?? f.resource ?? "suite"}: ${f.stage ?? "cleanup"}: ${f.error}`);
   const selected = summary.options.apps;
   const allAppsPresent = Array.isArray(selected) && selected.length === expectedApps.length && new Set(selected).size === expectedApps.length
@@ -86,6 +106,19 @@ export function inspectCatalog(summary, expectedCommit) {
     for (const source of ["fixture", "api"]) if (!completeChecks(entry?.checks?.[source], source)) {
       everyCheck = false;
       warnings.push(`${app} ${source}: missing or contradictory JSON, page, browser-profile or upstream correctness evidence.`);
+    }
+    if (headerScope?.unchecked.includes(app)) for (const source of ["fixture", "api"]) {
+      if (entry?.checks?.[source] && Object.hasOwn(entry.checks[source], "documentHeaders")) {
+        everyCheck = false;
+        warnings.push(`${app} ${source}: document header evidence outside the runner's header-checked apps.`);
+      }
+    }
+    if (group?.descriptor.documentHeaders || headerScope?.checked.includes(app)) for (const source of ["fixture", "api"]) {
+      try { verifyDocumentHeaderChecks(entry?.checks?.[source]?.documentHeaders, fixture, source); }
+      catch {
+        everyCheck = false;
+        warnings.push(`${app} ${source}: missing or invalid document header observations.`);
+      }
     }
     if (entry?.failures?.length) { everyCheck = false; warnings.push(`${app}: per-app failures are recorded.`); }
     const results = Object.fromEntries(reportKeys.map((key) => {
@@ -139,10 +172,11 @@ export function inspectCatalog(summary, expectedCommit) {
   const dispositionComplete = !timed || Array.isArray(summary.targetFailures)
     && isDeepStrictEqual(ordered(summary.targetFailures), ordered(targetFailures)) && summary.complete === (targetFailures.length === 0);
   if (!dispositionComplete) warnings.push("Timed target failure ledger or baseline disposition is missing or differs from retained phases.");
-  const baseline = validClock && summary.complete === true && summary.checksPassed === true && summary.dirty === false
+  const uniformBaseline = validClock && summary.complete === true && summary.checksPassed === true && summary.dirty === false
     && allAppsPresent && everyCheck && everyPass && fixtureMatches && configurationComplete && failures.length === 0 && summary.options.checkOnly !== true
     && (!timed || summary.attemptComplete === true && dispositionComplete)
     && (group === null || group.complete);
+  const baseline = uniformBaseline && !mixed;
   const attemptComplete = timed && validClock && summary.attemptComplete === true && summary.checksPassed === true && summary.dirty === false
     && allAppsPresent && everyCheck && everyPass && fixtureMatches && configurationComplete && failures.length === 0
     && summary.options.checkOnly !== true && group?.attemptComplete === true && dispositionComplete;
@@ -154,7 +188,8 @@ export function inspectCatalog(summary, expectedCommit) {
   return { round: summary.round, commit: summary.commit, config, baseline, terminal, passes, apps, failures, warnings,
     ...(timed ? { attemptComplete, timedCells } : {}),
     attemptGates: { validClock, allAppsPresent, fixtureMatches, configurationComplete }, ...(group ? { group: group.descriptor } : {}),
-    status: baseline ? "COMPLETE" : attemptComplete ? "COMPLETE ATTEMPT: observed load/request failure; not a baseline" : terminal ? "FAILED OR INCOMPLETE: not a baseline" : "PRELIMINARY: not a baseline" };
+    ...(headerScope ? { documentHeaders: { ...headerScope, mixed } } : {}),
+    status: baseline ? "COMPLETE" : uniformBaseline ? "COMPLETE MIXED-CONTRACT RUN: not a feature-parity baseline" : attemptComplete ? "COMPLETE ATTEMPT: observed load/request failure; not a baseline" : terminal ? "FAILED OR INCOMPLETE: not a baseline" : "PRELIMINARY: not a baseline" };
 }
 
 const number = (value, digits = 0) => value === null || value === undefined ? "pending" : value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
@@ -170,15 +205,24 @@ export function renderCatalog(report) {
     "| CPU role | Quota, cores | Logical CPU pinning |", "|---|---:|---|"];
   for (const role of ["app", "load", "api"]) lines.push(`| ${role} | ${number(c.cpus?.[role]?.quota, 1)} | ${c.cpus?.[role]?.cpuset === null ? "unpinned" : c.cpus?.[role]?.cpuset ?? "unknown"} |`);
   if (c.leanProfile) lines.push("", `Speed configuration: \`${c.leanProfile.name}\`; configured contenders: ${c.leanProfile.apps.map((app) => `\`${app}\``).join(", ")}.`);
+  const h = report.documentHeaders;
+  if (h) lines.push("", `Document header contract \`${h.contract}\` (${h.scope}): checked for ${h.checked.length ? h.checked.map((app) => `\`${app}\``).join(", ") : "no reported app"}; not checked for ${h.unchecked.length ? h.unchecked.map((app) => `\`${app}\``).join(", ") : "no reported app"}.`,
+    ...(h.mixed ? ["This ungrouped run mixes correctness contracts. It is not a feature-parity comparison or a baseline; rows in the two tables below must not be ranked against each other."] : []));
   if (c.apparatus) lines.push("", `Upstream: \`${c.apparatus.schema}\`, exactly two request workers plus coordinator; unchanged 2-CPU/512-MiB budget. Raw replay: ${report.rawVerified === true ? "verified" : "not verified"}; first-host admission: ${report.apparatusPreflight ?? "not verified"}. Legacy evidence is not retroqualified.`);
   if (report.group) lines.push("", `Group: \`${report.group.group}\`; registry: \`${report.group.registrySchema}\`; contract SHA-256: \`${report.group.contractSha256}\`.`,
+    report.group.documentHeaders ? `Document header contract: \`${report.group.documentHeaders}\`.` : "Historical contract: the current document header floor was not checked.",
     `After-run commit: \`${c.commitAfter ?? "not recorded"}\`; tree dirty after run: ${c.dirtyAfter ?? "not recorded"}.`,
     `Exact apps: ${report.group.apps.map((app) => `\`${app}\``).join(", ")}.`,
     "Timing targets: page only, fixture and API sources. Native correctness gates remain page AND JSON; JSON is not timed. This is a group comparison, not the historical twenty-app catalog baseline.");
-  lines.push("", "First catalog workload results, not changes against marketplace r16. Each cell is the median [minimum, maximum] of available 64-user passes, with collected/requested pass counts. Partial cells are not complete repeated measurements.", "",
-    `| Framework | ${headings.join(" | ")} |`,
-    `|---|${reportKeys.map(() => "---:").join("|")}|`);
-  for (const [app, phases] of Object.entries(report.apps)) lines.push(`| ${app} | ${reportKeys.map((key) => cell(phases[key])).join(" | ")} |`);
+  lines.push("", "First catalog workload results, not changes against marketplace r16. Each cell is the median [minimum, maximum] of available 64-user passes, with collected/requested pass counts. Partial cells are not complete repeated measurements.");
+  const reported = Object.keys(report.apps);
+  const tables = h?.mixed ? [[`Checked against \`${h.contract}\``, reported.filter((app) => leanApps.includes(app))],
+    ["Not checked against the document header contract", reported.filter((app) => !leanApps.includes(app))]] : [[null, reported]];
+  for (const [title, apps] of tables) {
+    if (title) lines.push("", `### ${title}`);
+    lines.push("", `| Framework | ${headings.join(" | ")} |`, `|---|${reportKeys.map(() => "---:").join("|")}|`);
+    for (const app of apps) lines.push(`| ${app} | ${reportKeys.map((key) => cell(report.apps[app][key])).join(" | ")} |`);
+  }
   if (report.timedCells) {
     lines.push("", "## Timed outcomes", "", "Observed load/request outcomes, not root-cause diagnoses. Successful req/s excludes failed requests; attempted req/s includes them. Ranges retain every observed pass. Failed apps are not comparison-eligible, including when a different phase passed.", "",
       "| App | Profile | Phase | Passed / failed / requested passes | Successful req/s median [min, max] | Attempted req/s median [min, max] | Failed requests median [min, max] | Drops median [min, max] |", "|---|---|---|---|---|---|---|---|");

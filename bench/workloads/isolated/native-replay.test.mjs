@@ -6,7 +6,7 @@ import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { mock, test } from "node:test";
-import { groupNames, selectedApps } from "../registry.mjs";
+import { contractSha256, groupNames, selectedApps } from "../registry.mjs";
 import { productionFixture } from "../../json-api/production-fixtures.mjs";
 import { descriptor as jsonDescriptor } from "../../json-api/contract.mjs";
 import { apparatusSources } from "../../catalog/apparatus.mjs";
@@ -42,7 +42,7 @@ const { inspectNative, executionGroups, validateNativeResult } = await import(".
 function fixture(t, group) {
   const folder = mkdtempSync(join(tmpdir(), "isolated-native-composition-"));
   t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true }); });
-  const binding = { request: { group, round: "w17", commit: "a".repeat(40) }, selection: { apps: selectedApps(group) },
+  const binding = { request: { group, round: "w17", commit: "a".repeat(40) }, selection: { apps: selectedApps(group), contractSha256: contractSha256(group) },
     execution: { effectiveOptions: {} }, resources: { expectedCpus: {} } };
   const summary = { round: binding.request.round, commit: binding.request.commit, options: {}, measurement: { cpus: {} }, complete: true,
     apps: Object.fromEntries(binding.selection.apps.map((a) => [a, { qualification: { fixture: { eligible: true }, api: { eligible: true } }, runs: {} }])) };
@@ -60,6 +60,15 @@ async function jsonFixture(t, options) {
   return { ...f, summary };
 }
 
+test("catalog replay requires the campaign's selected contract, not a contract chosen by saved evidence", async (t) => {
+  action = "normal"; calls = [];
+  const { binding, folder } = fixture(t, "catalog-page");
+  assert.equal((await inspectNative(binding, folder)).status, "verified");
+  assert.equal(calls[0].input.expectedContractSha256, binding.selection.contractSha256);
+  delete binding.selection.contractSha256;
+  assert.equal((await inspectNative(binding, folder)).status, "invalid");
+  assert.equal(calls.length, 1, "missing contract must not fall back to archive-selected replay");
+});
 test("catalog worker source receipts must match the bound commit even after fully rehashing", async (t) => {
   const f = fixture(t, "catalog-page"), hash = (text) => createHash("sha256").update(text).digest("hex");
   const proof = { schema: "catalog-apparatus-source/v1", commit: f.binding.request.commit,

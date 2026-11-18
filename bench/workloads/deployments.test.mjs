@@ -4,6 +4,7 @@ import fs, { existsSync, readFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import test from "node:test";
 import { contractSha256, definition, groupNames, retainedFamilies, selectedApps } from "./registry.mjs";
+import { groupDescriptor } from "../catalog/group.mjs";
 import { groupApps, scheduledGroup } from "../marketplace/groups.mjs";
 import { cpuSettings as catalogCpus, parseArgs as catalogOptions } from "../catalog/contract.mjs";
 import { cpuSettings as jsonCpus, parseArgs as jsonOptions } from "../json-api/contract.mjs";
@@ -70,9 +71,11 @@ function fixture(original = descriptor(), { status = "complete", mutate = () => 
     verifyNative: () => true, verifyPerformance: () => true } };
 }
 
-test("all nine exact groups, cases, contenders and retained families survive without legacy hash changes", () => {
+test("all nine group contracts are pinned independently of historical catalog replay", () => {
+  assert.equal(groupDescriptor("catalog-page", { historical: true }).contractSha256,
+    "c267655acacf8083ce51cbd92d80cbfafbe5fe8f5f56141d4ef1d12a48ac89ee");
   const hashes = {
-    "catalog-page": "c267655acacf8083ce51cbd92d80cbfafbe5fe8f5f56141d4ef1d12a48ac89ee",
+    "catalog-page": "67e0bffbf6bc138c570b7d3855b9dc440c2d11526a1321269f14433155dd98f0",
     "json-api": "b0015ffc90e28f85823f1e7a392e8ed5a97f2f2a6e56cf6c9287934589325fb9",
     "localized-marketplace": "ab61f28221d8abe1225f13816c438b90f79bd0d50a379eae7b1b5fb9275366b7",
     "mixed-production": "65b1b953d9524aa7e72aaa4e04b8e5d2ce350930f46de874395a24ccbeea2676",

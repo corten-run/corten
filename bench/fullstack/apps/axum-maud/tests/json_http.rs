@@ -31,6 +31,10 @@ struct App {
 
 impl App {
     async fn start(upstream: Option<&str>) -> Self {
+        Self::start_with_profile(upstream, "default").await
+    }
+
+    async fn start_with_profile(upstream: Option<&str>, profile: &str) -> Self {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let work = root.join("tests/work").join(format!("{}-{}", std::process::id(), NEXT_APP.fetch_add(1, Ordering::Relaxed)));
         std::fs::create_dir_all(&work).unwrap();
@@ -43,7 +47,7 @@ impl App {
         let child = Command::new(env!("CARGO_BIN_EXE_item-page-axum-maud"))
             .current_dir(&root)
             .env("PORT", port.to_string())
-            .env("PROFILE", "default")
+            .env("PROFILE", profile)
             .env("CATALOG_SOURCE", if upstream.is_some() { "api" } else { "fixture" })
             .env("MARKETPLACE_SOURCE", if upstream.is_some() { "api" } else { "fixture" })
             .env("CATALOG_FIXTURE_PATH", root.join("tests/catalog.json"))
@@ -144,6 +148,48 @@ async fn fixture_pages_keep_native_templates_and_localization() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert!(response.text().await.unwrap().contains(labels[tag]["invalid_email"].as_str().unwrap()));
+    }
+}
+
+#[tokio::test]
+async fn document_headers_are_only_on_successful_catalog_lean_pages() {
+    let baseline = [
+        ("content-security-policy", ""),
+        ("x-content-type-options", "nosniff"),
+        ("referrer-policy", "strict-origin-when-cross-origin"),
+        ("x-frame-options", "DENY"),
+        ("cross-origin-opener-policy", "same-origin"),
+        ("permissions-policy", ""),
+        ("cache-control", "private, no-cache"),
+    ];
+    for profile in ["catalog-lean", "catalog-lean-extra"] {
+        let app = App::start_with_profile(None, profile).await;
+        for (path, status) in [
+            ("/catalog/record_1?field=Ac", StatusCode::OK),
+            ("/catalog/missing", StatusCode::NOT_FOUND),
+            ("/api/catalog/record_1", StatusCode::OK),
+            ("/static/catalog.css", StatusCode::OK),
+            ("/", StatusCode::OK),
+        ] {
+            let response = app.request(reqwest::Method::GET, path).await;
+            assert_eq!(response.status(), status, "{profile} {path}");
+            let headers = response.headers();
+            if profile == "catalog-lean" && path == "/catalog/record_1?field=Ac" {
+                assert_eq!(headers[header::CONTENT_TYPE], "text/html; charset=utf-8");
+                for (name, value) in baseline.into_iter().filter(|(_, value)| !value.is_empty()) {
+                    assert_eq!(headers[name], value, "{name}");
+                }
+                let csp = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+                assert!(csp.contains("script-src 'self'"));
+                assert!(csp.contains("frame-ancestors 'none'"));
+                assert!(!csp.contains("'unsafe-inline'"));
+                assert!(headers["permissions-policy"].to_str().unwrap().starts_with("accelerometer=(), camera=()"));
+            } else {
+                for (name, _) in baseline {
+                    assert!(!headers.contains_key(name), "{profile} {path}: unexpected {name}");
+                }
+            }
+        }
     }
 }
 

@@ -89,6 +89,15 @@ var app = builder.Build();
 app.Services.GetRequiredService<ItemSource>();
 app.Services.GetRequiredService<CatalogSource>();
 app.Services.GetRequiredService<MarketplaceSource>();
+if (catalogLean)
+{
+    app.UseWhen(c => c.Request.Path.StartsWithSegments("/catalog"), pages => pages.Use(async (context, next) =>
+    {
+        SecurityHeaders.Append(context.Response.Headers);
+        context.Response.Headers.CacheControl = "private, no-cache";
+        await next();
+    }));
+}
 if (matched)
 {
     // The security headers on every answer, as ASP.NET Core's documentation sets a header ("Control

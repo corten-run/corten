@@ -108,6 +108,7 @@ func (s *catalogSource) get(ctx context.Context, id string) (*catalogRecord, err
 }
 
 func (s *catalogSource) routes(r *gin.Engine) {
+	catalogLean := os.Getenv("PROFILE") == "catalog-lean"
 	r.GET("/catalog/:id", func(c *gin.Context) {
 		record, err := s.get(c.Request.Context(), c.Param("id"))
 		if err != nil {
@@ -117,6 +118,10 @@ func (s *catalogSource) routes(r *gin.Engine) {
 		if record == nil {
 			render(c, http.StatusNotFound, notFoundPage())
 			return
+		}
+		if catalogLean {
+			setDocumentSecurityHeaders(c)
+			c.Header("Cache-Control", "private, no-cache")
 		}
 		render(c, http.StatusOK, catalogPage(record, c.Query("field")))
 	})

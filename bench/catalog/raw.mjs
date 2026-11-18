@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { aggregate, leanApps, leanProfile, phases, readLoad } from "./contract.mjs";
+import { aggregate, leanApps, leanProfile, phases, readLoad, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { inspectCatalog, completeChecks } from "./report.mjs";
 import { records } from "./fixtures.mjs";
 import { qualificationIdentity } from "./group.mjs";
@@ -13,6 +13,7 @@ import { timedRawSchema, verifyTimedPhase, verifyTimedContinuity } from "./timed
 import { isDeepStrictEqual } from "node:util";
 import { workerAware, workerRawSchema, workerCommand, verifyControl, verifySource, verifyWorkers } from "./apparatus.mjs";
 import { verifyArtifactIndex, verifyPreflight } from "./preflight.mjs";
+import { receiptPrefix } from "./check.mjs";
 
 export const rawSchema = "catalog-saved-evidence/v2";
 export const upstreamImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
@@ -51,6 +52,16 @@ export function verifyFailedCheck(attempt, source) {
     ? Object.fromEntries(attempt.requests.map((r) => [r.id, 1])) : {}, "failed sweep upstream reads differ");
 }
 
+// The checker's stdout receipt: the one line that starts with `receiptPrefix`. Other lines
+// (`steady`'s retries and skipped console errors) are kept in checks.log as diagnostics; a
+// missing, repeated or embedded receipt is not guessed at.
+export function loggedReceipt(log) {
+  const framed = log.split(/\r?\n/).filter((line) => line.includes(receiptPrefix.trim()));
+  assert.ok(framed.length, "checker stdout receipt missing");
+  assert.equal(framed.length, 1, "checker stdout receipt repeated");
+  assert.ok(framed[0].startsWith(receiptPrefix), "checker stdout receipt is not framed on its own line");
+  return JSON.parse(framed[0].slice(receiptPrefix.length));
+}
 export function verifyCheckBoundary(proof, summary, app, source, failed) {
   const { runtime, checker, upstream } = proof;
   assert.deepEqual(proof.exit, { code: failed ? 1 : 0, signal: null, expired: false, interrupted: false }, "checker client lifetime incomplete");
@@ -113,7 +124,9 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   assert.equal(checker.HostConfig.CpusetCpus, budget.load.cpuset ?? ""); assert.equal(checker.HostConfig.Memory, 2 ** 31);
   assert.ok([`container:${runtime.Id}`, `container:${summary.runId}-${app}`].includes(checker.HostConfig.NetworkMode));
   mounts(checker, [mount(checkout, "/repo"), mount(`${checkout}/bench/catalog/results/${summary.round}/${source}/${app}`, "/results", true)]);
-  execution(checker, summary.tools.checker.execution, ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, `http://${summary.runId}-upstream:8080`, "/results/checks.json"]);
+  const headersChecked = summary.group ? !!summary.group.documentHeaders : leanApps.includes(app);
+  execution(checker, summary.tools.checker.execution, ["node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source,
+    `http://${summary.runId}-upstream:8080`, "/results/checks.json", ...(headersChecked ? [app] : [])]);
   assert.equal(checker.State.Status, "exited"); assert.equal(checker.State.Running, false);
   for (const key of ["OOMKilled", "Dead", "Paused", "Restarting"]) assert.equal(checker.State[key], false);
   assert.equal(checker.State.ExitCode, failed ? 1 : 0); assert.equal(checker.State.Error, "");
@@ -125,12 +138,15 @@ export function verifyCheckBoundary(proof, summary, app, source, failed) {
   assert.equal(new Set([runtime.Id, upstream.Id, checker.Id]).size, 3, "checker/participant identities overlap");
 }
 
-export function replayCatalog(summary, { readJson, readText }, commit) {
+export function replayCatalog(summary, { readJson, readText }, commit, expectedContractSha256) {
   assert.ok([rawSchema, timedRawSchema, workerRawSchema].includes(summary.savedEvidence?.schema), "native raw evidence version missing");
   assert.equal(summary.options?.group, "catalog-page", "raw group validation requires catalog-page");
   const report = inspectCatalog(summary, commit);
+  if (expectedContractSha256 !== undefined) assert.equal(report.group.contractSha256, expectedContractSha256, "native catalog contract differs from requested contract");
   const gated = summary.timingDisposition === "gated-functional";
   const workers = workerAware(summary);
+  const documentHeaders = report.group.documentHeaders;
+  if (documentHeaders) assert.ok(workers, "document-header contract requires worker-aware native evidence");
   if (workers) { verifySource(summary, { readJson, readText }); verifyArtifactIndex(summary, { readJson, readText }); }
   const timed = (workers || summary.savedEvidence.schema === timedRawSchema) && !gated;
   assert.ok(summary.timingDisposition === undefined || gated, "unknown timing disposition");
@@ -152,6 +168,7 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
   const fixture = readText("fixture.json");
   assert.equal(summary.fixtureSha256, summary.savedEvidence.fixtureSha256);
   assert.equal(summary.savedEvidence.fixtureSha256, createHash("sha256").update(fixture).digest("hex"));
+  const catalog = documentHeaders ? JSON.parse(fixture) : null;
   const cleanup = readJson("cleanup.json");
   assert.deepEqual(cleanup, { runId: summary.runId, containers: [], networks: [] }, "owned resources remain or cleanup proof differs");
   assert.deepEqual(readJson("tools.json"), summary.tools, "tool observations differ");
@@ -180,7 +197,11 @@ export function replayCatalog(summary, { readJson, readText }, commit) {
       assert.deepEqual(checked, entry.checks[source], "saved checks differ");
       const { qualification, ...nativeCheck } = checked;
       assert.deepEqual(readJson(`${base}/checks.json`), nativeCheck, "native checker receipt differs");
-      readText(`${base}/checks.log`);
+      const checksLog = readText(`${base}/checks.log`);
+      if (documentHeaders && !checked.failure) {
+        verifyDocumentHeaderChecks(nativeCheck.documentHeaders, catalog, source);
+        assert.ok(isDeepStrictEqual(loggedReceipt(checksLog), nativeCheck), "checker stdout receipt differs");
+      }
       readText(`${base}/app.log`);
       let boundary;
       if (gated || timed) {

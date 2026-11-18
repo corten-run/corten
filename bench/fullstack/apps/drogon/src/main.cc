@@ -67,7 +67,8 @@ int main()
     marketplace::routes();
     const char *port = std::getenv("PORT");
     const char *profile = std::getenv("PROFILE");
-    if (profile && std::string_view(profile) == "catalog-lean")
+    const bool catalogLean = profile && std::string_view(profile) == "catalog-lean";
+    if (catalogLean)
     {
         app().enableGzip(false).enableBrotli(false).setLogLevel(trantor::Logger::kWarn);
     }
@@ -134,8 +135,8 @@ int main()
 
     app().registerHandler(
         "/catalog/{id}",
-        [](const HttpRequestPtr &req, Callback &&callback, const std::string &id) {
-            catalog::get(id, [req, callback = std::move(callback)](catalog::RecordPtr record, bool failed) {
+        [catalogLean](const HttpRequestPtr &req, Callback &&callback, const std::string &id) {
+            catalog::get(id, [req, catalogLean, callback = std::move(callback)](catalog::RecordPtr record, bool failed) {
                 if (failed) return callback(failure());
                 if (!record) return callback(HttpResponse::newNotFoundResponse(req));
                 HttpViewData data;
@@ -143,7 +144,20 @@ int main()
                 data.insert("catalog_page", true);
                 data.insert("record", record);
                 data.insert("prefix", req->getParameter("field"));
-                callback(HttpResponse::newHttpViewResponse("CatalogPage", data));
+                auto res = HttpResponse::newHttpViewResponse("CatalogPage", data);
+                if (catalogLean)
+                {
+                    res->addHeader("Content-Security-Policy",
+                                   "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; "
+                                   "base-uri 'self'; frame-ancestors 'none'; form-action 'self'");
+                    res->addHeader("X-Content-Type-Options", "nosniff");
+                    res->addHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+                    res->addHeader("X-Frame-Options", "DENY");
+                    res->addHeader("Cross-Origin-Opener-Policy", "same-origin");
+                    res->addHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+                    res->addHeader("Cache-Control", "private, no-cache");
+                }
+                callback(res);
             });
         }, {Get});
     app().registerHandler(

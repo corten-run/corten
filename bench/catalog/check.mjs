@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { articleHtml, expectedArticle, expectedPageChecks, filterPrefixes, representativeIds, validateCatalog, validateRecord } from "./contract.mjs";
+import { articleHtml, catalogPagePath, documentHeaderNames, expectedArticle, expectedPageChecks, filterPrefixes,
+  leanApps, representativeIds, validateCatalog, validateRecord, verifyDocumentHeaders, verifyDocumentHeaderChecks } from "./contract.mjs";
 import { steady } from "../../scripts/steady.mjs";
 import { recordAttempt } from "./record-attempt.mjs";
 
@@ -92,9 +93,30 @@ async function once(upstream, id) {
   assert.deepEqual(JSON.parse(state.body).requests, { [id]: 1 }, "expected exactly one upstream read for the request");
 }
 
-export async function checkApp({ base, catalog, source, upstream, browser }) {
+export async function checkApp({ base, catalog, source, upstream, browser, app }) {
   validateCatalog(catalog);
   const result = { jsonRecords: 0, pages: 0, profiles: [], upstream: source === "api" ? {} : null };
+  if (leanApps.includes(app)) result.documentHeaders = [];
+  const documentPage = async (context) => {
+    const page = await context.newPage();
+    if (result.documentHeaders) {
+      // Chromium can report an effective 200 with the wire headers of a 304.
+      // Inspect fresh document responses, not fields inherited from a cached page.
+      const session = await context.newCDPSession(page);
+      await session.send("Network.enable");
+      await session.send("Network.setCacheDisabled", { cacheDisabled: true });
+    }
+    return page;
+  };
+  const observeDocument = async (response, path) => {
+    if (!result.documentHeaders) return;
+    assert.equal(response.url(), new URL(path, base).href, `${path}: document response URL differs`);
+    const headers = (await response.headersArray()).map(({ name, value }) => ({ name: name.toLowerCase(), value }))
+      .filter(({ name }) => documentHeaderNames.includes(name));
+    const row = { path, status: response.status(), headers };
+    verifyDocumentHeaders(row, path);
+    result.documentHeaders.push(row);
+  };
   // JSON every record, not a comparison with another framework's implementation.
   const ids = Object.keys(catalog);
   const attempt = recordAttempt(catalog, "/api/catalog");
@@ -138,7 +160,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
       const context = await browser.newContext({ javaScriptEnabled, viewport, colorScheme, reducedMotion: "reduce", serviceWorkers: "block" });
       context.setDefaultTimeout(10000);
       context.setDefaultNavigationTimeout(20000);
-      const page = await context.newPage();
+      const page = await documentPage(context);
       const reference = await context.newPage();
       const failures = [];
       const failedResources = [];
@@ -153,9 +175,10 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
         if (["stylesheet", "script"].includes(response.request().resourceType()) && response.status() >= 400) failures.push(`${response.url()}: HTTP ${response.status()}`);
       });
       const visit = async (r, prefix = "") => {
-        const path = `/catalog/${r.id}${prefix ? `?${new URLSearchParams({ field: prefix })}` : ""}`;
+        const path = catalogPagePath(r.id, prefix);
         const response = await page.goto(base + path, { waitUntil: "load" });
         assert.equal(response?.status(), 200, path);
+        await observeDocument(response, path);
         await page.waitForFunction(() => [...document.querySelectorAll('link[rel="stylesheet"]')].every((l) => l.sheet));
         await page.evaluate(() => document.fonts.ready);
         for (const link of await page.locator('link[rel]').evaluateAll((links) => links.map((link) => ({ href: link.href, rel: link.rel, as: link.as })))) {
@@ -203,7 +226,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
     assert.ok(upstream, "API checks need upstream control URL");
     const context = await browser.newContext({ javaScriptEnabled: false });
     context.setDefaultNavigationTimeout(20000);
-    const page = await context.newPage();
+    const page = await documentPage(context);
     try {
       for (const target of ["page", "json"]) {
         for (const version of ["one", "two"]) {
@@ -215,7 +238,10 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
             assert.deepEqual(JSON.parse(response.body), changed, "JSON cannot reuse a cached upstream record");
             assert.notEqual(response.body, JSON.stringify(changed, null, 2), "JSON must serialize, not forward the upstream body");
           } else {
-            assert.equal((await page.goto(`${base}/catalog/${record.id}`, { waitUntil: "load" }))?.status(), 200);
+            const path = catalogPagePath(record.id);
+            const response = await page.goto(base + path, { waitUntil: "load" });
+            assert.equal(response?.status(), 200);
+            await observeDocument(response, path);
             assert.deepEqual(await page.evaluate(snapshotArticle), expectedArticle(changed), "page cannot reuse a cached upstream record");
           }
           await once(upstream, record.id);
@@ -229,21 +255,30 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
     } finally { await context.close(); await control(upstream, {}); }
   }
   assert.equal(result.pages, expectedPageChecks(catalog), "incomplete page checks");
+  if (result.documentHeaders) verifyDocumentHeaderChecks(result.documentHeaders, catalog, source);
   return result;
 }
 
+// stdout also carries what `steady` logs (a retried navigation, a skipped console error), before
+// or after the result, so the result is one line of its own after this prefix; `raw.mjs` replays
+// that line against checks.json.
+export const receiptPrefix = "catalog-checks-receipt/v1 ";
+export const stdoutReceipt = (result) => `${receiptPrefix}${JSON.stringify(result)}`;
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const [base, source = "fixture", upstream, output] = process.argv.slice(2);
-  if (!base || !["fixture", "api"].includes(source)) throw new Error("usage: node bench/catalog/check.mjs BASE [fixture|api] [UPSTREAM]");
+  const [base, source = "fixture", upstream, output, app, ...extra] = process.argv.slice(2);
+  if (!base || !["fixture", "api"].includes(source) || (app !== undefined && !leanApps.includes(app)) || extra.length) {
+    throw new Error("usage: node bench/catalog/check.mjs BASE [fixture|api] [UPSTREAM] [OUTPUT] [CATALOG_LEAN_APP]");
+  }
   const catalog = validateCatalog(JSON.parse(readFileSync(join(here, "fixtures/catalog.json"), "utf8")));
   const { chromium } = await import("@playwright/test");
   const browser = steady(await chromium.launch({ headless: true }));
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { browser.close().finally(() => process.exit(1)); });
   const watchdog = setTimeout(() => { console.error("catalog checks exceeded 15 minutes"); browser.close().finally(() => process.exit(1)); }, 15 * 60 * 1000);
   try {
-    const result = JSON.stringify(await checkApp({ base, catalog, source, upstream, browser }), null, 2);
-    if (output) writeFileSync(output, result);
-    console.log(result);
+    const checked = await checkApp({ base, catalog, source, upstream, browser, app });
+    if (output) writeFileSync(output, JSON.stringify(checked, null, 2));
+    console.log(stdoutReceipt(checked));
   } catch (error) {
     if (output && error.recordAttempt) writeFileSync(`${output}.failure.json`, JSON.stringify(error.recordAttempt, null, 2));
     throw error;

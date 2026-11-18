@@ -10,6 +10,28 @@ using Xunit;
 
 public sealed class MarketplaceTests
 {
+    [Theory]
+    [InlineData("catalog-lean", true)]
+    [InlineData("defaults", false)]
+    public async Task CatalogHeadersAreScopedToLeanDocuments(string profile, bool expected)
+    {
+        var previous = Environment.GetEnvironmentVariable("PROFILE");
+        try
+        {
+            Environment.SetEnvironmentVariable("PROFILE", profile);
+            using var app = new App(new Upstream());
+            using var client = app.CreateClient();
+            using var page = await client.GetAsync("/catalog/record_1");
+            using var json = await client.GetAsync("/api/catalog/record_1");
+            Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, json.StatusCode);
+            Assert.Equal(expected, page.Headers.Contains("Content-Security-Policy"));
+            if (expected) Assert.Equal("same-origin", page.Headers.GetValues("Cross-Origin-Opener-Policy").Single());
+            Assert.False(json.Headers.Contains("Content-Security-Policy"));
+        }
+        finally { Environment.SetEnvironmentVariable("PROFILE", previous); }
+    }
+
     [Fact]
     public void CatalogLeanDisablesRateGuardsAndRetainsNativeKestrelTimers()
     {

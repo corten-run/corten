@@ -32,7 +32,8 @@ try {
   observations = await import("./raw.mjs");
 }
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
-const { aggregate, cpuSettings, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
+const { aggregate, cpuSettings, leanApps, leanProfile, parseArgs, phases, readLoad, sources, targets,
+  validateCatalog, verifyDocumentHeaderChecks, workload } = contract;
 const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
 const { containerEvidence, rawSchema, verifyFailedCheck, verifyCheckBoundary, checkBoundaryEvidence, imageCommandEvidence } = observations;
 const options = parseArgs(process.argv.slice(2), inventory);
@@ -53,6 +54,9 @@ const summary = { workload, round: options.round, runId, options, startedAt: new
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec",
     leanProfile: { name: leanProfile, apps: leanApps } } };
 summary.host.checkout = repo.replaceAll("\\", "/").replace(/\/$/, "");
+// Ungrouped runs header-check only the lean contenders (check.mjs); record that scope so
+// reports never present the mixed run as a feature-parity comparison.
+if (!group) summary.measurement.documentHeaders = { contract: groupDescriptor("catalog-page").documentHeaders, apps: [...leanApps] };
 if (group) Object.assign(summary, { schema: groupResultSchema, group,
   scope: "catalog-page group: page-only cold/warmup/load timing in both sources; native page AND JSON correctness gates retained; no browser timing, build-cost, bytes or instruction measurements" });
 if (group) Object.assign(summary.measurement, { apparatus,
@@ -337,7 +341,8 @@ try {
         // stays a trustworthy browser origin without disabling security features.
         const workerBefore = group ? await upstreamControl() : undefined;
         await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "2g", "--shm-size", "1g", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
-          "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", checker.Id, "node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, apiBase, "/results/checks.json"], checkContainer);
+          "-e", "PLAYWRIGHT_BROWSERS_PATH=/ms-playwright", checker.Id, "node", "/repo/bench/catalog/check.mjs", "http://127.0.0.1:8080", source, apiBase,
+          "/results/checks.json", ...(leanApps.includes(app) ? [app] : [])], checkContainer);
         let checkerFailure, boundary;
         try { await docker(["start", "-a", checkContainer], { timeout: 15 * 60 * 1000, file: join(out, "checks.log") }); }
         catch (error) { checkerFailure = error; }
@@ -356,6 +361,7 @@ try {
           });
           writeFileSync(join(out, "checks.json"), JSON.stringify(checked, null, 2));
         } else checked = JSON.parse(readFileSync(join(out, "checks.json"), "utf8"));
+        if (!checked.failure && leanApps.includes(app)) verifyDocumentHeaderChecks(checked.documentHeaders, catalog, source);
         if (group) {
           checked.qualification = qualificationIdentity(group, app, source, entry.imageId);
           writeFileSync(join(out, "qualification.json"), JSON.stringify(checked, null, 2));
