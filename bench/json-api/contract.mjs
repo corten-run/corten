@@ -9,6 +9,9 @@ import { summarizeSamples } from "../catalog/stats.mjs";
 
 export { aggregate, phases };
 export const schema = "json-api-results/v1";
+export const timedSchema = "json-api-results/v2";
+export const timedReceiptSchema = "json-api-native-audit/v2";
+export const auditBundleSchemas = Object.freeze(["json-api-native-audits/v1", "json-api-native-audits/v2"]);
 export const receiptSchema = "json-api-native-audit/v1";
 export const nodeImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
 export { k6Image } from "../load-tool.mjs";
@@ -110,7 +113,8 @@ export function runtimeContext(summary, profile) {
   return { checkout, runId: summary.runId, network: `${summary.runId}-net`, fixtureSource: `${checkout}/${p.fixture.slice(0, p.fixture.lastIndexOf("/"))}`,
     apiBase: `http://${summary.runId}-${p.path}-api:8080`, startupTimeout: summary.options.startupTimeout,
     nodeImageId: summary.tools?.node?.imageId, k6ImageId: summary.tools?.k6?.imageId,
-    toolExecutions: summary.toolExecutions,
+    toolExecutions: summary.toolExecutions, ...(summary.schema === timedSchema ? { timed: true,
+      runStartedAt: summary.startedAt, runFinishedAt: summary.finishedAt } : {}),
     appExecutions: Object.fromEntries(Object.entries(summary.apps ?? {}).map(([app, entry]) => [app, entry.images?.[profile.payload]?.execution])) };
 }
 function observedConfiguration(info, expected, context, role) {
@@ -118,7 +122,8 @@ function observedConfiguration(info, expected, context, role) {
   const env = {};
   for (const item of info.Config?.Env ?? []) {
     const at = item.indexOf("="), key = item.slice(0, at);
-    const keys = role === "load" ? ["BASE", "PAYLOAD", "DURATION", "MODE", "RATE", "VUS"]
+    const keys = role === "load" ? ["BASE", "PAYLOAD", "DURATION", "MODE", "RATE", "VUS", ...(context.timed ? ["JSON_PROTOTYPE_OUTPUT"] : [])]
+      : role === "upstream" ? ["NODE_OPTIONS"]
       : [`${payloads[expected.payload].path.toUpperCase()}_SOURCE`, `${payloads[expected.payload].path.toUpperCase()}_FIXTURE_PATH`, "API_BASE", "PROFILE"];
     if (keys.includes(key)) {
       assert.ok(!Object.hasOwn(env, key), "duplicate runtime environment key"); env[key] = item.slice(at + 1);
@@ -127,7 +132,7 @@ function observedConfiguration(info, expected, context, role) {
   const mounts = (info.Mounts ?? []).map((m) => ({ type: m.Type, source: m.Source?.replaceAll("\\", "/"), destination: m.Destination, writable: m.RW }))
     .sort((a, b) => a.destination.localeCompare(b.destination));
   return { name: info.Name, network: Object.keys(info.NetworkSettings?.Networks ?? {}).sort(),
-    owner: info.Config?.Labels?.["run.corten.json-api"], mounts, ...(["app", "load"].includes(role) ? { env } : {}),
+    owner: info.Config?.Labels?.["run.corten.json-api"], mounts, ...(["app", "load"].includes(role) || role === "upstream" && context.timed && (context.cold || context.load) ? { env } : {}),
     entrypoint: info.Config?.Entrypoint ?? null, command: info.Config?.Cmd ?? null, path: info.Path, args: info.Args };
 }
 function expectedConfiguration(expected, context, role) {
@@ -139,14 +144,16 @@ function expectedConfiguration(expected, context, role) {
   verifyImageExecution(image);
   const command = role === "app" ? image.Cmd : role === "upstream" ? ["node", `/bench/${p.path}/upstream.mjs`]
     : role === "probe" ? ["node", "/bench/json-api/cold.mjs", `http://${context.runId}-app:8080`, route(expected), String(context.startupTimeout)]
-    : ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"];
+    : context.timed ? timedLoadCommand(context.load) : ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"];
   const argv = [...(image.Entrypoint ?? []), ...(command ?? [])];
   return { name: `/${names[role]}`, network: [context.network], owner: context.runId,
     mounts: role === "app" ? [mount(context.fixtureSource, "/fixtures")]
       : [...(role === "upstream" ? [mount(context.fixtureSource, "/fixtures")] : []), mount(`${context.checkout}/bench`, "/bench")].sort((a, b) => a.destination.localeCompare(b.destination)),
     ...(role === "app" ? { env: { [`${prefix}_SOURCE`]: expected.source, [`${prefix}_FIXTURE_PATH`]: `/fixtures/${p.path}.json`, API_BASE: context.apiBase, PROFILE: "" } }
       : role === "load" ? { env: { BASE: `http://${context.runId}-app:8080`, PAYLOAD: expected.payload, DURATION: `${context.load.seconds}s`,
-        MODE: context.load.mode, RATE: String(context.load.rate), VUS: String(context.load.vus) } } : {}),
+        MODE: context.load.mode, RATE: String(context.load.rate), VUS: String(context.load.vus),
+        ...(context.timed && context.load.mode === "fixed" ? { JSON_PROTOTYPE_OUTPUT: "/tmp" } : {}) } }
+      : role === "upstream" && context.timed && (context.cold || context.load) ? { env: { NODE_OPTIONS: "--import=/bench/json-api/upstream-observer.mjs" } } : {}),
     entrypoint: image.Entrypoint, command, path: argv[0], args: argv.slice(1) };
 }
 export function runtimeReceipt(info, expected, context) {
@@ -185,6 +192,10 @@ export function loadConfig(options, phase) {
   return { seconds: phase === "warmup" ? options.warmup : options.duration, mode: phase === "fixed" ? "fixed" : "closed",
     rate: options.rate, vus: phase === "sat256" ? 256 : phase === "warmup" ? 32 : 64, encoding: "identity" };
 }
+export function timedLoadCommand(config) {
+  return ["run", "--quiet", "--log-format", "json", "--summary-export", "/tmp/json-summary.json",
+    ...(config.mode === "fixed" ? ["--out", "json=-", "/bench/json-api/fixed-prototype-load.js"] : ["/bench/json-api/timed-load.js"])];
+}
 export function upstreamReadDelta(counts) {
   const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
   assert.ok(counts && object(counts.before) && object(counts.after), "missing upstream read counters");
@@ -211,7 +222,24 @@ export function deriveLoad(raw, expected, phase, options, tools, context) {
   assert.ok(Number.isFinite(duration) && duration >= requested && duration <= requested + 10000, "phase did not run its configured duration/grace");
   const rate = metrics.requests * 1000 / duration;
   assert.ok(Math.abs(metrics.rps - rate) <= Math.max(1e-9, rate * 1e-9), "request count/rate/phase duration differ");
-  if (phase === "fixed") assert.equal(metrics.requests, options.rate * options.duration, "fixed phase must complete all offered requests");
+  if (phase === "fixed") {
+    // Historical v1 has no scheduler observations that can certify extra arrivals.
+    assert.equal(metrics.requests, options.rate * options.duration,
+      "historical v1 fixed phase must complete exactly the configured offer");
+    // v1 captures need not retain these counters. When present, they must agree
+    // with this script's one request per completed iteration and zero drops.
+    if (Object.hasOwn(raw.k6.metrics, "iterations")) {
+      const iterations = raw.k6.metrics.iterations?.values ?? raw.k6.metrics.iterations;
+      assert.equal(iterations?.count, metrics.requests, "JSON requests/completed iterations differ");
+      if (Object.hasOwn(iterations, "rate")) assert.ok(Math.abs(iterations.rate - rate) <= Math.max(1e-9, rate * 1e-9),
+        "iteration count/rate/phase duration differ");
+    }
+    if (Object.hasOwn(raw.k6.metrics, "dropped_iterations")) {
+      const dropped = raw.k6.metrics.dropped_iterations?.values ?? raw.k6.metrics.dropped_iterations;
+      assert.equal(dropped?.count, 0, "load dropped iterations missing or nonzero");
+      if (Object.hasOwn(dropped, "rate")) assert.equal(dropped.rate, 0, "load dropped iteration rate differs");
+    }
+  }
   const named = raw.k6.root_group?.checks;
   assert.deepEqual(Object.keys(named ?? {}).sort(), ["JSON content type", "JSON status 200"], "wrong/missing JSON load checks");
   for (const check of Object.values(named)) { assert.equal(check.passes, metrics.requests); assert.equal(check.fails, 0); }
@@ -244,13 +272,21 @@ export function deriveLoad(raw, expected, phase, options, tools, context) {
 
 // Receipts attest source inspection, not wire formatting. The operator supplies an
 // independently audited receipt; this harness never creates a positive audit.
-export function verifyNativeReceipt(receipt, expected, files) {
-  assert.equal(receipt?.schema, receiptSchema, "audited native receipt required");
+export function verifyNativeReceipt(receipt, expected, files, { timed = false } = {}) {
+  const extended = timed && receipt?.schema === timedReceiptSchema;
+  assert.ok(receipt?.schema === receiptSchema || extended, "audited native receipt required");
   assert.deepEqual(receipt.identity, expected, "native audit identity differs");
   assert.ok(typeof receipt.auditor === "string" && receipt.auditor.trim().length > 0 && Number.isFinite(Date.parse(receipt.auditedAt)), "named/date-stamped independent audit required");
   assert.deepEqual(receipt.findings, [], "unresolved native source findings");
   assert.deepEqual(receipt.verified, { typedCompleteRecord: true, nativeSerialization: true, noOutputCache: true,
-    noJsonPassthrough: true, fixtureParsedAtStartup: true, requestTimeFetchParse: true, upstreamErrors: true }, "native source guarantees not audited");
+    noJsonPassthrough: true, fixtureParsedAtStartup: true, requestTimeFetchParse: true, upstreamErrors: true,
+    ...(extended ? { atMostOneUpstreamFetch: true, noTransportRetries: true, noBackgroundUpstream: true,
+      responseAfterUpstreamCompletion: true } : {}) }, "native source guarantees not audited");
+  if (extended) {
+    assert.ok(Array.isArray(receipt.transportSourceFiles) && receipt.transportSourceFiles.length > 0, "audited transport/retry source required");
+    assert.equal(new Set(receipt.transportSourceFiles).size, receipt.transportSourceFiles.length, "duplicate transport source");
+    assert.ok(receipt.transportSourceFiles.every((p) => receipt.sourceFiles?.some((f) => f.path === p)), "transport audit not bound to source snapshots");
+  }
   assert.ok(Array.isArray(receipt.sourceFiles) && receipt.sourceFiles.length > 0, "audited source files required");
   assert.deepEqual(Object.keys(files).sort(), receipt.sourceFiles.map((f) => f.path).sort(), "source snapshot set differs");
   assert.equal(new Set(receipt.sourceFiles.map((f) => f.path)).size, receipt.sourceFiles.length, "duplicate source file");
