@@ -3375,7 +3375,7 @@ async fn errors_rendered<S: crate::app::Steps>(
         let _release = ReleasesEarlyHeads(signal);
         let answer: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
             let mut req = req;
-            let _until = crate::layout::LateWrite::stage(&mut req, deadline);
+            crate::layout::LateWrite::stage(&mut req, deadline);
             page_or_error::<S, true>(shared, req, next, deadline, signal, (mode, fetched)).await
         });
         return answer.await;

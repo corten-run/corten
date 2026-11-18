@@ -16408,16 +16408,28 @@ mod layout_reads {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_write_forwarded_to_a_fallback_keeps_the_outer_layout_deadline() {
-        a_fallback_omits_a_slow_layout_read(Duration::from_secs(1), None).await;
+    async fn a_write_forwarded_to_a_fallback_without_a_deadline_can_time_out_in_the_outer_app() {
+        for outer_reads in [false, true] {
+            let (status, _, body) = forward_slow_write(outer_reads, Duration::from_secs(1), None).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert!(body.contains("Not available"), "{body}");
+        }
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_write_forwarded_to_a_fallback_uses_an_earlier_inner_layout_deadline() {
-        a_fallback_omits_a_slow_layout_read(Duration::from_secs(3), Some(Duration::from_secs(1))).await;
+        let (status, headers, body) = forward_slow_write(true, Duration::from_secs(3), Some(Duration::from_secs(1))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && headers.contains_key("corten-shell"), "{headers:?}");
+        assert!(body.contains("<main><p>typed write</p></main>") && body.contains("<footer></footer>"), "{body}");
+        assert!(body.contains("<header>Cart <b>guest</b></header>"), "{body}");
     }
 
-    async fn a_fallback_omits_a_slow_layout_read(outer_deadline: Duration, inner_deadline: Option<Duration>) {
+    async fn forward_slow_write(
+        outer_reads: bool,
+        outer_deadline: Duration,
+        inner_deadline: Option<Duration>,
+    ) -> (StatusCode, http::HeaderMap, String) {
         struct Fallback(Router);
 
         impl crate::Middleware for Fallback {
@@ -16433,19 +16445,79 @@ mod layout_reads {
         let inner_count = CartCount { delay: Duration::from_secs(2), ..CartCount::default() };
         let inner =
             App::new(shop_url::router()).layout_read(inner_count.clone()).layout_read(SignedIn).deadline(inner_deadline).router();
-        let outer = App::new(Routes::from(Table::new()))
-            .layout_read(outer_count.clone())
-            .middleware(Fallback(inner))
-            .deadline(outer_deadline)
-            .router();
+        let outer = App::new(Routes::from(Table::new()));
+        let outer = if outer_reads { outer.layout_read(outer_count.clone()) } else { outer };
+        let outer = outer.middleware(Fallback(inner)).deadline(outer_deadline).router();
         let (status, headers, body) = call_with(outer, "POST", "/typed-write", Some("action"), None).await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert!(!headers.contains_key("corten-page") && headers.contains_key("corten-shell"), "{headers:?}");
-        assert!(body.contains("<main><p>typed write</p></main>") && body.contains("<footer></footer>"), "{body}");
-        assert!(body.contains("<header>Cart <b>guest</b></header>"), "{body}");
         assert_eq!(inner_count.started.load(Ordering::SeqCst), 1);
         assert_eq!(inner_count.finished.load(Ordering::SeqCst), 0);
         assert_eq!(outer_count.started.load(Ordering::SeqCst), 0);
+        (status, headers, body)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn copied_extensions_do_not_cap_an_independent_writes_layout_deadline() {
+        writes_with_retained_heads(false).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_replayed_head_does_not_inherit_a_finished_writes_layout_state() {
+        writes_with_retained_heads(true).await;
+    }
+
+    async fn writes_with_retained_heads(replay: bool) {
+        type SendHead = tokio::sync::oneshot::Sender<http::request::Parts>;
+        type Retain = Arc<std::sync::Mutex<Option<SendHead>>>;
+
+        #[crate::routes(state = Retain)]
+        mod retain_url {
+            #[route("/typed-write", post = retain)]
+            pub struct RetainsHead;
+        }
+
+        async fn retain(crate::extract::State(send): crate::extract::State<Retain>, req: crate::http::Request) -> HtmlResult {
+            send.lock().unwrap().take().unwrap().send(req.into_parts().0).unwrap();
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            Err(crate::Error::not_found())
+        }
+
+        let (send, head) = tokio::sync::oneshot::channel();
+        let original = App::new(retain_url::router(Arc::new(std::sync::Mutex::new(Some(send)))))
+            .layout_read(CartCount::default())
+            .deadline(Duration::from_secs(1))
+            .router();
+        let original = tokio::spawn(call_with(original, "POST", "/typed-write", Some("action"), None));
+        let head = head.await.unwrap();
+        assert!(crate::layout::LateWrite::reached(&head.extensions));
+
+        let count = CartCount { delay: Duration::from_secs(2), ..CartCount::default() };
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .deadline(if replay { None } else { Some(Duration::from_secs(3)) })
+            .router();
+        let res = if replay {
+            assert_eq!(original.await.unwrap().0, StatusCode::NOT_FOUND);
+            router.oneshot(Request::from_parts(head, Body::empty())).await.unwrap()
+        } else {
+            let mut req = Request::post("/typed-write")
+                .header("corten", "action")
+                .header("prefer", "corten-draws=whole")
+                .body(Body::empty())
+                .unwrap();
+            *req.extensions_mut() = head.extensions.clone();
+            let independent = tokio::spawn(router.oneshot(req));
+            assert_eq!(original.await.unwrap().0, StatusCode::NOT_FOUND);
+            assert_eq!(count.started.load(Ordering::SeqCst), 1);
+            assert_eq!(count.finished.load(Ordering::SeqCst), 0);
+            independent.await.unwrap().unwrap()
+        };
+        assert_eq!(res.status(), StatusCode::OK);
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let body = std::str::from_utf8(&bytes).unwrap();
+        assert!(body.contains(r#"<footer><span class="count">3</span></footer>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        assert_eq!(count.finished.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

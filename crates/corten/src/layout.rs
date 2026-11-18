@@ -8,7 +8,7 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, PoisonError, Weak,
+        Arc, Mutex, PoisonError,
     },
     task::{Context, Poll},
 };
@@ -598,29 +598,24 @@ pub(crate) fn at_late_route(req: &crate::http::Request) -> (Arc<crate::page::Sha
     (shared, until, kept)
 }
 
-/// One dispatch's late fill state. Its deadline follows the head through middleware, but is
-/// owned by the dispatch, not by copies of the head. Only the head forwarded to a typed endpoint
-/// is marked, not the head middleware may still hold.
-#[derive(Clone)]
+/// One dispatch's late fill state. Its own deadline follows the head through middleware.
+/// Only the head forwarded to a typed endpoint is marked, not the head middleware may still hold.
+#[derive(Clone, Copy)]
 pub(crate) struct LateWrite {
-    until: Weak<tokio::time::Instant>,
+    until: Option<tokio::time::Instant>,
     at_route: bool,
 }
 
 impl LateWrite {
     #[inline(never)]
-    pub(crate) fn stage(
-        req: &mut crate::http::Request,
-        deadline: Option<std::time::Duration>,
-    ) -> Option<Arc<tokio::time::Instant>> {
-        let own = deadline.map(|limit| tokio::time::Instant::now() + limit);
-        let until = Self::until(req.extensions()).into_iter().chain(own).min().map(Arc::new);
-        req.extensions_mut().insert(Self { until: until.as_ref().map_or_else(Weak::new, Arc::downgrade), at_route: false });
-        until
+    pub(crate) fn stage(req: &mut crate::http::Request, deadline: Option<std::time::Duration>) {
+        // A forwarded or replayed head can already carry another dispatch's deadline and mark.
+        let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
+        req.extensions_mut().insert(Self { until, at_route: false });
     }
 
     fn until(extensions: &http::Extensions) -> Option<tokio::time::Instant> {
-        extensions.get::<Self>().and_then(|late| late.until.upgrade()).map(|until| *until)
+        extensions.get::<Self>().and_then(|late| late.until)
     }
 
     pub(crate) fn reached(extensions: &http::Extensions) -> bool {
@@ -1099,20 +1094,7 @@ fn draw(
 
 #[cfg(test)]
 mod tests {
-    use super::{mark, mark_end, LateWrite, MARK};
-
-    #[tokio::test(start_paused = true)]
-    async fn a_replayed_head_does_not_keep_a_finished_layout_deadline() {
-        use std::time::Duration;
-
-        let mut req = crate::http::Request::default();
-        let deadline = LateWrite::stage(&mut req, Some(Duration::from_secs(1)));
-        assert!(LateWrite::until(req.extensions()).is_some());
-        drop(deadline);
-
-        let replay_deadline = LateWrite::stage(&mut req, None);
-        assert!(replay_deadline.is_none());
-    }
+    use super::{mark, mark_end, MARK};
 
     /// A place's mark is found only as it is written: the page's token in lowercase digits and
     /// the index in decimal ones.
