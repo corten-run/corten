@@ -301,19 +301,28 @@ export const nativeHostConfig = (value) => ({ ...value, OomKillDisable: value.Oo
 
 export const readyScript = 'const end=Date.now()+45000; while(true){try{const r=await fetch("http://127.0.0.1:8080/marketplace/en-US/item_1",{signal:AbortSignal.timeout(1000)});await r.arrayBuffer();if(r.status===200)break;}catch{}if(Date.now()>end)throw Error("native startup timeout");await new Promise(r=>setTimeout(r,100));}';
 
+const recoveryPhase = "dependency-recovery";
+export const upstreamSourcePath = (phase) => phase === recoveryPhase ? "bench/hardening/dependency-recovery-upstream.mjs" : "bench/marketplace/upstream.mjs";
+const probeSourcePath = (phase) => phase === recoveryPhase ? "bench/hardening/dependency-recovery-probe.mjs" : "bench/hardening/probe.mjs";
+
 function verifyWorker(r, cell, summary, receipts, folder) {
   const step = r.intent.step, base = step.startsWith("edge-") ? "https://localhost:8080" : "http://127.0.0.1:8080";
   const upstream = `http://${summary.runId}-cell-upstream:8080`, edge = step.startsWith("edge-");
   const qualification = `/results/${edge ? "edge-" : ""}qualification.json`, node = "/repo/bench/hardening/";
+  const recovery = cell.phase === recoveryPhase;
+  if (recovery || cell.key.endsWith("/" + recoveryPhase))
+    assert.equal(cell.key, [cell.app, cell.source, cell.mode, cell.phase].join("/"), "recovery phase differs from the cell identity");
+  const usesTrigger = recovery && ["upstream", "probe"].includes(step);
+  assert.ok(!(recovery && step === "form"), "dependency recovery has no native form worker");
   const commands = {
-    upstream: ["node", "/repo/bench/marketplace/upstream.mjs"], ready: ["node", "--input-type=module", "-e", readyScript],
+    upstream: ["node", "/repo/" + upstreamSourcePath(cell.phase)], ready: ["node", "--input-type=module", "-e", readyScript],
     qualification: ["node", "/repo/bench/marketplace/qualify.mjs", base, cell.source, upstream, qualification],
     "edge-qualification": ["node", node + "tls-qualification.mjs", base, cell.source, upstream, qualification],
     "native-controls": ["node", node + "native.mjs", base, cell.source, upstream, qualification, "/results/native-controls.json"],
     "edge-controls": ["node", node + "native.mjs", base, cell.source, upstream, qualification, "/results/edge-native-controls.json", "deployed-edge"],
     parity: ["node", node + "parity.mjs", base, cell.source, upstream, "/results/parity.json"],
     "edge-parity": ["node", node + "parity.mjs", base, cell.source, upstream, "/results/parity.json"],
-    probe: ["node", node + "probe.mjs", "/results/probe.json", "/results/raw.jsonl"],
+    probe: ["node", "/repo/" + probeSourcePath(cell.phase), "/results/probe.json", "/results/raw.jsonl"],
     "terminal-clock": ["node", node + "clock.mjs"], "cleanup-clock": ["node", node + "clock.mjs"],
     certificate: ["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "/cert/key.pem", "-out", "/cert/cert.pem", "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
   };
@@ -354,6 +363,7 @@ function verifyWorker(r, cell, summary, receipts, folder) {
     : role === "qualification" ? { PLAYWRIGHT_BROWSERS_PATH: "/ms-playwright",
       ...(cell.mode === "deployed-edge" && !["qualification", "native-controls", "parity"].includes(step)
         ? { NODE_EXTRA_CA_CERTS: "/results/cert/cert.pem", BENCH_EDGE_CERT: "/results/cert/cert.pem" } : {}) } : {};
+  if (usesTrigger) overrides.RECOVERY_TRIGGER_DIR = "/recovery";
   for (const [key, value] of Object.entries(overrides)) environment.set(key, value);
   assert.deepEqual([...(info.Config.Env ?? [])].sort(), [...environment].map(([key, value]) => `${key}=${value}`).sort(), "unbound native worker environment");
   assert.equal(r.intent.operation, ["application", "upstream", "proxy"].includes(step) ? "run" : "create");
@@ -373,6 +383,18 @@ function verifyWorker(r, cell, summary, receipts, folder) {
   if (step === "certificate" || step === "proxy") required("/cert", paths.join(out, "cert"), step === "proxy");
   if (step === "proxy") required("/etc/nginx/nginx.conf", paths.join(out, "nginx.conf"));
   if (step === "probe") required("/sys/fs/cgroup", "/sys/fs/cgroup");
+  let triggerSource;
+  if (usesTrigger) {
+    const trigger = info.Mounts.find((m) => m.Destination === "/recovery");
+    const writable = step === "probe";
+    assert.ok(trigger?.Type === "bind" && trigger.RW === writable, "recovery trigger mount type or access differs");
+    const name = paths.basename(trigger.Source);
+    assert.match(name, /^\.recovery-[a-zA-Z0-9]{6}$/, "recovery trigger must be a private runner directory");
+    triggerSource = paths.join(summary.originalFolder, name);
+    assert.equal(trigger.Source, triggerSource, "recovery trigger escaped the original run directory");
+    assert.deepEqual(r.terminal.Mounts.filter((m) => m.Destination === "/recovery"), [trigger], "recovery trigger mount changed during execution");
+    required("/recovery", triggerSource, !writable);
+  } else assert.ok(!r.terminal.Mounts?.some((m) => m.Destination === "/recovery"), "unexpected recovery trigger mount");
   const order = (a, b) => a.target < b.target ? -1 : a.target > b.target ? 1 : 0;
   assert.deepEqual(mounts.sort(order), expectedMounts.sort(order), "external, extra or writable source/tool input mount");
   // Inspect metadata cannot vouch for a different acknowledged command. Parse
@@ -417,21 +439,30 @@ function verifyWorker(r, cell, summary, receipts, folder) {
   }
   expectedOptions.set("--network", network);
   assert.deepEqual([...options].sort(), [...expectedOptions].sort(), "acknowledged native limits/options differ");
-  assert.deepEqual(volumes.sort(), expectedMounts.map((m) => `${m.source}:${m.target}${m.readOnly ? ":ro" : ""}`).sort(), "acknowledged native mounts differ");
+  assert.deepEqual(volumes.sort(), expectedMounts.map((m) => `${m.source}:${m.target}${m.readOnly ? ":ro" : m.target === "/recovery" ? ":rw" : ""}`).sort(),
+    "acknowledged native mounts differ");
   assert.deepEqual(env.sort(), Object.entries(overrides).map(([key, value]) => `${key}=${value}`).sort(), "acknowledged native environment differs");
+  return triggerSource;
 }
 
 const missingProof = (message) => { throw Object.assign(new Error(message), { code: "ENOENT" }); };
 export function verifyOwnedReceipts(receipts, summary, folder) {
   assert.ok(Array.isArray(receipts)); if (!receipts.length) missingProof("missing owned container receipts");
   const ids = new Set(), launches = new Map(), resources = summary.budget.resources;
+  const triggerByCell = new Map(), cellByTrigger = new Map();
   for (let i = 0; i < receipts.length; i++) {
     const r = receipts[i]; assert.equal(r.index, i); assert.equal(r.schema, "native-hardening-container/v2");
     assert.ok(r.intent && ["create", "run"].includes(r.intent.operation));
     const before = r.created, end = r.terminal; if (!before || !end) missingProof("missing owned container lifetime");
     const cell = summary.cells.find((c) => c.key === r.intent.cell); assert.ok(cell);
     verifyContainerCommands(r, summary.runId);
-    verifyWorker(r, cell, summary, receipts, folder);
+    const trigger = verifyWorker(r, cell, summary, receipts, folder);
+    if (trigger !== undefined) {
+      const key = win32.isAbsolute(trigger) && !posix.isAbsolute(trigger) ? trigger.toLowerCase() : trigger;
+      assert.equal(triggerByCell.get(cell.key) ?? trigger, trigger, "recovery workers do not share the same trigger directory");
+      assert.equal(cellByTrigger.get(key) ?? cell.key, cell.key, "recovery cells share a trigger directory");
+      triggerByCell.set(cell.key, trigger); cellByTrigger.set(key, cell.key);
+    }
     assert.match(before.Id, /^[a-f0-9]{64}$/); assert.ok(!ids.has(before.Id)); ids.add(before.Id);
     assert.equal(before.Config.Labels?.["run.corten.hardening"], summary.runId);
     assert.equal(before.Config.Labels?.["agent.owner"], "codex"); assert.equal(before.Config.Labels?.["agent.task"], summary.runId);
@@ -490,7 +521,8 @@ export function verifyOwnedReceipts(receipts, summary, folder) {
   }
   for (const c of summary.cells.filter((c) => c.status === "observed")) {
     const list = launches.get(c.key) ?? [];
-    for (const name of ["upstream", "application", "ready", "qualification", "native-controls", "parity", "form", "probe", "terminal-clock", "cleanup-clock",
+    for (const name of ["upstream", "application", "ready", "qualification", "native-controls", "parity",
+      ...(c.phase === recoveryPhase ? [] : ["form"]), "probe", "terminal-clock", "cleanup-clock",
       ...(c.mode === "deployed-edge" ? ["certificate", "proxy", "edge-qualification", "edge-parity", "edge-controls"] : [])])
       if (!list.some((r) => r.intent.step === name)) missingProof("missing charged native apparatus step");
     for (const step of new Set(list.map((r) => r.intent.step))) assert.equal(list.filter((r) => r.intent.step === step).length, step === "terminal-clock" ? 2 : 1);
@@ -539,6 +571,10 @@ export function verifyRunInputs(folder, summary) {
   }
   // The root context is also the immutable mounted harness/input snapshot.
   if (!summary.builds?.corten) missingProof("full source/harness build closure missing");
+  if (summary.cells.some((cell) => cell.status === "observed" && cell.phase === recoveryPhase)) {
+    for (const path of [upstreamSourcePath(recoveryPhase), probeSourcePath(recoveryPhase)])
+      assert.ok(files.some((file) => file.path === path), "dependency recovery entry point is not in the committed source");
+  }
   assert.deepEqual(savedFiles(join(folder, "dependencies")), input.dependencies);
   const lock = JSON.parse(body("corten-build-context/package-lock.json"));
   for (const name of ["@playwright/test", "playwright", "playwright-core"]) {

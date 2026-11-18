@@ -105,7 +105,7 @@ test("attack payloads bind real form metadata and preserve incomplete heads/bodi
   assert.ok(body.includes("Content-Length: 4096\r\n\r\n"), "slow bodies must not accidentally exercise an oversized-body defense");
   assert.equal(payload("slow-readers", 0, target, b.attack, form).paused, true);
   assert.equal(payload("idle-connections", 0, target, b.attack, form).first, "");
-  assert.ok(payload("connection-pressure", 0, target, b.attack, form).first.includes("Connection: close"));
+  assert.throws(() => payload("connection-pressure", 0, target, b.attack, form));
   assert.deepEqual([0, 1, 2].map((i) => payload("oversized-requests", i, target, b.attack, form).variant), ["header-count", "header-size", "body-size"]);
 });
 

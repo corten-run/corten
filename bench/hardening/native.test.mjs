@@ -215,6 +215,9 @@ test("checklist-only, failed browser and missing edge receipts cannot label a co
   assert.ok(nativeGroup(cells).every((app) => app.productionQualification === "partial"));
   for (const c of cells.filter((c) => c.mode === "deployed-edge")) c.edgeAssessment = { ...c.nativeAssessment, productionQualified: false, hostValidation: "missing" };
   assert.ok(nativeGroup(cells).every((app) => app.productionQualification === "gaps-observed"));
+  assert.equal(groupReady(cells), false, "a protection receipt cannot stand in for dependency recovery");
+  for (const c of cells.filter(c => c.phase === "dependency-recovery"))
+    c.dependencyRecovery = { version: "dependency-recovery/v1", source: c.source, status: c.source === "api" ? "recovered" : "fixture-control" };
   assert.equal(groupReady(cells), true, "complete apparatus evidence may retain observed native defense gaps without qualifying production");
   cells[0].nativeAssessment.hostValidation = "unknown"; assert.equal(groupReady(cells), false);
 });

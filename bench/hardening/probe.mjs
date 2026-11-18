@@ -1,14 +1,12 @@
 // Native sockets only. This process never renders a target page or implements a defense.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { writeFileSync, readFileSync, readdirSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { writeFileSync, readFileSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { performance, monitorEventLoopDelay } from "node:perf_hooks";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { validateBudget } from "./plan.mjs";
 import { observe } from "./native.mjs";
@@ -50,7 +48,6 @@ export function payload(phase, index, target, attack, form) {
   }
   if (phase === "slow-readers") return { first: (get + "Connection: keep-alive\r\n\r\n").repeat(attack.pipelined), paused: true };
   if (phase === "idle-connections") return { first: "" };
-  if (phase === "connection-pressure") return { first: get + "Connection: close\r\n\r\n" };
   assert.equal(phase, "oversized-requests");
   if (index % 3 === 0) return { first: get + Array.from({ length: attack.headerCount }, (_, i) => `X-${i}: x\r\n`).join("") + "\r\n", variant: "header-count" };
   if (index % 3 === 1) return { first: get + "X-Large: " + "x".repeat(attack.headerBytes) + "\r\n\r\n", variant: "header-size" };
@@ -274,7 +271,6 @@ export function validateControl(result) {
       }
       if (phase === "slow-readers") assert.ok(receipt.responseBackpressure && r.unreadEnd?.paused, `paused-reader control failed: ${JSON.stringify({ receipt, row: r })}`);
       if (phase === "idle-connections") assert.equal(receipt.bytes, 0);
-      if (phase === "connection-pressure") assert.ok(receipt.prefix.includes("Connection: close\r\n\r\n"));
       if (r.variant === "body-size") assert.equal(r.bodyBytesQueued + r.bodyPrefixBytes, 4 * 2 ** 20);
     }
     assert.equal(good.ok, true, "legitimate recorder control failed");
@@ -282,40 +278,8 @@ export function validateControl(result) {
     assert.equal(good.bodySha256, sha('{"id":"control","value":37}')); assert.equal(good.status, 200);
 }
 
-export function cgroupDirectory(id, root = "/sys/fs/cgroup") {
-  assert.match(id, /^[a-f0-9]{64}$/);
-  const search = (dir, depth) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const path = join(dir, entry.name);
-      if (entry.name === id || entry.name === `docker-${id}.scope`) return path;
-      if (depth > 0) { const found = search(path, depth - 1); if (found) return found; }
-    }
-  };
-  const path = search(root, 3); assert.ok(path, `missing native cgroup ${id}`); return path;
-}
-const counters = (body) => Object.fromEntries(body.trim().split("\n").map((line) => { const [k, v] = line.split(/\s+/); return [k, Number(v)]; }));
-export function resource(path) {
-  try {
-    const cpu = readFileSync(join(path, "cpu.stat"), "utf8"), memory = readFileSync(join(path, "memory.current"), "utf8"), events = readFileSync(join(path, "memory.events"), "utf8");
-    const procs = readFileSync(join(path, "cgroup.procs"), "utf8").trim().split("\n").filter(Boolean);
-    assert.ok(Number.isFinite(counters(cpu).usage_usec) && Number.isFinite(Number(memory)));
-    return { cpu, memory, events, procs, cpuSeconds: counters(cpu).usage_usec / 1e6, memoryBytes: Number(memory), running: procs.length > 0, oomKilled: counters(events).oom_kill > 0 };
-  } catch (error) { return { unavailable: error.message }; }
-}
-
-// cgroup files may block on a busy virtualized host. Never read them on the
-// socket scheduler's event loop during a measured window.
-export async function resourceAsync(path) {
-  const startedNs = process.hrtime.bigint();
-  try {
-    const [cpu, memory, events, tasks] = await Promise.all(["cpu.stat", "memory.current", "memory.events", "cgroup.procs"].map((file) => readFile(join(path, file), "utf8")));
-    const procs = tasks.trim().split("\n").filter(Boolean);
-    assert.ok(Number.isFinite(counters(cpu).usage_usec) && Number.isFinite(Number(memory)));
-    return { cpu, memory, events, procs, cpuSeconds: counters(cpu).usage_usec / 1e6, memoryBytes: Number(memory), running: procs.length > 0,
-      oomKilled: counters(events).oom_kill > 0, startedNs: String(startedNs), endedNs: String(process.hrtime.bigint()) };
-  } catch (error) { return { unavailable: error.message, startedNs: String(startedNs), endedNs: String(process.hrtime.bigint()) }; }
-}
+export { cgroupDirectory, resource, resourceAsync } from "./resource-sample.mjs";
+import { cgroupDirectory, resourceAsync } from "./resource-sample.mjs";
 
 export async function runProbe(config, emit, sample) {
   const { budget: b, phase, target, form, expected } = config; validateBudget(b);

@@ -274,7 +274,7 @@ function validation(group, rootPath) {
     "client-heavy": ["six fresh native builds including Corten generator", "actual DOM/network/resource qualification", "separate measured journey passes its oracle and cleanup"],
     "live-delivery": ["all eight registered native ports", "normal and held-consumer overflow browser journeys", "requested measured fan-out levels; complete coverage and owned cleanup"],
     "recoverable-live": ["all seven registered native ports", "six native recovery/fault journeys", "requested measured fan-out levels; complete coverage and owned cleanup"],
-    hardening: ["both-source direct and TLS-edge production/browser gates", "all 216 native attack/control/semantic-receipt cells", "charged process topology, terminal state, source observations and owned cleanup"],
+    hardening: ["both-source direct and TLS-edge production/browser gates", "all native scenario cells with matching replayable evidence", "charged process topology, terminal state, source observations and owned cleanup"],
   }[group];
   return { artifactRoot: rootPath, required, entireTreeRequired: true, validator: runner,
     validatorState: runner ? "native-validator-not-run" : "blocked-missing-standalone-validator",
