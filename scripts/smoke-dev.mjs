@@ -88,6 +88,9 @@ try {
       '<div class="limitDraws"><div class="limitStop"><dialog id="limitDrawn" class="limitDrawn"></dialog></div><dialog id="limitShown" class="limitDrawn"></dialog></div>',
       // A scope without a start has the stylesheet's parent element as its root.
       '<section><link rel="stylesheet" href="/dialog-implicit.css"><dialog id="implicitIn" class="implicitChild"></dialog><div><dialog id="implicitDeep" class="implicitChild"></dialog></div></section><dialog id="implicitOut" class="implicitChild"></dialog>',
+      // A missing start is not the selector `undefined`, in either order (no element is one).
+      '<section><link rel="stylesheet" href="/dialog-undefined-after.css"><dialog id="undefinedAfter"></dialog></section>',
+      '<section><link rel="stylesheet" href="/dialog-undefined.css"><dialog id="undefinedStart"></dialog></section>',
       '<dialog id="lastrail" class="rail"></dialog>',
     ].join("");
     const sheet = '<link rel="stylesheet" href="/dialog-in-place.css">';
@@ -130,6 +133,12 @@ try {
   await drawn.route(base + "/dialog-implicit.css", (route) =>
     route.fulfill({ contentType: "text/css", body: "@scope { @media (min-width: 1px) { :scope > body dialog, :scope > .implicitChild { display: flex; outline-style: solid; } } }" }),
   );
+  await drawn.route(base + "/dialog-undefined.css", (route) =>
+    route.fulfill({ contentType: "text/css", body: "@scope { a { color: red; } } @scope (undefined) { @media (min-width: 1px) { #undefinedStart { display: flex; outline-style: solid; } } }" }),
+  );
+  await drawn.route(base + "/dialog-undefined-after.css", (route) =>
+    route.fulfill({ contentType: "text/css", body: "@scope (undefined) { a { color: red; } } @scope { @media (min-width: 1px) { #undefinedAfter { display: flex; outline-style: solid; } } }" }),
+  );
   const loaded = reportOf("last");
   const loadedLive = reportOf("lastlive");
   const loadedRail = reportOf("lastrail");
@@ -140,7 +149,7 @@ try {
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
   const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
   const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
-  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,sameRoot,listPlain,listExplicit,literalAttribute,literalEscape,relativeScope,relativeAmp,relativeList,relativeOther,scopedPopover,nestedScope,doubleScope,exactScope,documentScope,documentAmp,limitKept,limitDrawn,implicitIn,lastrail", railNames);
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,scopedPlain,scopedRoot,scopedAmp,scopedDeclarations,scopedContainer,sameRoot,listPlain,listExplicit,literalAttribute,literalEscape,relativeScope,relativeAmp,relativeList,relativeOther,scopedPopover,nestedScope,doubleScope,exactScope,documentScope,documentAmp,limitKept,limitDrawn,implicitIn,undefinedAfter,lastrail", railNames);
   const warned = new Set(railOnLoad.map((e) => e.split(" ")[1]));
   check("plain scoped selectors stay descendants, independently in each selector-list member", !warned.has("scopedSelf") && !warned.has("outsideAncestor") && !warned.has("listSelf") && warned.has("listPlain") && warned.has("listExplicit"));
   check("every :scope in a selector binds the same root", warned.has("sameRoot") && !warned.has("differentRoots"));
@@ -160,6 +169,9 @@ try {
   const implicitCases = ["implicitIn", "implicitDeep", "implicitOut"];
   const implicitLooks = await drawn.evaluate((ids) => ids.map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle === "solid"), implicitCases);
   check("a scope without a start is the stylesheet parent's, as the browser applies it", implicitLooks.join(",") === "true,false,false" && implicitCases.every((id, i) => warned.has(id) === implicitLooks[i]), implicitLooks.join(","));
+  const undefinedCases = ["undefinedStart", "undefinedAfter"];
+  const undefinedLooks = await drawn.evaluate((ids) => ids.map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).outlineStyle === "solid"), undefinedCases);
+  check("a scope without a start is not one that starts at `undefined`, in either order", undefinedLooks.join(",") === "false,true" && undefinedCases.every((id, i) => warned.has(id) === undefinedLooks[i]), undefinedLooks.join(","));
   check(
     "its warning names the rule, the query, the rule that draws it in place and the open one's look",
     !!railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") &&
@@ -235,13 +247,20 @@ try {
   check("dev mode does not report a value the user typed", (await marker) && !(await Promise.race([moved, Promise.resolve(false)])));
   await drawn.close();
   // Count work, not elapsed time: rule reads, fixture matches, and queries (including their results).
-  /** @param {string} markup @param {string} css @param {number} count @param {boolean} [patch] */
-  async function dialogWork(markup, css, count, patch = false) {
+  // The span from the first counted match to the last is the check's time, for one that stalls.
+  /** @param {string} markup @param {string} css @param {number} count @param {boolean} [patch] @param {string} [last] */
+  async function dialogWork(markup, css, count, patch = false, last = `work${count - 1}`) {
     const many = await browser.newPage();
-    let warnings = 0;
-    many.on("console", (m) => { if (m.type() === "warning" && m.text().startsWith("corten: work")) warnings++; });
+    /** @type {string[]} */
+    const warned = [];
+    /** @type {string[]} */
+    const skipped = [];
+    many.on("console", (m) => {
+      if (m.type() === "warning" && m.text().startsWith("corten: work")) warned.push(m.text().split(" ")[1] ?? "");
+      if (m.type() === "warning" && m.text().startsWith("corten: skipped ")) skipped.push(m.text());
+    });
     await many.addInitScript(() => {
-      const counter = { reads: 0, matches: 0, queries: 0, results: 0 };
+      const counter = { reads: 0, matches: 0, queries: 0, results: 0, first: 0, last: 0 };
       Object.assign(window, { dialogWork: counter });
       const selectorText = Object.getOwnPropertyDescriptor(CSSStyleRule.prototype, "selectorText");
       Object.defineProperty(CSSStyleRule.prototype, "selectorText", {
@@ -254,7 +273,10 @@ try {
       });
       const matches = Element.prototype.matches;
       Element.prototype.matches = function (selector) {
-        if (selector.includes(".work") || this.classList.contains("workScope") && selector.includes(":scope")) counter.matches++;
+        if (selector.includes(".work") || this.classList.contains("workScope") && selector.includes(":scope")) {
+          counter.last = performance.now();
+          if (!counter.matches++) counter.first = counter.last;
+        }
         return matches.call(this, selector);
       };
       /** @type {(this: Element | Document, selector: string) => NodeListOf<Element>} */
@@ -277,7 +299,7 @@ try {
       await route.fulfill({ response: res, body: (await res.text()).replace("</head>", '<link rel="stylesheet" href="/dialog-work.css"></head>').replace("</body>", `${markup}</body>`) });
     });
     await many.route(base + "/dialog-work.css", (route) => route.fulfill({ contentType: "text/css", body: css }));
-    const done = many.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: work${count - 1} `), timeout: 30000 }).then(() => true, () => false);
+    const done = many.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: ${last} `), timeout: 30000 }).then(() => true, () => false);
     await many.goto(base + "/");
     if (patch) {
       // Wait for the startup check and observer before drawing one dialog in a small patch.
@@ -289,12 +311,14 @@ try {
       });
     }
     const completed = await done;
-    const { reads, matches, queries, results, looks } = await many.evaluate((count) => ({
-      ...(/** @type {{reads: number, matches: number, queries: number, results: number}} */ (/** @type {any} */ (window)).dialogWork),
+    const { reads, matches, queries, results, first, last: end, looks, drawn } = await many.evaluate((count) => ({
+      ...(/** @type {{reads: number, matches: number, queries: number, results: number, first: number, last: number}} */ (/** @type {any} */ (window)).dialogWork),
       looks: Array.from({ length: count }, (_, i) => document.getElementById(`work${i}`)).every((el) => el !== null && getComputedStyle(el).outlineStyle === "solid"),
+      drawn: getComputedStyle(/** @type {Element} */ (document.getElementById("work0"))).outlineStyle === "solid",
     }), count);
     await many.close();
-    return { reads, matches, queries, results, ok: completed && warnings === count && looks, detail: `${warnings}/${count} warnings, native styles ${looks}, ${reads} rule reads, ${matches} matches, ${queries} queries, ${results} results` };
+    const span = Math.round(end - first);
+    return { reads, matches, queries, results, completed, warned, skipped, drawn, span, ok: completed && warned.length === count && looks, detail: `${warned.length}/${count} warnings, native styles ${looks}, ${skipped.length} skipped, ${reads} rule reads, ${matches} matches, ${queries} queries, ${results} results, ${span} ms` };
   }
   const scopedRule = "@media (min-width: 1px) { .workDialog { display: flex; outline-style: solid; } }";
   const dialog = (/** @type {number} */ i) => `<dialog class="workDialog" id="work${i}"></dialog>`;
@@ -312,6 +336,22 @@ try {
     for (const start of [":scope:not(.disabled) > .workPanel", ":scope > .workPanel:not(:scope)"]) {
       const exact = await dialogWork(panel, `@scope (.workScope) { @scope (${start}) { ${scopedRule} } }`, 1);
       check(`a nested start \`${start}\` does linear work at depth ${depth}`, exact.ok && exact.reads <= 2 && exact.queries === 0 && exact.matches <= 4 * depth, exact.detail);
+    }
+    // Every ancestor a root and a subject (the review's): a start or limit whose root is the
+    // subject or its parent tries those two, and any other has a budget of tries a few times the
+    // depth; past it, the rule is skipped and named. A marker dialog after the chain ends the check.
+    const chain = (/** @type {string} */ last) => "<div hidden>" + '<div class="workOuter workPanel">'.repeat(depth) + last + dialog(0) + "</div>".repeat(depth + (last ? 2 : 1)) + '<dialog class="workEnd" id="workEnd"></dialog>';
+    const marker = "@media (min-width: 1px) { .workEnd { display: flex; } }";
+    for (const [last, scope, skips] of /** @type {[string, string, boolean][]} */ ([
+      ["", "@scope (.workOuter) { @scope (:scope.disabled > .workPanel:not(:scope)) { RULE } }", false],
+      ['<div class="workOuter workPanel enabled">', "@scope (.workOuter) { @scope (:scope.enabled > .workPanel:not(:scope), :scope.enabled.workPanel) { RULE } }", false],
+      ["", "@scope (.workOuter) to (:scope > .workPanel) { RULE }", false],
+      ["", "@scope (.workOuter) to (.workPanel) { RULE }", false],
+      ["", "@scope (.workOuter) to (.missing .workPanel) { RULE }", true],
+    ])) {
+      const dense = await dialogWork(chain(last), `${scope.replace("RULE", scopedRule)} ${marker}`, 1, false, "workEnd");
+      const verdict = skips ? !dense.warned.includes("work0") && dense.skipped.length === 1 && !!dense.skipped[0]?.includes("`.workDialog`") : dense.warned.includes("work0") === dense.drawn && dense.skipped.length === 0;
+      check(`\`${scope.replace(/ \{ RULE.*/, "")}\` stays within its budget at depth ${depth}`, dense.completed && verdict && dense.matches <= 5 * depth + 128 && dense.span < 1000, `native ${dense.drawn}, warned ${dense.warned}, ${dense.detail}`);
     }
   }
   const flatScopes = await dialogWork(scopeRoot + dialog(0) + "</div>" + (scopeRoot + "</div>").repeat(count - 1), `@scope (.workScope) { @media (min-width: 1px) { ${Array.from({ length: 64 }, (_, i) => `.workDialog:not(.workSkip${i}) { display: flex; outline-style: solid; }`).join("")} } }`, 1);

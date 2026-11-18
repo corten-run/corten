@@ -99,16 +99,17 @@ function within(root, selector) {
 const SCOPE = "\0";
 /** @param {string} selector @param {string} root */
 const bindScope = (selector, root) => selector.replaceAll(SCOPE, () => `:is(${root})`);
+// A member whose root can only be its subject or the subject's parent.
+const LOCAL = /^\0[^\s>+~|]*(\s*>\s*[^\s>+~|]+)?$/;
 
 /**
  * A nested rule's selector as one that matches on its own: `&` is the parent's, and a selector
  * without one is inside it. It is `flat` when each member names its root once, positively, with
- * the subject inside that root, so any eligible root can stand in; `filter` is what the subject
- * must match whatever its root.
+ * the subject inside it, so any eligible root can stand in, and `local` when each member is.
  * @param {string} selector
  * @param {{ text: string, flat: boolean } | null} parent
  * @param {boolean} scoped
- * @returns {{ text: string, flat: boolean, filter: string }}
+ * @returns {{ text: string, flat: boolean, local: boolean }}
  */
 const resolved = (selector, parent, scoped) => {
   // CSSOM normalizes pseudo-class names. Keep strings and identifiers (including CSS escapes)
@@ -124,9 +125,7 @@ const resolved = (selector, parent, scoped) => {
     if (token === ")" || token === "]") depth--;
   }
   let flat = true;
-  /** @type {string[]} */
-  const filters = [];
-  const text = members.map((member) => {
+  const parts = members.map((member) => {
     let scope = false;
     const nesting = member.includes("&");
     const out = member.map((token, i) => {
@@ -144,36 +143,16 @@ const resolved = (selector, parent, scoped) => {
     // :scope or & occurs later in the member.
     const anchor = parent ? `:is(${parent.text})` : scoped && (relative || !scope && !nesting) ? SCOPE : null;
     if (anchor && (!nesting || relative)) out.unshift(anchor, " ");
-    // A combinator outside brackets ends a compound; the last compound is the subject. One root
-    // reference outside any function, followed only by descendant and child combinators, keeps
-    // the subject inside whichever root it matches. Other uses need one exact root at a time.
-    let level = 0, refs = 0, escapes = false, subject = 0;
-    for (const [i, token] of out.entries()) {
+    let level = 0, refs = 0, escapes = false;
+    for (const token of out) {
       if (token.includes(SCOPE)) refs += level || (token !== SCOPE && !parent?.flat) ? 2 : 1;
-      else if (!level && /^[\s>+~|]$/.test(token)) {
-        subject = i + 1;
-        escapes ||= refs > 0 && /[+~|]/.test(token);
-      }
+      else if (!level && /^[+~|]$/.test(token)) escapes ||= refs > 0;
       level += +(token === "(" || token === "[") - +(token === ")" || token === "]");
     }
     flat &&= refs === 1 && !escapes;
-    // The subject less each part that names a root (a whole `:not(:scope)`) matches more.
-    const rest = out.slice(subject);
-    let filter = "";
-    for (let i = 0, j = 0; i < rest.length; i = j) {
-      j = i + 1;
-      for (let open = 0; rest[i] === ":" && rest[i + 2] === "(" && j < rest.length;) {
-        const token = rest[j++];
-        if (token === "(") open++;
-        if (token === ")" && !--open) break;
-      }
-      const part = rest.slice(i, j).join("");
-      if (!part.includes(SCOPE)) filter += part;
-    }
-    filters.push(filter);
     return out.join("");
-  }).join(",");
-  return { text, flat, filter: filters.every((f) => f) ? filters.join(",") : "*" };
+  });
+  return { text: parts.join(","), flat, local: parts.every((part) => LOCAL.test(part)) };
 };
 
 /**
@@ -181,7 +160,7 @@ const resolved = (selector, parent, scoped) => {
  * and its roots as one selector when no limit cuts them or the scopes around them short.
  * @typedef {{ start: ReturnType<typeof resolved> | null, end: ReturnType<typeof resolved> | null, owner: Element, parent: Scope | null, selector: string | null }} Scope
  */
-/** @typedef {{ selector: string, filter: string, scope: Scope | null, text: string, written: string, display: string, condition: string | null, important: boolean }} Display */
+/** @typedef {{ selector: string, local: boolean, scope: Scope | null, text: string, written: string, display: string, condition: string | null, important: boolean }} Display */
 
 /**
  * Each style rule of the page's stylesheets that sets `display`: its selector (resolved, and as
@@ -211,7 +190,8 @@ function displays() {
         const end = rule.end ? resolved(rule.end, null, true) : null;
         let siblings = scopes.get(scope);
         if (!siblings) scopes.set(scope, siblings = new Map());
-        const key = `${start?.text}\n${end?.text}`;
+        // A missing start is null, never the selector `undefined`.
+        const key = JSON.stringify([start?.text, end?.text]);
         let child = siblings.get(key);
         if (!child || !start && child.owner !== owner) {
           const root = !scope ? ":root" : start?.flat && !scope.end ? scope.selector : null;
@@ -223,11 +203,11 @@ function displays() {
       const style = /** @type {CSSStyleRule} */ (rule).style;
       // A nested rule's own selector, or a nested block of declarations, which has its parent's.
       const asWritten = rule instanceof CSSStyleRule ? rule.selectorText : written;
-      const own = rule instanceof CSSStyleRule ? resolved(asWritten ?? "", selector, !!scope) : selector ?? (scope ? { text: SCOPE, flat: true, filter: "*" } : null);
+      const own = rule instanceof CSSStyleRule ? resolved(asWritten ?? "", selector, !!scope) : selector ?? (scope ? { text: SCOPE, flat: true, local: true } : null);
       if (style && own && asWritten && style.display) {
         // matches() normally binds :scope to the candidate. Unscoped rules use the document root.
         const root = !scope ? ":root" : own.flat && !scope.end ? scope.selector : null;
-        found.push({ selector: root ? bindScope(own.text, root) : own.text, filter: own.filter, scope: root ? null : scope, text: own.text, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
+        found.push({ selector: root ? bindScope(own.text, root) : own.text, local: own.local, scope: root ? null : scope, text: own.text, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
       }
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
@@ -246,24 +226,25 @@ function displays() {
   return found;
 }
 
-/**
- * Whether `el` matches `selector`; one the engine cannot read is `unread` (a filter rules nothing
- * out).
- * @param {Element} el @param {string} selector
- */
-function matches(el, selector, unread = false) {
+/** @param {Element} el @param {string} selector */
+function matches(el, selector) {
   try {
     return own.matches.call(el, selector);
   } catch {
-    return unread;
+    return false;
   }
 }
+
+// Thrown when a candidate's budget of exact tries runs out.
+const SPENT = Symbol();
+/** Rules said to be too complex. @type {Set<string>} */
+const complex = new Set();
 
 /**
  * Match one candidate, not a scope's entire subtree: its roots are among its own ancestors, and
  * it is in a root's scope if no element from that root down to it matches the root's limit.
- * When a selector needs an exact root, identify it by its position without changing the DOM or
- * depending on unique author IDs, and only for an element whose subject could match.
+ * An exact root is named by its position (not changing the DOM or relying on author IDs), from
+ * a budget a few times the candidate's depth, so no selector can freeze the page.
  * @param {Element} el
  * @param {Map<Element, string>} positions
  */
@@ -275,6 +256,7 @@ function scopedMatches(el, positions) {
   const ancestors = [];
   for (let node = /** @type {Element | null} */ (el); node; node = Reflect.get(Node.prototype, "parentElement", node)) ancestors.push(node);
   const indices = new Map(ancestors.map((node, i) => [node, i]));
+  let budget = 4 * ancestors.length + 64;
   /** @param {Element} node @returns {string} */
   const position = (node) => {
     const known = positions.get(node);
@@ -289,29 +271,35 @@ function scopedMatches(el, positions) {
     positions.set(node, path);
     return path;
   };
-  /** @param {Element} target @param {string} selector @param {Element} root */
-  const at = (target, selector, root) => matches(target, bindScope(selector, position(root)));
   /** @param {Element} node */
   const depth = (node) => indices.get(node) ?? -1;
+  /** @param {Element} target @param {{ text: string, local: boolean }} selector @param {Element} root */
+  const at = (target, { text, local }, root) => {
+    const above = depth(root) - depth(target);
+    if (above < 0 || local && above > 1) return false;
+    if (--budget < 0) throw SPENT;
+    return matches(target, bindScope(text, position(root)));
+  };
   /** @param {Scope} scope @returns {Element[]} */
   const roots = (scope) => {
     const known = cache.get(scope);
     if (known) return known;
     // The roots around it whose scope holds the candidate, nearest first.
-    const parents = scope.parent && !scope.selector ? roots(scope.parent) : null;
-    const { start, end, selector } = scope;
-    let found = parents?.length === 0 ? [] : ancestors.filter((node, i) => selector ? matches(node, selector)
-      : !start ? node === scope.owner && (!parents || parents.some((parent) => depth(parent) >= i))
-      : matches(node, start.filter, true) && !!parents?.some((parent) => depth(parent) >= i && at(node, start.text, parent)));
+    const { start, end, selector, parent } = scope;
+    const parents = parent && !selector ? roots(parent) : [];
+    let found = ancestors.filter((node, i) => selector ? matches(node, selector)
+      : !start ? node === scope.owner && (!parent || parents.some((root) => depth(root) >= i))
+      : parents.some((root) => at(node, start, root)));
     if (end) {
-      const limits = ancestors.filter((node) => matches(node, end.filter, true));
-      found = found.filter((root) => !limits.some((node) => depth(node) <= depth(root) && at(node, end.text, root)));
+      // A limit of plain compounds cuts each root above the nearest element that matches one.
+      const cut = /^\0 [^\s>+~|,\0]+(,\0 [^\s>+~|,\0]+)*$/.test(end.text) ? ancestors.findIndex((node) => matches(node, end.text.replaceAll(SCOPE + " ", ""))) : null;
+      found = found.filter((root) => cut === null ? !ancestors.some((node) => at(node, end, root)) : cut < 0 || cut >= depth(root));
     }
     cache.set(scope, found);
     return found;
   };
-  /** @param {string} selector @param {Scope} scope */
-  return (selector, scope) => roots(scope).some((root) => at(el, selector, root));
+  /** @param {Display} rule @param {Scope} scope */
+  return ({ selector, local }, scope) => roots(scope).some((root) => at(el, { text: selector, local }, root));
 }
 
 /**
@@ -335,10 +323,17 @@ function inPlace(root) {
     if (getComputedStyle(el).display !== "none") continue;
     /** @type {ReturnType<typeof scopedMatches> | undefined} */
     let scoped;
-    // A rule whose subject cannot match the candidate needs no root.
-    const applies = rules.filter((rule) => rule.scope
-      ? matches(el, rule.filter, true) && (scoped ??= scopedMatches(el, positions))(rule.selector, rule.scope)
-      : matches(el, rule.selector));
+    const applies = rules.filter((rule) => {
+      try {
+        return rule.scope ? (scoped ??= scopedMatches(el, positions))(rule, rule.scope) : matches(el, rule.selector);
+      } catch (e) {
+        if (e !== SPENT) throw e;
+        // Unknown: neither drawn nor overridden.
+        if (!complex.has(rule.written)) console.warn(`corten: skipped \`${rule.written}\`: its @scope is too complex to check for closed dialogs and popovers`);
+        complex.add(rule.written);
+        return false;
+      }
+    });
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
     if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;

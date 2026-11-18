@@ -80,7 +80,12 @@ warns only inside that root and above its `to (limit)`, which also bounds a scop
 a scope with no root has the element around its stylesheet. Each selector-list member without
 `:scope` or `&` selects descendants, not the root itself; every `:scope` in a selector refers to
 the same root. A leading combinator stays relative to that root, even with `:scope` or `&` later
-in the member. Quoted text and escaped class names are left as written. When only areas have
+in the member. Quoted text and escaped class names are left as written. A scope whose roots
+must each be tried in turn (`@scope (:scope.open + .panel)` inside another) has a budget a few
+times the dialog's depth: past it, the check skips the rule and names it once in the console.
+A scope with no root nested in another is checked as Chromium and Firefox apply it, only when
+the stylesheet's element is inside the outer root; WebKit also applies it when that element is
+above, so a dialog drawn that way in WebKit is not warned of. When only areas have
 stylesheets, each area's file starts with these rules. An app with no component stylesheet has
 neither file, so if its `static/style.css` gives a hidden element, a popover or a dialog a
 `display` (styling corten-ui's parts there, say), it adds them itself:
