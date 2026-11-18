@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
 import { verifyRecordAttempt, verifyCheckerExit, verifyAttemptWindow } from "../catalog/record-attempt.mjs";
 import { aggregate, deriveLoad, loadConfig, payloads, phases, route, sha256, upstreamReadDelta, verifyParticipants, verifyRuntime } from "./contract.mjs";
+import { captureLimits, deriveProductionPhase, successfulUpstream, verifyLife } from "./production.mjs";
 
 // Replay retained functional observations, not application code. In particular,
 // byte forwarding can pass this gate; only a separate native audit can qualify it.
@@ -10,7 +11,7 @@ export function verifyFunctional(functional, events, profile, records) {
   return functionalVerifier(profile, records)(functional, events);
 }
 
-export function verifyFunctionalFailure(failure, events, expected, records) {
+export function verifyFunctionalFailure(failure, events, expected, records, { historical = false } = {}) {
   assert.deepEqual(failure.identity, expected, "wrong failed checker identity");
   verifyCheckerExit(failure.exit);
   const p = payloads[expected.payload], attempt = failure.attempt;
@@ -32,7 +33,16 @@ export function verifyFunctionalFailure(failure, events, expected, records) {
   reset(events[0]);
   const counter = events.at(expected.source === "api" ? -2 : -1);
   assert.equal(counter?.kind, "control"); assert.equal(counter.method, "GET"); assert.equal(counter.path, path); assert.equal(counter.status, 200);
-  assert.deepEqual(JSON.parse(counter.body).requests, expected.source === "api" ? Object.fromEntries(attempt.requests.map((r) => [r.id, 1])) : {});
+  const control = JSON.parse(counter.body);
+  assert.deepEqual(control.requests, expected.source === "api" ? Object.fromEntries(attempt.requests.map((r) => [r.id, 1])) : {});
+  if (expected.source === "api") {
+    if (!historical || control.status !== undefined) assert.equal(control.status, 200, "failed API sweep: unhealthy configured upstream status");
+    if (control.answers !== undefined) assert.deepEqual(control.answers, { 200: attempt.requests.length }, "failed API sweep: non-200 upstream answers");
+    if (!historical || counter.sweepEnd !== undefined) {
+      assert.deepEqual(counter.sweepEnd?.upstreamReads, control.requests, "failed API sweep: upstream read boundary differs or is missing");
+      assert.ok(successfulUpstream(counter.sweepEnd.upstreamResponses, control.requests), "failed API sweep: not every upstream read finished with 200");
+    }
+  }
   if (expected.source === "api") reset(events.at(-1));
   assert.ok(events.slice(1, expected.source === "api" ? -2 : -1).every((e) => e.kind === "application"), "unexpected sweep control");
   return true;
@@ -127,8 +137,12 @@ export function functionalVerifier(profile, records) {
 export function verifyCold(raw, expected, options, context) {
   assert.deepEqual(raw.identity, expected, "wrong cold identity");
   verifyRuntime(raw.runtime, expected, context);
-  verifyParticipants(raw, expected, context, ["upstream", "probe"]);
+  verifyParticipants(raw, expected, { ...context, cold: true }, ["upstream", "probe"]);
   const c = raw.result;
+  if (context.timed) {
+    verifyLife(raw.upstreamLife, raw.participants.upstream, { at: Date.parse(c.containerStartedAt) });
+    assert.ok(Date.parse(raw.upstreamLife.startedAt) >= Date.parse(context.runStartedAt), "cold upstream predates suite");
+  }
   assert.equal(c.status, 200); assert.equal(c.type, "application/json", "cold response must be JSON");
   assert.equal(c.path, route(expected), "cold probe must target the native JSON payload");
   const elapsed = Date.parse(c.first200At) - Date.parse(c.containerStartedAt);
@@ -163,4 +177,62 @@ export function verifyAggregates(saved, runs, asked) {
     const derived = { ...aggregate(runs.filter((r) => r.phases?.[phase]?.metrics).map((r) => r.phases[phase].metrics)), asked };
     assert.ok(isDeepStrictEqual(saved[phase], derived), `${phase} aggregate differs from individual runs/requested passes`);
   }
+}
+
+export function replayTimedRun(run, expected, options, load, tools, context, native, { prefix = false } = {}) {
+  const same = (a, b, message) => assert.ok(isDeepStrictEqual(a, b), message);
+  same(run.identity, expected, "wrong v2 timing identity");
+  if (!prefix) {
+    assert.equal(run.complete, true, "v2 timing run incomplete"); assert.equal(run.failed, undefined, "v2 runner failure");
+    same(Object.keys(run.phases ?? {}).sort(), [...phases].sort(), "missing/extra v2 timing phases");
+  }
+  const cold = load(run.cold.raw);
+  same(verifyCold(cold, expected, options, context), run.cold.result, "v2 cold differs from raw");
+  const observations = {}, loadIds = new Set(), previousCounters = {}; let priorTailUnobserved = false;
+  let timedUpstreamLife;
+  let previousReads = cold.upstreamReads.after, previousEnd = Date.parse(cold.result.first200At), appId = cold.runtime.containerId;
+  for (const phase of ["warmup", ...phases]) {
+    const saved = phase === "warmup" ? run.warmup : run.phases?.[phase];
+    // A prefix replay keeps the joined phases before the first one the runner did not
+    // finish (no metrics) or that fails replay. It never stands in for the full run's
+    // teardown/window joins, so its run stays incomplete.
+    if (prefix && !saved?.metrics) break;
+    try {
+      assert.ok(saved, "missing v2 phase"); const raw = load(saved.raw);
+      assert.equal(raw.before?.runtime?.containerId, appId, "app replaced between cold/load phases");
+      assert.equal(raw.before?.liveness?.app?.startedAt, cold.result.containerStartedAt, "app restarted after cold probe");
+      same(raw.before?.liveness?.upstream, cold.upstreamLife, "upstream replaced/restarted between cold/load phases");
+      assert.ok(!loadIds.has(raw.before?.participants?.load?.containerId), "load container reused across phases");
+      loadIds.add(raw.before?.participants?.load?.containerId);
+      same(raw.upstreamReads?.before, previousReads, "cross-phase upstream reads/contamination");
+      assert.ok(raw.before.at >= previousEnd, "overlapping/out-of-order phases");
+      same(Object.keys(raw.files ?? {}).sort(), ["clock", "stderr", ...(phase === "fixed" ? [] : ["stdout"]), "summary"], "raw auxiliary byte references missing");
+      for (const [name, field] of [["stderr", "logs"], ["summary", "k6"], ["clock", "clock"]]) {
+        assert.equal(typeof load.bytes, "function", "bounded native byte replay required");
+        const bytes = load.bytes(raw.files[name], name === "stderr" ? captureLimits.stderrBytes : captureLimits.auxiliaryBytes);
+        const text = new TextDecoder("utf8", { fatal: true, ignoreBOM: true }).decode(bytes);
+        same(raw[field], name === "stderr" ? text : JSON.parse(text), "embedded native artifact differs from retained raw bytes");
+      }
+      if (phase !== "fixed") assert.equal(load.bytes(raw.files.stdout, captureLimits.auxiliaryBytes).length, 0, "closed native stdout not empty");
+      const stream = phase === "fixed" ? load.stream?.(raw.eventStream) : undefined;
+      const derived = deriveProductionPhase(raw, expected, phase, options, tools, context, { stream, native, priorTailUnobserved });
+      timedUpstreamLife = raw.after.liveness.upstream;
+      same(saved.metrics, derived, `${phase} saved metrics differ from independent raw replay`);
+      for (const [role, counter] of Object.entries(raw.counters)) {
+        if (previousCounters[role] !== undefined) assert.ok(counter.before >= previousCounters[role], "CPU counters reset between phases");
+        previousCounters[role] = counter.after;
+      }
+      if (phase !== "warmup") observations[phase] = derived;
+      previousReads = raw.upstreamReads.after; previousEnd = raw.settledAt;
+      priorTailUnobserved ||= derived.counts.timeout > 0;
+    } catch (error) { if (prefix) break; throw error; }
+  }
+  if (prefix) return { pass: run.pass, phases: observations, window: null };
+  const tail = load(run.tail);
+  same(tail.before, previousReads, "post-phase upstream tail reads"); same(tail.after, tail.before, "upstream reads during app teardown");
+  assert.ok(Number.isSafeInteger(tail.beforeStopAt) && tail.beforeStopAt >= previousEnd
+    && Number.isSafeInteger(tail.afterStopAt) && tail.afterStopAt >= tail.beforeStopAt, "missing/invalid app cleanup read window");
+  assert.ok(tail.afterStopAt <= Date.parse(context.runFinishedAt), "teardown outside terminal run clock");
+  return { pass: run.pass, phases: observations, window: { appId, startedAt: Date.parse(cold.result.containerStartedAt), finishedAt: tail.afterStopAt,
+    upstreamLife: timedUpstreamLife, readsBefore: cold.upstreamReads.before, readsAfter: tail.after } };
 }

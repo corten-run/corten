@@ -17,6 +17,7 @@ export default function () {
     redirects: 0, timeout: "10s", tags: { name: prefix + ":id" } });
   check(response, { "JSON status 200": (r) => r.status === 200,
     "JSON content type": (r) => (r.headers["Content-Type"] ?? "").split(";")[0].trim().toLowerCase() === "application/json" });
+  return response;
 }
 // Preserve k6's measured clock independently of the legacy --summary-export format.
 export function handleSummary(data) {

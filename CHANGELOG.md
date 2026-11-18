@@ -9,6 +9,14 @@ Corten is pre-1.0, so any minor version may change the API.
   measurements that would justify removing Brotli.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
+- JSON benchmark v2 keeps classified target failures separate from apparatus
+  faults, retains verified phases of incomplete passes, and leaves independently
+  complete peers comparable. Raw stock-load output, counted resources, source
+  and cleanup gates still apply. Its producer assets must match the measured
+  commit, and current campaigns reject schema downgrades; standalone historical v1
+  evidence retains its original exact fixed-offer and zero-error verifier.
+  The campaign carries independently reviewed v2 transport receipts from the
+  cloud inbox through timing replay; a version label alone is not an audit.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
