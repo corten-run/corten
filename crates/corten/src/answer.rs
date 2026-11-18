@@ -2565,6 +2565,8 @@ where
     S: Send + 'static,
     T: 'static,
 {
+    const ACTION_PATCHES: bool = <O::Kind as AnswerKind>::PATCHES;
+
     #[inline]
     fn call(self, mut req: Request, state: S) -> impl Future<Output = Response> + Send + 'static {
         // A whole document's layout reads (`crate::LayoutRead`) start as its page route is called,
@@ -2584,7 +2586,7 @@ where
         // only a route whose answer type can be a page keeps the request's head for it, and fills
         // it after the handler. Known here, as a constant: a route that answers patches alone
         // (`HtmlResult<Patches>`), JSON or text keeps none. A `GET` or `HEAD` looks no further.
-        let page = O::PAGE && !<O::Kind as AnswerKind>::PATCHES && !self.shared;
+        let page = O::PAGE && !Self::ACTION_PATCHES && !self.shared;
         let late = crate::layout::reaches_late_route(&req);
         // Each answer is made where it is returned: made first and then moved into its variant, the
         // handler's future (which holds the request) was copied twice more on every request

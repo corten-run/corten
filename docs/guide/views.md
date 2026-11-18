@@ -453,7 +453,9 @@ navigation to read the whole page. A write that failed in view (the network fail
 answer was cut off after its headers came) may still have been applied. A navigation to another
 page reads the whole page. While the failure is undrawn, a same-page poll uses a partial response,
 even if another write is undrawn; a whole [`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet)
-poll already on its way is skipped and retried. A partial draw can still replace `<main>` and
+poll already on its way is skipped and retried. If another write drew while a 5xx body was still
+arriving, the failure counts again when it is shown, whether that body arrived or was cut off.
+A partial draw can still replace `<main>` and
 page-owned layout elements; it does not redraw the rest of the layout. Browsers without the
 Navigation API reload for `ReadAgain`. A page the app's or an area's middleware makes with `Req` in the
 route's place (a sign-in page) is filled the same way, from the request's head as it had it,
@@ -483,8 +485,10 @@ only for the patch: without JavaScript the redirect's next page is a full load t
 In an app with layout reads a typed write route whose answer type can be a page (`HtmlResult`)
 keeps a copy of the request's head on each preferred submit, for the page its handler may answer.
 A handler that answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) can return
-`HtmlResult<Patches>` to skip the typed route's copy, not a copy made when middleware or a raw
-`Table` handler takes `Req` ([Requests and forms](requests-and-forms.md#request-modes)).
+`HtmlResult<Patches>` to skip the typed route's copy. With no middleware that could answer a
+page in its place, it skips whole-page negotiation and late filling too. Middleware or a raw
+`Table` handler taking `Req` can still copy the head
+([Requests and forms](requests-and-forms.md#request-modes)).
 
 ```rust,ignore
 #[component]

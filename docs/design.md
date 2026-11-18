@@ -5882,8 +5882,8 @@ rules something out.
     so the navigation after reads the whole page again. One that failed in view (the network failed,
     a 5xx, or the body of an answer that took it was cut off, or did not draw, after its headers
     came), which the server may have applied too, counts for a navigation to another page.
-    A body failure marks the write undrawn again, even if a later write's layout covered it
-    while the body was on its way.
+    When an error is shown, a cut body or a completed 5xx marks the same write undrawn again,
+    even if a later write's layout covered it while the body was on its way.
     An undrawn failure vetoes a whole `ReadAgain` poll even if another write is undrawn or the
     page normally polls whole while its write lands. If a whole poll is already waiting for its
     answer or assets, it skips the draw and schedules the next read. This avoids replacing the
@@ -5898,9 +5898,10 @@ rules something out.
     on `main`), which the head's extensions hold in turn, so it is let go when the write is answered
     or its future dropped unanswered (the client gone, a middleware's timeout). Publication checks
     the closed mark under the slot lock, so a detached extraction cannot recreate the cycle after
-    cleanup. The route and middleware fills run only for responses with places. The write records
-    its deadline in a request extension so a patch needs no task-local scope or boxed request
-    wrapper. A
+    cleanup. The route and middleware fills run only for responses with places. A typed patch-only
+    route with no app or scoped middleware skips the preference and late fill entirely. Middleware
+    can still answer in its place. A late write carries its deadline in a request extension;
+    other requests do not enter the late timeout poller. A
     `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
     layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
     page's, as a navigation does, and the next navigation reads the whole page; it cannot load in
@@ -5956,9 +5957,10 @@ rules something out.
     keeps it, since its handler may answer either: a `data-patch` form whose handler is
     `req.patch_or(view, page)` answers a patch with JavaScript and its page without, so it is
     `HtmlResult` and pays the copy on each patch, 31,180 where it took 22,900, 8,280 more; such a
-    handler may return `HtmlResult<Patches>` instead, as the guides say. The copy alone is the
-    `HtmlResult` patch less the `Patches` one at the same commit: 5,464 on `70031a793` (31,180 less
-    25,716), as on `bb7562d9d` and `70b69a3db`, where `main` has -632, so the copy is about 6,100.
+    handler may return `HtmlResult<Patches>` instead, as the guides say. The historical gap between
+    the two patches was 5,464 on `70031a793` (31,180 less 25,716), as on `bb7562d9d` and
+    `70b69a3db`. That gap included more than the copy: it also included the route continuation
+    and the dropped head.
     It is made field by field from the request in place: before `main`'s named posts were merged in,
     that gave 5,395 (`914f4781e`, 30,930 less 25,535) where taking the request apart and putting it
     back gave 5,535 (`17f285075`, 31,132 less 25,597), 140 less; with them merged in, the same copy
@@ -6019,31 +6021,40 @@ rules something out.
     Revisit when: an app needs a patch to change a layout read and cannot answer its page (a write
     whose page is too costly to draw again), which would reopen markers on the places; or a route
     can have the request's head back from its handler once it has answered (an extractor that hands
-    it on), which would take the copy off an `HtmlResult` route's patch; or the copy of the head on an `HtmlResult` route's
-    patch, that patch less the `Patches` one at the same commit
-    (`what_a_write_answering_in_an_action_costs` with `WRITE_ANSWER=patch` and with
-    `WRITE_ANSWER=patches`), grows past 5,467 by more than it has varied between runs and builds of
-    the same copy (5,462 to 5,467, so 5): taken as 5,464 at `70031a793` and 5,467 at this round's
-    head, whose release of the early heads costs the `HtmlResult` patch 149 and the `Patches` one
-    146, the copy itself unchanged. This choice was weighed at that cost,
-    6.8% of what the watchlist's watch costs in process on `main` (80,551; `what_a_watch_costs`, a
-    real write's handler answering with its patch, a lower bound since it has no I/O), so any growth
-    is work on every patch of such a route that nothing here has weighed. (Earlier rounds set the
-    line at a share of the watch, 10% and then 12%, then at the `HtmlResult` patch's cost over the
-    base, which moves with the base as much as with the copy; the difference at one commit is the
-    copy's alone.)
+    it on), which would take the copy off an `HtmlResult` route's patch; or the paired
+    `write_request_cost` controls show a repeatable increase beyond the measured ranges in the
+    generic-only cost or in the cost of the late-write machinery. With `READS=1 MIDDLEWARE=1`,
+    subtract legacy typed patches from preferred typed patches to keep the middleware path
+    eligible, net of the same difference on main. The equivalent generic comparison, net of
+    the typed one, measures the cost specific to the generic path. Separate the capture, boxed
+    continuation and drop by profiling, not by calling the generic-minus-typed gap a copy.
+    Also revisit if the paired no-read patch or GET controls
+    show a repeatable increase beyond the measured ranges. The 5,467-instruction threshold was
+    historical: it compared the generic and typed patches in
+    `what_a_write_answering_in_an_action_costs`, not a standalone head copy.
 
-    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc, `e80694ef7` against merged
-    main `9de7529fc`, using the same `write_request_cost` fixture on both. Three alternating
+    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc, against main `9de7529fc`.
+    Using the same `write_request_cost` fixture on both builds, three alternating 1,200-minus-200
+    runs measured these median additional instructions per request without reads: document GET
+    96 (range 94 to 96), navigation GET 104 (103 to 104), typed patch 160 (159 to 160), generic
+    patch 454 (454 to 454). With reads configured and pass-through middleware, the preferred
+    versus legacy controls measured 1,086 (1,086 to 1,086) for the late-write path and 2,905
+    (2,905 to 2,907) more for the generic-only path. One profile of the generic patch without
+    middleware still counted 1,512 in the inclusive capture. Core gzip measured 15,612 to
+    16,108 bytes, upload gzip 539 to 559. The watchlist smoke covers named form controls in
+    the frame fallback and both cut and completed 503 bodies after another write draws;
+    2026-11-18, release Callgrind 3.19.0 with jemalloc, `e80694ef7` against merged
+    main `9de7529fc`, using the same earlier `write_request_cost` fixture on both. Three alternating
     1,200-minus-200 runs, with assertions outside the counted loop. Median instructions per
     request, main to head: without reads, document GET 19,022 to 19,121, nav GET 17,651 to 17,757,
     typed patch 18,101 to 18,547 and generic patch 18,128 to 18,579. With reads configured, typed
     patch 18,175 to 19,274 and generic patch 18,202 to 22,194. Preferred versus legacy typed patches,
     net of the same comparison on main, measured 537 additional instructions for negotiation,
-    the late mark and cleanup, the deadline extension and the pending-page check. The equivalent
-    generic comparison adds 2,888 instructions beyond the typed one, including 1,512 in the
-    inclusive `at_late_route` capture alone. The remainder includes the captured head's cleanup
-    and its boxed route continuation. Core gzip 15,612 to 16,079 bytes, upload gzip 539 to 559;
+    the late mark and cleanup, the deadline extension and the pending-page check at that head.
+    The equivalent generic comparison adds 2,888 instructions beyond that then-shared path,
+    including 1,512 in the inclusive `at_late_route` capture. The remainder includes the captured
+    head's cleanup and its boxed route continuation. Core gzip 15,612 to 16,079 bytes, upload gzip
+    539 to 559;
     2026-11-17, callgrind (valgrind 3.19.0) on `32ea2c896` against `ef35919bb`
     (the early heads let go against leaked; `main` at `76b5126b7` merged), three alternating rounds,
     the middleware case's own instructions per function compared by `callgrind_annotate`, the

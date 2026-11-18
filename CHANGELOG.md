@@ -1176,8 +1176,9 @@ Corten is pre-1.0, so any minor version may change the API.
   reloads the current address without resending the write; across a mixed-version deploy this can
   lose the write's answer, including a refusal. A typed write route whose handler
   answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) may return
-  `HtmlResult<Patches>` to skip the route's copy of the request head; middleware taking `Req` before
-  the route and raw `Table` handlers taking `Req` can still copy it.
+  `HtmlResult<Patches>` to skip the route's copy of the request head, and with no middleware it
+  skips whole-page negotiation and late filling too. Middleware taking `Req` before the route
+  and raw `Table` handlers taking `Req` can still copy it.
   In historical Callgrind comparisons with earlier revisions of `main`, a write's own whole-page
   answer took about 62,600 instructions where its `<main>` swap took 24,781 (two layout reads),
   and the same write without JavaScript 57,595; with
@@ -1192,9 +1193,12 @@ Corten is pre-1.0, so any minor version may change the API.
   navigation reads the whole page; so does one after a write a navigation cut off before its
   answer, or one that failed in view (the network failed, a 5xx, its answer cut off after its
   headers), either of which the server may have applied. If another write drew while an answer's
-  body was on its way, a later failure of that body makes it undrawn again. While a failure is undrawn, same-page
-  polls use a partial response and in-flight whole polls are skipped and retried. A partial draw
+  body was on its way, a cut body or completed 5xx makes it undrawn again when the failure is
+  shown. While a failure is undrawn, same-page polls use a partial response and in-flight whole
+  polls are skipped and retried. A partial draw
   may replace `<main>` and page-owned layout parts; browsers without the Navigation API reload.
+  If a write's page has a different frame, its page-owned parts still draw even when a form
+  has a control named `closest` or `parentElement`.
   A patch that refuses a field with a 422 scrolls it into view when focusing it.
   A page the app's or an area's middleware makes with `Req` in the route's place is
   filled too, within the request's deadline. **Breaking:** an app that skips a layout value of its own when

@@ -5595,10 +5595,12 @@ async function run(browser) {
   // A write's body fails after its headers, optionally after another form's whole page has
   // already drawn over its ledger entry. Keep the first form in an unchanged layout element so
   // its error still bubbles. A poll leaves that failure in view; a link reads the layout anew.
-  for (const overlap of [false, true]) {
-    const cutBodyName = overlap
-      ? "a body failure remains visible to polls after a second write's whole page has drawn"
-      : "a write whose own page is cut off after its headers is a failure in view: the page reading itself again keeps it shown, and the next page is read whole";
+  for (const [cutBodyName, overlap, status, complete] of [
+    ["a write whose own page is cut off after its headers is a failure in view: the page reading itself again keeps it shown, and the next page is read whole", false, 200, false],
+    ["a body failure remains visible to polls after a second write's whole page has drawn", true, 200, false],
+    ["a cut 503 body keeps the failure visible to polls after a second write's whole page has drawn", true, 503, false],
+    ["a completed 503 body keeps the failure visible to polls after a second write's whole page has drawn", true, 503, true],
+  ] /** @type {const} */) {
     if (!(await page.evaluate(() => "navigation" in window))) {
       skip(cutBodyName, "without the Navigation API a link is a full load");
       continue;
@@ -5606,38 +5608,55 @@ async function run(browser) {
     const outside = (/** @type {string} */ body) =>
       overlap ? body.replace("</header>", '</header><aside><form id="held-write" method="post" action="/smoke/written/again" data-patch><button>Write first</button></form></aside>') : body;
     const { own, seen } = await writtenPage(
-      (body, _writes, headers) => outside(brand(body)).replace(">Watchlist, written</span>", overlap && !headers ? ">Poll brand</span>" : ">Watchlist, written</span>"),
+      (body, writes, headers) => {
+        if (headers && writes === 1 && status === 503) {
+          delete headers["corten-shell"];
+          delete headers["corten-page"];
+          return "Unavailable";
+        }
+        return outside(brand(body)).replace(">Watchlist, written</span>", overlap && !headers ? ">Poll brand</span>" : ">Watchlist, written</span>");
+      },
       outside,
       "/smoke/written/again",
     );
-    await own.evaluate((overlap) => {
+    seen.status = status;
+    await own.evaluate(({ overlap, status, complete }) => {
       const state = /** @type {any} */ (window);
-      addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", ""));
+      addEventListener("corten:error", (event) => document.querySelector("header")?.setAttribute("data-failed", String((/** @type {CustomEvent} */ (event)).detail.status)));
       const fetch_ = window.fetch;
       let cut = false;
       window.fetch = async function (input, init) {
         const res = await fetch_.call(this, input, init);
         if (!cut && init?.method === "POST") {
           cut = true;
-          res.text = () => new Promise((_resolve, reject) => {
-            const fail = () => reject(new TypeError("network error"));
-            if (overlap) state.__failBody = fail;
-            else fail();
+          /** @template T @param {() => Promise<T>} body */
+          const held = (body) => new Promise((resolve, reject) => {
+            const release = () => complete ? body().then(resolve, reject) : reject(new TypeError("network error"));
+            if (overlap) state.__releaseBody = release;
+            else release();
           });
+          if (status === 503) {
+            const body = res.arrayBuffer.bind(res);
+            res.arrayBuffer = () => held(body);
+          } else {
+            const body = res.text.bind(res);
+            res.text = () => held(body);
+          }
         }
         return res;
       };
-    }, overlap);
+    }, { overlap, status, complete });
     await own.click(overlap ? "#held-write button" : "main form button");
     let drewOver = true;
     if (overlap) {
-      await own.waitForFunction(() => typeof (/** @type {any} */ (window)).__failBody === "function");
+      await own.waitForFunction(() => typeof (/** @type {any} */ (window)).__releaseBody === "function");
+      seen.status = 0;
       await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
       drewOver = await brandBecomes(own, "Watchlist, written");
-      await own.evaluate(() => (/** @type {any} */ (window)).__failBody());
+      await own.evaluate(() => (/** @type {any} */ (window)).__releaseBody());
     }
     const failed = await own
-      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+      .waitForFunction((status) => document.querySelector("header")?.getAttribute("data-failed") === String(status) && !document.querySelector("[aria-busy]"), complete ? 503 : 0, { timeout: 5000 })
       .then(
         () => true,
         () => false,
@@ -5794,15 +5813,21 @@ async function run(browser) {
   // does: the write's page has other sector links than the form's. This guards the fallback when the
   // layout cannot be drawn (main, whose answer for the write was <main> and those parts, passes it
   // too), not the drawing of the layout itself.
-  {
-    const section = (/** @type {string} */ name) => (/** @type {string} */ body) => body.replace(/(<nav\b[^>]*\bid="sector-nav"[^>]*>)/, `$1<a href="/news">${name} section</a>`);
+  for (const shadow of ["closest", "parentElement"]) {
+    const section = (/** @type {string} */ name) => (/** @type {string} */ body) =>
+      body.replace(/<nav(\b[^>]*\bid="sector-nav"[^>]*)>(.*?)<\/nav>/s, (_nav, attrs, children) => {
+        const content = `<a href="/news">${name} section</a>${children}`;
+        return shadow === "closest"
+          ? `<form><input name="closest" type="hidden"><nav${attrs}>${content}</nav></form>`
+          : `<form${attrs}><input name="parentElement" type="hidden">${content}</form>`;
+      });
     const { own } = await writtenPage((body) => section("New")(body).replace("<body ", '<body data-smoke-frame="other" '), section("Old"));
     const first = await shownOf(own);
     await own.click("main form button");
     const drawn = await writtenIn(own);
     const shown = await shownOf(own);
     check(
-      "a write's own page in another frame draws <main> and the page's parts of the layout",
+      `a write's own page in another frame draws <main> and its layout parts with a form control named ${shadow}`,
       first.section === "Old section" && drawn && shown.section === "New section" && shown.same && shown.path === "/smoke/written",
       JSON.stringify({ first: first.section, drawn, shown }),
     );

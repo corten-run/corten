@@ -1921,7 +1921,10 @@ async function swapDocument(html, signal, notice, again, stay, own, covers) {
   // A write's own page whose frame differs swaps in what a navigation's answer holds, the layout's
   // elements that are the page's (`page` in `html!`, a section's nav) included ({@link swapPage}).
   // With the layout drawn, they are drawn with it.
-  const parts = layout ? [] : Array.from(doc.body.querySelectorAll("[data-corten-page]")).filter((el) => !el.parentElement?.closest("[data-corten-page]"));
+  const parts = layout ? [] : Array.from(doc.body.querySelectorAll("[data-corten-page]")).filter((el) => {
+    const parent = parentElementOf(el);
+    return !parent || !closestOf(parent, "[data-corten-page]");
+  });
   const text = head.map((el) => outerOf(el)).join("") + parts.map((el) => outerOf(el)).join("") + main.innerHTML;
   // Read again with nothing new in the page: it stays as it is, with what the user typed and its
   // live streams, and only what changed around it (a count the layout reads) is drawn.
@@ -2550,11 +2553,13 @@ function deferWholeRead(wholePoll) {
 }
 /**
  * A write that failed where the page says so, which the server may have applied: undrawn, for the
- * next navigation to another page.
+ * next navigation to another page. Reuse its number if another page has drawn since its headers.
+ * @param {number} [n]
  */
-function failedWrite() {
-  failedInView.add(++writesIn);
-  undrawn.add(writesIn);
+function failedWrite(n = ++writesIn) {
+  failedInView.add(n);
+  undrawn.add(n);
+  return n;
 }
 /**
  * What a whole page's layout draws: every write answered before it was asked for (`through`, the
@@ -2664,7 +2669,7 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   // The writes answered before the page is asked for, which its layout draws.
   const through = redirected ? (askedAfter.get(redirected) ?? 0) : writesIn;
   let cut = false;
-  if (!again) {
+  if (!again && submits.size) {
     for (const pending of submits.values()) {
       if (!pending.write || pending.answered) continue;
       cut = true;
@@ -3239,10 +3244,9 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       const write = method !== "GET" && (whole || res.ok) ? ++writesIn : 0;
       if (write) undrawn.add(write);
       // A 5xx says the write failed (a toast), but a proxy's 502 can hide one that was applied.
-      else if (method !== "GET" && res.status >= 500) failedWrite();
       // In the record now, or with nothing to record (a refusal): a navigation from here on does
       // not count it as cut off, and a page asked for from now on is made after it.
-      pending.n = write;
+      pending.n = write || (method !== "GET" && res.status >= 500 ? failedWrite() : 0);
       pending.answered = true;
       const body = await res.text();
       renew();
@@ -3262,6 +3266,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         } else if (await swapDocument(body, signal, notice, false, false, true, { through, write })) announce(notice);
       }
       signal.throwIfAborted();
+      if (!write && pending.n) failedWrite(pending.n);
       if (res.status === 422) focusInvalid(form);
       // Sent after an answer that took the write (2xx) or refused only its input (422). Not after a
       // refusal of the state it was made against (a 409 or 410, "someone saved first"): the user
@@ -3270,7 +3275,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
       if (!res.ok && res.status !== 422) pending.next = undefined;
     } else {
       // A 5xx it does not draw failed where the page says so (`corten:error`), applied or not.
-      if (method !== "GET" && res.status >= 500) failedWrite();
+      if (method !== "GET" && res.status >= 500) pending.n = failedWrite();
       // Nothing to draw: a navigation from here on does not count it as cut off.
       pending.answered = true;
       // An answer the runtime does not draw is whole once its body has arrived too.
@@ -3289,6 +3294,7 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
         renew();
         // The page did not change, so the waiting submit would meet the same answer (a 409 for its
         // version): the page says so with `corten:error`, and the user sends it again.
+        if (pending.n) failedWrite(pending.n);
         pending.next = undefined;
         formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: res.status } }));
       }
@@ -3299,10 +3305,8 @@ async function send(form, submitter, sends, within = asking(form, submitter)) {
     // did not draw) may have been applied too: the next navigation reads the whole page, but not the
     // page reading itself again, which would draw away the failure shown.
     if (signal.aborted) return;
-    if (pending.n) {
-      failedInView.add(pending.n);
-      undrawn.add(pending.n);
-    } else if (pending.went && !pending.answered && method !== "GET") failedWrite();
+    if (pending.n) failedWrite(pending.n);
+    else if (pending.went && !pending.answered && method !== "GET") failedWrite();
     // Offline, the server unreachable, or the browser leaving the page (a full navigation without
     // the Navigation API cancels it): the form stays as it is, and the page can say so. A submit
     // that waited goes with it, since it would fail the same way, and the user sends it again.

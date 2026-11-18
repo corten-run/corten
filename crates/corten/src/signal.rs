@@ -147,8 +147,8 @@ struct Inner {
     /// the same reason: the limit XOR the default, so a signal made without one (`Default`, 0)
     /// has the default and every limit, 0 too, is kept.
     body_limit: usize,
-    /// A write the runtime sent, in an app with layout reads, whose own page is filled after it
-    /// answers (#1370), here for the same reason: 0 for any other request, [`LATE`] until its
+    /// A write the runtime sent whose own page is drawn whole ([`WHOLE`]). When the app has
+    /// layout reads, it is filled after it answers (#1370): [`LATE`] until its
     /// route is reached, [`HEAD_KEPT`] once its route is reached (and, if its answer can be a page,
     /// has kept the request's head for it: [`crate::layout::at_late_route`]). A byte, in the
     /// padding beside the others; its deadline is not kept here (`crate::layout::LateUntil`), as
@@ -164,6 +164,8 @@ const HEAD_KEPT: u8 = 2;
 /// [`Inner::late`], beside the others: a `Req` taken before its route kept a head on the signal
 /// ([`EarlyHeads`]), to be let go when the write is answered.
 const EARLY_KEPT: u8 = 4;
+/// [`Inner::late`]: the runtime draws its own page whole, with or without layout reads.
+const WHOLE: u8 = 8;
 
 type EarlyHeads = Vec<Arc<http::request::Parts>>;
 
@@ -245,10 +247,14 @@ impl Signal {
         self.0.shared.as_ref()
     }
 
-    /// A write the runtime sent, in an app with layout reads, whose own page is filled after it
-    /// answers (`page::render_errors`), so a page made with `Req` writes its places.
-    pub(crate) fn mark_late(&self) {
-        self.0.late.store(LATE, Ordering::Relaxed);
+    /// The runtime draws the write's own page whole (`page::render_errors`). A late-filled page
+    /// made with `Req` also writes its places for layout reads.
+    pub(crate) fn mark_whole(&self, late: bool) {
+        self.0.late.store(if late { WHOLE | LATE } else { WHOLE }, Ordering::Relaxed);
+    }
+
+    pub(crate) fn draws_whole(&self) -> bool {
+        self.0.late.load(Ordering::Relaxed) & WHOLE != 0
     }
 
     /// Its route is reached, and keeps the head for a page it may answer with
@@ -290,7 +296,7 @@ impl Signal {
 
     /// Closes the slot before releasing the heads (which hold this signal in turn).
     pub(crate) fn release_early_heads(&self) {
-        if self.0.late.swap(LATE | HEAD_KEPT, Ordering::Relaxed) & EARLY_KEPT != 0 {
+        if self.0.late.swap(WHOLE | LATE | HEAD_KEPT, Ordering::Relaxed) & EARLY_KEPT != 0 {
             let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if let Some(at) = found.iter().position(|kept| kept.is::<EarlyHeads>()) {
                 let heads = found.swap_remove(at);
@@ -300,14 +306,12 @@ impl Signal {
         }
     }
 
-    /// A write whose own page is filled after it answers ([`Signal::mark_late`]): `Some(true)`
+    /// A write whose own page is filled after it answers ([`Signal::mark_whole`]): `Some(true)`
     /// once the head is kept ([`Signal::keep_head`]), `Some(false)` before, `None` for any other
     /// request.
     pub(crate) fn late_write(&self) -> Option<bool> {
-        match self.0.late.load(Ordering::Relaxed) {
-            0 => None,
-            late => Some(late & HEAD_KEPT != 0),
-        }
+        let late = self.0.late.load(Ordering::Relaxed);
+        (late & LATE != 0).then_some(late & HEAD_KEPT != 0)
     }
 
     /// Whether the signal has aborted: a cheap check for a loop on a blocking thread.

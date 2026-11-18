@@ -15315,7 +15315,11 @@ mod layout_reads {
 
     /// A write named in a routes module that answers patches alone.
     async fn patches_only(req: Req) -> HtmlResult<crate::Patches> {
-        req.patch(html! { <p id={MsgId}>"patched"</p> })
+        let mut patch = req.patch(html! { <p id={MsgId}>"patched"</p> })?;
+        if req.signal().draws_whole() {
+            patch.headers_mut().insert("x-draws-whole", http::HeaderValue::from_static("yes"));
+        }
+        Ok(patch)
     }
 
     /// A handler's own check refuses the request (#890).
@@ -16152,6 +16156,18 @@ mod layout_reads {
         );
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "a patch starts no read");
         assert_eq!(copies.load(Ordering::SeqCst), 0, "a route that answers patches alone keeps no head");
+    }
+
+    #[tokio::test]
+    async fn a_patch_only_write_without_middleware_does_not_negotiate_a_whole_answer() {
+        let count = CartCount::default();
+        let app = App::new(shop_url::router());
+        for router in [app.router(), App::new(shop_url::router()).layout_read(count.clone()).router()] {
+            let (status, headers, _) = call_with(router, "POST", "/patches-only", Some("action"), None).await;
+            assert_eq!(status, StatusCode::OK);
+            assert!(headers.contains_key("corten-patch") && !headers.contains_key("x-draws-whole"), "{headers:?}");
+        }
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 
     /// An extension that counts its copies: a request's head kept with its extensions copies it.

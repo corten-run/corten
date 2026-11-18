@@ -44,6 +44,10 @@ pub(crate) type Answering = Pin<Box<dyn Future<Output = Response> + Send>>;
 /// A route's handler for one or more methods, with its state: what the router calls.
 pub(crate) trait Endpoint: Send + Sync + 'static {
     fn call(&self, req: Request) -> Answering;
+
+    fn action_patches(&self) -> bool {
+        false
+    }
 }
 
 /// The handler the router chose for a request, which the stages call last.
@@ -60,6 +64,10 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     #[inline]
     fn call(&self, req: Request) -> Answering {
         Box::pin(self.handler.clone().call(req, self.state.clone()))
+    }
+
+    fn action_patches(&self) -> bool {
+        H::ACTION_PATCHES
     }
 }
 
@@ -98,6 +106,10 @@ impl Endpoint for Giving {
         req.extensions_mut().insert(crate::layout::Gives(self.gives));
         self.inner.call(req)
     }
+
+    fn action_patches(&self) -> bool {
+        self.inner.action_patches()
+    }
 }
 
 /// A page's `POST` handler when it has named posts (`post(hold) = ..`): the one the `do` of the
@@ -123,6 +135,10 @@ impl Endpoint for Chooser {
             Some(route) => route.call(req),
             None => self.refuse(req.uri().query()),
         }
+    }
+
+    fn action_patches(&self) -> bool {
+        self.plain.iter().chain(self.actions.iter().map(|(_, route)| route)).all(|route| route.action_patches())
     }
 }
 
@@ -158,6 +174,10 @@ impl Endpoint for Posts {
     fn call(&self, mut req: Request) -> Answering {
         req.extensions_mut().insert(HasPosts);
         self.inner.call(req)
+    }
+
+    fn action_patches(&self) -> bool {
+        self.inner.action_patches()
     }
 }
 
