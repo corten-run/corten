@@ -390,3 +390,14 @@ Its cleanup check retains all process observations and exempts only kernel threa
 proved by saved Linux stat flags and matching PID/start identity. A new user-space
 daemon or application process still fails cleanup; later observations cannot repair
 an old failed run. This is benchmark-host preparation, not app deployment advice.
+
+To build the Git-capable browser test image manually, run `npm ci` from the repository
+root and pass the image that matches the installed Playwright version, as CI does:
+
+```sh
+version=$(node -p 'require("@playwright/test/package.json").version') &&
+  docker build --build-arg PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v${version}-noble" \
+    -f bench/workloads/test-tools.Dockerfile -t corten-evidence-tools .
+```
+
+The Dockerfile has no default base image.

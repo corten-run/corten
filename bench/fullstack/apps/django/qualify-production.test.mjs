@@ -10,7 +10,8 @@ import vm from "node:vm";
 const driver = new URL("./qualify-production.mjs", import.meta.url);
 const work = new URL("./work/", import.meta.url);
 let sequence = 0;
-async function exercise({ failRun = 1, failRemove = false, failNetwork = false, foreign = false, failCreate = false } = {}) {
+async function exercise({ failRun = 1, failRemove = false, failNetwork = false, foreign = false, failCreate = false,
+  installedVersion = "1.64.1", lockedVersion = installedVersion } = {}) {
   mkdirSync(work, { recursive: true });
   const output = mkdtempSync(join(fileURLToPath(work), "driver-test-"));
   const calls = [], containers = new Map(), networks = new Map();
@@ -26,6 +27,7 @@ async function exercise({ failRun = 1, failRemove = false, failNetwork = false, 
     if (args[0] === "run") {
       const name = args[args.indexOf("--name") + 1];
       containers.set(name, { Id: `container-${runs}`, Name: `/${name}`, Config: { Labels: foreign ? { "agent.owner": "someone-else" } : labelsOf(args) },
+        Args: [], HostConfig: {},
         NetworkSettings: { Ports: { "8080/tcp": [{ HostPort: "12345" }] } } });
       return ++runs === failRun ? reply("", 125, "injected start failure") : reply(name);
     }
@@ -48,7 +50,16 @@ async function exercise({ failRun = 1, failRemove = false, failNetwork = false, 
     console: { log() {}, error() {} }, fetch: async () => ({ status: 200, arrayBuffer: async () => new ArrayBuffer(0) }), AbortSignal, setTimeout, URL });
   const module = new vm.SourceTextModule(readFileSync(driver, "utf8"), { context, identifier: driver.href, initializeImportMeta(meta) { meta.url = driver.href; } });
   await module.link(async (specifier) => {
-    const exports = specifier === "node:child_process" ? { spawnSync } : specifier.endsWith("/qualify.mjs") ? { qualify: async () => { throw new Error("unexpected qualification"); } } : await import(specifier);
+    let exports = specifier === "node:child_process" ? { spawnSync } :
+      specifier.endsWith("/qualify.mjs") ? { qualify: async () => ({ eligible: true }) } : await import(specifier);
+    if (specifier === "node:fs") exports = { ...exports, readFileSync(path) {
+      const repo = fileURLToPath(new URL("../../../../", driver));
+      if (path === join(repo, "package-lock.json")) {
+        return JSON.stringify({ packages: { "node_modules/@playwright/test": { version: lockedVersion } } });
+      }
+      assert.equal(path, join(repo, "node_modules/@playwright/test/package.json"));
+      return JSON.stringify({ version: installedVersion });
+    } };
     return new vm.SyntheticModule(Object.keys(exports), function () { for (const [key, value] of Object.entries(exports)) this.setExport(key, value); }, { context });
   });
   let error;
@@ -105,4 +116,20 @@ test("resource names leave room for fixture/api/browser DNS labels", async () =>
   const r = await exercise();
   const name = r.calls.find((c) => c[0] === "network" && c[1] === "create").at(-1);
   assert.ok(`${name}-fixture-browser`.length <= 63, "Docker names must also be usable DNS labels");
+});
+
+for (const version of ["1.64.1", "1.65.1"]) test(`both browser runs select the root Playwright ${version} image`, async () => {
+  const r = await exercise({ failRun: 0, installedVersion: version });
+  assert.equal(r.error, undefined);
+  const browserRuns = r.calls.filter((c) => c[0] === "run" && c.includes("bench/marketplace/check.mjs"));
+  assert.deepEqual(browserRuns.map((args) => args[args.indexOf("bench/marketplace/check.mjs") - 2]),
+    Array(2).fill(`mcr.microsoft.com/playwright:v${version}-noble`));
+  assert.equal(r.containers.size, 0);
+  assert.equal(r.networks.size, 0);
+});
+
+test("a stale Playwright install is rejected before starting Docker", async () => {
+  const r = await exercise({ installedVersion: "1.64.1", lockedVersion: "1.65.1" });
+  assert.match(String(r.error), /installed Playwright does not match the root lockfile/);
+  assert.deepEqual(r.calls, []);
 });

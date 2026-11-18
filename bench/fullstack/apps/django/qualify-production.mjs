@@ -3,13 +3,18 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { qualify } from "../../../marketplace/qualify.mjs";
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 const repo = resolve(here, "../../../..");
+const locked = JSON.parse(readFileSync(resolve(repo, "package-lock.json"), "utf8")).packages["node_modules/@playwright/test"].version;
+const { version } = JSON.parse(readFileSync(resolve(repo, "node_modules/@playwright/test/package.json"), "utf8"));
+assert.match(locked, /^\d+\.\d+\.\d+$/, "Playwright must have a pinned image-compatible version");
+assert.equal(version, locked, "installed Playwright does not match the root lockfile; run npm ci at the repository root");
+const checkerImage = `mcr.microsoft.com/playwright:v${version}-noble`;
 const output = resolve(process.argv[2] ?? resolve(here, "work/production"));
 const image = process.argv[3] ?? "cb-marketplace-django-granian:local";
 mkdirSync(output, { recursive: true });
@@ -94,7 +99,7 @@ try {
       containers.add(check);
       const browserLog = docker("run", "--name", check, ...labels, "--network", task, "--cpus", "4", "--memory", "2g",
         "-v", `${repo}:/repo:ro`, "-v", `${output}:/results`, "-w", "/repo",
-        "mcr.microsoft.com/playwright:v1.64.1-noble", "node", "bench/marketplace/check.mjs",
+        checkerImage, "node", "bench/marketplace/check.mjs",
         `http://${app}:8080`, source, `http://${upstream}:8080`, `/results/${source}-browser.json`);
       removeContainer(check);
       writeFileSync(resolve(output, `${source}-browser.log`), browserLog);
