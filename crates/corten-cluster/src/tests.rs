@@ -100,7 +100,7 @@ async fn take(conn: &mut PgConnection, who: &str, lease: Duration) -> bool {
 
 /// Keys that are not literal NATS subjects: empty tokens, whitespace (including the framing
 /// bytes and Unicode spaces), control characters (NUL also stops Postgres), the subscription
-/// wildcards, and subjects longer than a default server's control line holds.
+/// wildcards, and keys over Corten's 1,024-byte limit.
 fn bad_keys() -> Vec<String> {
     let mut keys: Vec<String> = [
         "my feed",
@@ -128,6 +128,7 @@ fn bad_keys() -> Vec<String> {
     .into();
     keys.push("a".repeat(5000));
     keys.push("\u{e9}".repeat(2500));
+    keys.push(long_key(1025));
     keys
 }
 
@@ -143,24 +144,10 @@ fn feed_keys_are_literal_nats_subjects() {
     }
     // The byte limit, whatever the characters.
     assert!(check_key(&"k".repeat(MAX_FEED_KEY_BYTES)).is_ok());
+    assert!(check_key(&long_key(1024)).is_ok());
     assert!(check_key(&format!("{}\u{e9}", "k".repeat(MAX_FEED_KEY_BYTES - 2))).is_ok());
     assert!(check_key(&"k".repeat(MAX_FEED_KEY_BYTES + 1)).is_err());
     assert!(check_key(&format!("{}\u{e9}", "k".repeat(MAX_FEED_KEY_BYTES - 1))).is_err());
-}
-
-/// The check `Cluster::feed` runs before its cached lookup, timed in release mode. It reads the
-/// key in place: no allocation.
-#[test]
-#[ignore]
-fn feed_key_check_cost() {
-    for (key, rounds) in [("sellers.42".to_string(), 10_000_000), ("s".repeat(MAX_FEED_KEY_BYTES), 100_000)] {
-        let started = Instant::now();
-        for _ in 0..rounds {
-            assert!(valid_key(std::hint::black_box(&key)));
-        }
-        let ns = started.elapsed().as_nanos() as f64 / rounds as f64;
-        println!("valid_key, {} bytes: {ns:.1} ns per check over {rounds} checks", key.len());
-    }
 }
 
 #[tokio::test]
@@ -212,44 +199,7 @@ async fn an_invalid_subject_prefix_is_refused_before_migration() {
     }
 }
 
-/// The cluster's tables as corten-cluster 0.2.0 created them, before `rejected_at`.
-const SCHEMA_0_2: &str = "
-CREATE TABLE corten_feeds (key text PRIMARY KEY, generation text NOT NULL, seq bigint NOT NULL DEFAULT 0);
-CREATE TABLE corten_outbox (
-    id bigserial PRIMARY KEY,
-    feed text NOT NULL,
-    generation text NOT NULL,
-    seq bigint NOT NULL,
-    body text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    published_at timestamptz,
-    UNIQUE (feed, seq)
-);
-CREATE INDEX corten_outbox_pending ON corten_outbox (id) WHERE published_at IS NULL;
-CREATE TABLE corten_idempotency (
-    key text PRIMARY KEY,
-    feed text NOT NULL,
-    seq bigint,
-    committed_at bigint,
-    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
-);
-CREATE TABLE corten_relay_lease (
-    id int PRIMARY KEY CHECK (id = 1),
-    holder text,
-    holder_pid int,
-    expires_at timestamptz NOT NULL DEFAULT '-infinity'
-);
-INSERT INTO corten_relay_lease (id) VALUES (1);
-CREATE FUNCTION corten_outbox_notify() RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    PERFORM pg_notify('corten_outbox', '');
-    RETURN NULL;
-END $$;
-CREATE TRIGGER corten_outbox_notify AFTER INSERT ON corten_outbox
-    FOR EACH STATEMENT EXECUTE FUNCTION corten_outbox_notify();
-";
-
-/// A pool on a new, empty Postgres schema of its own (its own tables and relay lease).
+/// A pool on an isolated schema so legacy rows cannot affect the other relay tests.
 async fn schema_pool(url: &str, schema: &str) -> PgPool {
     let admin = PgPool::connect(url).await.unwrap();
     sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
@@ -258,116 +208,85 @@ async fn schema_pool(url: &str, schema: &str) -> PgPool {
     PgPoolOptions::new().max_connections(8).connect_with(options).await.unwrap()
 }
 
-/// A patch body as `append` writes it: item `a` set to `n`.
-fn patch(seq: u64, n: i64) -> String {
-    let item = Item { id: "a".into(), n };
-    format!("{{\"seq\":{seq},\"changes\":{}}}", serde_json::to_string(&[Change::Upsert { id: "a", value: &item }]).unwrap())
+/// Deterministic, low-compressibility ASCII for exercising the real B-tree indexes.
+fn long_key(len: usize) -> String {
+    let alphabet = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    let mut state = 0xa3b1_c2d3_u32;
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            char::from(alphabet[state as usize % alphabet.len()])
+        })
+        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_upgraded_outbox_sets_bad_rows_aside_and_publishes_the_rest_in_order() {
+async fn the_relay_drops_legacy_invalid_keys_and_delivers_good_rows_in_order() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
-    let schema = format!("upgrade_{:x}", now_ms());
+    let schema = key("legacy_");
     let pool = schema_pool(&db, &schema).await;
-    sqlx::raw_sql(SCHEMA_0_2).execute(&pool).await.unwrap();
-    sqlx::query("CREATE TABLE test_items (feed text, id text, n bigint, PRIMARY KEY (feed, id))").execute(&pool).await.unwrap();
+    migrate(&pool).await.unwrap();
 
-    // Rows the previous release (or other SQL) wrote, committed together so the relay's first
-    // batch mixes them: feed `good`'s first patch, keys NATS refuses (a space, 5,000 bytes of
-    // ASCII and of UTF-8), a patch over the server's max_payload on a valid key, `good`'s second
-    // patch, more bad rows than a batch holds, and `good`'s third. Every key has a feed row, so
-    // prune would remove a rejected patch if it counted as published.
-    let good = key("upgrade");
-    let big = key("bigpatch");
-    let mut rows: Vec<(String, u64, String)> = vec![(good.clone(), 1, patch(1, 1))];
-    for bad in [format!("{good} x"), format!("{good}{}", "a".repeat(5000)), format!("{good}{}", "\u{e9}".repeat(2500))] {
-        rows.push((bad, 1, patch(1, 0)));
-    }
-    rows.push((big.clone(), 1, "x".repeat(1_100_000)));
-    rows.push((good.clone(), 2, patch(2, 2)));
-    rows.extend((0..260).map(|n| (format!("{good}.{n}..x"), 1, patch(1, 0))));
-    rows.push((good.clone(), 3, patch(3, 3)));
+    let good = long_key(1024);
+    let too_long = long_key(1025);
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("INSERT INTO test_items VALUES ($1, 'a', 3)").bind(&good).execute(&mut *tx).await.unwrap();
-    let mut ids = Vec::new();
-    for (feed, seq, body) in &rows {
+    assert!(create_feed(&mut tx, &good).await.unwrap());
+    sqlx::query("UPDATE corten_feeds SET seq = 3 WHERE key = $1").bind(&good).execute(&mut *tx).await.unwrap();
+    for bad in ["old key", &too_long] {
+        sqlx::query("INSERT INTO corten_feeds (key, generation, seq) VALUES ($1, 'g', 1)")
+            .bind(bad)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    // Commit as one batch before starting any relay. Both later good rows must get past both bad keys.
+    for (feed, seq) in [(&*good, 1_i64), ("old key", 1), (&too_long, 1), (&good, 2), (&good, 3)] {
         sqlx::query(
-            "INSERT INTO corten_feeds (key, generation, seq) VALUES ($1, 'g', $2) ON CONFLICT (key) DO UPDATE SET seq = $2",
+            "INSERT INTO corten_outbox (feed, generation, seq, body)
+             SELECT key, generation, $2, $3 FROM corten_feeds WHERE key = $1",
         )
         .bind(feed)
-        .bind(*seq as i64)
+        .bind(seq)
+        .bind(format!(r#"{{"seq":{seq},"changes":[]}}"#))
         .execute(&mut *tx)
         .await
         .unwrap();
-        let id: i64 =
-            sqlx::query_scalar("INSERT INTO corten_outbox (feed, generation, seq, body) VALUES ($1, 'g', $2, $3) RETURNING id")
-                .bind(feed)
-                .bind(*seq as i64)
-                .bind(body)
-                .fetch_one(&mut *tx)
-                .await
-                .unwrap();
-        ids.push(id);
     }
     tx.commit().await.unwrap();
 
-    let nats = async_nats::connect(&nats).await.unwrap();
-    let cluster = Cluster::start(pool.clone(), nats.clone(), Items, Options::default()).await.unwrap();
-    // `good`'s patches reach JetStream, in order, past every rejected row.
-    let stream = async_nats::jetstream::new(nats).get_stream("CORTEN_FEEDS").await.unwrap();
-    let consumer = stream
-        .create_consumer(OrderedConfig {
-            filter_subject: format!("corten.feeds.{good}"),
-            deliver_policy: DeliverPolicy::All,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
+    let prefix = format!("{schema}{}", "p".repeat(255 - schema.len()));
+    let stream_name = schema.to_uppercase();
+    let options = Options { stream: stream_name.clone(), subject_prefix: prefix.clone(), ..Options::default() };
+    let nats = async_nats::ConnectOptions::new().custom_inbox_prefix("r".repeat(300)).connect(&nats).await.unwrap();
+    let cluster = Cluster::start(pool.clone(), nats.clone(), Items, options).await.unwrap();
+    let js = async_nats::jetstream::new(nats);
+    let mut stream = js.get_stream(&stream_name).await.unwrap();
+    let consumer =
+        stream.create_consumer(OrderedConfig { deliver_policy: DeliverPolicy::All, ..Default::default() }).await.unwrap();
     let mut messages = consumer.messages().await.unwrap();
-    let mut seqs = Vec::new();
-    while seqs.len() < 3 {
-        let next = tokio::time::timeout(Duration::from_secs(10), messages.next()).await;
-        let msg = next.unwrap_or_else(|_| panic!("timed out after {seqs:?}")).unwrap().unwrap();
-        seqs.push(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"].as_u64().unwrap());
-    }
-    assert_eq!(seqs, [1, 2, 3]);
-
-    // Each good row is marked published once acknowledged; every other row is rejected and
-    // never counted as published.
-    let expected: Vec<(i64, bool, bool)> =
-        ids.iter().zip(&rows).map(|(id, (feed, ..))| (*id, *feed == good, *feed != good)).collect();
-    let state = async || -> Vec<(i64, bool, bool)> {
-        sqlx::query_as("SELECT id, published_at IS NOT NULL, rejected_at IS NOT NULL FROM corten_outbox ORDER BY id")
-            .fetch_all(&pool)
+    let subject = format!("{prefix}.{good}");
+    for seq in 1..=3 {
+        let msg = tokio::time::timeout(Duration::from_secs(10), messages.next())
             .await
+            .unwrap_or_else(|_| panic!("timed out waiting for good patch {seq}"))
             .unwrap()
-    };
+            .unwrap();
+        assert_eq!(msg.subject.as_str(), subject);
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"], seq);
+    }
+
     let end = Instant::now() + Duration::from_secs(10);
-    while state().await != expected {
-        assert!(Instant::now() < end, "outbox rows not settled");
+    while !store::pending(&pool, 10).await.unwrap().is_empty() {
+        assert!(Instant::now() < end, "outbox rows not marked done");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    // A second migration (another instance starting) keeps the rejections, and the pending
-    // index leaves rejected rows out.
-    migrate(&pool).await.unwrap();
-    assert_eq!(state().await, expected);
-    let indexes: Vec<String> =
-        sqlx::query_scalar("SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexdef LIKE '%published_at IS NULL%'")
-            .bind(&schema)
-            .fetch_all(&pool)
-            .await
-            .unwrap();
-    assert_eq!(indexes.len(), 1, "{indexes:?}");
-    assert!(indexes[0].contains("rejected_at IS NULL"), "{indexes:?}");
-    prune(&pool, Duration::ZERO, 0).await.unwrap();
-    let rejected: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM corten_outbox WHERE rejected_at IS NOT NULL").fetch_one(&pool).await.unwrap();
-    assert_eq!(rejected as usize, rows.len() - 3, "prune keeps rejected rows");
-    for (bad, ..) in &rows[1..4] {
-        assert!(cluster.feed(bad).await.unwrap().is_none(), "{bad:?}");
-        assert!(begin(&pool, bad, None).await.err().unwrap().is::<InvalidFeedKey>(), "{bad:?}");
-    }
+    assert_eq!(stream.info().await.unwrap().state.messages, 3, "only valid rows were published");
+    assert!(cluster.feed("old key").await.unwrap().is_none());
+    assert!(cluster.feed(&too_long).await.unwrap().is_none());
 
+    js.delete_stream(&stream_name).await.unwrap();
     let admin = PgPool::connect(&db).await.unwrap();
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
 }

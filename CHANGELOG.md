@@ -5,16 +5,14 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- `corten-cluster` refuses a feed key that is not a literal NATS subject (`my feed`, `a..b`,
-  `*`, whitespace or control characters, or more than `MAX_FEED_KEY_BYTES`, 3,584 bytes) at
-  `create_feed` and `begin` with `InvalidFeedKey`, `Cluster::feed` answers `None` for it, and
-  `Cluster::start` refuses such a subject prefix (or one over 255 bytes). The relay sets an
-  existing invalid outbox row, or one whose patch exceeds the server's `max_payload`, aside
-  with `rejected_at` (not `published_at`), logs it and goes on, instead of retrying it and
-  stopping every feed's patches. The pending index leaves rejected rows out
-  (`corten_outbox_ready` replaces `corten_outbox_pending` on first start). Rejected rows are not
-  pruned; repair them as the live-data guide describes, after every instance is upgraded.
-
+- `corten-cluster` checks feed keys at creation, write and lookup. Corten's rule is stricter
+  than what the NATS broker accepts: it rejects names such as `a*b` and keys containing a
+  non-breaking space to follow the documented subject rules, excludes control characters, and
+  caps keys at 1,024 bytes so they fit NATS publish lines and Postgres indexes. Invalid keys
+  return `InvalidFeedKey` at `create_feed` and `begin`, and `None` at `Cluster::feed`.
+  Subject prefixes follow the same rules with a 255-byte limit. The relay logs and drops
+  pending rows with invalid legacy keys instead of stopping other feeds. No schema change;
+  publish and acknowledgement errors still retry.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 

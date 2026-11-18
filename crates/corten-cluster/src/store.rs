@@ -26,14 +26,7 @@ CREATE TABLE IF NOT EXISTS corten_outbox (
     published_at timestamptz,
     UNIQUE (feed, seq)
 );
--- Set by the relay on a row the server can never accept (a feed key that is not a NATS subject,
--- written before keys were checked or by other SQL, or a patch over max_payload). Kept for
--- repair; the relay skips it and prune keeps it.
-ALTER TABLE corten_outbox ADD COLUMN IF NOT EXISTS rejected_at timestamptz;
--- The relay's queue: rows neither published nor rejected, so rejected rows cost a drain nothing.
--- Replaces corten_outbox_pending (WHERE published_at IS NULL), which kept them in the scan.
-CREATE INDEX IF NOT EXISTS corten_outbox_ready ON corten_outbox (id) WHERE published_at IS NULL AND rejected_at IS NULL;
-DROP INDEX IF EXISTS corten_outbox_pending;
+CREATE INDEX IF NOT EXISTS corten_outbox_pending ON corten_outbox (id) WHERE published_at IS NULL;
 CREATE TABLE IF NOT EXISTS corten_idempotency (
     key text PRIMARY KEY,
     feed text NOT NULL,
@@ -68,8 +61,8 @@ pub async fn migrate(pool: &PgPool) -> Result<(), Error> {
 }
 
 /// Creates feed `key` if it does not exist, inside the caller's transaction (so it can insert the
-/// feed's first rows in the same commit). Returns true when it was created. A key that is not a
-/// literal NATS subject is [`InvalidFeedKey`](crate::InvalidFeedKey), refused before any SQL, so
+/// feed's first rows in the same commit). Returns true when it was created. A key that breaks
+/// Corten's subject rules is [`InvalidFeedKey`](crate::InvalidFeedKey), refused before any SQL, so
 /// the transaction stays usable.
 pub async fn create_feed(conn: &mut PgConnection, key: &str) -> Result<bool, Error> {
     check_key(key)?;
@@ -145,7 +138,7 @@ pub enum Begin {
 
 /// Starts a write to feed `key`. With an idempotency key (from the client, one per user intent),
 /// a retry of a write that already committed gets [`Begin::Done`] instead of writing twice, and
-/// a retry that races the original waits for it. A key that is not a literal NATS subject is
+/// a retry that races the original waits for it. A key that breaks Corten's subject rules is
 /// [`InvalidFeedKey`](crate::InvalidFeedKey), refused before a transaction starts.
 pub async fn begin(pool: &PgPool, key: &str, idempotency_key: Option<&str>) -> Result<Begin, Error> {
     check_key(key)?;
@@ -225,7 +218,7 @@ async fn append<T: Row>(conn: &mut PgConnection, feed: &str, changes: &[Change<'
     seq.map(|s| s as u64).ok_or_else(|| format!("no feed named {feed}; create it with create_feed").into())
 }
 
-/// Unpublished outbox rows, oldest first, without rejected ones.
+/// Pending outbox rows, oldest first.
 pub(crate) struct Pending {
     pub id: i64,
     pub feed: String,
@@ -236,8 +229,7 @@ pub(crate) struct Pending {
 
 pub(crate) async fn pending(pool: &PgPool, limit: i64) -> Result<Vec<Pending>, Error> {
     let rows: Vec<(i64, String, String, i64, String)> = sqlx::query_as(
-        "SELECT id, feed, generation, seq, body FROM corten_outbox
-          WHERE published_at IS NULL AND rejected_at IS NULL ORDER BY id LIMIT $1",
+        "SELECT id, feed, generation, seq, body FROM corten_outbox WHERE published_at IS NULL ORDER BY id LIMIT $1",
     )
     .bind(limit)
     .fetch_all(pool)
@@ -245,25 +237,17 @@ pub(crate) async fn pending(pool: &PgPool, limit: i64) -> Result<Vec<Pending>, E
     Ok(rows.into_iter().map(|(id, feed, generation, seq, body)| Pending { id, feed, generation, seq, body }).collect())
 }
 
-pub(crate) async fn mark_published(pool: &PgPool, ids: &[i64]) -> Result<(), Error> {
-    sqlx::query("UPDATE corten_outbox SET published_at = clock_timestamp() WHERE id = ANY($1)").bind(ids).execute(pool).await?;
-    Ok(())
-}
-
-/// Marks an outbox row the relay can never publish, as it read the row: a row renamed since
-/// (a repair) is left alone. True when this call rejected it (so two overlapping relays log it
-/// once).
-pub(crate) async fn reject(pool: &PgPool, id: i64, feed: &str) -> Result<bool, Error> {
-    let rejected = sqlx::query(
-        "UPDATE corten_outbox SET rejected_at = clock_timestamp()
-          WHERE id = $1 AND feed = $2 AND published_at IS NULL AND rejected_at IS NULL",
+/// Retires acknowledged rows or rows with invalid keys. True if any were still pending.
+pub(crate) async fn mark_published(pool: &PgPool, ids: &[i64]) -> Result<bool, Error> {
+    let updated = sqlx::query(
+        "UPDATE corten_outbox SET published_at = clock_timestamp()
+          WHERE id = ANY($1) AND published_at IS NULL",
     )
-    .bind(id)
-    .bind(feed)
+    .bind(ids)
     .execute(pool)
     .await?
     .rows_affected();
-    Ok(rejected == 1)
+    Ok(updated != 0)
 }
 
 /// Takes or renews the relay lease on `conn` (a dedicated connection). The lease is free when it
@@ -294,9 +278,8 @@ pub(crate) async fn release(conn: &mut PgConnection) -> Result<(), Error> {
     Ok(())
 }
 
-/// Deletes published outbox rows and idempotency keys older than `age`. Keeps every feed's last
-/// `keep` patches, which a freshly started instance loads into its replay log, and every
-/// unpublished row, rejected ones included.
+/// Deletes done outbox rows and idempotency keys older than `age`. Keeps every feed's last
+/// `keep` patches, which a freshly started instance loads into its replay log.
 pub async fn prune(pool: &PgPool, age: Duration, keep: u64) -> Result<u64, Error> {
     let secs = age.as_secs_f64();
     let outbox = sqlx::query(

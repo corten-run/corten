@@ -473,48 +473,32 @@ in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream), on
 async-nats 0.52 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
 
-Cluster feed keys are literal [NATS subjects](https://docs.nats.io/nats-concepts/subjects):
+Cluster feed keys use literal [NATS subjects](https://docs.nats.io/nats-concepts/subjects):
 nonempty dot-separated tokens without whitespace, control characters (NUL included), `*` or
-`>`, and at most `corten_cluster::MAX_FEED_KEY_BYTES` (3,584) bytes. UTF-8 keys and keys
-with several tokens (`seller.42`) work; `""`, `.seller`, `seller.`, `seller..42` and `my feed`
-do not. The byte limit keeps `{subject_prefix}.{key}` inside a NATS server's default
-`max_control_line` (4 KB) with the rest of the publish line, so keep that setting at its
-default or above: a server that refuses a shorter line closes the connection, which the relay
-cannot tell from a network failure and retries. `create_feed` refuses an invalid key before
-inserting anything, with the typed
-`corten_cluster::InvalidFeedKey` error inside `corten_cluster::Error` (inspect it with
-`error.is::<corten_cluster::InvalidFeedKey>()`). The caller's transaction remains usable.
-`begin` refuses the same keys, including feeds an older version created, and `Cluster::feed`
-answers `None` for them (so a feed route answers 404), since no patch can reach such a feed.
-`Options::subject_prefix` must follow those same rules, in at most 255 bytes; `Cluster::start`
-refuses any other prefix before changing the database or starting background tasks.
+`>`, and at most `corten_cluster::MAX_FEED_KEY_BYTES` (1,024) bytes. UTF-8 and several tokens
+(`seller.42`) work. Corten follows the documented naming rules even where the broker is
+more permissive. `Options::subject_prefix` follows the same rules, with a 255-byte limit
+checked at startup. These bounds leave room for the reply inbox and protocol framing in
+NATS's default 4 KB control line, and fit the feed and outbox B-tree indexes on standard
+8 KB Postgres pages without relying on compression. Keep the default `max_control_line`
+or higher; a smaller limit or an unusually long custom reply inbox can still cause a
+publish failure.
 
-The relay sets aside an outbox row the server can never accept: one whose key breaks those
-rules (written by an older version or other SQL), or whose patch async-nats refuses as larger
-than the server's `max_payload`. It sets the row's `rejected_at`, logs it once on
-`corten::feed` with its id and the start of its key, and goes on publishing the rest. It leaves
-`published_at` unset, keeps the committed data and patch body, and does not retry or prune
-rejected rows. A feed whose patch was set aside for its size still gets its later patches;
-followers see the gap and reload the feed from Postgres. Inspect rejected rows with
-`SELECT id, feed, rejected_at FROM corten_outbox WHERE rejected_at IS NOT NULL`.
-Transport, acknowledgement and other JetStream failures still end the batch and retry, rather
-than being treated as bad data ([Choice 63](../design.md#choice-cluster-feed-subjects)).
+`create_feed` and `begin` refuse invalid keys before doing SQL. Inspect the error with
+`error.is::<corten_cluster::InvalidFeedKey>()`. `Cluster::feed` answers `None` without
+querying Postgres, and the snapshot and live routes answer 404.
 
-Upgrade every instance before relying on that. The first instance to start the new version
-adds `rejected_at`, builds the index of rows waiting to be published (`corten_outbox_ready`,
-which reads `corten_outbox` once and holds writes to it while it builds) and replaces the old
-`corten_outbox_pending`. An older instance still running ignores `rejected_at`: if it holds the
-relay lease, one bad row holds up its relay exactly as before, and an older instance that
-starts again recreates the old index (the next new instance to start replaces it). Roll out
-quickly, or shut the older instances down first.
+The relay logs and drops pending rows with invalid keys from an older version or external
+SQL, then publishes the remaining rows in order. Look on `corten::feed` for the outbox row
+ID and key. The relay uses the existing `published_at` marker to take the skipped row out
+of the queue; it did not deliver that patch. Ordinary pruning can remove it. There is no
+schema migration. An older instance holding the relay lease can still stall on a bad row
+until a new relay takes over. Publish and acknowledgement failures, including message size
+limits, still retry ([Choice 63](../design.md#choice-cluster-feed-subjects)).
 
-To repair a rejected row, pause writes to its feed, then in one transaction rename the key in
-the app's rows, `corten_feeds`, `corten_outbox` and `corten_idempotency` and clear
-`rejected_at` on that feed's unpublished rows; the relay publishes them on its next pass. A
-relay rejects a row only under the key it read, so one that read the old key just before the
-rename cannot set the renamed rows aside again. Clearing `rejected_at` without fixing the cause
-only gets the row rejected again (for a patch over `max_payload`, raise the server's limit
-first). Links that used the old key answer 404 afterwards.
+To replace an invalid key, write a new feed with a valid key using the app's current
+committed data, and point clients and future writes at it. Do not rename queued rows or
+try to replay the dropped patches.
 
 In the failover
 benchmark (200 clients, 50 writes a second, each instance killed and restarted under load),

@@ -46,15 +46,15 @@ pub use store::{begin, create_feed, migrate, prune, seq, Begin, Write, Written};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
-/// The longest feed key, in bytes. A key is published as `{subject_prefix}.{key}`, and with the
-/// longest prefix (255 bytes) the subject still fits a NATS server's default `max_control_line`
-/// (4 KB) with room for the rest of the publish line (the reply inbox and two lengths).
-pub const MAX_FEED_KEY_BYTES: usize = 3584;
+/// The longest feed key, in bytes. Leaves room for the prefix, reply inbox and publish framing
+/// in NATS's default 4 KB control line, and fits Postgres's B-tree indexes without compression
+/// on standard 8 KB pages.
+pub const MAX_FEED_KEY_BYTES: usize = 1024;
 
 /// The longest [`Options::subject_prefix`], in bytes.
 const MAX_PREFIX_BYTES: usize = 255;
 
-/// A feed key that is not a literal NATS subject, refused by [`create_feed`] and [`begin`]
+/// A feed key that breaks Corten's literal subject rules, refused by [`create_feed`] and [`begin`]
 /// before they touch the database. A key is published as `{subject_prefix}.{key}`, so it must
 /// be nonempty dot-separated tokens without whitespace, control characters (NUL included),
 /// `*` or `>`, and at most [`MAX_FEED_KEY_BYTES`] long. It arrives inside [`Error`]: test for
@@ -75,7 +75,7 @@ impl std::fmt::Display for InvalidFeedKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "corten-cluster: a feed key must be a literal NATS subject: nonempty dot-separated tokens \
+            "corten-cluster: a feed key must use nonempty dot-separated tokens \
              without whitespace, control characters, `*` or `>`, at most {MAX_FEED_KEY_BYTES} bytes"
         )
     }
@@ -83,15 +83,13 @@ impl std::fmt::Display for InvalidFeedKey {
 
 impl std::error::Error for InvalidFeedKey {}
 
-/// True when `name` is a literal subject of at most `max` bytes, as NATS documents subjects:
-/// nonempty `.`-separated tokens, no whitespace, and no `*` or `>` (wildcards, for subscribing
-/// only). Control characters are refused too: no subject needs one, and Postgres cannot store
-/// NUL. Stricter than async-nats's own `Subject::is_valid`, and reads `name` in place.
+/// Corten's literal subject policy follows the documented token and wildcard rules, also
+/// excluding control characters (Postgres cannot store NUL) and bounding the byte length.
 fn literal(name: &str, max: usize) -> bool {
     name.len() <= max
-        && name
-            .split('.')
-            .all(|token| !token.is_empty() && !token.chars().any(|c| c == '*' || c == '>' || c.is_whitespace() || c.is_control()))
+        && name.split('.').all(|token| {
+            !token.is_empty() && !token.chars().any(|c| matches!(c, '*' | '>') || c.is_whitespace() || c.is_control())
+        })
 }
 
 pub(crate) fn valid_key(key: &str) -> bool {
@@ -191,12 +189,9 @@ impl<S: Source> Cluster<S> {
 
     /// The feed for `key`, loaded on first use. `None` when no such feed exists. Ask again per
     /// request rather than keeping the handle: an idle feed is unloaded (`Options::idle_unload`),
-    /// and a kept handle would stop receiving patches. A key that is not a literal NATS subject
+    /// and a kept handle would stop receiving patches. A key that breaks Corten's subject rules
     /// ([`InvalidFeedKey`]) is `None` without a query: no feed can be written under it.
     pub async fn feed(&self, key: &str) -> Result<Option<Feed<S::Row>>, Error> {
-        if !valid_key(key) {
-            return Ok(None);
-        }
         self.hub.feed(key).await
     }
 

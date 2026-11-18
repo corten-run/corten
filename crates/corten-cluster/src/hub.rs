@@ -31,7 +31,7 @@ use futures_util::StreamExt;
 use sqlx::PgPool;
 use tokio::sync::watch;
 
-use crate::{store, Error, Options, Source};
+use crate::{store, valid_key, Error, Options, Source};
 
 struct Message {
     generation: String,
@@ -83,6 +83,10 @@ impl<S: Source> Hub<S> {
                     }
                     Some(Slot::Loading { done, .. }) => Next::Wait(done.subscribe()),
                     None => {
+                        // Only validated keys get a slot; a cached lookup needs no recheck.
+                        if !valid_key(key) {
+                            return Ok(None);
+                        }
                         let (done, _) = watch::channel(false);
                         slots.insert(key.to_string(), Slot::Loading { buffer: Vec::new(), done, current: None });
                         Next::Load
