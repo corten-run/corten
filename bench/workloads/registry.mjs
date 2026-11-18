@@ -4,7 +4,6 @@ import { allApps } from "../fullstack/inventory.mjs";
 import { locales } from "../marketplace/contract.mjs";
 
 export const registrySchema = "benchmark-groups/v1";
-export const catalogDocumentHeaders = "catalog-document-headers/v1";
 const freeze = (value) => {
   if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); }
   return value;
@@ -19,8 +18,9 @@ const records = (payload, targets, localized = false) => sources.flatMap((source
 // Reviewed challenger selection, not a ranking or an implementation-status filter.
 // Keep old marketplace group identities in marketplace/groups.mjs immutable for saved rounds.
 export const groups = freeze({
-  "catalog-page": group("Catalog page", ["aspnet", "express", "fastapi"], ["axum-maud", "drogon", "gin"],
-    ["typed-record", "escaped-fields-and-links", "get-filter", "request-time-source", "no-output-cache", catalogDocumentHeaders], records("catalog-v1", ["page"])),
+  "catalog-page": { ...group("Catalog page", ["aspnet", "express", "fastapi"], ["axum-maud", "drogon", "gin"],
+    ["typed-record", "escaped-fields-and-links", "get-filter", "request-time-source", "no-output-cache"], records("catalog-v1", ["page"])),
+    documentHeaders: "catalog-document-headers/v1" },
   "json-api": group("JSON API", ["aspnet", "fastapi", "express", "spring"], ["axum-maud", "drogon", "gin", "aspnet-aot"],
     ["typed-complete-schema", "numeric-json", "tested-errors", "fetch-parse-reserialize", "no-output-cache"],
     ["catalog-v1", "marketplace-v2"].flatMap((payload) => records(payload, ["json"]))),

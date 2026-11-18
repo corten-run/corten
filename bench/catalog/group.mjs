@@ -1,7 +1,7 @@
 // Pure native-runner selection/provenance. No readiness or inventory filtering.
 import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
-import { catalogDocumentHeaders, contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
+import { contractSha256, definition, registrySchema, selectedApps } from "../workloads/registry.mjs";
 // Keep this version check local: the observation reader imports this contract.
 const timedSchema = "catalog-saved-evidence/v3";
 
@@ -10,10 +10,10 @@ export const groupResultSchema = "catalog-group-results/v1";
 const historicalContract = "c267655acacf8083ce51cbd92d80cbfafbe5fe8f5f56141d4ef1d12a48ac89ee";
 export function groupDescriptor(name, { historical = false } = {}) {
   assert.equal(name, "catalog-page", "catalog runner supports only --group catalog-page");
-  const cases = structuredClone(definition(name).cases);
+  const { cases, documentHeaders } = structuredClone(definition(name));
   assert.ok(cases.every((c) => c.payload === "catalog-v1" && c.target === "page" && c.locale === null), "not a native catalog-page contract");
   return { schema: "catalog-group/v1", registrySchema, group: name, contractSha256: historical ? historicalContract : contractSha256(name),
-    ...(historical ? {} : { documentHeaders: catalogDocumentHeaders }),
+    ...(historical ? {} : { documentHeaders }),
     apps: selectedApps(name), cases, sources: [...new Set(cases.map((c) => c.source))],
     targets: [...new Set(cases.map((c) => c.target))], correctnessTargets: ["page", "json"] };
 }
