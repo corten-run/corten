@@ -340,8 +340,22 @@ establish a general ranking.
    `main`, so a commit of the pull request's own passes there; a pull request that cites one is
    merged with a merge commit, which keeps it on `main`'s history, or pushes an evidence tag for
    it first, since a squash or rebase merge leaves it out.
-3. Update the guide in `docs/guide/` that describes the behavior, and add a line to
-   `CHANGELOG.md` under Unreleased.
+3. Update the guide in `docs/guide/` that describes the behavior and add a file in
+   [`changelog.d/`](changelog.d/) instead of editing `CHANGELOG.md`. Name it
+   `pr-<PR-number>-<entry>.md`, using the pull request number, not the issue number, and a
+   different positive integer suffix for each entry in the pull request. Before you have a PR
+   number, use `branch-<unique-slug>-<entry>.md`. Pick a branch slug unique in this repository
+   (lowercase letters, digits and hyphens; add the fork owner or another discriminator if needed).
+   Each file holds one top-level `- ` bullet: one to four spaces after the hyphen, then a
+   paragraph of visible text. Indent continuation lines with spaces to at least the start of the
+   first line's text. No blank lines or nested blocks. Start the bullet's text with
+   `**Breaking:**` followed by a space for a breaking change.
+   Use only single-line `[label](https://host/path)` links with a text label and a bare absolute
+   HTTPS destination, without a title. Percent-encode any parentheses in the destination.
+   These links work in both the pending file and the released changelog.
+   Use emphasis and single-line code spans for prose; put literal brackets, angle brackets,
+   backslashes, URLs, and link examples inside code spans. Do not use raw HTML, character
+   references, images, or reference links or definitions. `npm run check` validates this format.
 4. Commit messages say what changed and why, in plain sentences.
 5. The description says what changed and why, the checks run and their results, and the
    measurements from 2. It merges after its [review](#review).

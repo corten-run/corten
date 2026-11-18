@@ -1,13 +1,12 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable changes to Corten. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- Catalog Contract scopes a push to `main` by its push diff, so a merge that changes no
-  benchmark input or framework crate runs no parity jobs. A push whose before commit is unknown
-  or not its ancestor still runs every job.
+Pending entries are in [changelog.d/](changelog.d/).
+
 - CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
   for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
