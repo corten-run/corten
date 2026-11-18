@@ -14,7 +14,7 @@ not remove that requirement.
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
 | What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
-| What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` (or `no_store` on the route) for one nothing may keep ([below](#caching)); `HtmlResult<Patches>` for a handler that answers only patches (`req.patch_or`, `req.patch`, `req.invalid`): the `get` of a route that says `patches`, one a part of a page is read again from ([Requests and forms](requests-and-forms.md#a-read-that-has-not-caught-up-yet)), and a typed write route, which skips its copy of the request head. Middleware taking `Req` before the route and raw `Table` handlers taking `Req` can still copy it ([layout reads](views.md#the-document)) |
+| What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` (or `no_store` on the route) for one nothing may keep ([below](#caching)); `HtmlResult<Patches>` for a handler that answers only patches (`req.patch_or`, `action.patch`, `req.invalid`): the `get` of a route that says `patches`, one a part of a page is read again from ([Requests and forms](requests-and-forms.md#a-read-that-has-not-caught-up-yet)), and a typed write route, which skips its copy of the request head. Middleware taking `Req` before the route and raw `Table` handlers taking `Req` can still copy it ([layout reads](views.md#the-document)) |
 | The client's address | the connection's peer; no `X-Forwarded-For` is read | a handler takes `ClientIp`; behind a proxy, `PROXIES=10.0.0.0/8` in the environment or `Policy::proxy("10.0.0.0/8")` ([below](#the-clients-address)) |
 | Who is asking | nothing: no lookup runs | a handler takes `Caller<Viewer>` (`Viewer: Identify`), looked up only then, once per request ([below](#who-is-asking)) |
 | A part of the app | none | `.area(admin::area)` for a `#[corten::routes(area = Admin)]` module: its routes under the prefix (a route outside it does not compile), with `.components(&[..])` for a stylesheet only its pages load and `caller = Staff` for who may use it ([below](#areas)) |
@@ -618,7 +618,7 @@ What it sends is what the app's own pages send, typed the same way:
    no `GET`, gets a 500 that says why ([Where a form posts](requests-and-forms.md#where-a-form-posts)).
    `Mode::Action` sends `Prefer: corten-draws=whole` as the runtime does, so a write that answers
    its own page (`req.page(..)`) is answered with the whole document, layout and layout reads
-   included ([Choice 64](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
+   included ([Choice 65](../design.md#choice-write-own-page-whole)). To ask as a runtime from before
    that, which is answered with `<main>`, add
    `.header(HeaderName::from_static("prefer"), "corten-draws=main")` (`corten::http::HeaderName`):
    a preference the test sets is sent first, and the first is the one read.
@@ -935,7 +935,14 @@ Every request goes through the same stages in the same order, outside in, each n
 before it (a route that says `unstaged` goes through none;
 [below](#a-route-outside-the-stages)):
 
-1. Compression is negotiated (`Accept-Encoding`); it is applied last.
+1. Compression is negotiated (`Accept-Encoding`); it is applied last. Weights use RFC 9110's
+   qvalue grammar (0 to 1, at most three decimals), as `Accept-Language` does. A coding with
+   a malformed or repeated weight is ignored rather than given the default weight of 1.
+   A comma inside another parameter's closed quoted value does not start a new coding, and
+   weight-like text inside that value is not a repeated weight. If the quote never closes, that
+   item is ignored and the remaining text is split on commas to recover other codings.
+   Only space and tab may surround the weight's `;`, and no whitespace may touch its `=`.
+   A coding with no weight still has weight 1.
 2. A write another site sent is refused (`Failure::CrossSite`). A browser's gets the error page,
    with the request's `Signal` made for it as in stage 3; its layout reads are not started.
 3. The request gets its `Signal`, its nonce and the app.

@@ -435,6 +435,58 @@ async function run(browser) {
       .join(" ");
   });
   check("the design system orders an adornment between the parts", layout === "button span input button", layout);
+  // A field with step="any" has no step for a button to add: both stay disabled
+  // as the value changes, and Home leaves the value as typed rather than going to an end the field
+  // may have to stay off (exclusive_min).
+  const discount = page.locator("#discount");
+  const discountButtons = page.locator("[data-scope=ui-number-field]").nth(2).locator("button");
+  const discountHint = page.locator("#discount-hint");
+  check("the discount has a visible, associated hint with the exclusive limits",
+    (await discount.getAttribute("aria-describedby")) === "discount-hint" && await discountHint.isVisible() &&
+    (await discountHint.textContent()) === "Enter a discount above 0 and below 100 percent, or none.");
+  await discount.fill("37.5");
+  await discount.press("Home");
+  const stepless = [await discount.inputValue(), await discount.getAttribute("step"), await discountButtons.nth(0).isDisabled(), await discountButtons.nth(1).isDisabled()].join(" ");
+  check("a number field with step any keeps both buttons disabled and Home leaves its value", stepless === "37.5 any true true", stepless);
+  // The browser owns the arrow keys and may land on a hinted endpoint. It must not step past it.
+  /** @param {string} from @param {string} key */
+  const arrow = async (from, key) => {
+    await discount.fill(from);
+    await discount.press(key);
+    return discount.evaluate((input) => ({ value: /** @type {HTMLInputElement} */ (input).value, valid: /** @type {HTMLInputElement} */ (input).validity.valid }));
+  };
+  const down = await arrow("0.5", "ArrowDown");
+  check("step any: ArrowDown from 0.5 does not go below the minimum hint", down.valid && Number(down.value) >= 0 && Number(down.value) <= 0.5, JSON.stringify(down));
+  const up = await arrow("99.5", "ArrowUp");
+  check("step any: ArrowUp from 99.5 does not go above the maximum hint", up.valid && Number(up.value) >= 99.5 && Number(up.value) <= 100, JSON.stringify(up));
+  // A number made in code is drawn with an exponent past 18 digits written out. Check that
+  // the browser admits that prefill near either end.
+  const drawnTiny = await discount.evaluate((input) => {
+    const [min, max] = [input.getAttribute("min") ?? "", input.getAttribute("max") ?? ""];
+    // The discount's own ends, and the mirror: below 0 (exclusive_max), from -1.
+    return [["1e-20", min, max], ["-1e-20", "-1", "0"]].map(([value, min, max]) => {
+      const i = document.createElement("input");
+      Object.assign(i, { type: "number", step: "any", min, max });
+      i.setAttribute("value", value);
+      return i.validity.valid;
+    }).join(" ");
+  });
+  check("step any: a tiny number drawn with an exponent is inside the drawn ends, above 0 and below it", drawnTiny === "true true", drawnTiny);
+  // The Rust render tests pin these attributes. In particular the stepped writer must not mix
+  // an exponent min and step with a fixed-notation prefilled value.
+  const otherBounds = await page.evaluate(() => {
+    const input = () => document.createElement("input");
+    const [tiny, positive, negative] = [input(), input(), input()];
+    const fixed = "0.00000000000000000001";
+    Object.assign(tiny, { type: "number", min: fixed, step: fixed, max: "1" });
+    tiny.setAttribute("value", fixed);
+    Object.assign(positive, { type: "number", min: "-3.4028235e38", max: "3.4028235e38", step: "any", value: "1e39" });
+    Object.assign(negative, { type: "number", min: "-3.4028235e38", max: "3.4028235e38", step: "any", value: "-1e39" });
+    return [tiny.validity.valid, positive.validity.rangeOverflow, negative.validity.rangeUnderflow].join(" ");
+  });
+  check("the prefilled tiny stepped value is valid and finite f32 bounds block overflow in both directions",
+    otherBounds === "true true true", otherBounds);
+  await discount.fill("");
 
   // ComboBox
   const color = page.getByLabel("Condition");
@@ -5027,6 +5079,103 @@ async function run(browser) {
   await listForSale();
   const offStep = (await plain.textContent("#result")) ?? "";
   check("no script: a weight between the input's steps is refused by the handler", offStep === "Enter a weight from 0.1 to 16 oz, in tenths.", offStep);
+  // The browser admits both hinted endpoints, but the handler refuses them. Values inside post
+  // without bypassing validation. Only the extra long spelling probe below bypasses validation.
+  /** @param {string} discount */
+  const postDiscount = async (discount, bypass = false) => {
+    await plain.goto(`${base}/`);
+    await plain.locator("[data-scope=ui-combo-box] select").selectOption("lp");
+    await plain.fill("#discount", discount);
+    const valid = await plain.evaluate((bypass) => {
+      const form = /** @type {HTMLFormElement} */ (document.querySelector('form[method=post][action="/"]'));
+      const valid = form.checkValidity();
+      if (bypass) form.noValidate = true;
+      return valid;
+    }, bypass);
+    if (!valid && !bypass) return "blocked by native validation";
+    const answer = await listForSale();
+    return `${valid} ${answer.status()} ${(await plain.textContent("#result")) ?? ""}`;
+  };
+  for (const end of ["0", "100"]) {
+    const atEnd = await postDiscount(end);
+    check(`no script: a discount of ${end} posts natively and is refused by the handler`, atEnd === "true 422 Enter a discount above 0 and below 100 percent, or none.", atEnd);
+  }
+  const roundedEnd = await postDiscount("0.00000000000000999999999999999999e16", true);
+  check("no script: the handler refuses a value that rounds to 100 even if native validation admits it",
+    roundedEnd.split(" ").slice(1).join(" ") === "422 Enter a discount above 0 and below 100 percent, or none.", roundedEnd);
+  const precise = await postDiscount("12.345");
+  check("no script: a discount with any decimals is listed", precise === "true 200 Listed 1 Lightly Played Ashen Drake at $12.50 each, 0.5 oz to ship, 12.345% off two or more.", precise);
+  // The least double above zero still posts in a spelling that used to be blocked by the hint.
+  for (const typed of ["4e-324", "1e-20"]) {
+    const tiny = await postDiscount(typed);
+    const [valid, status] = tiny.split(" ");
+    check(`no script: a discount of ${typed} posts natively and is held by the handler`, status === "200" && valid === "true", tiny.slice(0, 80));
+  }
+  await plain.goto(`${base}/help`);
+  const prefill = plain.getByLabel("Example discount (%)");
+  const defaultDiscount = await prefill.inputValue();
+  const discountMin = await prefill.getAttribute("min");
+  const [prefilled] = await Promise.all([
+    plain.waitForResponse((r) => new URL(r.url()).pathname === "/" && r.request().method() === "POST"),
+    plain.getByRole("button", { name: "Try listing with this discount" }).click(),
+  ]);
+  const postedDiscount = new URLSearchParams(prefilled.request().postData() ?? "").get("discount");
+  check("no script: a plain any-step input posts its tiny prefill unchanged",
+    defaultDiscount === "1e-20" && discountMin === "0" && postedDiscount === defaultDiscount && prefilled.status() === 200,
+    `${defaultDiscount} min=${discountMin} posted=${postedDiscount} ${prefilled.status()}`);
+  const ratios = [
+    { label: "Minimum ratio example", attr: "min", end: "0.001", inside: "1.0000000000000002e-3", rule: "Enter a ratio above 0.001 and at most 1." },
+    { label: "Maximum ratio example", attr: "max", end: "1", inside: "0.9999999701976776123046874", rule: "Enter a ratio of at least 0 and below 1." },
+  ];
+  const postRatios = async () => {
+    const [response] = await Promise.all([
+      plain.waitForResponse((r) => new URL(r.url()).pathname === "/help" && r.request().method() === "POST"),
+      plain.waitForEvent("load"),
+      plain.getByRole("button", { name: "Check the example ratios" }).click(),
+    ]);
+    return response;
+  };
+  /** @param {import("@playwright/test").Locator} input @param {string} rule */
+  const showsRatioError = async (input, rule) => {
+    const [hintId, errorId, ...extra] = (await input.getAttribute("aria-describedby") ?? "").split(/\s+/);
+    if (!hintId || !errorId || extra.length || await input.getAttribute("aria-invalid") !== "true") return false;
+    const hint = plain.locator(`[id="${hintId}"]`);
+    const error = plain.locator(`[id="${errorId}"]`);
+    return hintId !== errorId && await hint.isVisible() && await hint.textContent() === rule &&
+      await error.isVisible() && await error.textContent() === rule;
+  };
+  for (const { label, attr, end, inside, rule } of ratios) {
+    for (const typed of [end, inside]) {
+      await plain.goto(`${base}/help`);
+      const input = plain.getByLabel(label);
+      const hint = await input.getAttribute(attr);
+      await input.fill(typed);
+      const { name, valid } = await input.evaluate((el) => {
+        const input = /** @type {HTMLInputElement} */ (el);
+        return { name: input.name, valid: input.form?.checkValidity() };
+      });
+      const test = `no script: ${label} posts ${typed} natively (${typed === end ? "422 with the field error" : "200"})`;
+      if (!valid) {
+        check(test, false, `native validation blocked the form with ${attr}=${hint}`);
+        continue;
+      }
+      const response = await postRatios();
+      const posted = new URLSearchParams(response.request().postData() ?? "").get(name);
+      const refused = typed === end;
+      check(test, hint === end && posted === typed && response.status() === (refused ? 422 : 200) &&
+        (refused ? await showsRatioError(input, rule) : await plain.textContent("#result") === "Both ratios are in range."),
+      `${attr}=${hint} posted=${posted} ${response.status()}`);
+    }
+  }
+  await plain.goto(`${base}/help`);
+  for (const { label, end } of ratios) await plain.getByLabel(label).fill(end);
+  const bothValid = await plain.getByRole("button", { name: "Check the example ratios" }).evaluate(
+    (el) => /** @type {HTMLButtonElement} */ (el).form?.checkValidity(),
+  );
+  const both = bothValid ? await postRatios() : undefined;
+  check("no script: one refused submission redisplays both typed ratio errors",
+    both?.status() === 422 && (await Promise.all(ratios.map(({ label, rule }) => showsRatioError(plain.getByLabel(label), rule)))).every(Boolean),
+    both ? String(both.status()) : "native validation blocked the form");
   await plain.goto(`${base}/`);
   const plainFloor = plain.getByLabel("Lowest offer");
   check("no script: the lowest offer is enabled and optional (the handler checks it)", (await plainFloor.isEnabled()) && !(await plainFloor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required)));

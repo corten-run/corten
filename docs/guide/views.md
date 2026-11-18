@@ -323,7 +323,7 @@ keeps an unknown URL a scanner asks for as cheap as before. For any other failur
 refused before anything runs) it starts none and waits for none: it draws a value only if its read is
 in by the time the page is drawn, since what made the request fail (a database that is down) is
 likely what the read needs too. A patch or a live fragment is not a page and fills no place: pass it the
-value instead (`req.patch(Badge { count })` in `Mode::Action`). A `later` whose `to_html()` string the page never
+value instead (`action.patch(Badge { count })` with `action` from `req.action()`). A `later` whose `to_html()` string the page never
 writes draws nothing and is no error, and the page does not wait for its read. In a debug build, a
 `later` for a read the app does not start, one inside `<main>` (which a navigation would not fill),
 one in a patch, one rendered as text or whose `to_html()` string is placed twice, or one on a page
@@ -492,7 +492,7 @@ A handler forwarding the request into another Corten router does not suppress th
 layout reads. The receiving router decides whether to fill the page in its own dispatch.
 Its optional reads stop at the earliest active deadline, even if the receiving router has no
 deadline of its own.
-A handler that answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) can return
+A handler that answers only patches (`req.patch_or`, `action.patch`, `req.invalid`) can return
 `HtmlResult<Patches>` to skip the typed route's copy. With no middleware that could answer a
 page in its place, it skips whole-page negotiation and late filling too. Middleware or a raw
 `Table` handler taking `Req` can still copy the head
@@ -506,16 +506,16 @@ fn CartBadge(count: Option<u32>) -> impl Patch {
 
 async fn add_to_cart(req: Req, carts: State<Carts>, viewer: Caller<Viewer>) -> HtmlResult {
     carts.add(&viewer, ..).await?;
-    if req.mode == Mode::Action {
+    if let Some(action) = req.action() {
         let count = carts.count(&viewer).await;
-        return req.patch(CartBadge { count: Some(count) });
+        return action.patch(CartBadge { count: Some(count) });
     }
     req.redirect(&url::Cart)
 }
 ```
 
 Either way there is one answer that brings a layout read up to date after a write, a page: the page
-the write redirects to, or its own ([design Choice 64](../design.md#choice-write-own-page-whole)).
+the write redirects to, or its own ([design Choice 65](../design.md#choice-write-own-page-whole)).
 
 A nav link is written from one mention of its route, `<a {..req.nav(&url::News)}>"News"</a>`:
 `href`, `data-nav` and `aria-current="page"` when it is the page (`req.nav_section` for a link
@@ -613,7 +613,7 @@ html! {
     <p>{t.item_show_all_offers(item.offers.len())}</p>
     <li id={OfferId(&offer.id)}>{offer.seller}</li>                         // a patch's target
 }
-req.patch(html! { {Remove(OfferId(&sold.id))} })                             // the same id, in Mode::Action
+action.patch(html! { {Remove(OfferId(&sold.id))} })                             // the same id, in Mode::Action
 ```
 
 | What | Fails to compile when |
@@ -857,6 +857,16 @@ shortens a tag, so a browser that sends `zh-TW` or `zh-HK` gets `zh` (Simplified
 listed, not `zh-Hant`, and with `zh-Hans` and `zh-Hant` listed and no `zh`, the same-language
 step gives it `zh-Hans`, the first, even when `zh-Hant` is the header's next choice; an app with
 Traditional Chinese readers lists `zh-TW` and `zh-HK` too, which Corten has data for.
+
+Weights follow RFC 9110's `qvalue` grammar: `0` to `1`, with at most three decimal places
+(`0.123`, `1.000`; a decimal point with no digits is allowed too). A missing weight means `1`,
+and equal weights keep header order. A range with a malformed or repeated weight is ignored.
+A comma inside another parameter's closed quoted value does not start a new range, and
+weight-like text inside that value is not a repeated weight. If the quote never closes, that
+range is ignored and the remaining text is split on commas to recover other ranges.
+For example, `nan`, `inf`, `1.5`, `-0`, an empty value and too many decimals are malformed.
+Only space and tab may surround the weight's `;`, and no whitespace may touch its `=`.
+If no range matches, the first locale is still the fallback.
 
 A page that a shared cache keeps (`Public`), or one whose address should name its
 language (a link to the French page), takes its locale from its URL instead: a

@@ -30,6 +30,213 @@ pub use crate::body::{Body, BodyDataStream};
 pub use crate::handler::Request;
 pub use crate::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
 
+/// Byte ranges of list items, split on commas outside quoted strings. An item with an
+/// unterminated quote is skipped, then the rest is split on commas to recover valid siblings.
+pub(crate) fn list_items(header: &[u8]) -> impl Iterator<Item = std::ops::Range<usize>> + '_ {
+    let mut has_quotes = memchr::memchr(b'"', header).is_some();
+    let mut start = Some(0);
+    std::iter::from_fn(move || loop {
+        let from = start?;
+        let rest = &header[from..];
+        let comma = if has_quotes {
+            match unquoted_comma(rest) {
+                Ok(comma) => comma,
+                Err(open) => {
+                    start = memchr::memchr(b',', &rest[open..]).map(|at| from + open + at + 1);
+                    has_quotes = false;
+                    continue;
+                }
+            }
+        } else {
+            memchr::memchr(b',', rest)
+        };
+        let end = comma.map_or(header.len(), |at| from + at);
+        start = comma.map(|_| end + 1);
+        return Some(from..end);
+    })
+}
+
+/// The next separator, or the byte offset of a quote that never closes.
+fn unquoted_comma(item: &[u8]) -> std::result::Result<Option<usize>, usize> {
+    let mut quote = None;
+    let mut bytes = item.iter().enumerate();
+    while let Some((at, &byte)) = bytes.next() {
+        match byte {
+            b'"' => quote = if quote.is_some() { None } else { Some(at) },
+            b'\\' if quote.is_some() => {
+                bytes.next();
+            }
+            b',' if quote.is_none() => return Ok(Some(at)),
+            _ => {}
+        }
+    }
+    quote.map_or(Ok(None), Err)
+}
+
+/// RFC 9110 section 12.4.2's qvalue, in thousandths, without rounding or float syntax.
+pub(crate) fn qvalue(value: &[u8]) -> Option<u16> {
+    let (&whole, rest) = value.split_first()?;
+    let mut quality = match whole {
+        b'0' => 0,
+        b'1' => 1000,
+        _ => return None,
+    };
+    if rest.is_empty() {
+        return Some(quality);
+    }
+    let digits = rest.strip_prefix(b".")?;
+    if digits.len() > 3 {
+        return None;
+    }
+    let mut place = 100;
+    for &digit in digits {
+        if !digit.is_ascii_digit() || (whole == b'1' && digit != b'0') {
+            return None;
+        }
+        quality += u16::from(digit - b'0') * place;
+        place /= 10;
+    }
+    Some(quality)
+}
+
+/// The weight among a list item's parameters (the text after its first `;`), in thousandths:
+/// 1000 without a `q` parameter, `None` for a malformed or repeated weight or an unclosed quote.
+/// RFC 9110 (sections 5.6.6 and 12.4.2) allows only SP and HTAB around `;` and no whitespace around `=`.
+pub(crate) fn weight(params: &[u8]) -> Option<u16> {
+    // A complete qvalue cannot contain a semicolon, so a valid bare weight needs no scan.
+    if let [b'q' | b'Q', b'=', value @ ..] = params {
+        if let Some(quality) = qvalue(value) {
+            return Some(quality);
+        }
+    }
+    fn trim(mut s: &[u8]) -> &[u8] {
+        while let [b' ' | b'\t', rest @ ..] = s {
+            s = rest;
+        }
+        while let [rest @ .., b' ' | b'\t'] = s {
+            s = rest;
+        }
+        s
+    }
+    let mut quality = None;
+    let mut params = params.split(|&b| b == b';');
+    while let Some(param) = params.next() {
+        let param = trim(param);
+        if let [b'q' | b'Q', b'=', value @ ..] = param {
+            if quality.is_some() {
+                return None;
+            }
+            quality = Some(qvalue(value)?);
+        } else {
+            let mut pair = param.splitn(2, |&b| b == b'=');
+            let name = trim(pair.next().unwrap_or_default());
+            // A non-OWS separator must not disguise a weight as an unrelated parameter.
+            if name.eq_ignore_ascii_case(b"q") || name.iter().any(|b| !b.is_ascii_graphic()) {
+                return None;
+            }
+            if let Some(value) = pair.next().and_then(|value| value.strip_prefix(b"\"")) {
+                // Semicolons inside the string do not start parameters. If a backslash
+                // ends a chunk, it quotes the discarded semicolon, not the next byte.
+                if !ends_quoted_string(value) && !params.by_ref().any(ends_quoted_string) {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(quality.unwrap_or(1000))
+}
+
+fn ends_quoted_string(mut value: &[u8]) -> bool {
+    while let Some((&byte, rest)) = value.split_first() {
+        match byte {
+            b'"' => return true,
+            b'\\' => value = rest.get(1..).unwrap_or_default(),
+            _ => value = rest,
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{qvalue, weight};
+
+    #[test]
+    fn qvalues_follow_the_rfc_grammar() {
+        for (text, expected) in [
+            ("0", 0),
+            ("0.", 0),
+            ("0.0", 0),
+            ("0.00", 0),
+            ("0.000", 0),
+            ("1", 1000),
+            ("1.", 1000),
+            ("1.0", 1000),
+            ("1.00", 1000),
+            ("1.000", 1000),
+            ("0.1", 100),
+            ("0.12", 120),
+            ("0.123", 123),
+        ] {
+            assert_eq!(qvalue(text.as_bytes()), Some(expected), "{text}");
+        }
+        for quality in 0..1000 {
+            assert_eq!(qvalue(format!("0.{quality:03}").as_bytes()), Some(quality));
+        }
+        for text in [
+            "nan", "NaN", "inf", "infinity", "1.5", "-0", "1.0001", "0.1234", "", ".5", "+0.5", "1e0", "00", "1.001", "0. 1",
+            " 0.5", "0.5 ",
+        ] {
+            assert_eq!(qvalue(text.as_bytes()), None, "{text:?}");
+        }
+        assert_eq!(qvalue(b"0.\xff"), None);
+    }
+
+    #[test]
+    fn a_weight_is_q_equals_a_qvalue_with_whitespace_only_around_its_semicolon() {
+        for (params, expected) in [
+            ("", 1000),
+            ("level=1", 1000),
+            ("q=0.5", 500),
+            ("Q=0.5", 500),
+            (" \tq=0.5\t ", 500),
+            ("level=1; q=0", 0),
+            ("qs=2;q=0.25", 250),
+            ("q=0.25;qs=2", 250),
+            (r#"note="a\";q=0;b";q=0.25"#, 250),
+            (r#"note="a\\";q=0.25"#, 250),
+            (r#"note="a\;";q=0.25"#, 250),
+        ] {
+            assert_eq!(weight(params.as_bytes()), Some(expected), "{params:?}");
+        }
+        for params in [
+            "q =0",
+            "q\t=0",
+            "q= 0",
+            "Q =0.5",
+            "q",
+            "q=",
+            "q=nan",
+            "level=1;q =1",
+            "\u{00a0}q=0",
+            "q\u{00a0}=0",
+            "q=0\u{00a0}",
+            "\x0bq=0",
+            "q=1;q =0",
+            "q=1;Q=0",
+            "q=1;level=1;q=0",
+            r#"q=1;note="a;q=0;b";Q=0"#,
+            r#"q="0.5""#,
+            r#"note="oops"#,
+            r#"note="oops\"#,
+            r#"q=1;note="oops;a"#,
+        ] {
+            assert_eq!(weight(params.as_bytes()), None, "{params:?}");
+        }
+        assert_eq!(weight(b"\xa0q=0"), None);
+    }
+}
+
 /// This module is the one place these types are named: the paths each had before it are gone,
 /// one test each.
 ///

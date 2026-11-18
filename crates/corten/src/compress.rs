@@ -118,7 +118,9 @@ pub(crate) fn accepted(headers: &HeaderMap, offered: &[Coding]) -> Option<Coding
 /// Read as bytes, and a q-value parsed only where an item has one: every request reads this header.
 fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
     for value in headers.get_all(header::ACCEPT_ENCODING) {
-        for item in value.as_bytes().split(|&b| b == b',') {
+        let header = value.as_bytes();
+        for range in crate::http::list_items(header) {
+            let item = &header[range];
             let (name, params) = match item.iter().position(|&b| b == b';') {
                 Some(at) => (&item[..at], Some(&item[at + 1..])),
                 None => (item, None),
@@ -133,21 +135,12 @@ fn each_accepted(headers: &HeaderMap, mut f: impl FnMut(u16, Coding)) {
             } else {
                 continue;
             };
-            let q = params.map_or(1000, quality);
-            if q > 0 {
+            // A malformed weight skips its coding, so it cannot make that coding preferable.
+            if let Some(q @ 1..) = params.map_or(Some(1000), crate::http::weight) {
                 f(q, coding);
             }
         }
     }
-}
-
-/// The q-value among an item's parameters (`q=0.5`), in thousandths; 1000 when it has none.
-fn quality(params: &[u8]) -> u16 {
-    params
-        .split(|&b| b == b';')
-        .filter_map(|p| p.trim_ascii().strip_prefix(b"q=").or_else(|| p.trim_ascii().strip_prefix(b"Q=")))
-        .find_map(|q| std::str::from_utf8(q.trim_ascii()).ok()?.parse::<f32>().ok())
-        .map_or(1000, |q| (q.clamp(0.0, 1.0) * 1000.0) as u16)
 }
 
 fn compressible(content_type: &str) -> bool {
@@ -731,6 +724,82 @@ mod tests {
         assert_eq!(accepted(&accept("zstd, gzip"), &[Coding::Brotli, Coding::Gzip]), Some(Coding::Gzip));
     }
 
+    #[test]
+    fn negotiation_ignores_invalid_weights() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for weight in ["nan", "NaN", "inf", "infinity", "1.5", "-0", "1.0001", "0.1234", "", ".5", "+0.5", "1e0", "00", "1.001"] {
+            let header = format!("zstd;q={weight}, gzip;q=0.001");
+            assert_eq!(accepted(&accept(&header), &all), Some(Coding::Gzip), "{header}");
+            assert_eq!(negotiate(&accept(&header)).streamed(), Some(Coding::Gzip), "{header}");
+        }
+    }
+
+    #[test]
+    fn negotiation_skips_a_coding_with_a_malformed_or_duplicate_weight() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for params in ["q =0", "Q\t=0", "q= 0", "q", "\u{00a0}q=0", "q=1;q =0", "q=1;Q=0"] {
+            let header = format!("zstd;{params}, gzip;q=0.5");
+            let headers = accept(&header);
+            assert_eq!(accepted(&headers, &all), Some(Coding::Gzip), "{header}");
+            assert_eq!(negotiate(&headers).streamed(), Some(Coding::Gzip), "{header}");
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_bytes(b"zstd;\xa0q=0, gzip;q=0.5").unwrap());
+        assert_eq!(accepted(&headers, &all), Some(Coding::Gzip));
+        assert_eq!(negotiate(&headers).streamed(), Some(Coding::Gzip));
+        for header in ["zstd;Q=0.5, gzip;q=0.4", "zstd \t; \tQ=0.5 , gzip;q=0.4"] {
+            assert_eq!(accepted(&accept(header), &all), Some(Coding::Zstd), "{header}");
+            assert_eq!(negotiate(&accept(header)).streamed(), Some(Coding::Zstd), "{header}");
+        }
+    }
+
+    #[test]
+    fn negotiation_ignores_weight_like_text_in_quoted_coding_parameters() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for header in [
+            r#"zstd;q=0.8;note="a;q=0;b", gzip;q=0.5"#,
+            r#"zstd;note="a\";q=0;b";q=0.8, gzip;q=0.5"#,
+            r#"zstd;note="a\\";q=0.8, gzip;q=0.5"#,
+        ] {
+            let headers = accept(header);
+            assert_eq!(accepted(&headers, &all), Some(Coding::Zstd), "{header}");
+            assert_eq!(negotiate(&headers).streamed(), Some(Coding::Zstd), "{header}");
+        }
+    }
+
+    #[test]
+    fn negotiation_reads_weights_after_a_quoted_comma_in_coding_parameters() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for (header, expected) in [
+            (r#"zstd;note="a,b";q=0.8, gzip;q=0.9"#, Coding::Gzip),
+            (r#"zstd;note="a,b";q=0.8, gzip;q=0.5"#, Coding::Zstd),
+            (r#"zstd;q=0.8;note="a,b";q=0.9, gzip;q=0.5"#, Coding::Gzip),
+            (r#"zstd;note="a\",b";q=0.4, gzip;q=0.5"#, Coding::Gzip),
+            (r#"zstd;note="a,\\";q=0, gzip;q=0.5"#, Coding::Gzip),
+        ] {
+            let headers = accept(header);
+            assert_eq!(accepted(&headers, &all), Some(expected), "{header}");
+            assert_eq!(negotiate(&headers).streamed(), Some(expected), "{header}");
+        }
+    }
+
+    #[test]
+    fn negotiation_skips_a_coding_with_an_unterminated_quoted_parameter() {
+        let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
+        for (header, expected) in [
+            (r#"zstd;note="oops"#, None),
+            (r#"zstd;note="oops\"#, None),
+            (r#"zstd;q=0;note="oops, gzip"#, Some(Coding::Gzip)),
+            (r#"zstd;note="oops, gzip;q=0.5"#, Some(Coding::Gzip)),
+            (r#"zstd;note="a,br;q=1,b";other="oops, gzip;q=0.5"#, Some(Coding::Gzip)),
+            (r#"gzip;q=0.5, zstd;note="oops\"#, Some(Coding::Gzip)),
+        ] {
+            let headers = accept(header);
+            assert_eq!(accepted(&headers, &all), expected, "{header}");
+            assert_eq!(negotiate(&headers).streamed(), expected, "{header}");
+        }
+    }
+
     fn app() -> Compressed {
         let page = "<p>corten</p>".repeat(200);
         apply(
@@ -874,7 +943,7 @@ mod tests {
         assert_eq!(at("identity"), (None, None));
         assert_eq!(at("br;q=0, gzip;level=1;q=0.9 , zstd ; q=0.1"), (Some(Coding::Gzip), Some(Coding::Gzip)));
         assert_eq!(at("ZSTD;Q=0.2, Br;q=0.2"), (Some(Coding::Zstd), Some(Coding::Brotli)));
-        assert_eq!(at("x-gzip;q=bad, br;q=0"), (Some(Coding::Gzip), Some(Coding::Gzip)));
+        assert_eq!(at("x-gzip;q=bad, br;q=0"), (None, None), "an invalid weight skips that coding");
         assert_eq!(negotiate(&HeaderMap::new()), Accepts::default());
     }
 

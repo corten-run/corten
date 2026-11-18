@@ -71,7 +71,7 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    (`Area::route`) with a `get` that is not `HtmlResult<Patches>` (that one fails at
    `cargo build`, not `cargo check`). An answer type of the app's own says
    `type Kind = AnyAnswer;`; never claim `Patches`. A write route whose handler answers only
-   `req.patch_or(..)`, `req.patch(..)` or `req.invalid(..)` (a `data-patch` form's, its page
+   `req.patch_or(..)`, `action.patch(..)` or `req.invalid(..)` (a `data-patch` form's, its page
    inside `patch_or`) returns `HtmlResult<Patches>` too, the cheaper path in an app with layout
    reads (below); keep every other handler `HtmlResult`;
    never redirect only to show "saving". A slow part the page does not wait for (a slow read)
@@ -79,9 +79,11 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    page's own route, which says `patches`; the element needs the `#[derive(Id)]` id the part's
    patch replaces, and is the only one the read marks busy or failed), and that route's handler
    answers both:
-   `req.patch_or_with(|| async { req.patch(Part { .. }) }, || async { req.page(..) }).await`,
+   `req.patch_or_with(|action| async move { action.patch(Part { .. }) }, || async { req.page(..) }).await`,
    each side a closure that reads only what it draws; never a `<corten-live>` stream for it, and
-   never `req.patch` on the page side (it compiles, and a full load gets a fragment; a debug build answers it with a 500).
+   use the checked builder only on the part side; the page closure gets no builder and draws
+   the full page or a redirect. When both closures use owned read state, borrow that state
+   before the part's `async move` rather than cloning or moving it away from the page.
    Tags naming one address share one read, so each waits for the slowest: give independent slow
    parts a query field each (each its own address on the same route). A page in a `Public` has its
    part answered to everyone, so a part read for one visitor there gets a route of its own that
@@ -121,8 +123,10 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    fills no layout read (a `later` in it is a debug error), so a write whose answer must change one
    answers its page, never a patch of the read's view. An `HtmlResult` write route copies the
    request's head for the page it may answer, on every runtime write, patch or not; one that
-   answers patches alone (`patch_or`, `patch`, `invalid`) returns `HtmlResult<Patches>` (above)
-   and copies nothing. Write each nav link from
+   answers patches alone (`patch_or`, `action.patch`, `invalid`) returns `HtmlResult<Patches>` (above)
+   and skips the typed route's copy. A badge drawn as a component with its own id can take a
+   value read by the write and passed to `action.patch(Badge { count })`.
+   Write each nav link from
    one mention of its route, `<a {..req.nav(&url::Item { id })}>` (`href`, `data-nav` and
    `aria-current` on its own page; `req.nav_section(..)` for a section), never `href` and
    `aria-current` separately.

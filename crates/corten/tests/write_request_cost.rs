@@ -53,11 +53,11 @@ async fn page(req: Req) -> HtmlResult {
 }
 
 async fn typed(req: Req) -> HtmlResult<Patches> {
-    req.patch(html! { <p id={Message}>"Request cost fixture"</p> })
+    req.action().ok_or_else(corten::Error::not_found)?.patch(html! { <p id={Message}>"Request cost fixture"</p> })
 }
 
 async fn generic(req: Req) -> HtmlResult {
-    req.patch(html! { <p id={Message}>"Request cost fixture"</p> })
+    req.action().ok_or_else(corten::Error::not_found)?.patch(html! { <p id={Message}>"Request cost fixture"</p> })
 }
 
 struct Count(Arc<AtomicUsize>);

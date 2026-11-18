@@ -374,6 +374,15 @@ try {
   check("pages are compressed with zstd when the client accepts it", zstd.headers.get("content-encoding") === "zstd" && /accept-encoding/.test(zstd.headers.get("vary") ?? ""));
   const br = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "gzip, br" } });
   check("pages fall back to brotli", br.headers.get("content-encoding") === "br" && (await br.text()).includes("Card Name 5"));
+  for (const weight of ["nan", "inf", "1.5", "-0", "1.0001", "0.1234", ""]) {
+    const response = await fetch(`${base}/items/item_5`, {
+      headers: { "accept-language": `en;q=${weight}, fr;q=0.5`, "accept-encoding": `zstd;q=${weight}, gzip;q=0.001` },
+    });
+    check(
+      `invalid q=${weight} selects neither the language nor the coding`,
+      response.headers.get("content-language") === "fr" && response.headers.get("content-encoding") === "gzip" && (await response.text()).includes("Peu joué"),
+    );
+  }
   // A page's weak tag is its body's, the same compressed or not; a tag the client names is a 304
   // with no body, type or length, and the browser revisiting the page sends it and shows its copy.
   const tag = br.headers.get("etag") ?? "";

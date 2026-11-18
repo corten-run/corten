@@ -998,6 +998,135 @@ impl Shared {
 static DEFAULT: LazyLock<Arc<Shared>> =
     LazyLock::new(|| Arc::new(Shared::new(error_page_fn(default_error_page, ()), None, String::new())));
 
+/// A patch builder borrowed from a request checked by [`Req::action`].
+/// It consumes itself to answer once, just as [`FormPatch`] draws once. It has no public
+/// constructor and is neither `Clone` nor `Copy`; obtain another by checking the request again.
+///
+/// ```
+/// use corten::prelude::*;
+/// #[derive(Id)]
+/// struct SavedId;
+/// fn save(req: &Req) -> HtmlResult {
+///     if let Some(action) = req.action() {
+///         return action.patch(html! { <p id={SavedId}>"Saved"</p> });
+///     }
+///     req.redirect(&corten::Local::parse("/").unwrap())
+/// }
+/// ```
+///
+/// A request alone cannot build a patch, even after a boolean mode check:
+///
+/// ```compile_fail,E0599
+/// use corten::prelude::*;
+/// fn unchecked(req: &Req) -> HtmlResult {
+///     if req.mode != Mode::Action { return Err(corten::Error::not_found()); }
+///     req.patch(html! {})
+/// }
+/// ```
+///
+/// Nor can it build a patch with a status:
+///
+/// ```compile_fail,E0599
+/// use corten::prelude::*;
+/// fn unchecked(req: &Req) -> HtmlResult {
+///     req.patch_with_status(corten::http::StatusCode::OK, html! {})
+/// }
+/// ```
+///
+/// Its field is private:
+///
+/// ```compile_fail,E0423
+/// use corten::{prelude::*, Action};
+/// fn unchecked(req: &Req) {
+///     let action = Action(req);
+/// }
+/// ```
+///
+/// It cannot be cloned:
+///
+/// ```compile_fail,E0599
+/// use corten::{prelude::*, Action};
+/// fn duplicate(action: Action<'_>) {
+///     let another = action.clone();
+/// }
+/// ```
+///
+/// Nor copied to answer twice:
+///
+/// ```compile_fail,E0382
+/// use corten::{prelude::*, Action};
+/// fn duplicate(action: Action<'_>) -> HtmlResult {
+///     let first: HtmlResult = action.patch(html! {});
+///     action.patch(html! {})
+/// }
+/// ```
+///
+/// Its borrow prevents using it after writing that request's mode:
+///
+/// ```compile_fail,E0506
+/// use corten::prelude::*;
+/// fn changed(mut req: Req) -> HtmlResult {
+///     let Some(action) = req.action() else { return Err(corten::Error::not_found()); };
+///     req.mode = Mode::Document;
+///     action.patch(html! {})
+/// }
+/// ```
+pub struct Action<'r>(&'r Req);
+
+impl Action<'_> {
+    /// Answers a `<form data-patch>` submit with fragments: the runtime replaces each element on
+    /// the page that has the id of one of `view`'s top-level elements. One without an id would
+    /// be dropped in the browser, so `view` is a [`Patch`](crate::view::Patch), which the compiler
+    /// checks: usually a component declared `-> impl Patch` whose root has a `#[derive(Id)]` id.
+    /// It is any [`HtmlResult`], `HtmlResult<Patches>` too ([`crate::Patches`]).
+    ///
+    /// Obtain this builder from [`Req::action`], or answer both modes with [`Req::patch_or`].
+    pub fn patch<For, Kind: crate::answer::PatchingKind>(
+        self,
+        view: impl crate::view::Patch,
+    ) -> crate::Result<HtmlResponse<For, Kind>> {
+        self.patch_with_status(StatusCode::OK, view)
+    }
+
+    /// Same as [`Action::patch`] with another status.
+    pub fn patch_with_status<For, Kind: crate::answer::PatchingKind>(
+        self,
+        status: StatusCode,
+        view: impl crate::view::Patch,
+    ) -> crate::Result<HtmlResponse<For, Kind>> {
+        let mut body = String::new();
+        crate::form::DREW_KEY.set(false);
+        // A debug build notes the places a patch draws: a patch is not a page, so none is filled.
+        #[cfg(debug_assertions)]
+        {
+            let (rendered, places) = crate::gather(&crate::layout::SLOTS, crate::layout::Places::default(), || {
+                self.0.render_into(view, &mut body, false)
+            });
+            rendered?;
+            if let Some(crate::layout::Slot { name, .. }) = places.and_then(|places| places.slots.first().copied()) {
+                return Err(self.0.unserved(format!(
+                    "the patch renders later::<{name}>(), which only a page fills, so nothing is drawn there: pass the value to the patch's view instead"
+                )));
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        self.0.render_into(view, &mut body, false)?;
+        // In an app whose areas have stylesheets, a patch under one ends with their links, after
+        // its elements, where adding them moves nothing; the runtime takes them out first.
+        if !self.0.shared.sections.is_empty() {
+            self.0.section_links(&mut body);
+        }
+        #[cfg(debug_assertions)]
+        self.0.parses_whole(&body)?;
+        let mut res = html_response(status, body, Some(PATCH_HEADER));
+        // A form's submit key is new on every render, so this body's tag would never match.
+        if crate::form::DREW_KEY.take() {
+            res.extensions_mut().insert(crate::cache::Unrepeatable);
+        }
+        Ok(HtmlResponse::new(res))
+    }
+}
+
 /// What draws the form's patch in [`Req::invalid_with`]: a patch and nothing else.
 pub struct FormPatch<'r>(&'r Req);
 
@@ -2341,61 +2470,12 @@ impl Req {
         }
     }
 
-    /// Answers a `<form data-patch>` submit with fragments: the runtime replaces each element on
-    /// the page that has the id of one of `view`'s top-level elements. One without an id would
-    /// be dropped in the browser, so `view` is a [`Patch`](crate::view::Patch), which the compiler
-    /// checks: usually a component declared `-> impl Patch` whose root has a `#[derive(Id)]` id.
-    /// It is any [`HtmlResult`], `HtmlResult<Patches>` too ([`crate::Patches`]).
-    ///
-    /// It answers whatever mode reached the handler: a browser that asked by itself (a form
-    /// without JavaScript, a link, a reload) shows the fragment as the whole document. Answer
-    /// both with [`Req::patch_or`], or call this only when `req.mode == Mode::Action`; a debug
-    /// build answers a browser's plain request that got a patch with a 500 naming the route.
-    pub fn patch<For, Kind: crate::answer::PatchingKind>(
-        &self,
-        view: impl crate::view::Patch,
-    ) -> crate::Result<HtmlResponse<For, Kind>> {
-        self.patch_with_status(StatusCode::OK, view)
-    }
-
-    /// Same as [`Req::patch`] with another status. Like it, it answers whatever mode reached the
-    /// handler, and a debug build answers a browser's plain request that got it with a 500: use
-    /// [`Req::patch_or`], or check `req.mode == Mode::Action` first.
-    pub fn patch_with_status<For, Kind: crate::answer::PatchingKind>(
-        &self,
-        status: StatusCode,
-        view: impl crate::view::Patch,
-    ) -> crate::Result<HtmlResponse<For, Kind>> {
-        let mut body = String::new();
-        crate::form::DREW_KEY.set(false);
-        // A debug build notes the places a patch draws: a patch is not a page, so none is filled.
-        #[cfg(debug_assertions)]
-        {
-            let (rendered, places) = crate::gather(&crate::layout::SLOTS, crate::layout::Places::default(), || {
-                self.render_into(view, &mut body, false)
-            });
-            rendered?;
-            if let Some(crate::layout::Slot { name, .. }) = places.and_then(|places| places.slots.first().copied()) {
-                return Err(self.unserved(format!(
-                    "the patch renders later::<{name}>(), which only a page fills, so nothing is drawn there: pass the value to the patch's view instead"
-                )));
-            }
-        }
-        #[cfg(not(debug_assertions))]
-        self.render_into(view, &mut body, false)?;
-        // In an app whose areas have stylesheets, a patch under one ends with their links, after
-        // its elements, where adding them moves nothing; the runtime takes them out first.
-        if !self.shared.sections.is_empty() {
-            self.section_links(&mut body);
-        }
-        #[cfg(debug_assertions)]
-        self.parses_whole(&body)?;
-        let mut res = html_response(status, body, Some(PATCH_HEADER));
-        // A form's submit key is new on every render, so this body's tag would never match.
-        if crate::form::DREW_KEY.take() {
-            res.extensions_mut().insert(crate::cache::Unrepeatable);
-        }
-        Ok(HtmlResponse::new(res))
+    /// The builder for an HTML patch, only when the effective mode is [`Mode::Action`].
+    /// Otherwise answer with a page or redirect, or use [`Req::patch_or`] to select both.
+    /// This reads `mode`, including an application override; it is not a check for POST.
+    #[inline]
+    pub fn action(&self) -> Option<Action<'_>> {
+        (self.mode == Mode::Action).then_some(Action(self))
     }
 
     /// Answers a `data-patch` form (a write, Load more) both ways: with JavaScript
@@ -2444,7 +2524,7 @@ impl Req {
     {
         // The patch is rendered before the future is made, so the future holds the answer and not
         // `view`: a view of non-`Send` references would make the handler's future not `Send`.
-        let patch = (self.mode == Mode::Action).then(|| self.patch(view));
+        let patch = self.action().map(|action| action.patch(view));
         async move {
             match patch {
                 Some(patch) => patch,
@@ -2454,10 +2534,11 @@ impl Req {
     }
 
     /// [`Req::patch_or`] for a part that needs a read of its own: both sides are lazy, so the
-    /// runtime's read of the part ([`Mode::Action`]) runs `part()` alone, and every other request
+    /// runtime's read of the part ([`Mode::Action`]) runs `part(action)` alone, and every other request
     /// (a full load, a navigation, a data client, a browser without JavaScript) runs `page()`
-    /// alone. Neither reads what the other draws. `part()` answers `HtmlResult<Patches>`, which only
-    /// [`Req::patch`] and the other methods that answer a patch make, so a page or a redirect there
+    /// alone. Neither reads what the other draws. `part(action)` receives the checked
+    /// [`Action`] and answers `HtmlResult<Patches>`, which only [`Action::patch`] and the
+    /// other methods that answer a patch make, so a page or a redirect there
     /// does not compile; `page()` is a plain `HtmlResult`.
     ///
     /// It is how one handler answers a page and its slow part: the page draws the part waiting,
@@ -2468,9 +2549,8 @@ impl Req {
     /// (`docs/design.md#choice-slow-part-link`). Both sides are one route's answers, for the
     /// same people: a page in a [`crate::Public`], which shared caches give to anyone, cannot
     /// read a part for one visitor here, so such a part is read from a route of its own (one that
-    /// says `patches`, named by [`ReadAgain::now`]). `page()` takes any `HtmlResult`, so a
-    /// [`Req::patch`] there compiles too, and a full load would get a fragment, as on
-    /// [`Req::patch_or`]'s other side; making a patch only for the runtime's request is #1532.
+    /// says `patches`, named by [`ReadAgain::now`]). The page side receives no builder:
+    /// it answers the full page or a redirect, not an unchecked patch.
     ///
     /// ```
     /// use corten::prelude::*;
@@ -2500,7 +2580,7 @@ impl Req {
     ///
     /// async fn home(req: Req, Params(at): Params<url::Home>) -> HtmlResult<Patches> {
     ///     req.patch_or_with(
-    ///         || async { req.patch(Picks { picks: &picks_for_you().await }) },
+    ///         |action| async move { action.patch(Picks { picks: &picks_for_you().await }) },
     ///         || async {
     ///             let picks = if at.picks == Some(true) { Some(picks_for_you().await) } else { None };
     ///             req.page(html! {
@@ -2523,6 +2603,31 @@ impl Req {
     /// # let _ = App::new(url::router()).router();
     /// ```
     ///
+    /// A shared answer keeps its inference: `Public` finds `HtmlResult<Patches>` from the call.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    /// use std::time::Duration;
+    ///
+    /// #[derive(Id)]
+    /// struct PartId;
+    ///
+    /// async fn shared(req: Req) -> Public<HtmlResult<Patches>> {
+    ///     Public::new(
+    ///         Duration::from_secs(60),
+    ///         req.patch_or_with(
+    ///             |action| async move { action.patch(html! { <p id={PartId}>"part"</p> }) },
+    ///             || async {
+    ///                 req.page(html! {
+    ///                     <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html>
+    ///                 })
+    ///             },
+    ///         )
+    ///         .await,
+    ///     )
+    /// }
+    /// ```
+    ///
     /// The part side answers the runtime's read, so a page there does not compile:
     ///
     /// ```compile_fail,E0271
@@ -2530,22 +2635,46 @@ impl Req {
     ///
     /// async fn home(req: Req) -> HtmlResult<Patches> {
     ///     let doc = || html! { <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html> };
-    ///     req.patch_or_with(|| async { req.page(doc()) }, || async { req.page(doc()) }).await
+    ///     req.patch_or_with(|_action| async { req.page(doc()) }, || async { req.page(doc()) }).await
     /// }
     /// ```
-    pub async fn patch_or_with<For, Kind, P, PartFut, G, PageFut>(
-        &self,
+    /// As with `patch_or`, only patch-answer kinds are possible, not a data screen:
+    ///
+    /// ```compile_fail,E0277
+    /// use corten::prelude::*;
+    /// async fn wrong(req: Req) -> HtmlResult<corten::Screen<()>> {
+    ///     req.patch_or_with(
+    ///         |action| async move { action.patch(html! {}) },
+    ///         || async { req.page(html! {
+    ///             <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html>
+    ///         }) },
+    ///     ).await
+    /// }
+    /// ```
+    ///
+    /// The part closure takes the checked builder, even if it answers another patch-making method:
+    ///
+    /// ```compile_fail,E0593
+    /// use corten::prelude::*;
+    /// async fn wrong(req: Req) -> HtmlResult<Patches> {
+    ///     req.patch_or_with(|| async { Err(corten::Error::not_found()) }, || async {
+    ///         req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main>"Home"</main></body></html> })
+    ///     }).await
+    /// }
+    /// ```
+    pub async fn patch_or_with<'r, For, Kind: crate::answer::PatchingKind, P, PartFut, G, PageFut>(
+        &'r self,
         part: P,
         page: G,
     ) -> crate::Result<HtmlResponse<For, Kind>>
     where
-        P: FnOnce() -> PartFut,
+        P: FnOnce(Action<'r>) -> PartFut,
         PartFut: Future<Output = crate::Result<HtmlResponse<For, crate::Patches>>>,
         G: FnOnce() -> PageFut,
         PageFut: Future<Output = crate::Result<HtmlResponse<For>>>,
     {
-        if self.mode == Mode::Action {
-            part().await.map(HtmlResponse::of)
+        if let Some(action) = self.action() {
+            part(action).await.map(HtmlResponse::of)
         } else {
             page().await.map(HtmlResponse::of)
         }
@@ -2582,7 +2711,7 @@ impl Req {
     {
         let status = errors.refusal().status();
         match self.mode {
-            Mode::Action => self.patch_with_status(status, form),
+            Mode::Action => Action(self).patch_with_status(status, form),
             #[cfg(feature = "json")]
             Mode::Data => Ok(HtmlResponse::new(errors.response())),
             _ => {
@@ -2993,7 +3122,7 @@ fn page_where_no_page_is(res: Response, shared: &Shared, path: &str) -> Response
 /// A patch answering a browser's plain request (no `data-patch`, asking for HTML): the browser
 /// shows the fragment as the whole document, with no layout, stylesheets or navigation, at the
 /// request's address. [`Req::patch_or`] answers the page or a redirect then, and a handler that
-/// checks `req.mode == Mode::Action` itself answers its patch only in that mode. The route is
+/// binds `Some(action)` from `req.action()` itself answers its patch only in that mode. The route is
 /// named as `#[corten::routes]` declares it, and by the request's path where no macro route
 /// matches it (a hand-built `Table`'s). The handler's cookies and `Clear-Site-Data` go out with
 /// the error page, as for [`page_where_no_page_is`].
@@ -3016,7 +3145,7 @@ fn patch_where_a_page_belongs(res: Response, shared: &Shared, method: &http::Met
         res,
         shared.dev,
         format!(
-            "a browser's plain {method} to {route} (no data-patch, asking for HTML) was answered with a patch, which the browser shows as the whole page, with no layout, stylesheets or navigation: answer both with req.patch_or(view, || async {{ .. }}), which draws the page or a redirect when the runtime did not ask, or check req.mode == Mode::Action before req.patch"
+            "a browser's plain {method} to {route} (no data-patch, asking for HTML) was answered with a patch, which the browser shows as the whole page, with no layout, stylesheets or navigation: answer both with req.patch_or(view, || async {{ .. }}), which draws the page or a redirect when the runtime did not ask, or bind Some(action) from req.action() before action.patch"
         ),
     )
 }
@@ -3727,7 +3856,7 @@ impl ReadAgain {
         (self.after.as_secs() + u64::from(self.after.subsec_nanos() > 0)).max(1)
     }
 
-    /// In a patch (a `data-patch` form's answer, [`Req::patch`]) whose part shows a read still
+    /// In a patch (a `data-patch` form's answer, [`Action::patch`]) whose part shows a read still
     /// catching up with the write: after `after`, the runtime fetches `route` as a GET
     /// `data-patch` form would (`corten: action`) and applies the patch it answers, which asks
     /// again while it is behind. The route says `patches` and its `get` handler returns
@@ -3876,7 +4005,7 @@ impl ReadAgain {
     ///     #[route("/", get = home, patches)]
     ///     pub struct Home;
     /// }
-    /// # async fn home(req: Req) -> HtmlResult<Patches> { req.patch(html! {}) }
+    /// # async fn home(req: Req) -> HtmlResult<Patches> { req.action().ok_or_else(corten::Error::not_found)?.patch(html! {}) }
     ///
     /// #[derive(Id)]
     /// struct PicksId;
@@ -3912,7 +4041,7 @@ impl ReadAgain {
     ///     #[route("/", get = home, patches)]
     ///     pub struct Home;
     /// }
-    /// # async fn home(req: Req) -> HtmlResult<Patches> { req.patch(html! {}) }
+    /// # async fn home(req: Req) -> HtmlResult<Patches> { req.action().ok_or_else(corten::Error::not_found)?.patch(html! {}) }
     ///
     /// fn waiting() -> impl Patch {
     ///     ReadAgain::now(url::Home)
