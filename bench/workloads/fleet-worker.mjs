@@ -4,9 +4,9 @@ import { createHash } from "node:crypto";
 import { registerHooks } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 
-let booted = false, providerFailure, controllerFailure;
+let booted = false, providerFailure, controllerFailure, stopWatching;
 try {
-  assert.deepEqual(Object.keys(workerData).sort(), ["args", "cancellation", "entry", "sources"]);
+  assert.deepEqual(Object.keys(workerData).sort(), [...(workerData.admission === true ? ["admission"] : []), "args", "cancellation", "entry", "sources"]);
   assert.ok(workerData.cancellation instanceof SharedArrayBuffer && workerData.cancellation.byteLength === 4);
   assert.ok(Array.isArray(workerData.args) && workerData.args.length <= 24 && workerData.args.every((arg) => typeof arg === "string" && arg.length <= 4096));
   assert.ok(Array.isArray(workerData.sources) && workerData.sources.length <= 100);
@@ -43,6 +43,11 @@ try {
   assert.ok(approval && !preview && !options.deliverAudit);
   assert.ok(options.collect || options.detach && options.group && options.fleet);
   const cancelled = new Int32Array(workerData.cancellation);
+  if (workerData.admission) {
+    assert.ok(options.detach && options.group && options.fleet);
+    const { watchSupervisedHost } = await import(new URL("./fleet.mjs", workerData.entry).href);
+    stopWatching = watchSupervisedHost(options, (proof) => parentPort.postMessage({ schema: "benchmark-group-fleet-worker-ready/v1", ...proof }));
+  }
   // productionMain's finally confirms credential-worker settlement. Its result
   // alone is insufficient: the parent also waits for this worker's clean exit.
   const code = await productionMain(workerData.args, { interrupted: () => Atomics.load(cancelled, 0) !== 0, write: () => {} });
@@ -55,4 +60,4 @@ try {
     uncertain: error?.controlTreeUncertain === true || error?.controlUncertain === true,
     ...(diagnostic ? { providerDiagnostic: diagnostic } : {}), ...(stage ? { controllerStage: stage } : {}) });
 }
-parentPort.close();
+stopWatching?.(); parentPort.close();

@@ -160,6 +160,8 @@ export function checkPackage(root) {
   }
   const campaign = lstatSync(join(root, "campaign"), { throwIfNoEntry: false });
   if (campaign) { assert.ok(campaign.isDirectory() && !campaign.isSymbolicLink(), "package campaign must be physical"); selected.push("campaign"); }
+  const control = lstatSync(join(root, "control"), { throwIfNoEntry: false });
+  if (control) { assert.ok(control.isDirectory() && !control.isSymbolicLink(), "control custody must be physical"); selected.push("control"); }
   const result = walkTree(root, bounds(), selected, false);
   assert.ok(result.tarBytes <= tarLimit, "expanded archive size limit"); return result;
 }
