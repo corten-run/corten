@@ -4,20 +4,22 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import test from "node:test";
-import { auditProgram, auditProtocol } from "./cloud-audit.mjs";
+import { auditDelivery, auditProgram, auditProtocol } from "./cloud-audit.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { commit, campaign, syntheticDelivery } from "./cloud-fixtures.mjs";
 
 function fake(flags = {}, group = "json-api") {
   const token = "0123456789abcdef", dir = `/bench/campaign/${campaign}`, cp = "c".repeat(64);
   const { prefix } = auditProtocol(group), delivery = syntheticDelivery(group);
+  if (flags.bundleSchema) delivery.bundle.schema = flags.bundleSchema;
   const identities = delivery.bundle.receipts.map((r) => r.identity);
   const body = { schema: `benchmark-${prefix}-audit-subject/v1`, campaignSha256: cp, commit,
     ...(group === "mixed-production" ? { requests: identities.map((identity) => ({ identity })) } : { identities }), qualified: false };
   const subject = { ...body, subjectSha256: deploymentSha256(body) };
   delivery.subjectSha256 = delivery.review.subjectSha256 = subject.subjectSha256;
   if (flags.changedReceipt) delivery.bundle.receipts[0].identity = { ...delivery.bundle.receipts[0].identity, imageId: "synthetic-unapproved-image" };
-  const bytes = Buffer.from(JSON.stringify(delivery)), stage = `/bench/cloud-${prefix}-audit-${token}.json`, target = `${dir}/${prefix}-audit-delivery.json`;
+  const bytes = Buffer.from(JSON.stringify(delivery)), stage = `/bench/cloud-${prefix}-audit-${token}.json`,
+    target = `${dir}/${prefix}-audit-delivery${flags.control ? "-pending" : ""}.json`;
   const files = new Map([
     ["/bench/campaign/.host-attempt.json", JSON.stringify({ id: campaign, commit, campaignSha256: cp })],
     [`${dir}/plan.json`, JSON.stringify({ round: "r21", commit, campaignSha256: cp })],
@@ -41,7 +43,7 @@ function fake(flags = {}, group = "json-api") {
     readdirSync: () => ["plan.json", "00000-review-needed.json", `${prefix}-audit-subject.json`],
   };
   const intent = { group, campaign, sha256: createHash("sha256").update(bytes).digest("hex"), subjectSha256: subject.subjectSha256 };
-  const run = () => runInNewContext(auditProgram({ token, round: "r21", commit }, intent, true), {
+  const run = () => runInNewContext(auditProgram({ token, round: "r21", commit, ...(flags.control ? { control: {} } : {}) }, intent, true), {
     require(name) {
       if (name === "node:fs") return fs;
       if (name === "node:path") return path.posix;
@@ -56,8 +58,21 @@ function fake(flags = {}, group = "json-api") {
       assert.fail("unapproved fake process dependency");
     }, process: { getuid: () => 1000 }, console: { log: () => {} }, Buffer,
   }, { timeout: 1000 });
-  return { run, files, target, stage, get moves() { return moves; } };
+  const intake = () => auditDelivery(bytes, { campaign, approveSubject: subject.subjectSha256, auditGroup: group });
+  return { run, intake, files, target, stage, get moves() { return moves; } };
 }
+test("local and remote inboxes agree on current JSON audit envelopes without admitting foreign versions or groups", () => {
+  for (const group of ["json-api", "mixed-production"]) {
+    for (const schema of ["json-api-native-audits/v1", "json-api-native-audits/v2", "json-api-native-audits/v3", "mixed-native-source-audits/v1"]) {
+      const probe = fake({ bundleSchema: schema }, group);
+      if (group === "json-api" ? ["json-api-native-audits/v1", "json-api-native-audits/v2"].includes(schema) : schema === "mixed-native-source-audits/v1") {
+        assert.equal(probe.intake().group, group); probe.run(); assert.equal(probe.moves, 1);
+      } else {
+        assert.throws(probe.intake); assert.throws(probe.run); assert.equal(probe.moves, 0);
+      }
+    }
+  }
+});
 test("fixed remote inbox publishes once, rebinds subject body, and never overwrites a collision", () => {
   for (const group of ["json-api", "mixed-production"]) {
   const h = fake({}, group); h.run(); assert.ok(h.files.has(h.target)); assert.ok(!h.files.has(h.stage)); assert.equal(h.moves, 1);
@@ -69,4 +84,13 @@ test("fixed remote inbox publishes once, rebinds subject body, and never overwri
   }
   for (const field of ["round", "commit", "token"]) assert.throws(() => auditProgram({ round: "r21", commit, token: "0123456789abcdef", [field]: "'; arbitraryCommand #" },
     { campaign, sha256: "a".repeat(64), subjectSha256: "b".repeat(64) }));
+});
+
+test("registered audit publish leaves only pending delivery for the detached sealed-admission barrier", () => {
+  for (const group of ["json-api", "mixed-production"]) {
+    const h = fake({ control: true }, group); h.run();
+    assert.ok(h.files.has(h.target)); assert.ok(h.target.endsWith("-pending.json"));
+    assert.ok(!h.files.has(h.target.replace("-pending.json", ".json")));
+    assert.throws(h.run); assert.equal(h.moves, 1);
+  }
 });

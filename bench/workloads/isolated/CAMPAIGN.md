@@ -8,6 +8,21 @@ skipping an entire group. Actual source/OS integration is not inferred from synt
 adapter tests. No benchmark timing was measured to test this code. Independent review,
 merged native producers/validators and the explicit unit preparation below remain required.
 
+The [owned SSH/SFTP drain contract](owned-ssh-drain.md) adds production registration,
+input hold, sealed bootstrap/audit admission and watcher-terminal proof. Actual first-host
+native qualification remains pending. Local transport exit still does not clear a remote
+session, relax a host bookend, or release an uncertain lock.
+New grouped catalog launches use one presealed CPU0-bound SSH control stream and an
+explicit foreground local-monitor lease. Routine `--collect` reads its durable local
+journal without opening remote commands/channels. Lost lease irrevocably invalidates
+and cancels native work; qualification is no longer detached from the local connection.
+Terminal stream notice/local exit is not remote-empty evidence: actual source-bound
+identity/scope disappearance and existing unit/evidence gates precede normal cleanup.
+Supervised audit delivery currently fails closed at its missing locked approval
+checkpoint, so JSON/mixed/all-group review waits remain blocked. Catalog has no audit
+wait. Legacy schemas/collection remain explicit. See the drain contract for custody,
+failed-only recovery and first-official-host qualification limits.
+
 ## Parent interface
 
 ```sh
@@ -381,12 +396,16 @@ No whole-host deletion is appropriate while state is blocked-review-needed.
     "findings": [],
     "decision": "approved"
   },
-  "bundle": { "schema": "json-api-native-audits/v1", "receipts": [] }
+  "bundle": { "schema": "json-api-native-audits/v2", "receipts": [] }
 }
 ```
 
-The bundle must contain all 36 real existing json-api-native-audit/v1 receipts, with exact
-current image/CPU/source/commit identities and audited adapter source files. The empty
+The bundle must contain one independent receipt per selected app and profile, with exact
+current image/CPU/source/commit identities and audited adapter source files. The cloud
+inbox and campaign accept the v1 and v2 JSON bundle formats. For a failed API phase,
+only an extended v2 receipt can establish the transport guarantees; a bundle version alone
+cannot. The timing replay checks the receipt and its source bytes against the accepted
+delivery. Preparation and timing must both use the current commit-bound producer. The empty
 array above only illustrates the envelope, and is rejected. Operator-authorized transport
 and actual independent review are separate trust boundaries, journaled explicitly. The
 unsigned JSON cannot authenticate a human or make itself authoritative; the parent must
@@ -395,7 +414,7 @@ obtain the real review. No new signing/approval service is required or implied.
 After acceptance the same handle stages `json-native-audits.json`, rechecks sources,
 original/copy hashes and actual built image IDs, then runs timing with --receipts and
 without --build in the paired fresh round. The native runner repeats its real checks and
-requires all 36 audits before timing. Images are checked again after timing. Accepted
+requires the complete set of audits before timing. Images are checked again after timing. Accepted
 inbox bytes and review records are sealed; no serialized receipt resumes a crashed job.
 
 ## Remaining handoffs
