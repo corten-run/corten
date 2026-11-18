@@ -1926,6 +1926,9 @@ rules something out.
     `corten::middleware`'s; the app's steps are resolved at compile time. The page tag stage
     can skip the hash for a `GET`, but not for an otherwise taggable `HEAD`: without its
     validator, a cache could freshen an older page of the same length ([Limit 21](#limit-etag)).
+    The stage future holds the request once. The stages borrow it until dispatch moves it to
+    the first middleware or, when there is none, the route. The late layout poller is boxed
+    only on the late path, so its state does not enlarge the ordinary future.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
     app's, for the requests at its prefix; they are boxed, since which run depends on the route, and
     an app with none pays nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
@@ -2182,6 +2185,10 @@ rules something out.
     matchit 0.9.2 pin changes, whose matching and conflict rules must be read again;
     or a derived route, or an area's or API's, may put text before a parameter, which
     `parse_path` and `route_shaped` refuse today; any of which the count must then follow.
+    Also revisit if `router::tests::staged_page_future_sizes` exceeds either boxed-future
+    budget on x86-64 Linux. It measures the real stages and typed handler for a small page
+    without app middleware or layout reads. The bounds leave room for build profiles,
+    features and compiler layout changes; remeasure before raising one.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
