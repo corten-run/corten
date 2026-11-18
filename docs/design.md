@@ -6083,7 +6083,23 @@ rules something out.
     historical: it compared the generic and typed patches in
     `what_a_write_answering_in_an_action_costs`, not a standalone head copy.
 
-    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc, `7d8253ceb` against
+    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc and Rust 1.99.1,
+    `251a1792c` against main `5599e451c`, with the same `write_request_cost` fixture and three
+    alternating 1,200-minus-200 pairs. Median additional instructions per request without reads:
+    document GET 122 (paired range 121 to 122), navigation GET 128 (128 to 128), direct typed
+    patch 188 (186 to 188), generic patch 485 (485 to 485). Those medians are 19, 15, 16 and 20
+    higher, respectively, than the prior check. With reads and no middleware the typed patch
+    adds 197 (197 to 198), the generic patch 4,643 (4,643 to 4,643), and the own page 13,972
+    (13,972 to 13,972), drawing a document instead of a fragment. With reads and pass-through
+    middleware, the typed patch adds 1,533 (1,532 to 1,533) when legacy and 1,620 (1,620 to 1,620)
+    when preferred. The generic patch adds 4,191 (4,189 to 4,191) when legacy and 4,633
+    (4,633 to 4,633) when preferred. The paired generic delta net of the typed delta is 2,657
+    (2,656 to 2,659) when legacy and 3,012 (3,012 to 3,012) when preferred. Neither isolates
+    the copy. Neither patch starts a read, and the typed patch still skips the head copy.
+    Both the generic and typed-patch regressions return a whole page with unfilled layout reads on
+    `41f6ae507` when middleware replaces the patch with a page from a retained request head.
+    On `251a1792c` the replacement fills its layout and starts exactly one read in each case;
+    2026-11-18, release Callgrind 3.19.0 with jemalloc, `7d8253ceb` against
     main `70dd920cc`, with the same `write_request_cost` fixture and three alternating
     1,200-minus-200 pairs. Median additional instructions per request without reads: document
     GET 103 (range 103 to 103), navigation GET 113 (113 to 113), direct typed patch 172
