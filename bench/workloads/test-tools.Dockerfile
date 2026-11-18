@@ -1,4 +1,4 @@
-ARG PLAYWRIGHT_IMAGE=mcr.microsoft.com/playwright:v1.64.1-noble
+ARG PLAYWRIGHT_IMAGE
 FROM ${PLAYWRIGHT_IMAGE}
 
 # Keep the upstream stable PPA and its exact signing key, without the Launchpad

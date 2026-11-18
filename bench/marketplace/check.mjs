@@ -461,11 +461,16 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
   assert.equal(result.pages, 264);
   return result;
 }
+export async function loadChromium() {
+  const { chromium } = await import("@playwright/test");
+  return chromium;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [base, source = "fixture", upstream, output] = process.argv.slice(2);
   assert.ok(base && ["fixture", "api"].includes(source));
   const catalog = JSON.parse(readFileSync(new URL("./fixtures/marketplace.json", import.meta.url)));
-  const { chromium } = await import("@playwright/test");
+  const chromium = await loadChromium();
   const browser = await chromium.launch({ headless: true });
   try { const value = JSON.stringify(await checkApp({ base, catalog, source, upstream, browser }), null, 2); if (output) writeFileSync(output, value); console.log(value); }
   finally { await browser.close(); }
