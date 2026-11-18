@@ -9,7 +9,7 @@
 //! | `POST /?do=save` | saving the draft, answered with a toast; without JavaScript, back to the view of the draft it was on, whose toaster says it (`req.redirect_with_notice`) |
 //! | `POST /?do=publish` | publishing the draft: refused (409, the card sold meanwhile), answered with a failed toast |
 //! | `POST /?do=rename` | the rename dialog's form: refused (no name, or the other draft's, which the form's own message says in `FormAlert`), the dialog drawn open; else back to the view of the draft it was on, whose toaster says it was renamed (`req.redirect_with_notice`) |
-//! | `GET /help` | the menu's link, with a plain number input showing a precise discount |
+//! | `GET /help`, `POST /help` | the menu's link, with plain number inputs showing a precise discount and checking exclusive ends |
 //! | `GET /orders?page=2` | the seller's orders, a page of them: the kit's other components |
 //! | `POST /orders/settings` | the shipping settings: back to the orders, whose toaster says they were saved |
 use corten::{Component, Refusal, form::HintId, i18n::Currency, prelude::*, route::FromUrl};
@@ -69,7 +69,7 @@ pub mod url {
         pub sales: Option<crate::gallery::SalesPage>,
     }
 
-    #[route("/help", get = help)]
+    #[route("/help", get = help, post = check_bounds)]
     pub struct Help;
 
     #[route("/orders", get = orders)]
@@ -413,12 +413,50 @@ async fn settings(req: Req, Form(form): Form<SettingsForm>) -> HtmlResult {
 #[derive(Id)]
 struct ExampleDiscountId;
 
+#[derive(Id)]
+struct MinimumRatioId;
+
+#[derive(Id)]
+struct MaximumRatioId;
+
+#[derive(Fields)]
+struct ExampleBounds {
+    minimum_ratio: Entry<f64>,
+    maximum_ratio: Entry<f32>,
+}
+
+const MINIMUM_RATIO: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(0.001, 1.0).exclusive_min();
+const MAXIMUM_RATIO: Bounds<f32, AnyStep> = Bounds::<f32>::any_step(0.0, 1.0).exclusive_max();
+const MINIMUM_RATIO_RULE: &str = "Enter a ratio above 0.001 and at most 1.";
+const MAXIMUM_RATIO_RULE: &str = "Enter a ratio of at least 0 and below 1.";
+
 async fn help(req: Req) -> HtmlResult {
+    help_page(&req, &ExampleBounds { minimum_ratio: 0.002.into(), maximum_ratio: 0.5.into() }, "")
+}
+
+async fn check_bounds(req: Req, Form(form): Form<ExampleBounds>) -> HtmlResult {
+    let f = ExampleBounds::FIELDS;
+    let mut errors = Errors::new();
+    if MINIMUM_RATIO.read(&form.minimum_ratio).is_none() {
+        errors.add(f.minimum_ratio, MINIMUM_RATIO_RULE);
+    }
+    if MAXIMUM_RATIO.read(&form.maximum_ratio).is_none() {
+        errors.add(f.maximum_ratio, MAXIMUM_RATIO_RULE);
+    }
+    if let Some((_, message)) = errors.iter().next() {
+        return req.invalid(&errors, OrderResult { text: message }, || async { help_page(&req, &form, message) }).await;
+    }
+    let text = "Both ratios are in range.";
+    req.patch_or(OrderResult { text }, || async { help_page(&req, &form, text) }).await
+}
+
+fn help_page(req: &Req, example: &ExampleBounds, result: &str) -> HtmlResult {
     let f = SellForm::FIELDS;
+    let ratio = ExampleBounds::FIELDS;
     let t: Msg = req.t();
     let discount = Entry::from(1e-20);
     req.page(html! {
-        <Layout req={&req} title="Help | corten-ui" toast={QUIET}>
+        <Layout req={req} title="Help | corten-ui" toast={QUIET}>
             <h1>"Listing a card"</h1>
             <p>"A draft is yours until you list it. Each part of the form:"</p>
             <dl>
@@ -451,6 +489,32 @@ async fn help(req: Req) -> HtmlResult {
                 >
                 <p id={HintId(&ExampleDiscountId)}>{discount_rule(t)}</p>
                 <button>"Try listing with this discount"</button>
+            </form>
+            <form method="post" action={url::Help}>
+                <label for={MinimumRatioId}>"Minimum ratio example"</label>
+                <input
+                    type="number"
+                    id={MinimumRatioId}
+                    name={ratio.minimum_ratio}
+                    aria-describedby={HintId(&MinimumRatioId)}
+                    value={MINIMUM_RATIO.input_value(&example.minimum_ratio)}
+                    {..MINIMUM_RATIO}
+                    required
+                >
+                <p id={HintId(&MinimumRatioId)}>{MINIMUM_RATIO_RULE}</p>
+                <label for={MaximumRatioId}>"Maximum ratio example"</label>
+                <input
+                    type="number"
+                    id={MaximumRatioId}
+                    name={ratio.maximum_ratio}
+                    aria-describedby={HintId(&MaximumRatioId)}
+                    value={MAXIMUM_RATIO.input_value(&example.maximum_ratio)}
+                    {..MAXIMUM_RATIO}
+                    required
+                >
+                <p id={HintId(&MaximumRatioId)}>{MAXIMUM_RATIO_RULE}</p>
+                <button>"Check the example ratios"</button>
+                <OrderResult text={result} />
             </form>
             <p><a href={url::Home { tab: None, sale: None, period: None, sold: None, sales: None }}>"Back to the draft"</a></p>
         </Layout>

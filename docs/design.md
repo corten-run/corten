@@ -5782,11 +5782,11 @@ rules something out.
     above, at `65ac1dc47` against `38587c414`.
 
 62. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
-    on the server.** HTML has no exclusive number bound. Draw the next representable float
-    inside a refused end to block ordinary spellings and keep native arrows off the end;
-    omit the native attribute if its spelling does not round-trip to that float. The handler
-    checks the logical ends and refuses out-of-range input with 422. Show the rule in a visible
-    hint and in the field error: the browser can only describe inclusive attributes.
+    on the server.** HTML has no exclusive number bound. For `f64`, draw the next float inside
+    a refused end. For `f32`, draw the midpoint between the end and the next `f32` inside it,
+    exactly representable as an `f64`. Omit a hint if its spelling does not round-trip as that
+    `f64`. The handler checks the logical ends and refuses out-of-range input with 422. Show the
+    rule in a visible hint and in the field error: the browser can only describe inclusive attributes.
 
     Reopened after the fixed-notation magnitude restriction rejected useful exclusive ends
     such as 0.01, even though all three engines accepted the inward hints in exponent form.
@@ -5796,6 +5796,15 @@ rules something out.
     block a fixed prefill `0.00000000000000000001` against `min="5e-324"`, but submit `1e-20`
     unchanged. The helper still preserves submitted text on redisplay. Existing stepped
     fields and standalone `Entry` attributes keep their formatting.
+
+    Reopened again when Firefox read `min="1.0000000000000002e-3"` and the short spelling
+    `0.001` as the same number, admitting the excluded end. Chromium and WebKit block `0.001`.
+    Firefox also reads the valid inward spelling as `0.001`, so a stricter hint would block
+    that input. Keep the hint; the handler refuses the endpoint in every engine. For `f32`,
+    the old exclusive hint `max="0.99999994"` blocked `0.99999996` in all three engines, even
+    though Rust rounds it inward. The midpoint hint `max="0.9999999701976776"` admits it and
+    blocks `1` in all three. The hint includes the midpoint even if Rust rounds the exact tie
+    to the excluded end and refuses it.
 
     Native checks are advisory: Chromium and WebKit may admit the fixed spelling of `1e-20`
     below `9.999999999999998e-21`, or `0.00000000000000999999999999999999e16` below 100 (Rust
@@ -5812,16 +5821,18 @@ rules something out.
 
     Stands on: platform ([HTML's number state](https://html.spec.whatwg.org/multipage/input.html#number-state-(type=number))
     and [floating-point syntax](https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#floating-point-numbers));
-    measured (one native submission per spelling and end for both sides of 0.01, tiny and
-    extreme inward hints, and fixed and exponent prefills in three engines); value (standards
-    first, compile-time safety, and HTML that works without JavaScript).
+    measured (native submissions around 0.01, tiny and extreme inward hints, fixed and exponent
+    prefills, and gallery POSTs at the reported `f64` and `f32` limits in three engines);
+    value (standards first, compile-time safety, and HTML that works without JavaScript).
 
-    Revisit when: HTML gains exclusive number bounds, browser range checks use the same
-    rounding as Rust, or a shortest spelling of an exclusive end gets past its shifted hint
-    or a prefill written by `Bounds::input_value` is blocked by that hint.
+    Revisit when: HTML gains exclusive number bounds, browsers can distinguish both sides of
+    a known collapsed pair, a new shortest spelling of an exclusive end gets past its hint,
+    or a server-valid shortest spelling or `Bounds::input_value` prefill is blocked by a hint.
 
-    Last checked: 2026-11-17, native submissions in Chromium 156, Firefox 157 and WebKit 27.2
-    (Playwright 1.64.1), and a Rust 1.89 const check of both 0.01 ranges.
+    Last checked: 2026-11-18, range probes and gallery POSTs with JavaScript disabled in Chromium
+    156, Firefox 157 and WebKit 27.2 (Playwright 1.64.1) at the `f64` and `f32` limits above;
+    2026-11-17, native submissions around 0.01 (Playwright 1.64.1) and a Rust 1.89 const check
+    of both 0.01 ranges.
 
 ## Rules
 

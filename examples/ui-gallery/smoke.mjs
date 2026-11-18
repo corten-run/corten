@@ -5105,6 +5105,36 @@ async function run(browser) {
   check("no script: a plain any-step input posts its tiny prefill unchanged",
     defaultDiscount === "1e-20" && discountMin === "5e-324" && postedDiscount === defaultDiscount && prefilled.status() === 200,
     `${defaultDiscount} min=${discountMin} posted=${postedDiscount} ${prefilled.status()}`);
+  for (const [label, typed, expected, message] of [
+    ["Minimum ratio example", "0.001", "either", "Enter a ratio above 0.001 and at most 1."],
+    ["Minimum ratio example", "1.0000000000000002e-3", "valid", "Both ratios are in range."],
+    ["Maximum ratio example", "0.99999996", "valid", "Both ratios are in range."],
+    ["Maximum ratio example", "1", "invalid", "Enter a ratio of at least 0 and below 1."],
+  ]) {
+    await plain.goto(`${base}/help`);
+    const input = plain.getByLabel(label);
+    await input.fill(typed);
+    const { name, valid } = await input.evaluate((el) => {
+      const input = /** @type {HTMLInputElement} */ (el);
+      return { name: input.name, valid: input.validity.valid };
+    });
+    const test = `no script: ${label} posts ${typed} (${expected === "valid" ? "held by the server" : "refused by the server"})`;
+    if (expected === "valid" && !valid) {
+      check(test, false, "native validation blocked a server-valid number");
+      continue;
+    }
+    // Firefox can submit the f64 endpoint natively. If the browser blocks an endpoint, bypass
+    // only its advisory check to show that the same POST still gets a 422 from the handler.
+    if (!valid) await input.evaluate((el) => { /** @type {HTMLInputElement} */ (el).form?.setAttribute("novalidate", ""); });
+    const [response] = await Promise.all([
+      plain.waitForResponse((r) => new URL(r.url()).pathname === "/help" && r.request().method() === "POST"),
+      plain.getByRole("button", { name: "Check the example ratios" }).click(),
+    ]);
+    const posted = new URLSearchParams(response.request().postData() ?? "").get(name);
+    check(test, (expected !== "invalid" || !valid) && posted === typed &&
+      response.status() === (expected === "valid" ? 200 : 422) && (await plain.textContent("#result")) === message,
+    `${valid ? "native" : "bypassed"} posted=${posted} ${response.status()}`);
+  }
   await plain.goto(`${base}/`);
   const plainFloor = plain.getByLabel("Lowest offer");
   check("no script: the lowest offer is enabled and optional (the handler checks it)", (await plainFloor.isEnabled()) && !(await plainFloor.evaluate((i) => /** @type {HTMLInputElement} */ (i).required)));

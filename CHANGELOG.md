@@ -7,7 +7,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - Decimal fields can use `Bounds::<f64>::any_step` (also for `f32`) for `step="any"`,
   with optional exclusive endpoints. Constants reject non-finite, reversed, or empty ranges.
-  The browser gets advisory inward bounds and the server enforces the logical rule.
+  The browser gets advisory inward bounds and the server enforces the logical rule. Exclusive
+  `f32` hints use the rounding midpoint so they do not cut off decimals that round inward.
   `Bounds::input_value` shares `NumberField`'s exponent notation for tiny prefills with plain
   number inputs. Existing stepped fields and standalone `Entry` attributes keep their formatting.
   See [Choice 62](docs/design.md#choice-exclusive-ends) and

@@ -434,10 +434,13 @@ A decimal with no step, such as a ratio or percentile, uses
 `Bounds::<f64>::any_step(min, max)`. It writes HTML's `step="any"` and holds every finite
 number in range. Use `Bounds::<f32>::any_step` for an `f32` field. Only any-step bounds take
 `.exclusive_min()` and `.exclusive_max()`. HTML has no exclusive number bound, so the input
-gets the type's next number inside a refused end, or omits that attribute if the number cannot
-be written as a round-tripping HTML number. This is advisory: the browser and Rust can round
-differently. The server's check is authoritative. Show the logical rule in a visible hint
-and in the field's error; the browser can only describe inclusive attributes.
+gets the next `f64` inside a refused `f64` end. For an `f32` end the hint is the rounding
+midpoint between the end and the next `f32` inside, not the next `f32` itself: a decimal that
+rounds inward should not be cut off at that neighbor. A hint whose spelling cannot round-trip
+as an `f64` is omitted. This is advisory: the browser and Rust can round differently, and even
+a short spelling of an excluded end can get through. The server's check is authoritative.
+Show the logical rule in a visible hint and in the field's error; the browser can only
+describe inclusive attributes.
 
 ```rust,ignore
 const DISCOUNT: Bounds<f64, AnyStep> =
