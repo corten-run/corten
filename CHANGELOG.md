@@ -1,14 +1,14 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable changes to Corten. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- `#[derive(FromJson)]` rejects `#[serde(transparent)]` combined with `from`, `try_from`
-  or `into`, using serde's compile error messages. It also reports `from` and `try_from`
-  together as a conflict instead of an unsupported attribute, after checking that each conversion
-  has a string literal argument.
+Pending entries are in [changelog.d/](changelog.d/).
+
+- CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
+  for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
@@ -82,6 +82,10 @@ Corten is pre-1.0, so any minor version may change the API.
   cloud inbox through timing replay; a version label alone is not an audit.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
+- Catalog Contract selects affected parity apps on pull requests and runs all parity and JSON
+  jobs for unrecognized app paths. Benchmark Evidence runs portable source-custody checks when
+  captured sources change and native kernel checks when their own inputs change. Both scope
+  against the full Git diff and cancel superseded pull request runs, not main runs.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 

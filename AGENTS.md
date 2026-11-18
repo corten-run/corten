@@ -69,8 +69,8 @@ Choice in the same pull request.
    the containers afterwards. All must pass.
 2. Measure a change to rendering, the runtime or the request path with the number that can see
    it, as [CONTRIBUTING.md](CONTRIBUTING.md#pull-requests) (item 2) describes.
-3. Update the guide that describes a changed behavior, and add a line to `CHANGELOG.md` under
-   Unreleased.
+3. Update the guide that describes a changed behavior, and add a [changelog fragment](CONTRIBUTING.md#pull-requests)
+   in `changelog.d/`, not a line under Unreleased in `CHANGELOG.md`.
 4. Have the change reviewed as [CONTRIBUTING.md](CONTRIBUTING.md#review) describes: start a new
    agent that did not write it, and give it the diff, `README.md` (Values), `docs/design.md` and
    CONTRIBUTING.md (Review), not your reasoning or summary. Fix each finding or say why it
