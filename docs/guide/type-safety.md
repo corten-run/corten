@@ -84,14 +84,15 @@ Use `Types::add` for other types, such as feed rows or screen data the script re
 URL. A type already collected through a component or added by hand is declared only once.
 
 If two Rust types have the same name, the generator numbers later declarations (for example,
-`Payload2`), just as it does for types reached through `Types::add`. Handler types for the
-file are registered first; component events and explicit adds otherwise keep their builder
-order. Generated references can use the numbered names.
+`Payload2`). This also applies when Rust prints the same full path for two versions of a
+dependency: each gets its own definition and references. Handler types for the file are
+registered first; component events and explicit adds otherwise keep their builder order.
+Generated references can use the numbered names.
 TypeScript generation fails if a handler imports from that file under a different name from
 the declaration for its Rust type. Give handler argument types in the same file distinct Rust
-names. A renamed Rust alias does not create a declaration: use the underlying type's declared
-name, or define a newtype that derives `ToJson`. `Types::json_schema` includes all handler
-types in `$defs` without checking the names their scripts import.
+names, for example by wrapping one dependency version in a distinctly named newtype that derives
+`ToJson`. A renamed Rust alias does not create a declaration. `Types::json_schema` includes all
+handler types in `$defs` without checking the names their scripts import.
 
 ### Where the types come from
 

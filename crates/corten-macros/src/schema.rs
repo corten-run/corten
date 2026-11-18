@@ -333,7 +333,7 @@ pub(crate) fn expand(
         proc_macro::Delimiter::Brace,
         q(
             "fn json_schema(__g: &mut ::corten::json::schema::Generator) -> ::corten::json::schema::__private::JsonValue {
-                __g.define(__A3, ::core::any::type_name::<Self>(), __A0, |__g| <Self as __A1>::__inline(__g))
+                __g.define::<Self>(__A3, __A0, |__g| <Self as __A1>::__inline(__g))
             }
             #[allow(unused_mut, unused_variables, clippy::all)]
             fn __inline(__g: &mut ::corten::json::schema::Generator) -> ::corten::json::schema::__private::JsonValue {

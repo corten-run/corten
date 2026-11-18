@@ -1835,7 +1835,9 @@ a failure of its own adds it to its `default` response: JSON for a `JsonResponse
 (`item_price_get`). A route added by hand (`Api::route`, an MCP endpoint) is not in it.
 
 The document is built once, when the router is, so a type in it with no JSON Schema fails then,
-naming the type, and serving it costs a clone of its bytes. A test keeps a copy in the repository,
+naming the type, and serving it costs a clone of its bytes. Distinct Rust types with the same
+name, even the same printed path from two dependency versions, get separate component schemas
+(`Payload`, `Payload2`) and references to their own definitions. A test keeps a copy in the repository,
 for a generator or a reviewer to diff, with `corten::openapi::sync`, which rewrites the file and
 fails the test when the routes changed, as `Types::sync` does:
 

@@ -2718,6 +2718,13 @@ rules something out.
     script type comes from `ToJson`, so a row still derives both; their declaration is
     [#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044).
 
+    Schema definitions are cached by Rust type identity and direction, not by the printed path.
+    A derive's static would separate two versions of a dependency's type but not two instances
+    of the same generic over those types. The optional `types` feature uses `typeid` for identity
+    without a `'static` bound on borrowed types. Definition names still come from the Rust name
+    and the existing numeric suffix rule. A handler importing the wrong declaration fails
+    when the declarations are generated, not on a request.
+
     Not chosen: the attribute, a synonym; an attribute that derives both directions, which would
     save a type that is read and written one name in its `#[derive(..)]` list
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
@@ -2745,7 +2752,8 @@ rules something out.
     (none in `examples/` at the last check), or a JSON seam other than the feed is bounded on
     serde's `Serialize` or `Deserialize` again, or serde or serde_json changes how it writes or
     reads one of the std types Corten writes or reads itself (the `json` tests that compare them
-    fail).
+    fail). Drop `typeid` when the standard library can identify types with non-static lifetimes at
+    the supported Rust floor.
 
     Last checked: 2026-11-09, the derives and the agent endpoint's bounds, inputs and outputs, at
     `7965aeab`, the bounds' last change; 2026-11-10, no such impl in `examples/`, at `7197604f`;

@@ -5,7 +5,8 @@
 //! `inputSchema` and `outputSchema`.
 //!
 //! A type the derives describe is named under `$defs` and referred to by `$ref`; a recursive
-//! type refers to itself the same way.
+//! type refers to itself the same way. Distinct types get distinct definitions even when Rust
+//! prints the same path for both, as with two versions of a dependency.
 //!
 //! A derived type may hold a field of any type serde writes or reads (another crate's, through
 //! serde), so the derives compile for it. Describing such a type fails instead, at startup or in
@@ -30,6 +31,7 @@
 //! ```
 
 use std::{
+    any::TypeId,
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     rc::Rc,
@@ -83,8 +85,8 @@ pub trait FromJsonSchema {
 /// types; a second type of one name (two instances of a generic) is numbered, `Name2`.
 #[derive(Clone, Default)]
 pub struct Generator {
-    /// By the side (`true` for what is read) and the type's id: its name.
-    by_id: HashMap<(bool, &'static str), String>,
+    /// By the side (`true` for what is read) and the type's identity, ignoring lifetimes.
+    by_id: HashMap<(bool, TypeId), String>,
     /// By name: the schema once made (`None` while it is being made).
     defs: BTreeMap<String, Option<Value>>,
     /// Field types met with no schema for the side they were asked for (`true` for read).
@@ -96,12 +98,13 @@ impl Generator {
         Self::default()
     }
 
-    /// A `$ref` to the type `id` names (its Rust path and arguments) as it is read (`read`) or
-    /// written, made by `make` under `name` the first time. A type described on both sides in one
-    /// document has two definitions (`Name` and `Name2`). Not a public API: what the derives call.
+    /// A `$ref` to `T` as it is read (`read`) or written, made by `make` under `name` the
+    /// first time. A type described on both sides in one document has two definitions
+    /// (`Name` and `Name2`). Not a public API: what the derives call.
     #[doc(hidden)]
-    pub fn define(&mut self, read: bool, id: &'static str, name: &str, make: impl FnOnce(&mut Generator) -> Value) -> Value {
-        if let Some(name) = self.by_id.get(&(read, id)) {
+    pub fn define<T: ?Sized>(&mut self, read: bool, name: &str, make: impl FnOnce(&mut Generator) -> Value) -> Value {
+        let id = (read, typeid::of::<T>());
+        if let Some(name) = self.by_id.get(&id) {
             return reference(name);
         }
         let mut unique = name.to_string();
@@ -110,7 +113,7 @@ impl Generator {
             unique = format!("{name}{n}");
             n += 1;
         }
-        self.by_id.insert((read, id), unique.clone());
+        self.by_id.insert(id, unique.clone());
         self.defs.insert(unique.clone(), None);
         let schema = make(self);
         self.defs.insert(unique.clone(), Some(schema));
@@ -606,12 +609,12 @@ both! {
     impl for std::num::NonZeroI128 => |g| nonzero(<i128 as ToJsonSchema>::json_schema(g), true);
     impl for std::num::NonZeroIsize => |g| nonzero(<isize as ToJsonSchema>::json_schema(g), true);
     // Written and read alike, so one definition serves both sides.
-    impl for std::time::Duration => |g| g.define(false, std::any::type_name::<std::time::Duration>(), "Duration", |g| {
+    impl for std::time::Duration => |g| g.define::<std::time::Duration>(false, "Duration", |g| {
         let secs = <u64 as ToJsonSchema>::json_schema(g);
         let nanos = <u32 as ToJsonSchema>::json_schema(g);
         __private::object(vec![("nanos", nanos), ("secs", secs)], vec!["secs", "nanos"], false)
     });
-    impl for std::time::SystemTime => |g| g.define(false, std::any::type_name::<std::time::SystemTime>(), "SystemTime", |g| {
+    impl for std::time::SystemTime => |g| g.define::<std::time::SystemTime>(false, "SystemTime", |g| {
         let secs = <u64 as ToJsonSchema>::json_schema(g);
         let nanos = <u32 as ToJsonSchema>::json_schema(g);
         __private::object(vec![("nanos_since_epoch", nanos), ("secs_since_epoch", secs)], vec!["secs_since_epoch", "nanos_since_epoch"], false)

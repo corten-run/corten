@@ -704,6 +704,80 @@ mod tests {
         assert_eq!(schema["$defs"]["Change2"]["properties"]["applied"]["type"], "boolean", "{schema}");
     }
 
+    struct PayloadVersion {
+        name: &'static str,
+        describe: TsType,
+        describe_wrapper: TsType,
+        add: fn(Types) -> Types,
+    }
+
+    fn same_printed_payloads() -> [PayloadVersion; 2] {
+        #[derive(ToJson)]
+        struct Wrapper<'a, T: ToJsonSchema + crate::json::ToJson> {
+            value: T,
+            label: &'a str,
+            children: Vec<Self>,
+        }
+
+        // A block does not appear in type_name, just as a dependency version does not.
+        macro_rules! payload {
+            ($field:ident: $ty:ty) => {{
+                #[derive(ToJson)]
+                struct Payload {
+                    $field: $ty,
+                }
+                PayloadVersion {
+                    name: std::any::type_name::<Payload>(),
+                    describe: Payload::json_schema,
+                    describe_wrapper: Wrapper::<'_, Payload>::json_schema,
+                    add: Types::add::<Payload>,
+                }
+            }};
+        }
+        let first = payload!(old: String);
+        let second = payload!(new: bool);
+        assert_eq!(first.name, second.name);
+        [first, second]
+    }
+
+    #[test]
+    fn same_printed_types_and_generic_instances_get_separate_definitions() {
+        let [first, second] = same_printed_payloads();
+        let mut generator = Generator::new();
+        assert_eq!((first.describe_wrapper)(&mut generator)["$ref"], "#/$defs/Wrapper");
+        assert_eq!((second.describe_wrapper)(&mut generator)["$ref"], "#/$defs/Wrapper2");
+        assert_eq!((first.describe)(&mut generator)["$ref"], "#/$defs/Payload");
+        assert_eq!((second.describe)(&mut generator)["$ref"], "#/$defs/Payload2");
+        let defs = generator.definitions();
+        assert_eq!(defs["Wrapper"]["properties"]["value"]["$ref"], "#/$defs/Payload");
+        assert_eq!(defs["Wrapper2"]["properties"]["value"]["$ref"], "#/$defs/Payload2");
+        assert_eq!(defs["Wrapper2"]["properties"]["children"]["items"]["$ref"], "#/$defs/Wrapper2");
+        assert_eq!(defs["Payload"]["properties"]["old"]["type"], "string");
+        assert_eq!(defs["Payload2"]["properties"]["new"]["type"], "boolean");
+    }
+
+    #[test]
+    fn an_added_type_does_not_share_a_declaration_with_a_same_printed_handler_type() {
+        let [first, second] = same_printed_payloads();
+        let eager = (second.add)((first.add)(Types::new())).json_schema();
+        assert_eq!(eager["$defs"]["Payload"]["properties"]["old"]["type"], "string");
+        assert_eq!(eager["$defs"]["Payload2"]["properties"]["new"]["type"], "boolean");
+
+        let mut types = (first.add)(Types::new());
+        types.handlers.push(("new.js", ("Payload", None, second.describe)));
+
+        // The handler claims its name first when generating its declarations.
+        let declarations = types.typescript();
+        assert!(declarations.contains("export interface Payload {\n  new: boolean;"), "{declarations}");
+        assert!(declarations.contains("export interface Payload2 {\n  old: string;"), "{declarations}");
+        let schema = types.json_schema();
+        assert_eq!(schema["$defs"]["Payload"]["properties"]["new"]["type"], "boolean");
+        assert_eq!(schema["$defs"]["Payload2"]["properties"]["old"]["type"], "string");
+
+        types.handlers.push(("old.js", ("Payload", None, first.describe)));
+        assert_type_error(|| types.typescript(), "old.js: handler argument Payload resolves to `Payload2` instead of `Payload`");
+    }
+
     #[test]
     fn same_named_handler_types_are_refused_in_either_order() {
         for (first, second, file) in [
