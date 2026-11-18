@@ -40,9 +40,6 @@ const loopDelay = monitorEventLoopDelay({ resolution: 10 });
 loopDelay.enable();
 const loopStats = () => ({ p50: loopDelay.percentile(50) / 1e6, p99: loopDelay.percentile(99) / 1e6, max: loopDelay.max / 1e6 });
 
-if (isMainThread) await main();
-else await subscribers(workerData);
-
 // ---------------------------------------------------------------------------------------------
 // Worker: a share of the subscribers.
 
@@ -451,3 +448,6 @@ function report({ t0, events, first, committed, drainMs, writes, parts }) {
     }),
   );
 }
+
+if (isMainThread) await main();
+else await subscribers(workerData);
