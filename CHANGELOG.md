@@ -17,6 +17,8 @@ Corten is pre-1.0, so any minor version may change the API.
   `static/style.css` (docs/guide/styles.md). The kit's `stepper.css` anchors its unit rules this
   way; `corten ui diff stepper` shows the change for a copy, and
   `corten ui add --merge stepper` upgrades it.
+- The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
+  `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 
