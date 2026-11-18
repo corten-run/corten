@@ -252,12 +252,15 @@ pub const USD: Currency = Currency::new("USD");
 /// and `step`, and the handler's check.
 pub const QTY: Bounds<u32> = Bounds::new(1, 10);
 pub const WEIGHT: Bounds<f64> = Bounds::new(0.1, 16.0).step(0.1);
+const DISCOUNT_MIN: u8 = 0;
+const DISCOUNT_MAX: u8 = 100;
 /// The discount on two or more copies, in percent: above 0 and below 100, with any decimals. HTML
 /// has no exclusive end, so the input says the numbers next to 0 and 100 inside them.
-pub const DISCOUNT: Bounds<f64, AnyStep> = Bounds::<f64>::any_step(0.0, 100.0).exclusive_min().exclusive_max();
+pub const DISCOUNT: Bounds<f64, AnyStep> =
+    Bounds::<f64>::any_step(DISCOUNT_MIN as f64, DISCOUNT_MAX as f64).exclusive_min().exclusive_max();
 
 pub fn discount_rule(t: Msg) -> impl Render + std::fmt::Display {
-    t.discount_rule(msg::DiscountRule { min: t.number(DISCOUNT.min()), max: t.number(DISCOUNT.max()) })
+    t.discount_rule(msg::DiscountRule { min: t.number(DISCOUNT_MIN), max: t.number(DISCOUNT_MAX) })
 }
 
 /// What a listing that ships nowhere is told, by the browser and by the handler.
