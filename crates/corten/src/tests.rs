@@ -14502,25 +14502,36 @@ async fn a_page_head_has_a_validator_for_a_same_length_change() {
         }),
     );
     let router = App::new(Routes::from(routes)).router();
-    let ask = |method| {
-        let req = Request::builder().method(method).uri("/price").header(header::ACCEPT_ENCODING, "identity");
+    let ask = |method, tag: Option<&http::HeaderValue>| {
+        let mut req = Request::builder().method(method).uri("/price").header(header::ACCEPT_ENCODING, "identity");
+        if let Some(tag) = tag {
+            req = req.header(header::IF_NONE_MATCH, tag);
+        }
         router.clone().oneshot(req.body(Body::empty()).unwrap())
     };
 
-    let (stored, body) = ask(http::Method::GET).await.unwrap().into_parts();
+    let (stored, body) = ask(http::Method::GET, None).await.unwrap().into_parts();
     assert_eq!(stored.status, StatusCode::OK);
     assert_eq!(stored.headers[header::CACHE_CONTROL], "public, max-age=60");
     assert_eq!(body.collect().await.unwrap().to_bytes(), "<p>$10</p>");
     assert!(!stored.headers.contains_key(header::ETAG));
     assert!(!stored.headers.contains_key(header::LAST_MODIFIED));
+    let before = ask(http::Method::HEAD, None).await.unwrap();
 
     changed.store(true, Ordering::Relaxed);
-    let (head, body) = ask(http::Method::HEAD).await.unwrap().into_parts();
+    let (head, body) = ask(http::Method::HEAD, None).await.unwrap().into_parts();
     assert_eq!(head.status, StatusCode::OK);
     assert_eq!(head.headers[header::CONTENT_LENGTH], stored.headers[header::CONTENT_LENGTH]);
     assert!(body.collect().await.unwrap().to_bytes().is_empty());
     // RFC 9111 section 4.3.5: equal lengths cannot freshen the stored GET if HEAD has a tag it lacks.
-    assert!(head.headers.contains_key(header::ETAG), "an untagged HEAD could freshen the old body");
+    let tag = head.headers.get(header::ETAG).expect("an untagged HEAD could freshen the old body");
+    assert!(tag.as_bytes().starts_with(b"W/"));
+    assert_ne!(tag, &before.headers()[header::ETAG]);
+
+    let (revalidated, body) = ask(http::Method::GET, Some(tag)).await.unwrap().into_parts();
+    assert_eq!(revalidated.status, StatusCode::NOT_MODIFIED);
+    assert_eq!(&revalidated.headers[header::ETAG], tag);
+    assert!(body.collect().await.unwrap().to_bytes().is_empty());
 }
 
 /// A page's `GET` and `HEAD` carry a weak tag of the body it rendered and its `corten-*`
