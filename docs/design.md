@@ -4384,10 +4384,21 @@ rules something out.
     only, after the checks that already find the user changed it, as one `Set.has`. That patch work
     is reasoned, not measured: a few calls where the root's state is already read.
 
-    Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
-    defaults, once each build); platform (a `<dialog>`'s and a `<details>`' open state is their
+    The later widget close handoff adds 232 bytes raw, 98 gzip and 81 brotli to core (43,846 to
+    44,078 raw, 15,612 to 15,710 gzip, 14,100 to 14,181 brotli). The optional served
+    `ui.dialog.js` is 1,653 to 4,315 bytes raw, 714 to 1,568 gzip and 591 to 1,353 brotli.
+    Only a page that loads the widget normally opts in to the map. The patch records replaced
+    or removed roots, not all ids in the document; the removal sweep clears those records.
+    With no dialog or widget, 10,000 ids in Chromium took 0.0313 ms per sparse patch on both
+    builds (ranges 0.0250-0.0788 and 0.0238-0.1413 ms); whole redraws took 18.3 and 18.4 ms
+    (ranges 15.575-30.975 and 14.850-29.300 ms). The differences were smaller than run-to-run
+    variation; neither patch looked up every id for the hook.
+
+    Stands on: measured (minified core and served widget sizes, and the no-dialog patch timings
+    above); platform (a `<dialog>`'s and a `<details>`' open state is their
     `open` attribute, which markup sets and closing removes, while a popover's shown state has no
-    attribute; the smoke's dialog, `<details>` and live checks in Chromium, Firefox and WebKit);
+    attribute; the watchlist's dialog, `<details>` and live checks, and the UI Gallery's close,
+    focus and native-result checks, in Chromium, Firefox and WebKit);
     reasoned (a submitter, or with none the focused control of the form or the form, outside the
     element it asks for is the user asking for that element, and nothing else the runtime sees is; where it was is fixed by the press, not by
     what the page became while the answer was on its way; the cost is a few calls in the cases it
@@ -4421,7 +4432,15 @@ rules something out.
     them, every open-state check passing, in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2,
     and the runtime's size against `8f11b7b35`; 2026-11-14, the smoke's check of a submit that
     waited for a write, its button moved outside the dialog by the write's answer, failing on
-    `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines.
+    `fef11cb38` and passing on `50371f299`'s runtime, in the same three engines. 2026-11-18,
+    the widget close handoff at `9ce6fe5c9` against main `70dd920cc`: served bytes by Node 24's
+    zlib defaults once per build, and no-dialog patch time from 51 alternating pairs per case
+    in Chromium 156.0.8078.4 (sparse and whole redraws at 100, 2,000 and 10,000 ids). The gallery's
+    lost opener, same-id navigation, unrelated id reuse and two native close races failed
+    with `faa5ae1f8` in Chromium. A live patch during a pending navigation passed there, but
+    delivered no close with main `70dd920cc`.
+    The gallery's close checks passed with the handoff in Chromium 156.0.8078.4, Firefox 157.0
+    and WebKit 27.2 (Playwright 1.64.1).
 
 53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
     in the address each form posts to, not by the pressed button's name in the body or a route per
