@@ -26,9 +26,19 @@ render of that component reserves that size once (a 1-byte render right after a 
 | `<Card title="x" compact>children</Card>` | a component: a struct with those fields (`compact` is `true`), children in `children` |
 | `<>...</>`, `<!DOCTYPE html>`, `<input>` | fragments, the doctype, void elements without a closing tag |
 
-Three kinds of markup a browser parses differently from how it is written do not compile, where
-the markup shows how the browser parses it; HTML a browser rearranges inside HTML (a `<div>` in a
-`<p>`, an `<a>` in an `<a>`, a `<div>` straight in a `<table>`) still compiles. An element inside one whose content a browser reads as text (`<textarea>`,
+An emitted HTML attribute name is written once per element, case-insensitively:
+`name="a" NAME={b}` does not compile, even when one value might be absent. Combine values in one
+expression instead.
+`ref` writes `data-ref`, bare `page` writes `data-corten-page`, and `key` writes `data-key`, so
+each can appear beside its uppercase literal name (`REF`, `PAGE`, `KEY`); bare `page` can also
+appear beside `page=".."`. Repeating a pseudo-attribute is still a duplicate.
+Spreads can still write duplicate names: the macro cannot see their contents, and the browser
+keeps the first. Handler calls (`on:..`) still combine in one generated `data-on` attribute,
+including several calls for one event. `data-key` is Corten's output; write `key={item.id}`,
+not `data-key=".."`.
+
+Markup a browser parses differently from how it is written does not compile where
+the markup shows how the browser parses it. An element inside one whose content a browser reads as text (`<textarea>`,
 `<title>`, `<iframe>`, `<xmp>`, `<noembed>`, `<noframes>`) would show as text: put it beside
 the element, or write text meant to show tags as a string (`"<b>"`). One inside a `<script>` or
 a `<style>` belongs in a `#[component(js)]` or the component's CSS file (a data block,
@@ -46,11 +56,58 @@ shows HTML under an element that is HTML's wherever it lands (a `<div>`, a `<p>`
 or `application/xhtml+xml`; inside an `<svg>` or a `<math>`, outside those, a `<textarea>`,
 `<title>` or `<style>` is an element of the drawing or the formula and holds elements. At the top
 of a component's markup (its parent may write it into an `<svg>`), among a component's
-children (they go where the component writes them) and in an `<annotation-xml>` whose `encoding`
-an expression or a spread may write first, it does not show, and nothing here is
+children (they go where the component writes them), anywhere after an expression or a
+component, `<Corten />` included (what it writes may open or close an `<svg>` or a
+`<textarea>`, or leave a script open, whose text a later literal tag is part of), after a
+`<script>` or `<style>` whose text holds a `<` (written as is, `</script>` in it ends the
+element and may open anything after it, `<!--<script>` keeps it open past its end tag) and in an `<annotation-xml>` whose
+`encoding` an expression or a spread may write first, it does not show, and nothing here is
 refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an
-`<svg>` compiles ([design Choice 54](../design.md#choice-html-parse-refusals),
+`<svg>` compiles. An `<svg>` or a `<math>` written there does not show its own namespace either
+(a `<math>` in an `<svg>` is SVG's, an `<svg>` straight in a `<math>` MathML's): an element a
+browser takes out of either is refused straight in it, but its `<foreignObject>`, `<title>` or
+`<mtext>` shows nothing; put it in a `<div>` or another HTML element to show it. Where the
+markup does not show HTML, what a `<textarea>`, `<title>`, `<script>`, `<style>`, `<iframe>`,
+`<xmp>`, `<noembed>`, `<noframes>` or `<plaintext>` holds is not read for a refusal either (as
+HTML's it is text, as SVG's elements), so `<iframe><p><div>"Detail"</div></p></iframe>` at the
+top of a component compiles, and nothing after such a `<plaintext>` is refused; nor is what a
+`<noscript>` holds, anywhere, since it is text with scripting on ([design Choice 54](../design.md#choice-html-parse-refusals),
 [Limit 30](../design.md#limit-markup-context)).
+
+The same rule applies to literal HTML nesting whose start tags close an open element: a block
+in a `<p>` (`<p><span><div>..</div></span></p>`), an `<li>` in an `<li>` without a list or
+another special element between, a `<dt>` or `<dd>` in either without such a boundary, an `<a>`
+in an active `<a>`, a `<button>` or `<nobr>` in one still in scope, a heading directly in a
+heading. A `<select>` is closed by a
+nested `<select>` or `<input>`; option, option-group and ruby starts that imply the current
+element's end are refused too (`<option><option>`, `<rt><rt>`). An option inside an
+`<optgroup>` and an `<rt>` inside an `<rtc>` still compile. Put the elements beside one
+another, use `<div>` rather than `<p>` around blocks, and wrap a nested list in `<ul>` or
+`<ol>`. This is checked even without refs: a ref in content the browser moves may leave its
+component's scope. A refusal rests only on the literal markup of the same `html!` between the
+two elements, followed through control-flow bodies and fragments. A component, with or without
+children (`<Corten />` too: `html!` knows a component only by its name), and an expression,
+`raw` among them, may write any element, or close one, or leave a script open, and so may a
+`<script>` or `<style>` whose literal text holds a `<`, so after one no nesting or parsing
+refusal in the same `html!` acts, whatever later literal elements show (a duplicate attribute
+and a hand-written `data-key`, which need no context, are still refused):
+`<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
+compiles, as browsers keep it, and so does `<p>{text}<div>..</div></p>`, which they do not.
+Nesting across those boundaries is the app's to keep correct. The content of a
+`<template>`, and of an `<svg>` or `<math>` (their HTML integration points included), is
+checked with nothing open around it, as browsers keep these: an `<a>` in a `<foreignObject>`
+or `<mtext>` inside another `<a>` compiles. A form in a form is not refused: a browser ignores
+the inner one only outside every `<template>`, which a fragment cannot show (its caller may
+write it into one), and a document's body follows `<Corten />`, so nothing in a document's
+body is refused either. Every refusal assumes `html!` output, a component's included, is
+drawn where a browser reads tags. Writing a component into script or style text a caller left
+open (after `raw("<script>")`, or a script whose text holds `<!--<script>`) is not supported,
+since a script's text comes from a string, not markup: there a refused shape would be the
+script's text, which a browser keeps. A
+top-level `<a>` or `<form>` might be foreign content: wrap HTML fragments in an HTML element when their
+namespace needs to be established. This is not a complete HTML validator. It does not check
+insertion modes such as table foster parenting (a `<div>` straight in a `<table>`), or a
+`<table>` in a `<p>` (which closes the paragraph only outside quirks mode).
 
 `#[component]` turns a function into a props struct and a `Render` impl, so the same
 component renders inside a page and on its own as a patch, and the two cannot drift. A view owns
@@ -84,6 +141,10 @@ The rest of a page's accessibility is an audit's to find in a browser ([app](app
 A page is a whole HTML document, built from components like everything else: the app's layout
 component with the page in it. `corten new` writes the layout in `src/views.rs`, and it is the
 app's to change; Corten adds nothing around it.
+
+Write `<!DOCTYPE html>` before `<html>` so the browser uses standards mode rather than quirks
+mode. A document component with refs, a `scope` argument or `keep` still has one root element:
+the doctype is a declaration, not another root, and `data-scope` goes on `<html>`.
 
 ```rust
 use corten::prelude::*;
@@ -499,7 +560,8 @@ component are a patch. A patch's top-level elements are parsed together, as a `<
 content, so table rows or cells beside other elements are dropped unless they come first: `html!`
 refuses the shapes lost wherever they are written, such as a row after a first `<table>`
 (`<table id={TotalsId}>..</table> <tr id={RowId(7)}>..</tr>`) or a `<table>` after a first row,
-and a debug build refuses the shapes that depend on what the patch began with when it is sent
+where nothing an expression or a component writes comes between the two, and a debug build
+refuses the rest, the shapes that depend on what the patch began with among them, when it is sent
 ([Requests and forms](requests-and-forms.md)).
 
 A view lent to a prop inside another view (`action={&html! { .. }}`), or to a call written in its

@@ -917,6 +917,24 @@ fn Meter(used: f64) -> impl Render {
     html! { <div class={Meter} style={FILL.pct(used)}></div> }
 }
 
+/// `style={FILL.pct(..)}` is written as `data-vars`, so a literal `style` beside it is another
+/// attribute, in either order.
+#[crate::component(css)]
+fn MeterStyled(used: f64) -> impl Render {
+    html! {
+        <div class={Meter} style="color: red" style={FILL.pct(used)}></div>
+        <div class={Meter} style={FILL.pct(used)} style></div>
+    }
+}
+
+#[test]
+fn a_literal_style_beside_custom_properties_is_another_attribute() {
+    assert_eq!(
+        MeterStyled { used: 7.0 }.to_html(),
+        r#"<div class="meter-styled__meter" style="color: red" data-vars="--meter-styled__fill:7%"></div><div class="meter-styled__meter" data-vars="--meter-styled__fill:7%" style></div>"#
+    );
+}
+
 /// The meters' page, with `Meter` listed, as a debug build requires of a page that renders it.
 fn meters_app() -> Router {
     App::new(Routes::from(meters())).error_page(test_error_page, ()).components(&[Meter]).router()
