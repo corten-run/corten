@@ -95,15 +95,24 @@ closed stays closed. It takes the dialog itself, so on any other element it does
 List `corten_ui::COMPONENTS` and it is served.
 
 If a patch replaces a still-open modal made by `dialog::modal` or `dialog::modalClosedBy` with
-a closed dialog of the same id, the widget returns focus to the element focused before it opened
-(or its same-id replacement from the patch). It then dispatches one non-bubbling `close` on the
-attached replacement, so its `on:close` runs and can read the previous dialog's `returnValue`.
-A patch that removes the dialog without a replacement only restores focus. A modal drawn open
-again by a patch keeps its original opener for a later close. Nested removals finish innermost
-first. A native close, including one by the new dialog's own script, keeps its event and result.
-A navigation or script removal is not a patch: reusing an id does not send a close or restore
-focus. This does not change how patches treat a dialog the user opened rather than the widget,
-or how navigation updates a kept layout element in place.
+a closed dialog of the same id, the widget returns focus to the element it recorded when it
+opened the modal. It then dispatches one non-bubbling `close` on the attached replacement, so
+its `on:close` runs and can read the previous dialog's `returnValue`. If the response redraws
+the dialog and its ancestor, the widget follows the recorded replacements to the surviving
+dialog. A removal without a replacement only restores focus. A modal drawn open again keeps
+its opener for a later patch close. Nested removals finish innermost first. A native close,
+including one by the new dialog's own script, keeps its event and result; a vetoed attempt to
+open it does not swallow a patch close.
+
+Focus can follow an opener replacement recorded in the same removal sweep. Like a native
+dialog close, it does not find a replacement for an opener already lost. This includes an
+earlier opener-only patch or a later replacement in the same response if a ref lookup already
+ended the old dialog's life. A navigation or script removal is not a patch: reusing an id does
+not send a close or restore focus. Keep ids unique. A dialog newly created by a connect handler
+is not a patch replacement, and a handler must not move an already-drawn dialog into the
+replacement root to reuse the removed dialog's id. The widget's `patchRoots` import is an
+internal export, not an app API. This does not change patches of dialogs the user opened or
+navigation updates to a kept layout element in place.
 
 ```rust,ignore
 <button type="button" command="show-modal" commandfor={RenameId}>"Rename"</button>

@@ -1927,27 +1927,58 @@ async function run(browser) {
       }
     }
 
-    for (const mode of ["native-connect", "native-focus"]) {
+    for (const mode of ["native-connect", "native-focus", "veto-focus"]) {
       await draws.goto(`${base}/dialog-draw/${mode === "native-connect" ? mode : "post"}`);
       await draws.locator("#draw-opener").press("Enter");
       await draws.locator("#draw-outer:modal").waitFor();
       await draws.evaluate((mode) => {
         const old = /** @type {HTMLDialogElement} */ (document.querySelector("#draw-outer"));
         old.returnValue = "old";
-        if (mode === "native-focus") document.querySelector("#draw-opener")?.addEventListener("focus", () => {
+        if (mode !== "native-connect") document.querySelector("#draw-opener")?.addEventListener("focus", () => {
           const next = /** @type {HTMLDialogElement} */ (document.querySelector("#draw-outer"));
+          if (mode === "veto-focus") next.addEventListener("beforetoggle", (event) => {
+            if (event.isTrusted && event.newState === "open") {
+              next.dataset.vetoed = "yes";
+              event.preventDefault();
+            }
+          }, { once: true });
           next.showModal();
-          next.close("new");
+          if (mode === "native-focus") next.close("new");
         }, { once: true });
       }, mode);
       await draws.getByRole("button", { name: "Change dialog" }).click();
-      await draws.waitForFunction(() => document.querySelector("output")?.value.includes(":native:"));
-      const after = await draws.evaluate(() => ({
+      if (mode === "veto-focus") await draws.locator('#draw-area[data-stage="updated"]').waitFor({ state: "attached" });
+      else await draws.waitForFunction(() => document.querySelector("output")?.value.includes(":native:"));
+      const after = await draws.locator("#draw-outer").evaluate((el) => ({
         events: document.querySelector("output")?.value,
-        value: /** @type {HTMLDialogElement} */ (document.querySelector("#draw-outer")).returnValue,
+        value: /** @type {HTMLDialogElement} */ (el).returnValue,
+        open: el.hasAttribute("open"),
+        vetoed: el.getAttribute("data-vetoed"),
+        focus: document.activeElement?.id,
       }));
-      check(`${mode} delivers exactly one native close and keeps its returnValue`,
+      if (mode === "veto-focus") check("a vetoed native open does not swallow the patch close or result",
+        after.vetoed === "yes" && !after.open && after.focus === "draw-opener"
+          && after.events === "draw-outer:patch:target:old;" && after.value === "old", JSON.stringify(after));
+      else check(`${mode} delivers exactly one native close and keeps its returnValue`,
         after.events === "draw-outer:native:target:new;" && after.value === "new", JSON.stringify(after));
+    }
+    for (const mode of ["overlap-dialog-first", "overlap-area-first", "script-dialog"]) {
+      await draws.goto(`${base}/dialog-draw/${mode}`);
+      await draws.locator("#draw-opener").press("Enter");
+      await draws.locator("#draw-outer:modal").evaluate((el) => { /** @type {HTMLDialogElement} */ (el).returnValue = "old"; });
+      await draws.getByRole("button", { name: "Change dialog" }).click();
+      const after = await draws.locator('#draw-area[data-stage="updated"] #draw-outer').evaluate((el) => ({
+        events: document.querySelector("output")?.value,
+        value: /** @type {HTMLDialogElement} */ (el).returnValue,
+        open: el.hasAttribute("open"),
+        direct: el.hasAttribute("data-direct"),
+        focus: document.activeElement?.id,
+      }));
+      const script = mode === "script-dialog";
+      check(script ? "a script-created same-id dialog inside the patch root receives no close or result"
+        : `${mode} delivers one close and the old result to the surviving dialog`,
+      !after.open && after.focus === "draw-opener" && after.direct === (mode === "overlap-area-first")
+        && after.events === (script ? "" : "draw-outer:patch:target:old;") && after.value === (script ? "" : "old"), JSON.stringify(after));
     }
     await draws.close();
   }

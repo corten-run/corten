@@ -4369,13 +4369,19 @@ rules something out.
     it), closes nested modals outer-first (so focus lands on the page), and lets a `beforetoggle`
     handler change the tree while the runtime walks it. The widget instead asks the runtime
     which patch root took its modal away, during the existing connect signal's abort. It looks
-    for the counterpart only inside that root and acts after the sweep, innermost first. An
-    open redraw carries the opener forward; a native close takes precedence over a forwarded
-    one. A location guard loses a live close while a navigation is pending, and a page marker
-    or document-wide id lookup can mistake unrelated same-page markup for the replacement.
-    Neither navigation nor an arbitrary script removal is a patch. The pilot's workaround,
-    replacing the closed dialog with an empty element before each submit, is the per-page
-    script this removes.
+    only inside recorded roots, follows a detached counterpart through any further recorded
+    replacements, and acts after the sweep, innermost first. A dialog needs the drawn-state
+    record made before connect, so a dialog a connect handler just created cannot receive the
+    old close. Duplicate ids are invalid; moving an already-drawn dialog into a replacement
+    root to reuse the removed dialog's id is outside the widget's contract. An open redraw
+    carries the opener forward. A native close takes precedence over a forwarded one; a vetoed
+    open is not a native close. Focus goes to the recorded opener or its verified replacement
+    in the same removal sweep. Like native close, it does not follow an opener already lost,
+    including one replaced after a reentrant ref lookup has swept the dialog. A location guard
+    loses a live close while a navigation is pending, and a page marker or document-wide id
+    lookup can mistake unrelated same-page markup for the replacement. Neither navigation nor
+    an arbitrary script removal is a patch. The pilot's workaround, replacing the closed
+    dialog with an empty element before each submit, is the per-page script this removes.
 
     What it costs: the runtime is 386 bytes larger raw, 149 with gzip (15,069 to 15,218) and 124
     with brotli (13,601 to 13,725), paid once a release by every user. A submit reads the
@@ -4386,7 +4392,8 @@ rules something out.
 
     The later widget close handoff adds 232 bytes raw, 98 gzip and 81 brotli to core (43,846 to
     44,078 raw, 15,612 to 15,710 gzip, 14,100 to 14,181 brotli). The optional served
-    `ui.dialog.js` is 1,653 to 4,315 bytes raw, 714 to 1,568 gzip and 591 to 1,353 brotli.
+    `ui.dialog.js` is 1,653 to 4,711 bytes raw, 714 to 1,691 gzip and 591 to 1,462 brotli
+    (up from 4,315 raw, 1,568 gzip and 1,353 brotli before the widget-only fixes).
     Only a page that loads the widget normally opts in to the map. The patch records replaced
     or removed roots, not all ids in the document; the removal sweep clears those records.
     With no dialog or widget, 10,000 ids in Chromium took 0.0313 ms per sparse patch on both
@@ -4414,9 +4421,10 @@ rules something out.
     press inside an element is found to ask for it open (a Show more in a `<details>` the user
     folded), when the rule would need the submitter's intent rather than its place; a real app
     needs native close semantics for a user-opened dialog or for a kept layout dialog updated in
-    place, which this replacement-only widget does not address; or the platform provides a
-    native close that can be observed by an attached handler during replacement, so the
-    widget's forwarding and the core lookup can go.
+    place, or needs focus to follow an opener lost outside the sweep, which this replacement-only
+    widget does not address; or the platform provides a native close that can be observed by
+    an attached handler during replacement, so the widget's forwarding and the core lookup
+    can go.
 
     Last checked: 2026-11-14, the smoke's dialog and `<details>` reopen checks failing with main's
     runtime (`e59c32c28`, the checks as at `c264af2ac`) and passing on `bf1b2eaa2`, and its
@@ -4440,7 +4448,10 @@ rules something out.
     with `faa5ae1f8` in Chromium. A live patch during a pending navigation passed there, but
     delivered no close with main `70dd920cc`.
     The gallery's close checks passed with the handoff in Chromium 156.0.8078.4, Firefox 157.0
-    and WebKit 27.2 (Playwright 1.64.1).
+    and WebKit 27.2 (Playwright 1.64.1). 2026-11-18, the gallery's vetoed-open, dialog-first
+    overlap and script-created same-id cases failed on `e4a97b811` and passed with the widget
+    fixes in the same three engines. The reverse overlap order passed on both. Core was
+    byte-identical to `e4a97b811`.
 
 53. <a id="choice-page-actions"></a>**A page's several writes are named posts of its own route, chosen by a `do` parameter
     in the address each form posts to, not by the pressed button's name in the body or a route per

@@ -16,3 +16,11 @@ export function closed(event, dialog, discardOuter) {
 export function nativeClose(dialog) {
   dialog.close("new");
 }
+
+/** @param {HTMLElement} target @param {string} id */
+export function insertDialog(target, id) {
+  const dialog = document.createElement("dialog");
+  dialog.id = id;
+  dialog.addEventListener("close", (event) => closed(event, dialog, false));
+  target.append(dialog);
+}

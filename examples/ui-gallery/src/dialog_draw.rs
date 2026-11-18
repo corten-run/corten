@@ -22,6 +22,9 @@ pub enum Case {
     ReplaceOpener,
     Link,
     NativeConnect,
+    OverlapDialogFirst,
+    OverlapAreaFirst,
+    ScriptDialog,
 }
 
 #[derive(Id)]
@@ -56,6 +59,23 @@ pub(super) async fn draw(req: Req, Params(route): Params<DialogDraw>) -> HtmlRes
             req.patch_or(html! { {opener(route.case, "Replacement opener")} {area(route.case, false, "updated")} }, || async {
                 document(&req, route.case, false)
             })
+            .await
+        }
+        Case::OverlapDialogFirst | Case::OverlapAreaFirst => {
+            let direct = html! {
+                <dialog id={DrawOuter} data-direct on:close={dialog_draw::closed(event, target, false)}></dialog>
+            };
+            let area = area(route.case, false, "updated");
+            req.patch_or(
+                html! {
+                    if route.case == Case::OverlapDialogFirst {
+                        {direct} {area}
+                    } else {
+                        {area} {direct}
+                    }
+                },
+                || async { document(&req, route.case, false) },
+            )
             .await
         }
         case => {
@@ -125,6 +145,8 @@ fn DrawAreaPatch(case: Case, open: bool, stage: &str) -> impl Patch {
                     <a href={next} data-no-prefetch>"Next page"</a>
                     <form method="post" action={route.draw()} data-patch><button>"Change dialog"</button></form>
                 </dialog>
+            } else if case == Case::ScriptDialog && stage == "updated" {
+                <span on:connect={dialog_draw::insertDialog(target, DrawOuter::NAME)}></span>
             } else {
                 <dialog
                     id={DrawOuter}

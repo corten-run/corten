@@ -13,8 +13,8 @@ let opened = 0;
 const [patchRoot, drawnOpen] = patchRoots();
 /** @type {WeakMap<HTMLDialogElement, { opener: Element | null }>} */
 const modals = new WeakMap();
-/** Dialogs that started or ended a native session while another modal was open. */
-const toggled = new WeakSet();
+/** Dialogs that closed natively while a widget modal was tracked. */
+const nativeCloses = new WeakSet();
 /** @type {{ order: number, finish: () => void }[]} */
 const removed = [];
 
@@ -35,6 +35,25 @@ function counterpart(el, root) {
   return Element.prototype.getAttribute.call(root, "id") === id
     ? root : Element.prototype.querySelector.call(root, `#${CSS.escape(id)}`);
 }
+
+/** @param {HTMLDialogElement} dialog @param {Element | null} root */
+function replacement(dialog, root) {
+  let next = counterpart(dialog, root);
+  /** @type {Set<Element> | undefined} */
+  let seen;
+  // Core records the drawn state before connect runs. A dialog newly made by a script has none.
+  while (next instanceof HTMLDialogElement && drawnOpen(next) !== undefined) {
+    if (next.isConnected) return next;
+    // The batch can replace a dialog and then its ancestor. Follow only roots the patch recorded.
+    if (seen?.has(next)) break;
+    (seen ??= new Set()).add(next);
+    next = counterpart(next, patchRoot(next));
+  }
+  return null;
+}
+
+/** @param {ToggleEvent} event */
+const didClose = (event) => event.isTrusted && event.newState === "closed";
 
 /**
  * A dialog drawn `open` becomes modal: in the top layer over a backdrop, the page behind it inert,
@@ -59,8 +78,8 @@ export function modal(dialog, options) {
     modals.set(dialog, modalLife);
     let sameSession = true;
     doc.addEventListener("beforetoggle", (event) => {
-      if (!event.isTrusted || !(event.target instanceof HTMLDialogElement)) return;
-      toggled.add(event.target);
+      if (!didClose(event) || !(event.target instanceof HTMLDialogElement)) return;
+      nativeCloses.add(event.target);
       if (event.target === dialog) sameSession = false;
     }, { capture: true, signal });
     signal.addEventListener("abort", () => {
@@ -70,21 +89,20 @@ export function modal(dialog, options) {
       if (!sameSession || dialog.isConnected || !dialog.open) return;
       const root = patchRoot(dialog);
       if (root === undefined) return;
-      const next = counterpart(dialog, root);
+      const to = replacement(dialog, root);
       const opener = modalLife.opener;
       const back = opener && doc.contains(opener) ? opener : counterpart(opener, patchRoot(opener));
       const focus = back instanceof HTMLElement && back.localName === opener?.localName ? back : null;
-      const to = next instanceof HTMLDialogElement ? next : null;
       if (to?.open) {
         const carried = modals.get(to);
         if (carried) carried.opener = focus;
         return;
       }
-      if (to && (drawnOpen(to) || toggled.has(to))) return;
-      // A nested close handler or restoring focus can start a native session before we finish.
+      if (to && (drawnOpen(to) || nativeCloses.has(to))) return;
+      // A nested close handler or restoring focus can close it natively before we finish.
       const pending = new AbortController();
       let native = false;
-      to?.addEventListener("beforetoggle", (event) => { native ||= event.isTrusted; }, { signal: pending.signal });
+      to?.addEventListener("beforetoggle", (event) => { native ||= event.target === to && didClose(event); }, { signal: pending.signal });
       afterRemoval(order, () => {
         try {
           if (dialog.isConnected || to?.open || native) return;
