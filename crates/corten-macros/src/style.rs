@@ -1423,7 +1423,7 @@ fn squash(text: &str) -> String {
     squash_with(text, |_, _| {})
 }
 
-/// `observe` maps the source and output offsets of each emitted character outside strings.
+/// `observe` maps the source and output byte offsets of each copied character.
 fn squash_with(text: &str, mut observe: impl FnMut(usize, usize)) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.char_indices().peekable();
@@ -1446,11 +1446,14 @@ fn squash_with(text: &str, mut observe: impl FnMut(usize, usize)) -> String {
                     out.push(' ');
                 }
                 space = false;
+                observe(from, out.len());
                 out.push(c);
-                while let Some((_, s)) = chars.next() {
+                while let Some((from, s)) = chars.next() {
+                    observe(from, out.len());
                     out.push(s);
                     if s == '\\' {
-                        if let Some((_, next)) = chars.next() {
+                        if let Some((from, next)) = chars.next() {
+                            observe(from, out.len());
                             out.push(next);
                         }
                     } else if s == c {
@@ -1917,6 +1920,10 @@ mod tests {
         assert_eq!(
             scope("@position-try --above { top: 0 } .a { position-try-fallbacks: --abov\\65 , flip-block }", "x").unwrap().css,
             "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above , flip-block}"
+        );
+        assert_eq!(
+            scope("@position-try --above{top:0}.a{position-try:var(--missing\\', --above)}", "x").unwrap().css,
+            "@position-try --x__above{top:0}.x__a{position-try:var(--missing\\', --x__above)}"
         );
         // A no-break space is not CSS whitespace: `--above\u{a0}flip-block` is one name.
         assert_eq!(

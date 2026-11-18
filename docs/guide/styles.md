@@ -137,15 +137,18 @@ or `ComboBox` styled by this component:
 tree-wide namespace, not one per component ([design Limit 9](../design.md#limit-stylesheet-support));
 prefixing prevents two components' options from colliding. Names defined here use `--` followed
 by ASCII letters, digits, `-` and `_`, without `__`, as `@property` does; references can use CSS
-escapes. An option not defined in this file stays global. The macro reads the two declarations'
-values as CSS tokens and renames an identifier only where the value takes an option: at its top
-level, in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an `if()` branch's value.
+escapes. The scoping pass does not prefix options defined outside this file. The macro reads
+the two declarations' values as CSS tokens and renames an identifier only where the value takes
+an option: at its top level, in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an
+`if()` branch's value.
 `position-try: var(--choice, --above)` scopes the fallback but does not treat the lookup
 `--choice` as an option. A registered property with the same name does not rename an option,
 but its `var()` lookup still gets the property prefix. In
 `if(style(--above: 1): --above; else: flip-block)`, only the branch value names an option.
 Function calls (`--above()`), anchor names, strings, URLs and other functions' arguments are
-not position references. Comments and whitespace are normalized as in other declarations.
+not position references. Comments and whitespace are normalized as in other declarations. This
+can change token boundaries in unprefixed options: `--externa\6c  flip-block` loses the extra
+space, so the browser reads one name (`--externalflip-block`) instead of a name and a tactic.
 A name that reaches `position-try` through a
 custom property's value (`--choice: --above`) is not rewritten, since the macro cannot know where
 that value goes; name the option in the declaration itself. Other raw named rules remain global

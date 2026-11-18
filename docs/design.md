@@ -5816,8 +5816,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
 
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
-   CSS escapes. Only names defined in this file are rewritten; other position options remain
-   global. The values of `position-try` and `position-try-fallbacks` are read as
+   CSS escapes. The scoping pass prefixes only names defined in this file. The values of
+   `position-try` and `position-try-fallbacks` are read as
    [CSS Syntax](https://www.w3.org/TR/css-syntax-3/#tokenization) tokens, and only an ident
    token equal to a local name is renamed, where the value takes an option: at its top level,
    in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an `if()` branch's value. A
@@ -5825,9 +5825,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
    function token (`--x()`) calls a custom function, and strings, URLs, anchor names, other
    functions' arguments and unrelated declarations are not position references. The macro
    matches whole names from the source before normalizing whitespace and comments as in
-   other declarations. A registered custom property with the same name does not rename an
-   option, but its `var()` lookup still gets the property prefix. A name carried in a custom
-   property's value is not rewritten as a position option.
+   other declarations. That normalization can change token boundaries in unprefixed options:
+   `--externa\6c  flip-block` loses the extra space and becomes one name (`--externalflip-block`).
+   A registered custom property with the same name does not rename an option, but its `var()`
+   lookup still gets the property prefix. A name carried in a custom property's value is not
+   rewritten as a position option.
    [CSS Anchor Positioning](https://www.w3.org/TR/css-anchor-position-1/#at-ruledef-position-try)
    gives position options a tree-scoped namespace, not a selector-scoped one: all Corten
    components share the document tree, so prefixing prevents collisions. This does not make
