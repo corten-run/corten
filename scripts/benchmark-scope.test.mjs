@@ -42,7 +42,13 @@ test("Catalog always starts its scope job and gates parity and JSON on the selec
   assert.deepEqual(workflow.on.push, { branches: ["main"] });
   const { scope, harness, parity, "json-harness": jsonHarness, "json-aot": jsonAot } = workflow.jobs;
   assert.equal(scope.if, undefined);
-  assert.ok(scope.steps.some(step => step.run === "node scripts/benchmark-scope.mjs catalog"));
+  const step = scope.steps.find(step => step.run === "node scripts/benchmark-scope.mjs catalog");
+  assert.equal(step.env.PUSH_BEFORE, "${{ github.event.before }}");
+  assert.equal(scope.steps.find(step => step.uses?.startsWith("actions/checkout")).with["fetch-depth"], 0);
+  // Every main push keeps its own run: a replaced run would leave its push diff untested.
+  assert.equal(workflow.concurrency.group,
+    "${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}");
+  assert.equal(workflow.concurrency["cancel-in-progress"], "${{ github.event_name == 'pull_request' }}");
   assert.equal(harness.if, "needs.scope.outputs.apps != '[]' || needs.scope.outputs.json == 'true'");
   assert.equal(parity.if, "needs.scope.outputs.apps != '[]'");
   assert.equal(jsonHarness.if, "needs.scope.outputs.json == 'true'");
@@ -226,6 +232,35 @@ test("a base-side rename scopes the edited file where parity actually tests it",
   const paths = eventPaths(prEvent(merged), cwd);
   assert.deepEqual(paths, [after]);
   assert.deepEqual(selectScope(allApps, paths), { apps: allApps, json: true });
+});
+
+test("a push to main scopes Catalog by its push diff, and an unknown base selects everything", t => {
+  const { cwd, write, commit } = fixture(t);
+  write("initial");
+  const base = commit();
+  write("docs/guide/views.md");
+  const docs = commit();
+  write("crates/corten/src/lib.rs");
+  const framework = commit();
+  const script = fileURLToPath(new URL("./benchmark-scope.mjs", import.meta.url));
+  const output = join(cwd, "output");
+  const scope = (PUSH_BEFORE, GITHUB_SHA) => {
+    writeFileSync(output, "");
+    const env = { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_SHA, PUSH_BEFORE, GITHUB_OUTPUT: output,
+      PARITY_APPS: workflow.jobs.scope.env.PARITY_APPS };
+    execFileSync(process.execPath, [script, "catalog"], { cwd, env, stdio: ["ignore", "ignore", "ignore"] });
+    return readFileSync(output, "utf8");
+  };
+  assert.equal(scope(base, docs), "apps=[]\njson=false\n");
+  assert.equal(scope(docs, framework), 'apps=["corten"]\njson=false\n');
+  const all = `apps=${JSON.stringify(allApps)}\njson=true\n`;
+  assert.equal(scope("0".repeat(40), framework), all);
+  assert.equal(scope("a".repeat(40), framework), all);
+  // A rewound or rewritten push compares with a base that is not its ancestor.
+  assert.equal(scope(framework, docs), all);
+  for (const GITHUB_EVENT_NAME of ["workflow_dispatch", "schedule"]) {
+    assert.deepEqual(selectScope(allApps, eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA: framework }, cwd)), { apps: allApps, json: true });
+  }
 });
 
 test("PR and multi-commit push diffs see inputs beyond the hosted path-filter limit", t => {
