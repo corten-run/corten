@@ -94,6 +94,13 @@ page (a load, a navigation or a patch) and focuses the first field marked invali
 closed stays closed. It takes the dialog itself, so on any other element it does not compile.
 List `corten_ui::COMPONENTS` and it is served.
 
+If a patch replaces a still-open modal made by `dialog::modal` or `dialog::modalClosedBy` with
+a closed dialog of the same id, the widget returns focus to the element focused before it opened
+(or its same-id replacement, when available). It then dispatches one non-bubbling `close` on the
+attached replacement, so its `on:close` runs and can read the previous dialog's `returnValue`.
+A removal without a replacement only restores focus; a replacement drawn open starts its own
+modal life. Nested removals finish innermost first. A native close, including Escape, is unchanged.
+
 ```rust,ignore
 <button type="button" command="show-modal" commandfor={RenameId}>"Rename"</button>
 <dialog id={RenameId} open={!errors.is_empty()} on:connect={dialog::modal(target)}

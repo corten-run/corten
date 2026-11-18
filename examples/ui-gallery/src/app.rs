@@ -82,10 +82,22 @@ pub mod url {
 
     #[route("/orders/settings", post = settings)]
     pub struct Settings;
+
+    #[derive(Clone, Copy)]
+    #[route(
+        "/dialog-draw/{case}", get = crate::dialog_draw::page, patches,
+        post(open) = crate::dialog_draw::open, post(draw) = crate::dialog_draw::draw
+    )]
+    pub struct DialogDraw {
+        pub case: crate::dialog_draw::Case,
+    }
+
+    #[route("/dialog-draw-live", get = crate::dialog_draw::live)]
+    pub struct DialogDrawLive;
 }
 
 /// The app's components: the kit's (`ui::COMPONENTS`) are listed before them, corten-ui's after.
-pub const COMPONENTS: &[Component] = &[Gallery, crate::gallery::Sku, Orders];
+pub const COMPONENTS: &[Component] = &[Gallery, crate::gallery::Sku, Orders, crate::dialog_draw::HANDLERS];
 
 pub fn app() -> App {
     App::new(url::router())
@@ -630,7 +642,7 @@ mod tests {
         let patch = rename(" ").mode(Mode::Action).await;
         let patch = patch.text();
         assert!(
-            patch.starts_with(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open aria-label="Rename the draft" data-on='connect:ui.dialog.modal($t) corten:error:ui.dialog.failed($e,$t,@said)'>"#),
+            patch.starts_with(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open aria-label="Rename the draft" data-on='connect:ui.dialog.modal($t,{signal:$s}) corten:error:ui.dialog.failed($e,$t,@said)'>"#),
             "{patch}"
         );
         assert!(patch.contains("aria-invalid=\"true\"") && patch.contains("Give the draft a name."), "{patch}");

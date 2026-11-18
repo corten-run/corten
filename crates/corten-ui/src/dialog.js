@@ -6,17 +6,65 @@
 
 /** @import { CortenError } from "corten" */
 
+/** @typedef {{ signal: AbortSignal }} ModalLife */
+
+let opened = 0;
+/** @type {{ order: number, finish: () => void }[]} */
+const removed = [];
+
+/** @param {number} order @param {() => void} finish */
+function afterRemoval(order, finish) {
+  // Signals abort in lifetime order, not top-layer order. Finish after the removal sweep,
+  // newest modal first, so the outermost opener gets focus last.
+  if (!removed.length) queueMicrotask(() => {
+    for (const close of removed.splice(0).sort((a, b) => b.order - a.order)) close.finish();
+  });
+  removed.push({ order, finish });
+}
+
 /**
  * A dialog drawn `open` becomes modal: in the top layer over a backdrop, the page behind it inert,
  * Escape closes it, and focus goes to the first field the server marked invalid in it (else where
  * the browser puts it). A dialog drawn closed, or already modal, is left as it is.
+ * On removal while still open, restore opener focus where possible and send one non-bubbling
+ * `close` to a closed replacement with the same id. A replacement drawn open starts its own life.
  * @param {HTMLDialogElement} dialog
+ * @param {ModalLife} options
  */
-export function modal(dialog) {
+export function modal(dialog, options) {
   if (!dialog.open || dialog.matches(":modal")) return;
+  const doc = dialog.ownerDocument;
+  const opener = doc.activeElement;
+  const openerId = opener?.id;
+  const order = ++opened;
   // Without `open` rather than close(): no `close` event for a dialog the user saw stay open.
   dialog.removeAttribute("open");
   dialog.showModal();
+  const signal = options?.signal;
+  if (signal && !signal.aborted && dialog.matches(":modal")) {
+    let sameSession = true;
+    dialog.addEventListener("beforetoggle", (event) => {
+      if (event.isTrusted) sameSession = false;
+    }, { signal });
+    signal.addEventListener("abort", () => {
+      // Removing a modal takes it out of the top layer but leaves its open attribute. A
+      // native close (even if the dialog then reopens) or removal of open is not ours to report.
+      if (!sameSession || dialog.isConnected || !dialog.open) return;
+      const next = dialog.id ? doc.getElementById(dialog.id) : null;
+      if (next instanceof HTMLDialogElement && next.open) return;
+      afterRemoval(order, () => {
+        if (dialog.isConnected || (next instanceof HTMLDialogElement && next.open)) return;
+        const back = opener?.isConnected ? opener : openerId ? doc.getElementById(openerId) : null;
+        if (back instanceof HTMLElement && back.localName === opener?.localName) back.focus({ preventScroll: true });
+        // Focusing, or a nested dialog's close handler, can change the tree. Never retarget
+        // the event to some other element that has since taken this id.
+        if (next instanceof HTMLDialogElement && next.isConnected && !next.open) {
+          next.returnValue = dialog.returnValue;
+          next.dispatchEvent(new Event("close"));
+        }
+      });
+    }, { once: true });
+  }
   const invalid = dialog.querySelector('[aria-invalid="true"]');
   if (invalid instanceof HTMLElement) invalid.focus();
 }
@@ -30,13 +78,14 @@ export function modal(dialog) {
  * the Navigation API, the link's address replaces the dialog's. It is a script's navigation, so
  * attributes on the link (`data-reload`, `data-keep-place`, an `on:click`) do not apply. Only
  * a `cancel` of this dialog: a file input's picker dismissed inside it fires one too, which
- * bubbles. A dialog drawn closed and opened later gets the same.
+ * bubbles. A dialog drawn closed and opened later gets the same. The modal's removal and
+ * replacement use the same focus and `close` behavior as `modal`.
  * @param {HTMLDialogElement} dialog
  * @param {HTMLAnchorElement} close
  * @param {AbortSignal} signal
  */
 export function modalClosedBy(dialog, close, signal) {
-  modal(dialog);
+  modal(dialog, { signal });
   let followed = false;
   dialog.addEventListener(
     "cancel",

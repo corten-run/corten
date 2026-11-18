@@ -1780,6 +1780,70 @@ async function run(browser) {
   errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
   // dialog::modal: a dialog the server draws open is modal.
+  {
+    const draws = await browser.newPage();
+    draws.on("pageerror", (e) => errors.push(e.message));
+    const outer = "draw-outer:patch:target;";
+    const inner = "draw-inner:patch:target;";
+    for (const [mode, want, focus] of [
+      ["post", outer, "draw-opener"],
+      ["live", outer, "draw-opener"],
+      ["read", outer, "draw-opener"],
+      ["nested", inner + outer, "draw-opener"],
+      ["drop-inner", outer, "draw-opener"],
+      ["mutate", inner, "draw-opener"],
+      ["remove", "", "draw-opener"],
+      ["reopen", "", "change"],
+      ["replace-opener", outer, "draw-opener"],
+      ["link", outer, "draw-opener"],
+      ["native", "draw-outer:native:target;", "draw-opener"],
+      ["strip-open", "", ""],
+    ]) {
+      const url = `${base}/dialog-draw/${mode === "native" || mode === "strip-open" ? "post" : mode}`;
+      const incoming = mode === "live" ? `${base}/dialog-draw-live` : url;
+      const held = mode === "live" || mode === "read";
+      let release = () => {};
+      const ready = new Promise((resolve) => { release = () => resolve(undefined); });
+      /** @param {import("@playwright/test").Route} route */
+      const delay = async (route) => {
+        if (route.request().headers().corten === "action" && route.request().method() === "GET" || mode === "live") await ready;
+        await route.continue();
+      };
+      if (held) await draws.route(incoming, delay);
+      await draws.goto(url);
+      await draws.locator("#draw-opener").press("Enter");
+      await draws.waitForFunction((count) => document.querySelectorAll("dialog:modal").length === count,
+        ["nested", "drop-inner", "mutate"].includes(mode) ? 2 : 1);
+      if (held) release();
+      else if (mode === "native" || mode === "strip-open") {
+        if (mode === "native") {
+          await draws.keyboard.press("Escape");
+          await draws.waitForFunction(() => document.querySelector("output")?.textContent?.includes(":native:"));
+          check("Escape closes the modal natively and returns focus", await draws.locator("#draw-opener").evaluate((el) => el === document.activeElement));
+        } else await draws.locator("#draw-outer").evaluate((el) => el.removeAttribute("open"));
+        await draws.getByRole("button", { name: "Redraw dialog" }).evaluate((el) => /** @type {HTMLElement} */ (el).click());
+      } else await draws.getByRole("button", { name: "Change dialog" }).click();
+      if (mode === "remove") await draws.locator("#draw-area").waitFor({ state: "detached" });
+      else await draws.locator('#draw-area[data-stage="updated"]').waitFor({ state: "attached" });
+      if (mode === "reopen") await draws.locator("#draw-outer:modal").waitFor();
+      const after = await draws.evaluate(() => ({
+        events: document.querySelector("output")?.value,
+        modal: document.querySelector("dialog:modal")?.id,
+        outer: !!document.querySelector("#draw-outer"),
+        focus: document.activeElement?.id || (document.activeElement?.closest("dialog:modal") ? "change" : ""),
+        opener: document.activeElement?.textContent,
+      }));
+      check(
+        `A server-drawn modal's ${mode} redraw closes, reopens or removes it as drawn`,
+        after.events === want && after.modal === (mode === "reopen" ? "draw-outer" : undefined)
+          && after.outer === !["remove", "mutate"].includes(mode) && (mode === "strip-open" || after.focus === focus)
+          && (mode !== "replace-opener" || after.opener === "Replacement opener"),
+        JSON.stringify(after),
+      );
+      if (held) await draws.unroute(incoming, delay);
+    }
+    await draws.close();
+  }
   const rename = page.locator("#rename");
   const isModal = () => rename.evaluate((d) => d.matches(":modal"));
   check("drawn closed, the dialog stays closed", !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));

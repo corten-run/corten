@@ -7,6 +7,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
   for a runner; pushes to main and the release's call keep every run.
+- If a patch draws a server-drawn modal closed, `corten-ui`'s dialog widget restores opener
+  focus and dispatches `close` on the same-id replacement. The core runtime is unchanged.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including

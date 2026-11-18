@@ -1,0 +1,13 @@
+// @ts-check
+
+/**
+ * Records a delegated close, including whether it reached an attached dialog.
+ * @param {Event} event
+ * @param {HTMLDialogElement} dialog
+ * @param {boolean} discardOuter
+ */
+export function closed(event, dialog, discardOuter) {
+  const output = dialog.closest("main")?.querySelector("output");
+  if (output) output.value += `${dialog.id}:${event.isTrusted ? "native" : "patch"}:${event.bubbles ? "bubbles" : "target"};`;
+  if (discardOuter) dialog.parentElement?.remove();
+}

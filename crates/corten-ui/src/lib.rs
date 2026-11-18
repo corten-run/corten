@@ -90,7 +90,7 @@
 //!     <dialog id={RenameId} open={refused} on:connect={dialog::modal(target)}>".."</dialog>
 //! }
 //! .to_html();
-//! assert!(html.contains(r#"<dialog id="ui-rename" open data-on='connect:ui.dialog.modal($t)'>"#), "{html}");
+//! assert!(html.contains(r#"<dialog id="ui-rename" open data-on='connect:ui.dialog.modal($t,{signal:$s})'>"#), "{html}");
 //! ```
 //!
 //! It takes the dialog itself, so on any other element it does not compile:
@@ -228,7 +228,24 @@ pub use tab_group::{Tab, TabGroup};
 pub use toaster::{Toast, ToastId, Toaster};
 pub use tooltip::Tooltip;
 
-script!(pub mod dialog = "dialog.js");
+script!(mod dialog_handlers = "dialog.js");
+
+/// Handlers for native dialogs the server draws open.
+pub mod dialog {
+    use corten::script::{__private::SignalKw, el::HTMLDialogElement, Arg, Bind};
+
+    pub use super::dialog_handlers::{failed, modalClosedBy, COMPONENT};
+
+    /// Makes a server-drawn open dialog modal on connect and focuses its first invalid field.
+    /// If replaced with a closed dialog with the same id, restores opener focus where possible
+    /// and dispatches one `close` on the replacement. Removal without replacement only restores
+    /// focus. Native closes are unchanged.
+    #[must_use]
+    pub fn modal(dialog: impl Arg<HTMLDialogElement>) -> impl Bind {
+        // Preserve modal(target) while passing the same element lifetime as the signal keyword.
+        super::dialog_handlers::modal(dialog, super::dialog_handlers::ModalLife { signal: SignalKw })
+    }
+}
 script!(pub mod rows = "rows.js");
 script!(pub mod ordered = "ordered.js");
 

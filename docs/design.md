@@ -4346,10 +4346,12 @@ rules something out.
     the user closed with Escape while it was on its way), the elements inside the one replaced,
     and every redraw nobody asked for keep the user's. A `data-patch` submit answered with a whole
     page, not a patch, redraws `<main>` from the new markup, its dialogs and `<details>` as drawn,
-    as on main, while the layout's elements outside `<main>` keep the user's. A dialog the user left open as the server
-    drew it, which new markup draws closed, is replaced closed with no `close` event and no focus
-    returned to its opener, as on main; doing that as the browser does is
-    [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455). A popover has no markup that shows it, so no answer can ask for one shown
+    as on main, while the layout's elements outside `<main>` keep the user's. When the server draws
+    an open dialog closed, the runtime replaces it without calling `close()`. For a modal opened
+    by the [optional dialog widget](guide/ui.md), the widget handles focus and sends `close` on
+    the attached replacement
+    ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
+    A popover has no markup that shows it, so no answer can ask for one shown
     and it stays as the user left it. A non-modal dialog the user closes while the answer to a press
     outside it is on its way opens when the answer comes: the runtime knows the press, not what the
     user meant by the close after it. A script's `requestSubmit()` while focus is outside the
@@ -4365,8 +4367,8 @@ rules something out.
     the answer draws it closed: it was tried and taken out, since `close()` queues its `close`
     event after the patch has detached the dialog (so a delegated `on:close` handler never hears
     it), closes nested modals outer-first (so focus lands on the page), and lets a `beforetoggle`
-    handler change the tree while the runtime walks it; doing it right is the issue linked above,
-    and the reopen does not need it. The pilot's workaround, a script that
+    handler change the tree while the runtime walks it. The widget acts after replacement using
+    its connect signal instead, so other pages pay no core bytes or patch work. The pilot's workaround, a script that
     replaces the closed dialog with an empty element before each submit, is the per-page script
     this removes.
 
@@ -5890,7 +5892,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    new markup draws it open, and one they opened closes when it draws it closed), and a
    `<details>` that moved takes another's state. A dialog the server drew open, which the user
    closed and opened again, looks unchanged, so an answer that draws it closed closes it, without
-   a `close` event ([#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)). Other
+   a native `close` event. A modal the [optional dialog widget](guide/ui.md) opened and the user
+   left open gets a `close` on a same-id replacement. Other
    browser state inside a replaced element (scroll position) resets, so keep targets small. The
    runtime parses a patch as a `<template>`'s content, where the first top-level element (other
    than a head's, such as a `<script>` or `<template>`; Chromium and WebKit let a leading
