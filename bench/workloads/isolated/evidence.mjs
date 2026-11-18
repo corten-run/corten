@@ -9,6 +9,8 @@ import { inspectCatalog } from "../../catalog/report.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
 import { reader } from "../../json-api/artifacts.mjs";
 import { inspectJson } from "../../json-api/report.mjs";
+import { producerSources } from "../../json-api/production.mjs";
+import { timedSummarySchema } from "../../json-api/timed-outcomes.mjs";
 import { validateSummary } from "../../marketplace/report.mjs";
 import { admitted } from "../../marketplace/feature-contract.mjs";
 import { inspectRawSupport } from "./raw-support.mjs";
@@ -113,6 +115,23 @@ export function copyEvidence(source, destination) {
   return before;
 }
 
+export function verifyJsonProducer(binding, summary) {
+  assert.equal(summary.schema, timedSummarySchema, "current JSON campaign requires v2 evidence");
+  assert.equal(summary.producer?.schema, "json-api-producer/v2");
+  assert.deepEqual(Object.keys(summary.producer.sources).sort(), [...producerSources].sort(), "JSON producer inventory differs");
+  assert.equal(binding.sources?.commit, binding.request.commit, "JSON producer commit differs");
+  const files = binding.sources.files;
+  assert.ok(Array.isArray(files), "JSON bound sources missing");
+  const sources = new Map(files.map((row) => [row.path, row.sha256]));
+  assert.equal(sources.size, files.length, "duplicate bound source");
+  for (const name of producerSources) {
+    const path = `bench/json-api/${name}`;
+    assert.ok(sources.has(path), "JSON producer missing from bound commit");
+    assert.match(summary.producer.sources[name], /^[a-f0-9]{64}$/);
+    assert.equal(summary.producer.sources[name], sources.get(path), "JSON producer differs from bound commit");
+  }
+}
+
 /** Native APIs are independent gates; a process exit or complete flag is insufficient. */
 export function inspectEvidence(binding, root) {
   assert.ok(supportedGroups.includes(binding.request.group), "native validator not integrated");
@@ -129,6 +148,7 @@ export function inspectEvidence(binding, root) {
       options: binding.execution.effectiveOptions, cpus: binding.resources.expectedCpus }, inspectCatalog);
     report = rawProofBlocked(group, diagnosticNativeReport, inspectRawSupport(group, summary, root, before));
   } else if (group === "json-api") {
+    verifyJsonProducer(binding, summary);
     report = inspectJson(summary, { load: reader(root), commit });
     assert.equal(report.attemptComplete, true, "strict JSON native attempt incomplete");
   } else {

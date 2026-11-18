@@ -1,5 +1,5 @@
 // Synthetic test evidence only. Never imported by the runner or report.
-import { aggregate, cpuSettings, descriptor, deriveLoad, identity, imageLabels, k6Image, loadConfig, nodeImage, parseArgs, participantReceipt, payloads, phases, receiptSchema, route, runtimeContext, runtimeReceipt, schema, sha256, timingPlan } from "./contract.mjs";
+import { aggregate, cpuSettings, descriptor, deriveLoad, identity, imageLabels, k6Image, loadConfig, nodeImage, parseArgs, participantReceipt, payloads, phases, receiptSchema, route, runtimeContext, runtimeReceipt, schema, sha256, timingPlan, timedLoadCommand } from "./contract.mjs";
 import { jsonCheckSchema } from "../workloads/json-check.mjs";
 import { k6Provenance } from "../load-tool.mjs";
 import { recordAttemptSchema } from "../catalog/record-attempt.mjs";
@@ -32,14 +32,14 @@ export function functional(profile, records) {
 }
 export function k6Summary(count, seconds) {
   return { root_group: { checks: Object.fromEntries(["JSON status 200", "JSON content type"].map((key) => [key, { passes: count, fails: 0 }])) },
-    metrics: { http_reqs: { values: { count, rate: count / seconds } },
+    metrics: { http_reqs: { values: { count, rate: count / seconds } }, iterations: { values: { count, rate: count / seconds } },
     http_req_duration: { values: { avg: 2, "p(50)": 1, "p(95)": 2, "p(99)": 3, max: 4 } },
     http_req_failed: { values: { rate: 0 } }, checks: { values: { passes: count * 2, fails: 0 } }, dropped_iterations: { values: { count: 0 } } } };
 }
 export function runtimeInfo(expected, context, role = "app") {
   const p = payloads[expected.payload], budget = expected.cpus[role === "app" ? "app" : role === "upstream" ? "api" : "load"];
   const execution = role === "app" ? context.appExecutions[expected.app] : context.toolExecutions[role === "load" ? "k6" : "node"];
-  const command = role === "upstream" ? ["node", `/bench/${p.path}/upstream.mjs`] : role === "load" ? ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"]
+  const command = role === "upstream" ? ["node", `/bench/${p.path}/upstream.mjs`] : role === "load" ? context.timed ? timedLoadCommand(context.load) : ["run", "--quiet", "--summary-export", "/tmp/json-summary.json", "/bench/json-api/load.js"]
     : role === "probe" ? ["node", "/bench/json-api/cold.mjs", `http://${context.runId}-app:8080`, route(expected), String(context.startupTimeout)] : execution.Cmd;
   const argv = [...(execution.Entrypoint ?? []), ...(command ?? [])];
   const mount = (Source, Destination) => ({ Type: "bind", Source, Destination, RW: false });
@@ -49,7 +49,9 @@ export function runtimeInfo(expected, context, role = "app") {
     Config: { Labels: { "run.corten.json-api": context.runId }, Env: role === "app" ? [`${p.path.toUpperCase()}_SOURCE=${expected.source}`,
       `${p.path.toUpperCase()}_FIXTURE_PATH=/fixtures/${p.path}.json`, `API_BASE=${context.apiBase}`, "PROFILE="]
       : role === "load" ? [`BASE=http://${context.runId}-app:8080`, `PAYLOAD=${expected.payload}`, `DURATION=${context.load.seconds}s`,
-        `MODE=${context.load.mode}`, `RATE=${context.load.rate}`, `VUS=${context.load.vus}`] : [],
+        `MODE=${context.load.mode}`, `RATE=${context.load.rate}`, `VUS=${context.load.vus}`,
+        ...(context.timed && context.load.mode === "fixed" ? ["JSON_PROTOTYPE_OUTPUT=/tmp"] : [])]
+      : role === "upstream" && context.timed ? ["NODE_OPTIONS=--import=/bench/json-api/upstream-observer.mjs"] : [],
       Entrypoint: execution.Entrypoint, Cmd: command }, Path: argv[0], Args: argv.slice(1),
     NetworkSettings: { Networks: { [context.network]: {} } },
     HostConfig: { Memory: role === "app" ? 2 ** 30 : role === "upstream" ? 512 * 2 ** 20 : role === "probe" ? 256 * 2 ** 20 : 2 ** 31,
@@ -58,14 +60,14 @@ export function runtimeInfo(expected, context, role = "app") {
 }
 export const runtime = (expected, context) => runtimeReceipt(runtimeInfo(expected, context), expected, context);
 const participants = (expected, context, roles) => Object.fromEntries(roles.map((role) => [role, participantReceipt(runtimeInfo(expected, context, role), expected, context, role)]));
-export function result() {
-  const group = descriptor(), options = parseArgs(["j1", "--group", "json-api", "--passes", "1"]), artifacts = new Map();
+export function result(args = [], { artifacts = new Map() } = {}) {
+  const group = descriptor(), options = parseArgs(["j1", "--group", "json-api", "--passes", "1", ...args]);
   let serial = 0;
   const put = (value) => { const path = `test-${serial++}.json`, bytes = JSON.stringify(value); artifacts.set(path, bytes); return { path, sha256: sha256(bytes) }; };
   const load = (ref) => { if (!ref || !artifacts.has(ref.path)) throw new Error("raw artifact missing"); const bytes = artifacts.get(ref.path); if (sha256(bytes) !== ref.sha256) throw new Error("raw digest differs"); return JSON.parse(bytes); };
   const s = { schema, group, options, timingPlan: timingPlan(options), round: "j1", commit: "a".repeat(40), commitAfter: "a".repeat(40), dirty: false, dirtyAfter: false,
     complete: true, checksPassed: true, failures: [], cleanupFailures: [], startedAt: "2026-11-12T10:00:00Z", finishedAt: "2026-11-12T11:00:00Z",
-    measurement: { cpus: cpuSettings({}), encoding: "identity", fixedRate: 150, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
+    measurement: { cpus: cpuSettings({}), encoding: "identity", fixedRate: options.rate, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20,
       loadMemoryBytes: 2 ** 31, nativeProfile: group.nativeProfile, phases: ["warmup", ...phases] },
     runId: "json-api-j1-0123456789", host: { checkout: "/synthetic/checkout" },
     toolExecutions: { node: { Entrypoint: ["docker-entrypoint.sh"], Cmd: ["node"] }, k6: { Entrypoint: ["k6"], Cmd: null } },
@@ -114,22 +116,27 @@ export function result() {
 
 // Deliberately synthetic negative raw capture for verifier mutation tests.
 // It is not a native measurement or an independent source audit.
-export function failedResult(app = descriptor().apps[0], profile = descriptor().cases[0]) {
-  const f = result(), s = f.summary, checked = s.apps[app].checks[profile.key];
+export function failedResult(app = descriptor().apps[0], profile = descriptor().cases[0], { artifacts } = {}) {
+  return gateFunctional(result([], { artifacts }), app, profile);
+}
+export function gateFunctional(f, app, profile) {
+  const s = f.summary, checked = s.apps[app].checks[profile.key];
   const records = payloads[profile.payload].records(), ids = Object.keys(records).slice(0, 8), start = Date.parse(s.startedAt);
   const requests = ids.map((id, index) => ({ id, index, path: route(profile, id), startedOrder: index, finishedOrder: index + ids.length,
-    startedAt: start, finishedAt: start + 1, response: { status: 500, type: "application/json", body: "{}" } }));
-  const attempt = { schema: recordAttemptSchema, recordsSha256: sha256(JSON.stringify(records)), requests };
+    startedAt: start + 1, finishedAt: start + 2, response: { status: 500, type: "application/json", body: "{}" } }));
+  const attempt = { schema: recordAttemptSchema, recordsSha256: checked.functional.recordsSha256, requests };
   const raw = f.load(checked.raw), path = `/__${payloads[profile.payload].path}/control`;
   raw.liveness = Object.fromEntries(["app", "upstream"].map((role) => [role, { containerId: role === "app" ? raw.runtime.containerId : raw.participants.upstream.containerId,
     startedAt: s.startedAt, status: "running", running: true, oomKilled: false, dead: false, paused: false,
     restarting: false, restartCount: 0, exitCode: 0, error: "" }]));
   const reset = { kind: "control", method: "POST", path, value: {}, status: 200, body: "{}" };
+  const reads = profile.source === "api" ? Object.fromEntries(ids.map((id) => [id, 1])) : {};
   raw.events = [reset, ...requests.map((r) => ({ kind: "application", method: "GET", path: r.path, ...r.response })),
-    { kind: "control", method: "GET", path, status: 200, body: JSON.stringify({ requests: profile.source === "api" ? Object.fromEntries(ids.map((id) => [id, 1])) : {} }) },
+    { kind: "control", method: "GET", path, status: 200, body: JSON.stringify({ requests: reads, status: 200 }),
+      ...(profile.source === "api" && s.schema !== schema ? { sweepEnd: { upstreamReads: reads, upstreamResponses: { status: 200, completed: { 200: ids.length }, aborted: 0 } } } : {}) },
     ...(profile.source === "api" ? [reset] : [])];
   checked.raw = f.put(raw);
-  checked.failure = f.put({ identity: checked.identity, attempt, clock: { startedAt: start, finishedAt: start + 2 }, exit: { code: 1, signal: null, expired: false, interrupted: false } });
+  checked.failure = f.put({ identity: checked.identity, attempt, clock: { startedAt: start, finishedAt: start + 3 }, exit: { code: 1, signal: null, expired: false, interrupted: false } });
   delete checked.functional;
   for (const entry of Object.values(s.apps)) for (const p of s.group.cases) { entry.runs[p.key] = []; entry.aggregates[p.key] = {}; }
   s.complete = false; s.checksPassed = false; s.timingDisposition = "gated-functional";

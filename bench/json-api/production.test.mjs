@@ -1,0 +1,170 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { inspectJson, renderJson } from './report.mjs';
+import { descriptor, runtimeContext, loadConfig, deriveLoad, timingPlan } from './contract.mjs';
+import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve, sep } from 'node:path';
+import { gateFunctionalFixture, productionFixture, phaseFixture } from './production-fixtures.mjs';
+import { deriveProductionPhase } from './production.mjs';
+import { capturePhase } from './phase.mjs';
+import { readFixedStreamSync } from './fixed-stream.mjs';
+import { writer, reader } from './artifacts.mjs';
+import { timedCaseProjection } from './timed-outcomes.mjs';
+import { replayTimedRun, verifyAggregates } from './evidence.mjs';
+import { isDeepStrictEqual } from 'node:util';
+
+test('production v2 dispatch retains missing matrix cells instead of rejecting the schema', () => {
+  const group = descriptor();
+  const report = inspectJson({ schema: 'json-api-results/v2', group, options: { apps: group.apps, group: 'json-api', round: 'j1', passes: 1 }, round: 'j1' }, { load() { throw new Error('missing'); } });
+  assert.equal(report.attemptComplete, false);
+  assert.equal(Object.keys(report.apps).length, 9);
+  for (const rows of Object.values(report.apps)) for (const row of Object.values(rows)) {
+    assert.equal(row.projection.cells.length, 1);
+    assert.equal(row.projection.cells[0].phases.fixed.state, 'missing');
+  }
+});
+
+test('production full official matrix retains normal99, continues and independently replays saved outcomes', async (t) => {
+  const stage = (label) => { if (process.env.JSON_V2_STAGE_LOG) appendFileSync(process.env.JSON_V2_STAGE_LOG, `${Date.now()} ${label}\n`); };
+  stage('fixture-start');
+  const folder = mkdtempSync(join(tmpdir(), 'json-v2-production-'));
+  t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true, force: true }); });
+  const group = descriptor(), failure = { app: group.apps[0], key: group.cases[1].key, pass: 2, phase: 'fixed', responses: ['ok', 'http429', 'http503'] };
+  const f = await productionFixture(folder, { failure, passes: 3 });
+  stage('fixture-done');
+  assert.equal(f.captured.length, 9 * 4 * 3 * 4);
+  assert.equal(f.captured.filter(c => c.code === 99).length, 1);
+  const report = inspectJson(f.summary, { load: f.load });
+  stage('negative-report-done');
+  assert.equal(report.warnings.length, 0, report.warnings.slice(0, 4).join('\n'));
+  assert.equal(report.attemptComplete, true); assert.equal(report.baseline, false);
+  assert.equal(report.outcomes.find(o => o.app === failure.app).outcome, 'failed');
+  const row = report.apps[failure.app][failure.key];
+  assert.equal(row.comparisonEligible, null);
+  assert.equal(row.projection.byPhase.fixed.failedPasses.join(','), '2');
+  assert.equal(row.projection.byPhase.fixed.ranges.failed.max, 2);
+  assert.equal(row.projection.byPhase.fixed.ranges.failed.min, 0);
+  assert.equal(row.projection.cells.length, 3);
+  assert.equal(row.projection.cells[1].phases.sat256.state, 'passed');
+  assert.match(renderJson(report), /Timed Outcomes/);
+
+  const entry = f.summary.apps[failure.app], run = entry.runs[failure.key][1], saved = run.phases.fixed;
+  const raw = f.load(saved.raw), profile = group.cases[1], native = f.load(entry.checks[failure.key].native);
+  const context = runtimeContext(f.summary, profile), stream = f.load.stream(raw.eventStream);
+  const derive = (r, n = native, st = stream) => deriveProductionPhase(r, run.identity, 'fixed', f.summary.options, f.summary.tools, context, { native: n, stream: st });
+  for (const [name, mutate] of [
+    ['bad99 mismatch', r => r.command.exit.code = 0], ['I/O fault', r => r.command.ioErrors.push('disk write')],
+    ['abnormal', r => r.command.exit.signal = 'SIGTERM'], ['expired', r => r.command.exit.expired = true],
+    ['stderr truncation', r => r.command.stderrBytes = 67], ['recorded capture fault', r => r.captureErrors.push('sampler')],
+    ['source runtime', r => r.before.runtime.source = 'fixture'], ['load execution', r => r.after.participants.load.configuration.args.push('override')],
+    ['load budget', r => r.before.participants.load.quota = 1], ['missing generator resources', r => delete r.samples.load],
+    ['memory at budget', r => r.samples.app[0].mem = 1024], ['counter missing', r => delete r.counters.app],
+    ['counter decrease', r => r.counters.upstream.after = 0], ['lifetime OOM', r => r.after.liveness.app.oomKilled = true],
+    ['lifetime restart', r => r.after.liveness.upstream.restartCount = 1], ['lifetime start', r => r.after.liveness.load.startedAt = '2026-11-18T00:00:00Z'],
+    ['tail read', r => r.upstreamReads.settled = { synthetic: 99 }], ['missing settle clock', r => delete r.settledAt],
+    ['API below successful reads', r => { r.upstreamReads.after = r.after.upstreamReads = r.upstreamReads.settled = r.upstreamReads.before; }],
+    ['API unexplained extra reads', r => { const after = { ...r.upstreamReads.before, extra: 9 }; r.upstreamReads.after = r.after.upstreamReads = r.upstreamReads.settled = after; }],
+    ['raw receipt', r => r.events.sha256 = 'f'.repeat(64)], ['raw stdout count', r => r.command.stdoutBytes++],
+  ]) { const bad = structuredClone(raw); mutate(bad); assert.throws(() => derive(bad), undefined, name); }
+  stage('raw-negatives-done');
+  for (const mutate of [r => r.samples.load[0].cpu = 320, r => r.samples.upstream[0].cpu = 80,
+    r => r.counters.upstream.after = r.counters.upstream.before + 1000000]) {
+    const busy = structuredClone(raw); mutate(busy); const observed = derive(busy);
+    assert.equal(observed.observationComplete, false); assert.equal(observed.targetOutcome, null);
+  }
+  const historicalAudit = structuredClone(native); historicalAudit.receipt.schema = 'json-api-native-audit/v1';
+  for (const key of ['atMostOneUpstreamFetch', 'noTransportRetries', 'noBackgroundUpstream', 'responseAfterUpstreamCompletion']) delete historicalAudit.receipt.verified[key];
+  delete historicalAudit.receipt.transportSourceFiles;
+  assert.equal(derive(raw, historicalAudit).targetOutcome, null);
+  const unaudited = structuredClone(native); unaudited.receipt.verified.noTransportRetries = false;
+  assert.throws(() => derive(raw, unaudited), /source guarantees/);
+
+  // An actual disk writer/reader also replays the full stream, not a saved reduction.
+  const put = writer(folder), disk = reader(folder), diskRef = put('phase.json', raw);
+  assert.equal(derive(disk(diskRef), native, disk.stream(raw.eventStream)).failed, 2);
+  assert.throws(() => disk.stream({ path: raw.eventStream.path }), /reference/);
+  assert.throws(() => disk.stream({ ...raw.eventStream, path: '../outside' }), /unsafe/);
+  assert.throws(() => disk.stream({ ...raw.eventStream, receipt: { ...raw.events, events: raw.events.events + 1 } }), /receipt differs/);
+  stage('disk-controls-done');
+
+  const drop = phaseFixture('fixed', ['ok', 'ok'], raw.command.clock.startedAt - Date.parse('2026-11-17T00:00:00Z'), 1), dropped = structuredClone(raw), dropFile = join(folder, 'drops.jsonl');
+  writeFileSync(dropFile, drop.bytes()); const dropStream = readFixedStreamSync(dropFile);
+  dropped.k6 = drop.summary; dropped.clock = drop.clock; dropped.command = { ...drop.command, stdoutBytes: dropStream.receipt.bytes };
+  dropped.events = dropStream.receipt;
+  const reads = { ...dropped.upstreamReads.before, synthetic: (dropped.upstreamReads.before.synthetic ?? 0) + 2 };
+  dropped.upstreamReads.after = dropped.after.upstreamReads = dropped.upstreamReads.settled = reads;
+  const unattributed = derive(dropped, native, dropStream);
+  assert.equal(unattributed.observationComplete, false); assert.equal(unattributed.targetOutcome, null);
+  assert.match(unattributed.incompleteReasons.join(','), /monotonic-last-offer/);
+  stage('drop-control-done');
+
+  const savedProjection = entry.projections[failure.key];
+  const forgedProjection = structuredClone(savedProjection); forgedProjection.cells[1].phases.fixed.requests++;
+  const projection = timedCaseProjection(entry.runs[failure.key].map(r => ({ pass: r.pass,
+    phases: Object.fromEntries(Object.entries(r.phases).map(([key, value]) => [key, value.metrics])) })), 3);
+  assert.ok(isDeepStrictEqual(projection, savedProjection), 'saved projection must independently derive');
+  assert.ok(!isDeepStrictEqual(projection, forgedProjection), 'forged projection cannot match derivation');
+  entry.aggregates[failure.key].fixed.passes++;
+  assert.throws(() => verifyAggregates(entry.aggregates[failure.key], entry.runs[failure.key], 3), /aggregate differs/);
+  entry.aggregates[failure.key].fixed.passes--;
+  const tailRef = run.tail, tail = f.load(tailRef); tail.after = { extra: 1 }; run.tail = f.put(tail);
+  assert.throws(() => replayTimedRun(run, run.identity, f.summary.options, f.load, f.summary.tools, context, native), /teardown/); run.tail = tailRef;
+  const rawRef = saved.raw, truncated = structuredClone(raw); delete truncated.files.clock;
+  saved.raw = f.put(truncated);
+  assert.throws(() => replayTimedRun(run, run.identity, f.summary.options, f.load, f.summary.tools, context, native), /auxiliary byte references/);
+  saved.raw = rawRef;
+  const stderrPath = join(folder, raw.files.stderr.path), stderr = readFileSync(stderrPath);
+  writeFileSync(stderrPath, 'unretained stderr fault');
+  assert.throws(() => replayTimedRun(run, run.identity, f.summary.options, f.load, f.summary.tools, context, native), /raw byte length differs/);
+  writeFileSync(stderrPath, stderr);
+  assert.throws(() => deriveLoad(raw, run.identity, 'fixed', f.summary.options, f.summary.tools, context), /container identity/);
+  // Identically serialized fixture bodies have independent artifact paths/mutations.
+  const a = f.put({ marker: 1 }), b = f.put({ marker: 1 });
+  assert.notEqual(a.path, b.path); f.artifacts.set(a.path, JSON.stringify({ marker: 2 }));
+  assert.equal(f.load(b).marker, 1); assert.throws(() => f.load(a), /digest/);
+});
+
+test('production healthy full roster and explicit missing passes use saved-replay report gates', async (t) => {
+  const folder = mkdtempSync(join(tmpdir(), 'json-v2-positive-'));
+  t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true, force: true }); });
+  const f = await productionFixture(folder);
+  const healthy = inspectJson(f.summary, { load: f.load });
+  assert.equal(healthy.baseline, true, healthy.warnings.slice(0, 4).join('\n'));
+  assert.equal(healthy.comparisonEligibleApps.length, 9);
+  f.summary.options.passes = 3; f.summary.timingPlan = timingPlan(f.summary.options);
+  f.summary.attemptComplete = false; f.summary.complete = false;
+  const partial = inspectJson(f.summary, { load: f.load });
+  assert.equal(partial.attemptComplete, false);
+  for (const rows of Object.values(partial.apps)) for (const row of Object.values(rows)) {
+    assert.equal(row.projection.cells.length, 3);
+    assert.equal(row.projection.cells[2].phases.fixed.state, 'missing');
+    assert.equal(row.projection.byPhase.fixed.present, 1);
+    assert.ok(row.projection.cells[0].phases.fixed.requests > 0);
+  }
+  // Existing functional-negative policy still gates ALL v2 timings globally.
+  gateFunctionalFixture(f, "corten", f.summary.group.cases[0]);
+  const gated = inspectJson(f.summary, { load: f.load });
+  assert.equal(gated.attemptComplete, true, gated.warnings.slice(0, 3).join('\n')); assert.equal(gated.baseline, false);
+});
+
+test('production capture saves abnormal, I/O and bad99 evidence before rejecting, never target blame', async (t) => {
+  const folder = mkdtempSync(join(tmpdir(), 'json-v2-capture-'));
+  t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true, force: true }); });
+  const f = phaseFixture('sat64'), options = { duration: 1, warmup: 1, rate: 3 }, saved = new Map();
+  for (const kind of ['I/O', 'abnormal', 'bad99', 'copy', 'sampler']) {
+    const path = kind.replace('/', '-'); mkdirSync(join(folder, path));
+    const err = new Error(kind); err.exit = { code: 2, signal: null, expired: false, interrupted: false }; err.clock = f.command.clock; err.ioErrors = kind === 'I/O' ? ['write'] : [];
+    const io = { now: () => f.command.clock.finishedAt, reads: async () => ({}), counters: async () => ({}), observe: async () => ({}),
+      write(path, value) { saved.set(path, value); return { path }; },
+      sample() { return { async stop() { if (kind === 'sampler') throw err; return {}; } }; },
+      async execute() { if (['I/O', 'abnormal'].includes(kind)) throw err; return { ...f.command, exit: { ...f.command.exit, code: 99 }, stdoutBytes: 0 }; },
+      async copy(source, target) { if (kind === 'copy') throw err; writeFileSync(target, JSON.stringify(source.includes('summary') ? f.summary : f.clock)); } };
+    await assert.rejects(capturePhase({ folder, path, stage: 'sat64', config: loadConfig(options, 'sat64'), expected: {}, options, tools: { node: {}, k6: {} }, context: {}, io }), error => {
+      const raw = saved.get(error.phase?.raw.path);
+      assert.ok(raw?.captureErrors.length > 0); assert.equal(error.phase.metrics, null); assert.equal(raw.targetOutcome, undefined);
+      if (kind === 'bad99') assert.match(error.message, /exit\/threshold mismatch/);
+      return true;
+    });
+  }
+});
