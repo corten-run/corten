@@ -5856,8 +5856,11 @@ rules something out.
     JavaScript as without, for a runtime that says it draws it (`Prefer: corten-draws=whole`,
     [Choice 11](#choice-corten-request-header)): a runtime from before (a tab open across the deploy)
     gets `<main>` alone, as it did, since it would take a whole page for an answer it does not
-    draw, say the write failed, and a resend would be a new write; and a runtime given `<main>` for
-    a write (a server from before) has the next navigation read the whole page. The layout reads it
+    draw, say the write failed, and a resend would be a new write. A runtime given `<main>` for
+    a write with a matching shell key has the next navigation read the whole page. Across a
+    mixed-version deploy, different runtime bytes change the shell key: either runtime keeps the
+    shell boundary and reloads the current address without resending, losing the write's answer
+    (including a refusal's input and messages). The layout reads a whole answer
     draws start once the handler has answered with it
     (nothing runs beside the handler, whose reads must see what it wrote), `give` is honored, and
     the runtime applies it with the comparison it runs on the page a write redirects to
@@ -5879,6 +5882,8 @@ rules something out.
     so the navigation after reads the whole page again. One that failed in view (the network failed,
     a 5xx, or the body of an answer that took it was cut off, or did not draw, after its headers
     came), which the server may have applied too, counts for a navigation to another page.
+    A body failure marks the write undrawn again, even if a later write's layout covered it
+    while the body was on its way.
     An undrawn failure vetoes a whole `ReadAgain` poll even if another write is undrawn or the
     page normally polls whole while its write lands. If a whole poll is already waiting for its
     answer or assets, it skips the draw and schedules the next read. This avoids replacing the
@@ -5893,7 +5898,9 @@ rules something out.
     on `main`), which the head's extensions hold in turn, so it is let go when the write is answered
     or its future dropped unanswered (the client gone, a middleware's timeout). Publication checks
     the closed mark under the slot lock, so a detached extraction cannot recreate the cycle after
-    cleanup. A
+    cleanup. The route and middleware fills run only for responses with places. The write records
+    its deadline in a request extension so a patch needs no task-local scope or boxed request
+    wrapper. A
     `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
     layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
     page's, as a navigation does, and the next navigation reads the whole page; it cannot load in

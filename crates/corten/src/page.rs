@@ -3608,20 +3608,22 @@ async fn within(
     signal: &crate::Signal,
 ) -> Result<Response, Late> {
     use std::{future::Future, pin::pin, task::Poll};
-    let mut fut = pin!(fut);
+    let mut fut = pin!(Some(fut));
     let mut timer = pin!(None::<tokio::time::Sleep>);
     let mut fill: Option<std::pin::Pin<Box<dyn Future<Output = Response> + Send>>> = None;
     std::future::poll_fn(|cx| {
         if limit.is_some() {
             crate::extract::forget_wait();
         }
-        if fill.is_none() {
-            if let Poll::Ready(res) = fut.as_mut().poll(cx) {
+        if let Some(answer) = fut.as_mut().as_pin_mut() {
+            if let Poll::Ready(res) = answer.poll(cx) {
                 // A page the middleware (or a raw route) made early can still have places.
                 // Only that answer needs a fill, under the existing deadline and panic catch.
                 if !late || res.extensions().get::<crate::layout::Pending>().is_none() {
                     return Poll::Ready(Ok(res));
                 }
+                // The middleware's future is finished; do not hold it across the reads.
+                fut.set(None);
                 let shared = signal.shared().expect("late writes belong to an app");
                 fill = Some(Box::pin(crate::layout::fill_made_early(shared.clone(), res)));
             }

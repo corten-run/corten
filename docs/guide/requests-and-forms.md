@@ -93,6 +93,12 @@ one does), the deploy and its layout, and when a navigation answers with a diffe
 (sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
 never stale.
 
+During a mixed-version deploy, an older server can answer a new runtime's preferred write with
+`<main>` alone. With the same shell key, the runtime draws that fragment and reads the layout on
+the next navigation. With a different key, it reloads the current address instead: the write is
+not sent again, but its answer is lost, including the fields and messages in a refusal. The same
+shell check applies when a tab with the old runtime submits to the new server.
+
 A `data-patch` form may send to any route. One whose handler answers its page in
 `Mode::Action` (`req.page`, no `patch_or`) gets that page drawn as a redirect's is, its title,
 `<main>` and each element of the layout that changed: the form works, and every submit sends and

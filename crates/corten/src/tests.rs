@@ -16204,20 +16204,22 @@ mod layout_reads {
         }
     }
 
+    #[crate::routes]
+    mod early_middleware_url {
+        #[route("/early", post = patches_only)]
+        pub struct Early;
+
+        #[route("/patch", post = patches_only)]
+        pub struct Patch;
+    }
+
     /// A page the app's middleware makes with `Req` before a write's route draws the layout's
     /// values, from the head the middleware had (the viewer it added), with JavaScript as without
     /// (#1370); a patch in the same app starts no read.
     #[tokio::test]
     async fn a_page_middleware_makes_for_a_write_draws_its_layout_reads() {
         let count = CartCount::default();
-        let routes =
-            Table::new().route("/early", crate::router::post(|req: Req| async move { refused(&req, "the route") })).route(
-                "/patch",
-                crate::router::post(
-                    |req: Req| async move { req.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> }) },
-                ),
-            );
-        let router = App::new(Routes::from(routes))
+        let router = App::new(early_middleware_url::router())
             .layout_read(count.clone())
             .layout_read(SignedIn)
             .middleware((AsViewer(Some("ada")), AnswersEarly))
@@ -16235,7 +16237,7 @@ mod layout_reads {
             assert_eq!(count.started.load(Ordering::SeqCst), n + 1, "{mode:?}");
         }
         let (_, headers, body) = call_with(router, "POST", "/patch", Some("action"), None).await;
-        assert!(headers.contains_key("corten-patch") && body.contains("saved"), "{headers:?} {body}");
+        assert!(headers.contains_key("corten-patch") && body.contains("patched"), "{headers:?} {body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 2, "a patch starts no read");
     }
 

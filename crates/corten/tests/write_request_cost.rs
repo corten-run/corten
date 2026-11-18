@@ -1,12 +1,15 @@
 //! Release Callgrind fixture for document and navigation GETs and action patches with and without
 //! layout reads. Subtract a 200-request run from a 1,200-request run, then divide by 1,000.
 //! Run the `write_request_cost` test binary with `--ignored --exact request_cost`, setting
-//! `PATH_CASE=document|navigation|typed|generic`, `READS=0|1` and `REQUESTS=200|1200`.
+//! `PATH_CASE=document|navigation|typed|generic|own`, `READS=0|1` and `REQUESTS=200|1200`.
 //! `LEGACY=1` leaves out the preference to measure the late-write bookkeeping separately.
+
+use std::future::Future;
 
 use corten::{
     http::{request::Parts, Body, Request, Response, StatusCode},
     prelude::*,
+    LayoutRead,
 };
 use http_body_util::BodyExt;
 use tower::ServiceExt;
@@ -16,13 +19,13 @@ struct Message;
 
 #[corten::routes]
 mod url {
-    #[route("/page", get = super::page, post = super::page)]
+    #[route("/page", get = crate::page, post = crate::page)]
     pub struct Page;
 
-    #[route("/typed", post = super::typed)]
+    #[route("/typed", post = crate::typed)]
     pub struct Typed;
 
-    #[route("/generic", post = super::generic)]
+    #[route("/generic", post = crate::generic)]
     pub struct Generic;
 }
 

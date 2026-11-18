@@ -1172,7 +1172,9 @@ Corten is pre-1.0, so any minor version may change the API.
   has answered with the page, so they see what the write did, and a write that answers anything
   else starts none. The runtime says it draws the page whole with an HTTP preference (RFC 7240),
   `Prefer: corten-draws=whole`; a runtime without it (a tab open across the deploy) gets `<main>`
-  alone, as before, and a server that does not know it ignores it. A typed write route whose handler
+  alone, as before, and a server that does not know it ignores it. A mismatched shell key still
+  reloads the current address without resending the write; across a mixed-version deploy this can
+  lose the write's answer, including a refusal. A typed write route whose handler
   answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) may return
   `HtmlResult<Patches>` to skip the route's copy of the request head; middleware taking `Req` before
   the route and raw `Table` handlers taking `Req` can still copy it.
@@ -1189,7 +1191,8 @@ Corten is pre-1.0, so any minor version may change the API.
   last may be older than the other write, a patch to a layout element included, so the next
   navigation reads the whole page; so does one after a write a navigation cut off before its
   answer, or one that failed in view (the network failed, a 5xx, its answer cut off after its
-  headers), either of which the server may have applied. While a failure is undrawn, same-page
+  headers), either of which the server may have applied. If another write drew while an answer's
+  body was on its way, a later failure of that body makes it undrawn again. While a failure is undrawn, same-page
   polls use a partial response and in-flight whole polls are skipped and retried. A partial draw
   may replace `<main>` and page-owned layout parts; browsers without the Navigation API reload.
   A patch that refuses a field with a 422 scrolls it into view when focusing it.
