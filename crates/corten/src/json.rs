@@ -1929,6 +1929,31 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn json_names_the_same_bad_field_with_both_readers() {
+        #[derive(Debug)]
+        struct SerdeAlerts;
+
+        impl<'de> serde::Deserialize<'de> for SerdeAlerts {
+            fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+                <Vec<Alert> as serde::Deserialize>::deserialize(de).map(|_| Self)
+            }
+        }
+
+        impl FromJson for SerdeAlerts {}
+
+        let valid = r#"[{"email":"a@b.c","target":1}]"#;
+        assert!(super::read::fast::<Vec<Alert>>(valid).is_some());
+        assert!(super::read::fast::<SerdeAlerts>(valid).is_none());
+
+        let invalid = br#"[{"email":"a@b.c","target":-1}]"#;
+        let content_type = Some("application/json");
+        let derived = read::<Vec<Alert>>(content_type, invalid).await;
+        assert_eq!(derived, read::<SerdeAlerts>(content_type, invalid).await);
+        assert_eq!(derived.0, StatusCode::UNPROCESSABLE_ENTITY.to_string());
+        assert!(derived.1.contains("[0].target:"), "{}", derived.1);
+    }
+
     #[test]
     fn json_is_application_json_or_a_json_suffix_with_parameters_that_parse() {
         // As axum 0.8.9 (mime 0.3.17) read each.

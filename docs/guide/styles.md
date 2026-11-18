@@ -128,12 +128,42 @@ the media query, `.filters:not([open],[hidden]) { display: block !important }`. 
 dialog at a width goes under `[open]` (`.modal[open] { display: grid }`), as the kit's dialog and
 sheet do. Since nothing fails when a rail is missing (the page answers, the rail is simply not
 drawn), `corten dev` warns in the console of each closed dialog or popover that a rule inside
-`@media` or `@container` gives a `display`, at the width the page is at or any other, with both
-rules: the page cannot tell a rail from an open look written without `[open]`. When only areas
-have stylesheets,
-each area's file starts with these rules. An app with no component stylesheet has neither file,
-so if its `static/style.css` gives a hidden element, a popover or a dialog a `display` (styling
-corten-ui's parts there, say), it adds them itself:
+`@media` or `@container` gives a `display`, at the width the page is at or any other. It
+normally suggests both rules: the page cannot tell a rail from an open look written without
+`[open]`. The suggestion uses a matching class from the resolved selector, including in nested
+rules written with `&`. When the check composes an entire `@scope` selector chain, it names
+the rule without suggesting a replacement selector that would drop the scope.
+
+The check composes explicit, unlimited `@scope` roots outside style rules. Plain selector-list
+members and plain inner roots start below their parent; a leading `>` requires a direct child.
+A single `:scope` or `&` can name the root explicitly. In a nested style rule, `&` instead names
+the parent style rule's composed selector; that form does not compose `:scope` references.
+Declarations on a scope root or its nested style rules use their enclosing selector. Supported
+selectors use unescaped ASCII type, class, ID or presence-attribute selectors, `*`, descendant
+and child combinators, and `:is()`, `:not()` or `:where()` around one simple type, class, ID or
+presence-attribute selector, such as `dialog:not([open])`.
+
+If any root, limit, nesting parent or rule selector cannot be composed or read, the check
+handles the whole rule as before: it treats `@scope` as a grouping rule, keeps ordinary style
+nesting and does not use any of the scope bounds. This includes implicit roots, scopes with a
+`to` limit, scopes nested in style rules, sheets with `@namespace`, a top-level root referring to
+itself, unsupported selectors, selectors over 1,024 characters before or after composition,
+and selectors the browser rejects. Rules under `@supports` conditions that `CSS.supports()` rejects
+or under `@starting-style` also use only the old match. Unscoped rules are unchanged, including long
+selectors.
+
+The check does not evaluate the cascade. Three known limits for closed rails with declarations at
+`min-width: 900px` (check at 600px):
+
+- `.rail { display: flex }` and `@scope (.card) { & > * { display: grid !important } }` can suppress the warning for a rail in `.card` even though the override loses to the hiding rule.
+- `@scope (.card) { .rail:not(.gone,.pending) { display: flex } }` and `@scope (.other) { .rail { display: grid !important } }` at the same breakpoint can warn for a rail outside both roots: the `:not()` list uses the old flat match, but the override does not.
+- `@scope (.card) { :scope > .rail { display: flex } }` and `@scope (.other) { @supports (display: future-layout) { .rail { display: grid !important } } }` can suppress the warning for a rail in `.card`: the override's rejected `@supports` (or `@starting-style`) falls back to the old flat match, which ignores `.other`.
+
+This affects only the diagnostic, not which styles the browser applies. Adopted stylesheets are not inspected
+([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
+When only areas have stylesheets, each area's file starts with these rules. An app with no
+component stylesheet has neither file, so if its `static/style.css` gives a hidden element, a
+popover or a dialog a `display` (styling corten-ui's parts there, say), it adds them itself:
 
 ```css
 [hidden]:where(:not([hidden=until-found i])) { display: none !important; }
@@ -143,6 +173,72 @@ dialog:where(:not([open], [popover])) { display: none !important; }
 
 Inline `style="..."` stays blocked by the CSP; one-off values come from the token utilities, and
 a size drawn from data from a custom property ([below](#values-from-data)).
+
+## At-rules
+
+Component CSS supports the block at-rules below. Their names are ASCII case-insensitive
+(`@MEDIA`, `@LAYER`); this is a scoping pass, not a full CSS validator.
+
+| At-rules | What happens |
+|---|---|
+| `@media`, `@supports`, `@container`, `@layer`, `@starting-style` | Rules checked and classes prefixed as in the surrounding block, including nested declarations. `@media (--md)` names a token breakpoint ([below](#breakpoints)). |
+| `@scope` | Root and limit prefixed and rules checked as in the table above; no implicit root. |
+| `@property` | Body copied without selector scoping, then required descriptors and syntax checked; registered names and their references prefixed ([values from data](#values-from-data)). Not inside a style rule. |
+| `@position-try` | Declaration body copied without selector scoping; the defined name and references in `position-try-fallbacks` and `position-try` declarations in this file prefixed. Not inside a style rule. |
+| `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied without selector checks or class prefixes. Names stay global, including font families and feature-value names; qualify a private name with the component's name yourself. |
+| `@page` | A global name starting with the component's name and `-`, written by the author, with the body copied without selector scoping ([printing](#printing)). An unnamed page or an unqualified name does not compile. |
+
+Raw bodies still lose comments and extra whitespace, and registered custom properties are
+renamed there too. Nested block at-rules inside them are copied raw (font feature `@styleset`,
+page margin `@top-left`, and others), not independently selector-checked. The statement parser
+recognizes lowercase `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded,
+since the generated stylesheet is UTF-8). It refuses unknown statements even inside raw
+bodies.
+
+`@import` does not compile: imported CSS is not checked or owned by the component. Put it in
+`static/style.css`. `@custom-media` does not compile either: the token file defines breakpoints,
+and the component names them with `@media (--md)`. Unrecognized rules such as `@namespace`
+and `@document` are refused outside raw bodies; use the global stylesheet for them. At-rule
+names must match whole names: `@supports_other` and `@layer_other` are not supported.
+An `@scope` without a root is refused because its implicit root is outside the component.
+Escaped at-rule and class names are not supported.
+
+A popup can define a fallback beside its default position, including a corten-ui `MenuButton`
+or `ComboBox` styled by this component:
+
+```css
+/* actions.css */
+@position-try --above { position-area: block-start span-inline-end; }
+.menu [role="menu"] {
+  inset: auto;
+  position-area: block-end span-inline-end;
+  position-try-fallbacks: --above, flip-inline;
+}
+```
+
+`--above` becomes `--actions__above` in the definition and the declaration, including in the
+`position-try` shorthand and references before the definition. CSS gives these names a
+tree-wide namespace, not one per component ([design Limit 9](../design.md#limit-stylesheet-support));
+prefixing prevents two components' options from colliding. Names defined here use `--` followed
+by ASCII letters, digits, `-` and `_`, without `__`, as `@property` does; references can use CSS
+escapes. The scoping pass does not prefix options defined outside this file. The macro reads
+the two declarations' values as CSS tokens and renames an identifier only where the value takes
+an option: at its top level, in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an
+`if()` branch's value.
+`position-try: var(--choice, --above)` scopes the fallback but does not treat the lookup
+`--choice` as an option. A registered property with the same name does not rename an option,
+but its `var()` lookup still gets the property prefix. In
+`if(style(--above: 1): --above; else: flip-block)`, only the branch value names an option.
+Function calls (`--above()`), anchor names, strings, URLs and other functions' arguments are
+not position references. Comments and whitespace are normalized as in other declarations.
+In `--externa\6c  flip-block`, the first space terminates the hex escape and the second remains
+a separator, so the browser still reads a name and a tactic.
+A name that reaches `position-try` through a
+custom property's value (`--choice: --above`) is not rewritten, since the macro cannot know where
+that value goes; name the option in the declaration itself. Other raw named rules remain global
+for compatibility with references from global CSS and font files; a private name should include
+the component's name. This does not isolate anchors or change the browser's supported position
+descriptors.
 
 ## Motion
 
