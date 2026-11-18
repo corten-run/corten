@@ -1,12 +1,14 @@
 // Synthetic Docker observations only. No saved command is executed by these tests.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import test from "node:test";
-import { descriptor, imageCommandEvidence, loadConfig, participantReceipt, runtimeContext, runtimeReceipt, verifyImage } from "./contract.mjs";
+import { descriptor, imageCommandEvidence, loadConfig, participantReceipt, runtimeContext, runtimeReceipt, sha256, verifyImage } from "./contract.mjs";
 import { inspectJson } from "./report.mjs";
-import { failedResult, result, runtimeInfo } from "./test-fixtures.mjs";
+import { result, runtimeInfo } from "./test-fixtures.mjs";
+import { gateFunctionalFixture, productionFixture } from "./production-fixtures.mjs";
+import { producerSources } from "./production.mjs";
 import { inspectNative } from "../workloads/isolated/native-replay.mjs";
 import { composePhase } from "../workloads/isolated/composition.mjs";
 
@@ -88,13 +90,25 @@ test("inspected JSON image defaults are required, parsed exactly and not replace
   }
 });
 
-test("saved negative JSON execution substitutions cannot become a native-validated failed target", async (t) => {
-  const folder = mkdtempSync(join(tmpdir(), "json-execution-test-"));
-  t.after(() => { assert.ok(resolve(folder).startsWith(resolve(tmpdir()) + sep)); rmSync(folder, { recursive: true }); });
-  const f = failedResult("express"), s = f.summary, p = descriptor().cases[0], checked = s.apps.express.checks[p.key];
+let negativeExecution, executionFolder;
+test.after(() => {
+  if (!executionFolder) return;
+  assert.ok(resolve(executionFolder).startsWith(resolve(tmpdir()) + sep)); rmSync(executionFolder, { recursive: true });
+});
+async function executionFixture() {
+  const folder = executionFolder = mkdtempSync(join(tmpdir(), "json-execution-test-"));
+  const p = descriptor().cases[0], f = gateFunctionalFixture(await productionFixture(folder, { cells: [] }), "express", p);
+  const s = f.summary, checked = s.apps.express.checks[p.key];
   const binding = { request: { group: "json-api", round: s.round, commit: s.commit }, selection: { apps: s.group.apps },
-    preparation: { fixtures: [] }, execution: { effectiveOptions: s.options }, resources: { expectedCpus: s.measurement.cpus } };
-  const save = () => { for (const [path, bytes] of f.artifacts) writeFileSync(join(folder, path), bytes);
+    preparation: { fixtures: [] }, execution: { effectiveOptions: s.options }, resources: { expectedCpus: s.measurement.cpus },
+    sources: { commit: s.commit, files: producerSources.map((name) => ({ path: `bench/json-api/${name}`, sha256: sha256(readFileSync(new URL(name, import.meta.url))) })) } };
+  const written = new Set();
+  const save = () => {
+    const checks = Object.values(s.apps).flatMap((e) => Object.values(e.checks));
+    for (const ref of [...Object.values(s.fixtures), s.cleanup, s.readTail, ...checks.flatMap((c) => [c.raw, c.native, c.failure])]) {
+      if (!ref || written.has(ref.path)) continue;
+      writeFileSync(join(folder, ref.path), f.artifacts.get(ref.path)); written.add(ref.path);
+    }
     writeFileSync(join(folder, "summary.json"), JSON.stringify(s)); };
   const compose = (native) => composePhase(binding, native, { cleanupComplete: true, resources: "verified" },
     [{ terminal: true, code: 1, error: null, cancelled: false, forced: false, success: false }]);
@@ -103,8 +117,11 @@ test("saved negative JSON execution substitutions cannot become a native-validat
   assert.equal(positive.status, "failed"); assert.equal(positive.attemptComplete, true);
   assert.equal(compose(positive).outcome, "native-validated");
   assert.ok(compose(positive).appOutcomes.every((r) => !r.comparisonEligible));
-  const original = checked.raw;
-  for (const role of ["app", "upstream"]) for (const field of ["command", "entrypoint", "path", "args"]) {
+  return { f, s, checked, binding, save, compose, folder, original: checked.raw };
+}
+for (const role of ["app", "upstream"]) for (const field of ["command", "entrypoint", "path", "args"])
+  test(`saved negative JSON ${role} ${field} substitution cannot become a native-validated failed target`, async () => {
+    const { f, s, checked, binding, save, compose, folder, original } = await (negativeExecution ??= executionFixture());
     const raw = f.load(original), receipt = role === "app" ? raw.runtime : raw.participants[role];
     receipt.configuration[field] = field === "path" ? "/unreviewed/node" : ["/unreviewed/node", "--eval", "process.exit(1)"];
     checked.raw = f.put(raw); save();
@@ -113,6 +130,5 @@ test("saved negative JSON execution substitutions cannot become a native-validat
     const native = await inspectNative(binding, folder);
     assert.equal(native.status, "invalid", `${role}/${field}`); assert.equal(native.attemptComplete, false);
     assert.notEqual(compose(native).outcome, "native-validated");
-  }
-  checked.raw = original; save(); assert.equal((await inspectNative(binding, folder)).attemptComplete, true);
-});
+    checked.raw = original; save(); assert.equal((await inspectNative(binding, folder)).attemptComplete, true);
+  });
