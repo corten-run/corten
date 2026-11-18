@@ -204,7 +204,7 @@ Pending entries are in [changelog.d/](changelog.d/).
   `<script>` or `<template>`; Chromium and WebKit let a leading `<title>`, `<base>`,
   `<basefont>`, `<bgsound>` or `<noframes>` decide) decides how the rest is read, so a table
   row, cell or other table part beside another element was dropped (or a `<table>` or `<form>`
-  after a row taken apart) with only a console error about the next element. `req.patch`,
+  after a row taken apart) with only a console error about the next element. `action.patch`,
   `req.patch_or`, `req.invalid` and `form.draw` now answer it with a 500, and a `corten::live`
   fragment panics, naming the element lost and the one that came first, so an app's own
   debug-build tests that draw such a patch now fail; a patch with a token the check does not read
@@ -421,8 +421,8 @@ Pending entries are in [changelog.d/](changelog.d/).
   return type). Calls without a turbofish are unchanged, except a `req.screen(..)` given straight
   to `Public::new` or `NoStore::new` where no return type names the answer (a closure), which
   fails with E0283 and names the kind the same way, `req.screen::<_, corten::AnyAnswer, _>(..)`.
-  `req.patch`, `patch_with_status`, `patch_or`, `invalid` and `invalid_with` answer only as
-  `AnyAnswer` or `Patches` (the sealed `corten::answer::PatchingKind`), so a handler that returns
+  `action.patch`, `action.patch_with_status`, `patch_or`, `invalid` and `invalid_with` answer
+  only as `AnyAnswer` or `Patches` (the sealed `corten::answer::PatchingKind`), so a handler that returns
   `HtmlResult<Screen<T>>` cannot answer through them, and code of an app's own that is generic
   over an answer's kind and calls them bounds it `K: corten::answer::PatchingKind`. A `Route`
   written by hand (`impl corten::Route for ..`, not `#[derive(Route)]`) names what its screen
@@ -1166,7 +1166,7 @@ Pending entries are in [changelog.d/](changelog.d/).
 
 - A debug build answers a browser's plain request (no `data-patch`, asking for HTML) that a
   handler answered with `req.patch` or `req.patch_with_status` with a 500 that names the method
-  and the route and says to answer with `req.patch_or` or check `req.mode == Mode::Action`
+  and the route and says to answer with `req.patch_or` or build the patch from `req.action()`
   first: the browser would show the fragment as the whole page, with no layout, stylesheets or
   navigation. The handler's cookies and `Clear-Site-Data` go out with the error. The runtime's
   `data-patch` fetch and a client that does not ask for HTML still get the patch, and a release

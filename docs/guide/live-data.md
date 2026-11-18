@@ -217,6 +217,9 @@ own route. One handler answers both: the route says `patches`, and its handler a
 the part waiting, with `ReadAgain::now(route)` inside the waiting element, whose id the part's
 patch replaces.
 
+The part closure receives the checked `corten::Action`, whose `patch` or `patch_with_status` builds
+its answer. The page closure receives no builder and answers a full page or redirect.
+
 ```rust,ignore
 // in the routes module: `picks` has the page read them in (the link a browser without
 // JavaScript follows); other links to it are `url::Home::default()`
@@ -225,7 +228,10 @@ patch replaces.
 async fn home(req: Req, Params(at): Params<url::Home>, State(shop): State<Shop>) -> HtmlResult<Patches> {
     req.patch_or_with(
         // the runtime's read of the part: the part alone, as a patch
-        || async { req.patch(Picks { picks: &shop.picks_for_you().await }) },
+        |action| {
+            let picks = shop.picks_for_you();
+            async move { action.patch(Picks { picks: &picks.await }) }
+        },
         // the page: without the part, unless its address asks for it
         || async {
             let picks = match at.picks {
@@ -311,9 +317,12 @@ slowest: independent slow parts on one route share that one read unless the app 
 field (`url::Home { part: Some(Part::Picks) }`), so each has an address and a read of its own. A
 page in a `Public`, which shared caches give to anyone, answers its part to anyone too: a part
 read for one visitor there (picks for the visitor on a cached home page) needs a route of its own
-that says `patches`, named in its `ReadAgain::now`. The page side takes any `HtmlResult`, so a
-`req.patch` there compiles too, and a full load would get the fragment (a debug build answers it
-with a 500 that says so): draw the page there
+that says `patches`, named in its `ReadAgain::now`. Only the part closure gets the checked
+builder (its `Action`); the page closure gets none and runs only for a request whose effective
+mode is not an action, where `req.action()` is `None` too. `patch_or_with` picks the part
+closure only in the request's effective `Mode::Action`; return a page or a redirect from the
+other one. Debug builds refuse a marked patch that reaches a browser's plain request, with the
+limits [Choice 58](../design.md#choice-plain-request-patch) lists
 ([#1532 A patch can be made without checking the request's mode: req.action() could hand out the only way to make one, as invalid_with's FormPatch does](https://github.com/corten-run/corten/issues/1532)).
 
 Without JavaScript nothing reads the part, so the waiting part holds a link to the page's own

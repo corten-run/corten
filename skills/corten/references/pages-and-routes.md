@@ -76,9 +76,11 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    page's own route, which says `patches`; the element needs the `#[derive(Id)]` id the part's
    patch replaces, and is the only one the read marks busy or failed), and that route's handler
    answers both:
-   `req.patch_or_with(|| async { req.patch(Part { .. }) }, || async { req.page(..) }).await`,
+   `req.patch_or_with(|action| async move { action.patch(Part { .. }) }, || async { req.page(..) }).await`,
    each side a closure that reads only what it draws; never a `<corten-live>` stream for it, and
-   never `req.patch` on the page side (it compiles, and a full load gets a fragment; a debug build answers it with a 500).
+   use the checked builder only on the part side; the page closure gets no builder and draws
+   the full page or a redirect. When both closures use owned read state, borrow that state
+   before the part's `async move` rather than cloning or moving it away from the page.
    Tags naming one address share one read, so each waits for the slowest: give independent slow
    parts a query field each (each its own address on the same route). A page in a `Public` has its
    part answered to everyone, so a part read for one visitor there gets a route of its own that
@@ -111,7 +113,7 @@ async fn show(req: Req, Params(at): Params<url::Item<'_>>) -> HtmlResult {
    it through handlers with an extractor, never read it after the page's own reads (a full load then waits for both), and do
    not fetch it from a script on every load to draw it the first time. A write that changes it and redirects needs nothing more: the runtime fetches the page a
    write sends it to whole and draws the layout again. One that answers in place with a patch reads
-   it only when `req.mode == Mode::Action` and answers `req.patch(Badge { count })` then, passing
+   it only after binding `Some(action)` from `req.action()` and answers `action.patch(Badge { count })` then, passing
    the value: a patch is not a page, so a `later` in it draws nothing (a debug error). Write each nav link from
    one mention of its route, `<a {..req.nav(&url::Item { id })}>` (`href`, `data-nav` and
    `aria-current` on its own page; `req.nav_section(..)` for a section), never `href` and

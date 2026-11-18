@@ -158,7 +158,7 @@ fn a_part_read_again_from_a_route_that_may_answer_its_page_says_why() {
     let app = |patches: bool, answer: &str| {
         let patches = if patches { ", patches" } else { " " };
         format!(
-            "use std::time::Duration;\nuse corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/alerts\", get = alerts{patches})]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> {answer} {{\n    let again = ReadAgain {{ after: Duration::from_secs(1) }}.from(url::Alerts);\n    req.patch(html! {{ <ul id={{ListId}}></ul> {{again}} }})\n}}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
+            "use std::time::Duration;\nuse corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/alerts\", get = alerts{patches})]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> {answer} {{\n    let again = ReadAgain {{ after: Duration::from_secs(1) }}.from(url::Alerts);\n    req.action().ok_or_else(corten::Error::not_found)?.patch(html! {{ <ul id={{ListId}}></ul> {{again}} }})\n}}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
         )
     };
     let (ok, stderr) = build_main("patches-message", &app(false, "HtmlResult"));
@@ -187,7 +187,7 @@ fn a_part_read_again_from_a_route_that_may_answer_its_page_says_why() {
 fn a_patches_route_mounted_by_hand_with_a_page_handler_says_why() {
     let app = |answer: &str, method: &str| {
         format!(
-            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/alerts\", get = alerts, patches)]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> HtmlResult<Patches> {{\n    req.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nasync fn mounted(req: Req) -> {answer} {{\n    req.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nfn main() {{\n    let _ = alerts;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Alerts>({method}(mounted))).router();\n}}\n"
+            "use corten::prelude::*;\n\n#[derive(Route)]\n#[route(\"/admin\")]\nstruct Admin;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/admin/alerts\", get = alerts, patches)]\n    pub struct Alerts;\n}}\n\n#[derive(Id)]\nstruct ListId;\n\nasync fn alerts(req: Req) -> HtmlResult<Patches> {{\n    req.action().ok_or_else(corten::Error::not_found)?.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nasync fn mounted(req: Req) -> {answer} {{\n    req.action().ok_or_else(corten::Error::not_found)?.patch(html! {{ <ul id={{ListId}}></ul> }})\n}}\n\nfn main() {{\n    let _ = alerts;\n    let _ = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<url::Alerts>({method}(mounted))).router();\n}}\n"
         )
     };
     for (answer, method) in [("HtmlResult", "get"), ("HtmlResult<Patches>", "post")] {
@@ -261,7 +261,7 @@ fn patches_where_no_get_handler_can_answer_a_patch_says_why() {
             "use corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    {route}\n}}\n\n#[allow(unused_variables)]\n{handler}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"
         )
     };
-    let patch = "async fn alerts(req: Req) -> HtmlResult<Patches> {\n    req.patch(html! {})\n}";
+    let patch = "async fn alerts(req: Req) -> HtmlResult<Patches> {\n    req.action().ok_or_else(corten::Error::not_found)?.patch(html! {})\n}";
     for (route, handler, said) in [
         (
             "#[route(\"/alerts\", post = alerts, patches)]\n    pub struct Alerts;",

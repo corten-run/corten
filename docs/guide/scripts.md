@@ -589,7 +589,7 @@ fn AccountChooser<'a>(accounts: &'a [Account]) -> impl Render {
 }
 ```
 
-A patch (in `Mode::Action`) removes rows as well as replacing them: `req.patch(html! { for id in &done { {Remove(RowId(id))} } })`
+A patch (with `action` from `req.action()`) removes rows as well as replacing them: `action.patch(html! { for id in &done { {Remove(RowId(id))} } })`
 (`corten::view::Remove`, a `<template id data-remove>` the runtime applies), and adds them with
 `view::Append(RowsId, rows)` (`<template id data-append>`). `RowId` is the
 `#[derive(Id)]` the row prints its id with ([typed ids](views.md#typed-links-and-messages)), so

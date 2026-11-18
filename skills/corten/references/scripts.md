@@ -137,7 +137,7 @@ division: end statements with `;` and keep a division on the line it continues.
 5. A value borrowed from one the view owns: compute it inside `html!` with `let`. A view lent
    to a prop or a call (`action={&html! { .. }}`, `{keep_query(&at, &html! { .. })}`) borrows what it uses, so read the same local in it and
    in the rest of the markup; do not rebind it with `as_ref()` first.
-6. Rows a write removes (in `Mode::Action`): `req.patch(html! { for id in &done { {Remove(RowId(id))} } })`
+6. Rows a write removes (with `action` from `req.action()`): `action.patch(html! { for id in &done { {Remove(RowId(id))} } })`
    (`corten::view::Remove`), with `#[derive(Id)] struct RowId<'a>(&'a str);` and
    `<tr id={RowId(&item.id)}>` on the row. Rows Load more adds: `view::Append(RowsId, rows)`,
    only the new page, never the whole list again.
@@ -356,7 +356,7 @@ the handler gives `req.screen` to any script on this origin, with the user's coo
 page may show. The browser keeps one answer per URL, so a read after the page itself was fetched
 again there (a navigation, or a hover prefetch of a link to it) gets the whole answer, not a 304:
 put `data-no-prefetch` around links whose click reads.
-A patch-making method (`req.patch`, `patch_or`, `invalid`) does not compile in a handler that
+A patch-making method (`action.patch`, `patch_or`, `invalid`) does not compile in a handler that
 returns `HtmlResult<Screen<T>>`.
 
 ## Many rows: views
