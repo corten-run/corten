@@ -1,26 +1,14 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable changes to Corten. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- **Breaking:** a component stylesheet's selector compiles only when the element it styles, or
-  one that element is inside, has one of the file's classes, in every selector of the list and
-  every matchable arm of an `:is()` or `:where()` that supplies the class. A class only in
-  `:not()` or `:has()`, or reached through `+` or `~` (`.list + main`), no longer counts.
-  A nested selector is checked where its `&` stands (`.list { :not(&) { .. } }`). An owned
-  `@scope` root supplies the proof for its body. An inner root under an unowned scope needs its
-  own class anchor to supply that proof; otherwise it only filters independently anchored rules.
-  Malformed strings, unquoted `url()` tokens and mismatched selector blocks fail before forgiving
-  arms are ignored. Component class names must be unescaped ASCII.
-  At-rule names follow CSS whitespace rules: a nonbreaking space is part of the name,
-  not a separator. Non-ASCII at-rule names are refused with an escaped diagnostic.
-  Write the anchor out: `main:has(.list) p` becomes `main .list p`, and
-  `.pick:checked + span` becomes `:where(.cuts) .pick:checked + span`; page-wide rules belong in
-  `static/style.css` (docs/guide/styles.md). The kit's `stepper.css` anchors its unit rules this
-  way; `corten ui diff stepper` shows the change for a copy, and
-  `corten ui add --merge stepper` upgrades it.
+Pending entries are in [changelog.d/](changelog.d/).
+
+- CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
+  for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
@@ -94,6 +82,10 @@ Corten is pre-1.0, so any minor version may change the API.
   cloud inbox through timing replay; a version label alone is not an audit.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
+- Catalog Contract selects affected parity apps on pull requests and runs all parity and JSON
+  jobs for unrecognized app paths. Benchmark Evidence runs portable source-custody checks when
+  captured sources change and native kernel checks when their own inputs change. Both scope
+  against the full Git diff and cancel superseded pull request runs, not main runs.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
