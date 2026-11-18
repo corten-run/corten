@@ -86,8 +86,20 @@ enabled. Other Corten apps and the framework's production defaults are unchanged
 Axum/Maud uses its lean router here, not its `PROFILE=matched` middleware stack.
 Corten still uses its normal typed routes, escaped `html!` templates, document
 layout, assets and `req.page`: mandatory page security headers, cache metadata,
-error handling and other built-in stages remain framework costs. This is not
-identical middleware or a claim that all production protections have been matched.
+error handling and other built-in stages remain framework costs. All catalog-page
+contenders must now serve their HTML documents with a common header baseline:
+an enforced CSP restricting inline scripts; protection against cross-origin framing
+(CSP or X-Frame-Options); `nosniff`; a referrer policy no looser than
+`strict-origin-when-cross-origin`; same-origin opener isolation; and explicit
+permissions and cache policies. This workload draws on the
+[OWASP HTTP Headers Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html);
+the headers are a benchmark requirement, not a claim that HTTP mandates them.
+Both data sources must serve these policies on the actual HTML response.
+Equivalent policies need not use identical header strings or send the same number
+of bytes. This document contract adds no requirement to the JSON route and
+does not require the matched profile's compression, deadlines or other middleware.
+Earlier lean results did not check this baseline. Do not relabel them or attribute
+an earlier throughput difference to headers without a separate measurement.
 An `unstaged` data route is not a substitute: its sandbox would disable the
 catalog's working form. No output cache, pre-rendered response or framework
 internal bypass is used. Both sources retain the complete page/JSON correctness
@@ -102,7 +114,7 @@ unbounded search across runtimes, compilers or framework internals.
 | Contender | Supported lean configuration |
 |---|---|
 | Corten | No optional response compression or handler/header/send timers; normal page stages and error logs remain. |
-| Axum + Maud | Existing lean router without the optional matched production middleware. |
+| Axum + Maud | Lean router with document headers on the catalog page, without the rest of the matched production middleware. |
 | ASP.NET Razor | Minimum request/response data rates unset; native Kestrel header/keepalive timers remain at their defaults after infinite timers caused early connection closure in Linux checks. Razor rendering, source failures and logging remain. |
 | Express | Production EJS view cache; no ETag generation or HTTP header/request/keepalive timers; fresh response rendering remains. |
 | FastAPI | Uvicorn access logging disabled; error logging, worker count, event loop and parser selection unchanged. |

@@ -1,0 +1,1 @@
+- The lean catalog-page benchmark requires its contenders to return equivalent document security headers and an explicit cache policy with HTML from either data source. Earlier results did not check header parity.
