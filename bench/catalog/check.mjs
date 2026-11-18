@@ -97,6 +97,17 @@ export async function checkApp({ base, catalog, source, upstream, browser, app }
   validateCatalog(catalog);
   const result = { jsonRecords: 0, pages: 0, profiles: [], upstream: source === "api" ? {} : null };
   if (leanApps.includes(app)) result.documentHeaders = [];
+  const documentPage = async (context) => {
+    const page = await context.newPage();
+    if (result.documentHeaders) {
+      // Chromium can report an effective 200 with the wire headers of a 304.
+      // Inspect fresh document responses, not fields inherited from a cached page.
+      const session = await context.newCDPSession(page);
+      await session.send("Network.enable");
+      await session.send("Network.setCacheDisabled", { cacheDisabled: true });
+    }
+    return page;
+  };
   const observeDocument = async (response, path) => {
     if (!result.documentHeaders) return;
     assert.equal(response.url(), new URL(path, base).href, `${path}: document response URL differs`);
@@ -149,7 +160,7 @@ export async function checkApp({ base, catalog, source, upstream, browser, app }
       const context = await browser.newContext({ javaScriptEnabled, viewport, colorScheme, reducedMotion: "reduce", serviceWorkers: "block" });
       context.setDefaultTimeout(10000);
       context.setDefaultNavigationTimeout(20000);
-      const page = await context.newPage();
+      const page = await documentPage(context);
       const reference = await context.newPage();
       const failures = [];
       const failedResources = [];
@@ -215,7 +226,7 @@ export async function checkApp({ base, catalog, source, upstream, browser, app }
     assert.ok(upstream, "API checks need upstream control URL");
     const context = await browser.newContext({ javaScriptEnabled: false });
     context.setDefaultNavigationTimeout(20000);
-    const page = await context.newPage();
+    const page = await documentPage(context);
     try {
       for (const target of ["page", "json"]) {
         for (const version of ["one", "two"]) {

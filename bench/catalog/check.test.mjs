@@ -110,6 +110,7 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
   let broken = false;
   let scriptUnavailable = false;
   let omitPolicy = false;
+  let revalidations = 0;
   const app = createServer(async (req, res) => {
     const url = new URL(req.url, "http://catalog");
     if (url.pathname === "/required.js") {
@@ -128,7 +129,12 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
       record = await response.json();
     }
     if (!record) { res.writeHead(404); res.end("not found"); return; }
-    res.writeHead(200, { "Content-Type": json ? "application/json" : "text/html",
+    const tag = `"${id}-${encodeURIComponent(url.search)}"`;
+    if (!json && req.headers["if-none-match"] === tag) {
+      revalidations++;
+      res.writeHead(304, { ...documentHeaders, ETag: tag }); res.end(); return;
+    }
+    res.writeHead(200, { "Content-Type": json ? "application/json" : "text/html", ...(json ? {} : { ETag: tag }),
       ...(json ? {} : omitPolicy ? { "Content-Security-Policy-Report-Only": documentHeaders["Content-Security-Policy"] } : documentHeaders) });
     res.end(json ? JSON.stringify(broken ? { ...record, fields: [] } : record) :
       referenceHtml(record, url.searchParams.get("field") ?? "").replace("</head>", '<script defer src="/required.js"></script></head>'));
@@ -145,6 +151,7 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
       assert.equal(result.pages, expectedPageChecks(catalog));
       assert.equal(result.pages, 120);
       verifyDocumentHeaderChecks(result.documentHeaders, catalog, source);
+      assert.equal(revalidations, 0, "document observations must be fresh HTTP representations, not cache revalidations");
       assert.equal(result.documentHeaders.length, 120 + (source === "api" ? 2 : 0));
       assert.ok(result.documentHeaders[0].headers.some(({ name, value }) => name === "content-security-policy" && value === documentHeaders["Content-Security-Policy"]));
       if (source === "api") assert.equal(result.upstream.readsPerRequest, 1);

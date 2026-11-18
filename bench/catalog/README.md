@@ -95,6 +95,9 @@ permissions and cache policies. This workload draws on the
 [OWASP HTTP Headers Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/HTTP_Headers_Cheat_Sheet.html);
 the headers are a benchmark requirement, not a claim that HTTP mandates them.
 Both data sources must serve these policies on the actual HTML response.
+The correctness browser disables its HTTP cache for these visits so a
+revalidated document's 304 fields cannot be mistaken for the headers of a
+fresh 200 response. This does not change the app or the timed load generator.
 Equivalent policies need not use identical header strings or send the same number
 of bytes. This document contract adds no requirement to the JSON route and
 does not require the matched profile's compression, deadlines or other middleware.
