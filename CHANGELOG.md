@@ -9,10 +9,6 @@ Pending entries are in [changelog.d/](changelog.d/).
 
 - CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
   for a runner; pushes to main and the release's call keep every run.
-- If a patch draws a modal opened by `corten-ui`'s dialog widget closed, the widget restores
-  opener focus and dispatches one `close` on the same-id replacement from that patch. Open
-  redraws keep the opener; native closes keep their result, and navigation and unrelated
-  same-id controls do not receive a patch close.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
