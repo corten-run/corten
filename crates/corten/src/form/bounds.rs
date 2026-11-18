@@ -792,7 +792,7 @@ mod tests {
 
     #[test]
     fn a_precise_exclusive_end_keeps_its_exact_hint() {
-        // Choice 63 (docs/design.md#choice-exclusive-ends): Chromium and WebKit can block
+        // docs/design.md#choice-exclusive-ends: Chromium and WebKit can block
         // the fixed spelling of the next float, but we keep the unshifted native hint.
         let min = 0.0010000000000000002_f64;
         let bounds = Bounds::<f64>::any_step(min, 1.0).exclusive_min();
