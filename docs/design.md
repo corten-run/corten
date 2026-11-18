@@ -5798,16 +5798,19 @@ rules something out.
     The runtime calls `close()` while the dialog and its opener are still connected. The
     browser leaves the top layer, returns focus, and emits `beforetoggle` on the old dialog
     synchronously. The draw then carries that focus to the new opener if it replaces the old
-    one. The ordered patch resolver and the layout matcher record their draw decisions once.
-    The runtime collects closes from those decisions, runs them innermost first while the old
-    openers are still on the page, and then applies the recorded draw. A dialog removed before
-    its parent is redrawn isn't closed. Otherwise, in a patch whose replacements draw closed
-    dialog markup, a fragment cannot target the same tree as another fragment or depend on an
-    element it introduces. The runtime logs an error and refuses the draw before touching its
-    targets. Closed dialog markup only in appends does not trigger this planning or overlap
-    check: appending cannot close an existing dialog. If a synchronous handler changes the
-    tree's children or ids during a close, or reopens the dialog as focus returns, the runtime
-    stops before applying the draw. It does not undo a close or the handler's changes.
+    one. Before drawing, the runtime finds the dialogs that need a native close. The layout
+    uses the same matcher for this visit as it uses to draw, including children kept by
+    position. It does not queue the drawings. The runtime observes all the planned dialogs
+    before closing any, so a handler that closes another planned dialog doesn't lose its close.
+    It runs the closes innermost first with the old openers still on the page, then resolves
+    each patch target by id as it draws. A dialog removed before its parent is redrawn isn't
+    closed. Only when there is a native close to perform does a patch refuse overlapping or
+    dependent fragments before touching their targets. Appending closed markup, or redrawing
+    a dialog that is already closed, leaves the ordinary ordered application unchanged.
+    If a close handler changes the structure, ids or live-region matching of the tree, the
+    runtime stops before drawing. If a handler opens a new session of a closing dialog, even
+    during the draw of the replacement opener, the runtime stops before the next draw. It
+    doesn't undo completed closes, drawings or the handler's changes.
 
     In-place morphs get the native `beforetoggle`, `toggle` and `close`. For a replacement,
     native events target the old node; the runtime forwards only a non-bubbling `close`
@@ -5821,39 +5824,43 @@ rules something out.
     navigation replaces, and a layout a write's page draws. In a replacement only the root or a
     dialog with a matching id has continuity; a layout can also keep an anonymous dialog by
     position. A dialog that is only removed (including an anonymous descendant of a replaced
-    element, [Limit 2](#limit-whole-element-patches)) is not closed. One the user opened
-    stays open where it can be matched ([Choice 52](#choice-asked-open-state)).
+    element, [Limit 2](#limit-whole-element-patches)) gets no close handoff. If it is a modal
+    inside a matched modal being replaced closed, the runtime closes it first to release the
+    outer modal's opener from the top layer. Its native events are not forwarded. One the
+    user opened stays open where it can be matched ([Choice 52](#choice-asked-open-state)).
 
     Not chosen: closing during the swap, which lets a synchronous handler invalidate the walk
-    and can detach an opener needed by a later dialog; matching in a separate pre-pass, which
-    missed positional morphs and followed the wrong dialog during overlaps; looking up the
+    and can detach an opener needed by a later dialog; a separate layout matcher, which missed
+    positional morphs; queuing draw targets, which went stale when an earlier draw fired a
+    focus handler; looking up the close event's
     recipient by id, which misdelivered events after removals and reopens; waiting for the
     native event before swapping, which delays the draw and leaves the old element in place
     for a frame or task; simulating a close on the new dialog, which lacks the old opener; and
     forwarding a synthetic `toggle`, which is not needed for the close or focus guarantees.
 
     A patch with no closed dialog markup checks one incoming selector and resolves and applies
-    targets directly. The planner and close forwarding are a versioned module fetched only
-    when an answer draws a closed dialog, alongside its handlers and stylesheets where
-    possible. The extra request on first use keeps that code off every other page. After
-    loading, a read or answer that no longer owns its targets stops before resolving or closing
-    them. If the module fails to load, the runtime logs once and draws the answer without
-    closing replacement targets first or forwarding their close. It does not retry the write.
-    On `3344615da` against main `ad61ec622`, core grows from 43,846 to 44,669 bytes raw (+823),
-    15,612 to 16,012 gzip (+400), and 14,100 to 14,431 Brotli (+331). The optional module,
-    absent on main, is 2,017 bytes raw, 1,034 gzip and 905 Brotli. An earlier probe of
-    no-dialog draw timing (`0aa24d7` against `cf4671b13`) did not resolve a difference:
-    alternating six Chromium batches of 2,500 draws per build
-    gave 94.58 to 97.66 microseconds per draw with eight paragraphs (ranges 88.32 to 109.04
-    and 88.80 to 114.84) and 330.18 to 333.24 with 100 (316.76 to 366.80 and 316.32 to
-    353.36). Neither build requested the module in that probe.
+    targets directly. Overlap checks, native close ordering and event forwarding live in a
+    versioned module, fetched on the first patch that needs a close, or alongside the assets of
+    a navigation whose layout or page parts might need one. After assets load, a `ReadAgain`
+    does not draw if one of the ids it would redraw or replace now identifies a different node
+    than when it sent the read, even inside a surviving target wrapper. If the module fails
+    to load, the runtime logs once and draws the answer without closing replacement targets
+    first or forwarding their close. It does not retry the write.
+    On `210a3b111` against main `9de7529fc`, core grows from 43,846 to 46,560 bytes raw (+2,714),
+    15,612 to 16,619 gzip (+1,007), and 14,100 to 14,971 Brotli (+871). The optional module,
+    absent on main, is 1,875 bytes raw, 960 gzip and 835 Brotli. With no dialogs, six alternating
+    Chromium batches of 1,500 layout draws after 300 warmups, excluding the network, did not
+    resolve a timing difference. Replacement medians were 449 to 441 microseconds per draw
+    (ranges 327 to 514 and 318 to 543), and live-region morph medians were 545 to 612 (486 to
+    643 and 566 to 636). Neither build requested the module.
 
     Stands on: platform (`close()` restores focus from a modal, preserves `returnValue`
     without an argument, and queues a native `close` even when its target is detached before
     dispatch); measured (minified runtime and module size by Node's `zlib` defaults and the
     Watchlist smoke's close inventory, order, result, opener focus, redraw continuity,
-    structural mutation, overlap refusal, close-open-close, reopen on focus restoration,
-    module failure and stale read in Chromium, Firefox and WebKit); reasoned (a closed successor
+    structural mutation, overlap refusal, direct fragment ordering without a close, live target
+    resolution, reentrant close and reopen, module failure and stale read in Chromium, Firefox
+    and WebKit); reasoned (a closed successor
     is the dialog the delegated handler is wired to;
     observing a change to its `open` attribute distinguishes a real new session from an
     attempted open or a check of its eventual closed state);
@@ -5980,7 +5987,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `<details>` that moved takes another's state. A dialog the server drew open, which the user
    closed and opened again, looks unchanged, so an answer that draws it closed closes it (as the
    browser closes one, [Choice 62](#choice-patch-closes-dialog)); an anonymous one drawn closed
-   is replaced closed, with no `close` event. Other
+   is replaced closed, with no close handoff. Other
    browser state inside a replaced element (scroll position) resets, so keep targets small. The
    runtime parses a patch as a `<template>`'s content, where the first top-level element (other
    than a head's, such as a `<script>` or `<template>`; Chromium and WebKit let a leading

@@ -1468,12 +1468,12 @@ Corten is pre-1.0, so any minor version may change the API.
   the opener. A dialog kept in place gets native events. A replacement gets just one synthetic
   `close`, with the inherited `returnValue`, through consecutive closed redraws until removal
   or a new open session. Page parts and layout morphs use the same close rules; dialogs the user
-  opened stay open where matched. Overlapping draws in a patch whose replacements draw a dialog
-  closed are refused, except for a child removal before its parent's redraw. Closed dialog
-  markup only in appends does not trigger that check, since appending cannot close an existing
-  dialog. A synchronous handler changing the tree or reopening a dialog during the close phase
-  stops the draw, not closes already completed. If the dialog module fails to load, the received
-  answer is still drawn without the close handoff and no write is retried
+  opened stay open where matched. Only patches that need a native close refuse overlapping draws,
+  except for a child removal before its parent's redraw. Other patches still draw in order.
+  A synchronous handler changing the tree during the closes or reopening a dialog before it
+  is redrawn stops the remaining draws, not work already completed. `ReadAgain` leaves newer
+  targets alone even inside a surviving wrapper. If the dialog module fails to load, the
+  received answer is still drawn without the close handoff and no write is retried
   (design Choice 62,
   [#1455 A patch that draws an open dialog closed replaces it without the browser's close: no close event, and focus does not return to its opener](https://github.com/corten-run/corten/issues/1455)).
 

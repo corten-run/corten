@@ -1139,18 +1139,22 @@ The dialog's `on:close` hears one event. A dialog kept in place gets native even
 gets a synthetic, non-bubbling `close` only, with the inherited `returnValue`. The pending close
 follows consecutive closed replacements, not reused ids. Removing the dialog or opening a new
 session before delivery cancels forwarding. Give a dialog an id to match it in a replacement.
-An anonymous descendant is removed without a close event unless the layout keeps it by position.
+An anonymous descendant has no close handoff unless the layout keeps it by position. If a
+removed inner modal would prevent the outer modal from restoring focus, the inner one closes
+first, but nothing forwards its native events.
 The same close rules apply to a page part a navigation replaces and the layout a write draws.
 
-A patch whose replacements draw a dialog closed cannot also redraw the same target twice, redraw
+A patch that needs to close an existing open dialog natively cannot also redraw the same target twice, redraw
 a parent and then target its child, or otherwise depend on changes from another fragment of that
-answer. The runtime logs an error and refuses that draw. Appending closed dialog markup does not
-trigger the overlap check: an append cannot close an existing dialog. Removing a child before
-redrawing its parent is allowed and does not close the child. If a synchronous close or focus
-handler changes the live tree's children or ids during the close phase, or reopens the dialog
-while focus returns, the runtime skips the draw; any closes already performed and the handler's
-own changes remain. If the optional dialog module fails to load, the runtime logs once and draws
-the answer without handing off a close to a replacement. It does not retry a received write.
+answer. The runtime logs an error and refuses that draw. Without a native close, fragments
+still draw in order, including an append followed by a redraw of what it appended. Removing
+a child before redrawing its parent is allowed and does not close the child. A handler that
+changes the tree during the native close phase stops the draw. Starting a new dialog session,
+including when focus moves to a replacement opener, stops the remaining draws without undoing
+the completed ones. A `ReadAgain` answer does not overwrite a target, or a descendant with an id,
+that was replaced while it was away. If the optional dialog module fails to load, the runtime
+logs once and draws the answer without handing off a close to a replacement. It does not retry
+a received write.
 
 A dialog or `<details>` the user closed opens again
 when a `data-patch` answer replaces it drawn `open` and the button that sent it (or, when none
