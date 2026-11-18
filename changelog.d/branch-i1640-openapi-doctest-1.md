@@ -1,0 +1,1 @@
+- The app guide's OpenAPI example is tested only with `types`, so it no longer breaks doctests with `json` alone.

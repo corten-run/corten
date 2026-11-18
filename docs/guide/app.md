@@ -1781,6 +1781,8 @@ route table and the handlers' types, so a partner, a client generator, a gateway
 test reads the contract the handlers enforce, not a copy beside them:
 
 ```rust
+# #[cfg(feature = "types")]
+# {
 use corten::prelude::*;
 
 #[derive(ToJson)]
@@ -1804,6 +1806,7 @@ async fn price(Params(item): Params<api::ItemPrice>) -> JsonResult<Price> {
     Ok(Json(Price { lowest: format!("{} for item {}", "$0.50", item.id) }))
 }
 # let _ = App::new(Routes::new()).api(api::api).router();
+# }
 ```
 
 `GET /api/openapi.json` then describes `/api/items/{id}/price`: an operation named after its
