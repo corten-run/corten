@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { legacyRound, workerRound, indexRound } from "./workers-fixture.mjs";
 import { verifyTimedPhase } from "./timed.mjs";
-import { replayCatalog } from "./raw.mjs";
+import { loggedReceipt, replayCatalog } from "./raw.mjs";
+import { stdoutReceipt } from "./check.mjs";
 import { summarizeSamples } from "./stats.mjs";
 import { digest, verifyControl } from "./apparatus.mjs";
 import { inspectCatalog, renderCatalog } from "./report.mjs";
@@ -58,7 +59,7 @@ test("native document header evidence cannot be relabeled, omitted, weakened or 
     f.summary.apps[app].checks[source] = check;
     f.put(`${base}/qualification.json`, check);
     f.put(`${base}/checks.json`, native);
-    f.put(`${base}/checks.log`, native);
+    f.put(`${base}/checks.log`, `${stdoutReceipt(native)}\n`);
     indexRound(f);
   };
   for (const mutate of [
@@ -72,9 +73,9 @@ test("native document header evidence cannot be relabeled, omitted, weakened or 
     assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /not complete/);
   }
   putCheck(structuredClone(original));
-  const log = f.reader.readJson(`${base}/checks.log`);
+  const log = loggedReceipt(f.reader.readText(`${base}/checks.log`));
   log.documentHeaders[0].headers.find((h) => h.name === "cache-control").value = "private, no-cache";
-  f.put(`${base}/checks.log`, log); indexRound(f);
+  f.put(`${base}/checks.log`, `${stdoutReceipt(log)}\n`); indexRound(f);
   assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /checker stdout receipt differs/);
   putCheck(structuredClone(original));
   const key = `${base}/checker.json`;
@@ -82,6 +83,41 @@ test("native document header evidence cannot be relabeled, omitted, weakened or 
   boundary.checker.Config.Cmd.pop(); boundary.checker.Args.pop();
   f.put(key, boundary); indexRound(f);
   assert.throws(() => replayCatalog(f.summary, f.reader, f.commit), /command differs/);
+});
+
+test("native stdout receipt is found among the checker's own log lines and is never guessed at", () => {
+  const retry = "retry goto: net::ERR_NETWORK_CHANGED (#497)", skip = "skip console error: Failed to load resource: net::ERR_NETWORK_CHANGED (#904)";
+  const base = "api/express", key = `${base}/checks.log`;
+  const f = workerRound(), native = f.reader.readJson(`${base}/checks.json`), receipt = stdoutReceipt(native);
+  const report = replayCatalog(f.summary, f.reader, f.commit);
+  const replay = (log) => { f.put(key, log); indexRound(f); return replayCatalog(f.summary, f.reader, f.commit); };
+  for (const log of [`${retry}\n${receipt}\n`, `${receipt}\n${skip}\n`, `${retry}\n${skip}\r\n${receipt}\r\n${retry}\n`, receipt]) {
+    assert.deepEqual(replay(log), report);
+    assert.equal(f.reader.readText(key), log, "diagnostic lines are kept as logged");
+  }
+  const changed = structuredClone(native); changed.documentHeaders[0].status = 500;
+  const failed = { failure: { schema: "synthetic" } };
+  for (const [log, error] of [
+    ["", /receipt missing/],
+    [`${retry}\n${skip}\n`, /receipt missing/],
+    [`${JSON.stringify(native, null, 2)}\n`, /receipt missing/],
+    [`${retry}\n${JSON.stringify(native)}\n`, /receipt missing/],
+    [`${receipt}\n${retry}\n${receipt}\n`, /receipt repeated/],
+    [`${receipt}\n${stdoutReceipt(changed)}\n`, /receipt repeated/],
+    [`${retry} ${receipt}\n`, /not framed on its own line/],
+    [`${receipt}${skip}\n`, /JSON/],
+    [`${receipt.slice(0, -1)}\n`, /JSON/],
+    [`${stdoutReceipt(changed)}\n`, /checker stdout receipt differs/],
+    [`${stdoutReceipt(failed)}\n`, /checker stdout receipt differs/],
+    [`${stdoutReceipt({ ...native, extra: true })}\n`, /checker stdout receipt differs/],
+  ]) assert.throws(() => replay(log), error, JSON.stringify(log.slice(0, 80)));
+  assert.equal(loggedReceipt(`${retry}\n${receipt}\n${skip}\n`).documentHeaders.length, native.documentHeaders.length);
+  const old = workerRound(null, { historical: true }), historical = groupDescriptor("catalog-page", { historical: true }).contractSha256;
+  const oldReport = replayCatalog(old.summary, old.reader, old.commit, historical);
+  for (const log of ["synthetic checks\n", `${receipt}\n${receipt}\n`, "{"]) {
+    old.put(key, log); indexRound(old);
+    assert.deepEqual(replayCatalog(old.summary, old.reader, old.commit, historical), oldReport, "historical checks.log stays a diagnostic");
+  }
 });
 
 test("v4 phase accepts proven aggregate under 160 but not a busy worker, coordinator or generator", () => {

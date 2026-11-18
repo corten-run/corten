@@ -248,6 +248,12 @@ export async function checkApp({ base, catalog, source, upstream, browser, app }
   return result;
 }
 
+// stdout also carries what `steady` logs (a retried navigation, a skipped console error), before
+// or after the result, so the result is one line of its own after this prefix; `raw.mjs` replays
+// that line against checks.json.
+export const receiptPrefix = "catalog-checks-receipt/v1 ";
+export const stdoutReceipt = (result) => `${receiptPrefix}${JSON.stringify(result)}`;
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const [base, source = "fixture", upstream, output, app, ...extra] = process.argv.slice(2);
   if (!base || !["fixture", "api"].includes(source) || (app !== undefined && !leanApps.includes(app)) || extra.length) {
@@ -259,9 +265,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { browser.close().finally(() => process.exit(1)); });
   const watchdog = setTimeout(() => { console.error("catalog checks exceeded 15 minutes"); browser.close().finally(() => process.exit(1)); }, 15 * 60 * 1000);
   try {
-    const result = JSON.stringify(await checkApp({ base, catalog, source, upstream, browser, app }), null, 2);
-    if (output) writeFileSync(output, result);
-    console.log(result);
+    const checked = await checkApp({ base, catalog, source, upstream, browser, app });
+    if (output) writeFileSync(output, JSON.stringify(checked, null, 2));
+    console.log(stdoutReceipt(checked));
   } catch (error) {
     if (output && error.recordAttempt) writeFileSync(`${output}.failure.json`, JSON.stringify(error.recordAttempt, null, 2));
     throw error;

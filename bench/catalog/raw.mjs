@@ -13,6 +13,7 @@ import { timedRawSchema, verifyTimedPhase, verifyTimedContinuity } from "./timed
 import { isDeepStrictEqual } from "node:util";
 import { workerAware, workerRawSchema, workerCommand, verifyControl, verifySource, verifyWorkers } from "./apparatus.mjs";
 import { verifyArtifactIndex, verifyPreflight } from "./preflight.mjs";
+import { receiptPrefix } from "./check.mjs";
 
 export const rawSchema = "catalog-saved-evidence/v2";
 export const upstreamImage = "node:26.13.1-bookworm-slim@sha256:5df79989ed685e09f0a98019db4cebfb22fb9df1a53c0161664a011f7ff6b0f1";
@@ -51,6 +52,16 @@ export function verifyFailedCheck(attempt, source) {
     ? Object.fromEntries(attempt.requests.map((r) => [r.id, 1])) : {}, "failed sweep upstream reads differ");
 }
 
+// The checker's stdout receipt: the one line that starts with `receiptPrefix`. Other lines
+// (`steady`'s retries and skipped console errors) are kept in checks.log as diagnostics; a
+// missing, repeated or embedded receipt is not guessed at.
+export function loggedReceipt(log) {
+  const framed = log.split(/\r?\n/).filter((line) => line.includes(receiptPrefix.trim()));
+  assert.ok(framed.length, "checker stdout receipt missing");
+  assert.equal(framed.length, 1, "checker stdout receipt repeated");
+  assert.ok(framed[0].startsWith(receiptPrefix), "checker stdout receipt is not framed on its own line");
+  return JSON.parse(framed[0].slice(receiptPrefix.length));
+}
 export function verifyCheckBoundary(proof, summary, app, source, failed) {
   const { runtime, checker, upstream } = proof;
   assert.deepEqual(proof.exit, { code: failed ? 1 : 0, signal: null, expired: false, interrupted: false }, "checker client lifetime incomplete");
@@ -189,7 +200,7 @@ export function replayCatalog(summary, { readJson, readText }, commit, expectedC
       const checksLog = readText(`${base}/checks.log`);
       if (documentHeaders && !checked.failure) {
         verifyDocumentHeaderChecks(nativeCheck.documentHeaders, catalog, source);
-        assert.deepEqual(JSON.parse(checksLog), nativeCheck, "checker stdout receipt differs");
+        assert.ok(isDeepStrictEqual(loggedReceipt(checksLog), nativeCheck), "checker stdout receipt differs");
       }
       readText(`${base}/app.log`);
       let boundary;

@@ -162,10 +162,12 @@ node bench/catalog/report.mjs bench/catalog/results/c1/summary.json
 node bench/catalog/report.mjs bench/catalog/results/c1/summary.json --commit FULL_MEASURED_SHA --require-complete
 ```
 
-For an ungrouped round, the second command exits unsuccessfully unless all twenty apps,
+For a historical ungrouped round, the second command exits unsuccessfully unless all twenty apps,
 all requested 64-user passes,
 the per-app correctness evidence, canonical fixture identity, measurement configuration,
-clean-tree provenance and cleanup succeeded. Supply the full measured
+clean-tree provenance and cleanup succeeded. A new ungrouped run that mixes header
+contracts fails this strict comparison even if every app finishes; use the grouped
+catalog report for a header-matched comparison. Supply the full measured
 commit, not a branch name. Reports include phase duration, warmup, fixed rate and CPU placement,
 label partial pass counts and every app's throughput range, show Corten's CPU efficiency,
 memory and latency, and flag underutilized app CPUs or busy single-process

@@ -11,7 +11,7 @@ import { aggregate, phases } from "./contract.mjs";
 import { groupDescriptor, groupResultSchema, qualificationIdentity } from "./group.mjs";
 import { records } from "./fixtures.mjs";
 import { inspectCatalog, renderCatalog } from "./report.mjs";
-import { leanApps, leanProfile } from "./contract.mjs";
+import { expectedDocumentHeaderPaths, leanApps, leanProfile } from "./contract.mjs";
 
 function result() {
   const names = Object.keys(allApps).filter((name) => allApps[name].pages !== false);
@@ -53,6 +53,78 @@ test("historical catalog validation does not acquire group-only provenance or ag
   s.dirtyAfter = true;
   assert.equal(inspectCatalog(s).baseline, true, "optional new fields do not change legacy validation");
 });
+// Synthetic header observations that satisfy the document contract; not native evidence.
+const headerRows = (source) => expectedDocumentHeaderPaths(records(), source).map((path) => ({ path, status: 200,
+  headers: Object.entries({ "content-type": "text/html; charset=utf-8", "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
+    "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "cross-origin-opener-policy": "same-origin",
+    "permissions-policy": "geolocation=()", "cache-control": "no-store" }).map(([name, value]) => ({ name, value })) }));
+const contract = groupDescriptor("catalog-page").documentHeaders;
+// A new ungrouped run as run.mjs now writes it: lean contenders header-checked, others not.
+function mixedResult({ recorded = true } = {}) {
+  const s = result();
+  s.measurement.leanProfile = { name: leanProfile, apps: [...leanApps] };
+  if (recorded) s.measurement.documentHeaders = { contract, apps: [...leanApps] };
+  for (const app of leanApps) for (const source of ["fixture", "api"]) s.apps[app].checks[source].documentHeaders = headerRows(source);
+  return s;
+}
+
+test("legacy ungrouped reports are unchanged by the document header scope", () => {
+  const s = result();
+  s.measurement.leanProfile = { name: leanProfile, apps: [...leanApps] };
+  const report = inspectCatalog(s), text = renderCatalog(report);
+  assert.equal(report.baseline, true); assert.equal(report.status, "COMPLETE");
+  assert.equal(report.documentHeaders, undefined);
+  assert.ok(!/Document header contract|Mixed correctness|###/.test(text));
+  assert.equal(text.match(/^\| Framework \|/gm).length, 1);
+});
+
+for (const recorded of [true, false]) test(`new mixed ungrouped runs (${recorded ? "recorded" : "inferred"} scope) are never feature-parity baselines`, () => {
+  const s = mixedResult({ recorded }), report = inspectCatalog(s, s.commit), text = renderCatalog(report);
+  assert.equal(report.baseline, false);
+  assert.equal(report.status, "COMPLETE MIXED-CONTRACT RUN: not a feature-parity baseline");
+  assert.deepEqual(report.documentHeaders.checked, Object.keys(s.apps).filter((app) => leanApps.includes(app)));
+  assert.equal(report.documentHeaders.checked.length, 7); assert.equal(report.documentHeaders.unchecked.length, 13);
+  assert.equal(report.documentHeaders.mixed, true);
+  assert.match(report.documentHeaders.scope, recorded ? /recorded/ : /inferred/);
+  assert.ok(report.warnings.some((w) => /Mixed correctness contracts: 7 apps .* 13 were not/.test(w)));
+  const [checked, unchecked] = text.split("### Not checked against the document header contract");
+  assert.match(text, new RegExp(`### Checked against \`${contract}\``));
+  assert.match(text, /must not be ranked against each other/);
+  for (const app of leanApps) { assert.match(checked, new RegExp(`^\\| ${app} \\|`, "m")); assert.doesNotMatch(unchecked, new RegExp(`^\\| ${app} \\|`, "m")); }
+  for (const app of report.documentHeaders.unchecked) assert.match(unchecked, new RegExp(`^\\| ${app} \\|`, "m"));
+  const cli = strictReport(s);
+  assert.equal(cli.status, 1); assert.equal(cli.stderr, "");
+  assert.match(cli.stdout, /COMPLETE MIXED-CONTRACT RUN/);
+});
+
+test("mixed runs keep failure statuses and validate header evidence by scope", () => {
+  const failed = mixedResult(); failed.failures.push({ app: "gin", stage: "load", error: "timeout" });
+  assert.equal(inspectCatalog(failed).status, "FAILED OR INCOMPLETE: not a baseline");
+  const broken = mixedResult(); broken.apps.corten.checks.api.documentHeaders.pop();
+  let report = inspectCatalog(broken);
+  assert.equal(report.status, "FAILED OR INCOMPLETE: not a baseline");
+  assert.ok(report.warnings.includes("corten api: missing or invalid document header observations."));
+  const missing = mixedResult(); delete missing.apps.gin.checks.fixture.documentHeaders;
+  assert.ok(inspectCatalog(missing).warnings.includes("gin fixture: missing or invalid document header observations."));
+  const stray = mixedResult(); stray.apps.nextjs.checks.fixture.documentHeaders = headerRows("fixture");
+  report = inspectCatalog(stray);
+  assert.equal(report.status, "FAILED OR INCOMPLETE: not a baseline");
+  assert.ok(report.warnings.some((w) => /nextjs fixture: document header evidence outside/.test(w)));
+  const tampered = mixedResult(); tampered.measurement.documentHeaders.apps.pop();
+  assert.throws(() => inspectCatalog(tampered), /document header scope differs/);
+  const renamed = mixedResult(); renamed.measurement.documentHeaders.contract = "catalog-document-headers/v0";
+  assert.throws(() => inspectCatalog(renamed), /document header scope differs/);
+});
+
+test("a new ungrouped run of only header-checked apps is uniform but still a subset", () => {
+  const s = mixedResult(); s.options.apps = [...leanApps];
+  s.apps = Object.fromEntries(leanApps.map((app) => [app, s.apps[app]]));
+  const report = inspectCatalog(s), text = renderCatalog(report);
+  assert.equal(report.documentHeaders.mixed, false); assert.equal(report.baseline, false);
+  assert.equal(report.status, "FAILED OR INCOMPLETE: not a baseline");
+  assert.match(text, /not checked for no reported app/); assert.ok(!/###|Mixed correctness/.test(text));
+});
+
 // Summary-only synthetic fixtures, not raw evidence or native measurements.
 function timedResult(grouped, failed) {
   const s = result(), group = groupDescriptor("catalog-page", { historical: true }), imageId = `sha256:${"b".repeat(64)}`;
@@ -115,7 +187,15 @@ test("supported grouped v3 summaries preserve successful and failed dispositions
     assert.equal(cli.status, failed ? 1 : 0); assert.equal(cli.stderr, "");
     assert.match(cli.stdout, failed ? /COMPLETE ATTEMPT: observed load\/request failure; not a baseline/ : /\*\*COMPLETE\*\*/);
     assert.match(cli.stdout, /Historical contract: the current document header floor was not checked/);
+    assert.doesNotMatch(cli.stdout, /MIXED-CONTRACT|Mixed correctness/);
+    assert.equal(report.documentHeaders, undefined);
   }
+});
+
+test("grouped summaries cannot carry the ungrouped header scope record", () => {
+  const s = timedResult(true, false);
+  s.measurement.documentHeaders = { contract, apps: [...leanApps] };
+  assert.throws(() => inspectCatalog(s, s.commit), /group runs record their document header contract/);
 });
 
 for (const failed of [false, true]) for (const scope of ["absent", "legacy schema", "unsupported"]) {

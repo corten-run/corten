@@ -6,6 +6,7 @@ import { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan }
 import { records } from "./fixtures.mjs";
 import { timedFixture } from "./timed-fixture.mjs";
 import { checkerImage, upstreamImage } from "./raw.mjs";
+import { stdoutReceipt } from "./check.mjs";
 import { k6Image, k6Provenance } from "../load-tool.mjs";
 import { apparatus, digest, sourceProof, workerCommand, workerPhaseSchema, workerRawSchema } from "./apparatus.mjs";
 import { verifyTimedPhase } from "./timed.mjs";
@@ -83,7 +84,7 @@ export function workerRound(failure = null, { historical = false } = {}) {
       check.qualification = qualificationIdentity(s.group, app, source, s.apps[app].imageId);
       const { qualification, ...native } = check;
       f.put(`${source}/${app}/checks.json`, native);
-      f.put(`${source}/${app}/checks.log`, native);
+      f.put(`${source}/${app}/checks.log`, `${stdoutReceipt(native)}\n`);
       f.put(`${source}/${app}/qualification.json`, check);
       boundary.checker.Args.push(app);
       boundary.checker.Config.Cmd.push(app);
