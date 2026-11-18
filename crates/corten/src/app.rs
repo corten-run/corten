@@ -2436,13 +2436,11 @@ impl<S: Steps> Layer<S> {
     async fn handle(&self, req: Request, route: Route, scope: Option<&Scope>) -> Response {
         #[cfg(feature = "compress")]
         let coding = crate::compress::negotiate(req.headers());
-        // A page is tagged for a client that accepts compression, as every browser does (`secure`
-        // decides, `cache::tag` tags): one that accepts none is not a browser keeping pages.
         #[cfg(feature = "compress")]
-        let worth_a_tag = coding.any();
+        let accepts_coding = coding.any();
         #[cfg(not(feature = "compress"))]
-        let worth_a_tag = true;
-        let res = self.secure(req, route, worth_a_tag, scope).await;
+        let accepts_coding = cache::accepts_a_coding(req.headers());
+        let res = self.secure(req, route, accepts_coding, scope).await;
         #[cfg(feature = "compress")]
         let res = crate::compress::finish(res, coding).await;
         res
@@ -2450,7 +2448,7 @@ impl<S: Steps> Layer<S> {
 
     /// The security policy around the request: the host and same-origin checks first, the
     /// headers last.
-    async fn secure(&self, mut req: Request, route: Route, worth_a_tag: bool, scope: Option<&Scope>) -> Response {
+    async fn secure(&self, mut req: Request, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
         if !self.policy.answers(&req) {
@@ -2530,14 +2528,16 @@ impl<S: Steps> Layer<S> {
         }
         let cors = mount.and_then(|mount| mount.allowed_origin(req.headers()));
         let credentials = cache::credentials(req.headers());
-        // A page route's answer to a `GET` or `HEAD` is tagged (`cache::tag`); these are the tags
-        // the client has. A client that accepts no compression and names no tag is not a browser
-        // keeping pages (a benchmark, `curl`): the hash would cost it a third of the render for
-        // nothing.
+        // Skip the hash for a GET that accepts no coding and names no tag. A HEAD needs a
+        // validator so a cache cannot freshen a stale, untagged GET by matching its length alone
+        // (RFC 9111 section 4.3.5).
         let tagged = !own
             && mount.is_none()
-            && matches!(*req.method(), http::Method::GET | http::Method::HEAD)
-            && (worth_a_tag || req.headers().contains_key(header::IF_NONE_MATCH));
+            && match *req.method() {
+                http::Method::GET => accepts_coding || req.headers().contains_key(header::IF_NONE_MATCH),
+                http::Method::HEAD => true,
+                _ => false,
+            };
         let has: Vec<http::HeaderValue> = match tagged {
             true => req.headers().get_all(header::IF_NONE_MATCH).iter().cloned().collect(),
             false => Vec::new(),

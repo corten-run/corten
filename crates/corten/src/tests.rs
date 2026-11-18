@@ -14460,12 +14460,86 @@ struct KeyedWrite {
     submit: crate::SubmitKey,
 }
 
+#[tokio::test]
+async fn a_page_get_needs_an_explicit_coding_for_an_unrequested_tag() {
+    let router = App::new(Routes::from(self::routes())).router();
+    for (encoding, tagged) in [
+        (Some("identity"), false),
+        (None, false),
+        (Some("identity;q=1, gzip;q=0"), false),
+        (Some("gzip, br"), true),
+        (Some("gzip;Q=0"), false),
+        (Some("br;q=0.000"), false),
+        (Some("*"), !cfg!(feature = "compress")),
+        (Some("*;q=0"), false),
+        (Some("*;q=0, gzip;q=0.001"), true),
+        (Some("gzip;q=0, *;q=0.500"), !cfg!(feature = "compress")),
+        (Some(""), false),
+        (Some("gzip;q=bogus"), false),
+        (Some("invalid coding"), false),
+        (Some("deflate"), !cfg!(feature = "compress")),
+    ] {
+        let mut req = Request::builder().uri("/");
+        if let Some(encoding) = encoding {
+            req = req.header(header::ACCEPT_ENCODING, encoding);
+        }
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!((res.status(), res.headers().contains_key(header::ETAG)), (StatusCode::OK, tagged), "{encoding:?}");
+    }
+}
+
+#[tokio::test]
+async fn a_page_head_has_a_validator_for_a_same_length_change() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let changed = Arc::new(AtomicBool::new(false));
+    let price = changed.clone();
+    let routes = Table::new().route(
+        "/price",
+        get(move || {
+            let body = if price.load(Ordering::Relaxed) { "<p>$20</p>" } else { "<p>$10</p>" };
+            async move { Public::new(Duration::from_secs(60), crate::Media::new("text/html", body)) }
+        }),
+    );
+    let router = App::new(Routes::from(routes)).router();
+    let ask = |method, tag: Option<&http::HeaderValue>| {
+        let mut req = Request::builder().method(method).uri("/price").header(header::ACCEPT_ENCODING, "identity");
+        if let Some(tag) = tag {
+            req = req.header(header::IF_NONE_MATCH, tag);
+        }
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+
+    let (stored, body) = ask(http::Method::GET, None).await.unwrap().into_parts();
+    assert_eq!(stored.status, StatusCode::OK);
+    assert_eq!(stored.headers[header::CACHE_CONTROL], "public, max-age=60");
+    assert_eq!(body.collect().await.unwrap().to_bytes(), "<p>$10</p>");
+    assert!(!stored.headers.contains_key(header::ETAG));
+    assert!(!stored.headers.contains_key(header::LAST_MODIFIED));
+    let before = ask(http::Method::HEAD, None).await.unwrap();
+
+    changed.store(true, Ordering::Relaxed);
+    let (head, body) = ask(http::Method::HEAD, None).await.unwrap().into_parts();
+    assert_eq!(head.status, StatusCode::OK);
+    assert_eq!(head.headers[header::CONTENT_LENGTH], stored.headers[header::CONTENT_LENGTH]);
+    assert!(body.collect().await.unwrap().to_bytes().is_empty());
+    // RFC 9111 section 4.3.5: equal lengths cannot freshen the stored GET if HEAD has a tag it lacks.
+    let tag = head.headers.get(header::ETAG).expect("an untagged HEAD could freshen the old body");
+    assert!(tag.as_bytes().starts_with(b"W/"));
+    assert_ne!(tag, &before.headers()[header::ETAG]);
+
+    let (revalidated, body) = ask(http::Method::GET, Some(tag)).await.unwrap().into_parts();
+    assert_eq!(revalidated.status, StatusCode::NOT_MODIFIED);
+    assert_eq!(&revalidated.headers[header::ETAG], tag);
+    assert!(body.collect().await.unwrap().to_bytes().is_empty());
+}
+
 /// A page's `GET` and `HEAD` carry a weak tag of the body it rendered and its `corten-*`
 /// headers, and one the client names in `If-None-Match` is answered `304` with no body (and is
 /// not compressed): the same tag whether the body is compressed or not, another for another mode
 /// or another `corten-*` header; a `304` still sets the page's cookie and varies as its `200`.
-/// With `compress`, a client that accepts no compression is tagged only when it names a tag. A
-/// file compression sends as it is is tagged too. Nothing else is
+/// A `GET` that does not explicitly accept a coding is tagged only when it sends
+/// `If-None-Match`; `HEAD` does not need either. A file compression sends as it is is tagged too. Nothing else is
 /// tagged: a body with this request's nonce or a submit key drawn for it, an answer nothing may
 /// keep or that is immutable, one with a tag or an encoding of its own, a stream, a relayed page,
 /// an error, a write, an API's answer, the runtime.
@@ -14585,7 +14659,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     // one that names a tag is answered as a browser is.
     let identity = ("accept-encoding", "identity");
     let (_, headers, _) = send(router(), "GET", "/", &[identity]).await;
-    assert_eq!(headers.contains_key("etag"), !cfg!(feature = "compress"), "without compression every client: {headers:?}");
+    assert!(!headers.contains_key("etag"), "{headers:?}");
     let (status, ..) = send(router(), "GET", "/", &[identity, ("if-none-match", &tag)]).await;
     assert_eq!(status, StatusCode::NOT_MODIFIED);
 
