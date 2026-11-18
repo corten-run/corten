@@ -1,6 +1,7 @@
 // CSS Syntax Level 3, tokenization. Offsets always refer to the original UTF-8 text.
 // Comments are exposed as trivia, not whitespace tokens. In particular, `./**/a`
 // has the same significant tokens as `.a`, but `a/**/b` has two identifiers.
+// Quoted URL functions end at `(` in these source spans; all following space is trivia.
 use std::borrow::Cow;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,21 +68,11 @@ impl Iterator for Lexer<'_> {
             b'#' if b.get(start + 1).is_some_and(|&c| name_byte(c)) || valid_escape(b, start + 1) => {
                 (Hash, name_end(b, start + 1))
             }
-            _ if number_start(b, start) => {
-                let end = number_end(b, start);
-                if ident_start(b, end) {
-                    (Dimension, name_end(b, end))
-                } else if b.get(end) == Some(&b'%') {
-                    (Percentage, end + 1)
-                } else {
-                    (Number, end)
-                }
-            }
             _ if ident_start(b, start) => {
                 let end = name_end(b, start);
                 if b.get(end) != Some(&b'(') {
                     (Ident, end)
-                } else if decoded_name(&self.css[start..end]).eq_ignore_ascii_case("url") {
+                } else if name_is(&self.css[start..end], "url") {
                     let input = skip_space(b, end + 1);
                     if matches!(b.get(input), Some(b'"' | b'\'')) {
                         (Function, end + 1)
@@ -90,6 +81,16 @@ impl Iterator for Lexer<'_> {
                     }
                 } else {
                     (Function, end + 1)
+                }
+            }
+            _ if number_start(b, start) => {
+                let end = number_end(b, start);
+                if ident_start(b, end) {
+                    (Dimension, name_end(b, end))
+                } else if b.get(end) == Some(&b'%') {
+                    (Percentage, end + 1)
+                } else {
+                    (Number, end)
                 }
             }
             c => (
@@ -287,6 +288,11 @@ pub(crate) fn decoded_name(text: &str) -> Cow<'_, str> {
     } else {
         text.into()
     }
+}
+
+/// Match an ASCII lowercase keyword without decoding non-matching ordinary names.
+pub(crate) fn name_is(text: &str, keyword: &str) -> bool {
+    text.eq_ignore_ascii_case(keyword) || (text.as_bytes().contains(&b'\\') && decoded_name(text).eq_ignore_ascii_case(keyword))
 }
 
 pub(crate) fn decode(text: &str, string: bool) -> String {

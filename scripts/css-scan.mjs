@@ -10,10 +10,8 @@ export async function checkCssScanner(browser) {
   const page = await browser.newPage();
   const engine = browser.browserType().name();
   try {
-    const readings = await page.evaluate((cases) => {
-      function read(css, scoped = false) {
-        const sheet = new CSSStyleSheet();
-        sheet.replaceSync(css);
+    const readings = await page.evaluate(async (cases) => {
+      function read(sheet, scoped = false) {
         const name = (s) => scoped ? s.replace(/(^--|\.)x__/g, "$1") : s;
         function rule(r) {
           const type = r.constructor.name.replace(/^CSS|Rule$/g, "");
@@ -34,7 +32,33 @@ export async function checkCssScanner(browser) {
         }
         return Array.from(sheet.cssRules, rule);
       }
-      return cases.map(({ css, scoped }) => [read(css), scoped === undefined ? null : read(scoped, true)]);
+      function constructed(css, scoped) {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(css);
+        return read(sheet, scoped);
+      }
+      async function externalSheet(css) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        // The BOM applies to a byte stream, not a constructed sheet's CSS string.
+        link.href = URL.createObjectURL(new Blob([new TextEncoder().encode(css)], { type: "text/css; charset=utf-8" }));
+        try {
+          await new Promise((resolve, reject) => {
+            link.onload = resolve;
+            link.onerror = () => reject(new Error("Failed to load CSS oracle stylesheet"));
+            document.head.append(link);
+          });
+          return read(link.sheet);
+        } finally {
+          link.remove();
+          URL.revokeObjectURL(link.href);
+        }
+      }
+      const results = [];
+      for (const { css, scoped, external } of cases) {
+        results.push([external ? await externalSheet(css) : constructed(css), scoped === undefined ? null : constructed(scoped, true)]);
+      }
+      return results;
     }, cases);
     for (let i = 0; i < cases.length; i++) {
       const { name, browser: expected, browserScoped } = cases[i];

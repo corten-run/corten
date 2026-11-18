@@ -1080,54 +1080,62 @@ fn undeclared_properties(
     sections: &[(&str, &[Component])],
 ) -> io::Result<()> {
     use std::collections::HashSet;
-    let declared = |css: &str, into: &mut HashSet<String>| {
-        into.extend(crate::style::custom_properties(css).0.into_iter().map(std::borrow::Cow::into_owned));
-    };
+    let mut scanner = crate::style::Scanner::default();
     let mut everywhere = HashSet::new();
     for (_, body) in sources.iter().filter(|(url, _)| url.ends_with(".css")) {
         // A file that is not text declares nothing.
-        if let Ok(css) = std::str::from_utf8(body) {
-            declared(css, &mut everywhere);
+        if let Some(css) = crate::style::stylesheet_text(body) {
+            everywhere.extend(scanner.scan(css, false).0);
         }
-    }
-    for (_, css, _) in sheets.iter().filter(|(at, _, _)| at.is_empty()) {
-        declared(css, &mut everywhere);
     }
     // What each area's pages add: the section stylesheets linked from them, its own and those of
     // the areas it is under (`/admin`'s on `/admin/reports`'s pages).
-    let in_area: Vec<HashSet<String>> = (1..=sections.len())
-        .map(|i| {
-            let mut set = HashSet::new();
-            let linked = |j: &usize| crate::api::under(sections[j - 1].0, sections[i - 1].0);
-            for (_, css, _) in sheets.iter().filter(|(at, _, _)| at.iter().any(linked)) {
-                declared(css, &mut set);
-            }
-            set
-        })
-        .collect();
-    let mut missing = Vec::new();
+    let mut in_area = vec![HashSet::new(); sections.len()];
+    let mut reads = Vec::new();
     for (at, _, names) in sheets {
+        let linked: Vec<_> = sections
+            .iter()
+            .enumerate()
+            .filter(|(_, (prefix, _))| at.iter().any(|&j| crate::api::under(sections[j - 1].0, prefix)))
+            .map(|(i, _)| i)
+            .collect();
         for (name, style) in names.iter().filter_map(|n| styles.iter().find(|(s, _)| s == n)) {
-            for property in crate::style::custom_properties(style.css).1 {
-                if everywhere.contains(property.as_ref()) {
-                    continue;
+            // The sheets join complete stylesheets and only substitute media widths.
+            // Neither operation can change these declarations or reads.
+            let (declared, needed) = scanner.scan(style.css, true);
+            if at.is_empty() {
+                everywhere.extend(declared);
+            } else if let Some((&last, rest)) = linked.split_last() {
+                for &i in rest {
+                    in_area[i].extend(declared.iter().cloned());
                 }
-                let lacking: Vec<&str> =
-                    at.iter().filter(|i| !in_area[**i - 1].contains(property.as_ref())).map(|i| sections[i - 1].0).collect();
-                let line = if at.is_empty() {
-                    format!("{} ({name}) reads var({property}), which no stylesheet declares", style.file)
-                } else if !lacking.is_empty() {
-                    format!(
-                        "{} ({name}) reads var({property}), which no stylesheet on the pages of {} declares",
-                        style.file,
-                        lacking.join(", ")
-                    )
-                } else {
-                    continue;
-                };
-                if !missing.contains(&line) {
-                    missing.push(line);
-                }
+                in_area[last].extend(declared);
+            }
+            if !needed.is_empty() {
+                reads.push((at, name, style.file, needed));
+            }
+        }
+    }
+    let mut missing = Vec::new();
+    for (at, name, file, needed) in reads {
+        for property in needed {
+            if everywhere.contains(property.as_ref()) {
+                continue;
+            }
+            let lacking: Vec<&str> =
+                at.iter().filter(|i| !in_area[**i - 1].contains(property.as_ref())).map(|i| sections[i - 1].0).collect();
+            let line = if at.is_empty() {
+                format!("{file} ({name}) reads var({property}), which no stylesheet declares")
+            } else if !lacking.is_empty() {
+                format!(
+                    "{file} ({name}) reads var({property}), which no stylesheet on the pages of {} declares",
+                    lacking.join(", ")
+                )
+            } else {
+                continue;
+            };
+            if !missing.contains(&line) {
+                missing.push(line);
             }
         }
     }
@@ -2076,6 +2084,36 @@ mod tests {
         assert!(error.to_string().contains("both style .card__*"), "{error}");
     }
 
+    #[crate::component(css)]
+    fn BreakpointRewrite() -> impl crate::style::ClassList {
+        A
+    }
+
+    #[tokio::test]
+    async fn asset_emission_resolves_breakpoints_before_and_after_a_length_changing_rewrite() {
+        use crate::style::ClassList;
+        let mut classes = String::new();
+        BreakpointRewrite {}.write_classes(&mut classes);
+        assert_eq!(classes, "breakpoint-rewrite__a ");
+        let tokens = styled("tokens.json", "tokens.json", ":root{--x:1}");
+        let tokens = Component {
+            style: Some(crate::Style { breakpoints: &[("sm", "40rem"), ("md", "48rem")], ..tokens.style.unwrap() }),
+            ..tokens
+        };
+        let assets = Arc::new(Assets::build(None, &[tokens, BreakpointRewrite], "/assets").unwrap());
+        let request = Request::get(assets.stylesheet().unwrap()).body(Body::empty()).unwrap();
+        let response = crate::Router::from(assets.routes()).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body()).await.unwrap().to_bytes();
+        let expected = concat!(
+            "@media (min-width:40rem){.breakpoint-rewrite__a{color:red}}",
+            "@position-try --breakpoint-rewrite__above{top:0}",
+            ".breakpoint-rewrite__a{position-try:--breakpoint-rewrite__above}",
+            "@media not (min-width:48rem){.breakpoint-rewrite__a{color:blue}}",
+        );
+        assert_eq!(&body[..], format!("{HIDDEN_RULE}:root{{--x:1}}\n{expected}").as_bytes());
+    }
+
     #[test]
     fn a_stylesheet_reads_only_the_custom_properties_its_pages_declare() {
         let tokens = styled("tokens.json", "tokens.json", ":root{--ink:#111;--space-1:4px}");
@@ -2100,11 +2138,25 @@ mod tests {
             error.contains("x.css (Report) reads var(--admin-ink), which no stylesheet on the pages of /reports declares"),
             "{error}"
         );
+        let shared: &[(&str, &[Component])] =
+            &[("/admin", &[admin]), ("/admin/reports", &[report]), ("/reports", &[admin, report])];
+        Assets::build_with(Vec::new(), &[tokens], shared, "/assets").unwrap();
         let error = Assets::build_with(Vec::new(), &[tokens, report], &[("/admin", &[admin])], "/assets")
             .err()
             .expect("an area's")
             .to_string();
         assert!(error.contains("x.css (Report) reads var(--admin-ink), which no stylesheet declares"), "{error}");
+    }
+
+    #[test]
+    fn a_static_stylesheet_decodes_one_leading_utf8_bom() {
+        let card = styled("Card", "card", ".card__a{color:var(--bom)}");
+        let rule = "@property --bom { syntax: '<color>'; inherits: false; initial-value: red }";
+        let root = dir("css-bom", &[("style.css", &format!("\u{feff}{rule}"))]);
+        Assets::build(Some(&root), &[card], "/assets").unwrap();
+        let root = dir("css-two-boms", &[("style.css", &format!("\u{feff}\u{feff}{rule}"))]);
+        let error = Assets::build(Some(&root), &[card], "/assets").err().expect("only one BOM is stripped");
+        assert!(error.to_string().contains("reads var(--bom), which no stylesheet declares"), "{error}");
     }
 
     #[tokio::test]

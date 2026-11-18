@@ -343,7 +343,9 @@ rules something out.
    Stands on: bet (a CSS file per component and the typed token utilities are quick enough for the
    one-off values utility classes are good at, spacing and direction per breakpoint, so apps do not
    want a utility class for everything); platform (the CSP blocks inline `style=`, and `@property`
-   registers a typed custom property); reasoned (an untyped utility class is a string in a view the
+   registers a typed custom property); platform (CSS tokenizer boundaries distinguish comments
+   from whitespace and keep URL payloads out of selectors and declarations, so both checks can
+   use those same boundaries); reasoned (an untyped utility class is a string in a view the
    compiler cannot check without a scanner and a build step); value (typed class names, Values 4).
 
    Revisit when: apps built on Corten ask for, or write their own, utility classes beyond the typed
@@ -351,7 +353,8 @@ rules something out.
    CSP can allow values set from markup without a header source for each.
 
    Last checked: 2026-11-18, CSS rule, declaration and priority boundaries in the shared
-   stylesheet fixture against constructed sheets in Chromium 159, Firefox 159 and WebKit 27.2.
+   stylesheet fixture against constructed and external sheets in Chromium 159, Firefox 159
+   and WebKit 27.2.
    The CSP refusing an inline `style=` and `@property` registering a type were probed on
    2026-11-06 in Chromium 156, Firefox 157 and WebKit 27.2.
 
@@ -6736,12 +6739,21 @@ by design; where it is known, a limit says what would lift it or why it is so.
     Escaped or non-ASCII at-rule and class names are not supported.
 
    The macro and startup custom-property check share [CSS Syntax Level 3
-   tokenization](https://www.w3.org/TR/css-syntax-3/#tokenization). URL tokens are opaque,
-   even with escaped names, and comments between tokens are not spaces. The macro refuses
+   tokenization](https://www.w3.org/TR/css-syntax-3/#tokenization). URL payloads are opaque,
+   even with escaped names, and comments between tokens are not spaces. Source spans keep
+   the original UTF-8 bytes: for a quoted `url()`, the function span ends at `(` and all
+   following whitespace is trivia (including both bytes of CRLF), rather than absorbing
+   all but the last whitespace code point as the spec algorithm does. A comment before
+   the quote takes the unquoted URL path, not the quoted function path. The macro refuses
    mismatched block delimiters, bad strings and bad URLs instead of letting browser recovery
-   consume later components. Startup checks literal `var()` reads in declaration values,
-   skipping the whole lookup if it has a fallback, including `var({--x}, var(--fallback))`.
-   Blocks in a value do not declare properties. The check does not validate descriptor
+   consume later components. Static CSS is checked as UTF-8, with one leading BOM removed
+   at decoding, not treated as whitespace elsewhere. Startup checks literal `var()` reads
+   in declaration values (including declarations directly in `@scope` and in recognized
+   `@page` margin rules) and operands in recognized `@container` size conditions. It does not
+   check style or scroll-state query preludes or arbitrary at-rule conditions. It skips the
+   whole lookup if it has a fallback, including `var({--x}, var(--fallback))`.
+   Blocks in a custom-property value and the invalid `ident: { ... }` form do not declare
+   properties. The check does not validate descriptor
    values in a global stylesheet or infer whether a selector matches; for example, a global
    `@property --x { syntax: "<length>"; inherits: false; initial-value: red }` is counted
    structurally even though a browser drops that registration.

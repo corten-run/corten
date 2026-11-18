@@ -1185,7 +1185,9 @@ pub(crate) fn collect<T>(render: impl FnOnce() -> T) -> (T, Vec<&'static crate::
 }
 
 mod scan;
-pub(crate) use scan::custom_properties;
+#[cfg(test)]
+use scan::custom_properties;
+pub(crate) use scan::{stylesheet_text, Scanner};
 
 #[doc(hidden)]
 pub mod __private {
@@ -1276,6 +1278,27 @@ mod tests {
         assert_eq!(class, "url-scan__a ");
         let err = crate::assets::Assets::build(None, &[UrlScan], "/assets").err().expect("missing property");
         assert!(err.to_string().contains("reads var(--fake), which no stylesheet declares"), "{err}");
+    }
+
+    #[component(css)]
+    fn ScopeScan() -> impl ClassList {
+        (A, B)
+    }
+
+    #[component(css)]
+    fn ScopeMissing() -> impl ClassList {
+        A
+    }
+
+    #[test]
+    fn scoped_declarations_supply_and_read_custom_properties_at_startup() {
+        let mut classes = String::new();
+        ScopeScan {}.write_classes(&mut classes);
+        ScopeMissing {}.write_classes(&mut classes);
+        assert_eq!(classes, "scope-scan__a scope-scan__b scope-missing__a ");
+        crate::assets::Assets::build(None, &[ScopeScan], "/assets").unwrap();
+        let error = crate::assets::Assets::build(None, &[ScopeMissing], "/assets").err().expect("missing scoped property");
+        assert!(error.to_string().contains("reads var(--scope-missing), which no stylesheet declares"), "{error}");
     }
 
     #[test]

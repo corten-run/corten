@@ -84,11 +84,12 @@ pub(super) fn scanner_cases() -> TokenStream {
         let css = case.string("css").unwrap();
         let declared = case.strings("declared").unwrap();
         let needed = case.strings("needed").unwrap();
-        write!(rust, "({name:?}, {css:?}, &{declared:?}, &{needed:?}),").unwrap();
+        let external = case.field("external").is_some();
+        write!(rust, "({name:?}, {css:?}, {external}, &{declared:?}, &{needed:?}),").unwrap();
         if let Some(css) = case.string("scoped") {
             let declared = case.strings("scopedDeclared").unwrap_or(declared);
             let needed = case.strings("scopedNeeded").unwrap_or(needed);
-            write!(rust, "({name:?}, {css:?}, &{declared:?}, &{needed:?}),").unwrap();
+            write!(rust, "({name:?}, {css:?}, false, &{declared:?}, &{needed:?}),").unwrap();
         }
     }
     rust.push(']');
@@ -699,7 +700,7 @@ impl Scoper<'_> {
                 if starts_custom_property(&text) {
                     return Err(self.error(
                         start,
-                        "a custom property whose value holds a { } block at its outer level is not supported in a component stylesheet yet (#1602); put that declaration in the app's stylesheet (static/style.css)",
+                        "a custom property whose value holds a { } block at its outer level is not supported in a component stylesheet; put that declaration in the app's stylesheet (static/style.css)",
                     ));
                 }
                 self.i += 1;
@@ -2038,6 +2039,9 @@ mod tests {
     #[test]
     fn css_scanner_fixture_agrees_with_the_macro() {
         for case in ScanCase::all() {
+            if case.field("external").is_some() {
+                continue;
+            }
             let name = case.string("name").unwrap();
             let result = scope(case.string("css").unwrap(), "x");
             match (case.string("scoped"), case.string("refuse")) {
@@ -2049,6 +2053,24 @@ mod tests {
                 _ => panic!("{name}: specify scoped output or a refusal, not both"),
             }
         }
+    }
+
+    #[test]
+    fn quoted_url_leaves_all_whitespace_after_the_opening_parenthesis_as_trivia() {
+        use Tok::*;
+        let css = "u\\72l(  \r\n'x') url(/* gap */ \"x\")";
+        let tokens: Vec<_> = lexer(css).map(|(kind, start, end)| (kind, &css[start..end])).collect();
+        assert_eq!(
+            tokens,
+            [
+                (Function, "u\\72l("),
+                (Space, "  \r\n"),
+                (String { closed: true }, "'x'"),
+                (Close, ")"),
+                (Space, " "),
+                (BadUrl, "url(/* gap */ \"x\")"),
+            ]
+        );
     }
 
     #[test]
@@ -2267,7 +2289,7 @@ mod tests {
                 let error = scope(&css, "x").unwrap_err();
                 assert_eq!(
                     error,
-                    format!("line {line}: a custom property whose value holds a {{ }} block at its outer level is not supported in a component stylesheet yet (#1602); put that declaration in the app's stylesheet (static/style.css)"),
+                    format!("line {line}: a custom property whose value holds a {{ }} block at its outer level is not supported in a component stylesheet; put that declaration in the app's stylesheet (static/style.css)"),
                     "{css}"
                 );
             }

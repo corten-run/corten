@@ -218,10 +218,11 @@ tokenization](https://www.w3.org/TR/css-syntax-3/#tokenization). The compiler co
 without turning a token separator into a space: `@supports selector(./**/a)` keeps its
 condition, and `@page receipt-slip:/**/first` keeps its pseudo-page. It does not rewrite a URL
 payload, even when its function name uses escapes or uppercase letters. At startup, a literal
-`var(--name)` read in a declaration must name a property available to that sheet; strings
-and URLs are not searched for declarations or reads. A `var()` with a fallback is optional,
-including when the name is brace-wrapped (`var({--name}, var(--fallback))`). The check is
-structural, not a validation of property values or of whether a selector matches.
+`var(--name)` read in a declaration or a container size condition must name a property
+available to that sheet. This includes declarations directly in `@scope` and in `@page`
+margin rules; strings, URLs and other query preludes aren't searched. A `var()` with a
+fallback is optional, including when the name is brace-wrapped (`var({--name}, var(--fallback))`).
+The check is structural, not a validation of property values or of whether a selector matches.
 
 A popup can define a fallback beside its default position, including a corten-ui `MenuButton`
 or `ComboBox` styled by this component:

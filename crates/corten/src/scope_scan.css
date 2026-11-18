@@ -1,0 +1,4 @@
+@scope (.a) {
+    --ink: red;
+    .b { color: var(--ink) }
+}
