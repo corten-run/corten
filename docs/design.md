@@ -6011,6 +6011,12 @@ rules something out.
     (15,612 to 16,074 at zlib's default level, against `main` at `27c29d7d2`), numbering the
     writes a layout draws and which of them failed in view.
 
+    The decision accepts measured server overhead on document GETs, navigation GETs and both
+    typed and generic patches even in apps without layout reads, as well as 496 more gzip bytes
+    on every page that loads core. Apps with reads also pay for the late path when eligible, and
+    generic routes can pay for a head capture even if they answer a patch. The server counts below
+    are instructions, not elapsed time.
+
     Stands on: measured (callgrind, release, `write_request_cost`,
     `what_a_write_answering_in_an_action_costs`, `what_a_page_with_layout_reads_costs` and the
     watchlist's `what_a_watch_costs`, the difference
@@ -6022,11 +6028,7 @@ rules something out.
     the head its page's reads start from is copied before it runs, and only the answer type says
     beforehand that no page will come); value (the page shows the same values with JavaScript as
     without, Values 3; one answer brings a layout read up to date after a write, a page, Values 5;
-    correctness before performance, the order of the values). The decision accepts measured server
-    overhead on document GETs, navigation GETs and both typed and generic patches even in apps
-    without layout reads, as well as 496 more gzip bytes on every page that loads core. Apps with
-    reads also pay for the late path when eligible, and generic routes can pay for a head capture
-    even if they answer a patch. The server counts below are instructions, not elapsed time.
+    correctness before performance, the order of the values).
 
     Revisit when: an app needs a patch to change a layout read and cannot answer its page (a write
     whose page is too costly to draw again), which would reopen markers on the places; or a route
@@ -6044,14 +6046,25 @@ rules something out.
     historical: it compared the generic and typed patches in
     `what_a_write_answering_in_an_action_costs`, not a standalone head copy.
 
-    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc, against main `9de7529fc`.
-    Using the same `write_request_cost` fixture on both builds, three alternating 1,200-minus-200
-    runs measured these median additional instructions per request without reads: document GET
-    96 (range 95 to 96), navigation GET 102 (102 to 102), typed patch 159 (159 to 159), generic
-    patch 454 (454 to 454). With reads configured and pass-through middleware, the preferred
-    versus legacy controls measured 1,086 (1,086 to 1,088) for the late-write path and 2,905
-    (2,904 to 2,905) more for the generic-only path. One profile of the generic patch without
-    middleware still counted 1,512 in the inclusive capture. Core gzip measured 15,612 to
+    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc, `010f04f23` against
+    main `70dd920cc`. Using the same `write_request_cost` fixture on both builds, three alternating
+    1,200-minus-200 pairs measured these median additional instructions per request without reads:
+    document GET 102 (range 102 to 104), navigation GET 112 (112 to 113), direct typed patch
+    173 (173 to 173), generic patch 466 (466 to 466). These are 6 to 14 more than the preceding
+    check's deltas. They do not measure named-route dispatch in isolation. With reads and no
+    middleware the typed patch adds 180 (180 to 180), the generic patch 4,374 (4,374 to 4,374),
+    and the own page 13,703 (13,703 to 13,703), drawing a document instead of a fragment.
+    With reads and pass-through middleware, both legacy and preferred writes can enter late
+    staging: the typed patch adds 1,778 (1,777 to 1,778) when legacy and 1,967 (1,966 to 1,967)
+    when preferred. The preferred-minus-legacy difference, net of main, is 189 (189 to 189)
+    for typed patches and another 2,905 (2,905 to 2,907) for the generic-only path. Neither
+    patch starts a read. Core gzip remains 15,612 to 16,108 bytes and upload gzip 539 to 559;
+    2026-11-18, `7adced7ed` against main `9de7529fc`, using the same method and fixture: the
+    no-read deltas were 96 (95 to 96) for document GET, 102 (102 to 102) for navigation GET,
+    159 (159 to 159) for typed patch and 454 (454 to 454) for generic patch. In that version
+    the preferred versus legacy controls measured 1,086 (1,086 to 1,088) for the late-write
+    path and 2,905 (2,904 to 2,905) more for the generic-only path. One profile of the generic
+    patch without middleware counted 1,512 in the inclusive capture. Core gzip measured 15,612 to
     16,108 bytes, upload gzip 539 to 559. The watchlist smoke covers named form controls in
     the frame fallback and both cut and completed 503 bodies after another write draws;
     2026-11-18, release Callgrind 3.19.0 with jemalloc, `e80694ef7` against merged
