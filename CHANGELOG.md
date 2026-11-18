@@ -6,7 +6,8 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - Remove two unused workspace dependency entries and have Cargo 1.100 or later wait three days
-  before selecting newly published dependency versions for the Corten checkout, not for new apps.
+  before selecting newly published dependency versions in the Corten checkout; `corten new` does
+  not write the setting into new apps.
 - Every `corten` command accepts `--help` and `-h`, printing its own usage and exiting
   successfully without running the command; `corten help <command>` prints the same and refuses an
   unknown command. An option given twice (`--name`, `--corten-path`, `--port`) is refused instead of

@@ -75,7 +75,9 @@ Use Cargo 1.100 or later when changing Rust dependencies. The checkout's `.cargo
 asks Cargo to pass over registry versions published less than three days ago when resolving
 dependencies. This gives a bad release time to be noticed and yanked, not a guarantee that old
 versions are safe. It does not reject versions already in `Cargo.lock`, cover versions without a
-registry publish time, or apply to `cargo install`. For an urgent fix, set
+registry publish time, or apply to an install from the registry (`cargo install corten-cli`);
+`cargo install --path` and an app inside the checkout do read it. A new resolution fails when no
+version old enough meets a requirement. For an urgent fix, set
 `CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow` for that resolution only, and review the lockfile
 diff. Cargo 1.89 ignores the setting; Cargo 1.99.1 ignores it with a warning.
 
