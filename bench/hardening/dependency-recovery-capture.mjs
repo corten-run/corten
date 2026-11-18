@@ -10,6 +10,8 @@ const restoreMs = beforeMs + duringMs, endMs = restoreMs + afterMs;
 const windows = [["before", 0, beforeMs], ["during", beforeMs, restoreMs], ["after", restoreMs, endMs]];
 const phases = ["normal", "slow", "restored"];
 const counters = ["reads", "responses200"];
+// Allow for millisecond timer granularity, not scheduler or snapshot lag.
+const timerToleranceMs = 2;
 const localErrors = new Set(["EMFILE", "ENFILE", "ENOBUFS", "ENOMEM", "EADDRNOTAVAIL", "EACCES", "EPERM", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH"]);
 const uint = (n) => Number.isSafeInteger(n) && n >= 0;
 
@@ -31,32 +33,44 @@ function validateReadReceipts(samples) {
 
 function verifyApiEvidence(snapshots, samples, triggerAtMs, restoredAtMs, jitter) {
   assert.ok(snapshots[2].reads.slow > 0, "missing API upstream exposure during slow phase");
-  const successful = samples.filter((sample) => sample.ok);
   const phaseBounds = [0, triggerAtMs, restoredAtMs, Infinity];
-  for (const field of counters) {
-    const slots = snapshots.slice(1).flatMap((current, i) => phases.flatMap((phase, j) => {
-      const previous = snapshots[i], count = current[field][phase] - previous[field][phase];
-      // Snapshots are timestamped on receipt. A boundary-spanning request may
-      // fit more than one bucket, but no observed increment can back two successes.
-      return Array.from({ length: Math.min(count, successful.length) }, () => ({
-        start: previous.observedAtMs - jitter, end: current.observedAtMs,
-        phaseStart: phaseBounds[j] - jitter, phaseEnd: phaseBounds[j + 1],
-      }));
-    }));
-    const claim = (sample, seen) => {
-      for (const slot of slots) {
-        if (seen.has(slot)) continue;
-        const first = Math.max(sample.startMs, slot.phaseStart, field === "reads" ? slot.start : 0);
-        // A completion is booked to the phase of its read, even if the reply
-        // finishes after that phase. The read itself cannot cross the phase end.
-        if (first >= slot.phaseEnd || Math.max(first, slot.start) > Math.min(sample.endMs, slot.end)) continue;
-        seen.add(slot);
-        if (!slot.owner || claim(slot.owner, seen)) { slot.owner = sample; return true; }
+  const intervals = snapshots.slice(1).map((current, i) => ({
+    start: snapshots[i].observedAtMs - jitter, end: current.observedAtMs,
+    counts: phases.map((phase) => ({ reads: current.reads[phase] - snapshots[i].reads[phase],
+      responses200: current.responses200[phase] - snapshots[i].responses200[phase] })),
+  }));
+  const choices = samples.filter((sample) => sample.ok).map(({ startMs, endMs, scheduledMs }) => {
+    const pairs = [];
+    for (const [phase, name] of phases.entries()) {
+      const minDelay = name === "slow" ? delayMs - timerToleranceMs : 0;
+      for (const [i, read] of intervals.entries()) {
+        const firstRead = Math.max(startMs, read.start, phaseBounds[phase] - jitter);
+        if (!read.counts[phase].reads || firstRead > read.end || firstRead >= phaseBounds[phase + 1]) continue;
+        for (const reply of intervals.slice(i)) {
+          // The completion keeps the read's phase even when it crosses a transition.
+          const firstReply = Math.max(firstRead + minDelay, reply.start);
+          if (reply.counts[phase].responses200 && firstReply <= Math.min(endMs, reply.end)) {
+            pairs.push([read.counts[phase], reply.counts[phase]]);
+          }
+        }
       }
-      return false;
-    };
-    for (const sample of successful) assert.ok(claim(sample, new Set()), `missing API upstream ${field} for success at ${sample.scheduledMs} ms`);
-  }
+    }
+    assert.ok(pairs.length, `missing API upstream read/200 pair for success at ${scheduledMs} ms`);
+    return pairs;
+  }).sort((a, b) => a.length - b.length);
+  // Only probes near a phase or snapshot boundary have multiple choices: the
+  // fixed cadence and deadline bound how many probes can overlap each one.
+  const assign = (i) => {
+    if (i === choices.length) return true;
+    for (const [read, reply] of choices[i]) {
+      if (!read.reads || !reply.responses200) continue;
+      read.reads--; reply.responses200--;
+      if (assign(i + 1)) return true;
+      read.reads++; reply.responses200++;
+    }
+    return false;
+  };
+  assert.ok(assign(0), "missing API upstream read/200 pairs for all successes without reusing counter increments");
 }
 
 function validateUpstream({ upstream, restoredAtMs, samples }, source, jitter) {

@@ -106,18 +106,47 @@ test("a failed recovery still requires slow-phase exposure and a recorded restor
 
 test("a success at the restore boundary requires an attributable upstream read and completion", () => {
   const input = openCircuit("api", true), { samples, upstream } = input.raw.at(-1);
-  assert.throws(() => assembleRecovery(input), /missing API upstream reads/);
+  assert.throws(() => assembleRecovery(input), /missing API upstream read\/200 pair for success at 12000 ms/);
   upstream.restored.observedAtMs = 12030;
   upstream.restored.elapsedSinceStartMs = 8030;
   upstream.restored.reads.restored = upstream.after.reads.restored = 1;
-  assert.throws(() => assembleRecovery(input), /missing API upstream responses200/);
+  assert.throws(() => assembleRecovery(input), /missing API upstream read\/200 pair for success at 12000 ms/);
   upstream.restored.responses200.restored = upstream.after.responses200.restored = 1;
   const capture = assembleRecovery(input);
   assert.equal(capture.assessment.windows.after.successes, 1);
   assert.equal(capture.assessment.status, "unrecovered");
   const next = samples.find((sample) => sample.scheduledMs === 12400);
   Object.assign(next, { ok: true, receipt: { ...receipt } });
-  assert.throws(() => assembleRecovery(input), /missing API upstream reads for success at 12400 ms/);
+  assert.throws(() => assembleRecovery(input), /missing API upstream read\/200 pair for success at 12400 ms/);
+});
+
+test("a fast interior success cannot use delayed background reads as evidence", () => {
+  const input = fixture(), { samples } = input.raw.at(-1);
+  const interior = samples.find(({ scheduledMs }) => scheduledMs === 8000);
+  interior.endMs = interior.startMs + 20;
+  assert.throws(() => assembleRecovery(input), /missing API upstream read\/200 pair for success at 8000 ms/);
+  interior.endMs = interior.startMs + 149;
+  assert.equal(assembleRecovery(input).assessment.status, "recovered");
+});
+
+test("a boundary-spanning success cannot combine a restored read with a slow completion", () => {
+  const input = openCircuit(), { samples, upstream } = input.raw.at(-1);
+  const firstSlow = samples.find(({ scheduledMs }) => scheduledMs === 4000);
+  Object.assign(firstSlow, { startMs: 4020, endMs: 4190 });
+  const crossing = samples.find(({ scheduledMs }) => scheduledMs === 11600);
+  Object.assign(crossing, { startMs: 11790, endMs: 12040 });
+  upstream.slow.reads.slow = 1; // Too early for any successful slow probe.
+  upstream.restored.reads.restored = upstream.after.reads.restored = 1;
+  assert.throws(() => assembleRecovery(input), /missing API upstream read\/200 pair/);
+  upstream.restored.responses200.restored = upstream.after.responses200.restored = 1;
+  assert.equal(assembleRecovery(input).assessment.status, "unrecovered");
+
+  // Alternatively, a slow read can finish after restore and keep its read phase.
+  upstream.slow.reads.slow = 0;
+  upstream.restored.reads.restored = upstream.after.reads.restored = 0;
+  upstream.restored.responses200.restored = upstream.after.responses200.restored = 0;
+  upstream.restored.responses200.slow--;
+  assert.equal(assembleRecovery(input).assessment.status, "unrecovered");
 });
 
 test("rejects forged success, missing dependency evidence, and invalid native receipts", () => {
@@ -127,7 +156,7 @@ test("rejects forged success, missing dependency evidence, and invalid native re
     [(i) => i.raw.at(-1).samples.pop(), /missing or extra recovery probes/],
     [(i) => i.raw.at(-1).upstream.slow.phase = "normal", /wrong phase/],
     [(i) => i.raw.at(-1).upstream.slow.windowMs = 5000, /5000/],
-    [(i) => i.raw.at(-1).upstream.restored.responses200.slow = 1, /missing API upstream responses200/],
+    [(i) => i.raw.at(-1).upstream.restored.responses200.slow = 1, /missing API upstream read\/200 pair/],
     [(i) => i.raw.at(-1).restoredAtMs++, /timestamp differs/],
     [(i) => i.raw[2].samples.application.endedNs = ns(8011), /counter timestamps/],
     [(i) => i.raw[2].samples.application.memoryBytes++, /8388608/],
