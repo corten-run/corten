@@ -11,9 +11,10 @@
 //! ```
 //!
 //! A patch exists if and only if its write committed (the outbox row is in the same transaction).
-//! The relay publishes outbox rows in order and retires them after JetStream acknowledges them;
+//! The relay publishes outbox rows in order within each feed and retires them after JetStream acknowledges them;
 //! a relay that dies in between republishes, and JetStream drops the copy. Rows with invalid
-//! keys or confirmed size refusals are logged and retired without delivery.
+//! keys or JetStream size refusals are logged and retired without delivery. A cached NATS size
+//! refusal holds only that feed until retry; the cluster never forces the supplied client to reconnect.
 //! A gap or a consumer restart reloads the feed from Postgres. Measured with two instances, kills
 //! on a schedule and 200 clients: see `examples/listings-feed` and its `results/`.
 //!

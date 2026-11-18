@@ -495,10 +495,10 @@ inbox prefix; this does not change the key or subject prefix limits.
 querying Postgres, and the snapshot and live routes answer 404.
 
 The relay logs and drops pending rows with invalid keys from an older version or external
-SQL, then publishes the remaining rows in order. Look on `corten::feed` for the outbox row
-ID and key. The relay uses the existing `published_at` marker to take the skipped row out
-of the queue; it did not deliver that patch. Ordinary pruning can remove it. There is no
-schema migration. An older instance holding the relay lease can still stall on a bad row
+SQL, then publishes the remaining rows in order within each feed. Look on `corten::feed`
+for the outbox row ID and key. The relay uses the existing `published_at` marker to take
+the skipped row out of the queue; it did not deliver that patch. Ordinary pruning can remove
+it. There is no schema migration. An older instance holding the relay lease can still stall on a bad row
 until a new relay takes over ([Choice 63](../design.md#choice-cluster-feed-subjects)).
 
 To replace an invalid key, write a new feed with a valid key using the app's current
@@ -508,21 +508,32 @@ try to replay the dropped patches.
 Size the JetStream stream's `MaxMsgSize` and every eligible NATS broker's
 [`max_payload`](https://docs.nats.io/reference/config/) for the largest serialized patch,
 including NATS headers. Leave `MaxMsgSize` unlimited or set it to at least that size; keep
-the same broker limit on all servers the relay can connect to. JetStream's explicit
-`10054` size refusal retires the row. If the NATS client refuses a patch locally, the relay
-reconnects and tries the patch again against the limit advertised on that new connection.
-It only retires the row for `max_payload` if that fresh check still refuses it. A broker
-that closes the connection on an oversized publish does not send a patch acknowledgement;
-the relay retries that failure and can confirm the limit after reconnecting. Other
-publish or acknowledgement failures still retry.
+the same broker limit on all servers the relay can connect to. Look on `corten::feed` for
+these cases:
 
-For a size refusal, the `corten::feed` error includes the outbox row ID, feed key, patch body
-size in bytes, and which limit refused it. Later rows can flow, but the skipped patch is
-not replayed. Raise the applicable limits or make future patches smaller. The next
-deliverable patch on the affected feed reveals the gap and reloads it from committed
-Postgres data. If there is no next patch, restart the instances serving the affected feed
-to clear their loaded copies. Reloading the browser alone can still return a stale snapshot
-from an instance that has not reloaded the feed.
+- JetStream's per-publish `10054` acknowledgement logs an error, `dropped outbox row`, and
+  retires the row using `published_at`. Later patches on that feed can flow. Raise the
+  stream's `MaxMsgSize` or make future patches smaller. The relay will not resend the
+  retired patch to JetStream.
+- A refusal from the client's cached `max_payload` logs a warning, `outbox feed held`.
+  The row stays pending, and only later patches on the same feed wait behind it. The relay
+  tries again after a five-second backoff. Raise `max_payload` on every eligible broker
+  if needed; the client refreshes its cached limit when it reconnects. An operator may
+  need to restart the client or its instance to pick up the change. The cluster never
+  reconnects the supplied client on its own. To skip the patch instead, stop the relay
+  candidates before deleting the logged pending row from `corten_outbox`, so no retry can
+  race the deletion. Deleting the row leaves a gap and does not undo the app write.
+- A broker can close the connection if it receives a publish over its actual `max_payload`.
+  Its protocol error names no row, so the relay cannot use it to drop a patch on a shared
+  connection. An unacknowledged publish follows the ordinary retry path (`relay standing by`
+  on failure). If the client's refreshed limit refuses the row locally, only that feed waits.
+
+The drop and hold logs include the outbox row ID, feed key, patch body size (not the
+headers), and reason. After a row is dropped or deleted, the next deliverable patch on
+the affected feed reveals the gap and reloads it from committed Postgres data. If there
+is no next patch, restart the instances serving the affected feed to clear their loaded
+copies. Reloading the browser alone can still return a stale snapshot from an instance
+that has not reloaded the feed ([Choice 63](../design.md#choice-cluster-feed-subjects)).
 
 In the failover
 benchmark (200 clients, 50 writes a second, each instance killed and restarted under load),

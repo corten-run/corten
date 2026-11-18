@@ -227,13 +227,21 @@ pub(crate) struct Pending {
     pub body: String,
 }
 
-pub(crate) async fn pending(pool: &PgPool, limit: i64) -> Result<Vec<Pending>, Error> {
-    let rows: Vec<(i64, String, String, i64, String)> = sqlx::query_as(
-        "SELECT id, feed, generation, seq, body FROM corten_outbox WHERE published_at IS NULL ORDER BY id LIMIT $1",
-    )
-    .bind(limit)
-    .fetch_all(pool)
-    .await?;
+pub(crate) async fn pending(pool: &PgPool, limit: i64, excluded: &[&str]) -> Result<Vec<Pending>, Error> {
+    let query = if excluded.is_empty() {
+        sqlx::query_as(
+            "SELECT id, feed, generation, seq, body FROM corten_outbox WHERE published_at IS NULL ORDER BY id LIMIT $1",
+        )
+        .bind(limit)
+    } else {
+        sqlx::query_as(
+            "SELECT id, feed, generation, seq, body FROM corten_outbox
+             WHERE published_at IS NULL AND feed <> ALL($2) ORDER BY id LIMIT $1",
+        )
+        .bind(limit)
+        .bind(excluded)
+    };
+    let rows: Vec<(i64, String, String, i64, String)> = query.fetch_all(pool).await?;
     Ok(rows.into_iter().map(|(id, feed, generation, seq, body)| Pending { id, feed, generation, seq, body }).collect())
 }
 

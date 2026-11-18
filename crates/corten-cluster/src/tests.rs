@@ -7,11 +7,19 @@ use std::time::{Duration, Instant};
 
 use async_nats::jetstream::{
     self,
-    consumer::{pull::OrderedConfig, DeliverPolicy},
+    consumer::{
+        pull::{Ordered, OrderedConfig},
+        DeliverPolicy,
+    },
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    net::{TcpListener, TcpStream},
+    sync::oneshot,
+};
 
 use corten::feed::Change;
 
@@ -55,11 +63,15 @@ fn urls() -> Option<(String, String)> {
 async fn pool(url: &str) -> PgPool {
     let pool = PgPoolOptions::new().max_connections(8).connect(url).await.unwrap();
     migrate(&pool).await.unwrap();
+    test_items(&pool).await;
+    pool
+}
+
+async fn test_items(pool: &PgPool) {
     sqlx::query("CREATE TABLE IF NOT EXISTS test_items (feed text, id text, n bigint, PRIMARY KEY (feed, id))")
-        .execute(&pool)
+        .execute(pool)
         .await
         .unwrap();
-    pool
 }
 
 fn key(name: &str) -> String {
@@ -293,7 +305,7 @@ async fn the_relay_drops_legacy_invalid_keys_and_delivers_good_rows_in_order() {
     }
 
     let end = Instant::now() + Duration::from_secs(10);
-    while !store::pending(&pool, 10).await.unwrap().is_empty() {
+    while !store::pending(&pool, 10, &[]).await.unwrap().is_empty() {
         assert!(Instant::now() < end, "outbox rows not marked done");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -309,93 +321,222 @@ async fn the_relay_drops_legacy_invalid_keys_and_delivers_good_rows_in_order() {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
-    relay_drains_past_a_size_refusal(&db, &nats, Some(512)).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn the_relay_drains_past_a_patch_over_the_broker_limit() {
-    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
-    relay_drains_past_a_size_refusal(&db, &nats, None).await;
-}
-
-async fn relay_drains_past_a_size_refusal(db: &str, nats: &str, stream_limit: Option<i32>) {
+    const STREAM_LIMIT: i32 = 512;
     let schema = key("size_limit_");
-    let pool = schema_pool(db, &schema).await;
+    let pool = schema_pool(&db, &schema).await;
     migrate(&pool).await.unwrap();
-    let nats = async_nats::connect(nats).await.unwrap();
-    let js = async_nats::jetstream::new(nats.clone());
+    test_items(&pool).await;
+    new_feed(&pool, "large").await;
+    let nats = async_nats::connect(&nats).await.unwrap();
+    let js = jetstream::new(nats.clone());
     let stream_name = schema.to_uppercase();
     let mut stream = js
         .create_stream(jetstream::stream::Config {
             name: stream_name.clone(),
             subjects: vec![format!("{schema}.>")],
-            max_message_size: stream_limit.unwrap_or(-1),
+            max_message_size: STREAM_LIMIT,
             ..Default::default()
         })
         .await
         .unwrap();
-    let padding = stream_limit.map_or(nats.max_payload(), |limit| 2 * limit as usize);
-    let body = format!(r#"{{"seq":1,"changes":[],"padding":"{}"}}"#, "x".repeat(padding));
-    let probe = js.publish(format!("{schema}.probe"), body.clone().into()).await;
-    if let Some(limit) = stream_limit {
-        assert!(body.len() > limit as usize && body.len() + 128 < nats.max_payload());
-        let refusal = probe.unwrap().await.unwrap_err();
-        assert_eq!(
-            std::error::Error::source(&refusal).unwrap().downcast_ref::<jetstream::Error>().unwrap().error_code(),
-            jetstream::ErrorCode::STREAM_MESSAGE_EXCEEDS_MAXIMUM
-        );
-    } else {
-        assert_eq!(probe.unwrap_err().kind(), jetstream::context::PublishErrorKind::MaxPayloadExceeded);
+    let mut gate = pool.acquire().await.unwrap().detach();
+    assert!(take(&mut gate, "test", Duration::from_secs(30)).await);
+    let options = Options { stream: stream_name.clone(), subject_prefix: schema.clone(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), nats.clone(), Items, options).await.unwrap();
+    let followed = cluster.feed("large").await.unwrap().unwrap();
+    assert_eq!(followed.seq(), 0);
+
+    assert_eq!(set(&pool, "large", 1, None).await.seq, Some(1));
+    let item = Item { id: "x".repeat(2 * STREAM_LIMIT as usize), n: 2 };
+    let Begin::New(mut write) = begin(&pool, "large", None).await.unwrap() else { unreachable!() };
+    sqlx::query("INSERT INTO test_items VALUES ('large', $1, $2)")
+        .bind(&item.id)
+        .bind(item.n)
+        .execute(write.conn())
+        .await
+        .unwrap();
+    let change = Change::Upsert { id: &item.id, value: &item };
+    let body = corten::feed::patch_json(2, std::slice::from_ref(&change));
+    assert!(body.len() > STREAM_LIMIT as usize && body.len() + 128 < nats.max_payload());
+    let refusal = js.publish(format!("{schema}.probe"), body.into()).await.unwrap().await.unwrap_err();
+    assert_eq!(
+        std::error::Error::source(&refusal).unwrap().downcast_ref::<jetstream::Error>().unwrap().error_code(),
+        jetstream::ErrorCode::STREAM_MESSAGE_EXCEEDS_MAXIMUM
+    );
+    assert_eq!(write.commit(&[change]).await.unwrap().seq, Some(2));
+    assert_eq!(set(&pool, "large", 3, None).await.seq, Some(3));
+    assert_eq!(wait_pending(&pool, 3).await.iter().map(|row| row.seq).collect::<Vec<_>>(), [1, 2, 3]);
+    store::release(&mut gate).await.unwrap();
+
+    let mut messages = stream_messages(&stream).await;
+    let subject = format!("{schema}.large");
+    expect_patch(&mut messages, &subject, 1, 1).await;
+    expect_patch(&mut messages, &subject, 2, 3).await;
+    wait_pending(&pool, 0).await;
+    let state = &stream.info().await.unwrap().state;
+    assert_eq!((state.first_sequence, state.last_sequence, state.messages), (1, 2, 2));
+    eventually("the follower to reload at patch 3", || followed.seq() == 3).await;
+    assert_eq!(followed.read(|rows| (rows["a"].n, rows[&item.id].n)), (3, 2));
+
+    delete_test_stream_and_schema(&db, &js, &stream_name, &schema).await;
+}
+
+const LOW_PAYLOAD: usize = 4096;
+
+/// Relay real NATS traffic, making the first INFO stale-low on an ordinary test broker. If
+/// the broker is actually configured with LOW_PAYLOAD, forward its INFO unchanged instead.
+/// Only the test closes the first connection; the next handshake outlasts a default lease.
+async fn payload_proxy(listener: TcpListener, upstream: async_nats::ServerAddr, mut disconnect: oneshot::Receiver<()>) {
+    let mut first = true;
+    loop {
+        let (mut client, _) = listener.accept().await.unwrap();
+        let mut server = BufReader::new(TcpStream::connect((upstream.host(), upstream.port())).await.unwrap());
+        let mut info = String::new();
+        server.read_line(&mut info).await.unwrap();
+        if first {
+            let mut advertised: serde_json::Value = serde_json::from_str(info.strip_prefix("INFO ").unwrap()).unwrap();
+            if advertised["max_payload"] != LOW_PAYLOAD {
+                advertised["max_payload"] = LOW_PAYLOAD.into();
+                info = format!("INFO {advertised}\r\n");
+            }
+        } else {
+            tokio::time::sleep(Duration::from_millis(2250)).await;
+        }
+        if client.write_all(info.as_bytes()).await.is_ok() {
+            if first {
+                tokio::select! {
+                    _ = &mut disconnect => {}
+                    _ = tokio::io::copy_bidirectional(&mut client, &mut server) => {
+                        panic!("the publisher disconnected before the test closed its socket");
+                    }
+                }
+            } else {
+                let _ = tokio::io::copy_bidirectional(&mut client, &mut server).await;
+            }
+        }
+        first = false;
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_relay_holds_only_the_refused_feed_until_the_cached_limit_refreshes() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("cached_limit_");
+    let pool = schema_pool(&db, &schema).await;
+    migrate(&pool).await.unwrap();
+    let observer = async_nats::connect(&nats).await.unwrap();
+    let js = jetstream::new(observer.clone());
+    let stream_name = schema.to_uppercase();
+    let mut stream = js
+        .create_stream(jetstream::stream::Config {
+            name: stream_name.clone(),
+            subjects: vec![format!("{schema}.>")],
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap().to_string();
+    let (disconnect, trigger) = oneshot::channel();
+    let proxy = tokio::spawn(payload_proxy(listener, nats.parse().unwrap(), trigger));
+    let publisher = async_nats::ConnectOptions::new().ignore_discovered_servers().connect(proxy_addr).await.unwrap();
+    assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
 
     let mut tx = pool.begin().await.unwrap();
     assert!(create_feed(&mut tx, "large").await.unwrap());
     assert!(create_feed(&mut tx, "small").await.unwrap());
+    let last_seq = relay::BATCH + 2;
+    sqlx::query(
+        "INSERT INTO corten_outbox (feed, generation, seq, body)
+         SELECT key, generation, n, json_build_object('seq', n, 'changes', '[]'::json, 'padding',
+             CASE WHEN n = 2 THEN repeat('x', $2) ELSE '' END)::text
+         FROM corten_feeds CROSS JOIN generate_series(1, $1) AS n WHERE key = 'large' ORDER BY n",
+    )
+    .bind(last_seq)
+    .bind(2 * LOW_PAYLOAD as i32)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    // The other feed is beyond a batch full of held rows.
+    sqlx::query(
+        "INSERT INTO corten_outbox (feed, generation, seq, body)
+         SELECT key, generation, 1, '{\"seq\":1,\"changes\":[]}' FROM corten_feeds WHERE key = 'small'",
+    )
+    .execute(&mut *tx)
+    .await
+    .unwrap();
     tx.commit().await.unwrap();
-    sqlx::query(
-        "INSERT INTO corten_outbox (feed, generation, seq, body)
-         SELECT key, generation, 1, $1 FROM corten_feeds WHERE key = 'large'",
-    )
-    .bind(body)
-    .execute(&pool)
-    .await
-    .unwrap();
-    // The last small patch is beyond the first batch: pipelining alone cannot deliver it.
-    sqlx::query(
-        "INSERT INTO corten_outbox (feed, generation, seq, body)
-         SELECT key, generation, n, json_build_object('seq', n, 'changes', '[]'::json)::text
-         FROM corten_feeds CROSS JOIN generate_series(1, $1) AS n WHERE key = 'small' ORDER BY n",
-    )
-    .bind(relay::BATCH)
-    .execute(&pool)
-    .await
-    .unwrap();
 
     let options = Options { stream: stream_name.clone(), subject_prefix: schema.clone(), ..Options::default() };
-    let _cluster = Cluster::start(pool.clone(), nats.clone(), Items, options).await.unwrap();
-    let consumer =
-        stream.create_consumer(OrderedConfig { deliver_policy: DeliverPolicy::All, ..Default::default() }).await.unwrap();
-    let mut messages = consumer.messages().await.unwrap();
-    let subject = format!("{schema}.small");
-    for seq in 1..=relay::BATCH {
-        let msg = tokio::time::timeout(Duration::from_secs(10), messages.next())
-            .await
-            .unwrap_or_else(|_| panic!("timed out waiting for small patch {seq}"))
-            .unwrap()
-            .unwrap();
-        assert_eq!(msg.subject.as_str(), subject);
-        assert_eq!(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"], seq);
+    let _cluster = Cluster::start(pool.clone(), publisher.clone(), Items, options).await.unwrap();
+    let mut messages = stream_messages(&stream).await;
+    let large = format!("{schema}.large");
+    expect_patch(&mut messages, &large, 1, 1).await;
+    expect_patch(&mut messages, &format!("{schema}.small"), 2, 1).await;
+    let pending = wait_pending(&pool, (last_seq - 1) as usize).await;
+    assert!(pending.iter().all(|row| row.feed == "large"));
+    assert_eq!(pending.iter().map(|row| row.seq).collect::<Vec<_>>(), (2..=last_seq).collect::<Vec<_>>());
+    assert_eq!(stream.info().await.unwrap().state.messages, 2);
+    assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 1);
+
+    // With a broker started at LOW_PAYLOAD, an integration runner can reload its config
+    // here. A new client observes the increase; the test publisher still has the old INFO.
+    if observer.max_payload() == LOW_PAYLOAD {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while async_nats::connect(&nats).await.unwrap().max_payload() <= pending[0].body.len() + 128 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("the broker did not raise max_payload");
+        assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
     }
+    disconnect.send(()).unwrap();
+    for seq in 2..=last_seq {
+        expect_patch(&mut messages, &large, (seq + 1) as u64, seq).await;
+    }
+    wait_pending(&pool, 0).await;
+    assert_eq!(stream.info().await.unwrap().state.messages, (last_seq + 1) as u64);
+    assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 2, "only the test disconnected the publisher");
+    delete_test_stream_and_schema(&db, &js, &stream_name, &schema).await;
+    proxy.abort();
+}
+
+async fn stream_messages(stream: &jetstream::stream::Stream) -> Ordered {
+    stream
+        .create_consumer(OrderedConfig { deliver_policy: DeliverPolicy::All, ..Default::default() })
+        .await
+        .unwrap()
+        .messages()
+        .await
+        .unwrap()
+}
+
+async fn expect_patch(messages: &mut Ordered, subject: &str, stream_seq: u64, feed_seq: i64) {
+    let msg = tokio::time::timeout(Duration::from_secs(10), messages.next())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for patch {feed_seq} on {subject}"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(msg.subject.as_str(), subject);
+    assert_eq!(msg.info().unwrap().stream_sequence, stream_seq);
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"], feed_seq);
+}
+
+async fn wait_pending(pool: &PgPool, count: usize) -> Vec<store::Pending> {
     let end = Instant::now() + Duration::from_secs(10);
-    while !store::pending(&pool, 10).await.unwrap().is_empty() {
-        assert!(Instant::now() < end, "outbox rows not marked done");
+    loop {
+        let pending = store::pending(pool, count as i64 + 1, &[]).await.unwrap();
+        if pending.len() == count {
+            return pending;
+        }
+        assert!(Instant::now() < end, "expected {count} pending outbox rows, got {}", pending.len());
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert_eq!(stream.info().await.unwrap().state.messages, relay::BATCH as u64);
-    if stream_limit.is_none() {
-        assert!(nats.statistics().connects.load(Ordering::Relaxed) > 1, "the relay must refresh the cached limit");
-    }
-    js.delete_stream(&stream_name).await.unwrap();
+}
+
+async fn delete_test_stream_and_schema(db: &str, js: &jetstream::Context, stream_name: &str, schema: &str) {
+    js.delete_stream(stream_name).await.unwrap();
     let admin = PgPool::connect(db).await.unwrap();
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
 }
@@ -431,13 +572,13 @@ async fn the_relay_retries_an_acknowledgement_error_that_is_not_a_size_refusal()
     for _ in 0..2 {
         tokio::time::timeout(Duration::from_secs(10), attempts.next()).await.expect("relay did not retry").unwrap();
     }
-    assert_eq!(store::pending(&pool, 10).await.unwrap().len(), 1);
+    assert_eq!(store::pending(&pool, 10, &[]).await.unwrap().len(), 1);
     assert_eq!(stream.info().await.unwrap().state.messages, 1);
 
     config.max_messages = 2;
     js.update_stream(config).await.unwrap();
     let end = Instant::now() + Duration::from_secs(10);
-    while !store::pending(&pool, 10).await.unwrap().is_empty() {
+    while !store::pending(&pool, 10, &[]).await.unwrap().is_empty() {
         assert!(Instant::now() < end, "the pending patch was not delivered after the stream limit increased");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
