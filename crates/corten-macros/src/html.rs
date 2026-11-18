@@ -1052,8 +1052,7 @@ const BREAKOUT: &[&str] = &[
 const MATH_HTML_POINTS: &[&str] = &["mi", "mo", "mn", "ms", "mtext"];
 
 /// How a browser parses the content at a point of the markup, as far as this markup shows: an
-/// `html!` does not see where its view is written, so what it cannot show is `Unknown`, and a
-/// rule that depends on it does not act there.
+/// `html!` does not see where its view is written, so what it cannot show is `Unknown`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Parsing {
     /// As HTML: under an element that is HTML's wherever it lands (one of `BREAKOUT`, which a
@@ -1113,10 +1112,16 @@ fn annotation_parsing(attrs: &[Attr]) -> Parsing {
 fn breaks_out(name: &str, attrs: &[Attr]) -> bool {
     BREAKOUT.iter().any(|t| name.eq_ignore_ascii_case(t))
         || (name.eq_ignore_ascii_case("font")
-            && attrs.iter().any(|a| {
-                matches!(a, Attr::Static(n, _) | Attr::Bare(n)
-                    if ["color", "face", "size"].iter().any(|f| n.eq_ignore_ascii_case(f)))
-            }))
+            && attrs.iter().any(|a| matches!(a, Attr::Static(n, _) | Attr::Bare(n) if font_breakout_attr(n))))
+}
+
+fn font_breakout_attr(name: &str) -> bool {
+    ["color", "face", "size"].iter().any(|attr| name.eq_ignore_ascii_case(attr))
+}
+
+fn may_break_out(name: &str, attrs: &[Attr]) -> bool {
+    name.eq_ignore_ascii_case("font")
+        && attrs.iter().any(|a| matches!(a, Attr::Spread(_)) || matches!(a, Attr::Expr(n, _) if font_breakout_attr(n)))
 }
 
 /// How the children of `name` with `attrs` are parsed, in content parsed as `outer`.
@@ -1233,12 +1238,11 @@ struct Cursor {
     text_only: Option<String>,
     /// How a browser parses the content here, as far as this markup shows.
     parsing: Parsing,
-    /// Inside a `<script>` or a `<style>`, whose text `Gen` writes as prepared here.
-    raw_text: bool,
-    /// How many nodes the markup does not show come before this point (`nesting::holds_unseen`).
-    /// After one a browser may be reading text that no later literal end tag ends (a `<script>`
-    /// whose text holds `<!--<script>`, a `<plaintext>`, a comment), so from there to the end of
-    /// the `html!` no literal element shows how it is parsed or that it holds text.
+    /// Context at the start of a `<script>` or `<style>`, whose text `Gen` writes as prepared here.
+    raw_text: Option<Parsing>,
+    /// Count of possible context changes, so a body can tell whether it added any. After
+    /// opaque output a browser may be reading text no later literal tag ends (a `<plaintext>`,
+    /// a comment, or a script whose text holds `<!--<script>`).
     opaque: usize,
 }
 
@@ -1251,7 +1255,7 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
-            raw_text: false,
+            raw_text: None,
             opaque: 0,
         }
     }
@@ -1264,7 +1268,7 @@ impl Cursor {
             aria_svg: false,
             text_only: None,
             parsing: Parsing::Unknown,
-            raw_text: false,
+            raw_text: None,
             opaque: 0,
         }
     }
@@ -1332,24 +1336,7 @@ impl Cursor {
                 };
                 return err(span, format!("unexpected closing tag </{name}>{hint}"));
             }
-            let mut node = self.node()?;
-            // An element's own content is followed as it is read (`tag`).
-            if !matches!(node, Node::Element { .. }) && nesting::holds_unseen(std::slice::from_ref(&node)) {
-                self.unseen();
-            }
-            if let (true, Node::Text(text)) = (self.raw_text, &mut node) {
-                if matches!(self.parsing, Parsing::Svg | Parsing::Math | Parsing::AnnotationXml | Parsing::Foreign) {
-                    // Gen writes these bytes as is. In foreign content the browser reads
-                    // character references and tags, so encode the two text delimiters here.
-                    if text.contains(['&', '<']) {
-                        *text = text.replace('&', "&amp;").replace('<', "&lt;");
-                    }
-                } else if text.contains('<') {
-                    // A raw '<' may end the element or leave it open past its closing tag.
-                    self.unseen();
-                }
-            }
-            nodes.push(node);
+            nodes.push(self.node()?);
         }
         Ok(nodes)
     }
@@ -1361,7 +1348,7 @@ impl Cursor {
             Some(TokenTree::Literal(lit)) => {
                 self.next();
                 match string_value(&lit).or_else(|| literal_text(&lit)) {
-                    Some(text) => Ok(Node::Text(text)),
+                    Some(text) => self.text(text, span),
                     None => err(span, "write text as a string literal: \"...\""),
                 }
             }
@@ -1374,6 +1361,7 @@ impl Cursor {
                 if is_punct(inner.first(), '.') && is_punct(inner.get(1), '.') {
                     return err(span, "{..attributes} goes inside a start tag, like <input {..attrs}>");
                 }
+                self.unseen();
                 Ok(Node::Expr(borrowing(&lent_args(g.stream()))))
             }
             Some(TokenTree::Ident(id)) => match id.to_string().as_str() {
@@ -1395,6 +1383,30 @@ impl Cursor {
             ),
             None => err(span, "unexpected end of markup"),
         }
+    }
+
+    fn text(&mut self, mut text: String, span: Span) -> Result<Node, Error> {
+        if let Some(parsing) = self.raw_text.filter(|_| text.contains(['&', '<'])) {
+            match parsing {
+                Parsing::Unknown => {
+                    return err(
+                        span,
+                        ambiguous_raw_text("the surrounding markup does not show whether it is HTML or foreign content"),
+                    )
+                }
+                Parsing::Html | Parsing::MathText => {
+                    // A raw '<' may end the element or leave it open past its closing tag.
+                    if text.contains('<') {
+                        self.unseen();
+                    }
+                }
+                Parsing::Svg | Parsing::Math | Parsing::AnnotationXml | Parsing::Foreign => {
+                    // Gen writes these bytes as is; the browser reads them in the data state.
+                    text = text.replace('&', "&amp;").replace('<', "&lt;");
+                }
+            }
+        }
+        Ok(Node::Text(text))
     }
 
     /// A tag name: `div`, `listing-sort`, `Card` or `ui::Card`. Returns the name, its tokens and
@@ -1685,6 +1697,15 @@ impl Cursor {
             if let Some(why) = foreign_breakout(self.parsing, &name, &attrs) {
                 return err(name_span, why);
             }
+            if !as_html(self.parsing) && may_break_out(&name, &attrs) {
+                // A rendered color, face or size can pop the foreign ancestors, affecting both
+                // this element's children and any markup after it.
+                self.unseen();
+            }
+        } else {
+            // A component's children go where it writes them, and its output is unseen even
+            // when it takes no children.
+            self.unseen();
         }
         if !component && !self.aria_svg {
             if let Some(why) = unnamed_label(&name, &attrs) {
@@ -1702,13 +1723,6 @@ impl Cursor {
         } else {
             let outer = self.aria_svg;
             self.aria_svg = within_aria_svg(outer, &name);
-            // A component's children go where it writes them, after what it writes first, which
-            // this markup does not see. After what it does not see, a literal element shows
-            // neither how its content is parsed nor that it is read as text: a browser may still
-            // be reading a script's text there.
-            if component {
-                self.unseen();
-            }
             // What a `<noscript>` holds, or an element read as text where the markup does not show
             // it is HTML's, may be text: none of it shows how anything is parsed.
             let hidden = !component && may_read_as_text(self.parsing, &name);
@@ -1720,7 +1734,8 @@ impl Cursor {
             let outer_text = std::mem::replace(&mut self.text_only, holder);
             let inner = if shown { parsing_within(self.parsing, &name, &attrs) } else { Parsing::Unknown };
             let outer_parsing = std::mem::replace(&mut self.parsing, inner);
-            let outer_raw = std::mem::replace(&mut self.raw_text, !component && RAW_TEXT.contains(&name.as_str()));
+            let raw = (!component && RAW_TEXT.contains(&name.as_str())).then_some(inner);
+            let outer_raw = std::mem::replace(&mut self.raw_text, raw);
             let seen = self.opaque;
             let children = self.nodes(Some(&name));
             self.aria_svg = outer;
@@ -1845,21 +1860,38 @@ impl Cursor {
 
     fn block_for(&mut self) -> Result<Node, Error> {
         let keyword = self.next().unwrap();
+        let span = keyword.span();
         let (head, body) = self.until_brace("for ... in ...", true)?;
         let mut tokens = stream([keyword]);
         tokens.extend(head);
-        Ok(Node::Block { head: vec![tokens], bodies: vec![self.inner(&body).nodes(None)?], arms: false })
+        let mut changed = false;
+        let body = self.branch(&body, &mut changed)?;
+        if changed {
+            if has_raw_delimiters(&body, self.raw_text.is_some()) {
+                return err(span, ambiguous_raw_text("the loop body can change the parsing context of later iterations"));
+            }
+            self.unseen();
+        }
+        Ok(Node::Block { head: vec![tokens], bodies: vec![body], arms: false })
+    }
+
+    fn branch(&self, group: &Group, changed: &mut bool) -> Result<Vec<Node>, Error> {
+        let mut cursor = self.inner(group);
+        let nodes = cursor.nodes(None)?;
+        *changed |= cursor.opaque != self.opaque;
+        Ok(nodes)
     }
 
     fn block_if(&mut self) -> Result<Node, Error> {
         let mut heads = Vec::new();
         let mut bodies = Vec::new();
         let mut keyword = stream([self.next().unwrap()]);
+        let mut changed = false;
         loop {
             let (cond, body) = self.until_brace("if", false)?;
             keyword.extend(cond);
             heads.push(keyword);
-            bodies.push(self.inner(&body).nodes(None)?);
+            bodies.push(self.branch(&body, &mut changed)?);
             if !is_ident(self.peek(), "else") {
                 break;
             }
@@ -1872,11 +1904,14 @@ impl Cursor {
             match self.next() {
                 Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
                     heads.push(keyword);
-                    bodies.push(self.inner(&g).nodes(None)?);
+                    bodies.push(self.branch(&g, &mut changed)?);
                     break;
                 }
                 _ => return err(span, "expected { ... } or if after else"),
             }
+        }
+        if changed {
+            self.unseen();
         }
         Ok(Node::Block { head: heads, bodies, arms: false })
     }
@@ -1889,6 +1924,7 @@ impl Cursor {
         head.extend(scrutinee);
         let mut heads = vec![head];
         let mut bodies = Vec::new();
+        let mut changed = false;
         while !cursor.at_end() {
             let start = cursor.span();
             let mut pattern = Vec::new();
@@ -1907,17 +1943,44 @@ impl Cursor {
                 Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace => {
                     let g = g.clone();
                     cursor.next();
-                    cursor.inner(&g).nodes(None)?
+                    self.branch(&g, &mut changed)?
                 }
-                _ => vec![cursor.node()?],
+                _ => {
+                    let node = cursor.node()?;
+                    changed |= cursor.opaque != self.opaque;
+                    cursor.opaque = self.opaque;
+                    cursor.parsing = self.parsing;
+                    cursor.text_only.clone_from(&self.text_only);
+                    vec![node]
+                }
             };
             bodies.push(body);
             if is_punct(cursor.peek(), ',') {
                 cursor.next();
             }
         }
+        if changed {
+            self.unseen();
+        }
         Ok(Node::Block { head: heads, bodies, arms: true })
     }
+}
+
+fn ambiguous_raw_text(reason: &str) -> String {
+    format!(
+        "<script> or <style> text containing '<' or '&' cannot be written here: {reason}; move it to markup with a known parsing context, use a #[component(js)] for behavior or a component's CSS file for styles"
+    )
+}
+
+/// A loop is parsed once. Even a literal already escaped for its first iteration (and now
+/// containing '&') cannot be reused if the next iteration may enter a different context.
+fn has_raw_delimiters(nodes: &[Node], raw: bool) -> bool {
+    nodes.iter().any(|node| match node {
+        Node::Element { name, children, .. } => has_raw_delimiters(children, RAW_TEXT.contains(&name.as_str())),
+        Node::Block { bodies, .. } => bodies.iter().any(|body| has_raw_delimiters(body, raw)),
+        Node::Text(text) => raw && text.contains(['<', '&']),
+        _ => false,
+    })
 }
 
 /// Generated statements, with adjacent static markup merged into one `push_str`.

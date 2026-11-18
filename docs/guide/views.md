@@ -57,15 +57,25 @@ or `application/xhtml+xml`; inside an `<svg>` or a `<math>`, outside those, a `<
 `<title>` or `<style>` is an element of the drawing or the formula and holds elements.
 Where the markup shows a `<style>` or `<script>` is foreign content, `html!` escapes `<` and `&`
 in its literal text at compile time so the browser keeps them as text, rather than reading tags
-or character references. Where it shows HTML (including in HTML integration points), or
-does not show the context, these literals are written as is. At the top
+or character references. If you previously wrote `&lt;` or `&amp;` by hand to get `<` or `&` in
+foreign content, replace those references with the characters you want the browser to receive.
+Known HTML (including HTML integration points) continues to write the text as is.
+
+When the context is unknown, a script or style literal containing either character does not
+compile. An optional `color`, `face` or `size` on a foreign `<font>` (including a spread) can
+close the drawing before the literal, and markup that a conditional or loop can leave open
+can change the context of later markup or the next iteration. Move the literal to markup
+that shows how it parses, split the HTML and foreign cases into separate markup, or use the
+component's CSS file for styles and `#[component(js)]` for behavior.
+
+At the top
 of a component's markup (its parent may write it into an `<svg>`), among a component's
 children (they go where the component writes them), anywhere after an expression or a
 component, `<Corten />` included (what it writes may open or close an `<svg>` or a
 `<textarea>`, or leave a script open, whose text a later literal tag is part of), after a
 `<script>` or `<style>` whose text holds a `<` written as is (`</script>` in it ends the
 element and may open anything after it, `<!--<script>` keeps it open past its end tag) and in an `<annotation-xml>` whose
-`encoding` an expression or a spread may write first, it does not show, and nothing here is
+`encoding` an expression or a spread may write first, it does not show, and no element here is
 refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an
 `<svg>` compiles. An `<svg>` or a `<math>` written there does not show its own namespace either
 (a `<math>` in an `<svg>` is SVG's, an `<svg>` straight in a `<math>` MathML's): an element a
