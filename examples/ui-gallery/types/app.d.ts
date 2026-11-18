@@ -13,6 +13,10 @@ declare module "corten/events" {
   export class Copied extends Event {
     constructor(init?: {});
   }
+  /** The `ui-read-sort-links` event, from #[event] ReadSortLinks. */
+  export class ReadSortLinks extends Event {
+    constructor(init?: {});
+  }
 }
 
 export {};

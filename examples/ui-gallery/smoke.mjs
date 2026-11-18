@@ -972,6 +972,77 @@ async function run(browser) {
     new URL(page.url()).searchParams.get("sold") === "day" && new URL(unsorted).pathname === new URL(page.url()).pathname && sortLinks === "day_down,buyer,price",
     `${page.url()} ${sortLinks}`,
   );
+  // A write redraws a layout part containing a live region in place. Its retained anchors
+  // get new sort routes without another connect, even if a sort already rewrote their hrefs.
+  {
+    const redraw = await page.context().newPage();
+    await redraw.route((url) => url.pathname === "/" || url.pathname === "/sort-redraw", async (route) => {
+      const request = route.request();
+      const fresh = request.method() === "POST";
+      const res = await route.fetch({
+        url: fresh ? `${base}/?sold=buyer` : request.url(),
+        method: "GET",
+        headers: { "accept-encoding": "identity", ...(fresh ? { corten: "page" } : {}) },
+      });
+      const headers = res.headers();
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      let body = await res.text();
+      const at = body.search(/<table[^>]*>\s*<caption>This month/);
+      const end = body.indexOf("</table>", at) + "</table>".length;
+      const table = body.slice(at, end);
+      const ordered = /click:([\w.]+)\.sort\(/.exec(table)?.[1]?.replace(/rows$/, "ordered");
+      const id = /<table\b[^>]*\bid="([^"]+)"/.exec(table)?.[1];
+      if (!ordered || !id) throw new Error("missing sales table handlers or id");
+      const ids = `[&quot;${id}&quot;]`;
+      const layout =
+        `<div id="sort-layout"><p role="status">${fresh ? "Redrawn" : "Original"}</p>${fresh ? table.replaceAll("sold=", "order=") : table}` +
+        `<form id="order-send" method="post" action="/keep-order" data-on="submit:${ordered}.send($e,$t,${ids})"><button>Send order</button></form>` +
+        `<a id="order-link" href="/keep-order" data-no-prefetch data-on="connect:${ordered}.link($t,${ids},$s)">Open order</a></div>`;
+      body = `${body.slice(0, at)}${body.slice(end)}`.replace(
+        /<main\b[^>]*>/,
+        (main) => `${layout}${main}<form method="post" action="/sort-redraw" data-patch><button>Redraw layout</button></form>`,
+      );
+      await route.fulfill({ status: res.status(), headers, body });
+    });
+    await redraw.goto(`${base}/`);
+    const layout = redraw.locator("#sort-layout");
+    // Rewrite the links but put the rows back in their drawn order before the layout redraw.
+    const sold = layout.getByRole("link", { name: "Sold" });
+    await sold.click();
+    await sold.click();
+    const rewritten = (await sold.getAttribute("href")) === `${base}/?sold=day_down`;
+    const buyer = layout.getByRole("link", { name: "Buyer" });
+    const retained = await buyer.elementHandle();
+    await redraw.getByRole("button", { name: "Redraw layout" }).click();
+    await layout.getByText("Redrawn", { exact: true }).waitFor();
+    const same = await buyer.evaluate((link, old) => link === old, retained);
+    const newHref = await buyer.getAttribute("href");
+    await redraw.evaluate(() => history.replaceState(history.state, "", "/?sold=filter&order=buyer"));
+    const sent = await layout.locator("#order-send").evaluate((form) => {
+      form.addEventListener("submit", (event) => event.preventDefault(), { once: true });
+      form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+      return form.getAttribute("action");
+    });
+    const orderedLink = layout.locator("#order-link");
+    await orderedLink.focus();
+    const opened = await orderedLink.getAttribute("href");
+    check(
+      "a retained sort header supplies redrawn routes to ordered forms and links",
+      rewritten && same && newHref === "/?order=buyer_down" && sent === "/keep-order?order=buyer" && opened === sent,
+      JSON.stringify({ rewritten, same, newHref, sent, opened }),
+    );
+    await buyer.click();
+    const after = new URL(redraw.url()).searchParams;
+    const buyers = (await layout.locator("tbody td:nth-child(2)").allTextContents()).join("|");
+    const next = new URL((await buyer.getAttribute("href")) ?? "", redraw.url());
+    check(
+      "a retained sort header uses its redrawn routes for the next in-place sort",
+      same && after.get("order") === "buyer_down" && after.get("sold") === "filter" && next.searchParams.get("order") === "buyer" && buyers === "Grace Hopper|Alan Turing|Ada Lovelace",
+      `${redraw.url()} ${next.href} ${buyers}`,
+    );
+    await redraw.close();
+  }
   // A part of the page that reads itself again from its own route (ReadAgain::from, here put
   // around the table on its way from the server) reads the order a sort in place gave: its read's
   // address takes the sort's key and keeps its own. A part that does not hold the table is left.
@@ -1398,15 +1469,17 @@ async function run(browser) {
   });
   check("tied rows sort in the order the page drew them, not the last click's", tied === "Grace Hopper|Alan Turing|Ada Lovelace", tied);
   await page.goto(unsorted);
-  // Replace just Buyer's unsorted header, as a patch can. Its new link must register its own
+  // Replace just Buyer's unsorted header, as a patch can. Its new link must supply its own
   // values, including a first click that goes descending, not use those of the removed link.
   await sales.getByRole("columnheader", { name: "Buyer" }).evaluate((header) => {
     const replacement = /** @type {HTMLTableCellElement} */ (header.cloneNode(true));
-    const arrow = replacement.querySelector('span[aria-hidden="true"]');
     const link = replacement.querySelector("a");
-    if (!arrow || !link) throw new Error("missing sort arrow or link");
-    arrow.setAttribute("data-ref-value", "true");
-    link.href = JSON.parse(replacement.getAttribute("data-ref-value") ?? "null");
+    const ref = link?.getAttribute("data-ref");
+    if (!link || !ref) throw new Error("missing sort link or ref");
+    const first = link.getAttribute("href");
+    link.setAttribute("data-ref", ref.replace(/up$/, "down"));
+    link.setAttribute("href", JSON.parse(link.getAttribute("data-ref-value") ?? "null"));
+    link.setAttribute("data-ref-value", JSON.stringify(first));
     header.replaceWith(replacement);
   });
   await sales.getByRole("link", { name: "Buyer" }).click();
@@ -1417,6 +1490,14 @@ async function run(browser) {
     newest.buyers === "Grace Hopper|Alan Turing|Ada Lovelace" && newest.sort === ",descending,,," && new URL(page.url()).searchParams.get("sold") === "buyer_down" && newestNext.searchParams.get("sold") === "buyer",
     `${JSON.stringify(newest)} ${page.url()} ${newestNext}`,
   );
+  await page.goto(unsorted);
+  // A handler still wired to an old or misconfigured kit must not partially sort in place.
+  await sales.locator("thead").evaluate((head) => head.removeAttribute("data-on"));
+  const nativeSort = page.waitForRequest((request) => new URL(request.url()).searchParams.get("sold") === "buyer");
+  await sales.getByRole("link", { name: "Buyer" }).click();
+  await nativeSort;
+  await page.waitForURL((url) => url.searchParams.get("sold") === "buyer");
+  check("a sort without its route reader follows the server link", (await sortedBy()).buyers === "Ada Lovelace|Alan Turing|Grace Hopper", page.url());
   await page.goto(unsorted);
   // Numbers as numbers (-10 before -2, where text would put -2 first) and an empty value last; a
   // click with a modifier key is the link's.
@@ -5504,6 +5585,26 @@ async function run(browser) {
   check("no script: the SKU is on the page and the copy button is not", (await plain.locator("code", { hasText: "ASH-DRAKE-NM" }).isVisible()) && (await plain.locator("[data-scope=ui-copy-button]").isHidden()));
   const plainPrint = plain.locator("button", { hasText: "Print label" });
   check("no script: the print button is on the page, hidden", (await plainPrint.count()) === 1 && (await plainPrint.isHidden()));
+  const plainSales = plain.getByRole("table", { name: "This month's last sales, sorted among themselves" });
+  for (const [order, aria, buyers] of [
+    ["price", "ascending", "Alan Turing|Grace Hopper|Ada Lovelace"],
+    ["price_down", "descending", "Ada Lovelace|Grace Hopper|Alan Turing"],
+  ]) {
+    await Promise.all([plain.waitForURL((url) => url.searchParams.get("sold") === order), plainSales.getByRole("link", { name: "Price" }).click()]);
+    const rows = (await plainSales.locator("tbody td:nth-child(2)").allTextContents()).join("|");
+    const sort = await plainSales.getByRole("columnheader", { name: "Price" }).getAttribute("aria-sort");
+    check(`no script: Price follows the server's ${aria} sort link`, rows === buyers && sort === aria, `${plain.url()} ${rows} ${sort}`);
+  }
+  await Promise.all([
+    plain.waitForURL((url) => url.searchParams.get("sales") === "earlier"),
+    plain.getByRole("navigation", { name: "Sales pages" }).getByRole("link", { name: "Earlier sales" }).click(),
+  ]);
+  const earlierSales = plain.getByRole("table", { name: "This month's earlier sales, sorted among themselves" });
+  check(
+    "no script: the sorted table's pager preserves the server's order",
+    new URL(plain.url()).searchParams.get("sold") === "price_down" && (await earlierSales.getByRole("columnheader", { name: "Price" }).getAttribute("aria-sort")) === "descending",
+    plain.url(),
+  );
   await plain.goto(`${base}/orders`);
   await plain.getByRole("button", { name: "Share the shop" }).click();
   check("no script: the popover opens", await plain.locator("#share").isVisible());

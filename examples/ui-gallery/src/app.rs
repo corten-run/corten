@@ -639,7 +639,7 @@ mod tests {
         assert!(page.contains(r#"href="/?sold=day""#) && page.contains(r#"href="/?sold=buyer""#), "{page}");
         assert!(page.contains(r#"data-ref="price_value" data-ref-value='1240'"#), "{page}");
         // A hover does not fetch the sorted page, which a click sorting in place does not use.
-        assert!(page.contains("<thead data-no-prefetch>"), "{page}");
+        assert!(page.contains("<thead data-no-prefetch "), "{page}");
         // With no order asked, the rows are in day order, and Sold says so and links to the other way.
         let first = self::page(&HOME).await;
         let at = first.find(r#"aria-sort="ascending""#).unwrap_or_else(|| panic!("{first}"));

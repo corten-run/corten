@@ -403,7 +403,6 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                                             first={Sort::Ascending}
                                             class={TableNumeric {}}
                                             links={None}
-                                            on:connect={None::<Handler>}
                                             on:sort={None::<Handler>}
                                         />
                                         <th scope="col"><span class={VisuallyHidden {}}>"Actions"</span></th>

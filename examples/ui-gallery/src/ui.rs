@@ -643,34 +643,34 @@ pub(crate) mod tests {
         use super::table::{Sort, SortHeader, SortLinks, TableNumeric};
         use crate::{app::url, orders::OrderSort};
         use corten::prelude::*;
-        use corten_ui::rows;
-        let (up, down, first) = refs();
-        let links = Some(SortLinks { ascending: up, descending: down, descending_first: first });
+        use corten_ui::{ReadSortLinks, rows};
+        let (up, down) = refs();
+        let links = Some(SortLinks { ascending_first: up, descending_first: down });
         html! {
-            <tr>
-                <SortHeader
-                    label="Total"
-                    sort={Some(Sort::Ascending)}
-                    ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp), payout: None }}
-                    descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown), payout: None }}
-                    first={Sort::Ascending}
-                    class={TableNumeric {}}
-                    links={None}
-                    on:connect={None::<Handler>}
-                    on:sort={js::sortBy(event, TotalsBy::Total)}
-                />
-                <SortHeader
-                    label="Placed"
-                    sort={None}
-                    ascending={&url::Orders { page: Some(1), sort: None, payout: None }}
-                    descending={&url::Orders { page: Some(2), sort: None, payout: None }}
-                    first={Sort::Descending}
-                    class={()}
-                    links={links}
-                    on:connect={rows::connect(target, up, down, first)}
-                    on:sort={js::sortBy(event, TotalsBy::Placed)}
-                />
-            </tr>
+            <thead on:ReadSortLinks={rows::read(event, up, down)}>
+                <tr>
+                    <SortHeader
+                        label="Total"
+                        sort={Some(Sort::Ascending)}
+                        ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp), payout: None }}
+                        descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown), payout: None }}
+                        first={Sort::Ascending}
+                        class={TableNumeric {}}
+                        links={None}
+                        on:sort={js::sortBy(event, TotalsBy::Total)}
+                    />
+                    <SortHeader
+                        label="Placed"
+                        sort={None}
+                        ascending={&url::Orders { page: Some(1), sort: None, payout: None }}
+                        descending={&url::Orders { page: Some(2), sort: None, payout: None }}
+                        first={Sort::Descending}
+                        class={()}
+                        links={links}
+                        on:sort={js::sortBy(event, TotalsBy::Placed)}
+                    />
+                </tr>
+            </thead>
         }
     }
 
@@ -691,7 +691,6 @@ pub(crate) mod tests {
             first: super::table::Sort::Ascending,
             class: (),
             links: None,
-            on_connect: &None::<corten::prelude::Handler>,
             on_sort: &None::<corten::prelude::Handler>,
         }
         .to_html();
@@ -699,11 +698,9 @@ pub(crate) mod tests {
         // A column read newest first: its first click sorts it descending, and without the
         // script its link is the descending page.
         assert!(
-            html.contains(r#"data-ref="down" data-ref-value='"/orders?page=2"'"#)
-                && html.contains(r#"data-ref="up" data-ref-value='"/orders?page=1"'"#)
-                && html.contains(r#"data-ref="first" data-ref-value='true'"#)
-                && html.contains(r#"href="/orders?page=2" data-on='connect:ui.rows.connect("#)
-                && html.contains(r#"click:sorted_totals.sortBy($e,"Placed")'"#),
+            html.contains(r#"data-ref="down" data-ref-value='"/orders?page=1"'"#)
+                && html.matches("data-ref-value").count() == 1
+                && html.contains(r#"href="/orders?page=2" data-on='click:sorted_totals.sortBy($e,"Placed")'"#),
             "{html}"
         );
     }

@@ -1,47 +1,80 @@
 // @ts-check
 // corten_ui::rows. A table's rows sorted in place by the column whose header was clicked: the
-// handler a sortable header's link calls (`on:sort={rows::sort(event, target)}` on the kit's
+// handler a sortable header's link calls (`on:sort={rows::sort(event, target, head)}` on the kit's
 // SortHeader), so a table the page has every row of sorts without a request. The link stays the
 // app's, to the page the server sorts, for a click with a modifier key and a page without the
 // script. A table that shows one page of its rows sorts on the server: its links, not this.
 
-/** @type {WeakMap<HTMLAnchorElement, { up: string, down: string, first: 1 | -1 }>} */
-const routes = new WeakMap();
+import { ReadSortLinks } from "corten/events";
 
 /**
- * Registers a sort link's two typed route values and its first direction when it joins the page.
- * @param {HTMLElement} link the header link (a prop's handler gets an `HTMLElement`)
- * @param {Map<HTMLAnchorElement, string>} ascending
- * @param {Map<HTMLTableCellElement, string>} descending
- * @param {Map<HTMLSpanElement, boolean>} descendingFirst
+ * @typedef {{ link: HTMLAnchorElement, up: string, down: string, first: 1 | -1, other: string, href: string }} SortLink
  */
-export function connect(link, ascending, descending, descendingFirst) {
-  if (!(link instanceof HTMLAnchorElement)) return;
-  const header = link.closest("th");
-  const arrow = Array.from(link.children).find((part) => part instanceof HTMLSpanElement && descendingFirst.has(part));
-  const up = ascending.get(link);
-  const down = header && descending.get(header);
-  if (up !== undefined && down != null && arrow instanceof HTMLSpanElement) {
-    routes.set(link, { up, down, first: descendingFirst.get(arrow) ? -1 : 1 });
+/** @type {WeakMap<HTMLAnchorElement, SortLink>} */
+const routes = new WeakMap();
+/** @type {WeakMap<ReadSortLinks, SortLink[]>} */
+const requests = new WeakMap();
+
+/**
+ * Reads the current sort routes for the table's own head, in response to sorting or an ordered
+ * control. Each link has one valued ref, for the URL not in its native href. Which ref the link
+ * has says which way it sorts first; aria-sort says when the native href goes the other way.
+ * @param {ReadSortLinks} event
+ * @param {Map<HTMLAnchorElement, string>} ascendingFirst
+ * @param {Map<HTMLAnchorElement, string>} descendingFirst
+ */
+export function read(event, ascendingFirst, descendingFirst) {
+  const links = requests.get(event);
+  const head = event.target;
+  if (!links || !(head instanceof HTMLTableSectionElement)) return;
+  event.stopPropagation();
+  for (const link of head.querySelectorAll(/** @type {"a"} */ (":scope > tr > th > a"))) {
+    const up = ascendingFirst.get(link);
+    const down = descendingFirst.get(link);
+    // No value, or the same ref incorrectly passed for both directions: leave the link alone.
+    const upFirst = typeof up === "string";
+    if (upFirst === (typeof down === "string")) continue;
+    const other = upFirst ? up : /** @type {string} */ (down);
+    const first = upFirst ? 1 : -1;
+    const href = link.getAttribute("href");
+    if (href === null) continue;
+    const kept = routes.get(link);
+    if (kept && kept.other === other && kept.first === first && kept.href === href) {
+      links.push(kept);
+      continue;
+    }
+    // Take a fresh pair before any client href rewrite. On a retained anchor a redraw can
+    // change the ref or href without another connect; a client rewrite records its own href.
+    const active = link.parentElement?.getAttribute("aria-sort");
+    const hrefIsUp = active === "descending" || (active !== "ascending" && first === 1);
+    /** @type {SortLink} */
+    const route = { link, up: hrefIsUp ? href : other, down: hrefIsUp ? other : href, first, other, href };
+    routes.set(link, route);
+    links.push(route);
   }
 }
 
 /**
- * Registered sort links of this table's own header, not of a nested table.
+ * Read from today's refs, including a replaced header or one changed in place, without
+ * resolving the same maps once per anchor at startup.
  * @param {HTMLTableElement} table
  */
 export function sortLinks(table) {
-  const links = table.tHead?.querySelectorAll(/** @type {"a"} */ (":scope > tr > th > a")) ?? [];
-  return Array.from(links).flatMap((link) => {
-    const route = routes.get(link);
-    return route ? [{ link, ...route }] : [];
-  });
+  /** @type {SortLink[]} */
+  const links = [];
+  if (table.tHead) {
+    const event = new ReadSortLinks();
+    requests.set(event, links);
+    table.tHead.dispatchEvent(event);
+    requests.delete(event);
+  }
+  return links;
 }
 
 /**
  * Sorts the rows of each body of the link's table by the column of the header the link is in, in
  * place of following it: ascending, then descending on the next click (or the first direction
- * registered by `connect`). Each cell sorts by the machine value of the one
+ * given by the header's ref). Each cell sorts by the machine value of the one
  * `<time datetime>` (as an instant, when it is a date or a date and time) or `<data value>`
  * it holds outside its hidden parts, else its text. Use `sortByNumber` or `sortByText` for cells
  * with explicit values. A
@@ -53,8 +86,8 @@ export function sortLinks(table) {
  * earlier clicks did; an empty value is last either way. That is the server's order for ties when
  * the page was drawn in the order the server sorts from, not when it was drawn already sorted (a
  * reload of a sorted address): then ties follow the order it was drawn in. The header gets `aria-sort` and the table's other headers lose it, as the ARIA
- * sortable table does: nothing else is announced. When the header's link names the page sorted
- * each way (registered by `connect` from the kit's `SortHeader` refs), the
+ * sortable table does: nothing else is announced. With both sort routes read by the head's
+ * `on:ReadSortLinks` handler from the kit's `SortHeader` links, the
  * address becomes the page sorted as shown, in place of its history entry, and each header's link
  * the page its next click gives, as the server draws them: a reload and a page that reads itself
  * again (`ReadAgain`) get the order on screen, a part of it read again from its own route around
@@ -63,47 +96,51 @@ export function sortLinks(table) {
  * click would give. Only the query keys the header links differ in are taken from
  * them, so what another control put in the address (a tab, a choice) and its fragment stay, as
  * corten-ui's `TabGroup` does. A click with a modifier key, a link outside a
- * table's header, and a table whose header or bodies have a cell that spans columns or rows (so a
- * cell's place is not its column) are left to the link.
+ * table's header, a missing sort route, and a table whose header or bodies have a cell that spans
+ * columns or rows (so a cell's place is not its column) are left to the link.
  * @param {Event} event
  * @param {HTMLElement} link the header's link (a prop's handler gets an `HTMLElement`)
+ * @param {HTMLTableSectionElement} head the table's head with its route reader
  */
-export function sort(event, link) {
-  sortRows(event, link);
+export function sort(event, link, head) {
+  sortRows(event, link, head);
 }
 
 /**
  * Like `sort`, with cells that give a numeric ref value (`ref={cell.with(cents)}`) instead of
  * sorting by their contents.
- * @param {Event} event @param {HTMLElement} link @param {Map<HTMLTableCellElement, number>} cells
+ * @param {Event} event @param {HTMLElement} link @param {HTMLTableSectionElement} head @param {Map<HTMLTableCellElement, number>} cells
  */
-export function sortByNumber(event, link, cells) {
-  sortRows(event, link, cells);
+export function sortByNumber(event, link, head, cells) {
+  sortRows(event, link, head, cells);
 }
 
 /**
  * Like `sort`, with cells that give a text ref value (`ref={cell.with(text)}`) instead of
  * sorting by their contents.
- * @param {Event} event @param {HTMLElement} link @param {Map<HTMLTableCellElement, string>} cells
+ * @param {Event} event @param {HTMLElement} link @param {HTMLTableSectionElement} head @param {Map<HTMLTableCellElement, string>} cells
  */
-export function sortByText(event, link, cells) {
-  sortRows(event, link, cells);
+export function sortByText(event, link, head, cells) {
+  sortRows(event, link, head, cells);
 }
 
-/** @param {Event} event @param {HTMLElement} link @param {ReadonlyMap<HTMLTableCellElement, number | string>} [cells] */
-function sortRows(event, link, cells) {
+/** @param {Event} event @param {HTMLElement} link @param {HTMLTableSectionElement} head @param {ReadonlyMap<HTMLTableCellElement, number | string>} [cells] */
+function sortRows(event, link, head, cells) {
   if (event instanceof MouseEvent && (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)) return;
   const header = link.closest("th");
   const table = header?.closest("table");
-  if (!header || !table || !table.tHead?.contains(header)) return;
-  for (const part of [table.tHead, ...table.tBodies]) if (part.querySelector(SPANS)) return;
+  if (!header || !table || !head || table.tHead !== head || !head.contains(header)) return;
+  const sorters = sortLinks(table);
+  const route = sorters.find((sorter) => sorter.link === link);
+  if (!route) return;
+  for (const part of [head, ...table.tBodies]) if (part.querySelector(SPANS)) return;
+  const links = sorters.flatMap(({ up, down }) => [up, down]).map((to) => new URL(to, location.href).searchParams);
   // Everything that can throw is done before the link is stopped, so a failure leaves the link.
   const collator = collatorFor(link);
   const column = header.cellIndex;
   // The other way when sorted by this column, else the way its first click goes.
   const now = header.getAttribute("aria-sort");
-  const route = link instanceof HTMLAnchorElement ? routes.get(link) : undefined;
-  const order = now === "ascending" ? -1 : now === "descending" ? 1 : (route?.first ?? 1);
+  const order = now === "ascending" ? -1 : now === "descending" ? 1 : route.first;
   const sorted = Array.from(table.tBodies, (body) => {
     // A body none of whose rows were seen is as the page drew it.
     const fresh =
@@ -122,19 +159,18 @@ function sortRows(event, link, cells) {
     for (const { row } of rows) moved.append(row);
     body.append(moved);
   }
-  for (const other of table.tHead.querySelectorAll("th[aria-sort]")) if (other !== header) other.removeAttribute("aria-sort");
+  for (const other of head.querySelectorAll("th[aria-sort]")) if (other !== header) other.removeAttribute("aria-sort");
   header.setAttribute("aria-sort", order === 1 ? "ascending" : "descending");
-  if (!route) return;
   const shown = order === 1 ? route.up : route.down;
-  const sorters = sortLinks(table);
-  const links = sorters.flatMap(({ up, down }) => [up, down]).map((to) => new URL(to, location.href).searchParams);
   // The address is the page sorted as shown, and each link the page its next click gives: this
   // header's the other way, the others' first direction (none of them is sorted now).
-  for (const { link: other, up, down, first } of sorters) {
+  for (const sorter of sorters) {
+    const { link: other, up, down, first } = sorter;
     const way = other === link ? -order : first;
     const to = keeping(way === 1 ? up : down, links);
     to.hash = "";
-    other.setAttribute("href", to.href);
+    sorter.href = to.href;
+    other.setAttribute("href", sorter.href);
   }
   const to = keeping(shown, links);
   if (to.origin === location.origin && to.href !== location.href) history.replaceState(history.state, "", to);
@@ -294,7 +330,7 @@ function valueOf(cell, cells) {
     const text = /** @type {HTMLDataElement} */ (part).value.trim();
     return { text, number: decimal(text) };
   }
-  const text = read(cell).trim();
+  const text = cellText(cell).trim();
   return { text, number: decimal(text) };
 }
 
@@ -315,7 +351,7 @@ function collatorFor(link) {
  * A cell's text without its parts hidden from a screen reader or from everyone.
  * @param {HTMLTableCellElement} cell
  */
-function read(cell) {
+function cellText(cell) {
   const hidden = '[aria-hidden="true"], [hidden]';
   if (!cell.querySelector(hidden)) return cell.textContent ?? "";
   const copy = /** @type {HTMLTableCellElement} */ (cell.cloneNode(true));

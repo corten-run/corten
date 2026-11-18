@@ -139,6 +139,11 @@ a feed's envelope (a snapshot's `epoch`, `seq` and `rows`; a patch's `seq` and e
 and `id`) when it arrives and trusts its rows as the server's `Row`
 ([design Choice 40](design.md#choice-script-boundaries)).
 
+The table kit's client sort uses a single typed ref per link beside native `href` and
+`aria-sort`. The head reads the refs at the time a sort or ordered control needs them. The
+compiler checks the ref types, not that the clicked link is among those refs; if it is not,
+the link still navigates.
+
 Not checked: that the keys of the elements a `Map<string, El>` parameter takes differ (two equal keys are
 one entry of the map; a key on each element is checked when the crate compiles, and debug builds stop
 on equal keys in one render of a component), that a ref inside an `if` is present when a handler

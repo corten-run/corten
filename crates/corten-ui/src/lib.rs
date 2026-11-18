@@ -34,9 +34,10 @@
 //!
 //! #[component]
 //! fn Prices() -> impl Render {
-//!     let cell = refs();
+//!     let (head, cell) = refs();
 //!     html! {
-//!         <table on:click={rows::sortByNumber(event, target, cell)}>
+//!         <table on:click={rows::sortByNumber(event, target, head, cell)}>
+//!             <thead ref={head}></thead>
 //!             <tbody><tr><td ref={cell.with("1200")}>"$12"</td></tr></tbody>
 //!         </table>
 //!     }
@@ -51,53 +52,57 @@
 //!
 //! #[component]
 //! fn Dates() -> impl Render {
-//!     let cell = refs();
+//!     let (head, cell) = refs();
 //!     html! {
-//!         <table on:click={rows::sortByText(event, target, cell)}>
+//!         <table on:click={rows::sortByText(event, target, head, cell)}>
+//!             <thead ref={head}></thead>
 //!             <tbody><tr ref={cell.with("2026-10-30")}><td>"Oct 30"</td></tr></tbody>
 //!         </table>
 //!     }
 //! }
 //! ```
 //!
-//! Registering a sort link also checks the values and tags of its refs. The first direction is
-//! a boolean, not text:
+//! The old call without the table's head does not compile:
 //!
-//! ```compile_fail,E0271
+//! ```compile_fail,E0061
 //! use corten::prelude::*;
 //! use corten_ui::rows;
 //!
+//! let _ = html! { <a on:click={rows::sort(event, target)}>"Price"</a> };
+//! ```
+//!
+//! Reading sort routes checks both refs' values and tags. A route ref gives text, not a number:
+//!
+//! ```compile_fail,E0271
+//! use corten::prelude::*;
+//! use corten_ui::{ReadSortLinks, rows};
+//!
 //! #[component]
 //! fn Headers() -> impl Render {
-//!     let (up, down, first) = refs();
+//!     let (up, down) = refs();
 //!     html! {
-//!         <th ref={down.with("/?sold=down")}>
-//!             <a ref={up.with("/?sold=up")} on:connect={rows::connect(target, up, down, first)}>
-//!                 <span ref={first.with("descending")}>"Price"</span>
-//!             </a>
-//!         </th>
+//!         <thead on:ReadSortLinks={rows::read(event, up, down)}>
+//!             <tr><th><a ref={up.with(1)}>"Price"</a></th></tr>
+//!             <tr><th><a ref={down.with("/?sold=up")}>"Offers"</a></th></tr>
+//!         </thead>
 //!     }
 //! }
 //! ```
 //!
-//! The ascending address belongs to the link, not another table cell:
+//! The other address belongs to the link, not its table cell:
 //!
 //! ```compile_fail,E0277
 //! use corten::prelude::*;
-//! use corten_ui::rows;
+//! use corten_ui::{ReadSortLinks, rows};
 //!
 //! #[component]
 //! fn Headers() -> impl Render {
-//!     let (up, down, first) = refs();
+//!     let (up, down) = refs();
 //!     html! {
-//!         <tr>
-//!             <th ref={up.with("/?sold=up")}></th>
-//!             <th ref={down.with("/?sold=down")}>
-//!                 <a on:connect={rows::connect(target, up, down, first)}>
-//!                     <span ref={first.with(true)}>"Price"</span>
-//!                 </a>
-//!             </th>
-//!         </tr>
+//!         <thead on:ReadSortLinks={rows::read(event, up, down)}>
+//!             <tr><th ref={up.with("/?sold=down")}>"Price"</th></tr>
+//!             <tr><th><a ref={down.with("/?sold=up")}>"Offers"</a></th></tr>
+//!         </thead>
 //!     }
 //! }
 //! ```
@@ -323,6 +328,11 @@ pub mod dialog {
         super::dialog_handlers::modal(dialog, super::dialog_handlers::ModalLife { signal: SignalKw })
     }
 }
+/// A sort or an ordered control asks the table's head for its current sort links
+/// (`on:ReadSortLinks={rows::read(event, up, down)}`).
+#[corten::event]
+pub struct ReadSortLinks {}
+
 script!(pub mod rows = "rows.js");
 script!(pub mod ordered = "ordered.js");
 
@@ -332,7 +342,7 @@ script!(pub mod ordered = "ordered.js");
 /// `on:submit`) or `ordered::link` (a link's `on:connect`) with it, so what it sends or opens
 /// carries the order on screen. Each table is named by its `#[derive(Id)]` type, so a renamed
 /// table's id does not compile where a string would name nothing. The table's header links
-/// register their sort addresses through [`rows::connect`].
+/// give their sort addresses to the head's [`rows::read`] handler.
 ///
 /// ```
 /// use corten::prelude::*;

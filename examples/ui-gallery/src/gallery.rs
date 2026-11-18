@@ -5,7 +5,8 @@ use corten::prelude::*;
 use corten::{Href, form::HintId};
 use corten_ui::{
     CheckboxGroup, Choice, ChoiceGroup, ChoiceOption, Chosen, ComboBox, Copied, CopyButton, LocalTime, MenuButton, Number,
-    NumberField, Picker, PrintButton, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog, ordered, rows,
+    NumberField, Picker, PrintButton, ReadSortLinks, RelativeTime, RequiredWhen, ShownFor, Tab, TabGroup, Tooltip, dialog,
+    ordered, rows,
 };
 use std::time::SystemTime;
 
@@ -638,8 +639,8 @@ pub fn Gallery<'a>(
 #[component]
 fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldBy>, earlier: bool) -> impl Render {
     let (day_value, price_value) = refs();
-    let (up, down, first) = refs();
-    let links = Some(SortLinks { ascending: up, descending: down, descending_first: first });
+    let (head, up, down) = refs();
+    let links = Some(SortLinks { ascending_first: up, descending_first: down });
     let sales = earlier.then_some(SalesPage::Earlier);
     // Each sort header links to the page sorted by its column; the script sorts in place instead.
     let sorted = |by| url::Home { tab, sale: None, period, sold: Some(by), sales };
@@ -663,7 +664,7 @@ fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldB
             // cell sorts by and the buyer's name; without the script, the
             // link is the page the server sorts. A hover does not fetch that
             // page, which a click does not use.
-            <thead data-no-prefetch>
+            <thead data-no-prefetch ref={head} on:ReadSortLinks={rows::read(event, up, down)}>
                 <tr>
                     <SortHeader
                         label="Sold"
@@ -673,8 +674,7 @@ fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldB
                         first={Sort::Ascending}
                         class={()}
                         links={links}
-                        on:connect={rows::connect(target, up, down, first)}
-                        on:sort={rows::sortByText(event, target, day_value)}
+                        on:sort={rows::sortByText(event, target, head, day_value)}
                     />
                     <SortHeader
                         label="Buyer"
@@ -684,8 +684,7 @@ fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldB
                         first={Sort::Ascending}
                         class={()}
                         links={links}
-                        on:connect={rows::connect(target, up, down, first)}
-                        on:sort={rows::sort(event, target)}
+                        on:sort={rows::sort(event, target, head)}
                     />
                     <th scope="col">"Condition"</th>
                     <th scope="col">"Ships to"</th>
@@ -697,8 +696,7 @@ fn SalesTable(tab: Option<MarketTab>, period: Option<Period>, sold: Option<SoldB
                         first={Sort::Ascending}
                         class={TableNumeric {}}
                         links={links}
-                        on:connect={rows::connect(target, up, down, first)}
-                        on:sort={rows::sortByNumber(event, target, price_value)}
+                        on:sort={rows::sortByNumber(event, target, head, price_value)}
                     />
                 </tr>
             </thead>
