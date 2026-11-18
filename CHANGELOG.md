@@ -5,15 +5,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- `corten dev`'s closed-dialog and popover warning keeps `@scope` roots inside media and
-  container queries: it no longer warns outside the root or past its `to` limit (a nested
-  scope's too), takes a scope with no root as the stylesheet's parent element, and checks
-  `:scope`, `&` and declarations directly in the scope. Plain selector-list members select
-  descendants, every `:scope` binds the same root, leading combinators keep their anchor, and
-  strings and escaped identifiers keep their literal text. The check reads each display rule
-  once and matches only candidate dialogs and popovers instead of querying each rule across
-  the page. Trying each root of a scope in turn has a budget a few times the dialog's depth: a
-  rule past it is skipped and named once in the console, so no selector can freeze the page.
+- `corten dev`'s closed-dialog and popover check keeps explicit `@scope` roots for descendant
+  selectors, a single `:scope` or `&` per selector-list member, and declarations directly on
+  the root. It matches once per display rule and candidate. It skips scopes with `to` limits,
+  implicit roots or other [unsupported shapes](docs/guide/styles.md#styles), and selectors
+  longer than 1,024 characters before or after composition, naming each skipped display selector
+  once in the console. Adopted stylesheets are not inspected
+  ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
