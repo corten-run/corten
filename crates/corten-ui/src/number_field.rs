@@ -252,11 +252,9 @@ mod tests {
         const WEIGHT: Bounds<f64> = Bounds::new(1e-20, 1.0).step(1e-20);
         let weight = Number { value: 1e-20.into(), ..Number::new(TinySteppedId, Form::FIELDS.weight, WEIGHT, "Less", "More") };
         assert!(WEIGHT.holds(1e-20));
-        assert!(
-            NumberField { field: &weight }
-                .to_html()
-                .contains(r#"value="0.00000000000000000001" min="0.00000000000000000001" max="1" step="0.00000000000000000001""#)
-        );
+        assert!(NumberField { field: &weight }
+            .to_html()
+            .contains(r#"value="0.00000000000000000001" min="0.00000000000000000001" max="1" step="0.00000000000000000001""#));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! A number field's allowed values, written once for the input and the handler.
 
-use crate::view::{Attrs, Render, quoted};
+use crate::view::{quoted, Attrs, Render};
 
 /// The values a number field allows: from `min` to `max`, in steps of `step` counted from
 /// `min` (1 unless set, as in HTML). One constant gives the input its `min`, `max` and `step`
