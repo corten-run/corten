@@ -6,7 +6,7 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 
 - Parse `Accept-Language` and `Accept-Encoding` weights with the same RFC 9110 qvalue
-  grammar (0 to 1, at most three decimals). Ignore ranges with invalid weights instead of
+  grammar (0 to 1, at most three decimals). Ignore items with malformed or repeated weights instead of
   accepting float syntax or treating a malformed compression weight as `1`.
 
 - Document script testing without runtime stubs: import-free shared logic in Node, including

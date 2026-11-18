@@ -57,8 +57,8 @@ pub(crate) fn qvalue(value: &[u8]) -> Option<u16> {
 }
 
 /// The weight among a list item's parameters (the text after its first `;`), in thousandths:
-/// 1000 without a `q` parameter, `None` when its `q` is not exactly `q=` (either case) and a
-/// [`qvalue`]. RFC 9110 (sections 5.6.6 and 12.4.2) allows whitespace around `;`, not around `=`.
+/// 1000 without a `q` parameter, `None` for a malformed or repeated weight. RFC 9110
+/// (sections 5.6.6 and 12.4.2) allows only SP and HTAB around `;` and no whitespace around `=`.
 pub(crate) fn weight(params: &[u8]) -> Option<u16> {
     fn trim(mut s: &[u8]) -> &[u8] {
         while let [b' ' | b'\t', rest @ ..] = s {
@@ -69,20 +69,23 @@ pub(crate) fn weight(params: &[u8]) -> Option<u16> {
         }
         s
     }
+    let mut quality = None;
     for param in params.split(|&b| b == b';') {
         let param = trim(param);
-        let (name, value) = match param.iter().position(|&b| b == b'=') {
-            Some(at) => (&param[..at], Some(&param[at + 1..])),
-            None => (param, None),
-        };
-        if trim(name).eq_ignore_ascii_case(b"q") {
-            return match value {
-                Some(value) if name.len() == 1 => qvalue(value),
-                _ => None,
-            };
+        if let [b'q' | b'Q', b'=', value @ ..] = param {
+            if quality.is_some() {
+                return None;
+            }
+            quality = Some(qvalue(value)?);
+        } else {
+            let name = trim(param.split(|&b| b == b'=').next().unwrap_or_default());
+            // A non-OWS separator must not disguise a weight as an unrelated parameter.
+            if name.eq_ignore_ascii_case(b"q") || name.iter().any(|b| !b.is_ascii_graphic()) {
+                return None;
+            }
         }
     }
-    Some(1000)
+    Some(quality.unwrap_or(1000))
 }
 
 #[cfg(test)]
@@ -130,12 +133,17 @@ mod tests {
             (" \tq=0.5\t ", 500),
             ("level=1; q=0", 0),
             ("qs=2;q=0.25", 250),
+            ("q=0.25;qs=2", 250),
         ] {
             assert_eq!(weight(params.as_bytes()), Some(expected), "{params:?}");
         }
-        for params in ["q =0", "q\t=0", "q= 0", "Q =0.5", "q", "q=", "q=nan", "level=1;q =1"] {
+        for params in [
+            "q =0", "q\t=0", "q= 0", "Q =0.5", "q", "q=", "q=nan", "level=1;q =1", "\u{00a0}q=0", "q\u{00a0}=0", "q=0\u{00a0}",
+            "\x0bq=0", "q=1;q =0", "q=1;Q=0", "q=1;level=1;q=0",
+        ] {
             assert_eq!(weight(params.as_bytes()), None, "{params:?}");
         }
+        assert_eq!(weight(b"\xa0q=0"), None);
     }
 }
 

@@ -732,15 +732,19 @@ mod tests {
         }
     }
 
-    /// Whitespace at a weight's `=` makes it invalid, so its coding is skipped and a valid
-    /// sibling still counts; whitespace around `;` is allowed.
     #[test]
-    fn negotiation_skips_a_weight_with_whitespace_at_its_equals_sign() {
+    fn negotiation_skips_a_coding_with_a_malformed_or_duplicate_weight() {
         let all = [Coding::Zstd, Coding::Brotli, Coding::Gzip];
-        for header in ["zstd;q =0, gzip;q=0.5", "zstd;Q\t=0, gzip;q=0.5", "zstd;q= 0, gzip;q=0.5", "zstd;q, gzip;q=0.5"] {
-            assert_eq!(accepted(&accept(header), &all), Some(Coding::Gzip), "{header}");
-            assert_eq!(negotiate(&accept(header)).streamed(), Some(Coding::Gzip), "{header}");
+        for params in ["q =0", "Q\t=0", "q= 0", "q", "\u{00a0}q=0", "q=1;q =0", "q=1;Q=0"] {
+            let header = format!("zstd;{params}, gzip;q=0.5");
+            let headers = accept(&header);
+            assert_eq!(accepted(&headers, &all), Some(Coding::Gzip), "{header}");
+            assert_eq!(negotiate(&headers).streamed(), Some(Coding::Gzip), "{header}");
         }
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT_ENCODING, HeaderValue::from_bytes(b"zstd;\xa0q=0, gzip;q=0.5").unwrap());
+        assert_eq!(accepted(&headers, &all), Some(Coding::Gzip));
+        assert_eq!(negotiate(&headers).streamed(), Some(Coding::Gzip));
         for header in ["zstd;Q=0.5, gzip;q=0.4", "zstd \t; \tQ=0.5 , gzip;q=0.4"] {
             assert_eq!(accepted(&accept(header), &all), Some(Coding::Zstd), "{header}");
             assert_eq!(negotiate(&accept(header)).streamed(), Some(Coding::Zstd), "{header}");

@@ -733,10 +733,10 @@ Traditional Chinese readers lists `zh-TW` and `zh-HK` too, which Corten has data
 
 Weights follow RFC 9110's `qvalue` grammar: `0` to `1`, with at most three decimal places
 (`0.123`, `1.000`; a decimal point with no digits is allowed too). A missing weight means `1`,
-and equal weights keep header order. A range with an invalid weight (`nan`, `inf`, `1.5`,
-`-0`, an empty value, too many decimals, or whitespace beside the `=` as in `q =0`; whitespace
-is allowed only around the `;`) is ignored, as a range whose weight does not parse already was,
-rather than guessing its preference. If no range matches, the first locale is still the fallback.
+and equal weights keep header order. A range with a malformed or repeated weight is ignored.
+For example, `nan`, `inf`, `1.5`, `-0`, an empty value and too many decimals are malformed.
+Only space and tab may surround the weight's `;`, and no whitespace may touch its `=`.
+If no range matches, the first locale is still the fallback.
 
 A page that a shared cache keeps (`Public`), or one whose address should name its
 language (a link to the French page), takes its locale from its URL instead: a

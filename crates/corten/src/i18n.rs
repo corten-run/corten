@@ -477,15 +477,15 @@ impl<'de, M: Messages> serde::Deserialize<'de> for Locale<M> {
 /// The same-language step, which Lookup does not have, takes the first listed locale of the
 /// range's primary language (`fr` matches `fr-CA`), which can be more specific than the range or
 /// another script (docs/design.md#choice-locale-same-language). A weight must be an RFC 9110
-/// qvalue (0 to 1, at most three decimals); an invalid one skips that range. Allocates nothing.
+/// qvalue (0 to 1, at most three decimals); an invalid or repeated weight skips that range.
+/// Allocates nothing.
 pub fn negotiate(locales: &[&str], accept_language: Option<&str>) -> usize {
     let listed = |tag: &str| locales.iter().position(|l| l.eq_ignore_ascii_case(tag));
     let mut best: Option<(u16, usize)> = None;
     for part in accept_language.unwrap_or("").split(',') {
-        let part = part.trim();
         let (tag, q) = match part.split_once(';') {
             Some((tag, params)) => (tag.trim(), crate::http::weight(params.as_bytes())),
-            None => (part, Some(1000)),
+            None => (part.trim(), Some(1000)),
         };
         let Some(q) = q else { continue };
         if tag.is_empty() || tag == "*" || q == 0 || best.is_some_and(|(b, _)| q <= b) {
@@ -1991,13 +1991,12 @@ mod tests {
         }
     }
 
-    /// RFC 9110 allows whitespace around a weight's `;` but not around its `=`: a `q` parameter
-    /// spelled with it skips its range, as any invalid weight does, and the next range still counts.
     #[test]
-    fn negotiation_skips_a_weight_with_whitespace_at_its_equals_sign() {
-        let locales = ["en", "fr"];
-        for header in ["fr;q =0, en;q=0.5", "fr;q\t=0, en;q=0.5", "fr;q= 0, en;q=0.5", "fr;Q =1, en;q=0.5", "fr;q, en;q=0.5"] {
-            assert_eq!(locales[negotiate(&locales, Some(header))], "en", "{header}");
+    fn negotiation_skips_a_range_with_a_malformed_or_duplicate_weight() {
+        let locales = ["en", "fr", "de"];
+        for params in ["q =0", "q\t=0", "q= 0", "Q =1", "q", "\u{00a0}q=0", "q=1\u{00a0}", "q=1;q =0", "q=1;Q=0"] {
+            let header = format!("fr;{params}, de;q=0.5");
+            assert_eq!(locales[negotiate(&locales, Some(&header))], "de", "{header}");
         }
         for (header, expected) in [
             ("fr;Q=0.5, en;q=0.4", "fr"),
