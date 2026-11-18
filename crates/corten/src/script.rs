@@ -1932,6 +1932,18 @@ pub trait DomEvent {
 /// }
 /// # fn main() {}
 /// ```
+///
+/// ```compile_fail
+/// use corten::{prelude::*, script::Ref};
+///
+/// #[component(js)]
+/// fn CountBadge() -> impl Render {
+///     #[r#cfg(all())]
+///     let out: Ref<el::HTMLOutputElement> = refs();
+///     html! { <output ref={out}></output> }
+/// }
+/// # fn main() {}
+/// ```
 pub struct Ref<T = el::HTMLElement, V = NoRows, W = NoValue, K = NoKey, const EXPORTED: bool = false> {
     scope: &'static str,
     name: &'static str,

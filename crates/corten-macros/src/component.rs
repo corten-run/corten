@@ -764,8 +764,9 @@ fn conditional_ref_attr(mut before: &[TokenTree]) -> Option<Span> {
         if hash.as_char() != '#' || attr.delimiter() != Delimiter::Bracket {
             break;
         }
-        let name = attr.stream().into_iter().next();
-        if is_ident(name.as_ref(), "cfg") || is_ident(name.as_ref(), "cfg_attr") {
+        // A raw identifier (`r#cfg`) names the same attribute.
+        let name = attr.stream().into_iter().next().map(|t| t.to_string());
+        if matches!(name.as_deref().map(|n| n.strip_prefix("r#").unwrap_or(n)), Some("cfg" | "cfg_attr")) {
             return Some(hash.span());
         }
         before = rest;
