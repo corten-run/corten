@@ -320,11 +320,15 @@ fn lexically_normal(path: &Path) -> PathBuf {
                 out.pop();
             }
             Component::ParentDir if out.has_root() => {}
-            // Appended as text: `PathBuf::push` would read an interior `D:foo` as a new drive
-            // on Windows, where TypeScript reads it as one more directory name.
-            Component::Normal(name) if out.file_name().is_some() || out.ends_with("..") => {
+            // Appended as text: `PathBuf::push` would read a name like `D:foo` as a new drive
+            // on Windows, where TypeScript reads it as one more directory name. A separator goes
+            // in only after another name; a root already ends in one, and `D:` takes none.
+            Component::Normal(name) => {
+                let after_name = out.file_name().is_some() || out.ends_with("..");
                 let text = out.as_mut_os_string();
-                text.push(std::path::MAIN_SEPARATOR_STR);
+                if after_name {
+                    text.push(std::path::MAIN_SEPARATOR_STR);
+                }
                 text.push(name);
             }
             other => out.push(other),
@@ -599,7 +603,15 @@ mod tests {
         assert_eq!(lexically_normal(Path::new("/../a")), Path::new("/a"));
         assert_eq!(lexically_normal(Path::new("../a/../../b")), Path::new("../../b"));
         #[cfg(windows)]
-        assert_eq!(lexically_normal(Path::new(r"C:\src\D:foo\..\types\app")), Path::new(r"C:\src\types\app"));
+        for (path, normal) in [
+            (r"C:\src\D:foo\..\types\app", r"C:\src\types\app"),
+            (r"D:\D:foo\..\types\app", r"D:\types\app"),
+            (r"\\server\share\D:foo\..\types\app", r"\\server\share\types\app"),
+            (r"\\?\D:\D:foo\..\types\app", r"\\?\D:\types\app"),
+            (r"D:types\..\app", r"D:app"),
+        ] {
+            assert_eq!(lexically_normal(Path::new(path)).as_os_str(), std::ffi::OsStr::new(normal), "{path}");
+        }
         #[cfg(unix)]
         {
             let dir = crate::tests::Scratch::new("types-symlink");
