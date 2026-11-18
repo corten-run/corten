@@ -904,6 +904,8 @@ impl Scoper<'_> {
                 } else if text.starts_with('@') || ctx == Ctx::Raw {
                     self.out.push_str(&text);
                 } else {
+                    let joined_comment =
+                        joined_comment.filter(|_| ctx != Ctx::Style || !starts_custom_property(&self.text[source.clone()]));
                     self.check_selector_prelude(url, joined_comment)?;
                     let (selector, anchor) = self.selector(&text, nest, start)?;
                     inner_nest = nest.map(|_| anchor);
@@ -1033,7 +1035,7 @@ impl Scoper<'_> {
             "`@scope {prelude}`: the browser drops an @scope whose prelude is not a root and an optional limit; write `@scope (.list)` or `@scope (.list) to (.slot)`"
         );
         let (root, rest) = match parenthesized(prelude) {
-            Some((root, rest)) => (Some(root.trim_matches(css_whitespace)), rest.trim_start_matches(css_whitespace)),
+            Some((root, rest)) => (Some(root), rest.trim_start_matches(css_whitespace)),
             None => (None, prelude),
         };
         let limit = if rest.is_empty() {
@@ -1042,7 +1044,7 @@ impl Scoper<'_> {
             // `to` and a parenthesized list; `to(` would be a function, which is no limit.
             let to = rest.get(..3).is_some_and(|to| to.as_bytes()[..2].eq_ignore_ascii_case(b"to") && to.ends_with(' '));
             match parenthesized(if to { &rest[3..] } else { "" }) {
-                Some((limit, after)) if after.trim_matches(css_whitespace).is_empty() => Some(limit.trim_matches(css_whitespace)),
+                Some((limit, after)) if after.trim_matches(css_whitespace).is_empty() => Some(limit),
                 _ => return Err(self.error(at, usage)),
             }
         };
@@ -1052,10 +1054,8 @@ impl Scoper<'_> {
                 "@scope with no root scopes its rules to the element around the page's stylesheet link, which no component owns: start it at one of the stylesheet's classes, `@scope (.list)`",
             ));
         };
-        for selector in [Some(root), limit].into_iter().flatten() {
-            if selector.is_empty() {
-                return Err(self.error(at, usage));
-            }
+        if root.is_empty() || limit == Some("") {
+            return Err(self.error(at, usage));
         }
         // Chromium can resolve both explicit `&` and implicit nesting through the enclosing
         // @scope instead of an intervening style rule. An unowned outer root supplies no proof.
@@ -1221,7 +1221,7 @@ impl Scoper<'_> {
         if let Some(at) = joined_comment {
             return Err(self.error(
                 at,
-                "a comment between two parts of a selector is read differently by browsers and this scoper; put a space beside it or remove it",
+                "a comment directly between two parts of a selector cannot be kept or removed safely here; write the selector without it (for example `.a.b`, not `.a/**/.b`)",
             ));
         }
         // The selector proof handles functions, not URL tokens, whose contents can include
@@ -1622,16 +1622,22 @@ fn decoded_name(name: &str) -> Cow<'_, str> {
     }
 }
 
-/// The text inside the first parenthesis block, and the text after it.
+/// The text inside the first parenthesis block, trimmed of whitespace outside tokens, and the
+/// text after it.
 fn parenthesized(text: &str) -> Option<(&str, &str)> {
     if !text.starts_with('(') {
         return None;
     }
     let b = text.as_bytes();
     let mut blocks = vec![b')'];
-    let mut i = 1;
+    let start = css_skip_space(b, 1);
+    let (mut i, mut end) = (start, start);
     while let Some(&byte) = b.get(i) {
         i = match byte {
+            b if css_space(b) => {
+                i += 1;
+                continue;
+            }
             b'"' | b'\'' => string_end(b, i)?,
             b'\\' => css_escape_end(b, i),
             b'(' | b'[' | b'{' => {
@@ -1643,12 +1649,13 @@ fn parenthesized(text: &str) -> Option<(&str, &str)> {
                     return None;
                 }
                 if blocks.is_empty() {
-                    return Some((&text[1..i], &text[i + 1..]));
+                    return Some((&text[start..end], &text[i + 1..]));
                 }
                 i + 1
             }
             _ => i + 1,
         };
+        end = i;
     }
     None
 }
@@ -1716,6 +1723,21 @@ fn css_name_end(bytes: &[u8], mut at: usize) -> usize {
         }
     }
     at
+}
+
+/// Only disambiguates the comment check; the block still follows the existing brace path.
+fn starts_custom_property(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let end = css_name_end(bytes, 0);
+    if !decoded_name(&text[..end]).strip_prefix("--").is_some_and(|name| !name.is_empty()) {
+        return false;
+    }
+    let mut at = css_skip_space(bytes, end);
+    while let Some(comment) = text[at..].strip_prefix("/*") {
+        let Some(close) = comment.find("*/") else { return false };
+        at = css_skip_space(bytes, at + close + 4);
+    }
+    bytes.get(at) == Some(&b':')
 }
 
 struct Chunk {
@@ -2347,13 +2369,28 @@ mod tests {
             ("@scope (.a) to/**/(.b)", 1),
         ] {
             let error = scope(&format!("{selector}{{.c{{color:red}}}}"), "x").unwrap_err();
-            assert!(error.starts_with(&format!("line {line}: a comment between two parts of a selector")), "{error}");
-            assert!(error.ends_with("put a space beside it or remove it"), "{error}");
+            assert!(error.starts_with(&format!("line {line}: a comment directly between two parts of a selector")), "{error}");
+            assert!(error.ends_with("write the selector without it (for example `.a.b`, not `.a/**/.b`)"), "{error}");
         }
         assert_eq!(
             scope(r#"/*start*/.a[title="a/**/b"]/*end*/{--value:a/**/b}"#, "x").unwrap().css,
             r#".x__a[title="a/**/b"]{--value:a b}"#
         );
+    }
+
+    #[test]
+    fn selector_comment_check_leaves_braced_custom_property_values_alone() {
+        for name in ["--theme", "--theme/**/", "--theme /* before colon */ ", r"--th\65 me/**/"] {
+            let css = format!(".a{{{name}:foo/**/bar{{color:red;}}}}");
+            assert!(scope(&css, "x").is_ok(), "{css}");
+        }
+        // In a rule list, the dashed ident can instead be a type selector.
+        let error = scope("--theme:empty/**/.a{color:red}", "x").unwrap_err();
+        assert!(error.contains("a comment"), "{error}");
+        for css in [".a{--theme .b/**/.c{color:red}}", r".a{--th\65/**/me:hover.a{color:red}}"] {
+            let error = scope(css, "x").unwrap_err();
+            assert!(error.contains("a comment"), "{error}");
+        }
     }
 
     #[test]
@@ -2782,7 +2819,9 @@ mod tests {
         // A prelude the browser does not read drops the rule.
         for css in [
             "@scope () { p { margin: 0 } }",
+            "@scope ( /**/ ) { p { margin: 0 } }",
             "@scope (.a) to () { p { margin: 0 } }",
+            "@scope (.a) to ( /**/ ) { p { margin: 0 } }",
             "@scope (.a) to(.b) { p { margin: 0 } }",
             "@scope (.a) (.b) { p { margin: 0 } }",
             "@scope .a { p { margin: 0 } }",
@@ -2793,6 +2832,21 @@ mod tests {
             assert!(error(css).contains("a pseudo-element cannot be"), "{css}");
         }
         assert!(scope("@scope (.a[title=\"x::y\"]) { p { margin: 0 } }", "t").is_ok(), "an attribute's value is text");
+    }
+
+    #[test]
+    fn scope_roots_and_limits_keep_escaped_trailing_whitespace() {
+        for separator in ["", " /**/ "] {
+            for (id, trimmed) in [(r"#i\ ", r"#i\ "), (r"#i\\\ ", r"#i\\\ "), (r"#i\\ ", r"#i\\"), (r"#i\20 ", r"#i\20 ")] {
+                for (prelude, expected) in [
+                    (format!("(.a, {id}{separator})"), format!("(.x__a, {trimmed})")),
+                    (format!("(.a) to (.stop, {id}{separator})"), format!("(.x__a) to (.x__stop, {trimmed})")),
+                ] {
+                    let sheet = scope(&format!("@scope {prelude}{{.b{{outline-style:solid}}}}"), "x").unwrap();
+                    assert_eq!(sheet.css, format!("@scope {expected}{{.x__b{{outline-style:solid}}}}"), "{prelude}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -2972,7 +3026,7 @@ mod tests {
             ("crossed_selector_blocks.css", "mismatched selector block"),
             ("crossed_selector_after_not.css", "mismatched selector block"),
             ("non_ascii_class.css", "non-ASCII characters in a class name"),
-            ("joined_selector_comment.css", "a comment between two parts of a selector"),
+            ("joined_selector_comment.css", "a comment directly between two parts of a selector"),
             (
                 "invalid_scope_ampersand.css",
                 "`p` styles elements this component does not own: `@scope (:is(main, [foo=&]))` can start outside the component",

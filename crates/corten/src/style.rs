@@ -444,8 +444,9 @@
 //! fn NonAsciiClass() -> impl ClassList { List }
 //! ```
 //!
-//! A comment between two parts of a selector needs whitespace beside it. The browser reads
-//! `.list/**/.selected` as a compound selector, not as a descendant selector.
+//! The scoper cannot keep or remove a comment directly between two parts of a selector
+//! safely. Write the intended selector without the comment, such as `.list.selected` for
+//! a compound selector, not `.list/**/.selected`.
 //!
 //! ```compile_fail
 //! use corten::prelude::*;
