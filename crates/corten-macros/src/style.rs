@@ -544,8 +544,7 @@ impl Scoper<'_> {
                 _ => {}
             }
             let start = self.i;
-            let end = self.chunk()?;
-            let text = squash(&self.text[start..self.i]);
+            let (end, text, url) = self.chunk()?;
             if end == Some(b'{') {
                 self.i += 1;
                 let mut scope_rule = None;
@@ -567,6 +566,7 @@ impl Scoper<'_> {
                             return Err(self.error(start, "@property registers a property for the whole page: put it at the top of the stylesheet, outside any rule"))
                         }
                         (_, "scope") => {
+                            self.check_selector_url(url)?;
                             let (prelude, unowned) = self.scope_prelude(&rule["scope".len()..], nest, start)?;
                             scope_rule = Some(prelude);
                             // A root the component owns lets its rules start anywhere; any other
@@ -617,6 +617,7 @@ impl Scoper<'_> {
                 } else if text.starts_with('@') || ctx == Ctx::Raw {
                     self.out.push_str(&text);
                 } else {
+                    self.check_selector_url(url)?;
                     let (selector, anchor) = self.selector(&text, nest, start)?;
                     inner_nest = nest.map(|_| anchor);
                     self.out.push_str(&selector);
@@ -699,10 +700,7 @@ impl Scoper<'_> {
             if len == 0 || !after.starts_with(')') {
                 return Err(self.error(
                     at,
-                    format!(
-                        "{}: a breakpoint is named alone in its parentheses, `(--md)`, with lowercase letters, digits and -, starting with a letter",
-                        squash(prelude)
-                    ),
+                    format!("{prelude}: a breakpoint is named alone in its parentheses, `(--md)`, with lowercase letters, digits and -, starting with a letter"),
                 ));
             }
             let name = &name[..len];
@@ -906,38 +904,83 @@ impl Scoper<'_> {
         }
     }
 
-    /// Moves to the next `{`, `;` or `}` outside strings, comments and brackets.
-    fn chunk(&mut self) -> Result<Option<u8>, String> {
+    /// Reads to the next structural delimiter, removing comments and folding whitespace
+    /// without changing the boundaries of escapes, strings or URLs.
+    fn chunk(&mut self) -> Result<(Option<u8>, String, Option<usize>), String> {
         let mut depth = 0usize;
+        let mut text = String::new();
+        let mut space = false;
+        let mut url = None;
         while let Some(&b) = self.bytes.get(self.i) {
-            match b {
-                b'"' | b'\'' => {
-                    let start = self.i;
+            let start = self.i;
+            self.i = match b {
+                b'{' | b';' | b'}' if depth == 0 => return Ok((Some(b), text, url)),
+                b if css_space(b) => {
+                    space = true;
                     self.i += 1;
-                    loop {
-                        match self.bytes.get(self.i) {
-                            None | Some(b'\n') => return Err(self.error(start, "a string is never closed")),
-                            // An escaped line end, CRLF as one, continues the string.
-                            Some(b'\\') if self.bytes.get(self.i + 1..self.i + 3) == Some(b"\r\n") => self.i += 3,
-                            Some(b'\\') => self.i += 2,
-                            Some(&c) if c == b => break,
-                            Some(_) => self.i += 1,
+                    continue;
+                }
+                b'/' if self.bytes.get(start + 1) == Some(&b'*') => {
+                    space = true;
+                    self.i = self.text[start + 2..].find("*/").map_or(self.bytes.len(), |end| start + end + 4);
+                    continue;
+                }
+                b'"' | b'\'' => string_end(self.bytes, start).ok_or_else(|| self.error(start, "a string is never closed"))?,
+                b'#' | b'@' => css_name_end(self.bytes, start + 1),
+                b'<' if self.bytes[start..].starts_with(b"<!--") => start + 4,
+                b'-' if self.bytes[start..].starts_with(b"-->") => start + 3,
+                b if css_name_byte(b) || valid_css_escape(self.bytes, start) => {
+                    let end = css_name_end(self.bytes, start);
+                    let name = &self.text[start..end];
+                    if self.bytes.get(end) == Some(&b'(')
+                        && (name.eq_ignore_ascii_case("url")
+                            || (name.contains('\\') && unescape(name).eq_ignore_ascii_case("url")))
+                    {
+                        let value = css_skip_space(self.bytes, end + 1);
+                        if matches!(self.bytes.get(value), Some(b'"' | b'\'')) {
+                            end // A quoted `url()` is a function followed by a string, not a URL token.
+                        } else {
+                            url.get_or_insert(start);
+                            url_end(self.bytes, value).ok_or_else(|| {
+                                self.error(
+                                    start,
+                                    "a malformed unquoted url() has no reliable boundary here: quote its value or remove it",
+                                )
+                            })?
                         }
+                    } else {
+                        end
                     }
                 }
-                b'/' if self.bytes.get(self.i + 1) == Some(&b'*') => match self.text[self.i + 2..].find("*/") {
-                    Some(end) => self.i += end + 3,
-                    None => self.i = self.bytes.len() - 1,
-                },
-                b'\\' => self.i += 1,
-                b'(' | b'[' => depth += 1,
-                b')' | b']' => depth = depth.saturating_sub(1),
-                b'{' | b';' | b'}' if depth == 0 => return Ok(Some(b)),
-                _ => {}
+                b'\\' => return Err(self.error(start, "a backslash outside a string must escape a character, not a line break")),
+                b'(' | b'[' => {
+                    depth += 1;
+                    start + 1
+                }
+                b')' | b']' => {
+                    depth = depth.saturating_sub(1);
+                    start + 1
+                }
+                _ => start + 1,
+            };
+            if space && !text.is_empty() {
+                text.push(' ');
             }
-            self.i += 1;
+            space = false;
+            text.push_str(&self.text[start..self.i]);
         }
-        Ok(None)
+        Ok((None, text, url))
+    }
+
+    fn check_selector_url(&self, at: Option<usize>) -> Result<(), String> {
+        // The selector proof handles functions, not URL tokens, whose contents can include
+        // delimiters that would change the proof. Refuse them before discarding any arm.
+        if let Some(at) = at {
+            return Err(
+                self.error(at, "an unquoted url() cannot be checked in a component selector: quote its value or remove the arm")
+            );
+        }
+        Ok(())
     }
 
     /// The selector with its classes prefixed, and what its elements require. With `nest`, what
@@ -1392,52 +1435,93 @@ fn parenthesized(text: &str) -> Option<(&str, &str)> {
     None
 }
 
-/// Comments removed and whitespace collapsed, outside strings.
-fn squash(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    let mut space = false;
-    while let Some(c) = chars.next() {
-        match c {
-            '/' if chars.peek() == Some(&'*') => {
-                chars.next();
-                let mut last = ' ';
-                for c in chars.by_ref() {
-                    if last == '*' && c == '/' {
-                        break;
-                    }
-                    last = c;
-                }
-                space = true;
-            }
-            '"' | '\'' => {
-                if space && !out.is_empty() {
-                    out.push(' ');
-                }
-                space = false;
-                out.push(c);
-                while let Some(s) = chars.next() {
-                    out.push(s);
-                    if s == '\\' {
-                        if let Some(next) = chars.next() {
-                            out.push(next);
-                        }
-                    } else if s == c {
-                        break;
-                    }
-                }
-            }
-            c if c.is_whitespace() => space = true,
-            c => {
-                if space && !out.is_empty() {
-                    out.push(' ');
-                }
-                space = false;
-                out.push(c);
-            }
+fn css_line_end(b: u8) -> bool {
+    matches!(b, b'\n' | b'\r' | b'\x0c')
+}
+
+fn css_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t') || css_line_end(b)
+}
+
+fn css_skip_space(bytes: &[u8], mut at: usize) -> usize {
+    while bytes.get(at).is_some_and(|&b| css_space(b)) {
+        at += 1;
+    }
+    at
+}
+
+fn valid_css_escape(bytes: &[u8], at: usize) -> bool {
+    bytes.get(at) == Some(&b'\\') && bytes.get(at + 1).is_some_and(|&b| !css_line_end(b))
+}
+
+/// Consumes an escape in the original bytes, where CRLF is one CSS newline.
+fn css_escape_end(bytes: &[u8], at: usize) -> usize {
+    let start = at + 1;
+    let hex = bytes[start..].iter().take(6).take_while(|b| b.is_ascii_hexdigit()).count();
+    let end = start + hex;
+    if bytes.get(end..end + 2) == Some(b"\r\n") {
+        return end + 2;
+    }
+    if hex != 0 {
+        end + usize::from(bytes.get(end).is_some_and(|&b| css_space(b)))
+    } else {
+        let mut end = (start + 1).min(bytes.len());
+        while bytes.get(end).is_some_and(|b| b & 0xc0 == 0x80) {
+            end += 1;
+        }
+        end
+    }
+}
+
+fn css_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'\0' | 0x80..=0xff)
+}
+
+fn css_name_end(bytes: &[u8], mut at: usize) -> usize {
+    while let Some(&b) = bytes.get(at) {
+        if css_name_byte(b) {
+            at += 1;
+        } else if valid_css_escape(bytes, at) {
+            at = css_escape_end(bytes, at);
+        } else {
+            break;
         }
     }
-    out
+    at
+}
+
+/// CSS Syntax Level 3's string-token boundaries. An unescaped newline makes a bad
+/// string token; do not recover by reading across it to a later quote.
+fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut at = start + 1;
+    while let Some(&b) = bytes.get(at) {
+        match b {
+            b if b == bytes[start] => return Some(at + 1),
+            b if css_line_end(b) => break,
+            b'\\' => at = css_escape_end(bytes, at),
+            _ => at += 1,
+        }
+    }
+    None
+}
+
+/// CSS Syntax Level 3's unquoted URL token. Refuse a bad URL instead of recovering:
+/// a quote in it is not the beginning of a string and cannot hide another arm.
+fn url_end(bytes: &[u8], mut at: usize) -> Option<usize> {
+    while let Some(&b) = bytes.get(at) {
+        match b {
+            b')' => return Some(at + 1),
+            b if css_space(b) => {
+                let end = css_skip_space(bytes, at);
+                return (bytes.get(end) == Some(&b')')).then_some(end + 1);
+            }
+            b'"' | b'\'' | b'(' | 1..=8 | 11 | 14..=31 | 127 => break,
+            b'\\' if valid_css_escape(bytes, at) => at = css_escape_end(bytes, at),
+            b'\\' => break,
+            _ => at += 1,
+        }
+    }
+    None
 }
 
 fn split_declaration(text: &str) -> Option<(&str, &str)> {
@@ -2242,6 +2326,35 @@ mod tests {
     }
 
     #[test]
+    fn css_strings_and_urls_keep_their_token_boundaries() {
+        for line_end in ["\n", "\r", "\r\n", "\x0c"] {
+            for escape in ["\\", "\\61"] {
+                let attr = format!("[data-value='a{escape}{line_end},p']");
+                let css = format!(".list{attr} {{ outline-style:solid }}");
+                assert_eq!(scope(&css, "x").unwrap().css, format!(".x__list{attr}{{outline-style:solid}}"));
+            }
+        }
+        for value in [r"url(/a[};/*,b\).svg)", r"\75 rl(/a[};,b.svg)", "URL(  '/a,).svg')"] {
+            let css = format!(".list {{ background: {value} }}");
+            let output_value = if value.starts_with("URL") { "URL( '/a,).svg')" } else { value };
+            assert_eq!(scope(&css, "x").unwrap().css, format!(".x__list{{background:{output_value}}}"));
+        }
+        for value in ["url(a' )", "URL(a\" )", r"\75 rl(a' )", "url(a b)", "url(a\\\rb)"] {
+            let css = format!(".list {{ background: {value} }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains("a malformed unquoted url()"), "{css}: {error}");
+        }
+        for css in [
+            ":is(.list,[x=url(a)]) { outline-style:solid }",
+            "@scope (:is(.list,[x=url(a)])) { p { outline-style:solid } }",
+            "@scope (.list) to (:is(.slot,[x=url(a)])) { p { outline-style:solid } }",
+        ] {
+            let error = scope(css, "x").unwrap_err();
+            assert!(error.contains("an unquoted url() cannot be checked in a component selector"), "{css}: {error}");
+        }
+    }
+
+    #[test]
     fn the_compile_fail_selector_examples_fail_for_their_reasons() {
         for (file, reason) in [
             ("negated_list.css", "`:not(.list) p` styles elements this component does not own"),
@@ -2250,6 +2363,9 @@ mod tests {
             ("sibling_list.css", "`.list + main` styles elements this component does not own"),
             ("negated_nest.css", "`:not(&)` styles elements this component does not own"),
             ("invalid_nest_ampersand.css", "`:is(main, [foo=&])` styles elements this component does not own"),
+            ("malformed_selector_url.css", "a malformed unquoted url()"),
+            ("malformed_selector_ff.css", "a string is never closed"),
+            ("malformed_selector_cr.css", "a string is never closed"),
             (
                 "invalid_scope_ampersand.css",
                 "`p` styles elements this component does not own: `@scope (:is(main, [foo=&]))` can start outside the component",

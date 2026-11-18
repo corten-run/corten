@@ -12,6 +12,7 @@ Corten is pre-1.0, so any minor version may change the API.
   A nested selector is checked where its `&` stands (`.list { :not(&) { .. } }`). An owned
   `@scope` root supplies the proof for its body. An inner root under an unowned scope needs its
   own class anchor to supply that proof; otherwise it only filters independently anchored rules.
+  Malformed strings and unquoted `url()` tokens in selectors fail before forgiving arms are ignored.
   Write the anchor out: `main:has(.list) p` becomes `main .list p`, and
   `.pick:checked + span` becomes `:where(.cuts) .pick:checked + span`; page-wide rules belong in
   `static/style.css` (docs/guide/styles.md). The kit's `stepper.css` anchors its unit rules this

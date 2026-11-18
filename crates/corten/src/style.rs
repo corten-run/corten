@@ -389,6 +389,28 @@
 //! fn InvalidScopeAmpersand() -> impl ClassList { (List, Slot) }
 //! ```
 //!
+//! The compiler refuses malformed URL and string tokens before it drops any forgiving arm.
+//! The fixtures have an apostrophe in an unquoted URL, a raw form feed and a raw carriage
+//! return in a string, respectively:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn MalformedSelectorUrl() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn MalformedSelectorFf() -> impl ClassList { List }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn MalformedSelectorCr() -> impl ClassList { List }
+//! ```
+//!
 //! An inner scope under an unowned outer scope cannot take its proof from an intervening
 //! style rule. Browsers can resolve the inner root through the outer scope instead, whether
 //! the root uses an explicit `&` or implicit nesting.
