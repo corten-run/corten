@@ -5642,6 +5642,13 @@ rules something out.
     targets directly. The planner and close forwarding are a versioned module fetched only
     when an answer draws a closed dialog, alongside its handlers and stylesheets where
     possible. The extra request on first use keeps that code off every other page.
+    On `0aa24d7` against main's `cf4671b13`, core grows from 43,846 to 44,683 bytes raw
+    (+837), 15,612 to 16,012 gzip (+400), and 14,100 to 14,444 brotli (+344). The optional
+    module is 1,826 bytes raw, 975 gzip and 851 brotli. The no-dialog draw timing did not
+    resolve a difference: alternating six Chromium batches of 2,500 draws per build
+    gave 94.58 to 97.66 microseconds per draw with eight paragraphs (ranges 88.32 to 109.04
+    and 88.80 to 114.84) and 330.18 to 333.24 with 100 (316.76 to 366.80 and 316.32 to
+    353.36). Neither build requested the module in that probe.
 
     Stands on: platform (`close()` restores focus from a modal, preserves `returnValue`
     without an argument, and queues a native `close` even when its target is detached before

@@ -6743,7 +6743,9 @@ async function run(browser) {
         .waitForFunction((lines) => (document.querySelector("#smoke-closing output")?.textContent ?? "").split("\n").filter(Boolean).length >= lines, lines, { timeout: 3000 })
         .catch(() => {})
         .then(() =>
-          closing.evaluate(() => {
+          closing.evaluate(async () => {
+            // Close and toggle can use different tasks; observe the whole event inventory.
+            await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50))));
             const $ = (/** @type {string} */ id) => /** @type {HTMLDialogElement} */ (document.getElementById(id));
             return {
               log: (document.querySelector("#smoke-closing output")?.textContent ?? "").split("\n").filter(Boolean),
@@ -6985,11 +6987,14 @@ async function run(browser) {
       .waitForFunction(() => document.querySelectorAll("#smoke-morph-one p").length === 2 && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
       .then(() => true, () => false);
     await morph.waitForFunction(() => (/** @type {any} */ (window).__heard?.length ?? 0) >= 5, null, { timeout: 3000 }).catch(() => {});
-    const morphed = await morph.evaluate(() => ({
-      heard: /** @type {string[]} */ (/** @type {any} */ (window).__heard),
-      open: Array.from(document.querySelectorAll("dialog[open]"), (el) => el.id),
-      focus: document.activeElement?.id || document.activeElement?.textContent?.trim(),
-    }));
+    const morphed = await morph.evaluate(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(resolve, 50))));
+      return {
+        heard: /** @type {string[]} */ (/** @type {any} */ (window).__heard),
+        open: Array.from(document.querySelectorAll("dialog[open]"), (el) => el.id),
+        focus: document.activeElement?.id || document.activeElement?.textContent?.trim(),
+      };
+    });
     const morphCloses = morphed.heard.filter((line) => line.includes(" close"));
     check(
       "a write's page that draws closed open dialogs in a layout element it draws in place closes the inner one first, and one replaced is heard on the dialog that took its place",
