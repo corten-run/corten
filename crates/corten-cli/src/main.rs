@@ -27,7 +27,8 @@ const HELP: &str = "corten: create, run and check Corten apps
 Usage:
   corten new <dir> [--name <crate>] [--corten-path <path>]
                    Create an app in <dir>. --corten-path uses a local checkout (its root or
-                   its crates/corten) instead of the crates.io release.
+                   its crates/corten) instead of the crates.io release. Writes its
+                   Cargo.lock too (cargo update --workspace), which corten check requires.
   corten dev [--port <port>]
                    Build and run the app in this directory; rebuild and restart on every
                    change, and reload open pages. Default port 3000.
@@ -37,7 +38,8 @@ Usage:
                    bodies alone), so it fixes what corten check reports. With paths, only
                    their markup. --check reports what needs it instead of writing it.
   corten check [--no-script-types]
-                   corten fmt --check; that every component with a stylesheet, script or
+                   Refuse a missing or stale Cargo.lock; corten fmt --check;
+                   that every component with a stylesheet, script or
                    view is named in an array (a COMPONENTS list or .components(&[..]));
                    cargo clippy -D warnings; cargo build --all-targets, so what only a
                    binary's main mounts is checked as cargo build checks it; cargo test,
@@ -201,13 +203,13 @@ fn check_flags(args: &[String]) -> Result<bool, String> {
 /// matches `[profile.dev]`) the tests reuse those test targets; a test profile of its own makes
 /// the tests compile them again, and bench targets, which `cargo test` does not build, are
 /// built here too.
-const BUILD: [&str; 2] = ["build", "--all-targets"];
+const BUILD: [&str; 3] = ["build", "--all-targets", "--locked"];
 
 /// `corten check`, its scripts' type check skipped with `skip`.
 fn check(skip: bool) -> Result<(), String> {
     let root = std::env::current_dir().map_err(|e| e.to_string())?;
-    // Whether the scripts can be type-checked is settled first, so a machine without `tsc` hears
-    // it before format, lint and tests have run.
+    // Resolve with --locked before anything can rewrite the lock. This also settles whether
+    // the scripts can be type-checked before format, lint and tests have run.
     let scripts = check_step("script type setup", || scripts::plan(&root, skip))?;
     check_step("corten fmt --check", || fmt::run(&["--check".to_string()]))
         .and_then(|()| check_step("listed components", || listed::check(&root)))
@@ -238,13 +240,13 @@ fn lint_build_test(
     mut run: impl FnMut(&[&str]) -> Result<(), String>,
     scripts: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
-    run(&["clippy", "--all-targets", "--", "-D", "warnings"])?;
+    run(&["clippy", "--all-targets", "--locked", "--", "-D", "warnings"])?;
     run(&BUILD)?;
     // The tests first: the one that writes `types/app.d.ts` brings it up to date (and fails,
     // saying so, when it was stale) before `tsc` reads it, so a script that uses a new view or
     // event is not refused for a declaration the check had not written yet. The scripts are
     // checked whatever the tests did, so a failing test hides no script error.
-    let tests = run(&["test"]);
+    let tests = run(&["test", "--locked"]);
     let scripts = scripts();
     match (tests, scripts) {
         (Ok(()), scripts) => scripts,
@@ -336,17 +338,20 @@ mod tests {
 
     #[test]
     fn the_check_builds_every_target_after_lint_and_before_the_tests() {
-        let lint = "clippy --all-targets -- -D warnings";
-        let build = "build --all-targets";
-        let all = [lint, build, "test", "script types"].map(String::from).to_vec();
+        let lint = "clippy --all-targets --locked -- -D warnings";
+        let build = "build --all-targets --locked";
+        let all = [lint, build, "test --locked", "script types"].map(String::from).to_vec();
         assert_eq!(steps(&[]), (all.clone(), Ok(())));
         // A failed build fails the check before the tests or the scripts run.
-        assert_eq!(steps(&[build]), (vec![lint.into(), build.into()], Err("cargo build --all-targets failed".into())));
+        assert_eq!(steps(&[build]), (vec![lint.into(), build.into()], Err("cargo build --all-targets --locked failed".into())));
         // A failed lint stops the build too.
         assert_eq!(steps(&[lint]).0, [lint]);
         // A failed test still has the scripts checked, and both failures are reported.
-        assert_eq!(steps(&["test"]), (all.clone(), Err("cargo test failed".into())));
-        assert_eq!(steps(&["test", "script types"]), (all, Err("cargo test failed, and the scripts failed".into())));
+        assert_eq!(steps(&["test --locked"]), (all.clone(), Err("cargo test --locked failed".into())));
+        assert_eq!(
+            steps(&["test --locked", "script types"]),
+            (all, Err("cargo test --locked failed, and the scripts failed".into()))
+        );
     }
 
     #[test]

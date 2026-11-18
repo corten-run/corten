@@ -28,6 +28,11 @@ artifact attestations and `SHA256SUMS`, not a minisign signature
 with a script, a
 test and a Dockerfile.
 
+The starter enables Corten's `compress` feature. A local build normally needs a C compiler for
+`zstd-sys`, the starter's only C dependency. To build without it, remove `features = ["compress"]`
+from the `corten` dependency in `Cargo.toml`. This turns off Corten's response compression.
+See [Response compression](deploy.md#response-compression) for the Docker build and the codecs.
+
 | Command | What it does |
 |---|---|
 | `corten new <dir>` | Creates an app that depends on the release matching the command's version, as `corten = { package = "corten-run", version = ".." }`: the package is `corten-run` and the library `corten`, so the app's code names it `corten`. `--name` sets the crate name, `--corten-path` uses a local checkout instead (the repository's root or its `crates/corten`; another directory is refused before anything is written). |
@@ -51,6 +56,21 @@ through unchanged; the progress messages add nothing to stdout.
 
 The CLI is a convenience over cargo, not a build system: an app is an ordinary crate, and
 `cargo run` works too.
+
+`corten check` first reads Cargo metadata with `--locked`, then holds lint, build and tests to
+that lock too. A missing or stale `Cargo.lock` fails before formatting or compiling; the check
+never repairs it. `corten new` writes the lock with the app (`cargo update --workspace`, run in
+the app's directory, so Cargo's configuration there applies, offline included), and `corten ui
+add` updates it when it adds `corten-ui` to the manifest, so `corten check` passes straight after
+either; when Cargo cannot write it, the command fails and says what to run. After changing
+dependencies yourself, run `cargo build` or `corten dev`, then commit `Cargo.lock` alongside the
+manifest change. In a workspace, Cargo uses the lock at the workspace root, including when
+checking a library member from its own directory; a member needs no lock of its own, and an app
+created inside a workspace adds itself to the root lock without moving the versions already in
+it. Local `corten dev`, `corten build` and ordinary Cargo builds still create or update the lock,
+so editing dependencies needs no extra flag. The image build also uses `--locked`
+([Building the image](deploy.md#building-the-image)). This is always checked, not a CI-only
+opt-in ([Choice 65](../design.md#choice-locked-check)).
 
 `corten dev`, `fmt` and `check` format and check the way the corten they were built from does, so
 they compare it with the one the app's `Cargo.lock` pins (a release, or a git revision): when they
@@ -132,6 +152,11 @@ crate whose checksum crates.io stores.
 | `static/` | the app's own CSS (element defaults, the layout), its favicon (`favicon.svg`, Corten's mark until you replace it; also answered at `/favicon.ico`), images; compiled into the program (`embed!`, a constant per file) and served at versioned URLs |
 | `AGENTS.md` | the rules for an AI agent working on the app |
 | `Dockerfile` | a release build in a slim image that preloads jemalloc, which gives back memory a burst of connections took (remove its three lines to run on glibc's allocator); zstd is linked to the build image's libzstd, so the server needs `libzstd.so.1` where it runs (the slim image has it; for one without it, distroless or scratch, remove the `ZSTD_SYS_USE_PKG_CONFIG` line); the build keeps the app's compiled crates in a cache of its own, named for the app, so other apps on the same Docker host build alongside it ([Building the image](deploy.md#building-the-image)); the server runs as an unprivileged user, `USER 10001:10001` (by number, so a cluster that requires non-root containers starts it; the server writes no file, and an app whose server does gives that user a directory) |
+
+`corten new` does not set a dependency publish-age policy. Apps using Cargo 1.100 or later can
+set their own [minimum publish age](https://doc.rust-lang.org/cargo/reference/config.html#registryglobal-min-publish-age)
+in `.cargo/config.toml`; older supported Cargo versions do not enforce it, and Cargo 1.99.1
+warns about the setting.
 
 ## A whole app in one file
 

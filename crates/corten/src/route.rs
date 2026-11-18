@@ -728,8 +728,8 @@ pub use corten_macros::UrlValue;
 ///
 /// A route a part of a page is read from ([`crate::ReadAgain::from`], [`crate::ReadAgain::now`]) says `patches`: the
 /// runtime reads it with `corten: action` and can apply nothing but a patch, so its `get`
-/// handler returns `HtmlResult<Patches>` ([`crate::Patches`]), which only `req.patch`,
-/// `req.patch_with_status`, `req.patch_or`, `req.patch_or_with`, `req.invalid` and
+/// handler returns `HtmlResult<Patches>` ([`crate::Patches`]), which only `action.patch`,
+/// `action.patch_with_status`, `req.patch_or`, `req.patch_or_with`, `req.invalid` and
 /// `req.invalid_with` make, and the route is then one `ReadAgain::from` and `ReadAgain::now`
 /// take ([`PatchRoute`]):
 ///
@@ -791,7 +791,7 @@ pub use corten_macros::UrlValue;
 /// }
 ///
 /// async fn save(req: Req) -> HtmlResult<Patches> {
-///     req.patch(html! {})
+///     req.action().ok_or_else(corten::Error::not_found)?.patch(html! {})
 /// }
 /// # fn main() { let _ = url::router(); }
 /// ```
@@ -823,7 +823,7 @@ pub use corten_macros::UrlValue;
 /// }
 ///
 /// async fn alerts(req: Req) -> HtmlResult<Patches> {
-///     req.patch(html! {})
+///     req.action().ok_or_else(corten::Error::not_found)?.patch(html! {})
 /// }
 /// # fn main() { let _ = url::router(); }
 /// ```
@@ -1707,7 +1707,10 @@ pub struct HasData<T: ?Sized>(std::marker::PhantomData<fn(&T)>);
 /// }
 ///
 /// async fn alerts(req: Req) -> Mine {
-///     Mine(req.patch(html! { <ul id={ListId}></ul> }))
+///     Mine(match req.action() {
+///         Some(action) => action.patch(html! { <ul id={ListId}></ul> }),
+///         None => Err(corten::Error::not_found()),
+///     })
 /// }
 ///
 /// fn main() {
@@ -2112,6 +2115,18 @@ impl<R: Route + ?Sized, I: crate::view::Id> fmt::Display for At<'_, R, I> {
 /// stays there, so a post form in it with no `action` would send its post to that action again: a
 /// page with actions writes each form's `action`. A debug build answers such a page with an error
 /// that says so (docs/design.md#limit-page-action-address).
+///
+/// The prelude leaves out [`crate::Action`], the checked patch builder, so a bare `Action` here
+/// is not ambiguous when both are glob-imported:
+///
+/// ```
+/// use corten::prelude::*;
+/// use corten::route::*;
+///
+/// fn address<R: Route>(post: Action<'_, R>) -> String {
+///     post.to_string()
+/// }
+/// ```
 pub struct Action<'a, R: ?Sized> {
     route: &'a R,
     name: &'static str,

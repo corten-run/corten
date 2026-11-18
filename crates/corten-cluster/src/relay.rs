@@ -1,9 +1,12 @@
 //! Outbox relay: publishes committed patches to JetStream in outbox order. Every instance runs a
-//! candidate; the one holding the lease (store::lease) publishes. A patch is marked published only
-//! after JetStream acknowledged it. A relay that dies or loses its lease in between leaves it to
+//! candidate; the one holding the lease (store::lease) publishes. A valid patch is marked done
+//! only after JetStream acknowledged it. A relay that dies or loses its lease in between leaves it to
 //! the next one, which publishes it again, and JetStream drops the copy by its message id. Two
 //! relays briefly overlapping is therefore harmless: each publishes the pending rows in order, and
 //! the copies are dropped.
+//!
+//! Rows with invalid feed keys (written before validation or by external SQL) are marked done
+//! without publishing, and logged. Publish and acknowledgement failures still retry.
 
 use std::{
     sync::{
@@ -16,7 +19,7 @@ use std::{
 use async_nats::{jetstream, HeaderMap};
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
-use crate::{store, Error, Options};
+use crate::{store, valid_key, Error, Options};
 
 /// Outbox rows published per round trip.
 const BATCH: i64 = 256;
@@ -111,17 +114,28 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
         }
         held.check()?;
         let mut acks = Vec::with_capacity(rows.len());
+        let mut sent = Vec::with_capacity(rows.len());
         for row in &rows {
+            if !valid_key(&row.feed) {
+                if store::mark_published(pool, &[row.id]).await? {
+                    tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
+                        "dropped outbox row with invalid feed key");
+                }
+                held.check()?;
+                continue;
+            }
             let mut headers = HeaderMap::new();
             headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
             headers.insert("Feed-Generation", row.generation.as_str());
             acks.push(js.publish_with_headers(subject(options, &row.feed), headers, row.body.clone().into()).await?);
+            sent.push(row.id);
         }
         for ack in acks {
             ack.await?;
         }
-        let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
-        store::mark_published(pool, &ids).await?;
+        if !sent.is_empty() {
+            store::mark_published(pool, &sent).await?;
+        }
         if (rows.len() as i64) < BATCH {
             return Ok(());
         }

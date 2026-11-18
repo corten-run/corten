@@ -269,7 +269,33 @@ its clean build 361 s against 206 s. One codegen unit against sixteen costs abou
 process, builds about a third slower and makes the binary a fifth smaller. The workspace keeps it to match the benchmarks' other apps and the published numbers,
 not for speed.
 
+## Response compression
+
+The starter enables `compress`: zstd, Brotli and gzip for responses compressed per request;
+Brotli and gzip for assets and held JSON compressed once; and zstd or gzip, never Brotli,
+for event streams ([Choice 32](../design.md#choice-stream-coding)).
+
+Revisit Brotli when a zstd/gzip-only build can serve supported clients without a slowdown.
+Compare release builds on the same item pages, runtime, kit CSS and held JSON: use gzip for
+clients that do not offer zstd, and try high-level zstd for assets and held JSON where the
+client offers it. Measure bytes for both client groups, CPU for pages compressed per request,
+and browser load time on a throttled link if the replacement sends more. A faster encoder on
+the server is not enough if the extra bytes make the page slower for the visitor.
+
+By default `zstd-sys` builds its bundled C sources, which needs a C compiler, even when a
+system zstd is installed. The starter's Dockerfile instead sets `ZSTD_SYS_USE_PKG_CONFIG=1` to use the build image's libzstd, which needs
+`libzstd.so.1` in the runtime image. To keep compression in an image without that shared
+library, remove the setting so the build compiles zstd and links it into the app. To avoid
+zstd altogether, turn off the `compress` feature in the app's `Cargo.toml`.
+
 ## Building the image
+
+The Dockerfile builds with `cargo build --release --locked`, as `corten check` holds its Cargo
+steps to the lock. `corten new` writes `Cargo.lock` with the app; run `cargo build` or
+`corten dev` after a dependency change and commit `Cargo.lock` before checking or building the
+image. A missing or stale lock fails rather than resolving crate versions the check did not
+test. For a workspace app, include the workspace-root manifest and lockfile in the Docker build
+context, along with the members it needs.
 
 The Dockerfile `corten new` writes compiles the app with two BuildKit
 [cache mounts](https://docs.docker.com/reference/dockerfile/#run---mounttypecache), which stay on
@@ -371,3 +397,14 @@ Its cleanup check retains all process observations and exempts only kernel threa
 proved by saved Linux stat flags and matching PID/start identity. A new user-space
 daemon or application process still fails cleanup; later observations cannot repair
 an old failed run. This is benchmark-host preparation, not app deployment advice.
+
+To build the Git-capable browser test image manually, run `npm ci` from the repository
+root and pass the image that matches the installed Playwright version, as CI does:
+
+```sh
+version=$(node -p 'require("@playwright/test/package.json").version') &&
+  docker build --build-arg PLAYWRIGHT_IMAGE="mcr.microsoft.com/playwright:v${version}-noble" \
+    -f bench/workloads/test-tools.Dockerfile -t corten-evidence-tools .
+```
+
+The Dockerfile has no default base image.

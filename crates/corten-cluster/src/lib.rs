@@ -46,6 +46,68 @@ pub use store::{begin, create_feed, migrate, prune, seq, Begin, Write, Written};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
+/// The longest feed key, in bytes. Leaves room for the prefix, reply inbox and publish framing
+/// in NATS's default 4 KB control line, and fits Postgres's B-tree indexes without compression
+/// on standard 8 KB pages.
+pub const MAX_FEED_KEY_BYTES: usize = 1024;
+
+/// The longest [`Options::subject_prefix`], in bytes.
+const MAX_PREFIX_BYTES: usize = 255;
+
+/// Reserve for `HPUB`, separators, two decimal lengths (up to 20 digits each) and CRLF.
+const PUBLISH_FRAMING_BYTES: usize = 64;
+const MAX_PUBLISH_SUBJECT_BYTES: usize = MAX_PREFIX_BYTES + 1 + MAX_FEED_KEY_BYTES;
+
+/// A feed key that breaks Corten's literal subject rules, refused by [`create_feed`] and [`begin`]
+/// before they touch the database. A key is published as `{subject_prefix}.{key}`, so it must
+/// be nonempty dot-separated tokens without whitespace, control characters (NUL included),
+/// `*` or `>`, and at most [`MAX_FEED_KEY_BYTES`] long. It arrives inside [`Error`]: test for
+/// it with `error.is::<InvalidFeedKey>()`.
+///
+/// ```
+/// # async fn run(pool: sqlx::PgPool) -> Result<(), corten_cluster::Error> {
+/// let mut tx = pool.begin().await?;
+/// let error = corten_cluster::create_feed(&mut tx, "my feed").await.unwrap_err();
+/// assert!(error.is::<corten_cluster::InvalidFeedKey>());
+/// assert!(corten_cluster::create_feed(&mut tx, "sellers.42").await?);
+/// # Ok(()) }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidFeedKey;
+
+impl std::fmt::Display for InvalidFeedKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "corten-cluster: a feed key must use nonempty dot-separated tokens \
+             without whitespace, control characters, `*` or `>`, at most {MAX_FEED_KEY_BYTES} bytes"
+        )
+    }
+}
+
+impl std::error::Error for InvalidFeedKey {}
+
+/// Corten's literal subject policy follows the documented token and wildcard rules, also
+/// excluding control characters (Postgres cannot store NUL) and bounding the byte length.
+fn literal(name: &str, max: usize) -> bool {
+    name.len() <= max
+        && name.split('.').all(|token| {
+            !token.is_empty() && !token.chars().any(|c| matches!(c, '*' | '>') || c.is_whitespace() || c.is_control())
+        })
+}
+
+pub(crate) fn valid_key(key: &str) -> bool {
+    literal(key, MAX_FEED_KEY_BYTES)
+}
+
+pub(crate) fn check_key(key: &str) -> Result<(), Error> {
+    if valid_key(key) {
+        Ok(())
+    } else {
+        Err(InvalidFeedKey.into())
+    }
+}
+
 /// Where a feed's rows live. Called inside the cluster's consistent read, so the rows match the
 /// sequence number and replay log loaded with them.
 pub trait Source: Send + Sync + 'static {
@@ -62,8 +124,14 @@ pub struct Options {
     pub instance: String,
     /// JetStream stream that carries the patches.
     pub stream: String,
-    /// Feed `k` is published on `{subject_prefix}.k`.
+    /// Feed `k` is published on `{subject_prefix}.k`. A literal NATS subject, as a feed key is
+    /// ([`InvalidFeedKey`]), of at most 255 bytes; [`Cluster::start`] refuses any other.
     pub subject_prefix: String,
+    /// The NATS servers' `max_control_line`, in bytes. Defaults to 4,096 because the server
+    /// does not advertise this limit. With the default, a custom inbox prefix may use at most
+    /// 2,729 bytes. To use a longer prefix, raise the limit on all NATS servers this client can
+    /// connect to and set this field to match.
+    pub max_control_line: usize,
     /// The relay lease. The active relay renews it every quarter and steps down if it cannot
     /// renew within three quarters, so after an instance dies another takes over within about
     /// `lease`, even when its connections never close (a frozen VM, a network partition).
@@ -83,6 +151,7 @@ impl Default for Options {
             instance: "corten".into(),
             stream: "CORTEN_FEEDS".into(),
             subject_prefix: "corten.feeds".into(),
+            max_control_line: 4096,
             lease: Duration::from_secs(2),
             max_age: Duration::from_secs(3600),
             duplicate_window: Duration::from_secs(120),
@@ -106,7 +175,30 @@ impl<S: Source> Clone for Cluster<S> {
 impl<S: Source> Cluster<S> {
     /// Creates the tables if needed, starts this instance's JetStream consumer (before any feed
     /// loads, so no patch falls between a load and the stream) and its relay candidate.
+    /// Refuses an invalid subject prefix or a reply inbox that exceeds [`Options::max_control_line`]'s
+    /// budget before touching Postgres.
     pub async fn start(pool: PgPool, nats: async_nats::Client, source: S, options: Options) -> Result<Self, Error> {
+        if !literal(&options.subject_prefix, MAX_PREFIX_BYTES) {
+            return Err(format!(
+                "corten-cluster: subject_prefix {:?} is not a literal NATS subject: nonempty dot-separated \
+                 tokens without whitespace, control characters, `*` or `>`, at most {MAX_PREFIX_BYTES} bytes",
+                options.subject_prefix
+            )
+            .into());
+        }
+        // JetStream uses this shape for publish acknowledgements; measure the generated inbox
+        // so the configured prefix, separator and client-generated token are all counted.
+        let inbox_bytes = nats.new_inbox().len();
+        let max_inbox = options.max_control_line.saturating_sub(MAX_PUBLISH_SUBJECT_BYTES + PUBLISH_FRAMING_BYTES);
+        if inbox_bytes > max_inbox {
+            return Err(format!(
+                "corten-cluster: NATS reply inbox uses {inbox_bytes} bytes, but max_control_line={} \
+                 allows at most {max_inbox} bytes for the full reply inbox; shorten the custom inbox prefix \
+                 or raise both NATS and Options::max_control_line",
+                options.max_control_line
+            )
+            .into());
+        }
         store::migrate(&pool).await?;
         let js = async_nats::jetstream::new(nats);
         let options = Arc::new(options);
@@ -122,7 +214,8 @@ impl<S: Source> Cluster<S> {
 
     /// The feed for `key`, loaded on first use. `None` when no such feed exists. Ask again per
     /// request rather than keeping the handle: an idle feed is unloaded (`Options::idle_unload`),
-    /// and a kept handle would stop receiving patches.
+    /// and a kept handle would stop receiving patches. A key that breaks Corten's subject rules
+    /// ([`InvalidFeedKey`]) is `None` without a query: no feed can be written under it.
     pub async fn feed(&self, key: &str) -> Result<Option<Feed<S::Row>>, Error> {
         self.hub.feed(key).await
     }

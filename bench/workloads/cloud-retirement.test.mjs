@@ -3,7 +3,8 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fleetPlan, reservation, selection } from "./cloud-contract.mjs";
 import { commit } from "./cloud-fixtures.mjs";
-import { setupEvidence, terminalSetupScript, unusedHostScript } from "./cloud-retirement.mjs";
+import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
+import { setupEvidence, terminalSetupScript, unusedEvidence, unusedHostScript, verifyUnusedEvidence } from "./cloud-retirement.mjs";
 import { digest } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
 
@@ -53,9 +54,19 @@ class Entry:
     def is_dir(self): return True
     def is_symlink(self): return mode == 'symlink'
     def stat(self): return SimpleNamespace(st_size=len(self.read_bytes()))
-    def lstat(self): return SimpleNamespace(st_mode=stat.S_IFREG)
+    def lstat(self):
+        if config.get('bootstrap'):
+            if mode == 'custody-unreadable' and self.path == '/bench': raise PermissionError('private details')
+            present = {'partial': '/bench', 'dangling-bench': '/bench', 'guardian': '/run/corten-bench-control-' + config['token'],
+                       'unit-file': '/etc/systemd/system/' + unit, 'watcher-file': '/run/systemd/transient/' + config['watcher'],
+                       'watcher-cgroup': '/sys/fs/cgroup/system.slice/' + config['watcher']}
+            if self.path != present.get(mode): raise FileNotFoundError(self.path)
+        return SimpleNamespace(st_mode=stat.S_IFREG)
     def iterdir(self):
         if self.path == '/proc': return [Entry('/proc/' + pid) for pid in (['2', '3', '4', '5'] if mode == 'other-timeout' else ['2', '3', '4'])]
+        if self.path == '/run' and mode == 'foreign-guardian': return [Entry('/run/corten-bench-control-foreign')]
+        if self.path == '/run/systemd/transient' and mode == 'foreign-transient': return [Entry('/run/systemd/transient/corten-bench-control-foreign.service')]
+        if self.path == '/sys/fs/cgroup/system.slice' and mode == 'foreign-cgroup': return [Entry('/sys/fs/cgroup/system.slice/corten-bench-control-foreign.service')]
         if mode in ['partial', 'file-mismatch']: return [Entry('/bench/job.sh')]
         if mode == 'bench-data': return [Entry('/bench/campaign')]
         return []
@@ -64,18 +75,31 @@ class Entry:
         if self.path == '/proc/4/cmdline': return parent_cmdline()
         if self.path == '/proc/5/cmdline': return parent_bytes
         assert self.path != '/proc/2/cmdline'
-        if self.path.endswith('/cmdline'): return b'node /bench/job.sh' if mode == 'process' else b'ordinary'
+        if self.path.endswith('/cmdline'):
+            return {'process': b'node /bench/job.sh', 'guardian-process': b'/usr/bin/python3 -I -c corten-control'}.get(mode, b'ordinary')
         if mode == 'file-mismatch': return b'changed'
         return config['files'].get(self.name, 'unexpected').encode()
 def run(args, **kwargs):
     assert kwargs == dict(capture_output=True, text=True, timeout=5)
     if args[:2] == ['systemctl', 'show']:
+        if config.get('bootstrap') and args[2] == config['watcher']:
+            assert args[3:] == ['--property=LoadState']
+            return SimpleNamespace(returncode=0, stdout='LoadState=' + ('loaded' if mode == 'watcher-loaded' else 'not-found'))
         assert args[2] == unit
-        values = dict(Id=unit, LoadState='not-found', ActiveState='inactive', MainPID='0', FragmentPath='', ExecMainStartTimestamp='', Job='', Restart='no')
+        values = dict(Id=unit, LoadState='not-found', ActiveState='inactive', MainPID='0', FragmentPath='',
+                      ExecMainStartTimestamp=('n/a' if mode == 'systemd249' else ''), ExecMainStartTimestampMonotonic='0', Job='', Restart='no')
         if mode == 'loaded': values.update(LoadState='loaded', FragmentPath='/etc/systemd/system/' + unit)
         for case, key, value in [('active', 'ActiveState', 'active'), ('pid', 'MainPID', '3'), ('started', 'ExecMainStartTimestamp', 'yesterday'), ('unit-job', 'Job', '1'), ('restart', 'Restart', 'always'), ('wrong-unit', 'Id', 'foreign.service')]:
             if mode == case: values[key] = value
-        return SimpleNamespace(returncode=0, stdout='\\n'.join(k + '=' + v for k, v in values.items()))
+        if mode == 'started': values['ExecMainStartTimestampMonotonic'] = '12345'
+        if mode == 'malformed-timestamp': values['ExecMainStartTimestampMonotonic'] = '00'
+        if mode == 'missing-timestamp': del values['ExecMainStartTimestampMonotonic']
+        requested = [arg.removeprefix('--property=') for arg in args[3:]]
+        return SimpleNamespace(returncode=0, stdout='\\n'.join(k + '=' + values[k] for k in requested if k in values))
+    if args[:2] == ['systemctl', 'list-units']:
+        assert args[2:] == ['--all', '--plain', '--no-legend', '--no-pager', 'corten-bench-control-*.service']
+        watcher_row = config['watcher'] if mode == 'watcher-loaded' else 'corten-bench-control-foreign.service'
+        return SimpleNamespace(returncode=0, stdout=watcher_row + ' loaded active running' if mode in ['watcher-loaded', 'foreign-watcher'] else '')
     if args == ['systemctl', 'list-jobs', '--no-legend', '--no-pager']:
         return SimpleNamespace(returncode=0, stdout='1 start' if mode == 'jobs' else '')
     assert args == ['cloud-init', 'status', '--format', 'json']
@@ -97,11 +121,11 @@ test("fixed unused-host program accepts only never-started idle host observation
   const script = unusedHostScript(state), program = script.split("<<'CORTEN_UNUSED_HOST'\n")[1].split("\nCORTEN_UNUSED_HOST")[0];
   assert.ok(program);
   const files = remoteFiles(state), manifest = JSON.stringify(Object.fromEntries(Object.entries(files).map(([name, content]) => [name, digest(content)])));
-  for (const mode of ["empty", "partial", "loaded", "active", "pid", "started", "unit-job", "restart", "wrong-unit", "wrong-host",
+  for (const mode of ["empty", "systemd249", "partial", "loaded", "active", "pid", "started", "malformed-timestamp", "missing-timestamp", "unit-job", "restart", "wrong-unit", "wrong-host",
     "file-mismatch", "symlink", "bench-data", "docker", "jobs", "cloud-init", "user-data", "process", ...parentNegatives]) {
     const r = spawnSync(python, ["-c", fixture], { input: JSON.stringify({ mode, unit: state.unit, id: state.id, files, manifest, program }),
       encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
-    const positive = ["empty", "partial", "loaded"].includes(mode);
+    const positive = ["empty", "systemd249", "partial", "loaded"].includes(mode);
     assert.equal(r.error, undefined, mode); assert.equal(r.stderr, "", mode);
     assert.equal(r.status, positive ? 0 : 1, mode);
     const result = JSON.parse(r.stdout);
@@ -109,6 +133,44 @@ test("fixed unused-host program accepts only never-started idle host observation
     assert.equal(result.schema, "benchmark-unused-host/v1");
     if (positive) assert.deepEqual(result, { schema: "benchmark-unused-host/v1", hostId: "123", unit: state.unit, observedAtMs: 1000000, unused: true });
   }
+});
+
+test("interrupted first SSH probe positively proves absence of the guardian and all benchmark setup", { skip: !available }, () => {
+  const state = { ...reservation({ round: "r21", commit, token: "0123456789abcdef" }), id: "123", ip: "192.0.2.10", status: "preparing",
+    createIntentAt: "2026-11-18T00:00:00.000Z", control: { helperSha256: guardianSha256, ledger: [], sealed: [], monitor: { phase: "pending" } } };
+  const request = controlRequest(state, "ssh", [`root@${state.ip}`, "true"], 30000, "bootstrap");
+  state.control.ledger.push({ request, localTerminal: false });
+  const watcher = `corten-bench-control-${state.token}-${request.invocation.id}.service`;
+  for (const hasRequest of [true, false]) {
+    if (!hasRequest) state.control.ledger.pop();
+    const program = unusedHostScript(state, { bootstrap: true }).split("<<'CORTEN_UNUSED_HOST'\n")[1].split("\nCORTEN_UNUSED_HOST")[0];
+    const modes = hasRequest ? ["empty", "systemd249", "wrong-host", "active", "partial", "dangling-bench", "custody-unreadable", "loaded",
+      "unit-file", "guardian", "foreign-guardian", "guardian-process", "watcher-file", "watcher-cgroup", "watcher-loaded", "jobs", "process", "docker"]
+      : ["systemd249", "started", "guardian-process", "foreign-guardian", "foreign-transient", "foreign-cgroup", "foreign-watcher"];
+    for (const mode of modes) {
+      const positive = ["empty", "systemd249"].includes(mode);
+      const r = spawnSync(python, ["-c", fixture], { input: JSON.stringify({ mode, unit: state.unit, id: state.id, token: state.token,
+        watcher, files: {}, manifest: "{}", program, bootstrap: true }),
+        encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+      assert.equal(r.error, undefined, mode); assert.equal(r.stderr, "", mode);
+      assert.equal(r.status, positive ? 0 : 1, mode);
+      assert.equal(JSON.parse(r.stdout).unused, positive, mode);
+    }
+  }
+});
+
+test("unused retirement replays legacy proofs and requires the key digest for a pinned proof", () => {
+  const state = { ...reservation({ round: "r21", commit, token: "0123456789abcdef" }), id: "123", ip: "192.0.2.10", status: "preparing",
+    createIntentAt: "2026-11-18T00:00:00.000Z" };
+  const at = 1000000, raw = JSON.stringify({ schema: "benchmark-unused-host/v1", hostId: state.id, unit: state.unit, observedAtMs: at, unused: true });
+  const legacy = unusedEvidence(raw, state, unusedHostScript(state, { legacyTimestamp: true }), at, at);
+  verifyUnusedEvidence(legacy, state);
+  state.control = { helperSha256: guardianSha256, ledger: [], sealed: [], monitor: { phase: "pending" } };
+  const pinned = unusedEvidence(raw, state, unusedHostScript(state, { bootstrap: true }), at, at, "e".repeat(64));
+  verifyUnusedEvidence(pinned, state);
+  assert.throws(() => verifyUnusedEvidence({ ...pinned, knownHostsSha256: "not-a-digest" }, state));
+  delete pinned.knownHostsSha256;
+  assert.throws(() => verifyUnusedEvidence(pinned, state));
 });
 
 const setupFixture = `import contextlib, io, json, os, pathlib, stat, subprocess, sys, time, urllib.request

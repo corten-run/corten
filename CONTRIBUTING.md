@@ -72,6 +72,22 @@ The bare `npx tsc` command may select the benchmark harness's classic 5.9.3 comp
   container after `apt-get update && apt-get install -y valgrind`, and for `count.mjs` a Linux
   host with `perf`, root and cgroup v2.
 
+Use Cargo 1.100 or later when changing Rust dependencies. The checkout's `.cargo/config.toml`
+asks Cargo to pass over registry versions published less than three days ago when resolving
+dependencies. This gives a bad release time to be noticed and yanked, not a guarantee that old
+versions are safe. It does not reject versions already in `Cargo.lock`, cover versions without a
+registry publish time, or apply to an install from the registry (`cargo install corten-cli`);
+`cargo install --path` and an app inside the checkout do read it. A new resolution fails when no
+version old enough meets a requirement. For an urgent fix, set
+`CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow` for that resolution only, and review the lockfile
+diff. Cargo 1.89 ignores the setting; Cargo 1.99.1 ignores it with a warning.
+
+Fix Cargo's unused dependency warnings from the stable, all-feature, all-target check below.
+Cargo 1.100's `unused_dependencies` lint does not cover dev-dependencies. These Cargo lints
+remain warnings: setting them to `deny` in the manifests would introduce warnings on the
+supported Rust floor, and `-D warnings` here applies to rustc and Clippy, not Cargo.
+Revisit `deny` when the Rust floor reaches 1.100.
+
 ## Checks
 
 Grouped benchmark replay and observer controls also run in the separate
@@ -103,15 +119,17 @@ their absence cannot establish framework or host qualification.
 
 `Catalog Contract` runs the harness and Corten parity for framework-only changes; app
 changes run the harness and the affected apps, including consumers of shared drivers.
-Changes to shared benchmark inputs or the workflow, pushes to `main` and manual runs
-test all 20 parity apps and both JSON jobs. This also applies to unknown app directories
+Changes to shared benchmark inputs or the workflow, and manual runs, test all 20 parity
+apps and both JSON jobs. A push to `main` is scoped the same way by its push diff, and tests
+everything when its base commit is unknown. This also applies to unknown app directories
 and files directly in `bench/fullstack/apps/`. An `aspnet-aot` change runs the JSON jobs.
 Run `node --test scripts/benchmark-scope.test.mjs` to check both selectors, including
 the imports of the Catalog parity commands for each app.
 Both workflows compare the pull request merge commit with its first parent, using
-the full Git diff rather than GitHub's path-filter file list. Evidence compares the
-before and after commits on a push. Newer pull request runs cancel older ones;
-`main` runs do not cancel one another.
+the full Git diff rather than GitHub's path-filter file list, and the before and after
+commits on a push; a push whose before commit is unknown or not an ancestor of the new one (a
+force-push) tests everything. Newer pull request runs cancel older ones; `main` runs do not
+cancel one another, so each push's own diff is tested.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,

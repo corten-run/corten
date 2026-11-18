@@ -10,7 +10,7 @@ import { controlCheckpoint, shellTransport } from "./cloud-transport.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { validateFleet } from "./cloud-contract.mjs";
 import { providerFiles, providerTransport } from "./cloud-provider.mjs";
-import { failedNativePolicy, failedNativeRoots } from "./cloud-retirement.mjs";
+import { failedNativePolicy, failedNativeRoots, unusedBootstrap } from "./cloud-retirement.mjs";
 import { mixedWait, ownedMixedWait, verifyMixedSignal } from "./cloud-cancellation.mjs";
 
 const checkout = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -62,7 +62,13 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   else {
     const bytes = regular(join(physicalRequest, `groups-${options.round}`, "state.json"), 1024 * 1024);
     const saved = controllerState(JSON.parse(bytes), options.round);
-    if (options.cancelMixedWait) {
+    if (options.unusedBootstrapKnownHosts !== undefined) {
+      assert.ok(unusedBootstrap(saved), "unused bootstrap requires no dispatch or only an unacknowledged first SSH no-op");
+      if (saved.commit !== head) await run("git", ["merge-base", "--is-ancestor", saved.commit, head]);
+      const key = regular(options.unusedBootstrapKnownHosts, 1024 * 1024);
+      assert.ok(key.length, "verified host key required");
+      recovery = { measuredCommit: saved.commit, hostId: saved.id, ip: saved.ip, knownHostsSha256: digest(key), policy: "first-ssh-unused-only-no-qualification" };
+    } else if (options.cancelMixedWait) {
       ownedMixedWait(saved); assert.equal(saved.status, "running");
       for (const key of ["mixedCancellation", "archiveSha256", "evidence", "deletionIntentAt", "collectedAt"]) assert.equal(saved[key], undefined);
       for (const name of ["mixed-cancel-reservation.json", "mixed-cancel-intent.json", "mixed-cancel-signal.json"])
@@ -85,7 +91,9 @@ export async function productionPlan(options, { repo = checkout, run } = {}) {
   const subject = { action: options.detach ? "detach" : options.collect ? "collect" : options.cancelMixedWait ? "cancel-mixed-wait" : options.retireFailedNative ? "retire-failed-native" : "deliver-audit", controllerCommit: head,
     options, stateRoot: physicalRequest, reservationSha256, deliverySha256, ...(fleetSha256 ? { fleetSha256 } : {}),
     ...(recovery ? { recovery } : {}),
-    declaration: options.cancelMixedWait ? "operator-approved-after-merged-independent-review-for-one-owned-mixed-wait-cancellation-not-audit-or-delete"
+    declaration: options.unusedBootstrapKnownHosts !== undefined
+      ? "operator-confirmed-original-local-process-tree-gone-and-exact-host-key-verified-for-unused-bootstrap-retirement-only"
+      : options.cancelMixedWait ? "operator-approved-after-merged-independent-review-for-one-owned-mixed-wait-cancellation-not-audit-or-delete"
       : recovery ? "operator-approved-after-merged-independent-review-for-failed-native-custody-and-terminal-retirement-not-a-baseline"
       : "operator-approved-after-merged-independent-review-and-full-native-readiness" };
   return { subject, approvalSha256: digest(JSON.stringify(subject)), missing };
@@ -131,6 +139,7 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   if (preview) {
     write(JSON.stringify({ action: plan.subject.action, controllerCommit: plan.subject.controllerCommit, round: options.round,
       ...(plan.subject.recovery ? { recovery: plan.subject.recovery, reservationSha256: plan.subject.reservationSha256 } : {}),
+      ...(options.unusedBootstrapKnownHosts !== undefined ? { declaration: plan.subject.declaration } : {}),
       approvalSha256: plan.approvalSha256, missing: plan.missing, fullGroupQualified: false }));
     return plan.missing.length ? 2 : 3; // Preview is never qualified execution success.
   }
@@ -170,7 +179,10 @@ export async function productionMain(args, { spawn, streamSpawn, providerFactory
   };
   stage = "controller-construction";
   const task = controller({ ...options, stateDir: plan.subject.stateRoot }, { run: authorizedRun, repo, inspect, sleep, interrupted,
-    mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked, ...(options.retireFailedNative || options.cancelMixedWait ? {
+    mergedHead: remoteHead, settle: () => providerRun.close(), authorizeAudit: authorizeLocked,
+    ...(options.unusedBootstrapKnownHosts === undefined ? {} : { unusedBootstrapApproval: {
+      reservationSha256: plan.subject.reservationSha256, knownHostsSha256: plan.subject.recovery.knownHostsSha256,
+    } }), ...(options.retireFailedNative || options.cancelMixedWait ? {
       recoveryApproval: { controllerCommit: plan.subject.controllerCommit, reservationSha256: plan.subject.reservationSha256 },
     } : {}) });
   let result;

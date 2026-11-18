@@ -155,10 +155,14 @@ impl Container {
         json: bool,
         unsupported: &dyn Fn(&Arg) -> Error,
     ) -> Result<Self, Error> {
+        let args = serde_args_for(attrs, derive)?;
+        if json {
+            check_from_json_container(&args, is_enum)?;
+        }
         let mut c = Container::default();
-        for arg in serde_args_for(attrs, derive)? {
+        for arg in args {
             match arg.key.as_str() {
-                "transparent" if json && !is_enum => c.transparent = true,
+                "transparent" if json => c.transparent = true,
                 "rename_all_fields" if json && is_enum => {}
                 "rename_all_fields" if json => {
                     return err(arg.span, format!("{derive}: #[serde(rename_all_fields)] can only be used on enums"))
@@ -176,6 +180,30 @@ impl Container {
         }
         Ok(c)
     }
+}
+
+/// serde_derive's `check_transparent` and `check_from_and_try_from`, before unsupported
+/// attributes are rejected individually. Read all the arguments so order and grouping do not matter.
+fn check_from_json_container(args: &[Arg], is_enum: bool) -> Result<(), Error> {
+    // Check the attribute form, not the Rust type inside the string.
+    for arg in args.iter().filter(|arg| matches!(arg.key.as_str(), "from" | "try_from" | "into")) {
+        string_arg("FromJson", arg)?;
+    }
+    let find = |key| args.iter().find(|arg| arg.key == key);
+    if let Some(transparent) = find("transparent") {
+        for key in ["from", "try_from", "into"] {
+            if let Some(arg) = find(key) {
+                return err(arg.span, format!("#[serde(transparent)] is not allowed with #[serde({key} = \"...\")]"));
+            }
+        }
+        if is_enum {
+            return err(transparent.span, "#[serde(transparent)] is not allowed on an enum");
+        }
+    }
+    if let (Some(_), Some(arg)) = (find("from"), find("try_from")) {
+        return err(arg.span, "#[serde(from = \"...\")] and #[serde(try_from = \"...\")] conflict with each other");
+    }
+    Ok(())
 }
 
 /// The impl's pieces: `impl<'de: 'a, 'a, T>` (each lifetime outlived by `'de`, as a field that

@@ -5,8 +5,10 @@
 
 use std::time::{Duration, Instant};
 
+use async_nats::jetstream::consumer::{pull::OrderedConfig, DeliverPolicy};
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
 use corten::feed::Change;
 
@@ -94,6 +96,246 @@ async fn eventually(what: &str, mut ok: impl FnMut() -> bool) {
 
 async fn take(conn: &mut PgConnection, who: &str, lease: Duration) -> bool {
     store::lease(conn, who, lease).await.unwrap()
+}
+
+/// Keys that are not literal NATS subjects: empty tokens, whitespace (including the framing
+/// bytes and Unicode spaces), control characters (NUL also stops Postgres), the subscription
+/// wildcards, and keys over Corten's 1,024-byte limit.
+fn bad_keys() -> Vec<String> {
+    let mut keys: Vec<String> = [
+        "my feed",
+        "",
+        ".x",
+        "x.",
+        "a..b",
+        "a\tb",
+        "a\rb",
+        "a\nb",
+        "a\u{b}b",
+        "a\u{c}b",
+        "a\u{a0}b",
+        "a\u{2028}b",
+        "a\0b",
+        "a\u{7f}b",
+        "a\u{85}b",
+        "*",
+        ">",
+        "a*b",
+        "a>b",
+        "a.>",
+    ]
+    .map(String::from)
+    .into();
+    keys.push("a".repeat(5000));
+    keys.push("\u{e9}".repeat(2500));
+    keys.push(long_key(1025));
+    keys
+}
+
+#[test]
+fn feed_keys_are_literal_nats_subjects() {
+    for key in ["listings", "sellers.42", "a-b_c", "caf\u{e9}.\u{5e02}\u{5834}", "a:b", "x/y"] {
+        assert!(check_key(key).is_ok(), "refused {key:?}");
+        // Never wider than the client's own structural check.
+        assert!(async_nats::Subject::from(key).is_valid(), "{key:?}");
+    }
+    for key in bad_keys() {
+        assert!(check_key(&key).unwrap_err().is::<InvalidFeedKey>(), "accepted {key:?}");
+    }
+    // The byte limit, whatever the characters.
+    assert!(check_key(&"k".repeat(MAX_FEED_KEY_BYTES)).is_ok());
+    assert!(check_key(&long_key(1024)).is_ok());
+    assert!(check_key(&format!("{}\u{e9}", "k".repeat(MAX_FEED_KEY_BYTES - 2))).is_ok());
+    assert!(check_key(&"k".repeat(MAX_FEED_KEY_BYTES + 1)).is_err());
+    assert!(check_key(&format!("{}\u{e9}", "k".repeat(MAX_FEED_KEY_BYTES - 1))).is_err());
+}
+
+#[tokio::test]
+async fn begin_refuses_an_invalid_key_before_it_opens_a_transaction() {
+    // Nothing listens there: reaching the database would fail with a connection error instead.
+    let pool = PgPoolOptions::new().connect_lazy("postgres://corten@127.0.0.1:1/none").unwrap();
+    for key in bad_keys() {
+        let error = begin(&pool, &key, Some("idem")).await.err().expect("refused");
+        assert!(error.is::<InvalidFeedKey>(), "{key:?}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn invalid_feed_keys_are_refused_before_the_insert() {
+    let Some((db, _)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let pool = pool(&db).await;
+    let mut tx = pool.begin().await.unwrap();
+    for key in bad_keys() {
+        let error = create_feed(&mut tx, &key).await.err().unwrap_or_else(|| panic!("accepted {key:?}"));
+        assert!(error.is::<InvalidFeedKey>(), "{key:?}: {error}");
+        if key.contains('\0') {
+            continue; // Postgres cannot bind it, so it cannot be looked up either.
+        }
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM corten_feeds WHERE key = $1)")
+            .bind(&key)
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+        assert!(!exists, "inserted {key:?}");
+    }
+    let valid = key("valid.caf\u{e9}.part-_");
+    assert!(create_feed(&mut tx, &valid).await.unwrap(), "the transaction is still usable");
+    assert!(!create_feed(&mut tx, &valid).await.unwrap());
+    tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_invalid_subject_prefix_is_refused_before_migration() {
+    let Some((_, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    // Nothing listens there: migrating first would fail with a connection error instead.
+    let pool = PgPoolOptions::new().connect_lazy("postgres://corten@127.0.0.1:1/none").unwrap();
+    let long = "p".repeat(256);
+    for prefix in ["", "corten feeds", "corten.", "corten..feeds", "corten.*", "corten.>", "corten\u{a0}feeds", "corten\0", &long]
+    {
+        let options = Options { subject_prefix: prefix.into(), ..Options::default() };
+        let started = Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), Items, options).await;
+        let error = started.err().unwrap_or_else(|| panic!("accepted {prefix:?}")).to_string();
+        assert!(error.contains("subject_prefix"), "{prefix:?}: {error}");
+    }
+}
+
+#[tokio::test]
+async fn an_over_budget_reply_inbox_is_refused_before_migration() {
+    let Some((_, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    // Nothing listens there: migrating first would fail with a connection error instead.
+    let pool = PgPoolOptions::new().connect_lazy("postgres://corten@127.0.0.1:1/none").unwrap();
+    let nats = async_nats::ConnectOptions::new().custom_inbox_prefix("r".repeat(2730)).connect(&nats).await.unwrap();
+    let started = Cluster::start(pool, nats, Items, Options::default()).await;
+    let error = started.err().expect("refused").to_string();
+    assert!(error.contains("reply inbox uses 2753 bytes"), "{error}");
+    assert!(error.contains("max_control_line=4096 allows at most 2752 bytes"), "{error}");
+}
+
+/// A pool on an isolated schema so legacy rows cannot affect the other relay tests.
+async fn schema_pool(url: &str, schema: &str) -> PgPool {
+    let admin = PgPool::connect(url).await.unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {schema}")).execute(&admin).await.unwrap();
+    admin.close().await;
+    let options = url.parse::<PgConnectOptions>().unwrap().options([("search_path", schema)]);
+    PgPoolOptions::new().max_connections(8).connect_with(options).await.unwrap()
+}
+
+/// Deterministic, low-compressibility ASCII for exercising the real B-tree indexes.
+fn long_key(len: usize) -> String {
+    let alphabet = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    let mut state = 0xa3b1_c2d3_u32;
+    (0..len)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            char::from(alphabet[state as usize % alphabet.len()])
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_relay_drops_legacy_invalid_keys_and_delivers_good_rows_in_order() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("legacy_");
+    let pool = schema_pool(&db, &schema).await;
+    migrate(&pool).await.unwrap();
+
+    let good = long_key(1024);
+    let too_long = long_key(1025);
+    let mut tx = pool.begin().await.unwrap();
+    assert!(create_feed(&mut tx, &good).await.unwrap());
+    sqlx::query("UPDATE corten_feeds SET seq = 3 WHERE key = $1").bind(&good).execute(&mut *tx).await.unwrap();
+    for bad in ["old key", &too_long] {
+        sqlx::query("INSERT INTO corten_feeds (key, generation, seq) VALUES ($1, 'g', 1)")
+            .bind(bad)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    // Commit as one batch before starting any relay. Both later good rows must get past both bad keys.
+    for (feed, seq) in [(&*good, 1_i64), ("old key", 1), (&too_long, 1), (&good, 2), (&good, 3)] {
+        sqlx::query(
+            "INSERT INTO corten_outbox (feed, generation, seq, body)
+             SELECT key, generation, $2, $3 FROM corten_feeds WHERE key = $1",
+        )
+        .bind(feed)
+        .bind(seq)
+        .bind(format!(r#"{{"seq":{seq},"changes":[]}}"#))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let prefix = format!("{schema}{}", "p".repeat(255 - schema.len()));
+    let stream_name = schema.to_uppercase();
+    let options = Options { stream: stream_name.clone(), subject_prefix: prefix.clone(), ..Options::default() };
+    let nats = async_nats::ConnectOptions::new().custom_inbox_prefix("r".repeat(2729)).connect(&nats).await.unwrap();
+    let cluster = Cluster::start(pool.clone(), nats.clone(), Items, options).await.unwrap();
+    let js = async_nats::jetstream::new(nats);
+    let mut stream = js.get_stream(&stream_name).await.unwrap();
+    let consumer =
+        stream.create_consumer(OrderedConfig { deliver_policy: DeliverPolicy::All, ..Default::default() }).await.unwrap();
+    let mut messages = consumer.messages().await.unwrap();
+    let subject = format!("{prefix}.{good}");
+    for seq in 1..=3 {
+        let msg = tokio::time::timeout(Duration::from_secs(10), messages.next())
+            .await
+            .unwrap_or_else(|_| panic!("timed out waiting for good patch {seq}"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(msg.subject.as_str(), subject);
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"], seq);
+    }
+
+    let end = Instant::now() + Duration::from_secs(10);
+    while !store::pending(&pool, 10).await.unwrap().is_empty() {
+        assert!(Instant::now() < end, "outbox rows not marked done");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(stream.info().await.unwrap().state.messages, 3, "only valid rows were published");
+    assert!(cluster.feed("old key").await.unwrap().is_none());
+    assert!(cluster.feed(&too_long).await.unwrap().is_none());
+
+    js.delete_stream(&stream_name).await.unwrap();
+    let admin = PgPool::connect(&db).await.unwrap();
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
+}
+
+/// One write's latency until a follower has it (begin, statements, commit, relay, JetStream,
+/// hub) over real Postgres and NATS. Run in release mode, alone, with the integration URLs set;
+/// alternate the builds being compared on the same services.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore]
+async fn relay_latency() {
+    let (db, nats) = urls().expect("set the cluster integration URLs");
+    let pool = pool(&db).await;
+    let feed = key("latency");
+    new_feed(&pool, &feed).await;
+    let cluster =
+        Cluster::start(pool.clone(), async_nats::connect(&nats).await.unwrap(), Items, Options::default()).await.unwrap();
+    let followed = cluster.feed(&feed).await.unwrap().unwrap();
+    let mut samples = Vec::new();
+    for n in 1..=110 {
+        let started = Instant::now();
+        set(&pool, &feed, n, None).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while followed.seq() < n as u64 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        if n > 10 {
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    println!(
+        "110 serial writes, 10 warmup: write to follower ms median={:.3}, p95={:.3}, range={:.3}..{:.3}",
+        samples[50], samples[94], samples[0], samples[99]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -564,4 +806,8 @@ async fn a_feed_route_answers_a_snapshot_and_json_404_for_a_feed_that_does_not_e
     let (status, kind, body) = get(&key("missing")).await;
     assert_eq!((status, kind.as_str()), (StatusCode::NOT_FOUND, "application/problem+json"));
     assert!(body.contains(r#""status":404"#) && body.contains("no feed missing"), "{body}");
+    // A key no feed can have is not found either, rather than the service being unavailable.
+    let (status, kind, body) = get("bad..key").await;
+    assert_eq!((status, kind.as_str()), (StatusCode::NOT_FOUND, "application/problem+json"));
+    assert!(body.contains(r#""status":404"#), "{body}");
 }
