@@ -1,0 +1,3 @@
+/* For a test of style={..} beside a literal style: a meter whose fill comes from data. */
+@property --fill { syntax: "<percentage>"; inherits: false; initial-value: 0%; }
+.meter { background: linear-gradient(to right, currentColor var(--fill), transparent var(--fill)); }
