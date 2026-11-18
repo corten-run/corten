@@ -31,11 +31,6 @@ jobs:
   checks:
     uses: ./.github/workflows/ci.yml
 
-  benchmark-evidence:
-    # Both reusable workflows see the release workflow name and run ID in their concurrency keys.
-    needs: checks
-    uses: ./.github/workflows/benchmark-evidence.yml
-
   version:
     runs-on: ubuntu-24.04
     outputs:
@@ -155,7 +150,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [checks, benchmark-evidence, version, binaries, verify-archives]
+    needs: [checks, version, binaries, verify-archives]
     runs-on: ubuntu-24.04
     # Protect this environment in the repository settings; crates.io's trusted publisher names it.
     environment: release

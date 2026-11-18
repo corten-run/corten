@@ -1,0 +1,87 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
+
+const tooling = ["package.json", "package-lock.json", ".dockerignore", ".gitattributes", ".gitignore",
+  "scripts/benchmark-scope.mjs", "scripts/catalog-scope.test.mjs", "scripts/steady.mjs"];
+const rustInputs = ["Cargo.toml", "Cargo.lock", ".cargo", "rust-toolchain", "rust-toolchain.toml", "crates"];
+const catalogShared = [...tooling, ".github/workflows/catalog.yml", "bench/load-tool.mjs",
+  "bench/catalog", "bench/client-heavy", "bench/fullstack-browser", "bench/hardening",
+  "bench/json-api", "bench/live", "bench/marketplace", "bench/mixed-production", "bench/workloads",
+  // The catalog and marketplace checkers read these for every app.
+  "bench/fullstack/apps/axum-maud/static/style.css", "bench/fullstack/apps/axum-maud/static/components.css",
+];
+// Includes the core suite's committed source-custody roots, checked against captureSources.
+const evidenceInputs = [...tooling, ...rustInputs, ".github/workflows/benchmark-evidence.yml",
+  "README.md", "CONTRIBUTING.md", "AGENTS.md", "docs", "bench", "scripts", "examples/card-market"];
+const matches = (path, inputs) => inputs.some(input => path === input || path.startsWith(`${input}/`));
+
+export function selectScope(allApps, paths) {
+  if (paths === undefined) return { apps: allApps, json: true };
+  const selected = new Set();
+  let json = false;
+  for (const path of paths) {
+    if (matches(path, rustInputs) || matches(path, ["bench/catalog/corten"])) {
+      selected.add("corten");
+    } else if (matches(path, catalogShared)) {
+      return { apps: allApps, json: true };
+    } else if (path.startsWith("bench/fullstack/apps/")) {
+      const app = path.split("/")[3];
+      if (app === "aspnet-aot") json = true;
+      else selected.add(app);
+      // FastAPI's native and trace checks reuse the Express driver.
+      if (path === "bench/fullstack/apps/express/check-native.mjs") selected.add("fastapi");
+      // These Gin helpers also drive the other compiled apps' alert checks.
+      if (/^bench\/fullstack\/apps\/gin\/(check-alerts|compiled-check|hydration-diagnostics)\.mjs$/.test(path)) {
+        for (const peer of ["drogon", "topcoat", "leptos"]) selected.add(peer);
+      }
+    } else if (matches(path, ["bench/fullstack"])) {
+      return { apps: allApps, json: true };
+    }
+  }
+  return { apps: allApps.filter(app => selected.has(app)), json };
+}
+
+export function selectEvidence(paths) {
+  return paths === undefined || paths.some(path => matches(path, evidenceInputs));
+}
+
+function changedPaths(base, head, cwd) {
+  // Keep both sides of a move and don't hide gitlinks from source-custody checks.
+  return execFileSync("git", ["diff", "--name-only", "--no-renames", "--ignore-submodules=none", "-z", base, head, "--"], {
+    cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024,
+  }).split("\0").filter(Boolean);
+}
+
+export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd) {
+  const sha = /^[0-9a-f]{40}$/;
+  if (GITHUB_EVENT_NAME === "pull_request") {
+    assert.match(GITHUB_SHA ?? "", sha);
+    // Actions tests the synthetic merge, including any base-side path moves.
+    return changedPaths(`${GITHUB_SHA}^1`, GITHUB_SHA, cwd);
+  }
+  if (GITHUB_EVENT_NAME === "push") {
+    assert.match(GITHUB_SHA ?? "", sha);
+    if (sha.test(PUSH_BEFORE ?? "") && PUSH_BEFORE !== "0".repeat(40)) {
+      const base = spawnSync("git", ["cat-file", "-e", `${PUSH_BEFORE}^{commit}`], { cwd, stdio: "ignore" });
+      if (base.error) throw base.error;
+      if (base.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd);
+    }
+    console.warn("Push base unavailable; running all Evidence jobs.");
+  }
+  return undefined;
+}
+
+if (import.meta.main) {
+  const { GITHUB_EVENT_NAME, GITHUB_OUTPUT, PARITY_APPS } = process.env;
+  const workflow = process.argv[2];
+  if (workflow === "catalog") {
+    const paths = GITHUB_EVENT_NAME === "pull_request" ? eventPaths(process.env) : undefined;
+    const { apps, json } = selectScope(JSON.parse(PARITY_APPS), paths);
+    appendFileSync(GITHUB_OUTPUT, `apps=${JSON.stringify(apps)}\njson=${json}\n`);
+  } else if (workflow === "evidence") {
+    appendFileSync(GITHUB_OUTPUT, `run=${selectEvidence(eventPaths(process.env))}\n`);
+  } else {
+    throw new Error("Expected catalog or evidence scope");
+  }
+}

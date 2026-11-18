@@ -76,8 +76,10 @@ The bare `npx tsc` command may select the benchmark harness's classic 5.9.3 comp
 Grouped benchmark replay and observer controls also run in the separate
 `Benchmark Evidence` workflow: `npm run check:groups:evidence:core`,
 `npm run check:groups:evidence:contracts` and `npm run check:groups:evidence:browser`.
-On pull requests and pushes to `main`, this workflow runs only for changes to `bench/`,
-its fixtures, tooling or workflow file. The release workflow calls it without a path filter.
+On pull requests and pushes to `main`, its scope job starts the suites only when the
+benchmark, tooling, workflow or committed source-custody inputs change. These inputs
+include `docs/`, `crates/`, and the Cargo manifests and locks. A push with no usable
+base commit runs all Evidence jobs. Evidence is not a publication gate; Release calls CI only.
 They need Node 24 or later, the installed pinned Playwright Chromium, current Git,
 the full repository history and the integrity-checked npm cache used by `npm ci`.
 The portable jobs use the existing Git-capable Playwright image and serial test files;
@@ -96,12 +98,14 @@ portable saved-verifier test, excluding only the optional historical `retained r
 capture test. Native production-image and Docker collector controls are also separate;
 their absence cannot establish framework or host qualification.
 
-`Catalog Contract` selects parity apps from the pull request's merge-base diff. Framework-only
-changes run the harness and Corten parity; app changes run the harness and the affected apps.
-Changes to shared benchmark inputs or the workflow, pushes to `main` and manual runs test all
-20 parity apps and both JSON jobs. An `aspnet-aot` change also runs the JSON jobs.
-For both workflows, newer pull request runs cancel older ones; main and release runs do not
-cancel one another.
+`Catalog Contract` runs the harness and Corten parity for framework-only changes; app
+changes run the harness and the affected apps, including consumers of shared drivers.
+Changes to shared benchmark inputs or the workflow, pushes to `main` and manual runs
+test all 20 parity apps and both JSON jobs. An `aspnet-aot` change runs the JSON jobs.
+Both workflows compare the pull request merge commit with its first parent, using
+the full Git diff rather than GitHub's path-filter file list. Evidence compares the
+before and after commits on a push. Newer pull request runs cancel older ones;
+`main` runs do not cancel one another.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,

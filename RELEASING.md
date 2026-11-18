@@ -90,9 +90,7 @@ branch for one patch, not a maintained release branch.
    for, and `main`'s expects files the tag lacks. If `release.yml` needs anything from `ci.yml` the
    tag's copy lacks, add only that to the patch branch's `ci.yml`, reviewed in the same pull
    request, so the fix still ships as the patch `SECURITY.md` promises. It gets the same review and
-   checks; CI runs on pull requests to any branch. Keep the called `benchmark-evidence.yml` and
-   its suite inputs compatible with the patch tree too; verify all reusable workflow references
-   resolve at the candidate commit before tagging it.
+   checks; CI runs on pull requests to any branch.
 4. Record the merged commit's SHA on the patch branch as the candidate. At that SHA, confirm
    `git diff origin/main CANDIDATE_SHA -- .github/workflows/release.yml` prints nothing and
    `git diff vX.Y.W CANDIDATE_SHA -- .github/workflows/ci.yml` prints nothing beyond what step 3
@@ -132,11 +130,9 @@ git tag -a vX.Y.Z CANDIDATE_SHA -m "Corten X.Y.Z"
 git push origin vX.Y.Z
 ```
 
-1. The tag push starts `Release`. It reuses `CI` and `Benchmark Evidence`, with no path filter;
-   `Benchmark Evidence` starts after `CI`, and both must pass before publishing. The `version`
-   job checks the tag against the `corten-run`
-   version and extracts the matching, nonempty `CHANGELOG.md` section. After `CI` and `version`
-   pass, `binaries` builds the five locked release binaries and uploads their archives:
+1. The tag push starts `Release`. It reuses `CI`; its `version` job checks the tag against the
+   `corten-run` version and extracts the matching, nonempty `CHANGELOG.md` section. After both
+   jobs pass, `binaries` builds the five locked release binaries and uploads their archives:
    Linux musl x86_64 and aarch64, macOS x86_64 and aarch64, and Windows x86_64.
 2. `attest` signs build provenance in a separate job that builds nothing; the archive builders
    do not hold an OIDC token. `verify-archives` requires exactly the five expected archives,

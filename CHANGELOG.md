@@ -22,8 +22,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
-- Catalog Contract selects the affected parity apps on pull requests. Benchmark Evidence runs
-  for changes to its inputs and on releases. Both cancel superseded pull request runs, not main runs.
+- Catalog Contract selects affected parity apps on pull requests. Benchmark Evidence runs its
+  suites when inputs change, including the sources captured by the core suite. Both scope
+  against the full Git diff and cancel superseded pull request runs, not main runs.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 
