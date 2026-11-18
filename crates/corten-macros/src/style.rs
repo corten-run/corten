@@ -559,10 +559,10 @@ impl Scoper<'_> {
                 let mut inner_nest = nest;
                 let inner = if let Some(rule) = text.strip_prefix('@') {
                     // At-rule names are case-insensitive in CSS: `@MEDIA` is `@media`.
-                    let (name, prelude) = rule.split_at(css_name_end(rule.as_bytes(), 0));
+                    let (name, prelude) = self.at_rule(rule, start)?;
                     let name = name.to_ascii_lowercase();
                     if name == "page" && ctx != Ctx::Raw {
-                        self.check_page(prelude.trim(), start)?;
+                        self.check_page(prelude, start)?;
                     }
                     match (ctx, name.as_str()) {
                         (Ctx::Raw, _) => Ctx::Raw,
@@ -648,7 +648,7 @@ impl Scoper<'_> {
                 continue;
             }
             if let Some(rule) = text.strip_prefix('@') {
-                let name = rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
+                let (name, _) = self.at_rule(rule, start)?;
                 match name {
                     "custom-media" => {
                         return Err(self.error(
@@ -879,7 +879,8 @@ impl Scoper<'_> {
     /// names its own after itself, and one with no name, which sets every page the app prints,
     /// belongs in the app's stylesheet.
     fn check_page(&self, prelude: &str, at: usize) -> Result<(), String> {
-        let name = prelude.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')).next().unwrap_or("");
+        let start = css_skip_space(prelude.as_bytes(), 0);
+        let name = &prelude[start..css_name_end(prelude.as_bytes(), start)];
         let own = format!("{}-", self.prefix);
         if name.is_empty() {
             return Err(self.error(
@@ -893,6 +894,14 @@ impl Scoper<'_> {
             );
         }
         Ok(())
+    }
+
+    fn at_rule<'r>(&self, rule: &'r str, at: usize) -> Result<(&'r str, &'r str), String> {
+        let (name, prelude) = rule.split_at(css_name_end(rule.as_bytes(), 0));
+        if !name.is_ascii() {
+            return Err(self.error(at, format!("the at-rule name `@{}` contains a non-ASCII character", name.escape_default())));
+        }
+        Ok((name, prelude))
     }
 
     fn skip_space(&mut self) {
@@ -2381,15 +2390,33 @@ mod tests {
             ("@scope (.list)\u{a0}to (.slot)", "the browser drops an @scope"),
             ("@scope (.list) to\u{a0} (.slot)", "the browser drops an @scope"),
             ("@scope (.list) to (.slot) \u{a0}", "the browser drops an @scope"),
-            ("@scope\u{a0}(.list)", "@scope\u{a0} is not supported"),
         ] {
             let css = format!("{prelude} {{ p {{ outline-style:solid }} }}");
             let error = scope(&css, "x").unwrap_err();
             assert!(error.contains(reason), "{css:?}: {error}");
         }
 
+        for (css, name) in [
+            ("@scope\u{a0}(.list) { p { outline-style:solid } }", r"@scope\u{a0}"),
+            ("@media\u{a0}screen { .list { outline-style:solid } }", r"@media\u{a0}screen"),
+            ("@layer\u{a0}base { .list { outline-style:solid } }", r"@layer\u{a0}base"),
+            ("@layer\u{a0}base, kit;", r"@layer\u{a0}base"),
+        ] {
+            let error = scope(css, "x").unwrap_err();
+            assert!(error.contains(&format!("the at-rule name `{name}` contains a non-ASCII character")), "{css:?}: {error}");
+        }
+        let css = "@page \u{a0}x-slip { size: A4 }";
+        let error = scope(css, "x").unwrap_err();
+        assert!(error.contains("start it with this component's"), "{css:?}: {error}");
+
         let css = "@scope (\u{a0} .list) to (.slot \u{a0}) { p { outline-style:solid } }";
         assert_eq!(scope(css, "x").unwrap().css, "@scope (\u{a0} .x__list) to (.x__slot \u{a0}){p{outline-style:solid}}");
+
+        let css = "@scope (\u{a0}) { .list { outline-style:solid } }";
+        assert_eq!(scope(css, "x").unwrap().css, "@scope (\u{a0}){.x__list{outline-style:solid}}");
+        let css = "@scope (\u{a0}) { p { outline-style:solid } }";
+        let error = scope(css, "x").unwrap_err();
+        assert!(error.contains("styles elements this component does not own"), "{css:?}: {error}");
     }
 
     #[test]
