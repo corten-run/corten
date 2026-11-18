@@ -559,13 +559,12 @@ impl Scoper<'_> {
                 let mut inner_nest = nest;
                 let inner = if let Some(rule) = text.strip_prefix('@') {
                     // At-rule names are case-insensitive in CSS: `@MEDIA` is `@media`.
-                    let name =
-                        rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("").to_ascii_lowercase();
-                    let name = name.as_str();
+                    let (name, prelude) = rule.split_at(css_name_end(rule.as_bytes(), 0));
+                    let name = name.to_ascii_lowercase();
                     if name == "page" && ctx != Ctx::Raw {
-                        self.check_page(rule["page".len()..].trim(), start)?;
+                        self.check_page(prelude.trim(), start)?;
                     }
-                    match (ctx, name) {
+                    match (ctx, name.as_str()) {
                         (Ctx::Raw, _) => Ctx::Raw,
                         // A rule nested in a style rule holds style rules or declarations; the
                         // browser ignores an `@property` there (CSS Nesting).
@@ -574,7 +573,7 @@ impl Scoper<'_> {
                         }
                         (_, "scope") => {
                             self.check_selector_url(url)?;
-                            let (prelude, unowned) = self.scope_prelude(&rule["scope".len()..], nest, start)?;
+                            let (prelude, unowned) = self.scope_prelude(prelude, nest, start)?;
                             scope_rule = Some(prelude);
                             // A root the component owns lets its rules start anywhere; any other
                             // can match elements outside it, so its rules are checked as at the
@@ -740,12 +739,13 @@ impl Scoper<'_> {
     /// the component does not own. With no root, the scope is the parent of the stylesheet's
     /// owner node, the element around the page's stylesheet link, which no component owns.
     fn scope_prelude(&mut self, prelude: &str, nest: Option<Anchor>, at: usize) -> Result<(String, Option<String>), String> {
-        let prelude = prelude.trim();
+        let css_whitespace = [' ', '\t', '\n'];
+        let prelude = prelude.trim_matches(css_whitespace);
         let usage = format!(
             "`@scope {prelude}`: the browser drops an @scope whose prelude is not a root and an optional limit; write `@scope (.list)` or `@scope (.list) to (.slot)`"
         );
         let (root, rest) = match parenthesized(prelude) {
-            Some((root, rest)) => (Some(root), rest.trim_start()),
+            Some((root, rest)) => (Some(root.trim_matches(css_whitespace)), rest.trim_start_matches(css_whitespace)),
             None => (None, prelude),
         };
         let limit = if rest.is_empty() {
@@ -754,7 +754,7 @@ impl Scoper<'_> {
             // `to` and a parenthesized list; `to(` would be a function, which is no limit.
             let to = rest.get(..3).is_some_and(|to| to.as_bytes()[..2].eq_ignore_ascii_case(b"to") && to.ends_with(' '));
             match parenthesized(if to { &rest[3..] } else { "" }) {
-                Some((limit, after)) if after.trim().is_empty() => Some(limit),
+                Some((limit, after)) if after.trim_matches(css_whitespace).is_empty() => Some(limit.trim_matches(css_whitespace)),
                 _ => return Err(self.error(at, usage)),
             }
         };
@@ -765,21 +765,21 @@ impl Scoper<'_> {
             ));
         };
         for selector in [Some(root), limit].into_iter().flatten() {
-            if selector.trim().is_empty() {
+            if selector.is_empty() {
                 return Err(self.error(at, usage));
             }
         }
         // Chromium can resolve both explicit `&` and implicit nesting through the enclosing
         // @scope instead of an intervening style rule. An unowned outer root supplies no proof.
         let root_nest = if self.scope_root.is_some() { Anchor::default() } else { nest.unwrap_or_default() };
-        let (start, _, unowned) = self.prefixed(root.trim(), root_nest, Some(prelude), at)?;
+        let (start, _, unowned) = self.prefixed(root, root_nest, Some(prelude), at)?;
         let mut out = format!("@scope ({start})");
         if let Some(limit) = limit {
             out.push_str(" to (");
-            out.push_str(&self.prefixed(limit.trim(), Anchor::default(), Some(prelude), at)?.0);
+            out.push_str(&self.prefixed(limit, Anchor::default(), Some(prelude), at)?.0);
             out.push(')');
         }
-        Ok((out, (nest.is_some() && unowned.is_some()).then(|| root.trim().to_string())))
+        Ok((out, (nest.is_some() && unowned.is_some()).then(|| root.to_string())))
     }
 
     /// Records an `@property` rule, whose declarations are in `self.out` from `body`: its name,
@@ -2374,6 +2374,22 @@ mod tests {
         let css = ":is(.list, em + \u{a0} + p) { outline-style:solid }";
         let error = scope(css, "x").unwrap_err();
         assert!(error.contains("styles elements this component does not own"), "{css:?}: {error}");
+
+        for (prelude, reason) in [
+            ("@scope (.list\u{a0})", "non-ASCII characters in a class name"),
+            ("@scope (.list) to (.slot\u{a0})", "non-ASCII characters in a class name"),
+            ("@scope (.list)\u{a0}to (.slot)", "the browser drops an @scope"),
+            ("@scope (.list) to\u{a0} (.slot)", "the browser drops an @scope"),
+            ("@scope (.list) to (.slot) \u{a0}", "the browser drops an @scope"),
+            ("@scope\u{a0}(.list)", "@scope\u{a0} is not supported"),
+        ] {
+            let css = format!("{prelude} {{ p {{ outline-style:solid }} }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains(reason), "{css:?}: {error}");
+        }
+
+        let css = "@scope (\u{a0} .list) to (.slot \u{a0}) { p { outline-style:solid } }";
+        assert_eq!(scope(css, "x").unwrap().css, "@scope (\u{a0} .x__list) to (.x__slot \u{a0}){p{outline-style:solid}}");
     }
 
     #[test]

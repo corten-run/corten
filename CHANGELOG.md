@@ -14,6 +14,7 @@ Corten is pre-1.0, so any minor version may change the API.
   own class anchor to supply that proof; otherwise it only filters independently anchored rules.
   Malformed strings, unquoted `url()` tokens and mismatched selector blocks fail before forgiving
   arms are ignored. Component class names must be unescaped ASCII.
+  `@scope` follows CSS whitespace rules: a nonbreaking space is not a separator.
   Write the anchor out: `main:has(.list) p` becomes `main .list p`, and
   `.pick:checked + span` becomes `:where(.cuts) .pick:checked + span`; page-wide rules belong in
   `static/style.css` (docs/guide/styles.md). The kit's `stepper.css` anchors its unit rules this

@@ -50,7 +50,7 @@ combinator. It does not remove those arms from the emitted list. Malformed strin
 unquoted `url()` tokens and mismatched block delimiters in selectors are compile errors, even
 in a forgiving arm: the compiler does not guess where an arm ends. Remove the arm or correct
 the token. Component class names use ASCII without escapes; a nonbreaking space is part of a
-CSS name, not a separator.
+CSS name, not a separator, including in `@scope` roots and limits and next to `@scope` or `to`.
 `:is(.list, .grid) p`, `:is(.list,) p` and `.list:has(img) p` compile; `:is(.list, main) p`,
 `:not(.list) p` and `main:has(.list) p` do not. Classes inside other functions are still
 prefixed, but only filter. A nested selector is checked where its `&` stands, so
