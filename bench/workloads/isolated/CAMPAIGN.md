@@ -224,6 +224,7 @@ not consume an unobserved interval between samples. The one-second gap gate is u
 The Linux fixture delays that real read to test ordering, without replacing kernel data.
 
 Each phase contains `command-N-host/{binding.json,samples.jsonl,terminal.json,processes/**}`.
+Commands with deferred executable hashing also retain `executables.json` there.
 The journal commits each command observation tree; phase-sealed additionally commits the
 whole phase's host/native/log tree, including halted phases. JSON prepare images.json is
 appended afterward and committed separately by the exact audit subject. Finish requires
@@ -285,7 +286,8 @@ one second. States only advance created-to-running-to-exited. Missing interior r
 created-after-running, running-after-exit and contradictory terminal exit facts cannot
 qualify. These bounds do not infer live processes before start or after exit.
 
-For browser processes, the sampler opens the actual `/proc/<observed-pid>/exe` inode,
+For browser processes and members of catalog command scopes, the sampler opens
+the actual `/proc/<observed-pid>/exe` inode,
 records its device/inode/size/nanosecond modification/change identity and rechecks it
 with the live PID/start/cgroup bookends. It pins that descriptor while continuing raw
 sampling; it does not hash executable contents synchronously in a sampling interval.

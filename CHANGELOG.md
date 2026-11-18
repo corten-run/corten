@@ -114,6 +114,10 @@ Pending entries are in [changelog.d/](changelog.d/).
   Docker-participant gap. Preserve invalid evidence and uncertain ownership;
   cancellation does not qualify a run or authorize host deletion.
 
+- Catalog command observation pins executable identities during sampling and hashes
+  their exact bytes after the final sample. Full membership, process bookends,
+  terminal cleanup and the one-second continuity bound still apply.
+
 - Correct the grouped browser documentation to describe the current replayed
   tool/lock identity handoff. Missing historical identities and independent OS
   proof still block qualification; the documentation grants no readiness.

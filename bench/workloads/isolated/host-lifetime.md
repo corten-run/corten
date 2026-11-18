@@ -89,6 +89,51 @@ the accepted census. Nothing reconstructs an unobserved executable or repairs ol
 evidence. The r21 process-read ENOENT records identify failed operations, not every
 native runner failure or the cause of an exception-free accounting gap.
 
+## Catalog Build Startup
+
+Catalog commands use the same pinned executable descriptors as browser commands.
+The sampler still reads each member's PID, start ticks, name, cgroup and executable
+bookends, with both recursive membership censuses. It seals the exact executable
+bytes after the final resource sample, using the existing bounded helper. Catalog
+does not query Docker for participant inventory and its gated bootstrap check is
+unchanged.
+
+In [#1643 Grouped catalog diagnostic: host observer cancels the first image build after a 1,791 ms sample gap](https://github.com/corten-run/corten/issues/1643),
+the saved nonofficial run had a 915 ms gap before Docker appeared in an accepted
+sample. At 14:17:06.923 UTC, sample 12 listed Node and Docker. The first caught
+`process-cgroup` ENOENT was 1,644 ms later, the last `executable-link` ENOENT was
+1,738 ms later, and the next sample was 1,791 ms later. The build reported
+cancellation; the final scope was empty, but replay remained blocked. The archive
+does not identify the failing PID, time the failed reads or measure the nested
+guest's scheduler wait.
+
+A bounded reproduction on Linux under WSL2 used the same Node 26.13.1 and
+Docker 29.1.3 bytes and the matching buildx 0.30.1 package. An ordinary build
+startup targeted a private Unix socket that held requests without executing them;
+short CLI commands supplied real membership churn. Cold runs evicted only
+private executable copies and checked their residency before launch. In the
+instrumented unpaused pair:
+
+| First observation of Docker and buildx | Cold | Warm |
+| --- | ---: | ---: |
+| Executable reads, total | 273 ms | 129 ms |
+| SHA-256 updates, total | 579 ms | 449 ms |
+| Whole collector tick | 888 ms | 596 ms |
+| Sampler thread runnable wait in that tick | 32 ms | 33 ms |
+
+SHA-256 used almost as much CPU time as wall time in both runs. Live group
+census reads and ordinary membership-race retries were much smaller; a warm
+page cache did not avoid the first digest for each new inode in the observer.
+With the same controlled 700 ms pause at the first buildx stat read, real
+membership churn exhausted the old retry budget (1,496 ms cold and 1,416 ms warm
+gaps). Moving executable reads and digest work to finish kept those gaps to
+815 ms and 801 ms, including a real executable-open ENOENT followed by a fresh
+complete census. Without the pause, the fixed gaps were 103 ms and 104 ms.
+All four fixed probes retained the actual identities and an empty terminal scope.
+The WSL host lacked delegated CPU and cpuset controls; accounting replay remained
+blocked. This isolates a resource cost and a failure mechanism, not the cause of
+every millisecond in the original nested guest or a native campaign qualification.
+
 ## Ordered Asynchronous Storage
 
 One in-process `fs/promises` FIFO writes initial process records and samples. It
@@ -163,6 +208,12 @@ controls are not delegated-cgroup or host qualification. They test whole-snapsho
 discard, recursive membership changes, persistent missing reads, immediate
 permission/I/O failures, PID/start mismatches, monotonic retry exhaustion, and the
 separate accounting-only block for a coherent 1,909 ms gap.
+
+The catalog controls charge a first-sighting full executable read against the
+remaining window, prove that pinned reads preserve identity and exact digests
+through terminal cleanup, and keep a persistently unreadable listed member
+blocked even with an empty terminal.
+
 Pending-capture controls use real owned file descriptors with synthetic
 membership and Docker reads. They check descriptor bounds, earlier accepted
 inputs, final hash membership, enclosing-bookend and sample-write failures. Linux
