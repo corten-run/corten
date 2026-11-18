@@ -4,8 +4,26 @@ name: Benchmark Evidence
 on:
   push:
     branches: [main]
+    # npm's three evidence suites, their benchmark inputs and the native Linux driver.
+    paths: &evidence-paths
+      - bench/**
+      - scripts/benchmark-kernel-ci.sh
+      - scripts/steady.mjs
+      - .dockerignore
+      - .gitattributes
+      - .gitignore
+      - README.md # Portable input-custody fixture.
+      - package.json
+      - package-lock.json
+      - .github/workflows/benchmark-evidence.yml
   pull_request:
+    paths: *evidence-paths
   workflow_call:
+
+# Keep every matching main run and release call; only newer PR runs supersede older ones.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

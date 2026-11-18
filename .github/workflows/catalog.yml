@@ -10,37 +10,59 @@ on:
       - bench/marketplace/**
       - bench/fullstack/apps/**
       - bench/fullstack/apps.mjs
+      - bench/fullstack/conformance.mjs
+      - bench/fullstack/inventory.mjs
       - bench/fullstack/passes.mjs
+      - bench/load-tool.mjs
       - crates/**
       - Cargo.toml
       - Cargo.lock
       - package.json
       - package-lock.json
+      - scripts/catalog-scope.mjs
+      - scripts/catalog-scope.test.mjs
       - scripts/steady.mjs
   push:
     branches: [main]
-    paths:
-      - .github/workflows/catalog.yml
-      - bench/catalog/**
-      - bench/json-api/**
-      - bench/workloads/**
-      - bench/marketplace/**
-      - bench/fullstack/apps/**
-      - bench/fullstack/apps.mjs
-      - bench/fullstack/passes.mjs
-      - crates/**
-      - Cargo.toml
-      - Cargo.lock
-      - package.json
-      - package-lock.json
-      - scripts/steady.mjs
   workflow_dispatch:
+
+# Only newer PR runs supersede older ones; keep a run for every main commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  scope:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      apps: ${{ steps.scope.outputs.apps }}
+      json: ${{ steps.scope.outputs.json }}
+    env:
+      PARITY_MATRIX: >-
+        app: [corten, nextjs, tanstack-start, sveltekit, react-router, leptos, django, rails, laravel, aspnet, spring, phoenix, astro, nuxt, topcoat, axum-maud, gin, drogon, fastapi, express]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci --no-audit --no-fund
+      - run: node --test scripts/catalog-scope.test.mjs
+      - id: scope
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/catalog-scope.mjs
+
   harness:
+    needs: scope
+    if: needs.scope.outputs.apps != '[]' || needs.scope.outputs.json == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -61,13 +83,14 @@ jobs:
       - run: node --test bench/fullstack/apps/*/catalog.test.mjs
 
   parity:
-    needs: harness
+    needs: [scope, harness]
+    if: needs.scope.outputs.apps != '[]'
     runs-on: ubuntu-24.04
     timeout-minutes: 95
     strategy:
       fail-fast: false
       matrix:
-        app: [corten, nextjs, tanstack-start, sveltekit, react-router, leptos, django, rails, laravel, aspnet, spring, phoenix, astro, nuxt, topcoat, axum-maud, gin, drogon, fastapi, express]
+        app: ${{ fromJSON(needs.scope.outputs.apps) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -159,6 +182,8 @@ jobs:
           retention-days: 14
 
   json-harness:
+    needs: scope
+    if: needs.scope.outputs.json == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -170,7 +195,8 @@ jobs:
       - run: npm run check:json-api
 
   json-aot:
-    needs: harness
+    needs: [scope, harness]
+    if: needs.scope.outputs.json == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
