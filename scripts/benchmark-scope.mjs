@@ -73,17 +73,16 @@ export function eventPaths({ GITHUB_EVENT_NAME, GITHUB_SHA, PUSH_BEFORE }, cwd) 
       if (base.error) throw base.error;
       if (base.status === 0) return changedPaths(PUSH_BEFORE, GITHUB_SHA, cwd);
     }
-    console.warn("Push base unavailable; running all Evidence jobs.");
+    console.warn("Push base unavailable; selecting every benchmark job.");
   }
   return undefined;
 }
 
 if (import.meta.main) {
-  const { GITHUB_EVENT_NAME, GITHUB_OUTPUT, PARITY_APPS } = process.env;
+  const { GITHUB_OUTPUT, PARITY_APPS } = process.env;
   const workflow = process.argv[2];
   if (workflow === "catalog") {
-    const paths = GITHUB_EVENT_NAME === "pull_request" ? eventPaths(process.env) : undefined;
-    const { apps, json } = selectScope(JSON.parse(PARITY_APPS), paths);
+    const { apps, json } = selectScope(JSON.parse(PARITY_APPS), eventPaths(process.env));
     appendFileSync(GITHUB_OUTPUT, `apps=${JSON.stringify(apps)}\njson=${json}\n`);
   } else if (workflow === "evidence") {
     const paths = eventPaths(process.env);

@@ -5,6 +5,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Catalog Contract scopes a push to `main` by its push diff, so a merge that changes no
+  benchmark input or framework crate runs no parity jobs, and a newer `main` push replaces a
+  waiting `main` run instead of queueing behind it.
 - CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
   for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
