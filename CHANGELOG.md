@@ -1,18 +1,14 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Notable changes to Corten. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-- Decimal fields can use `Bounds::<f64>::any_step` (also for `f32`) for `step="any"`,
-  with optional exclusive endpoints. Constants reject non-finite, reversed, or empty ranges.
-  The browser gets endpoints as advisory hints; the server enforces exclusivity and refuses
-  an endpoint with the field's error.
-  `Bounds::input_value` shares `NumberField`'s exponent notation for tiny prefills with plain
-  number inputs. Existing stepped fields and standalone `Entry` attributes keep their formatting.
-  See [Choice 62](docs/design.md#choice-exclusive-ends) and
-  [#1412 Bounds cannot say step any or an exclusive end (above 0, below 1), so most decimal fields keep hand-written rules beside their Entry](https://github.com/corten-run/corten/issues/1412).
+Pending entries are in [changelog.d/](changelog.d/).
+
+- CI cancels a pull request's older run when a newer push arrives, so only the head's checks wait
+  for a runner; pushes to main and the release's call keep every run.
 - A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
   its single root is the `<html>` element, so the page can render in standards mode.
 - **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
@@ -86,6 +82,10 @@ Corten is pre-1.0, so any minor version may change the API.
   cloud inbox through timing replay; a version label alone is not an audit.
 - CI builds the Git-capable Playwright test-tools image only in the browser group that runs
   the workload apparatus; the other two smoke groups no longer depend on Launchpad's Git PPA.
+- Catalog Contract selects affected parity apps on pull requests and runs all parity and JSON
+  jobs for unrecognized app paths. Benchmark Evidence runs portable source-custody checks when
+  captured sources change and native kernel checks when their own inputs change. Both scope
+  against the full Git diff and cancel superseded pull request runs, not main runs.
 - Document how a GET filter handler chooses focus and text selection before `requestSubmit()`
   so `data-keep-place` restores them after the page swap, without another runtime behavior.
 

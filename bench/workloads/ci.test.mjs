@@ -11,15 +11,25 @@ const root = new URL("../../", import.meta.url);
 const packageJSON = JSON.parse(readFileSync(new URL("package.json", root), "utf8"));
 const workflow = parse(readFileSync(new URL(".github/workflows/benchmark-evidence.yml", root), "utf8"));
 
-test("every bounded evidence suite runs on pull requests and main without fail-open CI", () => {
-  assert.deepEqual(workflow.on.push.branches, ["main"]);
-  assert.ok(Object.hasOwn(workflow.on, "pull_request"));
+test("Evidence scopes the full diff on pull requests and main without fail-open CI", () => {
+  assert.deepEqual(workflow.on.push, { branches: ["main"] });
+  assert.equal(workflow.on.pull_request, null);
   assert.deepEqual(workflow.permissions, { contents: "read" });
+  const scope = workflow.jobs.scope;
+  assert.equal(scope.if, undefined);
+  assert.equal(scope["continue-on-error"], undefined);
+  assert.equal(scope.outputs.run, "${{ steps.scope.outputs.run }}");
+  assert.equal(scope.outputs.kernel, "${{ steps.scope.outputs.kernel }}");
+  const selector = scope.steps.find((step) => step.id === "scope");
+  assert.equal(selector.run, "node scripts/benchmark-scope.mjs evidence");
+  assert.equal(selector.env.PUSH_BEFORE, "${{ github.event.before }}");
+  assert.equal(scope.steps.find((step) => step.uses?.startsWith("actions/checkout@")).with["fetch-depth"], 0);
   const job = workflow.jobs.evidence;
   assert.deepEqual(job.strategy.matrix.suite, ["core", "contracts", "browser"]);
   assert.equal(job.strategy["fail-fast"], false);
   assert.equal(job["continue-on-error"], undefined);
-  assert.equal(job.if, undefined);
+  assert.equal(job.needs, "scope");
+  assert.equal(job.if, "needs.scope.outputs.run == 'true'");
   const step = job.steps.find((step) => step.env?.SUITE);
   assert.equal(step.if, undefined);
   assert.equal(step["continue-on-error"], undefined);
@@ -61,7 +71,8 @@ test("portable core selection excludes delegated-kernel controls but cannot omit
 test("real Linux controls have a required host job and cannot pass through fixture skips", () => {
   const job = workflow.jobs.kernel;
   assert.equal(job["runs-on"], "ubuntu-24.04");
-  assert.equal(job.if, undefined);
+  assert.equal(job.needs, "scope");
+  assert.equal(job.if, "needs.scope.outputs.kernel == 'true'");
   assert.equal(job["continue-on-error"], undefined);
   const step = job.steps.find((s) => s.run?.includes("scripts/benchmark-kernel-ci.sh"));
   assert.equal(step.if, undefined);

@@ -468,7 +468,7 @@ representable value must remain after excluding ends. For a plain any-step input
 past 18 digits written out, so a stored `1e-20` is drawn in a short spelling the browser can submit
 unchanged.
 It still draws submitted text as typed after a refusal. Standalone `Entry` attributes keep their
-existing formatting. See [Choice 62](../design.md#choice-exclusive-ends) for when to revisit this choice.
+existing formatting. See [Choice 63](../design.md#choice-exclusive-ends) for when to revisit this choice.
 
 Bounds with a step stay off an end by starting a step inside it: above 0 in tenths is
 `Bounds::new(0.1, 16.0).step(0.1)`. Stepped fields keep their existing formatting. Integers
