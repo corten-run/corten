@@ -539,10 +539,26 @@ bytes plus two copies each of the generation and sequence. Look on `corten::feed
   Its protocol error names no row, so the relay cannot use it to drop a patch on a shared
   connection. An unacknowledged publish follows the ordinary retry path (`relay standing by`
   on failure). A disconnect can interrupt other feeds and other users of the shared client.
-  The relay sends a batch before waiting for its acknowledgements, so JetStream can store
-  later patches from the same feed ahead of a failed one when the broker disconnects mid-batch
-  ([#1633 A relay batch interrupted by a broker disconnect can store a feed's later patches before the one that failed](https://github.com/corten-run/corten/issues/1633)).
-  If the reconnected client refuses the row locally, the relay tries a marker as above.
+
+The relay pipelines up to 256 ordinary patches in outbox-ID order (feed-sequence order
+within a generation) before waiting for acknowledgements. Two failures can change the
+order JetStream stores:
+
+- If an ordinary send or acknowledgement fails, all IDs selected for that attempt stay
+  pending, even those already acknowledged. After a mid-batch disconnect, queued later
+  patches of a feed can reach JetStream on the new socket before the earlier patch is
+  stored on retry or a reload marker is stored in its place.
+- If an individual patch is refused for size, the relay sends its reload marker after
+  attempting the ordinary patches. JetStream can therefore store later patches before
+  that marker even without a disconnect. If the marker is not acknowledged, its row
+  stays pending while other acknowledged rows can retire; JetStream may already have
+  stored the marker if only its acknowledgement was lost.
+
+Corten followers can stay at their last applied sequence until an update arrives. They reload
+committed state from Postgres on a feed-sequence gap or a marker ahead of them. This restores
+the current state, not every missed delta. They ignore patches and markers at or behind their
+current sequence in the same generation
+([relay stream-order limit](../design.md#limit-relay-stream-order)).
 
 The patch size-refusal logs include the outbox row ID, feed key, and patch body size (not
 the headers). Inspect the row by its logged `id` before ordinary pruning removes it, without
@@ -554,12 +570,13 @@ FROM corten_outbox WHERE id = $1;
 ```
 
 `published_at` does not distinguish an acknowledged patch from an acknowledged marker. Within
-[JetStream's configured deduplication window](https://docs.nats.io/learn/jetstream/publishing#avoiding-duplicate-writes),
+[JetStream's configured deduplication window](https://docs.nats.io/learn/jetstream/publishing#avoiding-duplicate-writes)
+from first acceptance of the message ID,
 a duplicate marker acknowledgement also retires the row, but logs
 `duplicate reload marker acknowledgement`: a notification with that ID was
-already accepted, and it could be the patch or the marker. After the window, both can be
-stored; followers ignore an update they already have in that feed generation. Install the
-app's `tracing` subscriber before `Cluster::start` to capture these diagnostics during startup.
+already accepted, and it could be the patch or the marker. A retry after the window can
+store another patch or marker with that ID. Install the app's `tracing` subscriber before
+`Cluster::start` to capture these diagnostics during startup.
 The original patch stays in Postgres, including for replay.
 
 The marker is an empty JetStream message with a `Corten-Reload` header carrying the patch's
