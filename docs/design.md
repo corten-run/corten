@@ -2227,7 +2227,9 @@ rules something out.
     differential and area-scope tests passed in the merged workspace's full debug tests at
     `66cb2936e`; 2026-11-14, matchit 0.8.6's and 0.9.2's insertion read for the order-dependent
     conflict a hand-written prefixed route can meet, and the differential and area-scope tests
-    passed again in the full debug tests of `0653768e1` and of the merge `4c6ac3e3d`.
+    passed again in the full debug tests of `0653768e1` and of the merge `4c6ac3e3d`;
+    2026-11-18, the staged catalog page's boxed future sizes in x86-64 Linux release builds
+    before (`7620ef9be`) and after (`ca900161d`) keeping the request in one slot.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
