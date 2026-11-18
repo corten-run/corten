@@ -47,10 +47,8 @@ A misspelled token (`var(--color-primary-contrast)` where the file has
 `--color-primary-foreground`) would make the declaration invalid and the property inherit, which
 shows only as a wrong color. So when the app starts (`App::router`, which every test of the app
 builds), each `var(--x)` without a fallback in a listed stylesheet must name a property declared
-by a stylesheet on the same pages, or it fails with the file and the property. Comments between
-tokens do not change this check: `var(/**/--x)` still needs `--x`, and `var(--x/**/, 0)` has a
-fallback. An escaped slash in an earlier value does not start a comment. It is a startup check,
-not a compile error, because a component's stylesheet compiles without seeing the theme,
+by a stylesheet on the same pages, or it fails with the file and the property. It is a startup
+check, not a compile error, because a component's stylesheet compiles without seeing the theme,
 which may be another crate's. A property a script sets (`el.style.setProperty`) takes a fallback,
 `var(--progress, 0)`.
 
@@ -105,16 +103,14 @@ Component CSS accepts exactly these block at-rules. At-rule names are ASCII case
 | `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied without selector checks or class prefixes. Names stay global, including font families and feature-value names; qualify a private name with the component's name yourself. |
 | `@page` | A global name starting with the component's name and `-`, written by the author, with the body copied without selector scoping ([printing](#printing)). An unnamed page or an unqualified name does not compile. |
 
-Raw bodies still have comments and extra whitespace shortened, and registered custom properties
-are renamed there too. A comment with whitespace beside it becomes that one space, and one with
-none is written `/**/` to keep adjacent tokens apart without adding a combinator: `.a/**/.b`
-stays the compound `.a.b`, `./**/a` still names the component's class, and
-`--abov\65/**/flip-block` stays two names. An escaped space is part of a token, not
-whitespace to trim. Quote URLs containing `/*`: the minifier preserves that text in an unquoted
-`url(..)`, but an earlier pass can mistake it for an unclosed comment. Nested block at-rules inside
-raw bodies are copied raw (font feature `@styleset`, page margin `@top-left`, and others), not
-independently selector-checked. The only statement at-rules accepted are
-`@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded, since
+Raw bodies still lose comments and extra whitespace, and registered custom properties are
+renamed there too. Throughout the file a removed comment keeps the tokens around it apart
+without adding whitespace that means something: `.a/**/.b` stays the compound `.a.b`,
+`--abov\65/**/flip-block` keeps `/**/` where its two names would join, and `/*` inside an
+unquoted `url(..)` stays part of the URL. Nested block at-rules inside raw bodies are copied
+raw (font feature `@styleset`, page margin `@top-left`, and others), not independently
+selector-checked. The only statement
+at-rules accepted are `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded, since
 the generated stylesheet is UTF-8). Unknown statements are refused even inside raw bodies.
 
 `@import` does not compile: imported CSS is not checked or owned by the component. Put it in
@@ -123,7 +119,7 @@ and the component names them with `@media (--md)`. Every other block or statemen
 including `@namespace` and `@document`, is refused outside raw bodies: the macro does not yet
 know how to keep its selectors or names inside the component. Use the global stylesheet for it.
 An `@scope` without a root is refused because its implicit root is outside the component.
-Escaped at-rule names and escaped or non-ASCII class names are not supported.
+Escaped at-rule and class names are not supported.
 
 A popup can define a fallback beside its default position, including a corten-ui `MenuButton`
 or `ComboBox` styled by this component:

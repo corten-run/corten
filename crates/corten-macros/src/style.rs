@@ -392,14 +392,8 @@ fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, 
     let ident = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_') || c >= 0x80 || c == b'\\';
     let mut out = String::with_capacity(css.len() + names.len() * (prefix.len() + 4));
     let (mut i, mut copied) = (0, 0);
-    let mut last = b'{';
     while i < b.len() {
-        let c = b[i];
-        if c.is_ascii_whitespace() || (c == b'/' && b[i..].starts_with(b"/**/")) {
-            i += if c.is_ascii_whitespace() { 1 } else { 4 };
-            continue;
-        }
-        match c {
+        match b[i] {
             q @ (b'"' | b'\'') => {
                 i += 1;
                 while i < b.len() && b[i] != q {
@@ -429,8 +423,10 @@ fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, 
                 let written = &css[i + 2..end];
                 let name = if written.contains('\\') { unescape(written) } else { written.to_string() };
                 if names.contains(&name.as_str()) {
-                    let value = css_trim_start(&css[end..]).strip_prefix(':');
-                    if matches!(last, b'{' | b';') && value.is_some_and(important) {
+                    let declared =
+                        b[..i].iter().rev().find(|c| !c.is_ascii_whitespace()).is_none_or(|c| matches!(c, b'{' | b';'))
+                            && b[end..].iter().find(|c| !c.is_ascii_whitespace()) == Some(&b':');
+                    if declared && important(&css[end..]) {
                         return Err(format!(
                             "--{name}: !important on a property markup sets would beat markup's value on a full load and lose to it after a patch; set it from markup (style={{..}}) or without !important"
                         ));
@@ -442,13 +438,9 @@ fn rename_properties(css: &str, names: &[&str], prefix: &str) -> Result<String, 
                     copied = end;
                 }
                 i = end;
-                last = c;
-                continue;
             }
-            b'\\' if i + 1 < b.len() => i += 2,
             _ => i += 1,
         }
-        last = c;
     }
     out.push_str(&css[copied.min(css.len())..]);
     Ok(out)
@@ -482,7 +474,7 @@ fn css_name_end(css: &str, mut end: usize) -> usize {
     end
 }
 
-/// Tokens used by the stylesheet's declaration readers (CSS Syntax Level 3, tokenization).
+/// What the position pass tells apart in a declaration's value (CSS Syntax Level 3, tokenization).
 #[derive(Clone, Copy, PartialEq)]
 enum Tok {
     /// An identifier: `--above`, `flip-block`.
@@ -496,46 +488,41 @@ enum Tok {
     Comma,
     Colon,
     Semicolon,
-    Bang,
-    /// Whitespace or a comment.
-    Trivia,
-    /// A string, a URL, a number, a hash, an at-keyword or another delimiter.
+    /// Whitespace, a comment, a string, a URL, a number, a hash, an at-keyword or a delimiter.
     Other,
 }
 
 /// The tokens of `css`, each with where it starts and ends.
-fn tokens(css: &str) -> impl Iterator<Item = (Tok, usize, usize)> + '_ {
+fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
     let b = css.as_bytes();
-    let escape = move |at: usize| b.get(at) == Some(&b'\\') && !matches!(b.get(at + 1), None | Some(b'\n' | b'\r' | b'\x0c'));
+    let escape = |at: usize| b.get(at) == Some(&b'\\') && !matches!(b.get(at + 1), None | Some(b'\n' | b'\r' | b'\x0c'));
     let name_start = |c: u8| c.is_ascii_alphabetic() || c == b'_' || c >= 0x80;
-    let ident_start = move |at: usize| match b.get(at) {
+    let ident_start = |at: usize| match b.get(at) {
         Some(b'-') => b.get(at + 1).is_some_and(|&c| name_start(c) || c == b'-') || escape(at + 1),
         Some(b'\\') => escape(at),
         Some(&c) => name_start(c),
         None => false,
     };
-    let digits = move |mut at: usize| {
+    let digits = |mut at: usize| {
         while b.get(at).is_some_and(u8::is_ascii_digit) {
             at += 1;
         }
         at
     };
-    let number_start = move |at: usize| {
+    let number_start = |at: usize| {
         let at = at + usize::from(matches!(b.get(at), Some(b'+' | b'-')));
         b.get(at).is_some_and(u8::is_ascii_digit) || (b.get(at) == Some(&b'.') && b.get(at + 1).is_some_and(u8::is_ascii_digit))
     };
+    let mut out = Vec::new();
     let mut i = 0;
-    std::iter::from_fn(move || {
-        if i == b.len() {
-            return None;
-        }
+    while i < b.len() {
         let start = i;
         let kind = match b[i] {
             c if c.is_ascii_whitespace() => {
                 while b.get(i).is_some_and(u8::is_ascii_whitespace) {
                     i += 1;
                 }
-                Tok::Trivia
+                Tok::Other
             }
             q @ (b'"' | b'\'') => {
                 i += 1;
@@ -547,14 +534,6 @@ fn tokens(css: &str) -> impl Iterator<Item = (Tok, usize, usize)> + '_ {
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
                 i = css[i + 2..].find("*/").map_or(b.len(), |end| i + end + 4);
-                Tok::Trivia
-            }
-            b'<' if b[i..].starts_with(b"<!--") => {
-                i += 4;
-                Tok::Other
-            }
-            b'-' if b[i..].starts_with(b"-->") => {
-                i += 3;
                 Tok::Other
             }
             // A number and its unit: `1px` is not the identifier `px`.
@@ -581,7 +560,7 @@ fn tokens(css: &str) -> impl Iterator<Item = (Tok, usize, usize)> + '_ {
                 if b.get(i) != Some(&b'(') {
                     Tok::Ident
                 } else {
-                    let url = css_keyword(&css[start..i], "url");
+                    let url = unescape(&css[start..i]).eq_ignore_ascii_case("url");
                     i += 1;
                     let mut at = i;
                     while b.get(at).is_some_and(u8::is_ascii_whitespace) {
@@ -611,7 +590,6 @@ fn tokens(css: &str) -> impl Iterator<Item = (Tok, usize, usize)> + '_ {
                     b',' => Tok::Comma,
                     b':' => Tok::Colon,
                     b';' => Tok::Semicolon,
-                    b'!' => Tok::Bang,
                     _ => Tok::Other,
                 }
             }
@@ -619,8 +597,9 @@ fn tokens(css: &str) -> impl Iterator<Item = (Tok, usize, usize)> + '_ {
         while i < b.len() && !css.is_char_boundary(i) {
             i += 1;
         }
-        Some((kind, start, i))
-    })
+        out.push((kind, start, i.min(b.len())));
+    }
+    out
 }
 
 /// `value`, a `position-try` or `position-try-fallbacks` value or an `@position-try` rule's name,
@@ -631,7 +610,7 @@ fn tokens(css: &str) -> impl Iterator<Item = (Tok, usize, usize)> + '_ {
 /// (`style(--above: 1)` queries a custom property), strings, URLs and whatever is inside any
 /// other function keep their names.
 fn rename_positions(value: &str, names: &[&str], prefix: &str) -> String {
-    let toks: Vec<_> = tokens(value).collect();
+    let toks = tokens(value);
     let mut renamed = Vec::new();
     let mut i = 0;
     while i < toks.len() {
@@ -730,26 +709,33 @@ fn skip(toks: &[(Tok, usize, usize)], mut i: usize, stop: &[Tok]) -> usize {
     i
 }
 
-/// Whether the declaration value at the start of `rest` ends with the tokens `!` and
-/// `important`, ignoring trivia and case (CSS Syntax Level 3, consume a declaration).
+/// Whether the declaration value at the start of `rest` (up to its `;` or `}`, outside strings
+/// and brackets) ends `!important`, in any case and with any space after the `!`.
 fn important(rest: &str) -> bool {
-    let mut depth = 0;
-    let (mut previous, mut last) = (Tok::Other, (Tok::Other, 0, 0));
-    for token @ (kind, ..) in tokens(rest) {
-        if depth == 0 {
-            match kind {
-                Tok::Semicolon | Tok::Close => break,
-                Tok::Trivia => continue,
-                _ => (previous, last) = (last.0, token),
+    let b = rest.as_bytes();
+    let (mut i, mut depth) = (0, 0usize);
+    while i < b.len() {
+        match b[i] {
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
             }
-        }
-        match kind {
-            Tok::Open | Tok::Function => depth += 1,
-            Tok::Close => depth -= 1,
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b';' | b'}' | b'{' if depth == 0 => break,
+            b'!' if depth == 0 => {
+                let word = rest[i + 1..].trim_start();
+                if word.len() >= 9 && word.as_bytes()[..9].eq_ignore_ascii_case(b"important") {
+                    return true;
+                }
+            }
             _ => {}
         }
+        i += 1;
     }
-    previous == Tok::Bang && last.0 == Tok::Ident && css_keyword(&rest[last.1..last.2], "important")
+    false
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -823,7 +809,7 @@ impl Scoper<'_> {
                         rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("").to_ascii_lowercase();
                     let name = name.as_str();
                     if name == "page" && ctx != Ctx::Raw {
-                        self.check_page(css_trim(&rule["page".len()..]), start)?;
+                        self.check_page(rule["page".len()..].trim(), start)?;
                     }
                     match (ctx, name) {
                         (Ctx::Raw, _) => Ctx::Raw,
@@ -833,8 +819,7 @@ impl Scoper<'_> {
                             return Err(self.error(start, format!("@{name} defines a name for the whole page: put it at the top of the stylesheet, outside any rule")))
                         }
                         (_, "position-try") => {
-                            let after = css_trim_start(&rule["position-try".len()..]);
-                            let written = css_trim_end(after);
+                            let written = rule["position-try".len()..].trim_matches(|c: char| c.is_ascii_whitespace());
                             let Some(name) = written.strip_prefix("--").filter(|name| !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))) else {
                                 return Err(self.error(start, "@position-try: a name starts with -- and has letters, digits, - and _"));
                             };
@@ -844,7 +829,7 @@ impl Scoper<'_> {
                             if !self.positions.iter().any(|other| other == name) {
                                 self.positions.push(name.to_string());
                             }
-                            let at = self.out.len() + text.len() - after.len();
+                            let at = self.out.len() + text.len() - written.len();
                             self.position_refs.push((at, at + written.len()));
                             Ctx::Raw
                         }
@@ -960,10 +945,10 @@ impl Scoper<'_> {
         while let Some(open) = rest.find('(') {
             out.push_str(&rest[..=open]);
             rest = &rest[open + 1..];
-            let inner = css_trim_start(rest);
+            let inner = rest.trim_start();
             let Some(name) = inner.strip_prefix("--") else { continue };
             let len = name.bytes().take_while(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_')).count();
-            let after = css_trim_start(&name[len..]);
+            let after = name[len..].trim_start();
             if len == 0 || !after.starts_with(')') {
                 return Err(self.error(
                     at,
@@ -1004,34 +989,32 @@ impl Scoper<'_> {
     /// elements. With no root, the scope is the parent of the stylesheet's owner node, the element
     /// around the page's stylesheet link, which no component owns.
     fn scope_prelude(&mut self, prelude: &str, top: bool, at: usize) -> Result<(String, Option<String>), String> {
-        let prelude = css_trim_start(prelude);
+        let prelude = prelude.trim();
         let usage = format!(
             "`@scope {prelude}`: the browser drops an @scope whose prelude is not a root and an optional limit; write `@scope (.list)` or `@scope (.list) to (.slot)`"
         );
         let (root, rest) = match parenthesized(prelude) {
-            Some((root, rest)) => (Some(root), css_trim_start(rest)),
+            Some((root, rest)) => (Some(root), rest.trim_start()),
             None => (None, prelude),
         };
         let limit = if rest.is_empty() {
             None
         } else {
-            // The identifier `to`, then whitespace or a comment and a parenthesized list:
-            // `to(` is a function, which is no limit, and `tox` another identifier.
-            let to = rest.get(..2).is_some_and(|to| to.eq_ignore_ascii_case("to"))
-                && (rest[2..].starts_with(' ') || rest[2..].starts_with("/**/"));
-            match parenthesized(if to { css_trim_start(&rest[2..]) } else { "" }) {
-                Some((limit, after)) if css_trim_start(after).is_empty() => Some(trim_selector(limit)),
+            // `to` and a parenthesized list; `to(` would be a function, which is no limit.
+            let to = rest.get(..3).is_some_and(|to| to.as_bytes()[..2].eq_ignore_ascii_case(b"to") && to.ends_with(' '));
+            match parenthesized(if to { &rest[3..] } else { "" }) {
+                Some((limit, after)) if after.trim().is_empty() => Some(limit),
                 _ => return Err(self.error(at, usage)),
             }
         };
-        let Some(root) = root.map(trim_selector) else {
+        let Some(root) = root else {
             return Err(self.error(
                 at,
                 "@scope with no root scopes its rules to the element around the page's stylesheet link, which no component owns: start it at one of the stylesheet's classes, `@scope (.list)`",
             ));
         };
         for selector in [Some(root), limit].into_iter().flatten() {
-            if selector.is_empty() {
+            if selector.trim().is_empty() {
                 return Err(self.error(at, usage));
             }
             if pseudo_element(selector) {
@@ -1043,21 +1026,21 @@ impl Scoper<'_> {
                 ));
             }
         }
-        let (start, unowned) = self.prefixed(root, at)?;
+        let (start, unowned) = self.prefixed(root.trim(), at)?;
         let mut out = format!("@scope ({start})");
         if let Some(limit) = limit {
             out.push_str(" to (");
-            out.push_str(&self.selector(limit, false, at)?);
+            out.push_str(&self.selector(limit.trim(), false, at)?);
             out.push(')');
         }
-        Ok((out, (top && unowned.is_some()).then(|| root.to_string())))
+        Ok((out, (top && unowned.is_some()).then(|| root.trim().to_string())))
     }
 
     /// Records an `@property` rule, whose declarations are in `self.out` from `body`: its name,
     /// and the type of its syntax when markup can set it. The browser ignores a rule that lacks
     /// `syntax`, `inherits`, or (for any syntax but `*`) `initial-value`, so each is required.
     fn property(&mut self, prelude: &str, body: usize, at: usize) -> Result<(), String> {
-        let prelude = css_trim(prelude);
+        let prelude = prelude.trim();
         let name = prelude
             .strip_prefix("--")
             .filter(|name| !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_')));
@@ -1249,12 +1232,6 @@ impl Scoper<'_> {
                 continue;
             }
             match c {
-                '\\' => {
-                    let (_, end) = escaped(&chars, i + 1);
-                    out.extend(&chars[i..end]);
-                    i = end;
-                    continue;
-                }
                 '"' | '\'' => quote = Some(c),
                 '[' => brackets += 1,
                 ']' => brackets = brackets.saturating_sub(1),
@@ -1267,26 +1244,9 @@ impl Scoper<'_> {
                     part_start = i + 1;
                     part_scoped = false;
                 }
-                '.' if brackets == 0 => {
-                    // A comment between the delimiter and the ident does not break the class
-                    // selector. Whitespace would, and comments cannot join pieces of an ident.
-                    let mut start = i + 1;
-                    while chars[start..].starts_with(&['/', '*', '*', '/']) {
-                        start += 4;
-                    }
-                    if !ident_start(&chars[start..]) {
-                        out.push(c);
-                        i += 1;
-                        continue;
-                    }
-                    let mut end = start;
-                    while end < chars.len() && css_name(chars[end]) {
-                        if !chars[end].is_ascii() {
-                            return Err(self.error(
-                                at,
-                                "non-ASCII characters in a class name are not supported in a component's stylesheet",
-                            ));
-                        }
+                '.' if brackets == 0 && ident_start(&chars[i + 1..]) => {
+                    let mut end = i + 1;
+                    while end < chars.len() && (chars[end].is_ascii_alphanumeric() || matches!(chars[end], '-' | '_')) {
                         end += 1;
                     }
                     if chars.get(end) == Some(&'\\') {
@@ -1294,13 +1254,13 @@ impl Scoper<'_> {
                             self.error(at, "escaped characters in a class name are not supported in a component's stylesheet")
                         );
                     }
-                    let class: String = chars[start..end].iter().collect();
+                    let class: String = chars[i + 1..end].iter().collect();
                     if class.contains("__") {
                         return Err(
                             self.error(at, format!(".{class}: __ separates the component's name from the class; use - or _"))
                         );
                     }
-                    out.extend(&chars[i..start]);
+                    out.push('.');
                     out.push_str(self.prefix);
                     out.push_str("__");
                     out.push_str(&class);
@@ -1338,20 +1298,11 @@ impl Scoper<'_> {
 }
 
 fn ident_start(rest: &[char]) -> bool {
-    let name_start = |c: char| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii();
     match rest {
-        [c, ..] if name_start(*c) => true,
-        ['-', c, ..] => name_start(*c) || matches!(c, '-' | '\\'),
-        ['\\', ..] => true,
+        [c, ..] if c.is_ascii_alphabetic() || *c == '_' => true,
+        ['-', c, ..] => c.is_ascii_alphabetic() || *c == '_',
         _ => false,
     }
-}
-
-/// Drop the trivia tokens around a scope selector, not whitespace in an escape.
-fn trim_selector(selector: &str) -> &str {
-    let selector = css_trim_start(selector);
-    let end = tokens(selector).filter(|(kind, ..)| *kind != Tok::Trivia).last().map_or(0, |(_, _, end)| end);
-    &selector[..end]
 }
 
 /// The text inside the parentheses `text` starts with, and the text after them, outside strings
@@ -1402,18 +1353,13 @@ fn pseudo_element(selector: &str) -> bool {
             b'[' => brackets += 1,
             b']' => brackets = brackets.saturating_sub(1),
             b':' if brackets == 0 => {
-                let rest = &selector[i + 1..];
-                let name = skip_comments(rest);
-                if name.starts_with(':') {
+                if b.get(i + 1) == Some(&b':') {
                     return true;
                 }
-                let end = css_name_end(name, 0);
-                if name.as_bytes().get(end) != Some(&b'(')
-                    && ["before", "after", "first-line", "first-letter"].iter().any(|n| css_keyword(&name[..end], n))
-                {
+                let name: String = selector[i + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+                if ["before", "after", "first-line", "first-letter"].iter().any(|n| name.eq_ignore_ascii_case(n)) {
                     return true;
                 }
-                i += rest.len() - name.len();
             }
             _ => {}
         }
@@ -1422,35 +1368,34 @@ fn pseudo_element(selector: &str) -> bool {
     false
 }
 
-/// Comments removed and whitespace collapsed outside strings, escapes and unquoted URLs, without
-/// changing the tokens the browser reads (CSS Syntax Level 3). Whitespace is CSS's (space, tab and
-/// line breaks), so a no-break space stays part of an identifier. A run of whitespace and comments
-/// with any whitespace in it is one space, which already separates tokens; a comment with none
-/// beside it is written `/**/`, since dropping it could join the tokens around it (`<!/**/--` is
-/// not `<!--`, `--abov\65/**/flip-block` not one name) and a space could add a descendant
-/// combinator (`#\62/**/.c`). An escape is kept whole, with the one whitespace that ends a hex
-/// escape, which separates nothing: after `\65 ` a comment is still `/**/`, and after an open
-/// `\65` whitespace is two spaces. Strings and unquoted `url(..)`s, where `/*` is not a comment,
-/// are copied as written. The result has no leading or trailing trivia tokens, and every comment
-/// in it is `/**/`.
+/// Comments removed and whitespace collapsed, outside strings, escapes and unquoted URLs, with
+/// the tokens the source had (CSS Syntax Level 3). Whitespace is CSS's (space, tab and line
+/// breaks), so a no-break space stays part of an identifier, and a run of it is one space. An
+/// escape is kept whole, the one whitespace that ends a hex escape written as a space, so
+/// whitespace after it still separates tokens: `--abov\65  flip-block` is two. A comment with no
+/// whitespace beside it separates tokens without being whitespace, so it is dropped where the
+/// tokens on its two sides stay apart (`#\62/**/.c` is `#\62.c`, the compound `#b.c`), written
+/// `/**/` where they would join (`--abov\65/**/flip-block` stays two names), and a space after an
+/// at-keyword (`@media/**/screen`), where whitespace means nothing. `/*` in an unquoted `url(..)`
+/// is part of the URL, which is copied as written.
 fn squash(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
-    // Whitespace, and a comment, waiting before the next token.
+    // Whitespace, and a comment with no whitespace beside it, waiting before the next token.
     let (mut space, mut comment) = (false, false);
+    // The last character written, `a` for an escape, which continues an identifier.
+    let mut last = ' ';
     // The last thing written is a hex escape that no whitespace has ended yet.
     let mut open = false;
-    // The last thing written continues a name (an escape included).
-    let mut in_name = false;
-    // The last character written when it was `#` or `@`, which make the name after it no
-    // identifier, and where in `out` the identifier being written starts.
-    let mut mark = false;
+    // Where in `out` the identifier being written starts, with a `#` or `@` just before it.
     let mut word: Option<usize> = None;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
         if c == '/' && chars.get(i + 1) == Some(&'*') {
-            i = (i + 3..chars.len()).find(|&at| chars[at - 1] == '*' && chars[at] == '/').map_or(chars.len(), |at| at + 1);
+            i = (i + 2..chars.len())
+                .find(|&at| chars[at - 1] == '*' && chars[at] == '/' && at > i + 2)
+                .map_or(chars.len(), |at| at + 1);
             comment = true;
             continue;
         }
@@ -1459,30 +1404,21 @@ fn squash(text: &str) -> String {
             i += 1;
             continue;
         }
-        if !out.is_empty() && (space || comment) {
-            out.push_str(match (space, open) {
-                (true, true) => "  ",
-                (true, false) => " ",
-                (false, _) => "/**/",
-            });
-            (in_name, mark, word) = (false, false, None);
+        if !out.is_empty() && space {
+            // A hex escape not yet ended takes the first space as its own.
+            out.push_str(if open { "  " } else { " " });
+            (last, word) = (' ', None);
+        } else if !out.is_empty() && comment && css_joins(last, c, chars.get(i + 1).copied()) {
+            if word.is_some_and(|at| out[at..].starts_with('@')) {
+                out.push(' ');
+                last = ' ';
+            } else {
+                out.push_str("/**/");
+                last = '/';
+            }
+            word = None;
         }
         (space, comment, open) = (false, false, false);
-        let cdo_or_cdc = match c {
-            '<' if chars[i..].starts_with(&['<', '!', '-', '-']) => 4,
-            '-' if !in_name && !mark && chars[i..].starts_with(&['-', '-', '>']) => 3,
-            _ => 0,
-        };
-        if cdo_or_cdc != 0 {
-            out.extend(&chars[i..i + cdo_or_cdc]);
-            i += cdo_or_cdc;
-            (in_name, mark, word) = (false, false, None);
-            continue;
-        }
-        let name = css_name(c) || (c == '\\' && chars.get(i + 1).is_some_and(|next| !matches!(next, '\n' | '\r' | '\u{c}')));
-        if name && !in_name {
-            word = (!mark).then_some(out.len());
-        }
         match c {
             '"' | '\'' => {
                 out.push(c);
@@ -1499,8 +1435,10 @@ fn squash(text: &str) -> String {
                         break;
                     }
                 }
+                (last, word) = (c, None);
             }
-            '\\' if name => {
+            '\\' if chars.get(i + 1).is_some_and(|next| !matches!(next, '\n' | '\r' | '\u{c}')) => {
+                word = word.or(Some(out.len()));
                 out.push(c);
                 i += 1;
                 let hex = chars[i..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).count();
@@ -1517,74 +1455,52 @@ fn squash(text: &str) -> String {
                         open = true;
                     }
                 }
+                last = 'a';
             }
-            // Only an identifier `url` (escapes read, any case) starts a URL token: `#\75rl(` is
-            // a hash and a parenthesis.
-            '(' if in_name
-                && word.is_some_and(|at| css_keyword(&out[at..], "url"))
+            '(' if word.is_some_and(|at| unescape(&out[at..]).eq_ignore_ascii_case("url"))
                 && !matches!(chars[i + 1..].iter().find(|c| !c.is_ascii_whitespace()), Some('"' | '\'')) =>
             {
                 // An unquoted URL is one token to its `)`, comments and spaces included.
                 let end = url_end(&chars, i + 1);
                 out.extend(&chars[i..end]);
                 i = end;
+                (last, word) = (')', None);
             }
             c => {
+                if css_name(c) {
+                    if word.is_none() {
+                        let mark = matches!(last, '#' | '@') && out.ends_with(last);
+                        word = Some(out.len() - if mark { 1 } else { 0 });
+                    }
+                } else {
+                    word = None;
+                }
                 out.push(c);
+                last = c;
                 i += 1;
             }
-        }
-        in_name = name;
-        mark = matches!(c, '#' | '@');
-        if !name {
-            word = None;
         }
     }
     out
 }
 
-/// Whether `c` continues a name: an identifier, a number's unit (CSS Syntax Level 3).
+/// Whether `c` continues an identifier, a number's digits or a unit (CSS Syntax Level 3).
 fn css_name(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '-' | '_') || !c.is_ascii()
 }
 
-fn css_keyword(written: &str, keyword: &str) -> bool {
-    written.eq_ignore_ascii_case(keyword) || (written.contains('\\') && unescape(written).eq_ignore_ascii_case(keyword))
+/// Whether writing `next` (and `after` it) right after `last` would make one token of what a
+/// comment between them kept as two (CSS Syntax Level 3, serialization's pairs that need a
+/// comment): `last` is `a` after an escape. It errs toward yes, where keeping the comment is only
+/// longer.
+fn css_joins(last: char, next: char, after: Option<char>) -> bool {
+    let number = |c: Option<char>| c.is_some_and(|c| c.is_ascii_digit() || c == '.');
+    (css_name(last) && (css_name(next) || matches!(next, '\\' | '(' | '%') || (matches!(next, '.' | '+') && number(after))))
+        || (matches!(last, '#' | '@') && (css_name(next) || next == '\\'))
+        || (matches!(last, '.' | '+') && number(Some(next)))
+        || matches!((last, next), ('/', '*') | ('<', '!') | ('-', '>'))
 }
 
-/// Squashed comments do not stand for whitespace.
-fn skip_comments(mut text: &str) -> &str {
-    while let Some(rest) = text.strip_prefix("/**/") {
-        text = rest;
-    }
-    text
-}
-
-/// Squashed `text` without the whitespace and comments it starts with.
-fn css_trim_start(mut text: &str) -> &str {
-    loop {
-        text = text.trim_start_matches(|c: char| c.is_ascii_whitespace());
-        match text.strip_prefix("/**/") {
-            Some(rest) => text = rest,
-            None => return text,
-        }
-    }
-}
-
-/// Squashed `text` without the whitespace and comments it ends with.
-fn css_trim_end(mut text: &str) -> &str {
-    loop {
-        text = text.trim_end_matches(|c: char| c.is_ascii_whitespace());
-        match text.strip_suffix("/**/") {
-            Some(rest) => text = rest,
-            None => return text,
-        }
-    }
-}
-
-fn css_trim(text: &str) -> &str {
-    css_trim_end(css_trim_start(text))
-}
 /// Where the unquoted URL whose contents start at `at` ends, after its `)`, or the text's end
 /// (CSS Syntax Level 3, consume a url token): an escape is kept whole.
 fn url_end(chars: &[char], mut at: usize) -> usize {
@@ -1598,9 +1514,11 @@ fn url_end(chars: &[char], mut at: usize) -> usize {
 }
 fn split_declaration(text: &str) -> Option<(&str, &str)> {
     let (name, value) = text.split_once(':')?;
-    // Trivia beside the colon joins nothing. Squash already trimmed the end of the value.
-    let name = css_trim(name);
-    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| (name, css_trim_start(value)))
+    let space = |c: char| c.is_ascii_whitespace();
+    let name = name.trim_matches(space);
+    // `squash` leaves no whitespace at the end but the one that ends a hex escape, which stays.
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .then(|| (name, value.trim_start_matches(space)))
 }
 
 /// The constant for a class: `alert-message` is `AlertMessage`.
@@ -2057,25 +1975,15 @@ mod tests {
     #[test]
     fn removing_a_comment_keeps_the_tokens_the_source_had() {
         let css = |src: &str| scope(src, "x").unwrap().css;
-        // Whitespace beside a comment is one space; a comment with none beside it stays `/**/`,
-        // so it neither joins tokens nor becomes a descendant combinator. The space that ends a
-        // hex escape is the escape's, not whitespace beside the comment.
-        assert_eq!(css(".a #\\62/**/.c { color: red }"), ".x__a #\\62/**/.x__c{color:red}");
+        // A comment separates tokens without being whitespace: `#\62/**/.c` is the compound
+        // `#b.c`, the space a hex escape takes is its own, and whitespace beside a comment is a
+        // descendant combinator.
+        assert_eq!(css(".a #\\62/**/.c { color: red }"), ".x__a #\\62.x__c{color:red}");
         assert_eq!(css(".a #\\62 .c { color: red }"), ".x__a #\\62 .x__c{color:red}");
-        assert_eq!(css(".a #\\62 /**/.c { color: red }"), ".x__a #\\62 /**/.x__c{color:red}");
         assert_eq!(css(".a #\\62/**/ .c { color: red }"), ".x__a #\\62  .x__c{color:red}");
-        assert_eq!(
-            css(".a/**/.c, .a/* x */ .c, .a /**/ .c { color: red }"),
-            ".x__a/**/.x__c, .x__a .x__c, .x__a .x__c{color:red}"
-        );
+        assert_eq!(css(".a/**/.c, .a/* x */ .c { color: red }"), ".x__a.x__c, .x__a .x__c{color:red}");
         assert_eq!(css(".a #b/**/c, .a #\\62/**/c { color: red }"), ".x__a #b/**/c, .x__a #\\62/**/c{color:red}");
-        // Review 4: a CDO, a unicode range and an escaped at-keyword are not formed.
-        assert_eq!(
-            css("@supports (--x:<!/**/--) { .a { unicode-range: U+/**/A } } .a { --y: (@m\\65/**/dia) }"),
-            "@supports (--x:<!/**/--){.x__a{unicode-range:U+/**/A}}.x__a{--y:(@m\\65/**/dia)}"
-        );
-        // `/*` inside an unquoted URL is part of it, and its spaces are the URL's; only an
-        // identifier `url(` starts one, not a hash or an at-keyword.
+        // `/*` inside an unquoted URL is part of it, and its spaces are the URL's.
         assert_eq!(
             css(".a { position-try: var(--choice, url(\\61/**/b)); background: url( a/**/b.png ) u\\72l(/*c*/) }"),
             ".x__a{position-try:var(--choice, url(\\61/**/b));background:url( a/**/b.png ) u\\72l(/*c*/)}"
@@ -2084,98 +1992,12 @@ mod tests {
             css(".a { background: url/**/(x.png), url(/**/'x.png') }"),
             ".x__a{background:url/**/(x.png), url(/**/'x.png')}"
         );
-        // (A custom property's value keeps its source text in the browser, so `--y` reads back one
-        // space shorter; the tokens are the same, as in `main`.)
+        // Numbers, units and keywords stay apart; an at-keyword takes a space, which means nothing
+        // in its prelude.
         assert_eq!(
-            css(".a { --x: #\\75rl(z \"a)b/**/.c\"); --y: @\\75rl(z /**/ y) }"),
-            ".x__a{--x:#\\75rl(z \"a)b/**/.c\");--y:@\\75rl(z y)}"
+            css("@media/**/screen { .a { margin: 1px/**/2px; width: 1/**/%; color: red/**/!important; order: +/**/1 } }"),
+            "@media screen{.x__a{margin:1px/**/2px;width:1/**/%;color:red!important;order:+/**/1}}"
         );
-        // Numbers, units, keywords and at-keywords stay apart. A comment beside a declaration's
-        // colon or at its end joins nothing and goes.
-        assert_eq!(
-            css("@media/**/screen { .a { margin: 1px/**/2px; width: 1/**/%; color/**/:/**/red/**/!important/**/; order: +/**/1 } }"),
-            "@media/**/screen{.x__a{margin:1px/**/2px;width:1/**/%;color:red/**/!important;order:+/**/1}}"
-        );
-        // `@scope`'s `to` is an identifier, then whitespace or a comment; `to(` is a function.
-        assert_eq!(
-            css("@scope/**/(.a)/**/to/**/(.limit) { .b { color: red } } @scope (.a) to /**/ (.limit) { .b { color: red } }"),
-            "@scope (.x__a) to (.x__limit){.x__b{color:red}}@scope (.x__a) to (.x__limit){.x__b{color:red}}"
-        );
-        assert!(scope("@scope (.a) to(.limit) { .b { color: red } }", "x").is_err());
-        assert!(scope("@scope (.a) tox (.limit) { .b { color: red } }", "x").is_err());
-        // Names in at-rule preludes read past comments.
-        assert_eq!(
-            css("@position-try/**/--above/**/{ top: 0 } @property/**/--w/**/{ syntax: '*'; inherits: false } @media (/**/--md/**/) { .a { position-try: --above; width: var(--w) } }"),
-            "@position-try/**/--x__above{top:0}@property/**/--x__w{syntax:'*';inherits:false}@media (--md){.x__a{position-try:--x__above;width:var(--x__w)}}"
-        );
-    }
-    #[test]
-    fn a_comment_between_a_dot_and_a_class_still_scopes_the_class() {
-        for (input, expected) in [
-            ("./**/a{}", "./**/x__a{}"),
-            (":is(./**/foreign,.a){}", ":is(./**/x__foreign,.x__a){}"),
-            (".a :not(./**/foreign,.a){}", ".x__a :not(./**/x__foreign,.x__a){}"),
-            ("@scope (.a) to (./**/foreign) { p {} }", "@scope (.x__a) to (./**/x__foreign){p{}}"),
-        ] {
-            assert_eq!(scope(input, "x").unwrap().css, expected, "{input}");
-        }
-        assert!(scope(". /**/a{}", "x").unwrap_err().contains("does not own"));
-        assert!(scope(r":is(./**/\66 oreign,.a){}", "x").unwrap_err().contains("escaped characters"));
-    }
-
-    #[test]
-    fn commented_class_selectors_scope_the_whole_ident_or_refuse_it() {
-        let sheet = scope(":is(./* gap */--foreign,.a){color:green}", "x").unwrap();
-        assert_eq!(sheet.css, ":is(./**/x__--foreign,.x__a){color:green}");
-        assert_eq!(sheet.classes, ["--foreign", "a"]);
-        for name in ["\u{e9}", "a\u{e9}", "-\u{e9}"] {
-            let css = format!(":is(./* gap */{name},.a){{color:green}}");
-            assert!(scope(&css, "x").unwrap_err().contains("non-ASCII characters"), "{css}");
-        }
-    }
-
-    #[test]
-    fn an_important_registered_property_is_refused_across_comments() {
-        let registration = "@property --w{syntax:'<length>';inherits:false;initial-value:0px}";
-        for declaration in [r"--w:2px!/**/important", r"--w:2px ! /**/ IMPORTANT/**/", r"--w:2px!\69mportant"] {
-            let input = format!("{registration}.a{{{declaration}}}");
-            assert!(scope(&input, "x").unwrap_err().contains("!important on a property"), "{input}");
-        }
-        for declaration in [r"--w:2px\!important", r"--w:2px!im/**/portant", r"--w:2px!importantly", r"--w:2px!important foo"] {
-            let input = format!("{registration}.a{{{declaration}}}");
-            assert!(scope(&input, "x").is_ok(), "{input}");
-        }
-    }
-
-    #[test]
-    fn declaration_values_keep_their_trailing_escaped_bytes() {
-        let css = |source| scope(source, "x").unwrap().css;
-        assert_eq!(css(r".a{--v:foo\ /**/;color:green}"), r".x__a{--v:foo\ ;color:green}");
-        assert_eq!(css(r".a{--v:x\/**/}"), r".x__a{--v:x\/**/}");
-        assert_eq!(css(r".a{--v:x\61 /**/;color:green}"), r".x__a{--v:x\61 ;color:green}");
-    }
-
-    #[test]
-    fn a_scope_limit_cannot_be_only_comments() {
-        let error = scope("@scope (.a) to (/**/) { p {} }", "x").unwrap_err();
-        assert!(error.contains("prelude is not a root and an optional limit"), "{error}");
-    }
-
-    #[test]
-    fn a_scope_pseudo_element_is_refused_across_comments() {
-        for root in ["(.a:/**/before)", "(.a:/**/:part(foo))"] {
-            let input = format!("@scope {root} {{ p {{}} }}");
-            let error = scope(&input, "x").unwrap_err();
-            assert!(error.contains("a pseudo-element cannot be a scope"), "{error}");
-        }
-        assert!(scope("@scope (.a:b/**/efore) { p {} }", "x").is_ok());
-    }
-
-    #[test]
-    fn unquoted_urls_follow_cdo_and_cdc_tokens() {
-        let css = |source| scope(source, "x").unwrap().css;
-        assert_eq!(css(".a{--v:<!--url(a/*comment*/b)}"), ".x__a{--v:<!--url(a/*comment*/b)}");
-        assert_eq!(css(".a{--v:-->url(a/*comment*/b)}"), ".x__a{--v:-->url(a/*comment*/b)}");
     }
 
     #[test]

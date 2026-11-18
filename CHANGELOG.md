@@ -7,13 +7,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - Accept component-local `@position-try` definitions and rewrite their fallback references,
   reading `position-try` values as CSS tokens so custom-function calls, `if()` conditions and
-  whitespace after an escape keep their meaning; write a comment with no whitespace beside it as
-  `/**/` to keep adjacent tokens apart without adding a combinator (a selector's `.a/**/.b`
-  stays compound), keep trailing escapes in declaration values, and recognize selectors,
-  `!important` and custom-property reads across comment trivia. Scope dashed class names,
-  refuse non-ASCII class names, and check required `var()` references after an escaped slash;
-  match statement at-rule names case-insensitively and document the complete component CSS
-  at-rule inventory, including raw bodies and global names.
+  whitespace after an escape keep their meaning; match statement at-rule names
+  case-insensitively and document the complete component CSS at-rule inventory, including raw
+  bodies and global names.
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 
