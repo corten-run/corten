@@ -8,7 +8,8 @@ import { copyEvidence, digest, durable, inside, inspectEvidence, readRegular, tr
 import { catalogResult } from "./test-fixtures/catalog.mjs";
 import { groupDescriptor } from "../../catalog/group.mjs";
 import { cpuSettings, parseArgs } from "../../catalog/contract.mjs";
-import { result as jsonResult } from "../../json-api/test-fixtures.mjs";
+import { productionFixture } from "../../json-api/production-fixtures.mjs";
+import { jsonSources, saveJsonFixture } from "./test-fixtures/json.mjs";
 import { marketplaceResult } from "./test-fixtures/marketplace.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { selectedApps } from "../registry.mjs";
@@ -128,21 +129,19 @@ test("catalog reuses strict native/controller gates including exact options, sou
     const bad = structuredClone(s); change(bad); fs.writeFileSync(file, JSON.stringify(bad)); assert.throws(() => inspectEvidence(b, root));
   }
 });
-test("JSON validator uses its actual hash-bound raw reader and cannot accept receipt strings or missing audits", (t) => {
-  const root = temporary(t), fixture = jsonResult(), s = fixture.summary;
-  const b = { request: { group: "json-api", round: s.round, commit: s.commit }, execution: { effectiveOptions: s.options }, resources: { expectedCpus: s.measurement.cpus } };
-  for (const [path, value] of fixture.artifacts) {
-    const target = join(root, path); fs.mkdirSync(dirname(target), { recursive: true }); fs.writeFileSync(target, value);
-  }
-  const file = join(root, "summary.json"); fs.writeFileSync(file, JSON.stringify(s));
-  assert.equal(inspectEvidence(b, root).baseline, true);
-  const key = s.group.cases[0].key;
-  const raw = join(root, s.apps.corten.checks[key].raw.path), bytes = fs.readFileSync(raw);
-  fs.writeFileSync(raw, "{}"); assert.throws(() => inspectEvidence(b, root), /strict JSON native attempt incomplete/); fs.writeFileSync(raw, bytes);
-  const bad = structuredClone(s); bad.apps.corten.checks[key].native = "approved-by-caller";
-  fs.writeFileSync(file, JSON.stringify(bad)); assert.throws(() => inspectEvidence(b, root), /strict JSON native attempt incomplete/);
-  assert.notEqual(digest(bytes), digest("{}"));
-});
+for (const fault of ["none", "raw hash mismatch", "receipt string"]) {
+  test(`JSON validator replays current production artifacts: ${fault}`, async (t) => {
+    const root = temporary(t), fixture = await productionFixture(root), s = fixture.summary;
+    const b = { request: { group: "json-api", round: s.round, commit: s.commit }, execution: { effectiveOptions: s.options },
+      resources: { expectedCpus: s.measurement.cpus }, sources: jsonSources(s) };
+    const checked = s.apps.corten.checks[s.group.cases[0].key];
+    if (fault === "receipt string") checked.native = "approved-by-caller";
+    saveJsonFixture(fixture, root);
+    if (fault === "raw hash mismatch") fs.writeFileSync(join(root, checked.raw.path), "{}");
+    if (fault === "none") assert.equal(inspectEvidence(b, root).baseline, true);
+    else assert.throws(() => inspectEvidence(b, root), /strict JSON native attempt incomplete/);
+  });
+}
 test("marketplace uses its native schema, exact configuration and full excluded-candidate ledger", (t) => {
   const root = temporary(t), apps = selectedApps("localized-marketplace");
   const b = { request: { group: "localized-marketplace", round: "w2", commit: "a".repeat(40) }, selection: { apps },
