@@ -357,7 +357,10 @@ for (const late of [true, false]) test(`catalog distinguishes ${late ? "late cal
   f.clock += late ? 1241 : 100;
   f.override = (path) => {
     if (path === `/sys/fs/cgroup${f.scope}/cgroup.procs` && ++reads % 2 === 0) {
-      if (!late) f.clock += 450;
+      if (!late) {
+        f.clock += 450;
+        if (reads === 2) f.wallOffset += 5000; // Not elapsed census time.
+      }
       return ""; // Closing census disagrees with the opening one.
     }
   };
@@ -366,6 +369,7 @@ for (const late of [true, false]) test(`catalog distinguishes ${late ? "late cal
   assert.equal((await f.finish()).status, "blocked"); assert.equal(f.terminal.empty, true);
   const { first, count } = f.terminal.observerFailures;
   assert.equal(count, 1); assert.equal(first.operation, "snapshot-membership-recheck");
+  assert.equal(first.at - first.lastSampleAt, late ? 1241 : 6001);
   assert.deepEqual(first.catalogCensus, late
     ? { entryGapMs: 1241, censusMs: 0, attempts: 1 }
     : { entryGapMs: 100, censusMs: 901, attempts: 2 });
