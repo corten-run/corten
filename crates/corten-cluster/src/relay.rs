@@ -5,8 +5,9 @@
 //! the next one, which republishes them, and JetStream drops the copies by message ID. Two
 //! relays briefly overlapping can republish these rows within the deduplication window.
 //!
-//! Rows with invalid feed keys or per-publish size refusals are logged and marked done without
-//! delivery. Their bodies stay in Postgres until ordinary pruning; other failures still retry.
+//! Rows with invalid feed keys are logged and marked done without publishing. On a per-publish
+//! size refusal the relay publishes a reload marker and waits for its acknowledgement before
+//! marking the row done. Patch bodies stay in Postgres until ordinary pruning.
 
 use std::{
     sync::{
@@ -25,7 +26,7 @@ use async_nats::{
 };
 use sqlx::{postgres::PgListener, PgConnection, PgPool};
 
-use crate::{store, valid_key, Error, Options};
+use crate::{store, valid_key, Error, Options, RELOAD_HEADER};
 
 /// Outbox rows published per round trip.
 const BATCH: i64 = 256;
@@ -121,48 +122,31 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
         held.check()?;
         let mut acks = Vec::with_capacity(rows.len());
         let mut sent = Vec::with_capacity(rows.len());
+        let mut refused = Vec::new();
         for row in &rows {
             if !valid_key(&row.feed) {
-                if store::mark_published(pool, &[row.id]).await? {
-                    tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
-                        "dropped outbox row with invalid feed key");
-                }
-                held.check()?;
+                refused.push((row, Refusal::InvalidKey));
                 continue;
             }
-            match send(js, options, row).await {
+            match send(js, options, row, false).await {
                 Ok(ack) => acks.push((row, ack)),
                 Err(error) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
-                    set_aside(pool, options, row, "refused by the connection's cached limit", None).await?;
-                    held.check()?;
+                    refused.push((row, Refusal::Cached(error)));
                 }
                 Err(error) => return Err(error.into()),
             }
         }
-        let mut stream_limit = None;
         for (row, ack) in acks {
             match ack.await {
                 Ok(_) => sent.push(row.id),
-                Err(error) if stream_size_refusal(&error) => {
-                    // 10054 does not carry the limit. Look it up once per refused batch
-                    // for diagnostics only; an unavailable limit must not stop the relay.
-                    if stream_limit.is_none() {
-                        let budget = (options.lease / 8).min(held.stale.saturating_sub(held.renewed.elapsed()));
-                        stream_limit = Some(
-                            tokio::time::timeout(budget, js.get_stream(&options.stream))
-                                .await
-                                .ok()
-                                .and_then(Result::ok)
-                                .map(|stream| stream.cached_info().config.max_message_size),
-                        );
-                    }
-                    set_aside(pool, options, row, "JetStream size refusal (10054)", stream_limit.flatten()).await?;
-                }
+                Err(error) if stream_size_refusal(&error) => refused.push((row, Refusal::Stream)),
                 Err(error) => return Err(error.into()),
             }
         }
-        if !sent.is_empty() {
+        if refused.is_empty() {
             store::mark_published(pool, &sent).await?;
+        } else {
+            finish_refusals(pool, js, options, held, &mut sent, refused).await?;
         }
         if (rows.len() as i64) < BATCH {
             return Ok(());
@@ -170,11 +154,22 @@ async fn drain(pool: &PgPool, js: &jetstream::Context, options: &Options, held: 
     }
 }
 
-async fn send(js: &jetstream::Context, options: &Options, row: &store::Pending) -> Result<PublishAckFuture, PublishError> {
+async fn send(
+    js: &jetstream::Context,
+    options: &Options,
+    row: &store::Pending,
+    reload: bool,
+) -> Result<PublishAckFuture, PublishError> {
     let mut headers = HeaderMap::new();
     headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
     headers.insert("Feed-Generation", row.generation.as_str());
-    js.publish_with_headers(subject(options, &row.feed), headers, row.body.clone().into()).await
+    let body = if reload {
+        headers.insert(RELOAD_HEADER, row.seq.to_string().as_str());
+        Default::default()
+    } else {
+        row.body.clone().into()
+    };
+    js.publish_with_headers(subject(options, &row.feed), headers, body).await
 }
 
 fn stream_size_refusal(error: &PublishError) -> bool {
@@ -183,17 +178,70 @@ fn stream_size_refusal(error: &PublishError) -> bool {
         .is_some_and(|source| source.error_code() == jetstream::ErrorCode::STREAM_MESSAGE_EXCEEDS_MAXIMUM)
 }
 
-async fn set_aside(
+enum Refusal {
+    InvalidKey,
+    Cached(PublishError),
+    Stream,
+}
+
+async fn finish_refusals(
     pool: &PgPool,
+    js: &jetstream::Context,
     options: &Options,
-    row: &store::Pending,
-    reason: &'static str,
-    stream_limit: Option<i32>,
+    held: &mut Held,
+    sent: &mut Vec<i64>,
+    refused: Vec<(&store::Pending, Refusal)>,
 ) -> Result<(), Error> {
-    if store::mark_published(pool, &[row.id]).await? {
+    held.check()?;
+    if held.renewed.elapsed() >= options.lease / 4 {
+        held.renew(options).await?;
+    }
+    // Only size refusals identify a publish we can replace. Pipeline the markers too.
+    let marker_error = |id, error| format!("publishing reload marker for outbox row {id}: {error}");
+    let mut markers = Vec::new();
+    for (row, refusal) in &refused {
+        if matches!(refusal, Refusal::InvalidKey) {
+            sent.push(row.id);
+            continue;
+        }
+        held.check()?;
+        let ack = send(js, options, row, true).await.map_err(|error| marker_error(row.id, error))?;
+        markers.push((row.id, ack));
+    }
+    for (id, ack) in markers {
+        ack.await.map_err(|error| marker_error(id, error))?;
+        sent.push(id);
+    }
+    // 10054 does not carry the limit. Look it up once for diagnostics only.
+    let stream_limit = if refused.iter().any(|(_, refusal)| matches!(refusal, Refusal::Stream)) {
+        let budget = (options.lease / 8).min(held.stale.saturating_sub(held.renewed.elapsed()));
+        tokio::time::timeout(budget, js.get_stream(&options.stream))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .map(|stream| stream.cached_info().config.max_message_size)
+    } else {
+        None
+    };
+    held.check()?;
+    let mut retired = store::mark_published_returning(pool, sent).await?;
+    retired.sort_unstable();
+    for (row, refusal) in refused {
+        if retired.binary_search(&row.id).is_err() {
+            continue;
+        }
+        let (reason, error) = match refusal {
+            Refusal::InvalidKey => {
+                tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
+                    "dropped outbox row with invalid feed key");
+                continue;
+            }
+            Refusal::Cached(error) => ("refused by the connection's cached limit", Some(error)),
+            Refusal::Stream => ("JetStream size refusal (10054)", None),
+        };
         tracing::error!(target: "corten::feed", instance = %options.instance, id = row.id, feed = ?row.feed,
             patch_bytes = row.body.len(), stream = %options.stream, stream_max_message_size = stream_limit,
-            "outbox row set aside: {reason}; kept for inspection");
+            error = error.as_ref().map(tracing::field::display), "published reload marker: {reason}; patch kept for inspection");
     }
     Ok(())
 }

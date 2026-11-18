@@ -14,9 +14,9 @@
 //! The relay sends outbox rows in order within each feed and retires them after JetStream acknowledges them.
 //! A broker disconnect mid-batch can let queued publishes overtake a failed one. A relay that dies before
 //! retiring a row republishes it, and JetStream drops the copy within its deduplication window. Rows with invalid
-//! keys, per-publish JetStream size refusals, or client-side cached payload refusals are logged and
-//! set aside without delivery, not deleted. The cluster never forces a reconnect.
-//! A gap or a consumer restart reloads the feed from Postgres. Measured with two instances, kills
+//! keys are logged and set aside. For a per-publish size refusal the relay sends a reload marker in
+//! place of the patch and retires the row only after acknowledgement. The cluster never forces a reconnect.
+//! A marker, gap or consumer restart reloads the feed from Postgres. Measured with two instances, kills
 //! on a schedule and 200 clients: see `examples/listings-feed` and its `results/`.
 //!
 //! The app provides its rows through [`Source`] and writes through [`begin`] / [`Write::commit`],
@@ -48,6 +48,9 @@ use sqlx::{PgConnection, PgPool};
 pub use store::{begin, create_feed, migrate, prune, seq, Begin, Write, Written};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
+
+/// An empty JetStream message carrying the refused patch's feed sequence in this header.
+const RELOAD_HEADER: &str = "Corten-Reload";
 
 /// The longest feed key, in bytes. Leaves room for the prefix, reply inbox and publish framing
 /// in NATS's default 4 KB control line, and fits Postgres's B-tree indexes without compression

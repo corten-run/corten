@@ -237,17 +237,19 @@ pub(crate) async fn pending(pool: &PgPool, limit: i64) -> Result<Vec<Pending>, E
     Ok(rows.into_iter().map(|(id, feed, generation, seq, body)| Pending { id, feed, generation, seq, body }).collect())
 }
 
-/// Marks acknowledged or set-aside rows done. True if any were still pending.
+const MARK_PUBLISHED: &str = "UPDATE corten_outbox SET published_at = clock_timestamp()
+          WHERE id = ANY($1) AND published_at IS NULL";
+
+/// Marks acknowledged patches done. True if any were still pending.
 pub(crate) async fn mark_published(pool: &PgPool, ids: &[i64]) -> Result<bool, Error> {
-    let updated = sqlx::query(
-        "UPDATE corten_outbox SET published_at = clock_timestamp()
-          WHERE id = ANY($1) AND published_at IS NULL",
-    )
-    .bind(ids)
-    .execute(pool)
-    .await?
-    .rows_affected();
+    let updated = sqlx::query(MARK_PUBLISHED).bind(ids).execute(pool).await?.rows_affected();
     Ok(updated != 0)
+}
+
+/// Marks a batch with exceptional rows done, returning their IDs for one-time diagnostics.
+pub(crate) async fn mark_published_returning(pool: &PgPool, ids: &[i64]) -> Result<Vec<i64>, Error> {
+    let sql = format!("{MARK_PUBLISHED} RETURNING id");
+    Ok(sqlx::query_scalar(&sql).bind(ids).fetch_all(pool).await?)
 }
 
 /// Takes or renews the relay lease on `conn` (a dedicated connection). The lease is free when it

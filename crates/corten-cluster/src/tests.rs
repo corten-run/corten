@@ -351,7 +351,7 @@ async fn the_relay_drops_legacy_invalid_keys_and_delivers_good_rows_in_order() {
 
 // Single-threaded so the relay task runs with the test's tracing subscriber.
 #[tokio::test]
-async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
+async fn a_stream_size_refusal_reloads_ready_and_loading_followers_without_a_later_patch() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     const STREAM_LIMIT: i32 = 512;
     let logs = Capture::default();
@@ -361,6 +361,21 @@ async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
     migrate(&pool).await.unwrap();
     test_items(&pool).await;
     new_feed(&pool, "large").await;
+    new_feed(&pool, "small").await;
+    sqlx::query("INSERT INTO test_items VALUES ('large', 'gate', 0)").execute(&pool).await.unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE retirement_batches (rows bigint);
+         CREATE FUNCTION count_retired() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+             INSERT INTO retirement_batches SELECT count(*) FROM updated HAVING count(*) > 0;
+             RETURN NULL;
+         END $$;
+         CREATE TRIGGER count_retired AFTER UPDATE ON corten_outbox
+             REFERENCING NEW TABLE AS updated FOR EACH STATEMENT EXECUTE FUNCTION count_retired();",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     let nats = async_nats::connect(&nats).await.unwrap();
     let js = jetstream::new(nats.clone());
     let stream_name = schema.to_uppercase();
@@ -376,11 +391,24 @@ async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
     let mut gate = pool.acquire().await.unwrap().detach();
     assert!(take(&mut gate, "test", Duration::from_secs(30)).await);
     let options = Options { stream: stream_name.clone(), subject_prefix: schema.clone(), ..Options::default() };
-    let cluster = Cluster::start(pool.clone(), nats.clone(), Items, options).await.unwrap();
+    let cluster = Cluster::start(pool.clone(), nats.clone(), Items, options.clone()).await.unwrap();
+    let loading_cluster = Cluster::start(pool.clone(), nats.clone(), GatedItems, options).await.unwrap();
     let followed = cluster.feed("large").await.unwrap().unwrap();
+    let small = cluster.feed("small").await.unwrap().unwrap();
     assert_eq!(followed.seq(), 0);
+    let mut live =
+        corten::http::Body::new(followed.live(Since(Some(corten::feed::Cursor::new(followed.generation(), 0)))).into_body())
+            .into_data_stream();
+    let opening = live.next().await.unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&opening).starts_with("retry:"));
+    let _open = OpenOnDrop;
+    GATE.arm();
+    let loading = tokio::spawn({
+        let cluster = loading_cluster.clone();
+        async move { cluster.feed("large").await.unwrap().unwrap() }
+    });
+    assert!(tokio::task::spawn_blocking(|| GATE.held(Duration::from_secs(10))).await.unwrap());
 
-    assert_eq!(set(&pool, "large", 1, None).await.seq, Some(1));
     let item = Item { id: "x".repeat(2 * STREAM_LIMIT as usize), n: 2 };
     let Begin::New(mut write) = begin(&pool, "large", None).await.unwrap() else { unreachable!() };
     sqlx::query("INSERT INTO test_items VALUES ('large', $1, $2)")
@@ -390,29 +418,38 @@ async fn the_relay_drains_past_a_patch_over_the_stream_limit() {
         .await
         .unwrap();
     let change = Change::Upsert { id: &item.id, value: &item };
-    let body = corten::feed::patch_json(2, std::slice::from_ref(&change));
+    let body = corten::feed::patch_json(1, std::slice::from_ref(&change));
     assert!(body.len() > STREAM_LIMIT as usize && body.len() + 128 < nats.max_payload());
     let refusal = js.publish(format!("{schema}.probe"), body.into()).await.unwrap().await.unwrap_err();
     assert_eq!(
         std::error::Error::source(&refusal).unwrap().downcast_ref::<jetstream::Error>().unwrap().error_code(),
         jetstream::ErrorCode::STREAM_MESSAGE_EXCEEDS_MAXIMUM
     );
-    assert_eq!(write.commit(&[change]).await.unwrap().seq, Some(2));
-    assert_eq!(set(&pool, "large", 3, None).await.seq, Some(3));
-    let pending = wait_pending(&pool, 3).await;
-    assert_eq!(pending.iter().map(|row| row.seq).collect::<Vec<_>>(), [1, 2, 3]);
+    assert_eq!(write.commit(&[change]).await.unwrap().seq, Some(1));
+    assert_eq!(set(&pool, "small", 1, None).await.seq, Some(1));
+    let pending = wait_pending(&pool, 2).await;
     store::release(&mut gate).await.unwrap();
 
     let mut messages = stream_messages(&stream).await;
-    let subject = format!("{schema}.large");
-    expect_patch(&mut messages, &subject, 1, 1).await;
-    expect_patch(&mut messages, &subject, 2, 3).await;
+    expect_patch(&mut messages, &format!("{schema}.small"), 1, 1).await;
+    expect_reload(&mut messages, &format!("{schema}.large"), &pending[0]).await;
+    eventually("the other feed's patch and the buffered marker", || {
+        small.seq() == 1 && loading_cluster.hub.buffered("large") == 1
+    })
+    .await;
+    GATE.open();
+    let loaded = loading.await.unwrap();
     wait_pending(&pool, 0).await;
+    let retired: Vec<i64> = sqlx::query_scalar("SELECT rows FROM retirement_batches").fetch_all(&pool).await.unwrap();
+    assert_eq!(retired, [2], "one update for the acknowledged patch and marker");
     let state = &stream.info().await.unwrap().state;
     assert_eq!((state.first_sequence, state.last_sequence, state.messages), (1, 2, 2));
-    eventually("the follower to reload at patch 3", || followed.seq() == 3).await;
-    assert_eq!(followed.read(|rows| (rows["a"].n, rows[&item.id].n)), (3, 2));
-    let log = expect_set_aside(&pool, &pending[1], &logs, "JetStream size refusal (10054)").await;
+    eventually("both followers to reload the final patch", || followed.seq() == 1 && loaded.seq() == 1).await;
+    assert_eq!(followed.read(|rows| rows[&item.id].n), 2);
+    assert_eq!(loaded.read(|rows| rows[&item.id].n), 2);
+    let sync = tokio::time::timeout(Duration::from_secs(10), live.next()).await.unwrap().unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&sync).contains("event: sync"));
+    let log = expect_reload_log(&pool, &pending[0], &logs, "JetStream size refusal (10054)").await;
     assert!(log.contains(&format!("stream_max_message_size={STREAM_LIMIT}")), "{log}");
     assert_eq!(nats.statistics().connects.load(Ordering::Relaxed), 1);
 
@@ -435,7 +472,7 @@ async fn payload_proxy(listener: TcpListener, upstream: async_nats::ServerAddr) 
 
 // Single-threaded so the relay task runs with the test's tracing subscriber.
 #[tokio::test]
-async fn the_relay_sets_aside_a_cached_payload_refusal_without_reconnecting() {
+async fn a_cached_payload_refusal_reloads_followers_without_reconnecting() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let logs = Capture::default();
     let _capture = tracing::subscriber::set_default(logs.clone());
@@ -465,12 +502,14 @@ async fn the_relay_sets_aside_a_cached_payload_refusal_without_reconnecting() {
     let mut gate = pool.acquire().await.unwrap().detach();
     assert!(take(&mut gate, "test", Duration::from_secs(30)).await);
     let options = Options { stream: stream_name.clone(), subject_prefix: schema.clone(), ..Options::default() };
-    let cluster = Cluster::start(pool.clone(), publisher.clone(), Items, options).await.unwrap();
+    let cluster = Cluster::start(pool.clone(), publisher.clone(), Items, options.clone()).await.unwrap();
+    let peer = hub::Hub::new(pool.clone(), Items, Arc::new(options));
+    hub::start(peer.clone(), js.clone()).await.unwrap();
     let large_follower = cluster.feed("large").await.unwrap().unwrap();
     let small_follower = cluster.feed("small").await.unwrap().unwrap();
+    let peer_follower = peer.feed("large").await.unwrap().unwrap();
     assert_eq!((large_follower.seq(), small_follower.seq()), (0, 0));
 
-    assert_eq!(set(&pool, "large", 1, None).await.seq, Some(1));
     let item = Item { id: "x".repeat(LOW_PAYLOAD), n: 2 };
     let Begin::New(mut write) = begin(&pool, "large", None).await.unwrap() else { unreachable!() };
     sqlx::query("INSERT INTO test_items VALUES ('large', $1, $2)")
@@ -479,33 +518,39 @@ async fn the_relay_sets_aside_a_cached_payload_refusal_without_reconnecting() {
         .execute(write.conn())
         .await
         .unwrap();
-    assert_eq!(write.commit(&[Change::Upsert { id: &item.id, value: &item }]).await.unwrap().seq, Some(2));
+    assert_eq!(write.commit(&[Change::Upsert { id: &item.id, value: &item }]).await.unwrap().seq, Some(1));
     assert_eq!(set(&pool, "small", 1, None).await.seq, Some(1));
-    assert_eq!(set(&pool, "large", 3, None).await.seq, Some(3));
-    let pending = wait_pending(&pool, 4).await;
-    let refused = &pending[1];
-    assert_eq!((refused.feed.as_str(), refused.seq), ("large", 2));
+    let pending = wait_pending(&pool, 2).await;
+    let refused = &pending[0];
+    assert_eq!((refused.feed.as_str(), refused.seq), ("large", 1));
     assert!(refused.body.len() > LOW_PAYLOAD && refused.body.len() + 128 < observer.max_payload());
     store::release(&mut gate).await.unwrap();
 
     let mut messages = stream_messages(&stream).await;
     let large = format!("{schema}.large");
     let small = format!("{schema}.small");
-    expect_patch(&mut messages, &large, 1, 1).await;
-    expect_patch(&mut messages, &small, 2, 1).await;
-    expect_patch(&mut messages, &large, 3, 3).await;
-    eventually("the loaded followers at patches 3 and 1", || large_follower.seq() == 3 && small_follower.seq() == 1).await;
-    assert_eq!(large_follower.read(|rows| (rows["a"].n, rows[&item.id].n)), (3, 2));
-    let gap = "message=gap in the feed's patches: reloading it instance=corten feed=large have=1 got=3";
-    assert!(logs.0.lock().unwrap().iter().any(|line| line.contains(gap)));
+    expect_patch(&mut messages, &small, 1, 1).await;
+    expect_reload(&mut messages, &large, refused).await;
+    eventually("both followers to reload the final patch", || large_follower.seq() == 1 && peer_follower.seq() == 1).await;
+    assert_eq!(large_follower.read(|rows| rows[&item.id].n), 2);
+    assert_eq!(peer_follower.read(|rows| rows[&item.id].n), 2);
 
     assert_eq!(set(&pool, "small", 2, None).await.seq, Some(2));
-    expect_patch(&mut messages, &small, 4, 2).await;
+    expect_patch(&mut messages, &small, 3, 2).await;
     eventually("the other feed's next write", || small_follower.seq() == 2).await;
     assert_eq!(small_follower.read(|rows| rows["a"].n), 2);
     wait_pending(&pool, 0).await;
-    expect_set_aside(&pool, refused, &logs, "refused by the connection's cached limit").await;
-    assert_eq!(stream.info().await.unwrap().state.messages, 4);
+    let log = expect_reload_log(&pool, refused, &logs, "refused by the connection's cached limit").await;
+    let size = log
+        .split_once(&format!("Payload size limit of {LOW_PAYLOAD} exceeded by message size of "))
+        .and_then(|(_, size)| size.split_whitespace().next())
+        .and_then(|size| size.parse::<usize>().ok())
+        .unwrap_or_else(|| panic!("missing checked publish size: {log}"));
+    assert!(size > refused.body.len() && size < observer.max_payload(), "{log}");
+    assert_eq!(stream.info().await.unwrap().state.messages, 3);
+    // The cached refusal was stale: the same broker and stream accept the full patch
+    // when sent by a client with the real limit (on a probe subject, not the live feed).
+    js.publish(format!("{schema}.probe"), refused.body.clone().into()).await.unwrap().await.unwrap();
     publisher.flush().await.unwrap();
     assert_eq!(publisher.max_payload(), LOW_PAYLOAD);
     assert_eq!(publisher.statistics().connects.load(Ordering::Relaxed), 1);
@@ -514,7 +559,7 @@ async fn the_relay_sets_aside_a_cached_payload_refusal_without_reconnecting() {
     delete_test_stream_and_schema(&db, &js, &stream_name, &schema).await;
 }
 
-async fn expect_set_aside(pool: &PgPool, row: &store::Pending, logs: &Capture, reason: &str) -> String {
+async fn expect_reload_log(pool: &PgPool, row: &store::Pending, logs: &Capture, reason: &str) -> String {
     let (body, done): (String, bool) = sqlx::query_as("SELECT body, published_at IS NOT NULL FROM corten_outbox WHERE id = $1")
         .bind(row.id)
         .fetch_one(pool)
@@ -522,13 +567,27 @@ async fn expect_set_aside(pool: &PgPool, row: &store::Pending, logs: &Capture, r
         .expect("the set-aside row is still in Postgres");
     assert!(done);
     assert_eq!(body, row.body);
-    let message = format!("ERROR corten::feed message=outbox row set aside: {reason}; kept for inspection");
+    let message = format!("ERROR corten::feed message=published reload marker: {reason}; patch kept for inspection");
     let fields = format!("id={} feed={:?} patch_bytes={}", row.id, row.feed, row.body.len());
     let seen = logs.0.lock().unwrap();
-    seen.iter()
-        .find(|line| line.starts_with(&message) && line.contains(&fields))
-        .unwrap_or_else(|| panic!("missing set-aside log for {fields}: {seen:?}"))
-        .clone()
+    let mut matching = seen.iter().filter(|line| line.starts_with(&message) && line.contains(&fields));
+    let log = matching.next().unwrap_or_else(|| panic!("missing reload marker log for {fields}: {seen:?}"));
+    assert!(matching.next().is_none(), "duplicate retirement log for {fields}: {seen:?}");
+    log.clone()
+}
+
+async fn expect_reload(messages: &mut Ordered, subject: &str, row: &store::Pending) {
+    let msg = tokio::time::timeout(Duration::from_secs(10), messages.next())
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for reload marker on {subject}"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(msg.subject.as_str(), subject);
+    assert!(msg.payload.is_empty());
+    let headers = msg.headers.as_ref().unwrap();
+    assert_eq!(headers.get("Corten-Reload").unwrap().as_str(), row.seq.to_string());
+    assert_eq!(headers.get("Feed-Generation").unwrap().as_str(), row.generation);
+    assert_eq!(headers.get("Nats-Msg-Id").unwrap().as_str(), format!("{}:{}:{}", row.feed, row.generation, row.seq));
 }
 
 async fn stream_messages(stream: &jetstream::stream::Stream) -> Ordered {
@@ -568,6 +627,67 @@ async fn delete_test_stream_and_schema(db: &str, js: &jetstream::Context, stream
     js.delete_stream(stream_name).await.unwrap();
     let admin = PgPool::connect(db).await.unwrap();
     sqlx::query(&format!("DROP SCHEMA {schema} CASCADE")).execute(&admin).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_refused_reload_marker_leaves_the_patch_pending_for_retry() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("marker_retry_");
+    let pool = schema_pool(&db, &schema).await;
+    migrate(&pool).await.unwrap();
+    test_items(&pool).await;
+    new_feed(&pool, "large").await;
+    let nats = async_nats::connect(nats).await.unwrap();
+    let js = jetstream::new(nats.clone());
+    let stream_name = schema.to_uppercase();
+    let subject = format!("{schema}.large");
+    let mut config = jetstream::stream::Config {
+        name: stream_name.clone(),
+        subjects: vec![format!("{schema}.>")],
+        max_message_size: 32, // Even the marker's headers won't fit.
+        ..Default::default()
+    };
+    let mut stream = js.create_stream(config.clone()).await.unwrap();
+    let mut attempts = nats.subscribe(subject.clone()).await.unwrap();
+    let Begin::New(write) = begin(&pool, "large", None).await.unwrap() else { unreachable!() };
+    let item = Item { id: "x".repeat(1024), n: 1 };
+    write.commit(&[Change::Upsert { id: &item.id, value: &item }]).await.unwrap();
+    let pending = wait_pending(&pool, 1).await;
+    let options = Options { stream: stream_name.clone(), subject_prefix: schema.clone(), ..Options::default() };
+    let _cluster = Cluster::start(pool.clone(), nats, Items, options).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for _ in 0..2 {
+            loop {
+                if attempts.next().await.unwrap().headers.is_some_and(|headers| headers.get("Corten-Reload").is_some()) {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("relay did not retry the marker");
+    assert_eq!(store::pending(&pool, 10).await.unwrap().len(), 1);
+    assert_eq!(stream.info().await.unwrap().state.messages, 0);
+
+    config.max_message_size = 512;
+    js.update_stream(config.clone()).await.unwrap();
+    let mut messages = stream_messages(&stream).await;
+    expect_reload(&mut messages, &subject, &pending[0]).await;
+    wait_pending(&pool, 0).await;
+    assert_eq!(stream.info().await.unwrap().state.messages, 1);
+
+    // After a limit change a retry may send the original patch. JetStream treats it
+    // as the same notification because the marker used the patch's deduplication ID.
+    config.max_message_size = -1;
+    js.update_stream(config).await.unwrap();
+    let mut headers = async_nats::HeaderMap::new();
+    let row = &pending[0];
+    headers.insert("Nats-Msg-Id", format!("{}:{}:{}", row.feed, row.generation, row.seq).as_str());
+    headers.insert("Feed-Generation", row.generation.as_str());
+    let ack = js.publish_with_headers(subject, headers, row.body.clone().into()).await.unwrap().await.unwrap();
+    assert!(ack.duplicate);
+    assert_eq!(stream.info().await.unwrap().state.messages, 1);
+    delete_test_stream_and_schema(&db, &js, &stream_name, &schema).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

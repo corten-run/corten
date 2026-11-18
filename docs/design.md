@@ -5897,7 +5897,7 @@ rules something out.
     and Corten's release procedure at `231225b9a`.
 
 63. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys use literal NATS subjects, not encoded names; the
-    relay sets aside invalid legacy keys and per-publish size refusals.**
+    relay drops invalid legacy keys and publishes reload markers for size refusals.**
     Corten requires nonempty dot-separated tokens
     without whitespace, control characters, `*` or `>`. This is stricter than the broker: it may
     accept an embedded `*` or a non-breaking space, but the documented naming rules reserve
@@ -5924,15 +5924,24 @@ rules something out.
     can remove the row; the app's committed data is not changed. A server with a lower
     control-line limit than the one configured in Corten can still reject a publish.
 
-    The relay uses the same done marker for JetStream's `10054` acknowledgement and for
-    `MaxPayloadExceeded` from the client's cached-limit check before it sends a publish.
-    Both identify one refused publish. A size limit can change; setting the row aside
-    says nothing about whether another connection or stream would accept it. The outbox
-    body remains inspectable until ordinary pruning, and the application write stays
-    committed. Only the delta notification is skipped. The next delivered patch on that
-    feed exposes a gap, so a loaded follower reloads the app's state from Postgres and
-    ignores patches at or below its new sequence. Without a later patch or another
-    reason to reload, a loaded follower can stay stale.
+    JetStream's `10054` acknowledgement and the client's `MaxPayloadExceeded` before
+    sending both identify one refused publish. Neither requires giving up notification
+    delivery, even when the connection's limit is stale and the broker would accept the
+    patch. The relay sends an empty message on the patch's subject with its `Feed-Generation`
+    and `Nats-Msg-Id`, and a `Corten-Reload` header containing the decimal feed sequence.
+    NATS provides headers and deduplication but no feed invalidation signal; the single
+    cluster-only header carries that signal without changing the feed's patch or SSE format.
+    A same-generation marker at or below the follower's loaded sequence is redundant;
+    otherwise it reloads from Postgres, including when the marker arrives during a load.
+    An old follower drops a same-generation marker as invalid JSON and can stay stale until
+    a gap or other reload. Other generations still use the existing generation mismatch path.
+
+    The relay sends markers after the batch's patch attempts, so a later patch may already
+    have revealed the gap. It marks rows done in one batch, with a size-refused row included
+    only after acknowledgement of its marker. If sending or acknowledging the marker fails, the
+    normal retry path applies. JetStream's deduplication works across a retry of either the original
+    patch or its marker because the ID is the same. The application write remains committed
+    and the outbox body stays available for replay and inspection until ordinary pruning.
 
     Postgres commits each feed's sequence under that feed's row lock, and followers detect
     gaps by that sequence, not across feeds by outbox ID. A broker's connection-wide
@@ -5947,7 +5956,8 @@ rules something out.
     restricting keys to ASCII, or introducing a separate quarantine and repair path for rows
     no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
     in place. Using `Subject::is_valid` would copy the key and accept whitespace outside the
-    framing bytes. Retrying a size refusal indefinitely keeps the feed stale and blocks
+    framing bytes. Dropping a refused notification leaves a loaded feed stale if no later
+    patch arrives; retrying the same oversized body can keep the feed stale and block
     the relay's ordinary pending scan. A per-feed hold adds an index to every append and
     can make selecting work for unrelated feeds slow. A separate queue would not put a
     patch back in its original stream position. Refreshing a shared client to confirm its
@@ -5966,21 +5976,22 @@ rules something out.
     [async-nats 0.52](https://docs.rs/crate/async-nats/0.52.0/source/src/connector.rs)
     caches the limit from its handshake and its
     [publish queue](https://docs.rs/crate/async-nats/0.52.0/source/src/lib.rs) survives reconnect);
-    reasoned (retrying cannot repair a key that fails a pure check; the done marker keeps
-    rejected rows out of the pending index; the loaded follower reloads the affected feed
-    on a sequence gap, and ignores patches at or below its loaded sequence; the durable
-    app state does not depend on the delta being sent); value (correctness and reliability
-    first, early failure and a small surface: README Values 4 and 6).
+    reasoned (retrying cannot repair a key that fails a pure check; the compact marker fits
+    limits that refuse larger patches, provided they can carry the headers; the durable
+    app state does not depend on the delta being sent, and followers can reload it even
+    without a later patch); value (correctness and reliability first, early failure and a
+    small surface: README Values 4 and 6).
 
     Revisit when: an app needs arbitrary text as a cluster key, the NATS server's default
     control line or documented grammar changes, clients can identify an individual broker
-    refusal or refresh the cached limit without reconnecting, follower gap reload no longer
-    restores committed state, or deployments need a skipped delta delivered, a reload without
-    a later patch, or ordering across a mid-batch disconnect.
+    refusal or reliably refresh the cached limit without reconnecting, JetStream provides a
+    standard invalidation signal, limits cannot carry the marker, or deployments need every
+    delta delivered, immediate recovery on old followers, or ordering across a mid-batch disconnect.
 
     Last checked: 2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
-    NATS 2.15.2 with async-nats 0.52.0: both size refusals leave the row in Postgres,
-    later patches flow, followers reload, and the cached refusal does not reconnect;
+    NATS 2.15.2 with async-nats 0.52.0: both refusals publish markers while retaining the
+    patch in Postgres. Ready and loading followers reload a refused tail without another
+    same-feed patch, unrelated patches flow, and size recovery does not reconnect;
     2026-11-17 at `056964945`, subject rules and control-line configuration.
 
 64. <a id="choice-exclusive-ends"></a>**Any-step bounds use native hints and check exclusive ends
