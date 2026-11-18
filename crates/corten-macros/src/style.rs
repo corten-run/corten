@@ -6,6 +6,8 @@
 //! writing in the width of each token breakpoint an `@media` rule names (`(--md)`), which only the
 //! app's token file knows.
 
+use std::borrow::Cow;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use proc_macro::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree};
@@ -45,11 +47,12 @@ const GROUP_AT_RULES: &[&str] = &["media", "supports", "container", "layer", "st
 const RAW_AT_RULES: &[&str] =
     &["keyframes", "font-face", "property", "page", "counter-style", "font-palette-values", "font-feature-values"];
 
-/// Prefixes every class in `src` with `{prefix}__`. A rule outside any at-rule (or in `@media`,
-/// `@supports`, `@container`, `@layer`) must name one of the file's classes, so a component's
-/// styles cannot reach elements it does not render; so must each rule in an `@scope` there unless
-/// the scope's root names one.
+/// Prefixes every class in `src` with `{prefix}__`. Every selector, nested ones included, must
+/// match only elements that have one of the file's classes or are inside one
+/// (`Scoper::prefixed`); under an `@scope` root that does not, each rule in it must.
 pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
+    let src = preprocess(src);
+    let src = src.as_ref();
     if let Some(line) = conflict_marker(src) {
         return Err(format!(
             "line {line}: a merge conflict's marker; keep what each side should between <<<<<<< and >>>>>>>, then remove the markers"
@@ -68,7 +71,7 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
         prefix,
         scope_root: None,
     };
-    s.block(Ctx::Top, true)?;
+    s.block(Ctx::Top, Some(Anchor::default()), true)?;
     let names: Vec<&str> = s.properties.iter().map(|(name, _)| name.as_str()).collect();
     if let Some(name) = s.media.iter().find(|m| names.contains(&m.as_str())) {
         return Err(format!(
@@ -77,11 +80,15 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
     }
     let mut option_names = Vec::new();
     let before = s.out.len();
-    for (start, end, raw) in s.position_refs {
+    for (output, source) in &s.position_refs {
         // Earlier replacements may have moved this value.
-        let start = start + s.out.len() - before;
-        let mut end = end + s.out.len() - before;
-        if let Some(value) = rename_positions(raw, &s.out[start..end], &s.positions, prefix) {
+        let start = output.start + s.out.len() - before;
+        let mut end = output.end + s.out.len() - before;
+        if let Some((base, raw)) = rename_positions(&src[source.clone()], &s.positions, prefix) {
+            let mut i = 0;
+            let Chunk { text: value, .. } =
+                scan_chunk(&raw, &mut i).map_err(|(at, message)| s.error(source.start + base + at, message))?;
+            debug_assert_eq!(i, raw.len());
             s.out.replace_range(start..end, &value);
             end = start + value.len();
         }
@@ -281,14 +288,18 @@ fn starts_ident(c: char) -> bool {
 
 /// `text` as CSS reads it: each line break (`\r\n`, `\r`, form feed) one `\n`, and NUL the
 /// replacement character (CSS Syntax Level 3, preprocessing the input stream).
-fn preprocess(text: &str) -> String {
-    text.replace("\r\n", "\n").replace(['\r', '\u{c}'], "\n").replace('\0', "\u{fffd}")
+fn preprocess(text: &str) -> Cow<'_, str> {
+    if text.contains(['\r', '\u{c}', '\0']) {
+        text.replace("\r\n", "\n").replace(['\r', '\u{c}'], "\n").replace('\0', "\u{fffd}").into()
+    } else {
+        text.into()
+    }
 }
 
 /// A CSS string's contents with its escapes decoded (CSS Syntax Level 3, consume a string token):
 /// `\` and a line break is nothing, and `\` before anything else is the code point it escapes.
 fn unescape(text: &str) -> String {
-    let chars: Vec<char> = preprocess(text).chars().collect();
+    let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < chars.len() {
@@ -491,15 +502,6 @@ fn name_end(css: &str, mut end: usize, ident: impl Fn(u8) -> bool) -> usize {
     end
 }
 
-fn css_name_start(c: u8) -> bool {
-    // CSS preprocessing turns a literal NUL into U+FFFD, a name-start code point.
-    c.is_ascii_alphabetic() || matches!(c, b'_' | 0) || c >= 0x80
-}
-
-fn css_name_end(css: &str, end: usize) -> usize {
-    name_end(css, end, |c| css_name_start(c) || c.is_ascii_digit() || c == b'-')
-}
-
 /// What the position pass tells apart in a declaration's value (CSS Syntax Level 3, tokenization).
 #[derive(Clone, Copy, PartialEq)]
 enum Tok {
@@ -522,13 +524,6 @@ enum Tok {
 /// The tokens of `css`, each with where it starts and ends.
 fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
     let b = css.as_bytes();
-    let escape = |at: usize| b.get(at) == Some(&b'\\') && !matches!(b.get(at + 1), None | Some(b'\n' | b'\r' | b'\x0c'));
-    let ident_start = |at: usize| match b.get(at) {
-        Some(b'-') => b.get(at + 1).is_some_and(|&c| css_name_start(c) || c == b'-') || escape(at + 1),
-        Some(b'\\') => escape(at),
-        Some(&c) => css_name_start(c),
-        None => false,
-    };
     let digits = |mut at: usize| {
         while b.get(at).is_some_and(u8::is_ascii_digit) {
             at += 1;
@@ -544,18 +539,12 @@ fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
     while i < b.len() {
         let start = i;
         let kind = match b[i] {
-            c if c.is_ascii_whitespace() => {
-                while b.get(i).is_some_and(u8::is_ascii_whitespace) {
-                    i += 1;
-                }
+            c if css_space(c) => {
+                i = css_skip_space(b, i);
                 Tok::Space
             }
-            q @ (b'"' | b'\'') => {
-                i += 1;
-                while i < b.len() && b[i] != q {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-                i = (i + 1).min(b.len());
+            b'"' | b'\'' => {
+                i = string_end(b, i).unwrap_or(b.len());
                 Tok::Other
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
@@ -574,38 +563,32 @@ fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
                         i = digits(i + 1 + sign);
                     }
                 }
-                if ident_start(i) {
-                    i = css_name_end(css, i);
+                if css_ident_start(b, i) {
+                    i = css_name_end(b, i);
                 } else if b.get(i) == Some(&b'%') {
                     i += 1;
                 }
                 Tok::Other
             }
-            _ if ident_start(i) => {
-                i = css_name_end(css, i);
+            _ if css_ident_start(b, i) => {
+                i = css_name_end(b, i);
                 if b.get(i) != Some(&b'(') {
                     Tok::Ident
                 } else {
-                    let url = unescape(&css[start..i]).eq_ignore_ascii_case("url");
+                    let url = decoded_name(&css[start..i]).eq_ignore_ascii_case("url");
                     i += 1;
-                    let mut at = i;
-                    while b.get(at).is_some_and(u8::is_ascii_whitespace) {
-                        at += 1;
-                    }
+                    let at = css_skip_space(b, i);
                     if url && !matches!(b.get(at), Some(b'"' | b'\'')) {
                         // An unquoted URL is one token to its `)`: `url(--above.svg)`.
-                        while i < b.len() && b[i] != b')' {
-                            i += if escape(i) { 2 } else { 1 };
-                        }
-                        i = (i + 1).min(b.len());
+                        i = url_end(b, at).unwrap_or(b.len());
                         Tok::Other
                     } else {
                         Tok::Function
                     }
                 }
             }
-            b'#' | b'@' if css_name_end(css, i + 1) > i + 1 => {
-                i = css_name_end(css, i + 1);
+            b'#' | b'@' => {
+                i = css_name_end(b, i + 1);
                 Tok::Other
             }
             c => {
@@ -635,11 +618,12 @@ fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
 /// function's name (`--above()` calls a custom function), a lookup's name, an `if()` condition
 /// (`style(--above: 1)` queries a custom property), strings, URLs and whatever is inside any
 /// other function keep their names.
-fn rename_positions(raw: &str, value: &str, names: &[String], prefix: &str) -> Option<String> {
+fn rename_positions(raw: &str, names: &[String], prefix: &str) -> Option<(usize, String)> {
     if names.is_empty() {
         return None;
     }
-    // Find names in the source, before squash can hide a separator after a hex escape.
+    // Edit whole tokens in the source before normalizing the value. Replacing a hex escape
+    // removes its terminator, but not a separator or comment that follows the token.
     let toks = tokens(raw);
     let colon = toks.iter().position(|&(kind, ..)| kind == Tok::Colon)?;
     let base = toks[colon].2;
@@ -647,30 +631,19 @@ fn rename_positions(raw: &str, value: &str, names: &[String], prefix: &str) -> O
         .into_iter()
         .filter_map(|(start, end)| {
             let written = &raw[start..end];
-            let name = unescape(written);
+            let name = decoded_name(written);
             let name = names.iter().find(|n| Some(n.as_str()) == name.strip_prefix("--"))?;
-            // The last source byte of a matching name is ASCII. Preserve normalized space
-            // after it even if the source used that space to terminate a hex escape.
-            Some((start - base, start - base + written.trim_end().len() - 1, name))
+            Some((start - base..end - base, name))
         })
         .collect();
     if edits.is_empty() {
         return None;
     }
-    // Map just the name boundaries onto the normalized value; never emit raw value text.
-    let mut offsets = Vec::new();
-    let normalized = squash_with(&raw[base..], |from, to| offsets.push((from, to)));
-    if normalized != value {
-        return None;
+    let mut out = raw[base..].to_string();
+    for (range, name) in edits.into_iter().rev() {
+        out.replace_range(range, &format!("--{prefix}__{name}"));
     }
-    let at = |raw| offsets.binary_search_by_key(&raw, |&(from, _)| from).ok().map(|i| offsets[i].1);
-    let mut out = normalized;
-    for (start, last, name) in edits.into_iter().rev() {
-        if let (Some(start), Some(last)) = (at(start), at(last)) {
-            out.replace_range(start..last + 1, &format!("--{prefix}__{name}"));
-        }
-    }
-    Some(out)
+    Some((base, out))
 }
 
 fn position_options(css: &str, toks: &[(Tok, usize, usize)], mut i: usize) -> Vec<(usize, usize)> {
@@ -785,11 +758,12 @@ enum Ctx {
     /// Rules, which must be scoped: at the top of the file, or in an `@scope` there whose root
     /// is not the component's.
     Top,
-    /// Inside a style rule, or an `@scope` rule nested in one: declarations and nested rules.
+    /// Inside a style rule, or an `@scope` rule nested in one: declarations and nested rules,
+    /// checked against the rule's elements.
     Style,
-    /// Inside an `@scope` rule at the top of the file whose root names one of its classes: as in a
-    /// style rule, since its rules match only under the root, but name-defining at-rules such as
-    /// `@property` are valid there and not scoped (CSS Cascade 6).
+    /// Inside an `@scope` rule at the top of the file whose root is the component's: as in a
+    /// style rule, and not checked, since its rules match only under the root, but name-defining
+    /// at-rules such as `@property` are valid there and not scoped (CSS Cascade 6).
     Scope,
     /// `@keyframes`, `@font-face` and the like: copied as written.
     Raw,
@@ -803,12 +777,12 @@ struct Scoper<'a> {
     classes: Vec<String>,
     properties: Vec<(String, Option<&'static str>)>,
     positions: Vec<String>,
-    position_refs: Vec<(usize, usize, &'a str)>,
+    /// Output value and source declaration ranges, for references before their definitions.
+    position_refs: Vec<(Range<usize>, Range<usize>)>,
     /// The breakpoints its `@media` rules name, without the `--`.
     media: Vec<String>,
     prefix: &'a str,
-    /// The root of the `@scope` rule being read when it is at the top of the file and not the
-    /// component's, whose rules are checked as the file's are.
+    /// The enclosing unowned `@scope` root, whose rules must prove ownership themselves.
     scope_root: Option<String>,
 }
 
@@ -825,7 +799,11 @@ impl Scoper<'_> {
         self.out.push('}');
     }
 
-    fn block(&mut self, ctx: Ctx, top: bool) -> Result<(), String> {
+    /// The rules and declarations up to the end of the block. `nest` is what the elements the
+    /// block's rules are relative to require (the parent rule's, or none at the top of the file or
+    /// in an `@scope` whose root is not the component's); with `None`, in an `@scope` whose root
+    /// is, its selectors are not checked.
+    fn block(&mut self, ctx: Ctx, nest: Option<Anchor>, top: bool) -> Result<(), String> {
         loop {
             self.skip_space();
             match self.bytes.get(self.i) {
@@ -839,31 +817,36 @@ impl Scoper<'_> {
                 _ => {}
             }
             let start = self.i;
-            let end = self.chunk()?;
-            let raw = &self.text[start..self.i];
-            let text = squash(raw);
+            let Chunk { end, text, url, joined_comment } = self.chunk()?;
+            let source = start..self.i;
             if end == Some(b'{') {
+                if starts_custom_property(&self.text[source.clone()]) {
+                    return Err(self.error(
+                        start,
+                        "a custom property whose value holds a { } block at its outer level is not supported in a component stylesheet yet (#1602); put that declaration in the app's stylesheet (static/style.css)",
+                    ));
+                }
                 self.i += 1;
                 let mut scope_rule = None;
                 let mut unowned_root = None;
+                let mut inner_nest = nest;
                 let mut position_name = None;
                 let inner = if let Some(rule) = text.strip_prefix('@') {
                     // At-rule names are case-insensitive in CSS: `@MEDIA` is `@media`.
-                    let name =
-                        rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("").to_ascii_lowercase();
-                    let name = name.as_str();
+                    let (name, prelude) = self.at_rule(rule, start)?;
+                    let name = name.to_ascii_lowercase();
                     if name == "page" && ctx != Ctx::Raw {
-                        self.check_page(rule["page".len()..].trim(), start)?;
+                        self.check_page(prelude, start)?;
                     }
-                    match (ctx, name) {
+                    match (ctx, name.as_str()) {
                         (Ctx::Raw, _) => Ctx::Raw,
                         // A rule nested in a style rule holds style rules or declarations; the
                         // browser ignores an `@property` there (CSS Nesting).
                         (Ctx::Style, "property") => {
                             return Err(self.error(start, "@property registers a property for the whole page: put it at the top of the stylesheet, outside any rule"))
                         }
-                        (_, "position-try") if raw.strip_prefix('@').is_some_and(|rule| css_name_end(rule, 0) == "position-try".len()) => {
-                            let written = rule["position-try".len()..].trim_matches(|c: char| c.is_ascii_whitespace());
+                        (_, "position-try") => {
+                            let written = &prelude[css_skip_space(prelude.as_bytes(), 0)..];
                             let Some(name) = written.strip_prefix("--").filter(|name| !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))) else {
                                 return Err(self.error(start, "@position-try: a name starts with -- and has letters, digits, - and _"));
                             };
@@ -880,27 +863,39 @@ impl Scoper<'_> {
                             Ctx::Raw
                         }
                         (_, "scope") => {
-                            let (prelude, unowned) = self.scope_prelude(&rule["scope".len()..], ctx == Ctx::Top, start)?;
+                            self.check_selector_prelude(url, joined_comment)?;
+                            let (prelude, unowned) = self.scope_prelude(prelude, nest, start)?;
                             scope_rule = Some(prelude);
                             // A root the component owns lets its rules start anywhere; any other
-                            // root at the top of the file matches elements outside it, so its
-                            // rules must each start at one of the file's classes.
-                            match (ctx, unowned) {
-                                (Ctx::Top, Some(root)) => {
+                            // can match elements outside it, so its rules are checked as at the
+                            // top of the file, and `&` and `:scope` in them are that root.
+                            match (nest, unowned) {
+                                (Some(_), Some(root)) => {
                                     unowned_root = Some(root);
-                                    Ctx::Top
+                                    inner_nest = Some(Anchor::default());
+                                    ctx
                                 }
-                                (Ctx::Top, None) => Ctx::Scope,
-                                _ => ctx,
+                                (Some(_), None) => {
+                                    inner_nest = None;
+                                    if ctx == Ctx::Top {
+                                        Ctx::Scope
+                                    } else {
+                                        ctx
+                                    }
+                                }
+                                (None, _) => ctx,
                             }
                         }
                         (_, name) if GROUP_AT_RULES.contains(&name) => ctx,
                         (_, name) if RAW_AT_RULES.contains(&name) => Ctx::Raw,
-                        _ => return Err(self.unsupported_at_rule(start, name)),
+                        (_, name) => return Err(self.unsupported_at_rule(start, name)),
                     }
                 } else {
                     Ctx::Style
                 };
+                if inner == Ctx::Raw {
+                    inner_nest = None;
+                }
                 let media = ctx != Ctx::Raw && text.get(..6).is_some_and(|at| at.eq_ignore_ascii_case("@media"));
                 if let Some(prelude) = scope_rule {
                     self.out.push_str(&prelude);
@@ -915,13 +910,15 @@ impl Scoper<'_> {
                 } else if text.starts_with('@') || ctx == Ctx::Raw {
                     self.out.push_str(&text);
                 } else {
-                    let selector = self.selector(&text, ctx == Ctx::Top, start)?;
+                    self.check_selector_prelude(url, joined_comment)?;
+                    let (selector, anchor) = self.selector(&text, nest, start)?;
+                    inner_nest = nest.map(|_| anchor);
                     self.out.push_str(&selector);
                 }
                 self.out.push('{');
                 let body = self.out.len();
                 let outer_root = unowned_root.map(|root| self.scope_root.replace(root));
-                self.block(inner, false)?;
+                self.block(inner, inner_nest, false)?;
                 if let Some(outer) = outer_root {
                     self.scope_root = outer;
                 }
@@ -938,7 +935,7 @@ impl Scoper<'_> {
                 continue;
             }
             if let Some(rule) = text.strip_prefix('@') {
-                let name = rule.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
+                let (name, _) = self.at_rule(rule, start)?;
                 match name {
                     "custom-media" => {
                         return Err(self.error(
@@ -961,11 +958,12 @@ impl Scoper<'_> {
                 }
                 continue;
             }
-            if ctx == Ctx::Top {
+            // A declaration styles the elements the block's rules are relative to.
+            if !nest.is_none_or(|anchor| anchor.owned) {
                 if let Some(root) = &self.scope_root {
                     return Err(self.error(
                         start,
-                        format!("`{text}` styles the root of `@scope ({root})`, which can be outside the component: put it in a rule that starts at one of the stylesheet's classes"),
+                        format!("`{text}` styles the root of `@scope ({root})`, which can be outside the component: put it in a rule for an element with one of the stylesheet's classes or inside one, like `.list {{ {text} }}`"),
                     ));
                 }
                 return Err(self.error(start, format!("`{text}` is outside any rule")));
@@ -976,7 +974,7 @@ impl Scoper<'_> {
             self.out.push_str(name);
             self.out.push(':');
             if name.eq_ignore_ascii_case("position-try") || name.eq_ignore_ascii_case("position-try-fallbacks") {
-                self.position_refs.push((self.out.len(), self.out.len() + value.len(), raw));
+                self.position_refs.push((self.out.len()..self.out.len() + value.len(), source));
             }
             self.out.push_str(value);
             self.out.push(';');
@@ -1002,10 +1000,7 @@ impl Scoper<'_> {
             if len == 0 || !after.starts_with(')') {
                 return Err(self.error(
                     at,
-                    format!(
-                        "{}: a breakpoint is named alone in its parentheses, `(--md)`, with lowercase letters, digits and -, starting with a letter",
-                        squash(prelude)
-                    ),
+                    format!("{prelude}: a breakpoint is named alone in its parentheses, `(--md)`, with lowercase letters, digits and -, starting with a letter"),
                 ));
             }
             let name = &name[..len];
@@ -1034,17 +1029,17 @@ impl Scoper<'_> {
 
     /// An `@scope` prelude, `(.list) to (.slot)` (CSS Cascade 6: `(<scope-start>) to
     /// (<scope-end>)`, each a selector list), with the classes of its root and limit prefixed and
-    /// recorded, and with `top`, the root as written when a selector in it names none of the
-    /// file's classes. Nested in a rule or another `@scope`, the root is relative to that one's
-    /// elements. With no root, the scope is the parent of the stylesheet's owner node, the element
-    /// around the page's stylesheet link, which no component owns.
-    fn scope_prelude(&mut self, prelude: &str, top: bool, at: usize) -> Result<(String, Option<String>), String> {
-        let prelude = prelude.trim();
+    /// recorded, and, unless `nest` is `None`, the root as written when it can match an element
+    /// the component does not own. With no root, the scope is the parent of the stylesheet's
+    /// owner node, the element around the page's stylesheet link, which no component owns.
+    fn scope_prelude(&mut self, prelude: &str, nest: Option<Anchor>, at: usize) -> Result<(String, Option<String>), String> {
+        let css_whitespace = [' ', '\t', '\n'];
+        let prelude = prelude.trim_matches(css_whitespace);
         let usage = format!(
             "`@scope {prelude}`: the browser drops an @scope whose prelude is not a root and an optional limit; write `@scope (.list)` or `@scope (.list) to (.slot)`"
         );
         let (root, rest) = match parenthesized(prelude) {
-            Some((root, rest)) => (Some(root), rest.trim_start()),
+            Some((root, rest)) => (Some(root), rest.trim_start_matches(css_whitespace)),
             None => (None, prelude),
         };
         let limit = if rest.is_empty() {
@@ -1053,7 +1048,7 @@ impl Scoper<'_> {
             // `to` and a parenthesized list; `to(` would be a function, which is no limit.
             let to = rest.get(..3).is_some_and(|to| to.as_bytes()[..2].eq_ignore_ascii_case(b"to") && to.ends_with(' '));
             match parenthesized(if to { &rest[3..] } else { "" }) {
-                Some((limit, after)) if after.trim().is_empty() => Some(limit),
+                Some((limit, after)) if after.trim_matches(css_whitespace).is_empty() => Some(limit),
                 _ => return Err(self.error(at, usage)),
             }
         };
@@ -1063,27 +1058,20 @@ impl Scoper<'_> {
                 "@scope with no root scopes its rules to the element around the page's stylesheet link, which no component owns: start it at one of the stylesheet's classes, `@scope (.list)`",
             ));
         };
-        for selector in [Some(root), limit].into_iter().flatten() {
-            if selector.trim().is_empty() {
-                return Err(self.error(at, usage));
-            }
-            if pseudo_element(selector) {
-                return Err(self.error(
-                    at,
-                    format!(
-                        "`@scope {prelude}`: a pseudo-element cannot be a scope's root or limit, and the browser drops the rule"
-                    ),
-                ));
-            }
+        if root.is_empty() || limit == Some("") {
+            return Err(self.error(at, usage));
         }
-        let (start, unowned) = self.prefixed(root.trim(), at)?;
+        // Chromium can resolve both explicit `&` and implicit nesting through the enclosing
+        // @scope instead of an intervening style rule. An unowned outer root supplies no proof.
+        let root_nest = if self.scope_root.is_some() { Anchor::default() } else { nest.unwrap_or_default() };
+        let (start, _, unowned) = self.prefixed(root, root_nest, Some(prelude), at)?;
         let mut out = format!("@scope ({start})");
         if let Some(limit) = limit {
             out.push_str(" to (");
-            out.push_str(&self.selector(limit.trim(), false, at)?);
+            out.push_str(&self.prefixed(limit, Anchor::default(), Some(prelude), at)?.0);
             out.push(')');
         }
-        Ok((out, (top && unowned.is_some()).then(|| root.trim().to_string())))
+        Ok((out, (nest.is_some() && unowned.is_some()).then(|| root.to_string())))
     }
 
     /// Records an `@property` rule, whose declarations are in `self.out` from `body`: its name,
@@ -1183,7 +1171,8 @@ impl Scoper<'_> {
     /// names its own after itself, and one with no name, which sets every page the app prints,
     /// belongs in the app's stylesheet.
     fn check_page(&self, prelude: &str, at: usize) -> Result<(), String> {
-        let name = prelude.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_')).next().unwrap_or("");
+        let start = css_skip_space(prelude.as_bytes(), 0);
+        let name = &prelude[start..css_name_end(prelude.as_bytes(), start)];
         let own = format!("{}-", self.prefix);
         if name.is_empty() {
             return Err(self.error(
@@ -1191,12 +1180,23 @@ impl Scoper<'_> {
                 format!("an @page with no name sets every page the app prints: name it, @page {own}slip, or put it in the app's stylesheet"),
             ));
         }
+        if !name.is_ascii() {
+            return Err(self.error(at, format!("the page name `{}` contains a non-ASCII character", name.escape_default())));
+        }
         if !name.starts_with(&own) {
             return Err(
                 self.error(at, format!("a page's name is the whole app's: start it with this component's, @page {own}{name}"))
             );
         }
         Ok(())
+    }
+
+    fn at_rule<'r>(&self, rule: &'r str, at: usize) -> Result<(&'r str, &'r str), String> {
+        let (name, prelude) = rule.split_at(css_name_end(rule.as_bytes(), 0));
+        if !name.is_ascii() {
+            return Err(self.error(at, format!("the at-rule name `@{}` contains a non-ASCII character", name.escape_default())));
+        }
+        Ok((name, prelude))
     }
 
     fn skip_space(&mut self) {
@@ -1215,96 +1215,181 @@ impl Scoper<'_> {
         }
     }
 
-    /// Moves to the next `{`, `;` or `}` outside strings, comments and brackets.
-    fn chunk(&mut self) -> Result<Option<u8>, String> {
-        let mut depth = 0usize;
-        while let Some(&b) = self.bytes.get(self.i) {
-            match b {
-                b'"' | b'\'' => {
-                    let start = self.i;
-                    self.i += 1;
-                    loop {
-                        match self.bytes.get(self.i) {
-                            None | Some(b'\n') => return Err(self.error(start, "a string is never closed")),
-                            // An escaped line end, CRLF as one, continues the string.
-                            Some(b'\\') if self.bytes.get(self.i + 1..self.i + 3) == Some(b"\r\n") => self.i += 3,
-                            Some(b'\\') => self.i += 2,
-                            Some(&c) if c == b => break,
-                            Some(_) => self.i += 1,
+    /// Reads to the next structural delimiter, removing comments and folding whitespace
+    /// without changing the boundaries of escapes, strings or URLs.
+    fn chunk(&mut self) -> Result<Chunk, String> {
+        scan_chunk(self.text, &mut self.i).map_err(|(at, message)| self.error(at, message))
+    }
+
+    fn check_selector_prelude(&self, url: Option<usize>, joined_comment: Option<usize>) -> Result<(), String> {
+        if let Some(at) = joined_comment {
+            return Err(self.error(
+                at,
+                "a comment directly between two parts of a selector cannot be kept or removed safely here; write the selector without it (for example `.a.b`, not `.a/**/.b`)",
+            ));
+        }
+        // The selector proof handles functions, not URL tokens, whose contents can include
+        // delimiters that would change the proof. Refuse them before discarding any arm.
+        if let Some(at) = url {
+            return Err(
+                self.error(at, "an unquoted url() cannot be checked in a component selector: quote its value or remove the arm")
+            );
+        }
+        Ok(())
+    }
+
+    /// The selector with its classes prefixed, and what its elements require. With `nest`, what
+    /// `&` requires, every selector in the list must match only elements the component owns.
+    fn selector(&mut self, text: &str, nest: Option<Anchor>, at: usize) -> Result<(String, Anchor), String> {
+        match (nest, self.prefixed(text, nest.unwrap_or_default(), None, at)?) {
+            (Some(nest), (_, _, Some(unowned))) => Err(self.unowned(&unowned, nest, at)),
+            (_, (out, anchor, _)) => Ok((out, anchor)),
+        }
+    }
+
+    /// The selector list with its classes prefixed, what all of its selectors require of the
+    /// elements they match, and the first that does not require them to be the component's: to
+    /// have one of the file's classes or be inside an element that has one.
+    ///
+    /// A class counts on the element's own compound selector or on one it is inside, by a
+    /// descendant or child combinator; a sibling shares what it is inside (`.list > li + li`),
+    /// but `+` and `~` from the class's element, or `||`, lead outside it. In `:is()` and
+    /// `:where()` every selector must count, but those the browser drops from these forgiving
+    /// lists, such as one that is empty or has a pseudo-element (Selectors 4). A class in any
+    /// other function, `:not()`, `:has()` or `:nth-child(2 of .row)`, is prefixed but only
+    /// filters. `&` is the parent rule's elements, `nest`; a leading combinator or the absence of
+    /// any `&` delimiter makes a nested selector relative to them (CSS Nesting).
+    fn prefixed(
+        &mut self,
+        text: &str,
+        nest: Anchor,
+        scope: Option<&str>,
+        at: usize,
+    ) -> Result<(String, Anchor, Option<Unowned>), String> {
+        let bytes = text.as_bytes();
+        let mut out = String::with_capacity(text.len() + 16);
+        let mut i = 0;
+        // Each block records its closer and whether it is inside an attribute or brace block,
+        // where class and pseudo-class syntax does not apply.
+        let mut blocks = Vec::<(u8, bool)>::new();
+        let mut part_start = 0;
+        // The rule's selector list, the `:is()` and `:where()` lists open in it, and for the
+        // current selector, whether it has an `&` delimiter and why it might not count.
+        let mut top = Branches::new();
+        let mut lists = Vec::<Branches>::new();
+        let (mut has_ampersand, mut why) = (false, Why::default());
+        let mut all = Anchor::ALL;
+        let mut unowned = None;
+        while let Some(&b) = bytes.get(i) {
+            // In a compound selector of the list or an `:is()` in it, rather than in another
+            // function or an attribute selector: a combinator, or a token that starts or continues
+            // a compound selector.
+            let depth = lists.last().map_or(0, |list| list.depth);
+            let in_list = blocks.len() == depth;
+            let opaque = blocks.last().is_some_and(|&(_, opaque)| opaque);
+            if in_list {
+                let list = lists.last_mut().unwrap_or(&mut top);
+                match b {
+                    b if css_space(b) => list.space(),
+                    b'>' | b'+' | b'~' => list.explicit_combinator(char::from(b)),
+                    b'|' if bytes.get(i + 1) == Some(&b'|') => {
+                        list.explicit_combinator('|');
+                        out.push_str("||");
+                        i += 2;
+                        continue;
+                    }
+                    b',' | b')' => {}
+                    b'/' if bytes[i..].starts_with(b"/**/") => {}
+                    _ => list.token(nest, &mut why),
+                }
+            }
+            let end = match b {
+                b'"' | b'\'' => string_end(bytes, i).ok_or_else(|| self.error(at, "a string is never closed"))?,
+                b'\\' => css_escape_end(bytes, i),
+                b'/' if bytes[i..].starts_with(b"/**/") => i + 4,
+                b'&' => {
+                    // Even an invalid arm can suppress implicit nesting. Only a matchable
+                    // nesting selector supplies an anchor.
+                    has_ampersand = true;
+                    if blocks.get(depth).is_some_and(|&(close, _)| close == b']') {
+                        lists.last_mut().unwrap_or(&mut top).invalid = true;
+                    } else if in_list {
+                        lists.last_mut().unwrap_or(&mut top).add(nest);
+                    } else {
+                        why.filtered = true;
+                    }
+                    i + 1
+                }
+                b':' if !opaque => {
+                    let double_colon = bytes.get(i + 1) == Some(&b':');
+                    if double_colon || legacy_pseudo_element(text, i + 1) {
+                        if let Some(list) = lists.last_mut().filter(|_| in_list) {
+                            list.invalid = true;
+                        } else if let Some(prelude) = scope {
+                            return Err(self.error(
+                                at,
+                                format!("`@scope {prelude}`: a pseudo-element cannot be a scope's root or limit; remove it or the invalid forgiving arm that contains it"),
+                            ));
+                        }
+                        i + 1 + usize::from(double_colon)
+                    } else if let Some(open) = positive_list_open(text, i + 1) {
+                        blocks.push((b')', false));
+                        lists.push(Branches { depth: blocks.len(), ..Branches::new() });
+                        open + 1
+                    } else {
+                        i + 1
+                    }
+                }
+                b'(' | b'[' | b'{' => {
+                    blocks.push((block_close(b), opaque || b != b'('));
+                    i + 1
+                }
+                b')' | b']' | b'}' => {
+                    if !blocks.pop().is_some_and(|(close, _)| close == b) {
+                        return Err(self.error(at, format!("mismatched selector block: unexpected {}", char::from(b))));
+                    }
+                    if b == b')' && in_list {
+                        if let Some(mut list) = lists.pop() {
+                            list.next();
+                            let parent = lists.last_mut().unwrap_or(&mut top);
+                            if blocks.len() == parent.depth {
+                                why.alternative |= list.any && !list.all.owned;
+                                parent.add(list.all);
+                            } else {
+                                why.filtered = true;
+                            }
                         }
                     }
+                    i + 1
                 }
-                b'/' if self.bytes.get(self.i + 1) == Some(&b'*') => match self.text[self.i + 2..].find("*/") {
-                    Some(end) => self.i += end + 3,
-                    None => self.i = self.bytes.len() - 1,
-                },
-                b'\\' => self.i += 1,
-                b'(' | b'[' => depth += 1,
-                b')' | b']' => depth = depth.saturating_sub(1),
-                b'{' | b';' | b'}' if depth == 0 => return Ok(Some(b)),
-                _ => {}
-            }
-            self.i += 1;
-        }
-        Ok(None)
-    }
-
-    /// The selector with its classes prefixed. With `check`, every selector in the list must
-    /// name a class of the file.
-    fn selector(&mut self, text: &str, check: bool, at: usize) -> Result<String, String> {
-        match self.prefixed(text, at)? {
-            (_, Some(part)) if check => Err(self.unowned(&part, at)),
-            (out, _) => Ok(out),
-        }
-    }
-
-    /// The selector with its classes prefixed, and the first selector in the list that names no
-    /// class of the file.
-    fn prefixed(&mut self, text: &str, at: usize) -> Result<(String, Option<String>), String> {
-        let chars: Vec<char> = text.chars().collect();
-        let mut out = String::with_capacity(text.len() + 16);
-        let (mut i, mut brackets, mut parens) = (0, 0usize, 0usize);
-        let mut quote = None;
-        let mut part_start = 0;
-        let mut part_scoped = false;
-        let mut unowned = None;
-        while i < chars.len() {
-            let c = chars[i];
-            if let Some(q) = quote {
-                out.push(c);
-                if c == '\\' && i + 1 < chars.len() {
-                    out.push(chars[i + 1]);
-                    i += 1;
-                } else if c == q {
-                    quote = None;
-                }
-                i += 1;
-                continue;
-            }
-            match c {
-                '"' | '\'' => quote = Some(c),
-                '[' => brackets += 1,
-                ']' => brackets = brackets.saturating_sub(1),
-                '(' => parens += 1,
-                ')' => parens = parens.saturating_sub(1),
-                ',' if brackets == 0 && parens == 0 => {
-                    if !part_scoped && unowned.is_none() {
-                        unowned = Some(chars[part_start..i].iter().collect::<String>().trim().to_string());
+                b',' if in_list => {
+                    if let Some(list) = lists.last_mut() {
+                        list.next();
+                    } else {
+                        let anchor = top.end(true, !has_ampersand).unwrap_or_default();
+                        all = all.and(anchor);
+                        if !anchor.owned && unowned.is_none() {
+                            unowned =
+                                Some(Unowned { part: text[part_start..i].trim_matches([' ', '\t', '\n']).to_string(), why });
+                        }
+                        part_start = i + 1;
+                        (has_ampersand, why) = (false, Why::default());
                     }
-                    part_start = i + 1;
-                    part_scoped = false;
+                    i + 1
                 }
-                '.' if brackets == 0 && ident_start(&chars[i + 1..]) => {
-                    let mut end = i + 1;
-                    while end < chars.len() && (chars[end].is_ascii_alphanumeric() || matches!(chars[end], '-' | '_')) {
-                        end += 1;
-                    }
-                    if chars.get(end) == Some(&'\\') {
+                b'.' if !opaque && css_ident_start(bytes, i + 1) => {
+                    let end = css_name_end(bytes, i + 1);
+                    let class = &text[i + 1..end];
+                    if class.contains('\\') {
                         return Err(
                             self.error(at, "escaped characters in a class name are not supported in a component's stylesheet")
                         );
                     }
-                    let class: String = chars[i + 1..end].iter().collect();
+                    if !class.is_ascii() {
+                        return Err(
+                            self.error(at, "non-ASCII characters in a class name are not supported in a component's stylesheet")
+                        );
+                    }
                     if class.contains("__") {
                         return Err(
                             self.error(at, format!(".{class}: __ separates the component's name from the class; use - or _"))
@@ -1313,172 +1398,473 @@ impl Scoper<'_> {
                     out.push('.');
                     out.push_str(self.prefix);
                     out.push_str("__");
-                    out.push_str(&class);
-                    if !self.classes.contains(&class) {
-                        self.classes.push(class);
+                    out.push_str(class);
+                    if !self.classes.iter().any(|name| name == class) {
+                        self.classes.push(class.to_string());
                     }
-                    part_scoped = true;
+                    if in_list {
+                        lists.last_mut().unwrap_or(&mut top).class();
+                    } else {
+                        why.filtered = true;
+                    }
                     i = end;
                     continue;
                 }
-                _ => {}
-            }
-            out.push(c);
-            i += 1;
+                _ if b.is_ascii() => i + 1,
+                _ => i + text[i..].chars().next().unwrap().len_utf8(),
+            };
+            out.push_str(&text[i..end]);
+            i = end;
         }
-        if !part_scoped && unowned.is_none() {
-            unowned = Some(chars[part_start..].iter().collect::<String>().trim().to_string());
+        if let Some(&(close, _)) = blocks.last() {
+            return Err(self.error(at, format!("unclosed selector block: expected {}", char::from(close))));
         }
-        Ok((out, unowned))
+        let anchor = top.end(true, !has_ampersand).unwrap_or_default();
+        all = all.and(anchor);
+        if !anchor.owned && unowned.is_none() {
+            unowned = Some(Unowned { part: text[part_start..].trim_matches([' ', '\t', '\n']).to_string(), why });
+        }
+        Ok((out, all, unowned))
     }
 
-    /// The error for a selector that names no class of the file.
-    fn unowned(&self, part: &str, at: usize) -> String {
+    /// The error for a selector the checker cannot prove is owned.
+    fn unowned(&self, unowned: &Unowned, nest: Anchor, at: usize) -> String {
+        let Unowned { part, why } = unowned;
+        if why.sibling && nest.owned {
+            return self.error(
+                at,
+                format!("cannot prove that `{part}` styles only elements this component owns. To keep a nested sibling condition and require a component ancestor without adding specificity, use an anchor like `:where(.list) & + p`"),
+            );
+        }
+        let mut reason = String::new();
+        if why.alternative {
+            reason.push_str("; an `:is()` or `:where()` counts only when every matchable selector in it does; remove invalid arms the compiler cannot recognize");
+        }
+        if why.filtered {
+            reason.push_str("; a class or `&` in `:not()`, `:has()` or another function only filters");
+        }
+        if why.sibling {
+            reason.push_str("; `+` and `~` lead to an element beside the class's, not inside it");
+        }
         match &self.scope_root {
             Some(root) => self.error(
                 at,
-                format!("`{part}` styles elements this component does not own: `@scope ({root})` can start outside the component, so start each rule in it with one of the stylesheet's classes, like `.list p`, or start the scope at one, `@scope (.list)`"),
+                format!("`{part}` styles elements this component does not own: `@scope ({root})` can start outside the component{reason}. Give each rule one of the stylesheet's classes on the element or one it is inside, like `.list p`, or each selector of the scope root, like `@scope (.list)`"),
             ),
             None => self.error(
                 at,
-                format!("`{part}` styles elements this component does not own: start the rule with one of the stylesheet's classes, like `.list {part}`"),
+                format!("`{part}` styles elements this component does not own: in every selector, the element it styles or one it is inside needs one of the stylesheet's classes{reason}. Name the class where that element is, like `.list p` or `main .list p`; styles for the whole page belong in the app's stylesheet"),
             ),
         }
     }
 }
 
-fn ident_start(rest: &[char]) -> bool {
-    match rest {
-        [c, ..] if c.is_ascii_alphabetic() || *c == '_' => true,
-        ['-', c, ..] => c.is_ascii_alphabetic() || *c == '_',
-        _ => false,
+/// What a selector requires of the elements it matches: one of the file's classes on the
+/// element itself, on an element it is inside, or, `owned`, either (`:is(.list, .grid p)`).
+#[derive(Clone, Copy, Default)]
+struct Anchor {
+    class: bool,
+    ancestor: bool,
+    owned: bool,
+}
+
+impl Anchor {
+    const ALL: Anchor = Anchor { class: true, ancestor: true, owned: true };
+
+    fn and(self, other: Anchor) -> Anchor {
+        Anchor { class: self.class && other.class, ancestor: self.ancestor && other.ancestor, owned: self.owned && other.owned }
+    }
+
+    fn or(self, other: Anchor) -> Anchor {
+        Anchor { class: self.class || other.class, ancestor: self.ancestor || other.ancestor, owned: self.owned || other.owned }
+    }
+
+    /// The element a combinator leads to: a descendant or child is inside this one, a sibling
+    /// inside what this one is inside, and a table cell after `||` neither.
+    fn across(self, combinator: char) -> Anchor {
+        let ancestor = match combinator {
+            ' ' | '>' => self.owned,
+            '+' | '~' => self.ancestor,
+            _ => false,
+        };
+        Anchor { class: false, ancestor, owned: ancestor }
     }
 }
 
-/// The text inside the parentheses `text` starts with, and the text after them, outside strings
-/// and brackets: `(.a) to (.b)` is `.a` and ` to (.b)`.
+/// A selector list being read: a rule's, or an `:is()` or `:where()` in it.
+struct Branches {
+    depth: usize,
+    /// What every selector before the current one requires, and whether any is owned.
+    all: Anchor,
+    any: bool,
+    /// What the current compound selector requires, as written and with the `& ` a nested
+    /// selector without `&` has in front.
+    now: Anchor,
+    nested: Anchor,
+    /// Whether the selector has a compound selector yet, the combinator after the last one (a
+    /// space for a descendant), and whether one came first.
+    compound: bool,
+    combinator: Option<char>,
+    leading: bool,
+    invalid: bool,
+}
+
+impl Branches {
+    fn new() -> Branches {
+        Branches {
+            depth: 0,
+            all: Anchor::ALL,
+            any: false,
+            now: Anchor::default(),
+            nested: Anchor::default(),
+            compound: false,
+            combinator: None,
+            leading: false,
+            invalid: false,
+        }
+    }
+
+    fn space(&mut self) {
+        if self.compound && self.combinator.is_none() {
+            self.combinator = Some(' ');
+        }
+    }
+
+    fn explicit_combinator(&mut self, c: char) {
+        self.invalid |= self.combinator.is_some_and(|c| c != ' ');
+        self.combinator = Some(c);
+    }
+
+    /// A token of a compound selector: after a combinator, it starts the next one.
+    fn token(&mut self, nest: Anchor, why: &mut Why) {
+        let combinator = self.combinator.take();
+        if !self.compound {
+            self.compound = true;
+            self.leading = combinator.is_some();
+            self.nested = nest.across(combinator.unwrap_or(' '));
+        } else if let Some(c) = combinator {
+            let (now, nested) = (self.now.across(c), self.nested.across(c));
+            why.sibling |= (self.now.owned && !now.owned) || (self.nested.owned && !nested.owned);
+            (self.now, self.nested) = (now, nested);
+        }
+    }
+
+    fn class(&mut self) {
+        self.add(Anchor { class: true, ancestor: false, owned: true });
+    }
+
+    fn add(&mut self, anchor: Anchor) {
+        (self.now, self.nested) = (self.now.or(anchor), self.nested.or(anchor));
+    }
+
+    /// The end of a selector, or `None` for a statically invalid one. A leading combinator is
+    /// invalid inside a forgiving list, but makes a nested rule relative even with an `&`.
+    fn end(&mut self, relative: bool, implicit_parent: bool) -> Option<Anchor> {
+        let valid = !self.invalid && self.compound && (relative || !self.leading) && self.combinator.is_none_or(|c| c == ' ');
+        let anchor = if implicit_parent || self.leading { self.nested } else { self.now };
+        *self = Branches { depth: self.depth, all: self.all, any: self.any, ..Branches::new() };
+        valid.then_some(anchor)
+    }
+
+    /// The end of a selector in an `:is()` or `:where()`, which drops one the browser drops.
+    fn next(&mut self) {
+        if let Some(anchor) = self.end(false, false) {
+            self.all = self.all.and(anchor);
+            self.any |= anchor.owned;
+        }
+    }
+}
+
+/// Why a selector does not count, for the error.
+#[derive(Clone, Copy, Default)]
+struct Why {
+    filtered: bool,
+    alternative: bool,
+    sibling: bool,
+}
+
+struct Unowned {
+    part: String,
+    why: Why,
+}
+
+/// The opening parenthesis of a matches-any pseudo-class after its colon, if present.
+fn positive_list_open(text: &str, mut start: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    while bytes[start..].starts_with(b"/**/") {
+        start += 4;
+    }
+    let end = css_name_end(bytes, start);
+    if bytes.get(end) != Some(&b'(') {
+        return None;
+    }
+    let name = decoded_name(&text[start..end]);
+    (name.eq_ignore_ascii_case("is") || name.eq_ignore_ascii_case("where")).then_some(end)
+}
+
+/// The four pseudo-elements that also have a single-colon form.
+fn legacy_pseudo_element(text: &str, start: usize) -> bool {
+    let bytes = text.as_bytes();
+    if !matches!(bytes.get(start), Some(b'b' | b'B' | b'a' | b'A' | b'f' | b'F' | b'\\')) {
+        return false;
+    }
+    let end = css_name_end(bytes, start);
+    // `:before(...)` is not the legacy spelling; don't infer validity from its name.
+    if bytes.get(end) == Some(&b'(') {
+        return false;
+    }
+    let name = decoded_name(&text[start..end]);
+    const NAMES: [&str; 4] = ["before", "after", "first-line", "first-letter"];
+    NAMES.iter().any(|n| name.eq_ignore_ascii_case(n))
+}
+
+fn decoded_name(name: &str) -> Cow<'_, str> {
+    if name.contains('\\') {
+        unescape(name).into()
+    } else {
+        name.into()
+    }
+}
+
+/// The text inside the first parenthesis block, trimmed of whitespace outside tokens, and the
+/// text after it.
 fn parenthesized(text: &str) -> Option<(&str, &str)> {
     if !text.starts_with('(') {
         return None;
     }
     let b = text.as_bytes();
-    let (mut i, mut depth) = (0, 0usize);
-    while i < b.len() {
-        match b[i] {
-            q @ (b'"' | b'\'') => {
+    let mut blocks = vec![b')'];
+    let start = css_skip_space(b, 1);
+    let (mut i, mut end) = (start, start);
+    while let Some(&byte) = b.get(i) {
+        i = match byte {
+            b if css_space(b) => {
                 i += 1;
-                while i < b.len() && b[i] != q {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
+                continue;
             }
-            b'\\' => i += 1,
-            b'(' | b'[' => depth += 1,
-            b')' | b']' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return (b[i] == b')').then(|| (&text[1..i], &text[i + 1..]));
-                }
+            b'"' | b'\'' => string_end(b, i)?,
+            b'\\' => css_escape_end(b, i),
+            b'(' | b'[' | b'{' => {
+                blocks.push(block_close(byte));
+                i + 1
             }
-            _ => {}
-        }
-        i += 1;
+            b')' | b']' | b'}' => {
+                if blocks.pop()? != byte {
+                    return None;
+                }
+                if blocks.is_empty() {
+                    return Some((&text[start..end], &text[i + 1..]));
+                }
+                i + 1
+            }
+            _ => i + 1,
+        };
+        end = i;
     }
     None
 }
 
-/// Whether a selector names a pseudo-element (`::before`, or one of the four CSS 2 wrote with
-/// one colon, `:before`), outside strings and brackets.
-fn pseudo_element(selector: &str) -> bool {
-    let b = selector.as_bytes();
-    let (mut i, mut brackets) = (0, 0usize);
-    while i < b.len() {
-        match b[i] {
-            q @ (b'"' | b'\'') => {
-                i += 1;
-                while i < b.len() && b[i] != q {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-            }
-            b'\\' => i += 1,
-            b'[' => brackets += 1,
-            b']' => brackets = brackets.saturating_sub(1),
-            b':' if brackets == 0 => {
-                if b.get(i + 1) == Some(&b':') {
-                    return true;
-                }
-                let name: String = selector[i + 1..].chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
-                if ["before", "after", "first-line", "first-letter"].iter().any(|n| name.eq_ignore_ascii_case(n)) {
-                    return true;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
+fn block_close(open: u8) -> u8 {
+    match open {
+        b'(' => b')',
+        b'[' => b']',
+        b'{' => b'}',
+        _ => unreachable!("not a block opener"),
     }
-    false
 }
 
-/// Comments removed and whitespace collapsed, outside strings.
-fn squash(text: &str) -> String {
-    squash_with(text, |_, _| {})
+fn css_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n')
 }
 
-/// `observe` maps the source and output byte offsets of each copied character.
-fn squash_with(text: &str, mut observe: impl FnMut(usize, usize)) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.char_indices().peekable();
+fn css_skip_space(bytes: &[u8], mut at: usize) -> usize {
+    while bytes.get(at).is_some_and(|&b| css_space(b)) {
+        at += 1;
+    }
+    at
+}
+
+fn valid_css_escape(bytes: &[u8], at: usize) -> bool {
+    bytes.get(at) == Some(&b'\\') && bytes.get(at + 1).is_some_and(|&b| b != b'\n')
+}
+
+/// Consumes an escape in preprocessed CSS, including its optional whitespace terminator.
+fn css_escape_end(bytes: &[u8], at: usize) -> usize {
+    let start = at + 1;
+    let hex = bytes[start..].iter().take(6).take_while(|b| b.is_ascii_hexdigit()).count();
+    let end = start + hex;
+    if hex != 0 {
+        end + usize::from(bytes.get(end).is_some_and(|&b| css_space(b)))
+    } else {
+        let mut end = (start + 1).min(bytes.len());
+        while bytes.get(end).is_some_and(|b| b & 0xc0 == 0x80) {
+            end += 1;
+        }
+        end
+    }
+}
+
+fn css_name_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | 0x80..=0xff)
+}
+
+fn css_ident_start(bytes: &[u8], at: usize) -> bool {
+    let name_start = |at| matches!(bytes.get(at), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_' | 0x80..=0xff));
+    name_start(at)
+        || valid_css_escape(bytes, at)
+        || (bytes.get(at) == Some(&b'-')
+            && (name_start(at + 1) || bytes.get(at + 1) == Some(&b'-') || valid_css_escape(bytes, at + 1)))
+}
+
+fn css_name_end(bytes: &[u8], mut at: usize) -> usize {
+    while let Some(&b) = bytes.get(at) {
+        if css_name_byte(b) {
+            at += 1;
+        } else if valid_css_escape(bytes, at) {
+            at = css_escape_end(bytes, at);
+        } else {
+            break;
+        }
+    }
+    at
+}
+
+/// The prelude starts with a custom property's ident followed by a colon.
+fn starts_custom_property(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let end = css_name_end(bytes, 0);
+    if !decoded_name(&text[..end]).strip_prefix("--").is_some_and(|name| !name.is_empty()) {
+        return false;
+    }
+    let mut at = css_skip_space(bytes, end);
+    while let Some(comment) = text[at..].strip_prefix("/*") {
+        let Some(close) = comment.find("*/") else { return false };
+        at = css_skip_space(bytes, at + close + 4);
+    }
+    bytes.get(at) == Some(&b':')
+}
+
+struct Chunk {
+    end: Option<u8>,
+    text: String,
+    url: Option<usize>,
+    joined_comment: Option<usize>,
+}
+
+/// Reads and normalizes one chunk of preprocessed CSS, advancing `i` to its delimiter.
+/// Only whitespace outside tokens is folded or discarded.
+fn scan_chunk(src: &str, i: &mut usize) -> Result<Chunk, (usize, &'static str)> {
+    let bytes = src.as_bytes();
+    let mut depth = 0usize;
+    let mut text = String::new();
     let mut space = false;
-    while let Some((from, c)) = chars.next() {
-        match c {
-            '/' if chars.peek().is_some_and(|&(_, next)| next == '*') => {
-                chars.next();
-                let mut last = ' ';
-                for (_, c) in chars.by_ref() {
-                    if last == '*' && c == '/' {
-                        break;
-                    }
-                    last = c;
-                }
+    let mut pending_comment = None;
+    let mut joined_comment = None;
+    let mut url = None;
+    while let Some(&b) = bytes.get(*i) {
+        let start = *i;
+        *i = match b {
+            b'{' | b';' | b'}' if depth == 0 => return Ok(Chunk { end: Some(b), text, url, joined_comment }),
+            b if css_space(b) => {
                 space = true;
+                *i += 1;
+                continue;
             }
-            '"' | '\'' => {
-                if space && !out.is_empty() {
-                    out.push(' ');
-                }
-                space = false;
-                observe(from, out.len());
-                out.push(c);
-                while let Some((from, s)) = chars.next() {
-                    observe(from, out.len());
-                    out.push(s);
-                    if s == '\\' {
-                        if let Some((from, next)) = chars.next() {
-                            observe(from, out.len());
-                            out.push(next);
-                        }
-                    } else if s == c {
-                        break;
+            b'/' if bytes.get(start + 1) == Some(&b'*') => {
+                pending_comment.get_or_insert(start);
+                *i = src[start + 2..].find("*/").map_or(bytes.len(), |end| start + end + 4);
+                continue;
+            }
+            b'"' | b'\'' => string_end(bytes, start).ok_or((start, "a string is never closed"))?,
+            b'#' | b'@' => css_name_end(bytes, start + 1),
+            b'<' if bytes[start..].starts_with(b"<!--") => start + 4,
+            b'-' if bytes[start..].starts_with(b"-->") => start + 3,
+            b if css_name_byte(b) || valid_css_escape(bytes, start) => {
+                let end = css_name_end(bytes, start);
+                if bytes.get(end) == Some(&b'(') && decoded_name(&src[start..end]).eq_ignore_ascii_case("url") {
+                    let value = css_skip_space(bytes, end + 1);
+                    if matches!(bytes.get(value), Some(b'"' | b'\'')) {
+                        end // A quoted `url()` is a function followed by a string, not a URL token.
+                    } else {
+                        url.get_or_insert(start);
+                        url_end(bytes, value).ok_or((
+                            start,
+                            "a malformed unquoted url() has no reliable boundary here: quote its value or remove it",
+                        ))?
                     }
+                } else {
+                    end
                 }
             }
-            c if c.is_whitespace() => space = true,
-            c => {
-                if space && !out.is_empty() {
-                    out.push(' ');
-                }
-                space = false;
-                observe(from, out.len());
-                out.push(c);
+            b'\\' => return Err((start, "a backslash outside a string must escape a character, not a line break")),
+            b'(' | b'[' => {
+                depth += 1;
+                start + 1
+            }
+            b')' | b']' => {
+                depth = depth.saturating_sub(1);
+                start + 1
+            }
+            _ if b.is_ascii() => start + 1,
+            _ => start + src[start..].chars().next().unwrap().len_utf8(),
+        };
+        let comment = pending_comment.take();
+        if !text.is_empty() {
+            if !space && joined_comment.is_none() {
+                joined_comment = comment;
+            }
+            if space || comment.is_some() {
+                text.push(' ');
             }
         }
+        space = false;
+        text.push_str(&src[start..*i]);
     }
-    out
+    Ok(Chunk { end: None, text, url, joined_comment })
+}
+
+/// CSS Syntax Level 3's string-token boundaries. An unescaped newline makes a bad
+/// string token; do not recover by reading across it to a later quote.
+fn string_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut at = start + 1;
+    while let Some(&b) = bytes.get(at) {
+        match b {
+            b if b == bytes[start] => return Some(at + 1),
+            b'\n' => break,
+            b'\\' => at = css_escape_end(bytes, at),
+            _ => at += 1,
+        }
+    }
+    None
+}
+
+/// CSS Syntax Level 3's unquoted URL token. Refuse a bad URL instead of recovering:
+/// a quote in it is not the beginning of a string and cannot hide another arm.
+fn url_end(bytes: &[u8], mut at: usize) -> Option<usize> {
+    while let Some(&b) = bytes.get(at) {
+        match b {
+            b')' => return Some(at + 1),
+            b if css_space(b) => {
+                let end = css_skip_space(bytes, at);
+                return (bytes.get(end) == Some(&b')')).then_some(end + 1);
+            }
+            b'"' | b'\'' | b'(' | 1..=8 | 11 | 14..=31 | 127 => break,
+            b'\\' if valid_css_escape(bytes, at) => at = css_escape_end(bytes, at),
+            b'\\' => break,
+            _ => at += 1,
+        }
+    }
+    None
 }
 
 fn split_declaration(text: &str) -> Option<(&str, &str)> {
     let (name, value) = text.split_once(':')?;
-    let name = name.trim();
-    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).then(|| (name, value.trim()))
+    let space = [' ', '\t', '\n'];
+    let name = name.trim_matches(space);
+    // scan_chunk already drops trailing whitespace tokens, but a trailing space may be part
+    // of an escape. Only drop the separator it can leave just after the colon.
+    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .then(|| (name, value.trim_start_matches(space)))
 }
 
 /// The constant for a class: `alert-message` is `AlertMessage`.
@@ -1915,11 +2301,11 @@ mod tests {
         }
         assert_eq!(
             scope(".a { position-try-fallbacks: --abov\\65\r\n\tflip-block }", "x").unwrap().css,
-            ".x__a{position-try-fallbacks:--abov\\65 flip-block}"
+            ".x__a{position-try-fallbacks:--abov\\65\n flip-block}"
         );
         assert_eq!(
             scope("@position-try --above { top: 0 } .a { position-try-fallbacks: --abov\\65 , flip-block }", "x").unwrap().css,
-            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above , flip-block}"
+            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--x__above, flip-block}"
         );
         assert_eq!(
             scope("@position-try --above{top:0}.a{position-try:var(--missing\\', --above)}", "x").unwrap().css,
@@ -1928,7 +2314,7 @@ mod tests {
         // A no-break space is not CSS whitespace: `--above\u{a0}flip-block` is one name.
         assert_eq!(
             scope("@position-try --above { top: 0 } .a { position-try-fallbacks: --above\u{a0}flip-block, --abov\\65\u{a0}, --above\0, --above\u{fffd}, --above, \0--above }", "x").unwrap().css,
-            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--above flip-block, --abov\\65 , --above\0, --above\u{fffd}, --x__above, \0--above}"
+            "@position-try --x__above{top:0}.x__a{position-try-fallbacks:--above\u{a0}flip-block, --abov\\65\u{a0}, --above\u{fffd}, --above\u{fffd}, --x__above, \u{fffd}--above}"
         );
         // `--above()` calls a custom function, whose name is not a position option's.
         assert_eq!(
@@ -1944,23 +2330,101 @@ mod tests {
     }
 
     #[test]
+    fn position_options_keep_escaped_trailing_whitespace() {
+        for (definition, option) in [("", "--above"), ("@position-try --above{top:0}", "--x__above")] {
+            let sheet = scope(&format!(r"{definition}.a{{position-try:  --above, --external\  ; color:red}}"), "x").unwrap();
+            assert!(sheet.css.ends_with(&format!(r".x__a{{position-try:{option}, --external\ ;color:red}}")), "{}", sheet.css);
+        }
+        assert_eq!(scope(r".a{--value:--external\\  ;color:red}", "x").unwrap().css, r".x__a{--value:--external\\;color:red}");
+    }
+
+    #[test]
     fn shared_selector_parsing_is_unchanged_by_position_options() {
         for (source, scoped) in [
-            (".a:not(.--foreign)", ".x__a:not(.--foreign)"),
-            (".a:is(./**/local,body)", ".x__a:is(. local,body)"),
-            (".a:is(.é,.b)", ".x__a:is(.é,.x__b)"),
-            (".a:is(.--a,.a)", ".x__a:is(.--a,.x__a)"),
+            (".a:not(.--foreign)", ".x__a:not(.x__--foreign)"),
+            (".a /**/.b", ".x__a .x__b"),
+            (".a/**/ .b", ".x__a .x__b"),
+            (".a:is(.--a,.a)", ".x__a:is(.x__--a,.x__a)"),
         ] {
-            let sheet = scope(&format!("{source}{{color:green}}"), "x").unwrap();
-            assert_eq!(sheet.css, format!("{scoped}{{color:green}}"));
+            let sheet = scope(&format!("{source}{{position-try:--above}}@position-try --above{{top:0}}"), "x").unwrap();
+            assert_eq!(sheet.css, format!("{scoped}{{position-try:--x__above}}@position-try --x__above{{top:0}}"));
         }
+        assert!(scope(".a:is(.é,.b){color:green}", "x").unwrap_err().contains("non-ASCII characters in a class name"));
         assert_eq!(
-            scope("@scope (.a:is(:/* gap */:marker,.b)){.a p{color:green}}", "x").unwrap().css,
+            scope("@scope (.a:is(:/* gap */ :marker,.b)){.a p{color:green}}", "x").unwrap().css,
             "@scope (.x__a:is(: :marker,.x__b)){.x__a p{color:green}}"
         );
-        assert!(scope("@LAYER_other foo; .a{color:green}", "x").unwrap_err().contains("@LAYER is not supported"));
-        assert!(scope("@LAYER foo; .a{color:green}", "x").unwrap_err().contains("@LAYER is not supported"));
-        assert_eq!(scope("@layer_other foo; .a{color:green}", "x").unwrap().css, "@layer_other foo;.x__a{color:green}");
+        for name in ["LAYER_other", "LAYER", "layer_other"] {
+            let error = scope(&format!("@{name} foo; .a{{color:green}}"), "x").unwrap_err();
+            assert!(error.contains(&format!("@{name} is not supported")), "{error}");
+        }
+        let css = "@supports (position-area:top){:is(.a,body){position-try:--above}@position-try --above{top:0}}";
+        assert!(scope(css, "x").unwrap_err().contains("styles elements this component does not own"));
+    }
+
+    #[test]
+    fn selector_comments_must_not_join_parts() {
+        for (selector, line) in [
+            (".a:is(./**/local,body)", 1),
+            (".a:is(\n./**/local,body)", 2),
+            (".a/**/.b", 1),
+            (".a/* one *//* two */.b", 1),
+            ("@scope (.a/**/.b)", 1),
+            ("@scope (.a) to/**/(.b)", 1),
+        ] {
+            let error = scope(&format!("{selector}{{.c{{color:red}}}}"), "x").unwrap_err();
+            assert!(error.starts_with(&format!("line {line}: a comment directly between two parts of a selector")), "{error}");
+            assert!(error.ends_with("write the selector without it (for example `.a.b`, not `.a/**/.b`)"), "{error}");
+        }
+        assert_eq!(
+            scope(r#"/*start*/.a[title="a/**/b"]/*end*/{--value:a/**/b}"#, "x").unwrap().css,
+            r#".x__a[title="a/**/b"]{--value:a b}"#
+        );
+    }
+
+    #[test]
+    fn braced_custom_property_values_are_refused() {
+        for (before, after, line) in [
+            ("", "", 1),
+            (".a {\n", "}", 2),
+            (".a {\n .b {\n @media (width > 0) {\n", "}}}", 4),
+            ("@scope (.a) {\n", "}", 2),
+            ("@keyframes x { from {\n", "}}", 2),
+        ] {
+            for declaration in [
+                "--theme: .b {color:red}",
+                "--theme /* before */ /**/ : .b/**/.c {color:red}",
+                "--theme: /**/ {foo/**/bar{color:red}}",
+                r"--th\65 me/**/: {color:red}",
+            ] {
+                let css = format!("{before}{declaration}{after}");
+                let error = scope(&css, "x").unwrap_err();
+                assert_eq!(
+                    error,
+                    format!("line {line}: a custom property whose value holds a {{ }} block at its outer level is not supported in a component stylesheet yet (#1602); put that declaration in the app's stylesheet (static/style.css)"),
+                    "{css}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn plain_custom_properties_and_nested_selectors_still_compile() {
+        let sheet = scope(".a{--x: 1px; &:hover{} .b{}}", "x").unwrap();
+        assert_eq!(sheet.css, ".x__a{--x:1px;&:hover{}.x__b{}}");
+        assert_eq!(sheet.classes, ["a", "b"]);
+        // A block inside a function or square brackets is part of the value, as browsers read it.
+        for (value, expected) in [("f({color:red})", "f({color:red})"), ("[{color:red}]", "[{color:red}]")] {
+            let sheet = scope(&format!(".a{{--x: {value}; color:blue}}"), "x").unwrap();
+            assert_eq!(sheet.css, format!(".x__a{{--x:{expected};color:blue}}"));
+        }
+        let sheet = scope("@scope (.a){--x/**/: 1px; .b{}}", "x").unwrap();
+        assert_eq!(sheet.css, "@scope (.x__a){--x:1px;.x__b{}}");
+        assert_eq!(sheet.classes, ["a", "b"]);
+        for css in [".a{&:hover/**/.b{color:red}}", ".a{--theme .b/**/.c{color:red}}", r".a{--th\65/**/me:hover.a{color:red}}"] {
+            let error = scope(css, "x").unwrap_err();
+            assert!(error.contains("a comment"), "{error}");
+        }
     }
 
     #[test]
@@ -2007,10 +2471,8 @@ mod tests {
             assert!(sheet.css.starts_with(format!("@{name} {prelude}").trim()));
         }
         assert_eq!(scope("@charset 'utf-8'; @layer base, widgets;", "x").unwrap().css, "@layer base, widgets;");
-        assert_eq!(
-            scope("@supports_other (position-area:top){.a{color:red}}", "x").unwrap().css,
-            "@supports_other (position-area:top){.x__a{color:red}}"
-        );
+        let error = scope("@supports_other (position-area:top){.a{color:red}}", "x").unwrap_err();
+        assert!(error.contains("@supports_other is not supported"), "{error}");
         for name in ["import", "IMPORT", "custom-media", "CUSTOM-MEDIA", "namespace", "document", "unknown"] {
             assert!(scope(&format!("@{name} x;"), "x").is_err(), "{name}");
         }
@@ -2092,6 +2554,223 @@ mod tests {
     }
 
     #[test]
+    fn selector_lists_require_a_positive_class_in_every_branch() {
+        for selector in [
+            ":not(.list) p",
+            ":is(.list, main) p",
+            "main:has(.list) p",
+            ":where(.list, :is(.row, main)) p",
+            ":nth-child(2 of .list)",
+            ".list, :not(.row)",
+            ":is(.list, :has(.row))",
+            ":is(.list, [data-name='.row'])",
+            r"#item\.list",
+            r":is(.list, #item\,main)",
+            r":is(.list, [data-name=x\]\.row])",
+        ] {
+            let css = format!("{selector} {{ color: red }}");
+            let error = scope(&css, "t").expect_err(&css);
+            assert!(error.contains("styles elements this component does not own"), "{error}");
+        }
+        let error = scope("@scope (:not(.list)) { p { color: red } }", "t").unwrap_err();
+        assert!(error.contains("`p` styles elements this component does not own"), "{error}");
+        let error = scope("@scope (.list, :where(.row, main)) { p { color: red } }", "t").unwrap_err();
+        assert!(error.contains("`p` styles elements this component does not own"), "{error}");
+    }
+
+    #[test]
+    fn a_class_reached_through_a_sibling_does_not_own_the_element() {
+        // `+` and `~` lead to an element beside the class's, which is not inside it; a sibling of
+        // an element inside it is, since the two share their ancestors.
+        for selector in [
+            ".list + main",
+            ".list ~ p",
+            r".list + #outside\,main",
+            ":is(.list + main, .grid) p",
+            ":is(.list, .grid p) + main",
+            ".list || td",
+        ] {
+            let css = format!("{selector} {{ color: red }}");
+            let error = scope(&css, "t").expect_err(&css);
+            assert!(error.contains("styles elements this component does not own"), "{error}");
+        }
+        for selector in [".list > li + li", ".list li ~ p", ":is(.list > li, .grid p) + p", ".list + .row", ".list ~ p .row"] {
+            assert!(scope(&format!("{selector} {{ color: red }}"), "t").is_ok(), "{selector}");
+        }
+        let error = scope("@scope (.list + main) { p { color: red } }", "t").unwrap_err();
+        assert!(error.contains("`@scope (.list + main)` can start outside the component"), "{error}");
+        assert!(scope("@scope (.list > li + li) { p { color: red } }", "t").is_ok());
+    }
+
+    #[test]
+    fn a_nested_selector_is_checked_where_its_ampersand_is() {
+        // CSS Nesting: a nested selector without `&` is under the parent rule's elements; one with
+        // it means them where it stands, which `:not()` or a sibling combinator leaves.
+        for css in [
+            ".list { :not(&) { color: red } }",
+            ".list { :is(&, main) { color: red } }",
+            ".list { + main { color: red } }",
+            ".list { ~ p { color: red } }",
+            ".list { p:has(&) { color: red } }",
+            ".list { @media print { :not(&) { color: red } } }",
+            ".list { @scope (& + main) { p { color: red } } }",
+        ] {
+            let error = scope(css, "t").expect_err(css);
+            assert!(error.contains("styles elements this component does not own"), "{css}: {error}");
+        }
+        for css in [
+            ".list { & + main { color: red } }",
+            ".list { &.on { & + main { color: red } } }",
+            ".list::before, .list > p { & + p { color: red } }",
+        ] {
+            let error = scope(css, "t").expect_err(css);
+            assert!(error.contains("cannot prove"), "{css}: {error}");
+            assert!(error.contains("`:where(.list) & + p`"), "{css}: {error}");
+        }
+        let error = scope(".list { @scope (& + main) { p { color: red } } }", "t").unwrap_err();
+        assert!(error.contains("`@scope (& + main)` can start outside the component"), "{error}");
+        let error = scope(".list { @scope (& + main) { color: red } }", "t").unwrap_err();
+        assert!(error.contains("styles the root of `@scope (& + main)`"), "{error}");
+        for css in [
+            ".list { p { color: red } }",
+            ".list { > p { color: red } }",
+            ".list { & p, &.on { color: red } }",
+            ".list { main & { color: red } }",
+            ".list { :is(&, .row) { color: red } }",
+            ".list { li { & + li { color: red } } }",
+            ".list { @media print { p { color: red } } }",
+            ".list { @scope (main) { p { color: red } } }",
+            ".list { @scope (& > li) { color: red; p { color: red } } }",
+            ".list { @scope (& + main) { .row { color: red } } }",
+            ".list::before, .list > p { :where(.list) & + p { color: red } }",
+            "@scope (.list) { & + main { color: red } :not(&) { color: red } }",
+        ] {
+            assert!(scope(css, "t").is_ok(), "{css}: {:?}", scope(css, "t"));
+        }
+    }
+
+    #[test]
+    fn an_ampersand_in_an_invalid_attribute_is_not_a_nesting_anchor() {
+        for css in [
+            ".list { :is(main, [foo=&]) { color: red } }",
+            ".list { @scope (:is(main, [foo=&])) to (.slot) { p { color: red } } }",
+        ] {
+            let error = scope(css, "t").expect_err(css);
+            assert!(error.contains("styles elements this component does not own"), "{css}: {error}");
+        }
+        for css in [r#".list { :is(main, [foo="&"]) { color: red } }"#, r".list { :is(main, [foo=\&]) { color: red } }"] {
+            assert!(scope(css, "t").is_ok(), "{css}");
+        }
+    }
+
+    #[test]
+    fn a_leading_combinator_is_relative_even_with_an_ampersand() {
+        let css = ".list { > :not(&), > :is(main, [foo=&]) { color: red } }";
+        assert_eq!(scope(css, "t").map(|s| s.css), Ok(".t__list{> :not(&), > :is(main, [foo=&]){color:red}}".into()));
+        assert!(scope(".list { + :not(&) { color: red } }", "t").is_err());
+    }
+
+    #[test]
+    fn pseudo_elements_and_doubled_combinators_are_dropped_in_forgiving_arms() {
+        for (input, expected) in [
+            (":is(.list, ::before) p { color: red }", ":is(.t__list, ::before) p{color:red}"),
+            (":where(.list, main + > p) p { color: red }", ":where(.t__list, main + > p) p{color:red}"),
+            ("@scope (:is(.list, ::before)) { p { color: red } }", "@scope (:is(.t__list, ::before)){p{color:red}}"),
+            (
+                "@scope (.list) to (:is(.slot, ::before)) { p { color: red } }",
+                "@scope (.t__list) to (:is(.t__slot, ::before)){p{color:red}}",
+            ),
+            ("@scope (:where(.list, :BeFoRe)) { p { color: red } }", "@scope (:where(.t__list, :BeFoRe)){p{color:red}}"),
+            (
+                "@scope (.list:not(:is(.slot, ::before))) { p { color: red } }",
+                "@scope (.t__list:not(:is(.t__slot, ::before))){p{color:red}}",
+            ),
+            (
+                "@scope (.list:is(: /* gap */:before,.row)) { p { color: red } }",
+                "@scope (.t__list:is(: :before,.t__row)){p{color:red}}",
+            ),
+        ] {
+            assert_eq!(scope(input, "t").map(|s| s.css), Ok(expected.to_string()), "{input}");
+        }
+        for css in [
+            ".list { :is(main, &::before) { color: red } }",
+            ".list { :is(main, & + > p) { color: red } }",
+            ":is(.list, main, ::before) p { color: red }",
+            ":where(.list, main + p) p { color: red }",
+            "@scope (.list) to (.slot::before) { p { color: red } }",
+            "@scope (:not(:is(.list, ::before))) { p { color: red } }",
+        ] {
+            assert!(scope(css, "t").is_err(), "{css}");
+        }
+        let invalid_arm = ":not(::before)";
+        let css = format!(":is(.list, {invalid_arm}) p {{ color: red }}");
+        assert!(scope(&css, "t").unwrap_err().contains("remove invalid arms"));
+        for css in [
+            format!("@scope (:is(.list, {invalid_arm})) {{ p {{ color: red }} }}"),
+            format!("@scope (.list) to (:is(.slot, {invalid_arm})) {{ p {{ color: red }} }}"),
+        ] {
+            assert!(scope(&css, "t").unwrap_err().contains("remove it or the invalid forgiving arm"), "{css}");
+            assert!(scope(&css.replace(&format!(", {invalid_arm}"), ""), "t").is_ok(), "{css}");
+        }
+    }
+
+    #[test]
+    fn a_forgiving_list_drops_the_branches_the_browser_drops() {
+        // Selectors 4: `:is()` and `:where()` drop an empty or invalid selector and match by
+        // the rest; a relative one (`> p`) is invalid there.
+        for (input, expected) in [
+            (":is(.list,) p { color: red }", ":is(.t__list,) p{color:red}"),
+            (":where(.list, > p) p { color: red }", ":where(.t__list, > p) p{color:red}"),
+            (":is(.list, main >) p { color: red }", ":is(.t__list, main >) p{color:red}"),
+            (":is( .list , ) p { color: red }", ":is( .t__list , ) p{color:red}"),
+        ] {
+            assert_eq!(scope(input, "t").map(|s| s.css), Ok(expected.to_string()), "{input}");
+        }
+        for css in [":is(.list, main ) p { color: red }", ":is(, main) p { color: red }", ".list, { color: red }"] {
+            assert!(scope(css, "t").is_err(), "{css}");
+        }
+    }
+
+    #[test]
+    fn an_unowned_selector_s_error_names_what_is_missing() {
+        let error = |css: &str| scope(css, "t").unwrap_err();
+        // No suggestion of a selector that cannot match, like `.list main:has(.list) p`.
+        let related = error("main:has(.list) p { color: red }");
+        assert!(!related.contains(".list main"), "{related}");
+        assert!(related.contains("`.list p` or `main .list p`"), "{related}");
+        assert!(related.contains("only filters"), "{related}");
+        assert!(error(":not(.list) p { color: red }").contains("only filters"));
+        let optional = error(":is(.list, main) p { color: red }");
+        assert!(optional.contains("every matchable selector in it"), "{optional}");
+        assert!(!optional.contains("only filters"), "{optional}");
+        assert!(error(".list + main { color: red }").contains("`+` and `~`"));
+        assert!(error("h2 { color: red }").contains("one of the stylesheet's classes"));
+        let root = error("@scope (main) { color: red }");
+        assert!(!root.contains("starts at"), "{root}");
+    }
+
+    #[test]
+    fn selector_functions_keep_their_classes_and_specificity() {
+        let css = r#":IS(.list, :where(.row:not(.hidden), .card:has(> .image))) > p, :is(main, aside).label { color: red }"#;
+        let sheet = scope(css, "t").unwrap();
+        assert_eq!(
+            sheet.css,
+            ":IS(.t__list, :where(.t__row:not(.t__hidden), .t__card:has(> .t__image))) > p, :is(main, aside).t__label{color:red}"
+        );
+        assert_eq!(sheet.classes, ["list", "row", "hidden", "card", "image", "label"]);
+        assert!(scope(r":\69s(.list, .row) { color: red }", "t").is_ok());
+        assert!(scope(r"#item\(.list { color: red }", "t").is_ok());
+        assert!(scope(r":is(.list, #item\,main.row) { color: red }", "t").is_ok());
+        let scope_css = "@scope (:where(.list, :is(.row, .card))) to (:not(.slot)) { p { color: red } }";
+        assert_eq!(
+            scope(scope_css, "t").unwrap().css,
+            "@scope (:where(.t__list, :is(.t__row, .t__card))) to (:not(.t__slot)){p{color:red}}"
+        );
+        let filtered = "@scope (:not(.list)) { .row { color: red } }";
+        assert_eq!(scope(filtered, "t").unwrap().css, "@scope (:not(.t__list)){.t__row{color:red}}");
+    }
+
+    #[test]
     fn a_scope_rule_s_root_and_limit_are_the_component_s_classes() {
         // CSS Cascade 6: `@scope (<scope-start>) to (<scope-end>)`, each a selector list.
         let sheet = scope("@scope (.list) to (.slot) { .title { color: red } }", "t").unwrap();
@@ -2109,8 +2788,8 @@ mod tests {
             "@scope (.t__card) to (:scope > .t__body > *){gap:1px;:scope{padding:0}& > img{width:100%}p{margin:0}> .t__body{gap:2px}}"
         );
         assert_eq!(sheet.classes, ["card", "body"]);
-        // Nested in a style rule, `&` in the root is the rule's elements; nested in another
-        // `@scope`, the root is relative to the outer one.
+        // A style rule outside an @scope can supply the root's nesting anchor. An owned outer
+        // scope bounds its nested scopes.
         assert_eq!(
             scope(".card { @scope (& > .body) to (.slot) { p { margin: 0 } } }", "t").unwrap().css,
             ".t__card{@scope (& > .t__body) to (.t__slot){p{margin:0}}}"
@@ -2125,7 +2804,7 @@ mod tests {
         );
         let error = |css: &str| scope(css, "t").unwrap_err();
         // A root at the top of the file that names none of its classes matches elements outside
-        // the component, so each rule inside starts at one of them, as at the top of the file.
+        // the component, so each rule inside names one of them, as at the top of the file.
         assert_eq!(
             scope("@scope ([data-theme=\"dark\"]) { .title { color: plum } }", "t").unwrap().css,
             "@scope ([data-theme=\"dark\"]){.t__title{color:plum}}"
@@ -2141,13 +2820,10 @@ mod tests {
             ("> p { margin: 0 }", "> p"),
             ("p { margin: 0 }", "p"),
             ("@media print { p { margin: 0 } }", "p"),
-            ("@scope (div) { :scope { margin: 0 } }", ":scope"),
         ] {
             let message = error(&format!("@scope ([data-theme=\"dark\"]) {{ {css} }}"));
             assert!(message.contains(&format!("`{part}` styles elements this component does not own")), "{message}");
-            if !css.starts_with("@scope") {
-                assert!(message.contains(outside), "{message}");
-            }
+            assert!(message.contains(outside), "{message}");
         }
         assert!(error("@scope (div) { color: plum }")
             .contains("styles the root of `@scope (div)`, which can be outside the component"));
@@ -2177,7 +2853,9 @@ mod tests {
         // A prelude the browser does not read drops the rule.
         for css in [
             "@scope () { p { margin: 0 } }",
+            "@scope ( /**/ ) { p { margin: 0 } }",
             "@scope (.a) to () { p { margin: 0 } }",
+            "@scope (.a) to ( /**/ ) { p { margin: 0 } }",
             "@scope (.a) to(.b) { p { margin: 0 } }",
             "@scope (.a) (.b) { p { margin: 0 } }",
             "@scope .a { p { margin: 0 } }",
@@ -2191,8 +2869,211 @@ mod tests {
     }
 
     #[test]
-    fn the_compile_fail_scope_examples_fail_for_their_reasons() {
+    fn scope_roots_and_limits_keep_escaped_trailing_whitespace() {
+        for separator in ["", " /**/ "] {
+            for (id, trimmed) in [(r"#i\ ", r"#i\ "), (r"#i\\\ ", r"#i\\\ "), (r"#i\\ ", r"#i\\"), (r"#i\20 ", r"#i\20 ")] {
+                for (prelude, expected) in [
+                    (format!("(.a, {id}{separator})"), format!("(.x__a, {trimmed})")),
+                    (format!("(.a) to (.stop, {id}{separator})"), format!("(.x__a) to (.x__stop, {trimmed})")),
+                ] {
+                    let sheet = scope(&format!("@scope {prelude}{{.b{{outline-style:solid}}}}"), "x").unwrap();
+                    assert_eq!(sheet.css, format!("@scope {expected}{{.x__b{{outline-style:solid}}}}"), "{prelude}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nested_scope_roots_cannot_borrow_an_anchor_under_an_unowned_scope() {
+        for (file, root) in [("leaky_nested_scope_ampersand.css", "&"), ("leaky_nested_scope_relative.css", "main")] {
+            let css = std::fs::read_to_string(Path::new("../corten/src").join(file)).expect("the example's stylesheet");
+            let error = scope(&css, "x").expect_err(file);
+            assert!(error.contains(&format!("`@scope ({root})`")), "{file}: {error}");
+            assert!(error.contains("`p` styles elements this component does not own"), "{file}: {error}");
+        }
+        for (css, expected) in [
+            ("@scope (body) { @scope (.list) { p { outline: solid } } }", "@scope (body){@scope (.x__list){p{outline:solid}}}"),
+            (
+                "@scope (body) { .list { @scope (main.list) { p { outline: solid } } } }",
+                "@scope (body){.x__list{@scope (main.x__list){p{outline:solid}}}}",
+            ),
+            (
+                "@scope (body) { .list { @supports (display: block) { @scope (.list > section) { p { outline: solid } } } } }",
+                "@scope (body){.x__list{@supports (display: block){@scope (.x__list > section){p{outline:solid}}}}}",
+            ),
+        ] {
+            assert_eq!(scope(css, "x").unwrap().css, expected);
+        }
+        for css in [
+            "@scope (body) { .list { @media print { @scope (& + main, .list) { p { outline: solid } } } } }",
+            "@scope (body) { @scope (:scope > main) { .list { @scope (&) { p { color: red } } } } }",
+            "@scope (body) { .list { @supports (display: block) { @scope (:is(&, .list)) { p { color: red } } } } }",
+            "@scope (body) { .list { @layer local { @scope (main) to (.slot) { p { color: red } } } } }",
+        ] {
+            let error = scope(css, "x").unwrap_err();
+            assert!(error.contains("`p` styles elements this component does not own"), "{css}: {error}");
+        }
+    }
+
+    #[test]
+    fn unowned_nested_scopes_can_filter_owned_rules() {
+        for (input, expected) in [
+            ("@scope (body) { @scope (main) { .list p { color: red } } }", "@scope (body){@scope (main){.x__list p{color:red}}}"),
+            (
+                "@scope (body) { @scope (:scope > main) { .list p { color: red } } }",
+                "@scope (body){@scope (:scope > main){.x__list p{color:red}}}",
+            ),
+            (
+                "@scope (body) { @scope (:scope > main, .outer) { .list p { color: red } } }",
+                "@scope (body){@scope (:scope > main, .x__outer){.x__list p{color:red}}}",
+            ),
+            (
+                "@scope (body) { @supports (display: block) { @scope (:scope > main) { .list p { color: red } } } }",
+                "@scope (body){@supports (display: block){@scope (:scope > main){.x__list p{color:red}}}}",
+            ),
+            (
+                "@scope (body) { @scope (:scope > main) to (.slot) { .list p { color: red } } }",
+                "@scope (body){@scope (:scope > main) to (.x__slot){.x__list p{color:red}}}",
+            ),
+        ] {
+            assert_eq!(scope(input, "x").map(|sheet| sheet.css), Ok(expected.to_string()), "{input}");
+            let bare = input.replace(".list p", "p");
+            let error = scope(&bare, "x").unwrap_err();
+            assert!(error.contains("`p` styles elements this component does not own"), "{bare}: {error}");
+        }
+    }
+
+    #[test]
+    fn css_strings_and_urls_keep_their_token_boundaries() {
+        for line_end in ["\n", "\r", "\r\n", "\x0c"] {
+            for escape in ["\\", "\\61"] {
+                let attr = format!("[data-value='a{escape}{line_end},p']");
+                let css = format!(".list{attr} {{ outline-style:solid }}");
+                assert_eq!(scope(&css, "x").unwrap().css, format!(".x__list[data-value='a{escape}\n,p']{{outline-style:solid}}"));
+            }
+        }
+        for value in [r"url(/a[};/*,b\).svg)", r"\75 rl(/a[};,b.svg)", "URL(  '/a,).svg')"] {
+            let css = format!(".list {{ background: {value} }}");
+            let output_value = if value.starts_with("URL") { "URL( '/a,).svg')" } else { value };
+            assert_eq!(scope(&css, "x").unwrap().css, format!(".x__list{{background:{output_value}}}"));
+        }
+        for value in ["url(a' )", "URL(a\" )", r"\75 rl(a' )", "url(a b)", "url(a\\\rb)"] {
+            let css = format!(".list {{ background: {value} }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains("a malformed unquoted url()"), "{css}: {error}");
+        }
+        for css in [
+            ":is(.list,[x=url(a)]) { outline-style:solid }",
+            "@scope (:is(.list,[x=url(a)])) { p { outline-style:solid } }",
+            "@scope (.list) to (:is(.slot,[x=url(a)])) { p { outline-style:solid } }",
+        ] {
+            let error = scope(css, "x").unwrap_err();
+            assert!(error.contains("an unquoted url() cannot be checked in a component selector"), "{css}: {error}");
+        }
+    }
+
+    #[test]
+    fn selector_hex_escapes_consume_one_css_line_break() {
+        for line_end in ["\n", "\r", "\r\n", "\x0c"] {
+            let css = format!(".list:\\65{line_end}mpty + p {{ outline-style:solid }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains("styles elements this component does not own"), "{css:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn escaped_matches_any_functions_keep_their_anchor_across_css_line_breaks() {
+        for line_end in ["\n", "\r", "\r\n", "\x0c"] {
+            let css = format!(":i\\73{line_end}(.list) {{ outline-style:solid }}");
+            assert_eq!(scope(&css, "x").unwrap().css, ":i\\73\n(.x__list){outline-style:solid}");
+        }
+    }
+
+    #[test]
+    fn selector_blocks_must_close_in_order() {
+        for selector in [":is([x=&(], .list) ], p)", ":not(&) :is(.list[x=(], .list) ], p)"] {
+            let css = format!(".list {{ {selector} {{ outline-style:solid }} }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains("mismatched selector block"), "{css}: {error}");
+        }
+    }
+
+    #[test]
+    fn non_ascii_selector_characters_are_name_characters_not_spaces() {
+        for class in [".list\u{a0}", ".\u{a0}list", ".-\u{a0}list"] {
+            let css = format!(".list {class} {{ outline-style:solid }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains("non-ASCII characters in a class name"), "{css:?}: {error}");
+        }
+        let css = ":is(.list, em + \u{a0} + p) { outline-style:solid }";
+        let error = scope(css, "x").unwrap_err();
+        assert!(error.contains("styles elements this component does not own"), "{css:?}: {error}");
+
+        for (prelude, reason) in [
+            ("@scope (.list\u{a0})", "non-ASCII characters in a class name"),
+            ("@scope (.list) to (.slot\u{a0})", "non-ASCII characters in a class name"),
+            ("@scope (.list)\u{a0}to (.slot)", "the browser drops an @scope"),
+            ("@scope (.list) to\u{a0} (.slot)", "the browser drops an @scope"),
+            ("@scope (.list) to (.slot) \u{a0}", "the browser drops an @scope"),
+        ] {
+            let css = format!("{prelude} {{ p {{ outline-style:solid }} }}");
+            let error = scope(&css, "x").unwrap_err();
+            assert!(error.contains(reason), "{css:?}: {error}");
+        }
+
+        for (css, name) in [
+            ("@scope\u{a0}(.list) { p { outline-style:solid } }", r"@scope\u{a0}"),
+            ("@media\u{a0}screen { .list { outline-style:solid } }", r"@media\u{a0}screen"),
+            ("@layer\u{a0}base { .list { outline-style:solid } }", r"@layer\u{a0}base"),
+            ("@layer\u{a0}base, kit;", r"@layer\u{a0}base"),
+        ] {
+            let error = scope(css, "x").unwrap_err();
+            assert!(error.contains(&format!("the at-rule name `{name}` contains a non-ASCII character")), "{css:?}: {error}");
+        }
+        let css = "@page \u{a0}x-slip { size: A4 }";
+        let error = scope(css, "x").unwrap_err();
+        assert!(error.contains("the page name `\\u{a0}x-slip` contains a non-ASCII character"), "{css:?}: {error}");
+
+        let css = "@scope (\u{a0} .list) to (.slot \u{a0}) { p { outline-style:solid } }";
+        assert_eq!(scope(css, "x").unwrap().css, "@scope (\u{a0} .x__list) to (.x__slot \u{a0}){p{outline-style:solid}}");
+
+        let css = "@scope (\u{a0}) { .list { outline-style:solid } }";
+        assert_eq!(scope(css, "x").unwrap().css, "@scope (\u{a0}){.x__list{outline-style:solid}}");
+        let css = "@scope (\u{a0}) { p { outline-style:solid } }";
+        let error = scope(css, "x").unwrap_err();
+        assert!(error.contains("styles elements this component does not own"), "{css:?}: {error}");
+    }
+
+    #[test]
+    fn the_compile_fail_selector_examples_fail_for_their_reasons() {
         for (file, reason) in [
+            ("negated_list.css", "`:not(.list) p` styles elements this component does not own"),
+            ("optional_list.css", "`:is(.list, main) p` styles elements this component does not own"),
+            ("related_list.css", "`main:has(.list) p` styles elements this component does not own"),
+            ("sibling_list.css", "`.list + main` styles elements this component does not own"),
+            ("negated_nest.css", "`:not(&)` styles elements this component does not own"),
+            ("invalid_nest_ampersand.css", "`:is(main, [foo=&])` styles elements this component does not own"),
+            ("malformed_selector_url.css", "a malformed unquoted url()"),
+            ("malformed_selector_ff.css", "a string is never closed"),
+            ("malformed_selector_cr.css", "a string is never closed"),
+            ("escaped_sibling.css", "styles elements this component does not own"),
+            ("crossed_selector_blocks.css", "mismatched selector block"),
+            ("crossed_selector_after_not.css", "mismatched selector block"),
+            ("non_ascii_class.css", "non-ASCII characters in a class name"),
+            ("joined_selector_comment.css", "a comment directly between two parts of a selector"),
+            ("braced_custom_property.css", "line 2: a custom property whose value holds a { } block at its outer level"),
+            (
+                "invalid_scope_ampersand.css",
+                "`p` styles elements this component does not own: `@scope (:is(main, [foo=&]))` can start outside the component",
+            ),
+            (
+                "sibling_scope.css",
+                "`p` styles elements this component does not own: `@scope (& + main)` can start outside the component",
+            ),
+            (
+                "negated_scope.css",
+                "`p` styles elements this component does not own: `@scope (:not(.list))` can start outside the component",
+            ),
             (
                 "leaky_scope.css",
                 "`li` styles elements this component does not own: `@scope (main)` can start outside the component",
