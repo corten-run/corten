@@ -6033,7 +6033,18 @@ rules something out.
     base, which moves with the base as much as with the copy; the difference at one commit is the
     copy's alone.)
 
-    Last checked: 2026-11-17, callgrind (valgrind 3.19.0) on `32ea2c896` against `ef35919bb`
+    Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc, `e80694ef7` against merged
+    main `9de7529fc`, using the same `write_request_cost` fixture on both. Three alternating
+    1,200-minus-200 runs, with assertions outside the counted loop. Median instructions per
+    request, main to head: without reads, document GET 19,022 to 19,121, nav GET 17,651 to 17,757,
+    typed patch 18,101 to 18,547 and generic patch 18,128 to 18,579. With reads configured, typed
+    patch 18,175 to 19,274 and generic patch 18,202 to 22,194. Preferred versus legacy typed patches,
+    net of the same comparison on main, measured 537 additional instructions for negotiation,
+    the late mark and cleanup, the deadline extension and the pending-page check. The equivalent
+    generic comparison adds 2,888 instructions beyond the typed one, including 1,512 in the
+    inclusive `at_late_route` capture alone. The remainder includes the captured head's cleanup
+    and its boxed route continuation. Core gzip 15,612 to 16,079 bytes, upload gzip 539 to 559;
+    2026-11-17, callgrind (valgrind 3.19.0) on `32ea2c896` against `ef35919bb`
     (the early heads let go against leaked; `main` at `76b5126b7` merged), three alternating rounds,
     the middleware case's own instructions per function compared by `callgrind_annotate`, the
     runtime's size against `27c29d7d2` by Node's `zlib` (the head merges it), the on-demand record

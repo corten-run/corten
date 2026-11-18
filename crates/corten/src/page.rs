@@ -104,7 +104,7 @@ impl Mode {
     /// ```
     /// use corten::{http::{request::Parts, Method}, prelude::*};
     ///
-    /// /// Whether the answer to this request can draw the layout: a write's may be its own page.
+    /// /// A conservative check: an action write may prefer to draw its own page whole.
     /// fn may_draw_the_layout(parts: &Parts) -> bool {
     ///     let mode = Mode::of(&parts.headers);
     ///     !mode.swaps() || (mode == Mode::Action && !matches!(parts.method, Method::GET | Method::HEAD))
@@ -3606,7 +3606,7 @@ fn accepts_html(headers: &HeaderMap) -> bool {
 /// one: about 600 ns a request measured with `tokio::time::timeout`. Each poll of `fut` starts
 /// with no wait for the body marked, so the mark read when the timer fires is that poll's.
 async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
-    use std::{future::Future, pin::pin, task::Poll};
+    use std::{pin::pin, task::Poll};
     let mut fut = pin!(fut);
     let mut timer = pin!(None::<tokio::time::Sleep>);
     std::future::poll_fn(|cx| {
