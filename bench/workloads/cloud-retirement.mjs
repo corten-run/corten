@@ -560,8 +560,24 @@ export function verifyFailedNativeRetirement(local, state, expectedSha256 = stat
   return record;
 }
 
+// The only unacknowledged action this path may retire is the first, fixed SSH
+// no-op. Keep that invocation unacknowledged, including in terminal state.
+export function unusedBootstrap(state) {
+  const c = state.control, row = c?.ledger[0], request = row?.request;
+  return !!(state.id && state.ip && state.createIntentAt && c?.helperSha256 === guardianSha256
+    && c.monitor?.phase === "pending" && !c.monitor.registrationSha256 && !c.sealed.length && c.ledger.length === 1
+    && request.epoch === "bootstrap" && request.sequence === 0 && !request.seal && !row.localTerminal
+    && request.invocation.channel === "ssh" && request.invocation.deadlineMs === 30000
+    && request.invocation.requestSha256 === digest("set -euo pipefail\ntrue\n")
+    && (state.status === "preparing" ? !state.deletionIntentAt : state.status === "retired" && state.retirement?.kind === "unused")
+    && ["bootstrapReady", "preBootstrapTerminal", "auditIntent", "auditIntents", "archiveSha256", "evidenceSha256", "extractionAttempts",
+      "evidence", "evidenceOutcome", "exitCode", "validation", "collectedAt", "mixedCancellation"].every((key) => state[key] === undefined));
+}
+
 export function unusedHostScript(state) {
-  const files = Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
+  const bootstrap = unusedBootstrap(state);
+  const files = bootstrap ? {} : Object.fromEntries(Object.entries(remoteFiles(state)).map(([name, content]) => [name, digest(content)]));
+  const watcher = bootstrap && `corten-bench-control-${state.token}-${state.control.ledger[0].request.invocation.id}.service`;
   return `/usr/bin/timeout 25 /usr/bin/python3 - ${quote(state.id)} ${quote(state.unit)} ${quote(JSON.stringify(files))} <<'CORTEN_UNUSED_HOST'
 import hashlib, json, os, pathlib, stat, subprocess, sys, time, urllib.request
 host_id, unit, manifest = sys.argv[1:]
@@ -581,7 +597,20 @@ assert values['ActiveState'] == 'inactive' and values['MainPID'] == '0'
 assert values['ExecMainStartTimestamp'] == '' and values['Job'] == ''
 assert values['LoadState'] in ['not-found', 'loaded'] and values['Restart'] == 'no'
 assert values['FragmentPath'] == (('/etc/systemd/system/' + unit) if values['LoadState'] == 'loaded' else '')
-bench = pathlib.Path('/bench')
+${bootstrap ? `def absent(path):
+    try:
+        pathlib.Path(path).lstat()
+    except FileNotFoundError:
+        return
+    raise AssertionError('unexpected bootstrap custody')
+assert values['LoadState'] == 'not-found'
+for path in ['/bench', '/run/corten-bench-control-${state.token}', '/etc/systemd/system/' + unit,
+             '/run/systemd/transient/${watcher}', '/sys/fs/cgroup/system.slice/${watcher}']:
+    absent(path)
+assert not any(entry.name.startswith('corten-bench-control-') for entry in pathlib.Path('/run').iterdir())
+watcher = subprocess.run(['systemctl', 'show', '${watcher}', '--property=LoadState'], capture_output=True, text=True, timeout=5)
+assert watcher.returncode in (0, 1) and watcher.stdout.strip() == 'LoadState=not-found'
+` : ""}bench = pathlib.Path('/bench')
 if os.path.lexists(bench):
     assert bench.is_dir() and not bench.is_symlink()
     for entry in bench.iterdir():
@@ -616,7 +645,10 @@ for entry in pathlib.Path('/proc').iterdir():
     except FileNotFoundError:
         continue
     assert b'/bench/' not in command and b'corten-bench-groups-' not in command
-assert os.getppid() == parent_pid and (parent / 'cmdline').read_bytes() == parent_command
+${bootstrap ? `    assert all(value not in command for value in [b'/bench', b'corten-bench-control-', b'corten-control'])
+absent('/run/corten-bench-control-${state.token}')
+absent('/bench')
+` : ""}assert os.getppid() == parent_pid and (parent / 'cmdline').read_bytes() == parent_command
 assert os.readlink(parent / 'exe') == '/usr/bin/timeout'
 print(json.dumps(dict(schema='benchmark-unused-host/v1', hostId=host_id, unit=unit,
                      observedAtMs=int(time.time()*1000), unused=True)))

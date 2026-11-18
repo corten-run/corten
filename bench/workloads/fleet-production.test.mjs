@@ -95,10 +95,11 @@ const synthetic = (${syntheticDependencies.toString()})({
 }
 
 test("captured production composition ignores arbitrary hints, binds POST identity and propagates remote options", { timeout: 30000 }, async (t) => {
-  const p = fixture(t);
+  const p = fixture(t, "ssh-late");
   assert.equal(await fleetMain(await p.prepare(), p.deps), 3, JSON.stringify(p.output.at(-1)));
   assert.equal(p.workers.length, 1, "bootstrap must not admit any later production child");
   const fleet = readFleet(p.h.base, "r21").manifest, events = p.events();
+  assert.equal(fleet.jobs[0].group, "catalog-page");
   assert.equal(p.output.at(-1).groups[0].outcome, "pending");
   assert.ok(p.output.at(-1).groups.slice(1).every((row) => row.outcome === "deferred"));
   for (const [i, group] of groupNames.slice(0, 1).entries()) {
@@ -120,6 +121,10 @@ test("captured production composition ignores arbitrary hints, binds POST identi
     assert.deepEqual(saved.control.sealed, ["bootstrap"]);
     assert.equal(saved.control.monitor.phase, "closed");
     assert.equal(events.filter((row) => row.group === group && row.boundary === "monitor").length, 1);
+    const firstSsh = events.filter((row) => row.group === group && row.boundary === "ssh").slice(0, 3);
+    assert.ok(firstSsh.every((row) => row.options.input === "set -euo pipefail\ntrue\n"));
+    assert.deepEqual(firstSsh.map((row) => row.argv.at(-1) === "/bin/bash -s"), [true, true, false]);
+    assert.equal(saved.control.ledger[0].request.invocation.requestSha256, digest(firstSsh[0].options.input));
     const script = uploads.find((row) => row.to.endsWith("/job.sh")).content;
     assert.ok(script.includes(`--group '${group}'`)); assert.ok(script.includes(`--commit '${commit}'`));
     assert.ok(script.includes("--state-dir '/bench/campaign'"));

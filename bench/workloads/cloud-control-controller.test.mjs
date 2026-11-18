@@ -159,19 +159,28 @@ test("a closed supervised reservation refuses legacy or differently registered i
 });
 
 test("controller persists earliest SSH and every SFTP intent before spawn, then seals including itself", async (t) => {
-  const h = harness(t, { active: true }), controls = [];
-  const state = await h.launch({ run(binary, args, timeout, allowFail, expiry, registration) {
+  const h = harness(t, { active: true }), controls = [], probes = []; let now = 0;
+  const state = await h.launch({ now: () => now, sleep: async (ms) => { now += ms; }, run(binary, args, timeout, allowFail, expiry, registration) {
+    if (binary === "ssh" && !registration) {
+      assert.equal(args.at(-1), "true"); assert.deepEqual(h.saved().control.ledger, []);
+      assert.equal(timeout, 20000); assert.equal(allowFail, true);
+      probes.push(now);
+      if (now < 15000) return { status: 255, stdout: "", stderr: "" };
+    }
     if (registration?.stream) {
       assert.equal(h.saved().control.monitor.phase, "pending"); assert.deepEqual(h.saved().control.sealed, []);
       assert.equal(registration.expected.id, h.saved().control.monitor.id);
-    } else if (["ssh", "scp"].includes(binary)) {
+    } else if (registration) {
       const saved = h.saved(), row = saved.control.ledger.at(-1);
       assert.equal(row.localTerminal, false); assert.deepEqual(row.request, registration.request);
       assert.equal(registration.request.helperSha256, guardianSha256);
+      if (registration.request.sequence === 0) { assert.equal(allowFail, true); assert.equal(timeout, 30000); }
       controls.push({ binary, script: args.at(-1), request: registration.request, command: registration.command });
     }
     return h.run(binary, args, timeout, allowFail, expiry, registration);
   } }).launch();
+  assert.deepEqual(probes, [0, 5000, 10000, 15000]); assert.equal(h.creates, 1);
+  assert.equal(controls.filter((c) => c.script === "true").length, 1);
   assert.equal(controls[0].script, "true"); assert.equal(controls[0].request.sequence, 0);
   assert.ok(controls[0].command.includes(" -c "));
   assert.ok(controls.filter((c) => c.binary === "scp").length === 3);
@@ -187,14 +196,31 @@ test("controller persists earliest SSH and every SFTP intent before spawn, then 
 
 test("ambiguous earliest SSH preserves its pre-spawn intent, both locks and the host without retry", async (t) => {
   const h = harness(t, { active: true }); let ssh = 0;
-  await assert.rejects(h.launch({ run(binary, ...args) {
-    if (binary === "ssh") { ssh++; throw Object.assign(new Error("synthetic disconnect"), { controlTreeUncertain: true }); }
-    return h.run(binary, ...args);
+  await assert.rejects(h.launch({ run(binary, args, timeout, allowFail, expiry, registration) {
+    if (binary === "ssh" && registration) { ssh++; throw Object.assign(new Error("synthetic missing acknowledgement"), { controlTreeUncertain: true }); }
+    return h.run(binary, args, timeout, allowFail, expiry, registration);
   } }).launch(), (error) => error.controlTreeUncertain === true);
   assert.equal(ssh, 1); assert.equal(h.saved().control.ledger.length, 1);
   assert.equal(h.saved().control.ledger[0].localTerminal, false);
   assert.ok(existsSync(join(h.local, "operation.lock"))); assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
   assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+});
+
+test("uncertain readiness, expired budget and cancellation cannot dispatch a tracked request", async (t) => {
+  for (const mode of ["uncertain", "expired", "cancelled"]) {
+    const h = harness(t); let probes = 0, at = 0;
+    await assert.rejects(h.launch({ now: () => at, run(binary, ...args) {
+      if (binary !== "ssh") return h.run(binary, ...args);
+      probes++;
+      if (mode === "uncertain") throw Object.assign(new Error("uncertain process tree"), { controlTreeUncertain: true });
+      if (mode === "expired") at = 120000;
+      else h.flags.cancelled = true;
+      return { status: 255 };
+    } }).launch(), /uncertain process tree|readiness budget|controller cancelled/);
+    assert.equal(probes, 1); assert.deepEqual(h.saved().control.ledger, []); assert.equal(h.creates, 1); assert.equal(h.deletes, 0);
+    assert.equal(existsSync(join(h.local, "operation.lock")), mode === "uncertain");
+    assert.equal(existsSync(join(h.base, ".groups-launch.lock")), mode === "uncertain");
+  }
 });
 
 test("sealed native collection refuses before SSH instead of turning an authorized status poll into an intrusion", async (t) => {

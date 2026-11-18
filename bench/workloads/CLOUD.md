@@ -324,6 +324,35 @@ content hash, then requires a new fresh host probe before writing the current
 receipt and intent. It never overwrites unknown evidence, treats an old observation
 as current permission or repeats a saved deletion intent.
 
+For [#1618 Benchmark r21: first catalog SSH setup has no completion receipt and leaves an unused droplet outside ordinary recovery](https://github.com/corten-run/corten/issues/1618),
+use the child collector's opt-in `--collect --unused-bootstrap-known-hosts ABSOLUTE_VERIFIED_KEY_FILE`.
+It accepts only `preparing` with a bound host, a pending unregistered monitor, and the sole
+unacknowledged sequence-zero, 30-second bootstrap SSH `true` request with no seal.
+It never acknowledges or retries that request. Ordinary `--collect` still refuses it.
+
+The original local controller, provider worker, SSH and their descendants must be
+affirmatively accounted for and gone. No elapsed timeout, absent PID or saved state
+alone proves that. Preserve original locks and intents; the controller never clears
+or takes over an old lock. Only after that local proof may the operator archive and
+release the exclusive child and fleet locks under the existing custody policy. Keep
+the proof and original lock bytes outside the fleet and child state roots. Separately verify the SSH
+host key against the exact provider/metadata identity and supply a local OpenSSH
+`known_hosts` file for that key; the controller does not populate it or fall back to
+global host keys. `--print-approval` binds the exact saved reservation, verified-key
+bytes, old measured commit and new controller commit. Supplying the exact approval
+attests to both operator checks above; it is not a way to clear retained locks.
+
+Execution rechecks the saved account, host and IP and requires a **fresh** pinned SSH
+unused proof, also proving no `/bench`, unit file, guardian storage, control watcher
+or benchmark process. It uses an observation-only command without installing a
+guardian. Ambiguous, active or foreign custody is preserved. As with other unused
+retirement, confirm deletion with an exact-ID 404; after a recorded intent a new
+approval can only verify the saved receipt and check absence. The original fleet
+intent and all sibling admissions stay unchanged. The repaired child controller must
+be clean and merged, and its source must descend from the measured commit if different.
+This exact exception does not use the native verifier or let ordinary collection or
+audit run from a mismatched checkout.
+
 If the common setup itself ran and failed before native entry, collection first
 preserves the immutable terminal archive and its raw nonzero exit. A separate
 pre-entry packaging check uses only the base image's Python and GNU tools, not
@@ -790,7 +819,12 @@ SHA256-checked on the owned host before installation/start. The packer requires 
 regular archive instead of overwriting it, and publishes a fresh private GNU tar
 archive with exclusive hard-link creation; a collision does not replace evidence.
 One remote unit start is attempted; there is no forced power cycle, restart or
-retry launch. SSH readiness is at most 40 bounded probes. The job has the existing
+retry launch. After confirmed create and before dispatching any tracked SSH, the
+controller allows at most 24 authenticated SSH no-op probes, paced five seconds
+apart after a refusal, in a shared two-minute budget. It retries only a settled SSH
+transport failure, not a timeout, cancellation
+or uncertain process tree. Each probe rechecks the bound allocation. The first
+guardian request still dispatches once; missing completion retains custody. The job has the existing
 48-hour systemd lifetime; control calls have explicit timeouts no greater than
 15 minutes. Collection does not poll a running unit. It requires exact loaded unit
 ID/path, `Restart=no`, a terminal exit type, prior start and no live MainPID before

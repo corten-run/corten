@@ -13,7 +13,7 @@ import { fleetPlan } from "./cloud-contract.mjs";
 import { groupNames } from "./registry.mjs";
 import { sourceUrl } from "./cloud-remote.mjs";
 import { registration as streamRegistration } from "./test-fixtures/control-stream-fixture.mjs";
-import { controlRegistration } from "./cloud-control-runtime.mjs";
+import { controlRegistration, controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { deploymentSha256 } from "./deployments.mjs";
 import { digest } from "./cloud-local.mjs";
 
@@ -38,8 +38,9 @@ function productionHarness(t, flags = {}) {
     const args = [...argv];
     if (binary === "doctl") args.splice(args.indexOf("--http-retry-max"));
     const request = existsSync(h.statePath) ? h.saved().control?.ledger.at(-1)?.request : undefined;
+    const trackedSsh = binary === "ssh" && argv.at(-1) !== "/bin/bash -s";
     if (binary === "ssh") {
-      const control = request && controlRegistration(request);
+      const control = trackedSsh && controlRegistration(request);
       if (control) assert.equal(argv.at(-1), control.command);
       const input = control ? options.input.slice(control.inputPrefix.length) : options.input;
       args[args.length - 1] = input.replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
@@ -55,7 +56,7 @@ function productionHarness(t, flags = {}) {
     if (flags.uploadHashError && binary === "ssh" && args.at(-1).includes("sha256sum --check")) return { status: 1, stderr: "private" };
     const result = flags.sealFail && binary === "ssh" && args.at(-1) === ":"
       ? { status: 1, stdout: "", stderr: "" } : h.run(binary, args, options.timeout);
-    return request && binary === "ssh" ? { ...result, stderr: "CORTEN_CONTROL " + request.invocation.id + " " + "d".repeat(64) + "\nCORTEN_RESULT " + request.invocation.id + " " + result.status + "\n" } : result;
+    return trackedSsh ? { ...result, stderr: "CORTEN_CONTROL " + request.invocation.id + " " + "d".repeat(64) + "\nCORTEN_RESULT " + request.invocation.id + " " + result.status + "\n" } : result;
   };
   const deps = { spawn, providerRequest: syntheticProviderRequest(h, (binary, argv, timeout) => {
     calls.push([binary, argv, { timeout }]); return h.run(binary, argv, timeout, true);
@@ -81,6 +82,73 @@ function productionHarness(t, flags = {}) {
   async function approve(mode) { const values = args(mode); await productionMain([...values, "--print-approval"], deps); return [...values, "--approve-reviewed-merged-ready", stdout.at(-1).approvalSha256]; }
   return { h, calls, stdout, deps, args, approve };
 }
+
+function unusedBootstrapAttempt(t, flags = {}, script = "true") {
+  const p = productionHarness(t, flags);
+  p.h.seed();
+  p.h.change((s) => {
+    s.status = "preparing"; s.commit = "7f8fd11c62b95624a083536ead5630176f826586";
+    s.control = { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
+      monitor: { schema: "benchmark-supervised-control/v1", id: "f".repeat(32), phase: "pending" } };
+    s.control.ledger.push({ request: controlRequest(s, "ssh", [`root@${s.ip}`, script], 30000, "bootstrap"), localTerminal: false });
+  });
+  const key = join(p.h.temp, "verified-host-key"), args = [...p.args(), "--unused-bootstrap-known-hosts", key];
+  writeFileSync(key, "synthetic operator-verified host key\n");
+  async function approve() {
+    assert.equal(await productionMain([...args, "--print-approval"], p.deps), 3);
+    return [...args, "--approve-reviewed-merged-ready", p.stdout.at(-1).approvalSha256];
+  }
+  return { ...p, key, approve };
+}
+
+test("approved old-source retirement preserves the missing first SSH receipt and only deletes after pinned unused proof", async (t) => {
+  const p = unusedBootstrapAttempt(t), state = p.h.saved();
+  await assert.rejects(p.h.task().collect(), /monitor not registered/, "stock path originally refuses the saved shape");
+  await assert.rejects(productionMain([...p.args(), "--print-approval"], p.deps), /measured integrated checkout/, "ordinary collection must stay exact-source");
+  const args = await p.approve();
+  assert.deepEqual(p.stdout.at(-1).recovery, { measuredCommit: state.commit, hostId: state.id, ip: state.ip,
+    knownHostsSha256: digest(readFileSync(p.key)), policy: "first-ssh-unused-only-no-qualification" });
+  assert.match(p.stdout.at(-1).declaration, /local-process-tree-gone/);
+  assert.equal(await productionMain(args, p.deps), 1);
+  const ssh = p.calls.filter(([binary]) => binary === "ssh"); assert.equal(ssh.length, 1);
+  assert.equal(ssh[0][1].at(-1), "/bin/bash -s");
+  assert.ok(ssh[0][1].includes("StrictHostKeyChecking=yes") && ssh[0][1].includes("GlobalKnownHostsFile=none"));
+  assert.ok(ssh[0][2].input.includes("unexpected bootstrap custody"));
+  const end = p.h.saved(); assert.equal(end.commit, state.commit); assert.deepEqual(end.control, state.control);
+  assert.equal(end.status, "retired"); assert.equal(end.retirement.kind, "unused"); assert.ok(end.destroyedAt);
+  assert.equal(end.validation, undefined); assert.equal(end.archiveSha256, undefined); assert.equal(p.h.creates, 0);
+  assert.equal(await productionMain(await p.approve(), p.deps), 1); assert.equal(p.h.deletes, 1);
+  assert.equal(p.calls.filter(([binary]) => binary === "ssh").length, 1);
+});
+
+test("first SSH recovery does not take over custody, replay mutations or use stale or foreign proofs", async (t) => {
+  for (const mode of ["operation.lock", ".groups-launch.lock", "monitor-registration.json", "mutation", "unmerged", "key", "foreign", "ambiguous-proof", "lost-delete"]) {
+    const p = unusedBootstrapAttempt(t, mode === "lost-delete" ? { deleteLost: true } : {}, mode === "mutation" ? "mkdir /bench" : "true");
+    if (mode === "mutation") { await assert.rejects(p.approve(), /not an unacknowledged first SSH no-op/); continue; }
+    const args = await p.approve(), before = readFileSync(p.h.statePath);
+    let custody;
+    if (mode.endsWith(".lock") || mode.endsWith(".json")) {
+      custody = join(mode === ".groups-launch.lock" ? p.h.base : p.h.local, mode);
+      writeFileSync(custody, "historical custody", { flag: "wx" });
+    }
+    if (mode === "unmerged") {
+      const spawn = p.deps.spawn;
+      p.deps.spawn = (binary, argv, opts) => binary === "git" && argv[0] === "merge-base" ? { status: 1 } : spawn(binary, argv, opts);
+    }
+    if (mode === "key") writeFileSync(p.key, "different host-key bytes");
+    if (mode === "foreign") p.h.hosts([{ id: 123, name: "foreign" }]);
+    if (mode === "ambiguous-proof") p.h.flags.unusedProof = { unused: false };
+    await assert.rejects(productionMain(args, p.deps));
+    if (mode === "lost-delete") {
+      assert.equal(p.h.deletes, 1); assert.ok(p.h.saved().deletionIntentAt); assert.equal(p.h.saved().destroyedAt, undefined);
+      assert.ok(existsSync(join(p.h.local, "operation.lock")));
+      await assert.rejects(productionMain(await p.approve(), p.deps), /EEXIST/); assert.equal(p.h.deletes, 1); continue;
+    }
+    assert.equal(p.h.deletes, 0); assert.deepEqual(readFileSync(p.h.statePath), before);
+    if (custody) assert.equal(readFileSync(custody, "utf8"), "historical custody");
+    assert.equal(p.calls.filter(([binary]) => binary === "ssh").length, mode === "ambiguous-proof" ? 1 : 0);
+  }
+});
 
 async function supervisedAudit(t, group, flags = {}) {
   flags.active = true;

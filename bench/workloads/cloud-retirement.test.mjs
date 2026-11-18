@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fleetPlan, reservation, selection } from "./cloud-contract.mjs";
 import { commit } from "./cloud-fixtures.mjs";
+import { controlRequest, guardianSha256 } from "./cloud-control-runtime.mjs";
 import { setupEvidence, terminalSetupScript, unusedHostScript } from "./cloud-retirement.mjs";
 import { digest } from "./cloud-local.mjs";
 import { bootstrapMarker, remoteFiles } from "./cloud-remote.mjs";
@@ -53,9 +54,17 @@ class Entry:
     def is_dir(self): return True
     def is_symlink(self): return mode == 'symlink'
     def stat(self): return SimpleNamespace(st_size=len(self.read_bytes()))
-    def lstat(self): return SimpleNamespace(st_mode=stat.S_IFREG)
+    def lstat(self):
+        if config.get('bootstrap'):
+            if mode == 'custody-unreadable' and self.path == '/bench': raise PermissionError('private details')
+            present = {'partial': '/bench', 'dangling-bench': '/bench', 'guardian': '/run/corten-bench-control-' + config['token'],
+                       'unit-file': '/etc/systemd/system/' + unit, 'watcher-file': '/run/systemd/transient/' + config['watcher'],
+                       'watcher-cgroup': '/sys/fs/cgroup/system.slice/' + config['watcher']}
+            if self.path != present.get(mode): raise FileNotFoundError(self.path)
+        return SimpleNamespace(st_mode=stat.S_IFREG)
     def iterdir(self):
         if self.path == '/proc': return [Entry('/proc/' + pid) for pid in (['2', '3', '4', '5'] if mode == 'other-timeout' else ['2', '3', '4'])]
+        if self.path == '/run' and mode == 'foreign-guardian': return [Entry('/run/corten-bench-control-foreign')]
         if mode in ['partial', 'file-mismatch']: return [Entry('/bench/job.sh')]
         if mode == 'bench-data': return [Entry('/bench/campaign')]
         return []
@@ -64,12 +73,16 @@ class Entry:
         if self.path == '/proc/4/cmdline': return parent_cmdline()
         if self.path == '/proc/5/cmdline': return parent_bytes
         assert self.path != '/proc/2/cmdline'
-        if self.path.endswith('/cmdline'): return b'node /bench/job.sh' if mode == 'process' else b'ordinary'
+        if self.path.endswith('/cmdline'):
+            return {'process': b'node /bench/job.sh', 'guardian-process': b'/usr/bin/python3 -I -c corten-control'}.get(mode, b'ordinary')
         if mode == 'file-mismatch': return b'changed'
         return config['files'].get(self.name, 'unexpected').encode()
 def run(args, **kwargs):
     assert kwargs == dict(capture_output=True, text=True, timeout=5)
     if args[:2] == ['systemctl', 'show']:
+        if config.get('bootstrap') and args[2] == config['watcher']:
+            assert args[3:] == ['--property=LoadState']
+            return SimpleNamespace(returncode=0, stdout='LoadState=' + ('loaded' if mode == 'watcher-loaded' else 'not-found'))
         assert args[2] == unit
         values = dict(Id=unit, LoadState='not-found', ActiveState='inactive', MainPID='0', FragmentPath='', ExecMainStartTimestamp='', Job='', Restart='no')
         if mode == 'loaded': values.update(LoadState='loaded', FragmentPath='/etc/systemd/system/' + unit)
@@ -108,6 +121,23 @@ test("fixed unused-host program accepts only never-started idle host observation
     assert.equal(result.unused, positive, mode);
     assert.equal(result.schema, "benchmark-unused-host/v1");
     if (positive) assert.deepEqual(result, { schema: "benchmark-unused-host/v1", hostId: "123", unit: state.unit, observedAtMs: 1000000, unused: true });
+  }
+});
+
+test("interrupted first SSH probe positively proves absence of the guardian and all benchmark setup", { skip: !available }, () => {
+  const state = { ...reservation({ round: "r21", commit, token: "0123456789abcdef" }), id: "123", ip: "192.0.2.10", status: "preparing",
+    createIntentAt: "2026-11-18T00:00:00.000Z", control: { helperSha256: guardianSha256, ledger: [], sealed: [], monitor: { phase: "pending" } } };
+  const request = controlRequest(state, "ssh", [`root@${state.ip}`, "true"], 30000, "bootstrap");
+  state.control.ledger.push({ request, localTerminal: false });
+  const watcher = `corten-bench-control-${state.token}-${request.invocation.id}.service`;
+  const program = unusedHostScript(state).split("<<'CORTEN_UNUSED_HOST'\n")[1].split("\nCORTEN_UNUSED_HOST")[0];
+  for (const mode of ["empty", "wrong-host", "active", "partial", "dangling-bench", "custody-unreadable", "loaded", "unit-file", "guardian",
+    "foreign-guardian", "guardian-process", "watcher-file", "watcher-cgroup", "watcher-loaded", "jobs", "process", "docker"]) {
+    const r = spawnSync(python, ["-c", fixture], { input: JSON.stringify({ mode, unit: state.unit, id: state.id, token: state.token, watcher,
+      files: {}, manifest: "{}", program, bootstrap: true }), encoding: "utf8", timeout: 5000, maxBuffer: 4096, windowsHide: true });
+    assert.equal(r.error, undefined, mode); assert.equal(r.stderr, "", mode);
+    assert.equal(r.status, mode === "empty" ? 0 : 1, mode);
+    assert.equal(JSON.parse(r.stdout).unused, mode === "empty", mode);
   }
 });
 
