@@ -822,10 +822,8 @@ async fn an_unacknowledged_marker_does_not_block_other_retirements() {
         let item = Item { id: "x".repeat(LOW_PAYLOAD), n: 1 };
         write.commit(&[Change::Upsert { id: &item.id, value: &item }]).await.unwrap();
     }
-    set(&pool, "delayed", 2, None).await;
     set(&pool, "small", 1, None).await;
-    set(&pool, "small", 2, None).await;
-    let rows = wait_pending(&pool, 5).await;
+    let rows = wait_pending(&pool, 3).await;
     let delayed = &rows[0];
 
     let observer = async_nats::connect(&nats).await.unwrap();
@@ -860,9 +858,8 @@ async fn an_unacknowledged_marker_does_not_block_other_retirements() {
 
     let mut messages = stream_messages(&delayed_stream).await;
     expect_reload(&mut messages, &delayed_subject, delayed).await;
-    let pending = wait_pending(&pool, 2).await;
-    assert_eq!((pending[0].id, pending[1].id), (delayed.id, rows[2].id));
-    assert_eq!(delayed_stream.info().await.unwrap().state.messages, 1, "the delayed feed's successor was not sent");
+    let pending = wait_pending(&pool, 1).await;
+    assert_eq!(pending[0].id, delayed.id);
     let warning = "WARN corten::feed message=reload marker publish failed; outbox row remains pending";
     let fields = format!("id={} feed=\"delayed\" error=deadline has elapsed", delayed.id);
     assert!(logs.0.lock().unwrap().iter().any(|line| line.starts_with(warning) && line.contains(&fields)));
@@ -873,8 +870,7 @@ async fn an_unacknowledged_marker_does_not_block_other_retirements() {
     wait_pending(&pool, 0).await;
     let retired: Vec<i64> = sqlx::query_scalar("SELECT id FROM retirements ORDER BY id").fetch_all(&pool).await.unwrap();
     assert_eq!(retired, rows.iter().map(|row| row.id).collect::<Vec<_>>());
-    expect_patch(&mut messages, &delayed_subject, 2, 2).await;
-    assert_eq!(delayed_stream.info().await.unwrap().state.messages, 2);
+    assert_eq!(delayed_stream.info().await.unwrap().state.messages, 1);
 
     relay.abort();
     assert!(relay.await.unwrap_err().is_cancelled());
@@ -1016,7 +1012,7 @@ async fn the_relay_retries_an_acknowledgement_error_that_is_not_a_size_refusal()
 }
 
 #[tokio::test]
-async fn a_broker_disconnect_does_not_reorder_a_feed() {
+async fn a_broker_disconnect_can_reorder_a_feed_but_the_follower_recovers() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let schema = key("interrupted_");
     let pool = schema_pool(&db, &schema).await;
@@ -1027,6 +1023,8 @@ async fn a_broker_disconnect_does_not_reorder_a_feed() {
     let options = Arc::new(Options { stream: schema.to_uppercase(), subject_prefix: schema.clone(), ..Options::default() });
     let observer = async_nats::connect(&nats).await.unwrap();
     let js = jetstream::new(observer.clone());
+    let logs = Capture::default();
+    let _capture = tracing::subscriber::set_default(logs.clone());
     let hub = hub::Hub::new(pool.clone(), Items, options.clone());
     hub::start(hub.clone(), js.clone()).await.unwrap();
     let follower = hub.feed("feed").await.unwrap().unwrap();
@@ -1071,17 +1069,18 @@ async fn a_broker_disconnect_does_not_reorder_a_feed() {
     let ids = |rows: &[store::Pending]| rows.iter().map(|r| r.id).collect::<Vec<_>>();
     assert_eq!(ids(&pending), ids(&rows), "an interrupted batch stays pending for retry");
     let mut stream = js.get_stream(&options.stream).await.unwrap();
-    let prefix = stream.get_raw_message(1).await.unwrap();
     let feed_subject = relay::subject(&options, "feed");
     let other_subject = relay::subject(&options, "other");
+    let prefix = stream.get_raw_message(1).await.unwrap();
     assert_eq!(prefix.subject.as_str(), feed_subject);
     assert_eq!(serde_json::from_slice::<serde_json::Value>(&prefix.payload).unwrap()["seq"], 1);
-
-    // The retry deduplicates the prefix and publishes a marker in place of the oversized row.
+    // Later patches can arrive on the replacement socket, or on the retry before its
+    // reload marker. In either case the stream is not in feed order after the retry.
     wait_pending(&pool, 0).await;
     assert_eq!(stream.info().await.unwrap().state.messages, 256, "no extra messages within the dedup window");
     let mut messages = stream_messages(&stream).await;
-    let mut next = 1;
+    let mut sequences = Vec::new();
+    let mut marker = None;
     let mut other = 0;
     for _ in 0..256 {
         let msg = tokio::time::timeout(Duration::from_secs(10), messages.next()).await.unwrap().unwrap().unwrap();
@@ -1091,17 +1090,42 @@ async fn a_broker_disconnect_does_not_reorder_a_feed() {
             continue;
         }
         assert_eq!(msg.subject.as_str(), feed_subject);
-        if next == 2 {
-            assert!(msg.payload.is_empty(), "a later patch overtook the missing patch's reload marker");
-            assert_eq!(msg.headers.as_ref().unwrap().get(RELOAD_HEADER).unwrap().as_str(), "2");
+        if let Some(seq) = msg.headers.as_ref().unwrap().get(RELOAD_HEADER) {
+            assert!(msg.payload.is_empty());
+            assert_eq!(seq.as_str(), "2");
+            assert!(marker.replace(sequences.len()).is_none(), "one reload marker");
         } else {
-            assert_eq!(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"], next);
+            sequences.push(serde_json::from_slice::<serde_json::Value>(&msg.payload).unwrap()["seq"].as_u64().unwrap());
         }
-        next += 1;
     }
-    assert_eq!((next, other), (256, 1));
+    assert_eq!(other, 1);
+    assert!(marker.unwrap() > 1, "at least one later same-feed patch was stored before the reload marker");
+    sequences.sort_unstable();
+    assert_eq!(sequences, std::iter::once(1).chain(3..=255).collect::<Vec<_>>());
     eventually("the loaded follower to catch up", || follower.seq() == 255).await;
     assert_eq!(follower.read(|rows| rows["a"].n), 255);
+    assert!(logs.0.lock().unwrap().iter().any(|log| log.contains("gap in the feed's patches: reloading it")));
+
+    // Omit the message ID to make the broker store a duplicate without waiting for the
+    // window to expire. The next write must reach the same live follower as a normal patch,
+    // with no duplicate patch or sync event ahead of it.
+    let mut live =
+        corten::http::Body::new(follower.live(Since(Some(corten::feed::Cursor::new(follower.generation(), 255)))).into_body())
+            .into_data_stream();
+    let opening = live.next().await.unwrap().unwrap();
+    assert!(String::from_utf8_lossy(&opening).starts_with("retry:"));
+    let mut headers = async_nats::HeaderMap::new();
+    headers.insert("Feed-Generation", rows[0].generation.as_str());
+    let duplicate = js.publish_with_headers(feed_subject, headers, rows[0].body.clone().into()).await.unwrap().await.unwrap();
+    assert_eq!(duplicate.sequence, 257);
+    assert!(!duplicate.duplicate, "JetStream stored the repeated notification");
+    assert_eq!(set(&pool, "feed", 256, None).await.seq, Some(256));
+    let frame = tokio::time::timeout(Duration::from_secs(10), live.next()).await.unwrap().unwrap().unwrap();
+    let frame = std::str::from_utf8(&frame).unwrap();
+    assert!(frame.starts_with(&format!("event: patch\nid: {}-256\ndata: ", follower.generation())), "{frame}");
+    assert_eq!(follower.seq(), 256);
+    assert_eq!(follower.read(|rows| rows["a"].n), 256);
+    wait_pending(&pool, 0).await;
 
     relay.abort();
     assert!(relay.await.unwrap_err().is_cancelled());
