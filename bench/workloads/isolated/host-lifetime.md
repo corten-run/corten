@@ -34,7 +34,8 @@ To exercise the catalog build path without renting a benchmark host, the
 **Catalog observer diagnostic** workflow runs Corten's ordinary single-app
 catalog build and checks both data sources on a fresh hosted Linux runner.
 It runs on manual dispatch or changes to the probe itself, not on main pushes.
-Inspect the command outcome, host replay and native check summary together.
+Read the command outcome, host sample counts and failed-census timings in the
+Actions log. The job does not upload files from the build or results directory.
 An interrupted build is a failed diagnostic, not a zero-throughput app.
 There are no timed requests, other contenders or official-round results.
 

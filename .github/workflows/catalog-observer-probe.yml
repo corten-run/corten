@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   probe:
@@ -35,22 +35,44 @@ jobs:
           nonce=$(node -p 'require("node:crypto").randomBytes(8).toString("hex")')
           unit="corten-bench-groups-r900000001-$nonce.service"
           test "$(systemctl show "$unit" --property=LoadState --value)" = not-found
-          sudo systemd-run --quiet --pipe --wait --collect --unit="$unit" \
+          work=$(mktemp -d "$RUNNER_TEMP/catalog-bootstrap.XXXXXXXX")
+          node --input-type=module - "$unit" > "$work/entry.sh" <<'JS'
+          import {supervisorBootstrap} from './bench/workloads/cloud-contract.mjs';
+          console.log('set -euo pipefail');
+          console.log(supervisorBootstrap(process.argv[2]));
+          console.log('exec "$1" scripts/catalog-observer-probe.mjs');
+          JS
+          # Wait on the systemd client so Bash can handle TERM while the unit runs.
+          cleanup() {
+            rc=$?
+            trap - EXIT
+            trap '' INT TERM HUP
+            # A signal can arrive before systemd-run registers the transient unit.
+            client=${client:-${!:-}}
+            for ((i=0; i<30; i++)); do
+              [[ -n $client ]] && kill -0 "$client" 2>/dev/null || break
+              [[ $(systemctl show "$unit" -p LoadState --value) == not-found ]] || break
+              sleep 1
+            done
+            if [[ $(systemctl show "$unit" -p Description --value) == "Catalog diagnostic $nonce" ]]; then
+              timeout 165 sudo systemctl stop "$unit" || rc=1
+            fi
+            for ((i=0; i<10; i++)); do
+              [[ $(systemctl show "$unit" -p LoadState --value) != not-found ]] || break
+              sleep 1
+            done
+            test "$(systemctl show "$unit" -p LoadState --value)" = not-found || rc=1
+            if [[ -n $client ]] && kill -0 "$client" 2>/dev/null; then rc=1; fi
+            exit "$rc"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT TERM HUP
+          sudo systemd-run --quiet --pipe --wait --collect --unit="$unit" --description="Catalog diagnostic $nonce" \
             --uid="$(id -u)" --gid="$(id -g)" --working-directory="$PWD" \
             --property='Delegate=cpu cpuset memory pids' --property=DelegateSubgroup=supervisor \
             --property=KillMode=control-group --property=Restart=no --property=RuntimeMaxSec=2100 \
             --property=TimeoutStopSec=150 --setenv="RUNNER_TEMP=$RUNNER_TEMP" --setenv="HOME=$HOME" \
             --setenv="PATH=$(dirname "$(command -v node)"):/usr/local/bin:/usr/bin:/bin" \
-            "$(command -v node)" scripts/catalog-observer-probe.mjs
-      - name: Retain observations, including failed attempts
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: catalog-observer-diagnostic
-          retention-days: 7
-          path: |
-            ${{ runner.temp }}/catalog-observer-probe/
-            bench/catalog/results/c900000001/summary.json
-            bench/catalog/results/c900000001/image-corten.json
-            bench/catalog/results/c900000001/build-corten.log
-            bench/catalog/results/c900000001/run.log
+            /bin/bash "$work/entry.sh" "$(command -v node)" &
+          client=$!
+          wait "$client"
