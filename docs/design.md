@@ -6244,9 +6244,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
 | `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied raw, without selector checks or class prefixes. Their names (animation, font family, counter style, palette and feature-value names) remain global: use component-qualified names when private. |
 | `@page` | Name must start with the component's name and `-` (written by the author); body copied raw, including margin at-rules. The name remains global. An unnamed page or a name without that prefix is refused. |
 
-   Raw bodies still lose comments and extra whitespace and receive registered-property
-   renaming; their nested block at-rules are copied raw too (for example `@styleset` and
-   `@top-left`), not independently checked against this list. The statement parser recognizes
+   Raw bodies still lose comments and extra whitespace, and references to registered custom
+   properties are renamed there too. Their nested block at-rules are copied raw (for example
+   `@styleset` and `@top-left`), not independently checked against this list. The statement parser recognizes
    lowercase `@layer` (copied) and `@charset` (discarded: the generated stylesheet is UTF-8).
    `@import` is refused because it loads a stylesheet the component does not own;
    `@custom-media` is refused because tokens define breakpoints. Unrecognized rules such as
@@ -6255,6 +6255,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `@layer_other` are not supported. Unknown statements are refused even inside raw bodies.
     Escaped or non-ASCII at-rule and class names are not supported.
 
+   A registered custom property's name is prefixed only where it names that property: in its
+   registration, declaration names, `var()` and `inherit()` lookups, style queries,
+   `@supports` declaration tests, and property lists in `transition`, `transition-property` and
+   `will-change`. An `attr()` name or a bare dashed identifier in another namespace is not a
+   custom-property reference. This leaves anchor, container, timeline, view-transition and
+   font-palette names unchanged, even if they share a spelling with a registered property.
+
    A `@position-try` name, like an `@property` name, starts with `--` and uses ASCII letters,
    digits, `-` and `_`, without `__` (reserved for the component prefix). References can use
    CSS escapes. The scoping pass prefixes only names defined in this file. The values of
@@ -6262,7 +6269,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
    [CSS Syntax](https://www.w3.org/TR/css-syntax-3/#tokenization) tokens, and only an ident
    token equal to a local name is renamed, where the value takes an option: at its top level,
    in a `var()`, `env()`, `attr()` or `inherit()` fallback, and in an `if()` branch's value. A
-   lookup's name and an `if()` condition (`style(--x: 1)`) name custom properties, a dashed
+   lookup's name and an `if()` condition (`style(--x: 1)`) are not option names, a dashed
    function token (`--x()`) calls a custom function, and strings, URLs, anchor names, other
    functions' arguments and unrelated declarations are not position references. The macro
     matches whole names from the source before normalizing whitespace and comments as in

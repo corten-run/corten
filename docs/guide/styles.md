@@ -197,9 +197,9 @@ Component CSS supports the block at-rules below. Their names are ASCII case-inse
 | `@keyframes`, `@font-face`, `@counter-style`, `@font-palette-values`, `@font-feature-values` | Bodies copied without selector checks or class prefixes. Names stay global, including font families and feature-value names; qualify a private name with the component's name yourself. |
 | `@page` | A global name starting with the component's name and `-`, written by the author, with the body copied without selector scoping ([printing](#printing)). An unnamed page or an unqualified name does not compile. |
 
-Raw bodies still lose comments and extra whitespace, and registered custom properties are
-renamed there too. Nested block at-rules inside them are copied raw (font feature `@styleset`,
-page margin `@top-left`, and others), not independently selector-checked. The statement parser
+Raw bodies still lose comments and extra whitespace, and references to registered custom
+properties are renamed there too. Nested block at-rules inside them are copied raw (font
+feature `@styleset`, page margin `@top-left`, and others), not independently selector-checked. The statement parser
 recognizes lowercase `@layer base, widgets;` (copied) and `@charset "utf-8";` (discarded,
 since the generated stylesheet is UTF-8). It refuses unknown statements even inside raw
 bodies.
@@ -237,7 +237,8 @@ an option: at its top level, in a `var()`, `env()`, `attr()` or `inherit()` fall
 `position-try: var(--choice, --above)` scopes the fallback but does not treat the lookup
 `--choice` as an option. A registered property with the same name does not rename an option,
 but its `var()` lookup still gets the property prefix. In
-`if(style(--above: 1): --above; else: flip-block)`, only the branch value names an option.
+`if(style(--above: 1): --above; else: flip-block)`, the condition names a property and the
+branch value names an option; each is scoped only if this file defines it in that namespace.
 Function calls (`--above()`), anchor names, strings, URLs and other functions' arguments are
 not position references. Comments and whitespace are normalized as in other declarations.
 In `--externa\6c  flip-block`, the first space terminates the hex escape and the second remains
@@ -284,10 +285,16 @@ the stock's value this way:
 
 | You write | Corten checks or generates |
 |---|---|
-| `@property --share { syntax: "<percentage>"; .. }` | the constant `SHARE: Var<Percentage>` in the component's markup, and `--statement-table__share` everywhere in the file: the property is the component's, as its classes are |
+| `@property --share { syntax: "<percentage>"; .. }` | the constant `SHARE: Var<Percentage>` in the component's markup, and `--statement-table__share` where the file names that custom property |
 | `SHARE.pct(12.5)`, `GAP.px(4.0)`, `TURN.deg(90.0)`, `SPAN.set(3)` | a method per unit the syntax allows (every CSS unit but `in`, a Rust keyword: an inch is `px(96.0)`) (`<number>`, `<integer>`, `<percentage>`, `<length>`, `<length-percentage>`, `<angle>`, `<time>`); another unit, CSS text (`style={format!(..)}`) or another component's property does not compile, and a number that is not finite sets nothing, so the property keeps its `initial-value` |
 | `style={(SHARE.pct(s), nudge.map(|n| GAP.px(n)))}` | one attribute, `data-vars="--statement-table__share:12.5%"`; `None` sets nothing, and with nothing to set there is no attribute |
 | an `@property` without `syntax`, `inherits` or `initial-value`, with a `syntax` the browser does not read (`<text>`, a keyword such as `-compact` that starts with `-`), or with a number syntax and an `initial-value` that is not one, or depends on the font or a container (`1em`, `1cqw`), or is a math function (write one value, `6px` rather than `calc(2px * 3)`: the browser drops the rule when a math function does not fit, and checking one would take a CSS math parser) | a compile error: the browser would ignore the rule, or the macro could not tell; another syntax's `initial-value` (`<color>`) is left to the browser |
+
+The prefix applies to the registration, declarations, lookups such as `var(--share)`, style
+queries such as `@container style(--share: 50%)`, and property lists such as
+`transition-property: --share`. A same-spelled anchor, container, timeline, view-transition name
+or font palette keeps its name. A bare name stored as a custom property's value is not a
+lookup, nor is the attribute name in `attr()`.
 
 A full page gets one `<style>` at `<Corten />`, after its stylesheets, with a rule for each
 distinct value (`[data-vars="--statement-table__share:12.5%"]{..}`), marked `!important`, as

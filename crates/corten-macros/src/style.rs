@@ -66,7 +66,7 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
         classes: Vec::new(),
         properties: Vec::new(),
         positions: Vec::new(),
-        position_refs: Vec::new(),
+        rewrites: Vec::new(),
         media: Vec::new(),
         prefix,
         scope_root: None,
@@ -78,27 +78,7 @@ pub fn scope(src: &str, prefix: &str) -> Result<Sheet, String> {
             "(--{name}) in an @media rule names a breakpoint of the token file, and --{name} is this stylesheet's @property: rename the property"
         ));
     }
-    let mut option_names = Vec::new();
-    let before = s.out.len();
-    for (output, source) in &s.position_refs {
-        // Earlier replacements may have moved this value.
-        let start = output.start + s.out.len() - before;
-        let mut end = output.end + s.out.len() - before;
-        if let Some((base, raw)) = rename_positions(&src[source.clone()], &s.positions, prefix) {
-            let mut i = 0;
-            let Chunk { text: value, .. } =
-                scan_chunk(&raw, &mut i).map_err(|(at, message)| s.error(source.start + base + at, message))?;
-            debug_assert_eq!(i, raw.len());
-            s.out.replace_range(start..end, &value);
-            end = start + value.len();
-        }
-        // Only option tokens are exempt from property renaming; e.g. a var() lookup still works.
-        if !names.is_empty() {
-            let value = &s.out[start..end];
-            option_names.extend(position_options(value, &tokens(value), 0).into_iter().map(|(a, b)| (start + a, start + b)));
-        }
-    }
-    let css = rename_properties(&s.out, &names, prefix, &option_names)?;
+    let css = if names.is_empty() && s.positions.is_empty() { s.out } else { s.rewrite_names(&names)? };
     let media = media_refs(&css);
     Ok(Sheet { css, classes: s.classes, properties: s.properties, media })
 }
@@ -396,113 +376,7 @@ const LENGTHS: &[&str] = &[
     "svmax", "lvw", "lvh", "lvi", "lvb", "lvmin", "lvmax", "dvw", "dvh", "dvi", "dvb", "dvmin", "dvmax",
 ];
 
-/// `css` with each of `names` (a custom property its `@property` rules register, `fill`)
-/// written `--{prefix}__fill` wherever it is a whole name outside strings: the property is the
-/// component's, as its classes are, so two components can both register a `--fill`.
-///
-/// A declaration of one marked `!important` is an error: markup's values (`style={FILL.pct(..)}`)
-/// are `!important` too, inline after a patch and in a rule of the page's style block on a full
-/// load, and an `!important` rule of the component's with more specificity than that rule would
-/// win on a full load and lose after a patch.
-fn rename_properties(css: &str, names: &[&str], prefix: &str, option_names: &[(usize, usize)]) -> Result<String, String> {
-    if names.is_empty() {
-        return Ok(css.to_string());
-    }
-    let b = css.as_bytes();
-    let ident = |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_') || c >= 0x80 || c == b'\\';
-    let mut out = String::with_capacity(css.len() + names.len() * (prefix.len() + 4));
-    let (mut i, mut copied) = (0, 0);
-    let mut options = option_names.iter().peekable();
-    while i < b.len() {
-        match b[i] {
-            q @ (b'"' | b'\'') => {
-                i += 1;
-                while i < b.len() && b[i] != q {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-                i += 1;
-            }
-            // An attribute selector's value, `[data-kind=--fill]`, is text.
-            b'[' => {
-                while i < b.len() && b[i] != b']' {
-                    i += match b[i] {
-                        b'\\' => 2,
-                        q @ (b'"' | b'\'') => 1 + css[i + 1..].find(q as char).map_or(b.len(), |end| end + 1),
-                        _ => 1,
-                    };
-                }
-            }
-            // An unquoted `url(..)` is a URL, `url(--fill.svg)` a file's name.
-            b'(' if i >= 3 && b[i - 3..i].eq_ignore_ascii_case(b"url") && (i == 3 || !ident(b[i - 4])) => {
-                while i < b.len() && b[i] != b')' {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-            }
-            b'-' if b.get(i + 1) == Some(&b'-') && (i == 0 || !ident(b[i - 1])) => {
-                while options.peek().is_some_and(|&&(_, end)| end <= i) {
-                    options.next();
-                }
-                if let Some(&&(_, end)) = options.peek().filter(|range| range.0 <= i) {
-                    i = end;
-                    continue;
-                }
-                // The whole name, escapes included: `--f\69 ll` is `--fill` to the browser.
-                let end = name_end(css, i + 2, ident);
-                let written = &css[i + 2..end];
-                let name = if written.contains('\\') { unescape(written) } else { written.to_string() };
-                if names.contains(&name.as_str()) {
-                    let declared =
-                        b[..i].iter().rev().find(|c| !c.is_ascii_whitespace()).is_none_or(|c| matches!(c, b'{' | b';'))
-                            && b[end..].iter().find(|c| !c.is_ascii_whitespace()) == Some(&b':');
-                    if declared && important(&css[end..]) {
-                        return Err(format!(
-                            "--{name}: !important on a property markup sets would beat markup's value on a full load and lose to it after a patch; set it from markup (style={{..}}) or without !important"
-                        ));
-                    }
-                    out.push_str(&css[copied..i + 2]);
-                    out.push_str(prefix);
-                    out.push_str("__");
-                    out.push_str(&name);
-                    copied = end;
-                }
-                i = end;
-            }
-            _ => i += 1,
-        }
-    }
-    out.push_str(&css[copied.min(css.len())..]);
-    Ok(out)
-}
-
-/// Where the identifier from `end` ends, escapes included (CSS Syntax Level 3, consume an ident
-/// sequence): a hex escape takes one whitespace after it, a CRLF counting as one.
-fn name_end(css: &str, mut end: usize, ident: impl Fn(u8) -> bool) -> usize {
-    let b = css.as_bytes();
-    while end < b.len() {
-        if b[end] == b'\\' {
-            if matches!(b.get(end + 1), None | Some(b'\n' | b'\r' | b'\x0c')) {
-                break;
-            }
-            let hex = b[end + 1..].iter().take(6).take_while(|c| c.is_ascii_hexdigit()).count();
-            end += 1 + hex.max(1);
-            if hex > 0 && b.get(end) == Some(&b'\r') && b.get(end + 1) == Some(&b'\n') {
-                end += 2;
-            } else if hex > 0 && matches!(b.get(end), Some(b' ' | b'\t' | b'\n' | b'\r' | b'\x0c')) {
-                end += 1;
-            }
-            while end < b.len() && !css.is_char_boundary(end) {
-                end += 1;
-            }
-        } else if ident(b[end]) {
-            end += 1;
-        } else {
-            break;
-        }
-    }
-    end
-}
-
-/// What the position pass tells apart in a declaration's value (CSS Syntax Level 3, tokenization).
+/// What the name passes tell apart (CSS Syntax Level 3, tokenization).
 #[derive(Clone, Copy, PartialEq)]
 enum Tok {
     /// An identifier: `--above`, `flip-block`.
@@ -609,6 +483,153 @@ fn tokens(css: &str) -> Vec<(Tok, usize, usize)> {
         out.push((kind, start, i.min(b.len())));
     }
     out
+}
+
+enum Rewrite {
+    Registration,
+    Container,
+    Supports,
+    /// Source range when the declaration can also name a position option.
+    Declaration(Option<Range<usize>>),
+}
+
+/// Write only references that take a property name, not every ident with the same spelling.
+fn rename_properties(css: &str, rewrite: &Rewrite, names: &[&str], prefix: &str, out: &mut String) -> Result<(), String> {
+    let mut toks = tokens(css);
+    toks.retain(|&(kind, ..)| kind != Tok::Space);
+    let mut refs = Vec::new();
+    match rewrite {
+        Rewrite::Registration => ident_ref(&toks, 1, &mut refs),
+        Rewrite::Container => property_refs(css, &toks, 1, PropertyScan::Container, &mut refs),
+        Rewrite::Supports => property_refs(css, &toks, 1, PropertyScan::Supports, &mut refs),
+        Rewrite::Declaration(_) => {
+            let colon = toks.iter().position(|&(kind, ..)| kind == Tok::Colon).unwrap();
+            ident_ref(&toks, 0, &mut refs);
+            property_value_names(css, &toks, 0, colon + 1, &mut refs);
+            property_refs(css, &toks, colon + 1, PropertyScan::Value, &mut refs);
+        }
+    }
+    refs.sort_unstable();
+    refs.dedup();
+    let mut copied = 0;
+    for (start, end) in refs {
+        let name = decoded_name(&css[start..end]);
+        let Some(name) = name.strip_prefix("--").filter(|name| names.contains(name)) else { continue };
+        // Markup also sets these as !important. A more specific declaration would beat markup
+        // on a full load (a page style block) but lose to it after a patch (inline).
+        if start == 0
+            && matches!(rewrite, Rewrite::Declaration(_))
+            && matches!(toks.as_slice(), [.., (Tok::Other, bang, after), (Tok::Ident, word, end)]
+                if &css[*bang..*after] == "!" && decoded_name(&css[*word..*end]).eq_ignore_ascii_case("important"))
+        {
+            return Err(format!(
+                "--{name}: !important on a property markup sets would beat markup's value on a full load and lose to it after a patch; set it from markup (style={{..}}) or without !important"
+            ));
+        }
+        out.push_str(&css[copied..start]);
+        out.push_str("--");
+        out.push_str(prefix);
+        out.push_str("__");
+        out.push_str(name);
+        copied = end;
+    }
+    out.push_str(&css[copied..]);
+    Ok(())
+}
+
+fn ident_ref(toks: &[(Tok, usize, usize)], i: usize, refs: &mut Vec<(usize, usize)>) {
+    if let Some(&(Tok::Ident, start, end)) = toks.get(i) {
+        refs.push((start, end));
+    }
+}
+
+/// These declaration values name properties in the same slots that position-try names options.
+fn property_value_names(css: &str, toks: &[(Tok, usize, usize)], name: usize, value: usize, refs: &mut Vec<(usize, usize)>) {
+    let (_, start, end) = toks[name];
+    if ["transition", "transition-property", "will-change"]
+        .iter()
+        .any(|property| decoded_name(&css[start..end]).eq_ignore_ascii_case(property))
+    {
+        options(css, toks, value, false, refs);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum PropertyScan {
+    Value,
+    Container,
+    Supports,
+    Style,
+    IfCondition,
+    IfValue,
+    Opaque,
+}
+
+fn property_refs(css: &str, toks: &[(Tok, usize, usize)], start: usize, mode: PropertyScan, refs: &mut Vec<(usize, usize)>) {
+    use PropertyScan::*;
+    let kind = |i: usize| toks.get(i).map(|&(kind, ..)| kind);
+    let comparison = |i: usize| {
+        toks.get(i).is_some_and(|&(kind, start, end)| kind == Tok::Other && matches!(&css[start..end], "<" | ">" | "="))
+    };
+    // A plain style feature or supports declaration has a name before its colon. Its value
+    // follows declaration rules, not query rules (e.g. the value in style(--state: --t)).
+    let feature = |i, mode, refs: &mut Vec<_>| {
+        if kind(i) == Some(Tok::Ident) && kind(i + 1) == Some(Tok::Colon) {
+            ident_ref(toks, i, refs);
+            property_value_names(css, toks, i, i + 2, refs);
+            Value
+        } else {
+            mode
+        }
+    };
+    let mut stack = vec![mode];
+    for (i, &(token, start, end)) in toks.iter().enumerate().skip(start) {
+        let mode = *stack.last().unwrap();
+        let in_value = matches!(mode, Value | IfValue | Style);
+        match token {
+            Tok::Function => {
+                let name = decoded_name(&css[start..end - 1]).to_ascii_lowercase();
+                let next = match name.as_str() {
+                    "url" => Opaque,
+                    "var" | "inherit" if in_value => {
+                        if matches!(kind(i + 2), Some(Tok::Comma | Tok::Close)) {
+                            ident_ref(toks, i + 1, refs);
+                        }
+                        Value
+                    }
+                    "if" if in_value => IfCondition,
+                    "style" if matches!(mode, Container | IfCondition) => feature(i + 1, Style, refs),
+                    "supports" if mode == IfCondition => feature(i + 1, Supports, refs),
+                    _ if in_value => Value,
+                    _ => Opaque,
+                };
+                stack.push(next);
+            }
+            Tok::Open => {
+                let next = match (mode, &css[start..end]) {
+                    (Supports | Style, "(") => feature(i + 1, mode, refs),
+                    (Container | IfCondition, "(") => mode,
+                    _ if in_value => Value,
+                    _ => Opaque,
+                };
+                stack.push(next);
+            }
+            Tok::Close if stack.len() > 1 => {
+                stack.pop();
+            }
+            Tok::Colon if mode == IfCondition => *stack.last_mut().unwrap() = IfValue,
+            Tok::Semicolon if mode == IfValue => *stack.last_mut().unwrap() = IfCondition,
+            // A boolean style feature or a whole operand in a style range names a property.
+            Tok::Ident if mode == Style => {
+                if (matches!(kind(i - 1), Some(Tok::Open | Tok::Function)) || comparison(i - 1))
+                    && (kind(i + 1) == Some(Tok::Close) || comparison(i + 1))
+                {
+                    refs.push((start, end));
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The value of a `position-try` or `position-try-fallbacks` declaration with each identifier token
@@ -724,35 +745,6 @@ fn skip(toks: &[(Tok, usize, usize)], mut i: usize, stop: &[Tok]) -> usize {
     i
 }
 
-/// Whether the declaration value at the start of `rest` (up to its `;` or `}`, outside strings
-/// and brackets) ends `!important`, in any case and with any space after the `!`.
-fn important(rest: &str) -> bool {
-    let b = rest.as_bytes();
-    let (mut i, mut depth) = (0, 0usize);
-    while i < b.len() {
-        match b[i] {
-            q @ (b'"' | b'\'') => {
-                i += 1;
-                while i < b.len() && b[i] != q {
-                    i += if b[i] == b'\\' { 2 } else { 1 };
-                }
-            }
-            b'(' | b'[' => depth += 1,
-            b')' | b']' => depth = depth.saturating_sub(1),
-            b';' | b'}' | b'{' if depth == 0 => break,
-            b'!' if depth == 0 => {
-                let word = rest[i + 1..].trim_start();
-                if word.len() >= 9 && word.as_bytes()[..9].eq_ignore_ascii_case(b"important") {
-                    return true;
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    false
-}
-
 #[derive(Clone, Copy, PartialEq)]
 enum Ctx {
     /// Rules, which must be scoped: at the top of the file, or in an `@scope` there whose root
@@ -777,8 +769,8 @@ struct Scoper<'a> {
     classes: Vec<String>,
     properties: Vec<(String, Option<&'static str>)>,
     positions: Vec<String>,
-    /// Output value and source declaration ranges, for references before their definitions.
-    position_refs: Vec<(Range<usize>, Range<usize>)>,
+    /// Output chunks that can name a local property or option before its definition.
+    rewrites: Vec<(Range<usize>, Rewrite)>,
     /// The breakpoints its `@media` rules name, without the `--`.
     media: Vec<String>,
     prefix: &'a str,
@@ -787,6 +779,33 @@ struct Scoper<'a> {
 }
 
 impl Scoper<'_> {
+    fn rewrite_names(&self, names: &[&str]) -> Result<String, String> {
+        let mut css = String::with_capacity(self.out.len());
+        let mut copied = 0;
+        for (range, rewrite) in &self.rewrites {
+            let mut chunk = Cow::Borrowed(&self.out[range.clone()]);
+            if let Rewrite::Declaration(Some(source)) = rewrite {
+                if let Some((base, raw)) = rename_positions(&self.text[source.clone()], &self.positions, self.prefix) {
+                    let mut i = 0;
+                    let Chunk { text: value, .. } =
+                        scan_chunk(&raw, &mut i).map_err(|(at, message)| self.error(source.start + base + at, message))?;
+                    debug_assert_eq!(i, raw.len());
+                    let property = chunk.split_once(':').unwrap().0;
+                    chunk = Cow::Owned(format!("{property}:{value}"));
+                }
+            }
+            css.push_str(&self.out[copied..range.start]);
+            if !names.is_empty() {
+                rename_properties(&chunk, rewrite, names, self.prefix, &mut css)?;
+            } else {
+                css.push_str(&chunk);
+            }
+            copied = range.end;
+        }
+        css.push_str(&self.out[copied..]);
+        Ok(css)
+    }
+
     fn error(&self, at: usize, message: impl std::fmt::Display) -> String {
         let line = self.text[..at.min(self.text.len())].matches('\n').count() + 1;
         format!("line {line}: {message}")
@@ -831,10 +850,19 @@ impl Scoper<'_> {
                 let mut unowned_root = None;
                 let mut inner_nest = nest;
                 let mut position_name = None;
+                let mut rewrite = None;
                 let inner = if let Some(rule) = text.strip_prefix('@') {
                     // At-rule names are case-insensitive in CSS: `@MEDIA` is `@media`.
                     let (name, prelude) = self.at_rule(rule, start)?;
                     let name = name.to_ascii_lowercase();
+                    if ctx != Ctx::Raw {
+                        rewrite = match name.as_str() {
+                            "property" => Some(Rewrite::Registration),
+                            "container" => Some(Rewrite::Container),
+                            "supports" => Some(Rewrite::Supports),
+                            _ => None,
+                        };
+                    }
                     if name == "page" && ctx != Ctx::Raw {
                         self.check_page(prelude, start)?;
                     }
@@ -896,6 +924,7 @@ impl Scoper<'_> {
                 if inner == Ctx::Raw {
                     inner_nest = None;
                 }
+                let output_start = self.out.len();
                 let media = ctx != Ctx::Raw && text.get(..6).is_some_and(|at| at.eq_ignore_ascii_case("@media"));
                 if let Some(prelude) = scope_rule {
                     self.out.push_str(&prelude);
@@ -915,6 +944,10 @@ impl Scoper<'_> {
                     inner_nest = nest.map(|_| anchor);
                     self.out.push_str(&selector);
                 }
+                let property = matches!(rewrite, Some(Rewrite::Registration));
+                if let Some(rewrite) = rewrite {
+                    self.rewrites.push((output_start..self.out.len(), rewrite));
+                }
                 self.out.push('{');
                 let body = self.out.len();
                 let outer_root = unowned_root.map(|root| self.scope_root.replace(root));
@@ -922,7 +955,7 @@ impl Scoper<'_> {
                 if let Some(outer) = outer_root {
                     self.scope_root = outer;
                 }
-                if ctx != Ctx::Raw && text.get(..9).is_some_and(|at| at.eq_ignore_ascii_case("@property")) {
+                if property {
                     self.property(&text["@property".len()..], body, start)?;
                 }
                 self.close();
@@ -971,12 +1004,15 @@ impl Scoper<'_> {
             let Some((name, value)) = split_declaration(&text) else {
                 return Err(self.error(start, format!("expected `property: value`, found `{text}`")));
             };
+            let output_start = self.out.len();
             self.out.push_str(name);
             self.out.push(':');
-            if name.eq_ignore_ascii_case("position-try") || name.eq_ignore_ascii_case("position-try-fallbacks") {
-                self.position_refs.push((self.out.len()..self.out.len() + value.len(), source));
-            }
             self.out.push_str(value);
+            if text.contains("--") || text.contains('\\') {
+                let position = (name.eq_ignore_ascii_case("position-try") || name.eq_ignore_ascii_case("position-try-fallbacks"))
+                    .then_some(source);
+                self.rewrites.push((output_start..self.out.len(), Rewrite::Declaration(position)));
+            }
             self.out.push(';');
         }
     }
@@ -1858,13 +1894,17 @@ fn url_end(bytes: &[u8], mut at: usize) -> Option<usize> {
 }
 
 fn split_declaration(text: &str) -> Option<(&str, &str)> {
-    let (name, value) = text.split_once(':')?;
     let space = [' ', '\t', '\n'];
-    let name = name.trim_matches(space);
+    let text = text.trim_start_matches(space);
+    let end = css_name_end(text.as_bytes(), 0);
+    let name = &text[..end];
+    let value = text[css_skip_space(text.as_bytes(), end)..].strip_prefix(':')?;
     // scan_chunk already drops trailing whitespace tokens, but a trailing space may be part
     // of an escape. Only drop the separator it can leave just after the colon.
-    (!name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
-        .then(|| (name, value.trim_start_matches(space)))
+    (!name.is_empty()
+        && (name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            || decoded_name(name).strip_prefix("--").is_some_and(|name| !name.is_empty())))
+    .then(|| (name, value.trim_start_matches(space)))
 }
 
 /// The constant for a class: `alert-message` is `AlertMessage`.
@@ -3099,6 +3139,74 @@ mod tests {
         assert_eq!(conflict_marker("========\n"), None, "eight is not a marker");
         assert_eq!(conflict_marker(".a { color: red }\n.b{x:1} <<<<<<< y"), None, "only at a line's start");
         assert!(scope("/* ======= */\n.a { color: red }", "x").is_ok());
+    }
+
+    #[test]
+    fn a_registered_property_does_not_rename_other_css_names() {
+        let sheet = scope(
+            "@property --t { syntax: '*'; inherits: false }
+             .a { --t: 1; anchor-name: --t; view-transition-name: --t; view-timeline-name: --t; animation-timeline: --t; font-palette: --t; container-name: --t }",
+            "x",
+        )
+        .unwrap();
+        assert_eq!(sheet.css, "@property --x__t{syntax:'*';inherits:false}.x__a{--x__t:1;anchor-name:--t;view-transition-name:--t;view-timeline-name:--t;animation-timeline:--t;font-palette:--t;container-name:--t}");
+    }
+
+    #[test]
+    fn registered_property_references_are_scoped_in_declarations_and_queries() {
+        let sheet = scope(
+            r#"@property --t { syntax: '<length>'; inherits: false; initial-value: 2px }
+               @font-palette-values --t { font-family: X }
+               .a { --t: 24px; container: --t / inline-size }
+               .b { --\74: 17px; width: var(--missing, v\61 r(\2d -t, --t));
+                    position: absolute; position-anchor: --t; top: anchor(--t bottom);
+                    view-transition-name: --t; view-transition-class: --t;
+                    scroll-timeline-name: --t; timeline-scope: --t; position-try: --t;
+                    font-palette: --t; --raw: --t; --attr: attr(--t, --t);
+                    --fn: --t(--t); background: u\72l(--t); content: "var(--t)" }
+               @container --t style(--t: 24px) { .b { height: 8px } }
+               .b[data-kind=--t] { --escaped: attr(--\74); --url: url("--t") }"#,
+            "x",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.css,
+            concat!(
+                "@property --x__t{syntax:'<length>';inherits:false;initial-value:2px}",
+                "@font-palette-values --t{font-family:X}",
+                ".x__a{--x__t:24px;container:--t / inline-size}",
+                r#".x__b{--x__t:17px;width:var(--missing, v\61 r(--x__t, --t));"#,
+                "position:absolute;position-anchor:--t;top:anchor(--t bottom);view-transition-name:--t;",
+                "view-transition-class:--t;scroll-timeline-name:--t;timeline-scope:--t;position-try:--t;font-palette:--t;",
+                r#"--raw:--t;--attr:attr(--t, --t);--fn:--t(--t);background:u\72l(--t);content:"var(--t)"}"#,
+                "@container --t style(--x__t: 24px){.x__b{height:8px}}",
+                r#".x__b[data-kind=--t]{--escaped:attr(--\74);--url:url("--t")}"#,
+            )
+        );
+    }
+
+    #[test]
+    fn custom_properties_in_conditions_and_property_lists() {
+        let sheet = scope(
+            "@property --t { syntax: '*'; inherits: false }
+             @supports (--t: --t) and (font-palette: --t) { .a { --t: --t } }
+             @container --t (style((--t) and (0 < --t <= var(--t))) and style(--t: --t)) { .a { --t: --t } }
+             .a { --paint: if(style(--t: --t): --t; else: style(--t));
+                  width: inherit(--t, var(--t)); transition: --t 1s, var(--choice, --t 2s);
+                  transition-property: opacity, --t; will-change: --t, opacity }",
+            "x",
+        )
+        .unwrap();
+        assert_eq!(
+            sheet.css,
+            concat!(
+                "@property --x__t{syntax:'*';inherits:false}",
+                "@supports (--x__t: --t) and (font-palette: --t){.x__a{--x__t:--t}}",
+                "@container --t (style((--x__t) and (0 < --x__t <= var(--x__t))) and style(--x__t: --t)){.x__a{--x__t:--t}}",
+                ".x__a{--paint:if(style(--x__t: --t): --t; else: style(--t));width:inherit(--x__t, var(--x__t));",
+                "transition:--x__t 1s, var(--choice, --x__t 2s);transition-property:opacity, --x__t;will-change:--x__t, opacity}",
+            )
+        );
     }
 
     #[test]
