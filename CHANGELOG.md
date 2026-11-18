@@ -19,6 +19,9 @@ Corten is pre-1.0, so any minor version may change the API.
   with ordinary CSS nesting. Adopted
   stylesheets are not inspected
   ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
+- The MCP endpoint moves the request's headers into a tool call instead of copying them, and its
+  `OPTIONS` answer reads them in place; the route's body limit and body errors are unchanged.
+
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
 
