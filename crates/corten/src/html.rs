@@ -1,10 +1,10 @@
 //! Small HTML helpers with no dependencies.
 
 mod scan;
+#[cfg(any(debug_assertions, test))]
+use scan::{lone_lt, raw_text_end, script_end, Mode, Token, Tokens};
 #[cfg(debug_assertions)]
 pub(crate) use scan::{Event, Markup};
-#[cfg(any(debug_assertions, test))]
-use scan::{Mode, Token, Tokens, lone_lt, raw_text_end, script_end};
 
 /// Escapes text for use in HTML text or a quoted attribute.
 /// To append to a string instead, use [`crate::view::escape_into`].
@@ -228,7 +228,11 @@ pub(crate) fn text_shows(text: &str) -> Option<bool> {
             _ => return Some(true),
         }
     }
-    if undecided { None } else { Some(false) }
+    if undecided {
+        None
+    } else {
+        Some(false)
+    }
 }
 
 /// The character reference whose `&` is at `bytes[at]`, as [`text_shows`] reads it: whether it
@@ -928,7 +932,11 @@ fn integration_point(open: &[Open]) -> String {
 fn template_problem(html: &str, head_decides: bool, nested: bool) -> Read {
     let shown = |written: &str| -> String {
         let shown: String = written.chars().take(80).collect();
-        if shown.len() < written.len() { format!("{shown}..") } else { shown }
+        if shown.len() < written.len() {
+            format!("{shown}..")
+        } else {
+            shown
+        }
     };
     let since = |first: &str| format!(", since {} comes first", shown(first));
     let bytes = html.as_bytes();

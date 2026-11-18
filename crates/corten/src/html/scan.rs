@@ -1,6 +1,6 @@
 //! Token boundaries for developer checks, not an HTML tree builder.
 
-use super::{Tag, VOID, Within, placed};
+use super::{placed, Tag, Within, VOID};
 
 pub(super) fn space(byte: u8) -> bool {
     matches!(byte, b'\t' | b'\n' | b'\x0c' | b'\r' | b' ')
