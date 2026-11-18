@@ -5648,7 +5648,7 @@ rules something out.
     loading, a read or answer that no longer owns its targets stops before resolving or closing
     them. If the module fails to load, the runtime logs once and draws the answer without
     closing replacement targets first or forwarding their close. It does not retry the write.
-    On `3344615da` against main `231225b9a`, core grows from 43,846 to 44,669 bytes raw (+823),
+    On `3344615da` against main `7f8fd11c6`, core grows from 43,846 to 44,669 bytes raw (+823),
     15,612 to 16,012 gzip (+400), and 14,100 to 14,431 Brotli (+331). The optional module,
     absent on main, is 2,017 bytes raw, 1,034 gzip and 905 Brotli. An earlier probe of
     no-dialog draw timing (`0aa24d7` against `cf4671b13`) did not resolve a difference:
