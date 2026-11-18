@@ -125,15 +125,16 @@ function resolved(selector, parent, scoped) {
 /** @type {Set<string>} */
 const skipped = new Set();
 
-/** @typedef {{ selector: string, written: string, display: string, condition: string | null, important: boolean }} Display */
+/** @typedef {{ selector: string, written: string, display: string, condition: string | null, important: boolean, scoped: boolean }} Display */
 
 /**
  * Read each display rule once, then match only the candidate dialogs and popovers.
- * @returns {Display[]}
  */
 function displays() {
   /** @type {Display[]} */
   const found = [];
+  /** @type {string[]} */
+  const uncertain = [];
   /**
    * @param {CSSRuleList} rules
    * @param {string | null} condition
@@ -150,15 +151,20 @@ function displays() {
         walk(rule.cssRules, condition, root, start || "@scope", true);
         continue;
       }
-      const style = /** @type {CSSStyleRule} */ (rule).style;
       const styled = rule instanceof CSSStyleRule;
+      const style = styled || (globalThis.CSSNestedDeclarations && rule instanceof CSSNestedDeclarations) ? rule.style : null;
       const asWritten = styled ? rule.selectorText : written;
       const own = styled ? resolved(asWritten ?? "", selector, scoped) : selector;
       if (style?.display && asWritten) {
-        if (own) found.push({ selector: own, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
-        else if (own === "" && !skipped.has(asWritten)) {
-          skipped.add(asWritten);
-          console.warn(`corten: skipped \`${asWritten}\`: cannot compose its selector for the closed dialog and popover check`);
+        if (own) found.push({ selector: own, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important", scoped });
+        else if (own === "") {
+          // A plain selector can rule out a candidate even without its root. If it depends on
+          // context or is too long to inspect, do not use a failed match as evidence.
+          uncertain.push(asWritten.length <= MAX_SELECTOR && !UNSUPPORTED.test(asWritten) && !asWritten.match(SCOPE_REF) && !/(^|,)\s*>/.test(asWritten) ? asWritten : "");
+          if (!skipped.has(asWritten)) {
+            skipped.add(asWritten);
+            console.warn(`corten: skipped \`${asWritten}\`: cannot compose its selector for the closed dialog and popover check; it may mask a warning`);
+          }
         }
       }
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
@@ -173,15 +179,15 @@ function displays() {
       walk(sheet.cssRules, null, null, null, false);
     } catch {}
   }
-  return found;
+  return { found, uncertain };
 }
 
-/** @param {Element} el @param {string} selector */
-const matching = (el, selector) => {
+/** @param {Element} el @param {string} selector @param {boolean} [fallback] */
+const matching = (el, selector, fallback = false) => {
   try {
     return own.matches.call(el, selector);
   } catch {
-    return false;
+    return fallback;
   }
 };
 
@@ -192,24 +198,31 @@ const matching = (el, selector) => {
  * from a breakpoint (a filters rail that is a modal on a phone), which is then simply not drawn,
  * or the open one's look written for a width, which is right; the page cannot tell which, so the
  * warning gives the rule for each. A look outside a query (a card) is the hidden rule's own case
- * and is not reported, nor is one the app already draws with an `!important` rule of its own.
+ * and is not reported, nor is one the app already draws with an `!important` rule of its own
+ * or one a skipped display rule could style.
  * @param {Element} root
  */
 function inPlace(root) {
   // One the app hides with `hidden` is meant to be hidden, whatever its rules say.
   const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !own.hasAttribute.call(el, "hidden"));
   if (!closed.length) return;
-  const rules = displays();
+  const { found, uncertain } = displays();
   for (const el of closed) {
     if (getComputedStyle(el).display !== "none") continue;
-    const applies = rules.filter((r) => matching(el, r.selector));
+    const applies = found.filter((r) => matching(el, r.selector));
     // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
     // browser's own, which an app's rule outranks.
     if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
     const drawn = applies.find((r) => r.condition && r.display !== "none");
-    if (!drawn || applies.some((r) => r.important && r.display !== "none")) continue;
+    if (!drawn || applies.some((r) => r.important && r.display !== "none") || uncertain.some((s) => !s || matching(el, s, true))) continue;
     reported.add(el);
     const dialog = el instanceof HTMLDialogElement && !own.hasAttribute.call(el, "popover");
+    const kind = dialog ? "dialog" : "popover";
+    const warning = `corten: ${labelOf(el)} is a closed ${kind} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed.`;
+    if (drawn.scoped) {
+      console.warn(warning, el);
+      continue;
+    }
     const state = dialog ? "[open]" : ":popover-open";
     // Not [hidden] either, so a rail the app hides with the attribute stays hidden.
     const closedState = dialog ? "[open],[hidden]" : ":popover-open,[hidden]";
@@ -218,7 +231,7 @@ function inPlace(root) {
     const cls = [...drawn.written.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "").find((c) => /** @type {DOMTokenList} */ (Reflect.get(own, "classList", el)).contains(c))?.split("__").pop();
     const id = attrOf(el, "id");
     const named = cls ? "." + cls : Reflect.get(own, "localName", el) + (id ? "#" + id : "");
-    console.warn(`corten: ${labelOf(el)} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);
+    console.warn(`${warning} To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${kind}'s look, write it as \`${named}${state}\``, el);
   }
 }
 

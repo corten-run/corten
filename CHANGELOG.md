@@ -7,10 +7,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - `corten dev`'s closed-dialog and popover check keeps explicit `@scope` roots for descendant
   selectors, a single `:scope` or `&` per selector-list member, and declarations directly on
-  the root. It matches once per display rule and candidate. It skips scopes with `to` limits,
-  implicit roots or other [unsupported shapes](docs/guide/styles.md#styles), and selectors
-  longer than 1,024 characters before or after composition, naming each skipped display selector
-  once in the console. Adopted stylesheets are not inspected
+  the root. It makes at most one match per eligible candidate and inspected display rule. It skips
+  scopes with `to` limits, implicit roots, explicit top-level roots such as `@scope (:scope)`, other
+  [unsupported shapes](docs/guide/styles.md#styles), and selectors longer than 1,024 characters
+  before or after composition. A skipped display rule can withhold a warning for a candidate it
+  could style; skip notes are deduplicated by CSSOM selector text. Scoped warnings do not suggest
+  replacement selectors. Adopted stylesheets are not inspected
   ([#1606 corten dev's closed-dialog check skips adopted stylesheets, so a dialog one draws from a breakpoint is not warned of](https://github.com/corten-run/corten/issues/1606)).
 - Document script testing without runtime stubs: import-free shared logic in Node, including
   Rust/JavaScript parity cases, and runtime-dependent handlers on a served page with Playwright.
