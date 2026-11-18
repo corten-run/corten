@@ -54,8 +54,8 @@ Every parameter needs a JSDoc type; an untyped one is a compile error that names
 
 ## Generating the script types
 
-A test in the app writes the TypeScript declarations its scripts read (feed rows, typed
-events), and fails while the committed file is stale:
+A test in the app writes the TypeScript declarations its scripts read and fails while the
+committed file is stale:
 
 ```rust,ignore
 #[test]
@@ -66,6 +66,12 @@ fn script_types_match_the_server() {
         .sync(concat!(env!("CARGO_MANIFEST_DIR"), "/types/app.d.ts"));
 }
 ```
+
+Give `Types::components` the same component lists as `App::components`. It declares typed
+events, views, and the named `ToJson` types in the scripts' checked handler parameters,
+including the types those values contain. Use `Types::add` for other types, such as feed rows or
+screen data the script receives from a URL. A type already collected through a component or
+added by hand is declared only once.
 
 ### Where the types come from
 
@@ -90,7 +96,8 @@ error, logged with the tool's name, and a debug build answers it with a 500 nami
 newtype that is a tool's whole input takes `impl corten::FromJson for T {}` beside its
 `Deserialize`). In a generic type, a field type that has a schema only under a bound the type does
 not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same way: add the bound to the type's where clause. A type a root names
-directly (`Types::add`, a tool's input or output, an event's field) without a schema does not
+directly (`Types::add`, a checked handler parameter's generated type, a tool's input or output,
+an event's field) without a schema does not
 compile. Rust's own types that serde writes have one (strings, numbers, `NonZero*`, lists, sets,
 maps, tuples, `Option`, `Box`/`Rc`/`Arc`/`Cow`, `Duration`, `SystemTime`, paths and addresses,
 `serde_json`'s values and `RawValue`, Corten's `Raw` and `Day`). The read side describes what

@@ -1593,6 +1593,7 @@ mod tests {
             handlers: &["f"],
             events: &[],
             imports: &[],
+            types: &[],
         }),
         style: None,
         event: None,
@@ -1659,7 +1660,7 @@ mod tests {
         const fn script(name: &'static str, imports: &'static [&'static str]) -> Component {
             Component {
                 name,
-                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports }),
+                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports, types: &[] }),
                 style: None,
                 event: None,
                 view: None,
@@ -1692,7 +1693,7 @@ mod tests {
         const fn script(name: &'static str, imports: &'static [&'static str]) -> Component {
             Component {
                 name,
-                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports }),
+                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports, types: &[] }),
                 style: None,
                 event: None,
                 view: None,
@@ -1747,7 +1748,15 @@ mod tests {
     fn corten_views_imported_by_an_app_without_a_view_is_refused() {
         const PLAIN: Component = Component {
             name: "plain",
-            script: Some(crate::Script { name: "plain", file: "plain", source: "", handlers: &[], events: &[], imports: &[] }),
+            script: Some(crate::Script {
+                name: "plain",
+                file: "plain",
+                source: "",
+                handlers: &[],
+                events: &[],
+                imports: &[],
+                types: &[],
+            }),
             style: None,
             event: None,
             view: None,
@@ -1762,6 +1771,7 @@ mod tests {
                 handlers: &[],
                 events: &[],
                 imports: &[],
+                types: &[],
             }),
             style: None,
             event: None,
@@ -1782,7 +1792,7 @@ mod tests {
         const fn script(name: &'static str, imports: &'static [&'static str]) -> Component {
             Component {
                 name,
-                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports }),
+                script: Some(crate::Script { name, file: name, source: name, handlers: &[], events: &[], imports, types: &[] }),
                 style: None,
                 event: None,
                 view: None,
@@ -1840,6 +1850,7 @@ mod tests {
                 handlers: &[],
                 events: &[SAVED],
                 imports: &[],
+                types: &[],
             }),
             style: None,
             event: None,
@@ -1876,6 +1887,7 @@ mod tests {
                 handlers: &["f"],
                 events: &[TOGGLED],
                 imports: &[],
+                types: &[],
             }),
             style: None,
             event: None,

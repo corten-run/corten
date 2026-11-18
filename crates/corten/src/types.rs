@@ -19,8 +19,9 @@
 //! that dispatches `new RowToggled({ id, selected })` is checked against the Rust struct. Other
 //! types are imported in JSDoc (`/** @typedef {import("../types/app").Card} Card */`). `tsc
 //! --checkJs` then fails on a renamed or retyped field, not the page in production. Handler
-//! parameters need nothing generated: the markup's calls are checked against the handler's own
-//! JSDoc when the crate compiles. The file holds types only; the browser never loads it.
+//! calls are checked against the handler's own JSDoc when the crate compiles, and
+//! [`Types::components`] collects any named JSON argument types those signatures use. The file
+//! holds types only; the browser never loads it.
 //!
 //! Types describe the JSON as the server writes it (`skip_serializing_if` fields are optional,
 //! `Option` is `T | null`). [`Types::json_schema`] gives the same definitions as JSON Schema,
@@ -31,6 +32,7 @@ use std::{collections::BTreeMap, fmt::Write as _, path::Path};
 use serde_json::{Map, Value};
 
 use crate::json::schema::{Generator, ToJsonSchema};
+use crate::script::__private::TsType;
 
 /// The set of types one app sends to the browser.
 pub struct Types {
@@ -52,24 +54,26 @@ impl Types {
         Types { generator: Generator::new(), events: BTreeMap::new(), views: BTreeMap::new() }
     }
 
-    /// Adds `T` and every type it refers to, under their Rust names. `T` is a type that derives
-    /// `ToJson` (a declaration of its own); one that has none, such as `Vec<Row>` or `String`,
-    /// panics, so the test that calls it fails: add the type it holds instead. So does a type with
-    /// a field, at any depth, whose type has no schema ([`crate::json::schema`]).
+    /// Adds `T` and every type it refers to, under their Rust names. Use this for types
+    /// [`Types::components`] does not already collect, such as feed rows. `T` is a type that
+    /// derives `ToJson` (a declaration of its own); one that has none, such as `Vec<Row>` or
+    /// `String`, panics: add the type it holds instead. So does a type with a field, at any depth,
+    /// whose type has no schema ([`crate::json::schema`]).
     pub fn add<T: ToJsonSchema>(mut self) -> Self {
-        let schema = T::json_schema(&mut self.generator);
-        self.generator.missing(&format!("Types::add::<{}>()", std::any::type_name::<T>()));
-        assert!(
-            schema.get("$ref").is_some(),
-            "Types::add::<{}>(): the type has no declaration of its own; add a type that derives ToJson (for a list, the type of its items)",
-            std::any::type_name::<T>()
-        );
+        self.add_schema(T::json_schema, &format!("Types::add::<{}>()", std::any::type_name::<T>()));
         self
+    }
+
+    fn add_schema(&mut self, describe: TsType, source: &str) {
+        let schema = describe(&mut self.generator);
+        self.generator.missing(source);
+        assert!(schema.get("$ref").is_some(), "{source}: the type has no declaration of its own; use a type that derives ToJson");
     }
 
     /// Adds the typed events among the app's components (the list it gives `App::components`)
     /// and those their scripts import, to `corten/events`, with the types of their fields, and the
-    /// views (`#[component(view)]`) to `corten/views`.
+    /// views (`#[component(view)]`) to `corten/views`. Also adds the named `ToJson` types the
+    /// scripts' checked handler parameters use, and the types those refer to.
     pub fn components(mut self, components: &[crate::Component]) -> Self {
         for view in components.iter().filter_map(|c| c.view) {
             self.views.insert(view.class, view.ts);
@@ -90,6 +94,11 @@ impl Types {
                 event.name, event.class, event.class
             );
             self.events.insert(event.class, entry);
+        }
+        for script in components.iter().filter_map(|c| c.script.as_ref()) {
+            for &(name, describe) in script.types {
+                self.add_schema(describe, &format!("{}: handler argument {name}", script.file));
+            }
         }
         self
     }
@@ -335,6 +344,36 @@ mod tests {
     enum Change {
         Upsert { id: String, value: Card },
         Remove { id: String },
+    }
+
+    #[crate::component(js)]
+    #[allow(dead_code)]
+    fn ReportChange(change: Change) -> impl crate::Render {
+        crate::html! { <button type="button" on:click={js::report(change)}>"Report"</button> }
+    }
+
+    #[crate::component(js)]
+    #[allow(dead_code)]
+    fn ConfirmChange(change: Change) -> impl crate::Render {
+        let button = refs();
+        crate::html! {
+            <button type="button" ref={button} on:click={js::confirm(js::Confirmation { button, change })}>"Confirm"</button>
+        }
+    }
+
+    #[test]
+    fn component_handler_arguments_declare_their_types() {
+        let report = Types::new().components(&[ReportChange]);
+        let types = report.typescript();
+        assert!(types.contains("export type Change = "), "{types}");
+        assert!(types.contains("value: Card;"), "{types}");
+        assert!(types.contains("export interface Card {"), "{types}");
+        assert!(types.contains("export type Kind = "), "{types}");
+        assert_eq!(Types::new().components(&[ConfirmChange]).typescript(), types);
+        assert_eq!(Types::new().components(&[ReportChange, ConfirmChange]).typescript(), types);
+        assert_eq!(Types::new().add::<Change>().components(&[ReportChange, ConfirmChange]).typescript(), types);
+        assert_eq!(Types::new().components(&[ReportChange, ConfirmChange]).add::<Change>().typescript(), types);
+        report.sync(concat!(env!("CARGO_MANIFEST_DIR"), "/src/type_tests/types/app.d.ts"));
     }
 
     #[test]

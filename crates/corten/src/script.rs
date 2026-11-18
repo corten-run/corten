@@ -1521,6 +1521,9 @@ pub struct Script {
     /// The script modules of its directory it imports (`import { load } from "./stripe.js"` is
     /// `"stripe"`): a page that loads it preloads them, and the app must list them.
     pub imports: &'static [&'static str],
+    /// The names and schemas of the JSON values its checked handlers take, for type generation.
+    #[doc(hidden)]
+    pub types: &'static [(&'static str, __private::TsType)],
 }
 
 /// A typed DOM event, from [`event`]: its name in the page and its fields, for the class the

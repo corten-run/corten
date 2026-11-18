@@ -9,7 +9,7 @@
 //! becomes a Rust struct `js::Selection { .. }` the markup builds and passes as one argument, and
 //! a class imported from `"corten/events"` is the Rust `#[event]` type of the same name.
 
-use std::path::Path;
+use std::{collections::BTreeSet, path::Path};
 
 use proc_macro::{Delimiter, Group, Ident, Span, TokenStream, TokenTree};
 
@@ -127,8 +127,8 @@ impl Module {
         Ok(Module { name, file, path: path.display().to_string(), served, handlers, groups, keeps, imports, siblings })
     }
 
-    /// `::corten::script::Script { .. }`, where the events it imports are named by `at` and
-    /// their names (`""` in the component's module, `"super::"` in a `script!` module).
+    /// `::corten::script::Script { .. }`. `at` is the prefix for types named in the script:
+    /// `""` in the component's module, `"super::"` in a `script!` module.
     pub fn literal(&self, at: &str) -> TokenStream {
         let mut names = TokenStream::new();
         for h in &self.handlers {
@@ -152,10 +152,38 @@ impl Module {
             siblings.extend(literal(name));
             siblings.extend(q(",", &[]));
         }
+        let mut types = TokenStream::new();
+        for name in self.argument_types() {
+            let ty = format!("{at}{name}").parse().expect("a type path parses");
+            types.extend(q("(__A0, ::corten::script::__private::ts::<__A1>()),", &[literal(name), ty]));
+        }
         q(
-            "{ __A5 ::corten::script::Script { name: __A0, file: __A1, source: __A2, handlers: &[__A3], events: &[__A4], imports: &[__A6] } }",
-            &[literal(&self.name), literal(&self.file), literal(&self.served), names, events, checks, siblings],
+            "{ __A5 ::corten::script::Script { name: __A0, file: __A1, source: __A2, handlers: &[__A3], events: &[__A4], imports: &[__A6], types: &[__A7] } }",
+            &[literal(&self.name), literal(&self.file), literal(&self.served), names, events, checks, siblings, types],
         )
+    }
+
+    /// The named JSON values in the checked handler signatures, including fields of a group
+    /// that a handler takes. Feed and screen URLs pass links, not the JSON they point to.
+    fn argument_types(&self) -> BTreeSet<&str> {
+        let mut types = BTreeSet::new();
+        for (_, param) in self.handlers.iter().flat_map(|handler| &handler.params) {
+            match param {
+                Param::Generated(name) => {
+                    types.insert(name.as_str());
+                }
+                Param::Group(name) => {
+                    if let Some(group) = self.groups.iter().find(|group| group.name == *name) {
+                        types.extend(group.fields.iter().filter_map(|(_, field)| match field {
+                            Param::Generated(name) => Some(name.as_str()),
+                            _ => None,
+                        }));
+                    }
+                }
+                _ => {}
+            }
+        }
+        types
     }
 
     /// `mod name { pub fn handler(..) -> Call<..> }`. `owner` is the shared module's component,
@@ -756,7 +784,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         })
     };
     let union_error = |what: &str, ty: &str| {
-        format!("{what}: a value that is one of several names ({ty}) is a Rust enum the markup passes: derive ToJson on it, add it with Types::add, and type it with its generated declaration, import(\"../types/app\").Name")
+        format!("{what}: a value that is one of several names ({ty}) is a Rust enum the markup passes: derive ToJson on it and type it with its generated declaration, import(\"../types/app\").Name")
     };
     let mut groups = Vec::new();
     let mut unions: Vec<(String, (usize, String))> = Vec::new();
@@ -821,7 +849,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         if holds_names_union(&fields) {
             bad.push((name.clone(), union_error(name, written.trim())));
         } else if mentions_generated(&fields) {
-            bad.push((name.clone(), format!("{name} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or declare a Rust type for the whole value (derive ToJson, add it with Types::add) and take its declaration")));
+            bad.push((name.clone(), format!("{name} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or derive ToJson on a Rust type for the whole value and take its declaration")));
         }
     }
     for (group, (_, why)) in &unions {
@@ -868,7 +896,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
                     // a list with `null`, a tuple, a typedef of plain values) rather than any value.
                     Param::Any => match type_words(&expanded).into_iter().find_map(|w| bad.iter().find(|(b, _)| *b == w)) {
                         Some((_, why)) => refused(why.clone()),
-                        None if mentions_generated(&expanded) => refused(format!("{ty} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or declare a Rust type for the whole value (derive ToJson, add it with Types::add) and take its declaration")),
+                        None if mentions_generated(&expanded) => refused(format!("{ty} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or derive ToJson on a Rust type for the whole value and take its declaration")),
                         None if named == UNKNOWN => Param::Any,
                         None => refused(unchecked(&ty, &expanded, browser(&expanded, &groups))),
                     },
@@ -1691,7 +1719,7 @@ fn unchecked(ty: &str, expanded: &str, browser: bool) -> String {
     if browser {
         return format!("{shown}: no call can be checked against this type, so a wrong element, event or other value would compile; take one the scripts guide lists as checked: an element type, a union or a list of them (El[]), one event interface (for several events, the one they share, such as UIEvent or Event, narrowed in the script), AbortSignal, ElementId or ElementId[], FeedUrl<Row>, ScreenUrl<Data>, Holds<Row, El>, Map<string, El>, Map<El, number> (or string, or boolean), a message or a format, or a @typedef of these (a group) taken as it is, not in a list or with null; or take {UNKNOWN} and check the value in the script");
     }
-    format!("{shown}: no call can be checked against this type, so a wrong argument would compile; declare a Rust type for the value (derive ToJson, add it with Types::add) and take its declaration, import(\"../types/app\").Name, use a type the scripts guide lists as checked, or take {UNKNOWN} and check the value in the script")
+    format!("{shown}: no call can be checked against this type, so a wrong argument would compile; derive ToJson on a Rust type for the value and take its declaration, import(\"../types/app\").Name, use a type the scripts guide lists as checked, or take {UNKNOWN} and check the value in the script")
 }
 
 /// Names of values a handler takes that are not JSON, besides elements and events: the browser's
@@ -1855,7 +1883,7 @@ fn param_type(ty: &str) -> Param {
     }
     if mentions_generated(ty) {
         return Param::Unreadable(format!(
-            "{ty}: a generated declaration types a value alone, import(\"../types/app\").Name, so the call can be checked against its Rust type; for a list, an optional value or a generic, declare a Rust type for the whole value (derive ToJson, add it with Types::add) and use its declaration"
+            "{ty}: a generated declaration types a value alone, import(\"../types/app\").Name, so the call can be checked against its Rust type; for a list, an optional value or a generic, derive ToJson on a Rust type for the whole value and use its declaration"
         ));
     }
     // `Message<"count">` (corten): a message of the app's catalog with exactly these arguments.
