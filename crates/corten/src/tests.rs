@@ -16425,22 +16425,40 @@ mod layout_reads {
         assert!(body.contains("<header>Cart <b>guest</b></header>"), "{body}");
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_forwarded_write_uses_the_inner_layout_deadline_for_a_page_from_middleware() {
+        let count = CartCount { delay: Duration::from_secs(2), ..CartCount::default() };
+        let inner = App::new(early_middleware_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware(AnswersEarly)
+            .deadline(Duration::from_secs(1))
+            .router();
+        let outer = App::new(Routes::from(Table::new())).middleware(Fallback(inner)).deadline(Duration::from_secs(3)).router();
+        let (status, _, body) = call_with(outer, "POST", "/early", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains("<main><p>early</p></main>") && body.contains("<footer></footer>"), "{body}");
+        assert!(body.contains("<header>Cart <b>guest</b></header>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        assert_eq!(count.finished.load(Ordering::SeqCst), 0);
+    }
+
+    struct Fallback(Router);
+
+    impl crate::Middleware for Fallback {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+            let (head, body) = req.into_parts();
+            let res = next.run(Request::from_parts(head.clone(), Body::empty())).await;
+            assert_eq!(res.status(), StatusCode::NOT_FOUND);
+            self.0.clone().oneshot(Request::from_parts(head, body)).await.unwrap()
+        }
+    }
+
     async fn forward_slow_write(
         outer_reads: bool,
         outer_deadline: Duration,
         inner_deadline: Option<Duration>,
     ) -> (StatusCode, http::HeaderMap, String) {
-        struct Fallback(Router);
-
-        impl crate::Middleware for Fallback {
-            async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
-                let (head, body) = req.into_parts();
-                let res = next.run(Request::from_parts(head.clone(), Body::empty())).await;
-                assert_eq!(res.status(), StatusCode::NOT_FOUND);
-                self.0.clone().oneshot(Request::from_parts(head, body)).await.unwrap()
-            }
-        }
-
         let outer_count = CartCount::default();
         let inner_count = CartCount { delay: Duration::from_secs(2), ..CartCount::default() };
         let inner =
