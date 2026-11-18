@@ -102,3 +102,21 @@ fn a_repeated_option_is_refused_and_writes_nothing() {
     assert!(String::from_utf8(out.stderr).unwrap().contains("--name is given more than once"));
     assert!(!changed, "a refused new wrote files");
 }
+
+#[test]
+fn help_after_a_double_dash_is_still_help_and_writes_nothing() {
+    // No command reads `--` as the end of its options, so a flag after it still counts: help
+    // there must not let `ui add` replace a file with `--force` or `new` write an app.
+    let root = std::env::temp_dir().join(format!("corten-double-dash-help-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for args in
+        [["ui", "add", "card", "--", "--help", "--force"].as_slice(), &["new", "shop", "--", "--help", "--name", "storefront"]]
+    {
+        let out = Command::new(env!("CARGO_BIN_EXE_corten")).args(args).current_dir(&root).env("PATH", "").output().unwrap();
+        assert!(out.status.success(), "{}", args.join(" "));
+        assert!(String::from_utf8(out.stdout).unwrap().starts_with("Usage:\n"), "{}", args.join(" "));
+    }
+    let changed = std::fs::read_dir(&root).unwrap().next().is_some();
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(!changed, "help after -- wrote files");
+}

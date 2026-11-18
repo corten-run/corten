@@ -160,9 +160,10 @@ fn command_help(args: &[String]) -> Option<String> {
     )
 }
 
-/// Whether `--help` or `-h` stands in a flag position of `command`'s arguments: before a `--`
-/// that is itself in a flag position, and not as the value of an option of that command that
-/// takes one (`new --corten-path --help` names a directory, `ui add --port --help` asks for help).
+/// Whether `--help` or `-h` stands in a flag position of `command`'s arguments: not as the
+/// value of an option of that command that takes one (`new --corten-path --help` names a directory,
+/// `ui add --port --help` asks for help). No command reads `--` as the end of its options, so
+/// neither does this: the command would still read a flag after it.
 fn asks_help(command: &str, args: &[String]) -> bool {
     let takes_value: &[&str] = match command {
         "new" => &["--name", "--corten-path"],
@@ -173,7 +174,6 @@ fn asks_help(command: &str, args: &[String]) -> bool {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => return true,
-            "--" => return false,
             option if takes_value.contains(&option) => {
                 args.next();
             }
@@ -259,20 +259,29 @@ fn cargo(args: &[&str]) -> Result<(), String> {
     if status.success() { Ok(()) } else { Err(format!("cargo {} failed", args.join(" "))) }
 }
 
-/// The value after `flag` in `args`, if present. A flag given twice is refused, so the value a
-/// command runs with is the one [`asks_help`] reads past (`--name a --name --help` is not help).
+/// The value after `flag` in `args`, if present. The token after `flag` is its value even when it
+/// reads as `flag` again. A flag given twice is refused, so the value a command runs with is the one
+/// [`asks_help`] reads past (`--name a --name --help` is not help).
 fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, String> {
-    let mut at = args.iter().enumerate().filter(|(_, a)| *a == flag).map(|(i, _)| i);
-    match (at.next(), at.next()) {
-        (Some(_), Some(_)) => Err(format!("{flag} is given more than once")),
-        (Some(i), None) => args.get(i + 1).map(|v| Some(v.as_str())).ok_or_else(|| format!("{flag} needs a value")),
-        (None, _) => Ok(None),
+    let mut found = None;
+    let mut at = 0;
+    while at < args.len() {
+        if args[at] != flag {
+            at += 1;
+            continue;
+        }
+        if found.is_some() {
+            return Err(format!("{flag} is given more than once"));
+        }
+        found = Some(args.get(at + 1).ok_or_else(|| format!("{flag} needs a value"))?.as_str());
+        at += 2;
     }
+    Ok(found)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{asks_help, check_flags, lint_build_test};
+    use super::{asks_help, check_flags, lint_build_test, option};
     use std::cell::RefCell;
 
     #[test]
@@ -283,10 +292,22 @@ mod tests {
         assert!(!asks_help("new", &args(&["app", "--corten-path", "--help"])));
         assert!(!asks_help("new", &args(&["app", "--name", "-h"])));
         assert!(!asks_help("dev", &args(&["--port", "--help"])));
-        assert!(!asks_help("new", &args(&["app", "--", "--help"])));
+        // `--` ends no command's options, so it ends no scan for help either.
+        assert!(asks_help("new", &args(&["app", "--", "--help"])));
         // An option names a value only for the command that has it, and a `--` it takes is a value.
         assert!(asks_help("ui", &args(&["add", "--all", "--port", "--help"])));
         assert!(asks_help("new", &args(&["shop", "--corten-path", "--", "--help"])));
+    }
+
+    #[test]
+    fn an_option_reads_the_token_after_it_and_is_given_once() {
+        let args = |list: &[&str]| list.iter().map(|a| a.to_string()).collect::<Vec<_>>();
+        assert_eq!(option(&args(&["shop", "--name", "store"]), "--name"), Ok(Some("store")));
+        // The second `--corten-path` is the first one's value, a directory, not a repeat.
+        assert_eq!(option(&args(&["shop", "--corten-path", "--corten-path"]), "--corten-path"), Ok(Some("--corten-path")));
+        assert!(option(&args(&["shop", "--name", "a", "--name", "b"]), "--name").is_err());
+        assert!(option(&args(&["shop", "--name"]), "--name").is_err());
+        assert_eq!(option(&args(&["shop"]), "--name"), Ok(None));
     }
 
     #[test]
