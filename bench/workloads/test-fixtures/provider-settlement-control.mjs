@@ -15,6 +15,7 @@ export function beforeProvisioning(local) {
 }
 
 export function settlementControl(t, h) {
+  let finishMonitor;
   function spawn(binary, argv, options) {
     if (binary === "git" && argv[0] === "show") {
       const url = new URL("../../../" + argv[1].slice(41), import.meta.url);
@@ -49,6 +50,12 @@ export function settlementControl(t, h) {
       result = h.run("scp", [local, remote], options.timeout);
     }
     if (!request) return result;
+    if (request.seal && result.status === 0) {
+      assert.equal(request.epoch, "bootstrap");
+      assert.ok(finishMonitor, "bootstrap seal requires a registered monitor");
+      finishMonitor();
+      finishMonitor = undefined;
+    }
     const { id } = request.invocation;
     return { ...result, stderr: `CORTEN_CONTROL ${id} ${digest(JSON.stringify(request))}\nCORTEN_RESULT ${id} ${result.status}\n` };
   }
@@ -60,30 +67,31 @@ export function settlementControl(t, h) {
     assert.equal(argv.at(-2), `root@${saved.ip}`);
     assert.equal(argv.at(-1), `/usr/bin/python3 -I /run/corten-bench-control-${token}/helper.py monitor ${token} ${Buffer.from(JSON.stringify(expected)).toString("hex")}`);
     const child = new EventEmitter();
-    let sequence = 0, ended = false;
+    let sequence = 0, ended = false, receivedClose = false, startup, terminal;
     const frame = (kind, payload) => child.stdout.write(JSON.stringify({ schema: "benchmark-control-frame/v1",
       id: expected.id, sequence: ++sequence, kind, payload }) + "\n");
     const close = (code) => {
-      clearInterval(timer);
-      if (!ended) { ended = true; child.emit("close", code, null); }
+      if (ended) return;
+      ended = true;
+      clearImmediate(startup); clearImmediate(terminal);
+      child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy();
+      child.emit("close", code, null);
     };
     child.stdout = new PassThrough(); child.stderr = new PassThrough();
     child.stdin = new Writable({ write(bytes, encoding, next) {
       assert.deepEqual(JSON.parse(bytes), { id: expected.id, kind: "close", payload: {} });
-      setImmediate(() => close(0)); next();
+      receivedClose = true; next();
     } });
-    child.stdin.on("close", () => setImmediate(() => close(255)));
-    setImmediate(() => {
+    child.stdin.on("close", () => close(receivedClose ? 0 : 255));
+    startup = setImmediate(() => {
       frame("registered", { ...structuredClone(registration), ...expected });
       frame("progress", { state: "active" });
     });
-    const deadline = Date.now() + 2000;
-    const timer = setInterval(() => {
-      if (h.saved().control.sealed.includes("bootstrap")) {
-        clearInterval(timer);
-        frame("terminal", { id: expected.id, nativeTerminal: true, campaign: `${round}-${token}`, sealSha256: "f".repeat(64) });
-      } else if (Date.now() >= deadline) close(255);
-    }, 5);
+    finishMonitor = () => {
+      assert.equal(ended, false);
+      terminal = setImmediate(() => frame("terminal", { id: expected.id, nativeTerminal: true,
+        campaign: `${round}-${token}`, sealSha256: "f".repeat(64) }));
+    };
     t.after(() => close(255));
     return child;
   }

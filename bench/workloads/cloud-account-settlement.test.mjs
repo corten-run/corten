@@ -240,8 +240,11 @@ test("composed unknown/unclosed/cancel/deadline/mutation failures retain exclusi
       } };
     const args = mode === "delete" ? ["r21", "--state-dir", h.base, "--collect"]
       : ["r21", "--state-dir", h.base, "--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
-    await productionMain([...args, "--print-approval"], deps);
-    await assert.rejects(productionMain([...args, "--approve-reviewed-merged-ready", approval], deps), (error) => {
+    const approved = async (args) => {
+      assert.equal(await productionMain([...args, "--print-approval"], deps), 3);
+      return productionMain([...args, "--approve-reviewed-merged-ready", approval], deps);
+    };
+    await assert.rejects(approved(args), (error) => {
       assert.equal(error.controlUncertain, true); assert.equal(error.controlTreeUncertain, true); return true;
     });
     assert.ok(existsSync(join(h.local, "operation.lock")));
@@ -254,13 +257,20 @@ test("composed unknown/unclosed/cancel/deadline/mutation failures retain exclusi
     assert.deepEqual(a.calls.at(-1), mode === "action" ? { method: "GET", path: "/v2/actions/456" }
       : mode === "post" ? { method: "POST", path: "/v2/droplets" }
       : mode === "delete" ? { method: "DELETE", path: "/v2/droplets/123" } : { method: "GET", path: "/v2/account" });
-    const before = h.calls.length, providerBefore = a.calls.length;
+    const before = h.calls.length, providerBefore = a.calls.length, saved = h.saved();
+    const locks = [join(h.local, "operation.lock"), ...(mode === "delete" ? [] : [join(h.base, ".groups-launch.lock")])];
+    const custody = locks.map((path) => readFileSync(path));
+    const collect = ["r21", "--state-dir", h.base, "--collect"];
     if (["action", "post"].includes(mode)) {
       // The unbound create is refused before collect can try the operation lock.
-      await assert.rejects(h.task().collect(), /monitor not registered; preserve pending reservation/);
-      await assert.rejects(h.launch().launch(), { code: "EEXIST" });
-    } else await assert.rejects(h.task().collect(), { code: "EEXIST" });
-    assert.equal(h.calls.length, before); assert.equal(a.calls.length, providerBefore);
+      await assert.rejects(approved(collect), { controllerStage: "controller-collect", message: /monitor not registered; preserve pending reservation/ });
+      await assert.rejects(approved(args), { controllerStage: "controller-launch", code: "EEXIST" });
+    } else await assert.rejects(approved(collect), { controllerStage: "controller-collect", code: "EEXIST" });
+    assert.ok(workers.slice(2).every((w) => w.child === undefined));
+    assert.deepEqual(h.calls.slice(before).filter(([binary]) => binary !== "git"), []);
+    assert.equal(a.calls.length, providerBefore);
+    assert.deepEqual(h.saved(), saved);
+    assert.deepEqual(locks.map((path) => readFileSync(path)), custody);
     await assert.rejects(workers[1].run.close(), (error) => error.controlUncertain === true);
     t.diagnostic(`${mode}: sticky uncertainty + retained operation lock; no repeated mutation`);
   });
