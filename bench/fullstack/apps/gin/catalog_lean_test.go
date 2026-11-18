@@ -51,3 +51,55 @@ func TestCatalogLeanLoggingAndRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestCatalogLeanDocumentHeaders(t *testing.T) {
+	source := &catalogSource{fixture: map[string]*catalogRecord{"record_1": sampleCatalogRecord()}}
+	baseline := map[string]string{
+		"Content-Security-Policy":    "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+		"X-Content-Type-Options":     "nosniff",
+		"Referrer-Policy":            "strict-origin-when-cross-origin",
+		"X-Frame-Options":            "DENY",
+		"Cross-Origin-Opener-Policy": "same-origin",
+		"Permissions-Policy":         "camera=(), microphone=(), geolocation=()",
+	}
+	for _, profile := range []string{"catalog-lean", "catalog-lean-extra"} {
+		t.Run(profile, func(t *testing.T) {
+			t.Setenv("PROFILE", profile)
+			router := newRouter()
+			source.routes(router)
+			router.StaticFile("/catalog.css", "static/catalog.css")
+			for _, tc := range []struct {
+				path   string
+				status int
+				cache  string
+			}{
+				{"/catalog/record_1?field=Ac", http.StatusOK, ""},
+				{"/catalog/missing", http.StatusNotFound, ""},
+				{"/api/catalog/record_1", http.StatusOK, "no-store"},
+				{"/catalog.css", http.StatusOK, ""},
+			} {
+				res := httptest.NewRecorder()
+				router.ServeHTTP(res, httptest.NewRequest(http.MethodGet, tc.path, nil))
+				if res.Code != tc.status {
+					t.Fatalf("%s: status=%d, want %d", tc.path, res.Code, tc.status)
+				}
+				document := profile == "catalog-lean" && tc.path == "/catalog/record_1?field=Ac"
+				for name, value := range baseline {
+					want := ""
+					if document {
+						want = value
+					}
+					if got := res.Header().Get(name); got != want {
+						t.Errorf("%s: %s=%q, want %q", tc.path, name, got, want)
+					}
+				}
+				if document {
+					tc.cache = "private, no-cache"
+				}
+				if got := res.Header().Get("Cache-Control"); got != tc.cache {
+					t.Errorf("%s: Cache-Control=%q, want %q", tc.path, got, tc.cache)
+				}
+			}
+		})
+	}
+}
