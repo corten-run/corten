@@ -100,6 +100,18 @@ of bytes. This document contract adds no requirement to the JSON route and
 does not require the matched profile's compression, deadlines or other middleware.
 Earlier lean results did not check this baseline. Do not relabel them or attribute
 an earlier throughput difference to headers without a separate measurement.
+
+**Header-only control (not a group result).** On 2026-11-18, four alternating
+off/on pairs exercised the same Axum/Maud release binary on Linux/WSL2, with
+the catalog adapter from commit `af63d0eca73baa91daf8066e94491b6654b872fc`.
+Each trial made 200 warmup and 2,000 measured serial keep-alive requests to
+the same in-memory record. All returned the same HTML. Enabling just the page
+headers increased the parsed header block from 101 to 604 bytes. The paired
+increases in server-task hardware cycles per request were 15,835, 13,329,
+71,996 and 23,590 (orders off/on, on/off, off/on, on/off). This checks that
+the extra work is measurable on that binary; the spread and single-client
+setup do not tell us how much it affects throughput or the gap to Corten.
+
 An `unstaged` data route is not a substitute: its sandbox would disable the
 catalog's working form. No output cache, pre-rendered response or framework
 internal bypass is used. Both sources retain the complete page/JSON correctness
@@ -108,7 +120,9 @@ gate, browser checks, field filtering and fresh request-time rendering.
 The runner selects `PROFILE=catalog-lean` for the registry's catalog-page
 contenders in both correctness and timed containers. Other diagnostic adapters
 retain their existing profile; richer group runners keep their production or
-matched settings. This is one supported lean recipe per contender, not an
+matched settings. A new ungrouped run that includes both checked and unchecked
+adapters reports their rows separately; it is not a header-matched baseline.
+This is one supported lean recipe per contender, not an
 unbounded search across runtimes, compilers or framework internals.
 
 | Contender | Supported lean configuration |

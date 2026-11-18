@@ -113,6 +113,24 @@ export function expectedDocumentHeaderPaths(catalog, source) {
 
 const strictReferrers = ["strict-origin-when-cross-origin", "strict-origin", "same-origin", "no-referrer"];
 const referrers = new Set([...strictReferrers, "no-referrer-when-downgrade", "origin", "origin-when-cross-origin", "unsafe-url"]);
+const trimOWS = (v) => v.replace(/^[ \t]+|[ \t]+$/g, "");
+// COOP is a Structured Fields token item. Unknown parameters do not change the
+// policy, but a malformed item has no policy. Do not split on a quoted semicolon.
+function sameOriginOpener(value) {
+  if (!value.startsWith("same-origin")) return false;
+  const param = /; *[a-z*][a-z0-9_.*-]*(?:=("(?:[\x20-\x21\x23-\x5b\x5d-\x7e]|\\["\\])*"|\?[01]|[A-Za-z*][A-Za-z0-9!#$%&'*+.^_\x60|~:/-]*|-?\d{1,12}\.\d{1,3}|@?-?\d{1,15}|:[A-Za-z0-9+/]*={0,2}:|%"(?:[\x20-\x21\x23-\x24\x26-\x7e]|%[a-f0-9]{2})*"))?/y;
+  for (let i = "same-origin".length; i < value.length; i = param.lastIndex) {
+    param.lastIndex = i;
+    const m = param.exec(value);
+    if (!m) return false;
+    const bare = m[1] ?? "";
+    try {
+      if (bare.startsWith(":")) atob(bare.slice(1, -1));
+      if (bare.startsWith('%"')) decodeURIComponent(bare.slice(2, -1));
+    } catch { return false; }
+  }
+  return true;
+}
 export function verifyDocumentHeaders(row, path) {
   assert.ok(row && row.path === path && row.status === 200 && Array.isArray(row.headers), `${path}: missing HTML response observation`);
   const fields = new Map();
@@ -120,9 +138,9 @@ export function verifyDocumentHeaders(row, path) {
     assert.ok(documentHeaderNames.includes(header?.name) && typeof header.value === "string" && !/[\0\r\n]/.test(header.value),
       `${path}: invalid document header observation`);
     if (!fields.has(header.name)) fields.set(header.name, []);
-    fields.get(header.name).push(header.value.trim());
+    fields.get(header.name).push(trimOWS(header.value));
   }
-  const list = (name) => (fields.get(name) ?? []).join(",").split(",").map((item) => item.trim());
+  const list = (name) => (fields.get(name) ?? []).join(",").split(",").map(trimOWS);
   const single = (name) => fields.get(name)?.length === 1 ? fields.get(name)[0] : "";
   assert.match(single("content-type"), /^text\/html(?:\s*;|$)/i, `${path}: expected text/html`);
 
@@ -131,7 +149,8 @@ export function verifyDocumentHeaders(row, path) {
   const policies = list("content-security-policy").map((policy) => {
     const directives = new Map();
     for (const part of policy.split(";")) {
-      const [name, ...values] = part.trim().toLowerCase().split(/[\t\n\r\f ]+/);
+      if (/[^\x00-\x7f]/.test(part)) continue;
+      const [name, ...values] = part.replace(/^[\t\n\r\f ]+|[\t\n\r\f ]+$/g, "").toLowerCase().split(/[\t\n\r\f ]+/);
       if (/^[a-z0-9-]+$/.test(name) && !directives.has(name)) directives.set(name, values);
     }
     return directives;
@@ -148,7 +167,7 @@ export function verifyDocumentHeaders(row, path) {
   assert.equal(list("x-content-type-options")[0].toLowerCase(), "nosniff", `${path}: X-Content-Type-Options must be nosniff`);
   const referrer = list("referrer-policy").map((v) => v.toLowerCase()).findLast((v) => referrers.has(v));
   assert.ok(strictReferrers.includes(referrer), `${path}: Referrer-Policy must be strict-origin-when-cross-origin or stricter`);
-  assert.match(single("cross-origin-opener-policy"), /^same-origin(?:; *report-to="(?:[\x20-\x21\x23-\x5b\x5d-\x7e]|\\["\\])*")?$/,
+  assert.ok(sameOriginOpener(single("cross-origin-opener-policy")),
     `${path}: Cross-Origin-Opener-Policy must be same-origin`);
   for (const name of ["permissions-policy", "cache-control"]) {
     assert.ok(list(name).some(Boolean), `${path}: ${name} must be present and nonempty`);
