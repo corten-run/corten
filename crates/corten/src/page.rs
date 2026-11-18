@@ -3554,10 +3554,14 @@ async fn within_deadline<S: crate::app::Steps>(
     (method, uri): (&http::Method, &Uri),
     late: bool,
 ) -> Response {
-    if deadline.is_none() && !late {
+    let result = if late {
+        within_late(deadline, next.run(req), signal).await
+    } else if let Some(limit) = deadline {
+        within(limit, next.run(req)).await
+    } else {
         return next.run(req).await;
-    }
-    match within(deadline, next.run(req), late, signal).await {
+    };
+    match result {
         Ok(res) => res,
         // The handler was waiting for the client to send the rest of the body: the request had
         // not arrived whole in time, which is the client's 408 (a stalled upload with the
@@ -3601,10 +3605,24 @@ fn accepts_html(headers: &HeaderMap) -> bool {
 /// is not ready, so a handler that answers at once (a page rendered from memory) never registers
 /// one: about 600 ns a request measured with `tokio::time::timeout`. Each poll of `fut` starts
 /// with no wait for the body marked, so the mark read when the timer fires is that poll's.
-async fn within(
+async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
+    use std::{future::Future, pin::pin, task::Poll};
+    let mut fut = pin!(fut);
+    let mut timer = pin!(None::<tokio::time::Sleep>);
+    std::future::poll_fn(|cx| {
+        crate::extract::forget_wait();
+        if let Poll::Ready(out) = fut.as_mut().poll(cx) {
+            return Poll::Ready(Ok(out));
+        }
+        waited_until(timer.as_mut(), limit, cx)
+    })
+    .await
+}
+
+/// Like `within`, with one more possible stage: filling a page that no typed route has filled.
+async fn within_late(
     limit: Option<std::time::Duration>,
     fut: impl Future<Output = Response>,
-    late: bool,
     signal: &crate::Signal,
 ) -> Result<Response, Late> {
     use std::{future::Future, pin::pin, task::Poll};
@@ -3619,7 +3637,7 @@ async fn within(
             if let Poll::Ready(res) = answer.poll(cx) {
                 // A page the middleware (or a raw route) made early can still have places.
                 // Only that answer needs a fill, under the existing deadline and panic catch.
-                if !late || res.extensions().get::<crate::layout::Pending>().is_none() {
+                if res.extensions().get::<crate::layout::Pending>().is_none() {
                     return Poll::Ready(Ok(res));
                 }
                 // The middleware's future is finished; do not hold it across the reads.
@@ -3634,15 +3652,25 @@ async fn within(
             }
         }
         let Some(limit) = limit else { return Poll::Pending };
-        if timer.is_none() {
-            timer.set(Some(tokio::time::sleep(limit)));
-        }
-        match timer.as_mut().as_pin_mut().map(|timer| timer.poll(cx)) {
-            Some(Poll::Ready(())) => Poll::Ready(Err(Late(crate::extract::waited()))),
-            _ => Poll::Pending,
-        }
+        waited_until(timer.as_mut(), limit, cx)
     })
     .await
+}
+
+#[inline]
+fn waited_until<T>(
+    mut timer: std::pin::Pin<&mut Option<tokio::time::Sleep>>,
+    limit: std::time::Duration,
+    cx: &mut std::task::Context<'_>,
+) -> std::task::Poll<Result<T, Late>> {
+    use std::task::Poll;
+    if timer.is_none() {
+        timer.set(Some(tokio::time::sleep(limit)));
+    }
+    match timer.as_pin_mut().map(|timer| timer.poll(cx)) {
+        Some(Poll::Ready(())) => Poll::Ready(Err(Late(crate::extract::waited()))),
+        _ => Poll::Pending,
+    }
 }
 
 thread_local! {
