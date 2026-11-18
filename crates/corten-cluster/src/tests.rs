@@ -17,8 +17,6 @@ use corten::feed::Change;
 
 use super::*;
 
-include!("../../../.i1607-throughput.rs");
-
 #[test]
 fn nats_header_line_breaks_do_not_panic() {
     // A received header's value is read into a `String` and appended through
