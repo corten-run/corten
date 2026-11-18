@@ -480,7 +480,11 @@ once. Against a feed that answers every stream with `sync`, one page made 544 sn
 in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
 221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream), on
-async-nats 0.52 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
+async-nats 0.53 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
+An app upgrading `corten-cluster` must set `async-nats = "0.53"` in its own `Cargo.toml` too:
+`Cluster::start` takes its `async_nats::Client`. Review the
+[async-nats 0.53 release notes](https://github.com/nats-io/nats.rs/releases/tag/async-nats%2Fv0.53.0)
+for changes to TLS and server discovery before deploying.
 
 Cluster feed keys use literal [NATS subjects](https://docs.nats.io/nats-concepts/subjects):
 nonempty dot-separated tokens without whitespace, control characters (NUL included), `*` or

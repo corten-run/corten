@@ -1061,6 +1061,34 @@ async fn an_idempotency_key_commits_once_even_when_retries_race() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_cluster_client_with_a_root_ca_requires_tls() {
+    let Ok(tls) = std::env::var("CORTEN_TEST_NATS_TLS_URL") else {
+        return eprintln!("skipped: set CORTEN_TEST_NATS_TLS_URL and CORTEN_TEST_NATS_CA_FILE for a TLS JetStream broker");
+    };
+    let (db, plain) = urls().expect("set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL (a plaintext broker)");
+    let ca = std::env::var_os("CORTEN_TEST_NATS_CA_FILE").expect("set CORTEN_TEST_NATS_CA_FILE to the broker's CA PEM");
+    let options = async_nats::ConnectOptions::new().add_root_certificates(ca.into());
+    let error = options.clone().connect(&plain).await.expect_err("the client accepted plaintext with a CA configured");
+    assert_eq!(error.kind(), async_nats::ConnectErrorKind::Tls);
+
+    let nats = options.connect(&tls).await.unwrap();
+    let schema = key("tls_");
+    let pool = schema_pool(&db, &schema).await;
+    test_items(&pool).await;
+    let stream = schema.to_uppercase();
+    let options = Options { stream: stream.clone(), subject_prefix: schema.clone(), ..Options::default() };
+    let cluster = Cluster::start(pool.clone(), nats.clone(), Items, options).await.unwrap();
+    let feed = "secured";
+    new_feed(&pool, feed).await;
+    let followed = cluster.feed(feed).await.unwrap().unwrap();
+    assert_eq!(set(&pool, feed, 1, None).await.seq, Some(1));
+    eventually("the follower to receive the patch over TLS", || followed.seq() == 1).await;
+    assert_eq!(followed.read(|rows| rows["a"].n), 1);
+    wait_pending(&pool, 0).await;
+    delete_test_stream_and_schema(&db, &jetstream::new(nats), &stream, &schema).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn two_instances_converge_and_a_late_one_backfills_its_replay_log() {
     let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
     let pool = pool(&db).await;

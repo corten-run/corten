@@ -4318,6 +4318,9 @@ rules something out.
     0.52 fixes that; 0.51 also fixes spurious missing heartbeats and pull-consumer hot loops
     and bounds JetStream API requests. These affect the cluster's feed path. Both releases
     require Rust 1.89. There is no claim that 0.50 is abandoned: its missing fixes suffice.
+    async-nats 0.53 keeps Rust 1.89 and fixes how the client requires TLS and trusts server
+    discovery. `Cluster::start` takes the app's `async_nats::Client`, so staying on 0.52
+    would prevent an app from taking those fixes.
     SQLx stays on 0.8.6: 0.9.0 requires Rust 1.94, and none of the Postgres, pool or TLS fixes
     its changelog lists is on a path corten-cluster uses (Stands on, reasoned).
 
@@ -4326,17 +4329,21 @@ rules something out.
     a `-wal` file that a less trusted party wrote. auction-room opens only the file its
     operator names in `DATABASE_URL`, never one a user supplies, so it is not exposed, and its
     README says not to copy it to open such files.
-    The fixed bundled libsqlite3-sys 0.39 is out of reach: sqlx-sqlite 0.8.6 requires 0.30 and
-    0.9.0 allows only `<0.38`. Linking a system SQLite 3.54.1 built from sqlite.org was tried
-    and rejected: it cost libclang, a C build and a download in every CI job and a patched
-    SQLite for every contributor, and a version-only scan still flagged the crate. A scan of
-    `Cargo.lock` reports the advisory; this paragraph is the exception, not an audit ignore.
+    SQLx 0.9.1 now allows the fixed bundled libsqlite3-sys, but requires Rust 1.94.
+    Keep the workspace floor at 1.89: although 1.94 meets the age guard, this example does
+    not open untrusted database files, and upgrading it would raise the floor even if
+    corten-cluster stayed on SQLx 0.8. Linking a system SQLite 3.54.1 built from sqlite.org
+    was tried and rejected: it cost libclang, a C build and a download in every CI job and a
+    patched SQLite for every contributor, and a version-only scan still flagged the crate.
+    A scan of `Cargo.lock` reports the advisory; this paragraph is the exception, not an audit ignore.
 
-    Stands on: platform (crates.io declares Rust 1.89.0 for async-nats 0.51.0 and 0.52.0,
-    and Rust 1.94.0 for SQLx 0.9.0; the
+    Stands on: platform (crates.io declares Rust 1.89.0 for async-nats 0.51.0 through 0.53.0,
+    and Rust 1.94.0 for SQLx 0.9.0 and 0.9.1; the
     [async-nats changelog](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md)
-    describes the header panic and JetStream fixes; sqlx-sqlite 0.8.6 requires
-    libsqlite3-sys 0.30.1 and 0.9.0 allows `>=0.30.1, <0.38.0`; the
+    describes the header panic and JetStream fixes, and the
+    [0.53.0 release notes](https://github.com/nats-io/nats.rs/releases/tag/async-nats%2Fv0.53.0)
+    describe the TLS and discovery fixes); platform (sqlx-sqlite 0.8.6 requires
+    libsqlite3-sys 0.30.1 and [0.9.1 allows `>=0.30.1, <0.41.0`](https://github.com/transact-rs/sqlx/blob/v0.9.1/sqlx-sqlite/Cargo.toml); the
     [SQLite advisory](https://rustsec.org/advisories/RUSTSEC-2026-0459.html) fixes the bundled
     source in libsqlite3-sys 0.39.0 / SQLite 3.54.0 and exposes only a process that opens a
     database, with its `-wal`, that a less trusted party could have written); bet (apps can
@@ -4362,16 +4369,19 @@ rules something out.
     value (small surface and deliberate dependencies, verified rather than assumed: Values 6
     and 9).
 
-    Revisit when: a SQLx release allows libsqlite3-sys 0.39 or later, any Corten crate or
-    example opens a database another party could write, another advisory is published against
-    the bundled SQLite auction-room builds, SQLx's TLS hang (#4251) is reported on Postgres or
+    Revisit when: a SQLx release that builds on the Rust floor allows libsqlite3-sys 0.39 or
+    later, any Corten crate or example opens a database another party could write, another
+    advisory is published against the bundled SQLite auction-room builds, SQLx's TLS hang
+    (#4251) is reported on Postgres or
     an app on corten-cluster needs a SQLx 0.9 fix, a held dependency line needs a
     correctness or security fix or loses maintenance, the Rust floor moves for another needed
     dependency, or an urgent fix requires a compiler less than about six months old. Re-read
     release notes, compiler requirements and advisories before moving either driver, and
     record the reason and the new floor here with its checked build.
 
-    Last checked: 2026-11-14, crates.io metadata for SQLx 0.8.6 and 0.9.0, sqlx-sqlite 0.8.6
+    Last checked: 2026-11-18, crates.io metadata for async-nats 0.53.0 and SQLx 0.9.1,
+    sqlx-sqlite 0.9.1's manifest, RUSTSEC-2026-0459 and async-nats 0.53.0's release notes;
+    2026-11-14, crates.io metadata for SQLx 0.8.6 and 0.9.0, sqlx-sqlite 0.8.6
     and 0.9.0 and async-nats 0.51.0 and 0.52.0, their release notes, Rust 1.89.0's release
     date and RUSTSEC-2026-0459, against `7d232f93d`; 2026-11-14, the SQLx 0.9.0 changelog's
     Postgres, pool and TLS fixes against corten-cluster's SQLx use, on `f776b350d`.
@@ -5978,6 +5988,10 @@ rules something out.
     inbox before changing the database or starting background work. NATS does not advertise
     its control-line limit, so deployments that change it set `Options::max_control_line` to
     match the lowest server limit the client can encounter.
+
+    The control-line budget is separate from the payload limit. Starting with async-nats
+    0.53, the client's cached payload limit follows later server INFO messages as well as
+    the handshake. This still is not a per-publish measurement of what JetStream will accept.
 
     The relay uses the same check, independent of the client or broker, for rows that an old
     version or external SQL could have queued. It marks an invalid row done with the existing
