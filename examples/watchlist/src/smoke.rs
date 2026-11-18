@@ -27,6 +27,10 @@ pub mod url {
     #[route("/smoke/quoted", get = quoted)]
     pub struct Quoted;
 
+    /// A page for checking nested scope roots against elements inside and outside the component.
+    #[route("/smoke/scope", get = scope_page)]
+    pub struct ScopePage;
+
     /// A whole document whose refs scope is its html element, after a doctype.
     #[route("/smoke/scoped", get = scoped_page)]
     pub struct ScopedPage;
@@ -82,7 +86,8 @@ pub mod url {
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm, Reader, FormNested, PastForm, FormText, ScopedPage];
+pub const COMPONENTS: &[corten::Component] =
+    &[Quoted, ScopeProbe, StyledNote, ShipForm, Reader, FormNested, PastForm, FormText, ScopedPage];
 
 #[derive(Id)]
 struct ScopedReadyId;
@@ -98,7 +103,7 @@ fn ScopedPage() -> impl Document {
                 <Corten />
             </head>
             <body>
-                <main><output id={ScopedReadyId} ref={ready} on:connect={js::ready(ready)}></output></main>
+                <main><output id={ScopedReadyId} ref={ready} on:connect={js::ready(ready, signal)}></output></main>
             </body>
         </html>
     }
@@ -140,6 +145,28 @@ async fn quoted(req: Req) -> HtmlResult {
     req.page(html! {
         <Layout req={&req} title="Quoted arguments" viewer={None} head="">
             <Quoted />
+        </Layout>
+    })
+}
+
+#[component(css)]
+fn ScopeProbe() -> impl Render {
+    html! {
+        <div class={Frame}>
+            <article class={List}>
+                <p data-scope-probe="inside">"Inside"</p>
+                <section><p data-scope-probe="section">"Inside a section"</p></section>
+            </article>
+            <p data-scope-probe="outside">"Outside"</p>
+        </div>
+    }
+}
+
+async fn scope_page(req: Req) -> HtmlResult {
+    req.page(html! {
+        <Layout req={&req} title="Nested CSS scopes" viewer={None} head="">
+            <ScopeProbe />
+            <article><section><p data-scope-probe="other">"In another article"</p></section></article>
         </Layout>
     })
 }

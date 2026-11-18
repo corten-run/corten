@@ -416,6 +416,28 @@ function signalOf(el) {
   return life.signal;
 }
 
+/** Patch roots that left, kept through the removal sweep only when asked for.
+ * @type {Map<Node, Element | null> | undefined} */
+let replacements;
+
+/**
+ * Internal to corten-ui. Opt into patch provenance. The lookup is for use during an element's
+ * `signal` abort: it finds the root a patch put in place of that element or its ancestor.
+ * Null means removal; undefined means no patch. The second lookup reads a dialog's drawn
+ * open state, before its connect handler or focus could change it.
+ * @returns {[(el: Element | null) => Element | null | undefined, (el: HTMLDialogElement) => boolean | undefined]}
+ * @internal
+ */
+export function patchRoots() {
+  const roots = replacements ??= new Map();
+  return [(el) => {
+    for (; el; el = parentElementOf(el)) {
+      const root = roots.get(el);
+      if (root !== undefined) return root;
+    }
+  }, (el) => served.get(el)];
+}
+
 /** A `^ref` argument with no such element around the event's target: the handler is not for it. */
 const SKIP = Symbol("skip");
 
@@ -792,6 +814,7 @@ function observed(records) {
   for (const parent of wide) if (inPage(parent)) scan(parent, names, true);
   for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
   if (removed && (lives.size || connected.size || onPage.size)) sweep();
+  if (replacements?.size) for (const { removedNodes } of records) for (const node of removedNodes) replacements.delete(node);
 }
 
 const observer = new MutationObserver(observed);
@@ -1077,7 +1100,10 @@ async function apply(html, signal, sent, took, own, asked, within) {
       const up = !!target && holds(target, document.activeElement) && parent;
       navs ||= !!target && holdsNav(target);
       if (parent) changedIn(parent, ["x", id, []]);
-      if (target) elementOwn.remove.call(target);
+      if (target) {
+        replacements?.set(target, null);
+        elementOwn.remove.call(target);
+      }
       if (up) focusNear(up);
     }
     else if (!target) console.error(`corten: patch element <${localNameOf(el)}> needs an id that exists on the page`, el);
@@ -1089,6 +1115,7 @@ async function apply(html, signal, sent, took, own, asked, within) {
     } else {
       const parent = parentElementOf(target);
       if (parent) changedIn(parent, ["r", id, [el]]);
+      replacements?.set(target, el);
       replaceKeeping(target, el, sent, took, true, within);
       put.push(el);
     }
