@@ -5874,7 +5874,7 @@ rules something out.
     on the successor, overlapping draws, or a synchronous structural change and draw together;
     or the first-use request costs more than keeping the planner in the runtime.
 
-    Last checked: 2026-11-17, the Watchlist dialog smoke in Chromium, Firefox and WebKit
+    Last checked: 2026-11-18, the Watchlist dialog smoke in Chromium, Firefox and WebKit
     (Playwright 1.64.1, Navigation API enabled in the isolated layout check).
 
 ## Rules

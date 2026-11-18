@@ -90,7 +90,8 @@ pub mod url {
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm, Reader, Closing, FormNested, PastForm, FormText, ScopedPage];
+pub const COMPONENTS: &[corten::Component] =
+    &[Quoted, StyledNote, ShipForm, Reader, Closing, FormNested, PastForm, FormText, ScopedPage];
 
 #[derive(Id)]
 struct ScopedReadyId;
