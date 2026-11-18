@@ -2399,7 +2399,9 @@ failures as plain text instead),
 the standard one: an RFC 9457 Problem Details document, sent as `application/problem+json`,
 `{"title":"Not Found","status":404,"detail":"No item 7."}`. `title` is the status's reason. A
 4xx's `detail` is the error's message or the rejection's text; a 5xx has no `detail`, only the
-status (the message is logged, and shown under `corten dev`). Validation errors add the fields
-as an extension member:
+status (the message is logged, and shown under `corten dev`). If a JSON body has a value that
+does not fit a field, `Json<T>` uses the same serde reader to report that field's path in its
+422 whether `T` has a derived `FromJson` fast path or delegates to serde. Validation errors add
+the fields as an extension member:
 `{"title":"Unprocessable Entity","status":422,"detail":"email: ...","fields":{"email":"..."}}`,
 and a message about the whole form (`Errors::add_form`) is `form` too.
