@@ -110,10 +110,13 @@ async fn quoted(req: Req) -> HtmlResult {
 #[component(css)]
 fn ScopeProbe() -> impl Render {
     html! {
-        <article class={List}>
-            <p data-scope-probe="inside">"Inside"</p>
-            <section><p data-scope-probe="section">"Inside a section"</p></section>
-        </article>
+        <div class={Frame}>
+            <article class={List}>
+                <p data-scope-probe="inside">"Inside"</p>
+                <section><p data-scope-probe="section">"Inside a section"</p></section>
+            </article>
+            <p data-scope-probe="outside">"Outside"</p>
+        </div>
     }
 }
 
@@ -121,7 +124,6 @@ async fn scope_page(req: Req) -> HtmlResult {
     req.page(html! {
         <Layout req={&req} title="Nested CSS scopes" viewer={None} head="">
             <ScopeProbe />
-            <p data-scope-probe="outside">"Outside"</p>
             <article><section><p data-scope-probe="other">"In another article"</p></section></article>
         </Layout>
     })

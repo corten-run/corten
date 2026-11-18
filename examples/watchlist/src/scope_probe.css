@@ -5,7 +5,8 @@
     @scope (.list) {
         p { --smoke-hoisted-scope: yes; }
     }
-    .list {
+    /* Both roots are inside the frame, whether the engine resolves them through it or body. */
+    .frame {
         @scope (article.list) {
             p { --smoke-subject-scope: yes; }
         }
