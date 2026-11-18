@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { isDeepStrictEqual } from "node:util";
 import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { descriptor, identity, imageCommandEvidence, verifyImage, verifyNativeReceipt } from "../../json-api/contract.mjs";
+import { auditBundleSchemas, descriptor, identity, imageCommandEvidence, verifyImage, verifyNativeReceipt } from "../../json-api/contract.mjs";
 import { inspectJson } from "../../json-api/report.mjs";
+import { timedCaseProjection } from "../../json-api/timed-outcomes.mjs";
 import { contained, reader } from "../../json-api/artifacts.mjs";
 import { deploymentSha256 } from "../deployments.mjs";
-import { digest, durable, inside, readRegular, tree } from "./evidence.mjs";
+import { digest, durable, inside, readRegular, tree, verifyJsonProducer } from "./evidence.mjs";
 import { exact, freeze } from "./campaign-contract.mjs";
 import { matchesWorkingSource } from "./worker.mjs";
 import { dockerRead } from "./host-observation.mjs";
@@ -14,30 +15,40 @@ import { dockerRead } from "./host-observation.mjs";
 export function inspectPreparation(binding, root) {
   const summary = JSON.parse(readRegular(join(root, "summary.json")));
   assert.equal(summary.round, binding.request.round); assert.equal(summary.commit, binding.request.commit);
+  verifyJsonProducer(binding, summary);
   assert.deepEqual(summary.options, binding.execution.effectiveOptions);
   assert.deepEqual(summary.measurement?.cpus, binding.resources.expectedCpus);
   assert.equal(summary.options.build, true); assert.equal(summary.options.checkOnly, true);
-  assert.equal(summary.checksPassed, false); assert.equal(summary.complete, false);
+  assert.equal(summary.checksPassed, false); assert.equal(summary.complete, false); assert.equal(summary.attemptComplete, false);
   assert.deepEqual(summary.cleanupFailures, []);
   const report = inspectJson(summary, { load: reader(root), commit: binding.request.commit });
   assert.equal(report.baseline, false);
   assert.equal(report.functionalAttemptComplete, true, "functional raw matrix/configuration incomplete");
-  assert.ok(Object.values(report.apps).every((rows) => Object.values(rows).every((r) => r.functionalComplete && !r.nativeQualified && r.passes === 0)),
-    "all 36 functional attempts must replay without prebuild audit claims");
-  assert.equal(summary.failures.length, 36, "only the 36 missing independent audits may block staging");
-  const seen = new Set();
+  const group = descriptor(), rows = Object.values(report.apps).flatMap(Object.values);
+  assert.ok(rows.every((r) => r.functionalComplete && !r.nativeQualified && r.passes === 0),
+    "all functional attempts must replay without prebuild audit claims");
+  assert.equal(summary.timingDisposition, rows.some((r) => !r.functional) ? "gated-functional" : undefined);
+  assert.equal(summary.failures.length, group.apps.length * group.cases.length, "only missing independent audits may block staging");
+  const seen = new Set(), expectedWarnings = new Set(["suite outcome"]);
   for (const failure of summary.failures) {
     assert.equal(failure.stage, "JSON qualification");
-    assert.ok(descriptor().apps.includes(failure.app) && descriptor().cases.some((p) => p.key === failure.key));
-    assert.match(failure.error, /exactly one independently audited native receipt required/);
+    assert.ok(group.apps.includes(failure.app) && group.cases.some((p) => p.key === failure.key));
+    assert.match(failure.error.split(/\r?\n/, 1)[0],
+      /^(?:AssertionError \[ERR_ASSERTION\]: )?exactly one independently audited native receipt required$/);
     assert.ok(!seen.has(`${failure.app}/${failure.key}`)); seen.add(`${failure.app}/${failure.key}`);
+    expectedWarnings.add(`${failure.app} ${failure.key} native audit`);
+    expectedWarnings.add(`${failure.app} ${failure.key} timing`);
   }
-  assert.ok(report.warnings.every((w) => / native audit:| timing:|^suite outcome:/.test(w)), report.warnings.join("; "));
-  for (const app of descriptor().apps) for (const profile of descriptor().cases) {
+  assert.ok(report.warnings.every((w) => expectedWarnings.has(w.split(":", 1)[0])), report.warnings.join("; "));
+  const emptyProjection = timedCaseProjection([], summary.options.passes);
+  for (const app of group.apps) exact(summary.apps[app].projections, group.cases.map((p) => p.key));
+  for (const app of group.apps) for (const profile of group.cases) {
     const check = summary.apps[app].checks[profile.key];
     assert.equal(check.nativeSourceVerified, false); assert.equal(check.nativeSerializationVerified, false);
     assert.equal(check.native, undefined);
     assert.deepEqual(summary.apps[app].runs[profile.key], [], "preparation must not have timed anything");
+    assert.deepEqual(summary.apps[app].aggregates[profile.key], {});
+    assert.ok(isDeepStrictEqual(summary.apps[app].projections[profile.key], emptyProjection), "preparation cannot project timed results");
   }
   return { summary, report };
 }
@@ -105,7 +116,7 @@ export function validateAuditDelivery(delivery, subject, sourceRoot) {
   assert.ok(typeof review.reviewer === "string" && review.reviewer.trim());
   assert.ok(Number.isFinite(Date.parse(review.reviewedAt))); assert.deepEqual(review.findings, []);
   exact(delivery.bundle, ["schema", "receipts"]);
-  assert.equal(delivery.bundle.schema, "json-api-native-audits/v1");
+  assert.ok(auditBundleSchemas.includes(delivery.bundle.schema), "unsupported JSON audit bundle");
   assert.ok(Array.isArray(delivery.bundle.receipts)); assert.equal(delivery.bundle.receipts.length, subject.identities.length);
   const seen = new Set();
   for (const receipt of delivery.bundle.receipts) {
@@ -121,7 +132,7 @@ export function validateAuditDelivery(delivery, subject, sourceRoot) {
       assert.equal(manifest.storedAs, `blobs/${file.sha256}`);
       files[file.path] = readRegular(join(sourceRoot, manifest.storedAs)).toString("utf8");
     }
-    verifyNativeReceipt(receipt, expected, files);
+    verifyNativeReceipt(receipt, expected, files, { timed: true });
   }
   return freeze(structuredClone(delivery)); // Data validation only; caller authority is checked separately.
 }
@@ -133,8 +144,9 @@ export function validateTimingAudit(binding, root, subject, bundle, sourceRoot) 
   if (!before.entries.some((e) => e.path === "summary.json")) return freeze({ complete: false });
   const summary = JSON.parse(readRegular(join(root, "summary.json")));
   assert.equal(summary.round, binding.request.round); assert.equal(summary.commit, binding.request.commit);
+  verifyJsonProducer(binding, summary);
   assert.deepEqual(summary.group, descriptor());
-  assert.equal(bundle.schema, "json-api-native-audits/v1");
+  assert.ok(auditBundleSchemas.includes(bundle.schema), "unsupported JSON audit bundle");
   assert.equal(subject.identities.length, descriptor().apps.length * descriptor().cases.length);
   assert.equal(bundle.receipts.length, subject.identities.length);
   assert.equal(subject.images.length, descriptor().apps.length * descriptor().payloads.length + 2);
@@ -176,7 +188,7 @@ export function validateTimingAudit(binding, root, subject, bundle, sourceRoot) 
       assert.equal(digest(source), file.sha256); assert.equal(typeof native.files[file.path], "string");
       assert.ok(isDeepStrictEqual(Buffer.from(native.files[file.path], "utf8"), source), "timing source differs from accepted source snapshot");
     }
-    verifyNativeReceipt(native.receipt, expected[0], native.files);
+    verifyNativeReceipt(native.receipt, expected[0], native.files, { timed: true });
   }
   assert.ok(isDeepStrictEqual(tree(root), before), "timing audit evidence mutated");
   return freeze({ complete });
