@@ -12,6 +12,7 @@ import { providerTransport } from "./cloud-provider.mjs";
 import { productionMain } from "./cloud-production.mjs";
 import { publicError } from "./droplet.mjs";
 import { accountId, commit, context, harness as controllerHarness } from "./cloud-fixtures.mjs";
+import { beforeProvisioning, settlementControl } from "./test-fixtures/provider-settlement-control.mjs";
 
 const credential = "SYNTHETIC_ACCOUNT_DIAGNOSTICS_CREDENTIAL";
 const account = ["account", "get", "--output", "json", "--context", context];
@@ -21,7 +22,7 @@ const state = () => ({ consumes: 0, calls: [], getters: 0, destroyed: 0 });
 
 // Also evaluated in a test-only worker entry, before its verified-import hook.
 // No Node error property, endpoint override or native network call is consulted.
-function fakeConnect(mode, observed, save = () => {}, cancel = () => {}, local) {
+function fakeConnect(mode, observed, save = () => {}, cancel = () => {}, local, beforeProvisioning) {
   let created;
   const raw = "SYNTHETIC_ACCOUNT_DIAGNOSTICS_CREDENTIAL";
   const hostile = () => Object.defineProperties({}, Object.fromEntries(["message", "code", "stack", "body", "endpoint", "providerDiagnostic", "controlUncertain"].map((key) =>
@@ -32,7 +33,7 @@ function fakeConnect(mode, observed, save = () => {}, cancel = () => {}, local) 
     assert.equal(options.headers.authorization, `Bearer ${raw}`);
     const path = url.pathname + url.search;
     observed.calls.push({ method: options.method, path }); save();
-    const fail = !local || path === "/v2/account" && existsSync(join(local, "job.sh"));
+    const fail = !local || path === "/v2/account" && beforeProvisioning(local);
     if (fail && mode === "connect") throw hostile();
     const req = new EventEmitter();
     req.destroy = () => { observed.destroyed++; save(); };
@@ -136,15 +137,16 @@ function worker(t, mode, local, receive = (value) => value) {
   const serve = new URL("cloud-provider-worker.mjs", import.meta.url).href;
   writeFileSync(entry, `import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { serveProviderWorker } from ${JSON.stringify(serve)};
 assert.equal(process.env.NODE_OPTIONS, '--max-old-space-size=256'); delete process.env.NODE_OPTIONS;
 assert.deepEqual(process.execArgv, []); process.stdin.resume();
 const observed = ${JSON.stringify(state())}, save = () => writeFileSync(${JSON.stringify(output)}, JSON.stringify(observed)); save();
 const fakeConnect = ${fakeConnect.toString()};
+const beforeProvisioning = ${beforeProvisioning.toString()};
 serveProviderWorker({ spawn() { observed.consumes++; save(); return {status:0, stdout:Buffer.from(${JSON.stringify(credential)})}; },
-connect: fakeConnect(${JSON.stringify(mode)}, observed, save, undefined, ${JSON.stringify(local)}) });
+connect: fakeConnect(${JSON.stringify(mode)}, observed, save, undefined, ${JSON.stringify(local)}, beforeProvisioning) });
 `);
   let child, launches = 0; const messages = [];
   const run = providerTransport({ repo: resolve("."), launch(path, args, options) {
@@ -199,16 +201,8 @@ test("invalid account details in actual worker replies fail closed and never bec
 test("production finalizer preserves detail after allocation while retaining locks and refusing replay", async (t) => {
   for (const mode of ["request-error", "invalid-json", "http503"]) await t.test(mode, async (t) => {
     const h = controllerHarness(t), workers = []; let approval;
-    const deps = { repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
-      providerFactory() { const w = worker(t, mode, h.local); workers.push(w); return w.run; },
-      spawn(binary, argv, options) {
-        assert.notEqual(binary, "doctl", "no real credential consumption");
-        if (binary === "git" && argv[0] === "show") return { status: 0, stdout: readFileSync(resolve(argv[1].slice(41)), "utf8").replaceAll("\r\n", "\n") };
-        assert.notEqual(binary, "scp", "failure must precede first upload");
-        const args = [...argv];
-        if (binary === "ssh") args[args.length - 1] = options.input.replace(/^set -euo pipefail\n/, "").replace(/\n$/, "");
-        return h.run(binary, args, options.timeout);
-      } };
+    const deps = { ...settlementControl(t, h), repo: h.repo, write(value) { approval = JSON.parse(value).approvalSha256; },
+      providerFactory() { const w = worker(t, mode, h.local); workers.push(w); return w.run; } };
     const args = ["r21", "--state-dir", h.base, "--detach", "--commit", commit, "--ssh-key", "42", "--account-id", accountId, "--context", context];
     assert.equal(await productionMain([...args, "--print-approval"], deps), 3); assert.equal(workers[0].launches, 0);
     const diagnostic = mode === "http503" ? { code: "account-http", httpStatus: 503 } : { code: "account-request", detail: mode };
@@ -221,9 +215,11 @@ test("production finalizer preserves detail after allocation while retaining loc
     assert.equal(observed.consumes, 1); assert.equal(observed.getters, 0);
     assert.equal(observed.calls.filter((value) => value.method === "POST").length, 1);
     assert.equal(observed.calls.filter((value) => value.method === "DELETE").length, 0);
+    assert.deepEqual(observed.calls.at(-1), { method: "GET", path: "/v2/account" });
     assert.equal(h.saved().status, "preparing"); assert.equal(h.saved().id, "123");
     assert.equal(h.saved().deletionIntentAt, undefined); assert.equal(h.saved().fullGroupQualified, false);
-    assert.ok(existsSync(join(h.local, "job.sh"))); assert.ok(existsSync(join(h.local, "operation.lock")));
+    assert.deepEqual(h.saved().control.ledger, []); assert.equal(existsSync(join(h.local, "job.sh")), false);
+    assert.ok(existsSync(join(h.local, "operation.lock")));
     assert.ok(existsSync(join(h.base, ".groups-launch.lock")));
     const before = h.calls.length;
     await assert.rejects(h.task().collect(), { code: "EEXIST" }); assert.equal(h.calls.length, before);
