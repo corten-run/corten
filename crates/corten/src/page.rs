@@ -3199,7 +3199,7 @@ pub(crate) struct AsIs;
 /// ([`crate::api`]). A request a [`crate::Caller`] sent to sign in is redirected there.
 pub(crate) fn render_errors<'s, 'n, 'g, 'm, S: crate::app::Steps>(
     shared: &'s Arc<Shared>,
-    mut req: Request,
+    req: Request,
     next: Next<'n, S>,
     deadline: Option<std::time::Duration>,
     signal: &'g crate::Signal,
@@ -3223,9 +3223,6 @@ pub(crate) fn render_errors<'s, 'n, 'g, 'm, S: crate::app::Steps>(
         late = !shared.layout_reads.is_empty();
         signal.mark_whole(late);
     }
-    if late {
-        crate::layout::LateWrite::stage(&mut req, deadline);
-    }
     errors_rendered(shared, req, next, deadline, signal, api, (mode, fetched), late)
 }
 
@@ -3247,8 +3244,11 @@ async fn errors_rendered<S: crate::app::Steps>(
     if late {
         // The uncommon path owns the late poller's state, not the ordinary request future.
         let _release = ReleasesEarlyHeads(signal);
-        let answer: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> =
-            Box::pin(page_or_error::<S, true>(shared, req, next, deadline, signal, (mode, fetched)));
+        let answer: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
+            let mut req = req;
+            let _until = crate::layout::LateWrite::stage(&mut req, deadline);
+            page_or_error::<S, true>(shared, req, next, deadline, signal, (mode, fetched)).await
+        });
         return answer.await;
     }
     if shared.layout_reads.is_empty() || mode.swaps() {

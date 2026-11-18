@@ -16344,6 +16344,47 @@ mod layout_reads {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn a_write_forwarded_to_a_fallback_keeps_the_outer_layout_deadline() {
+        a_fallback_omits_a_slow_layout_read(Duration::from_secs(1), None).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_write_forwarded_to_a_fallback_uses_an_earlier_inner_layout_deadline() {
+        a_fallback_omits_a_slow_layout_read(Duration::from_secs(3), Some(Duration::from_secs(1))).await;
+    }
+
+    async fn a_fallback_omits_a_slow_layout_read(outer_deadline: Duration, inner_deadline: Option<Duration>) {
+        struct Fallback(Router);
+
+        impl crate::Middleware for Fallback {
+            async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+                let (head, body) = req.into_parts();
+                let res = next.run(Request::from_parts(head.clone(), Body::empty())).await;
+                assert_eq!(res.status(), StatusCode::NOT_FOUND);
+                self.0.clone().oneshot(Request::from_parts(head, body)).await.unwrap()
+            }
+        }
+
+        let outer_count = CartCount::default();
+        let inner_count = CartCount { delay: Duration::from_secs(2), ..CartCount::default() };
+        let inner =
+            App::new(shop_url::router()).layout_read(inner_count.clone()).layout_read(SignedIn).deadline(inner_deadline).router();
+        let outer = App::new(Routes::from(Table::new()))
+            .layout_read(outer_count.clone())
+            .middleware(Fallback(inner))
+            .deadline(outer_deadline)
+            .router();
+        let (status, headers, body) = call_with(outer, "POST", "/typed-write", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && headers.contains_key("corten-shell"), "{headers:?}");
+        assert!(body.contains("<main><p>typed write</p></main>") && body.contains("<footer></footer>"), "{body}");
+        assert!(body.contains("<header>Cart <b>guest</b></header>"), "{body}");
+        assert_eq!(inner_count.started.load(Ordering::SeqCst), 1);
+        assert_eq!(inner_count.finished.load(Ordering::SeqCst), 0);
+        assert_eq!(outer_count.started.load(Ordering::SeqCst), 0);
+    }
+
     #[tokio::test]
     async fn a_patch_only_write_without_middleware_does_not_negotiate_a_whole_answer() {
         let count = CartCount::default();

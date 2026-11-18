@@ -490,6 +490,8 @@ middleware. It keeps the head even if middleware removes the preference: the han
 `req.mode = Mode::Document`. A fragment starts no layout reads.
 A handler forwarding the request into another Corten router does not suppress that router's
 layout reads. The receiving router decides whether to fill the page in its own dispatch.
+Its optional reads stop at the earliest active deadline, even if the receiving router has no
+deadline of its own.
 A handler that answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) can return
 `HtmlResult<Patches>` to skip the typed route's copy. With no middleware that could answer a
 page in its place, it skips whole-page negotiation and late filling too. Middleware or a raw
