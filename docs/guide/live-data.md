@@ -486,26 +486,33 @@ An app upgrading `corten-cluster` must set `async-nats = "0.53"` in its own `Car
 
 **Keep TLS failover when upgrading.** In
 [async-nats 0.53](https://github.com/nats-io/nats.rs/releases/tag/async-nats%2Fv0.53.0),
-root certificates, a client certificate, a custom TLS config, or a `tls://` URL make TLS
-mandatory for every endpoint by default, including `nats://` URLs and reconnects.
-Discovered endpoints keep the transport they were learned on, so a peer learned over TLS
-is dialed with TLS. If the peer is intentionally plaintext, list it explicitly as a
-`nats://` URL and set `ConnectOptions::tls_optional()`.
-Use explicit `tls://` URLs for the secure endpoints in that mixed pool. If a plaintext
-server advertises a TLS peer by hostname, the client does not trust that name for TLS:
-configure the peer's `tls://` URL explicitly, or set `tls_server_name()` to a name valid for
-every TLS peer. Do not make TLS optional for an all-TLS deployment.
+`add_root_certificates()`, `add_client_certificate()`, `tls_client_config()`, or a `tls://` URL
+make TLS mandatory for the whole pool by default, including `nats://` URLs and reconnects.
 
-When TLS starts after the first INFO, the client uses only discovery lists received inside
-TLS. With nats-server older than 2.12, a single configured server can connect without
-discovering any failover peers. Pass multiple `tls://` endpoints to `ConnectOptions::connect`,
-or use `ConnectOptions::tls_first()` if every broker has TLS `handshake_first` enabled, or
-upgrade the brokers to 2.12 or later. Check the advertised hostnames against the peers'
-certificates. A discovered IP is checked against the reporting server's verified name
-by default; for certificates with IP addresses instead, use
-`verify_discovered_servers_by_ip()` with a CA dedicated to the cluster. Before rollout,
-take the connected broker out of service in staging and verify that the client reconnects
-to a peer over the intended transport and feed delivery resumes.
+- **Mixed TLS and plaintext:** Use `ConnectOptions::tls_optional()` and explicitly list each
+  secure peer as `tls://` and each intentional plaintext peer as `nats://`.
+  `require_tls(true)` and `tls_first()` both conflict with `tls_optional()` and must be
+  removed before enabling it. In a mixed pool, `tls_server_name()` changes the name checked
+  when TLS is used; it does not require TLS. A peer learned over TLS still uses TLS, but a peer
+  learned over plaintext can be dialed in plaintext if its INFO does not require TLS. For an
+  all-TLS pool, leave `tls_optional()` off and use `require_tls(true)` to require TLS explicitly.
+- **Initial discovery over TLS:** When TLS starts after the first INFO, only lists received
+  inside TLS count. Before nats-server 2.12, a single seed can connect without discovering
+  failover peers. List multiple `tls://` endpoints, use `tls_first()` with `handshake_first`
+  enabled on every broker, or upgrade the brokers to 2.12 or later.
+- **Discovered IPs:** An IP can inherit the reporting server's verified DNS name, not its IP.
+  Even on nats-server 2.12 or later, a seed configured by IP can connect while peers it
+  advertises by IP are skipped by default. List those peers explicitly, set `tls_server_name()`
+  to a name valid on every TLS peer, or use `verify_discovered_servers_by_ip()` with IP subject
+  alternative names and a trust store dedicated to this cluster.
+- **Discovered hostnames:** Have brokers advertise DNS names that match their certificates.
+  By default the client verifies each peer against the hostname learned over TLS, not a
+  configured list of names. Trust only the cluster's CA: give its PEM to
+  `add_root_certificates()`, or set that root in a custom `tls_client_config()`. If you keep
+  system or shared roots, use `ignore_discovered_servers()` with an explicit server list.
+
+Before rollout, take the connected broker out of service in staging and verify that the
+client reconnects to a peer over the intended transport and feed delivery resumes.
 
 Cluster feed keys use literal [NATS subjects](https://docs.nats.io/nats-concepts/subjects):
 nonempty dot-separated tokens without whitespace, control characters (NUL included), `*` or
