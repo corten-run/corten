@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { bindExecution } from "./contract.mjs";
+import { providerCreateHost } from "../cloud-contract.mjs";
 import { bindCampaign, campaignRounds, jsonPhase, mixedPhase, productionRecipes, validateCampaign } from "./campaign-contract.mjs";
 import { groupNames, selectedApps } from "../registry.mjs";
 import { parseArgs as mixedOptions } from "../../mixed-production/run.mjs";
@@ -65,6 +66,7 @@ test("full campaign binds real committed procedures, all groups, exact native de
 });
 test("group campaigns bind the entire exact native group with stable all-group provenance", () => {
   const all = bindCampaign({ round: "r17", commit });
+  for (const b of all.bindings) assert.equal(b.host.region, providerCreateHost("legacy").region);
   for (const path of ["campaign-contract.mjs", "campaign-entry.mjs", "campaign.mjs", "campaign-verify.mjs"])
     assert.ok(all.bindings[0].sources.files.some((f) => f.path === `bench/workloads/isolated/${path}`), "campaign modules must be source-bound");
   assert.equal(typeof campaigns.bindGroupCampaign, "function");
@@ -72,7 +74,11 @@ test("group campaigns bind the entire exact native group with stable all-group p
     const plan = campaigns.bindGroupCampaign({ round: "r17", commit, group });
     assert.equal(plan.schema, "benchmark-isolated-group-campaign/v1");
     assert.deepEqual(plan.order, [group]);
-    assert.ok(isDeepStrictEqual(plan.bindings, all.bindings.filter((b) => b.request.group === group)), "group bindings differ");
+    const legacy = all.bindings.find((b) => b.request.group === group);
+    const dedicated = bindExecution({ ...legacy.request, review: null }, "dedicated");
+    assert.ok(isDeepStrictEqual(plan.bindings, [dedicated]), "dedicated group binding differs");
+    assert.equal(dedicated.host.region, providerCreateHost("dedicated").region);
+    assert.notEqual(dedicated.subjectSha256, legacy.subjectSha256);
     for (const field of ["procedures", "recipes", "sourceSha256", "ready", "executionAuthorized"])
       assert.deepEqual(plan[field], all[field]);
     assert.ok(Object.isFrozen(plan) && Object.isFrozen(plan.bindings[0].selection.apps));
