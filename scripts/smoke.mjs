@@ -437,7 +437,7 @@ async function parsesAsHtmlMeans(browser) {
   const page = await context.newPage();
   const MATHML = "http://www.w3.org/1998/Math/MathML";
   const XHTML = "http://www.w3.org/1999/xhtml";
-  /** @type {[string, string, (namespaces: { MATHML: string, XHTML: string }) => boolean][]} */
+  /** @type {[string, string, (page: { MATHML: string, XHTML: string, markup: string }) => boolean][]} */
   const shapes = [
     [
       "a <title> in a <mglyph> in an <mi> is MathML's and holds elements",
@@ -528,12 +528,275 @@ async function parsesAsHtmlMeans(browser) {
       `<div><svg><rect width="4" height="4"></rect><p>Total</p></svg></div>`,
       () => !!document.querySelector("p") && !document.querySelector("svg p"),
     ],
+    [
+      "a block through phrasing content closes its paragraph (refused by html!)",
+      `<p data-scope="root"><span><div data-ref="detail">Detail</div></span></p>`,
+      () => !!document.querySelector("[data-ref=detail]") && !document.querySelector("[data-scope=root] [data-ref=detail]"),
+    ],
+    [
+      "a nested li without a list between closes the earlier item (refused by html!)",
+      `<ul><li id="outer"><span><li id="inner">Next</li></span></li></ul>`,
+      () => !!document.querySelector("ul > #inner") && !document.querySelector("#outer #inner"),
+    ],
+    [
+      "a nested definition closes the term (refused by html!)",
+      `<dl><dt id="term"><dd id="definition">Meaning</dd></dt></dl>`,
+      () => !!document.querySelector("dl > #definition") && !document.querySelector("#term #definition"),
+    ],
+    [
+      "a nested anchor closes the active anchor (refused by html!)",
+      `<div><a href="#one"><span><a href="#two">Two</a></span></a></div>`,
+      () => document.querySelectorAll("a").length === 2 && !document.querySelector("a a"),
+    ],
+    [
+      "a nested form start tag is ignored (not refused by html!: no markup shows it is outside every template)",
+      `<div><form id="outer"><div><form id="inner"><input></form></div></form></div>`,
+      () => !!document.querySelector("#outer") && !document.querySelector("#inner"),
+    ],
+    [
+      "a nested button closes the earlier button (refused by html!)",
+      `<div><button id="outer"><span><button id="inner">Again</button></span></button></div>`,
+      () => !!document.querySelector("div > #inner") && !document.querySelector("#outer #inner"),
+    ],
+    [
+      "a directly nested heading closes the earlier heading (refused by html!)",
+      `<h1 id="outer"><h2 id="inner">Heading</h2></h1>`,
+      () => !!document.querySelector("body > #inner") && !document.querySelector("#outer #inner"),
+    ],
+    [
+      "a nested nobr in scope closes the earlier nobr (refused by html!)",
+      `<div><nobr id="outer"><span><nobr id="inner">Text</nobr></span></nobr></div>`,
+      () => !!document.querySelector("#inner") && !document.querySelector("#outer #inner"),
+    ],
+    [
+      "list, button, formatting and foreign-content boundaries keep the nested content",
+      `<div><ul><li><ul><li id="item">Nested</li></ul></li></ul><p><button><div id="block">Button</div></button></p><a><object><a id="link">Link</a></object></a><p><svg><foreignObject><div id="drawing">HTML</div></foreignObject></svg></p></div>`,
+      () => !!document.querySelector("li li#item") && !!document.querySelector("p button #block") && !!document.querySelector("a object a#link") && !!document.querySelector("p svg foreignObject #drawing"),
+    ],
+    [
+        "a caption's formatting marker separates its anchor from one around the table",
+        `<div><a href="#outer"><table><caption><a id="caption-link" href="#inner">Caption</a></caption></table></a></div>`,
+        () => !!document.querySelector("a table caption a#caption-link"),
+      ],
+      [
+      "a form in a template is independent of the outer form",
+      `<div><form><template><form id="inner"><input></form></template></form></div>`,
+      () => !!document.querySelector("template")?.content.querySelector("form#inner"),
+    ],
+    [
+        "an input closes a select in scope (refused by html!)",
+        `<div><select id="outer"><input id="inner"></select></div>`,
+        () => !!document.querySelector("#inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "a nested select is ignored and closes the earlier select (refused by html!)",
+        `<div><select id="outer"><select id="inner"></select><option id="after">After</option></select></div>`,
+        () => !document.querySelector("#inner") && !!document.querySelector("#after") && !document.querySelector("#outer #after"),
+      ],
+      [
+        "an option start ends the current option (refused by html!)",
+        `<div><select><option id="outer"><option id="inner">Next</option></option></select></div>`,
+        () => !!document.querySelector("select > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "an optgroup start ends the current optgroup in select scope (refused by html!)",
+        `<div><select><optgroup id="outer" label="One"><optgroup id="inner" label="Two"></optgroup></optgroup></select></div>`,
+        () => !!document.querySelector("select > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "an hr ends the current option in select scope (refused by html!)",
+        `<div><select><option id="outer">Choice<hr id="inner"></option></select></div>`,
+        () => !!document.querySelector("select > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "a ruby reading ends the current reading (refused by html!)",
+        `<div><ruby>Base<rt id="outer"><rt id="inner">Reading</rt></rt></ruby></div>`,
+        () => !!document.querySelector("ruby > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "a ruby base ends the current rtc (refused by html!)",
+        `<div><ruby><rtc id="outer"><rb id="inner">Base</rb></rtc></ruby></div>`,
+        () => !!document.querySelector("ruby > #inner") && !document.querySelector("#outer #inner"),
+      ],
+      [
+        "an option in an optgroup, a reading in an rtc and optgroups outside select keep their parent",
+        `<div><select><optgroup id="group" label="Group"><option id="choice">Choice</option></optgroup></select><ruby>Base<rtc id="rtc"><rt id="reading">Reading</rt></rtc></ruby><optgroup id="outer" label="Outside"><optgroup id="inner" label="Still outside"></optgroup></optgroup></div>`,
+        () => !!document.querySelector("#group > #choice") && !!document.querySelector("#rtc > #reading") && !!document.querySelector("#outer > #inner"),
+      ],
+      [
+      "duplicate attributes keep the first even when the names differ in case (refused by html!)",
+      `<input name="first" NAME="second">`,
+      () => document.querySelector("input")?.name === "first",
+    ],
+    // Each nesting rule html! refuses (crates/corten-macros/src/html/nesting.rs), for every tag
+    // it names: the browser takes #inner out of #outer, or drops it, in each engine.
+    ...refusedNesting().map(([around, outer, between, inner]) => {
+      const tag = (name, id) => `<${name}${id ? ` id="${id}"` : ""}${name === "optgroup" ? ' label="g"' : ""}>`;
+      const end = (name) => (["hr", "input"].includes(name) ? "" : `</${name}>`);
+      const markup =
+        around.map((n) => tag(n)).join("") +
+        tag(outer, "outer") +
+        (between ? tag(between) : "") +
+        `${tag(inner, "inner")}x${end(inner)}` +
+        (between ? end(between) : "") +
+        end(outer) +
+        [...around].reverse().map(end).join("");
+      return /** @type {[string, string, () => boolean]} */ ([
+        `<${inner}> in <${outer}>${between ? ` through <${between}>` : ""} leaves it (refused by html!)`,
+        markup,
+        () => {
+          const outer = document.getElementById("outer");
+          const inner = document.getElementById("inner");
+          return !!outer && !(inner && outer.contains(inner));
+        },
+      ]);
+    }),
+    // A template's content and a foreign element's start with nothing open in html!'s check:
+    // browsers keep these, so it must not refuse them.
+    ...[
+      ["svg", "foreignObject"],
+      ["svg", "title"],
+      ["svg", "desc"],
+      ["math", "mtext"],
+      ["math", "mi"],
+    ].map(([foreign, point]) => /** @type {[string, string, () => boolean]} */ ([
+      `an <a> in a <${point}> in an <${foreign}> in an <a> stays there`,
+      `<div><a id="outer"><${foreign}><${point}><a id="inner">Link</a></${point}></${foreign}></a></div>`,
+      () => !!document.getElementById("outer")?.contains(document.getElementById("inner")),
+    ])),
+    [
+      "a form in a form in a root template stays there",
+      `<template id="forms"><div><form id="outer"><form id="inner"><input></form></form></div></template>`,
+      () => !!(/** @type {HTMLTemplateElement | null} */ (document.getElementById("forms")))?.content.querySelector("#outer > #inner"),
+    ],
+    // html! refuses nothing across what its markup does not show: an expression or a component
+    // between the two elements may write a boundary, as `raw` does here, or an <svg> or <math>
+    // root may land in the other one. Browsers keep each inner element in its outer one
+    // (crates/corten/tests/markup_roots.rs).
+    ...[
+      `<p id="outer"><button><div id="inner">Detail</div></button></p>`,
+      `<ul><li id="outer"><ul><li id="inner">x</li></ul></li></ul>`,
+      `<dl><dt id="outer"><dl><dd id="inner">x</dd></dl></dt></dl>`,
+      `<div><a id="outer" href="#one"><object><a id="inner" href="#two">x</a></object></a></div>`,
+      `<div><button id="outer"><object><button id="inner">x</button></object></button></div>`,
+      `<div><nobr id="outer"><object><nobr id="inner">x</nobr></object></nobr></div>`,
+      `<h1 id="outer"><span><h2 id="inner">x</h2></span></h1>`,
+      `<div><select id="outer"><object><input id="inner"></object></select></div>`,
+      `<div><select id="outer"><object><select id="inner"></select></object></select></div>`,
+      `<div><select><option id="outer"><span><option id="inner">x</option></span></option></select></div>`,
+      `<div><select><optgroup id="outer" label="g"><span><optgroup id="inner" label="h"></optgroup></span></optgroup></select></div>`,
+      `<div><select><option id="outer">Choice<span><hr id="inner"></span></option></select></div>`,
+      `<div><ruby>Base<rt id="outer"><ruby><rt id="inner">x</rt></ruby></rt></ruby></div>`,
+      `<div><ruby><rtc id="outer"><ruby><rb id="inner">x</rb></ruby></rtc></ruby></div>`,
+      `<div><a id="outer" href="#one"><svg><foreignObject><a id="inner" href="#two">Link</a></foreignObject></svg></a></div>`,
+      `<svg><math><mtext><a id="outer" href="#one"><a id="inner" href="#two">Link</a></a></mtext></math></svg>`,
+      `<math><mrow><svg><title><a id="outer" href="#one"><a id="inner" href="#two">Link</a></a></title></svg></mrow></math>`,
+    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+      `an element stays in its outer one across a boundary html! does not see: ${markup}`,
+      markup,
+      () => !!document.getElementById("outer")?.contains(document.getElementById("inner")),
+    ])),
+    ...[
+      `<div><a href="#one"><template id="content"><a id="inner" href="#two">Link</a></template></a></div>`,
+      `<main><template id="content"><form id="outer"><form id="inner"><input></form></form></template></main>`,
+      // A <script> whose literal text holds `</script><template><script>`, as html! writes it.
+      `<main><script></script><template id="content"><script></script><form id="outer"><form id="inner"><input></form></form></template></main>`,
+    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+      `an element stays in a template written where html! does not see it: ${markup}`,
+      markup,
+      () => {
+        const content = /** @type {HTMLTemplateElement | null} */ (document.getElementById("content"))?.content;
+        const inner = content?.querySelector("#inner");
+        return !!inner && (!content?.querySelector("#outer") || !!content.querySelector("#outer > #inner"));
+      },
+    ])),
+    // html! writes a <script>'s or <style>'s literal text as is, so `</script>` in it ends the
+    // element and what follows is markup html! does not see (crates/corten/tests/markup_roots.rs).
+    ...[
+      `<p id="outer"><script></script><button><script></script><div id="inner">Detail</div></button></p>`,
+      `<p id="outer"><style></style><button><style></style><div id="inner">Detail</div></button></p>`,
+      `<div><script></script><svg><script></script><textarea id="outer"><g id="inner"></g></textarea></svg></div>`,
+    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+      `an element stays in its outer one after a script whose text html! writes as is: ${markup}`,
+      markup,
+      () => !!document.getElementById("outer")?.contains(document.getElementById("inner")),
+    ])),
+    // After a script left open (its text holds `<!--<script>`, or `raw` or a component opened
+    // it), what follows is its text until a second `</script>`, and a component named `Corten`
+    // may write a boundary: html! refuses nothing after either, and browsers serialize each back
+    // as written (crates/corten/tests/markup_roots.rs).
+    ...[
+      `<div><script type="text/x-template"><!--<script></script><svg><div>Detail</div></svg></script></div>`,
+      `<div><script type="text/x-template"><!--<script></script><p><div>Detail</div></p></script></div>`,
+      `<div><script type="text/x-template"><!--<script></script><div><textarea><g></g></textarea></div></script></div>`,
+      `<div><script type="text/x-template"><svg><div>Detail</div></svg></script></div>`,
+      `<div><script type="text/x-template"><p><div>Detail</div></p></script></div>`,
+      `<div><script type="text/x-template"><template><p><div>Detail</div></p></template></script></div>`,
+      `<div><script type="text/x-template"><div><textarea><g></g></textarea></div></script></div>`,
+      `<div><script type="text/x-template"><svg><foreignObject><p><div>Detail</div></p></foreignObject></svg></script></div>`,
+      `<p><span></span><button><span></span><div>Detail</div></button></p>`,
+    ].map((markup) => /** @type {[string, string, (page: { markup: string }) => boolean]} */ ([
+      `a browser keeps markup after unseen output as written: ${markup}`,
+      markup,
+      // Run in the page: the markup it was given comes in the argument.
+      ({ markup }) => document.body.innerHTML === markup,
+    ])),
+    // An element a browser parsing HTML reads as text, written where html! does not see that it
+    // is HTML's (the top of a component's markup), may hold text: html! reads nothing in it for a
+    // refusal, and a <noscript>'s nowhere (text with scripting on). Browsers keep each as written
+    // (crates/corten/tests/markup_roots.rs).
+    ...[
+      ...["iframe", "noscript", "xmp", "noembed", "noframes", "style", "script"].map((holder) => `<${holder}><p><div>Detail</div></p></${holder}>`),
+      `<div><noscript><p><div>Detail</div></p></noscript></div>`,
+    ]
+      .map((markup) => /** @type {[string, string, (page: { markup: string }) => boolean]} */ ([
+        `a browser reads what a text element holds as text: ${markup}`,
+        markup,
+        ({ markup }) => document.body.innerHTML === markup,
+      ])),
+    // A <textarea> and a <title> serialize their text escaped, so their text is compared, at the
+    // top and in an <svg>'s <foreignObject> whose <svg> html! does not place.
+    ...[
+      `<textarea id="held"><p><div>Detail</div></p></textarea>`,
+      `<title id="held"><p><div>Detail</div></p></title>`,
+      `<svg><foreignObject><textarea id="held"><p><div>Detail</div></p></textarea></foreignObject></svg>`,
+    ].map((markup) => /** @type {[string, string, () => boolean]} */ ([
+      `a browser reads what a text element holds as text: ${markup}`,
+      markup,
+      () => document.getElementById("held")?.textContent === "<p><div>Detail</div></p>",
+    ])),
   ];
   for (const [name, markup, keeps] of shapes) {
     await page.setContent(`<!DOCTYPE html><html><head><title>Shapes</title></head><body>${markup}</body></html>`);
-    check(`html! markup: ${name}`, await page.evaluate(keeps, { MATHML, XHTML }), markup);
+    check(`html! markup: ${name}`, await page.evaluate(keeps, { MATHML, XHTML, markup }), markup);
   }
   await context.close();
+}
+
+/**
+ * The nestings html! refuses, as [around, outer, between, inner]: `inner` written in `outer`
+ * (through `between` when given), inside the `around` elements.
+ * @returns {[string[], string, string, string][]}
+ */
+function refusedNesting() {
+  /** @type {[string[], string, string, string][]} */
+  const shapes = [];
+  // Start tags that close a <p> in button scope (nesting.rs CLOSE_P).
+  const closesP = ["address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset", "figcaption", "figure", "footer", "header", "hgroup", "main", "menu", "nav", "ol", "p", "search", "section", "summary", "ul", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "listing", "form", "li", "dd", "dt", "plaintext", "hr", "xmp"];
+  for (const inner of closesP) shapes.push([["div"], "p", "span", inner]);
+  shapes.push([["ul"], "li", "span", "li"], [["ul"], "li", "div", "li"], [["dl"], "dt", "div", "dd"]);
+  for (const outer of ["dd", "dt"]) for (const inner of ["dd", "dt"]) shapes.push([["dl"], outer, "", inner]);
+  for (const name of ["a", "button", "nobr"]) for (const between of ["span", "div"]) shapes.push([["div"], name, between, name]);
+  const headings = ["h1", "h2", "h3", "h4", "h5", "h6"];
+  for (const outer of headings) for (const inner of headings) shapes.push([["div"], outer, "", inner]);
+  shapes.push([["div"], "select", "option", "input"], [["div"], "select", "option", "select"]);
+  for (const outer of ["option", "optgroup"])
+    for (const inner of ["option", "optgroup", "hr"]) if (!(outer === "optgroup" && inner === "option")) shapes.push([["div", "select"], outer, "", inner]);
+  shapes.push([["div"], "option", "", "option"], [["div"], "option", "", "optgroup"]);
+  const ruby = ["rb", "rtc", "rp", "rt"];
+  for (const outer of ruby) for (const inner of ruby) if (!(outer === "rtc" && ["rp", "rt"].includes(inner))) shapes.push([["div", "ruby"], outer, "", inner]);
+  shapes.push([["div", "ruby"], "p", "", "rt"]);
+  return shapes;
 }
 
 /** Whether the browser lets a navigation say when its address changes: the Navigation API with `precommitHandler`. */
@@ -733,6 +996,16 @@ async function run(browser) {
   }
 
   await page.goto(base);
+  {
+    const scoped = await browser.newPage();
+    await scoped.goto(`${base}/smoke/scoped`);
+    await scoped.waitForFunction(() => document.querySelector("output")?.value === "CSS1Compat");
+    check(
+      "a scoped document keeps its doctype, standards mode and working refs under html",
+      await scoped.evaluate(() => document.doctype?.name === "html" && document.documentElement.getAttribute("data-scope") === "scoped-page" && document.querySelector("output")?.closest("[data-scope]") === document.documentElement),
+    );
+    await scoped.close();
+  }
   // Without the Navigation API every navigation is a full page load, the documented fallback: the
   // checks of what a swap keeps check that instead, or are skipped.
   const swaps = await page.evaluate(() => "navigation" in window);

@@ -27,6 +27,10 @@ pub mod url {
     #[route("/smoke/quoted", get = quoted)]
     pub struct Quoted;
 
+    /// A whole document whose refs scope is its html element, after a doctype.
+    #[route("/smoke/scoped", get = scoped_page)]
+    pub struct ScopedPage;
+
     /// A patch whose component is listed in this area only, for a `data-patch` form on a page
     /// outside it (the test writes the form into the watchlist).
     #[route("/smoke/styled", post = styled)]
@@ -86,7 +90,31 @@ pub mod url {
 }
 
 /// The components the smoke's pages draw.
-pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm, Reader, Closing, FormNested, PastForm, FormText];
+pub const COMPONENTS: &[corten::Component] = &[Quoted, StyledNote, ShipForm, Reader, Closing, FormNested, PastForm, FormText, ScopedPage];
+
+#[derive(Id)]
+struct ScopedReadyId;
+
+#[component(js)]
+fn ScopedPage() -> impl Document {
+    let ready = refs();
+    html! {
+        <!DOCTYPE html>
+        <html lang="en">
+            <head>
+                <title>"Scoped document"</title>
+                <Corten />
+            </head>
+            <body>
+                <main><output id={ScopedReadyId} ref={ready} on:connect={js::ready(ready)}></output></main>
+            </body>
+        </html>
+    }
+}
+
+async fn scoped_page(req: Req) -> HtmlResult {
+    req.page(ScopedPage {})
+}
 
 /// The text the handler is given, as itself and in a JSON array. `data-on` is single-quoted, so it
 /// is written with `&#39;`, `&amp;` and `&lt;` and its JSON's quotes as they are.
