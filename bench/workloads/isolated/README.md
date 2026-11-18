@@ -121,7 +121,8 @@ Requested overrides are always separate from recorded native defaults.
 
 ## Resources and validation
 
-The intended grouped host uses c-8/sfo3/Ubuntu; allocation and
+The binding uses the provider placement for its campaign mode: sfo3 for a
+dedicated group fleet, sfo2 for the legacy nonfleet campaign. Both use c-8/Ubuntu; allocation and
 isolation remain unobserved. Timed HTTP roles retain native 1/2/4 CPU quotas and explicitly
 record intended app/upstream/load pinning `1`/`2-3`/`4-7` using each native environment prefix.
 Those settings are expectations, not observed environment or native defaults. Mixed

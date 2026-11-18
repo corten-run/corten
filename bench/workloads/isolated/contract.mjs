@@ -20,7 +20,7 @@ import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
-import { host, portableEvidenceSegment } from "../cloud-contract.mjs";
+import { providerCreateHost, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -128,7 +128,8 @@ function request(value) {
 const selection = (group) => ({ registry: registrySchema, group, contractSha256: contractSha256(group),
   definition: clone(definition(group)), apps: selectedApps(group), retainedFamilies: clone(retainedFamilies) });
 
-function subjectFor(r, sources) {
+function subjectFor(r, sources, campaignMode) {
+  assert.ok(campaignMode === "dedicated" || campaignMode === "legacy", "unknown campaign placement");
   const inputs = Object.fromEntries(Object.entries(latestStableSources).filter(([key]) => key === "policy" || r.group === "client-heavy").map(([key, path]) => {
     const bytes = git(["show", `${r.commit}:${path}`]);
     assert.equal(sources.files.find((file) => file.path === path)?.sha256, sha256(bytes), `${path}: latest-stable source differs`);
@@ -136,11 +137,11 @@ function subjectFor(r, sources) {
   }));
   return { schema, request: r, selection: selection(r.group), sourceSha256: sources.sha256,
     latestStable: evaluateLatestStable({ group: r.group, ...inputs }),
-    host: { ...host, allocation: "not-created", isolation: "unverified" } };
+    campaignMode, host: { ...providerCreateHost(campaignMode), allocation: "not-created", isolation: "unverified" } };
 }
-export function reviewSubject(value) {
+export function reviewSubject(value, campaignMode = "legacy") {
   const r = request(value), sources = captureSources(r.commit);
-  return deploymentSha256(subjectFor(r, sources));
+  return deploymentSha256(subjectFor(r, sources, campaignMode));
 }
 function reviewDeclaration(review, subjectSha256) {
   if (review === null) return { state: "unknown", declaration: null };
@@ -281,8 +282,8 @@ function validation(group, rootPath) {
     outcomePolicy: "retain failed/unsupported/not-run cells and target outcomes; unavailable measurements are never numeric zero; exit zero/complete flags alone cannot establish readiness" };
 }
 
-function build(r, sources, review) {
-  const subject = subjectFor(r, sources), subjectSha256 = deploymentSha256(subject);
+function build(r, sources, review, campaignMode) {
+  const subject = subjectFor(r, sources, campaignMode), subjectSha256 = deploymentSha256(subject);
   const declaredReview = reviewDeclaration(review, subjectSha256);
   const execution = native(r.group, r.round, r.recipe, subjectSha256);
   const checks = validation(r.group, execution.operationalOptions.artifactRoot);
@@ -303,17 +304,17 @@ function build(r, sources, review) {
 }
 
 /** Accept no commands, flags, filters, images, environment or output-path overrides. */
-export function bindExecution(value) {
+export function bindExecution(value, campaignMode = "legacy") {
   exact(value, ["group", "round", "commit", "recipe", "review"], "binding request");
   const { review, ...input } = value, r = request(input);
-  return build(r, captureSources(r.commit), review);
+  return build(r, captureSources(r.commit), review, campaignMode);
 }
 
 /** Recompute from live committed source; a self-consistent caller hash is not trusted. */
 export function validateBinding(binding) {
   assert.equal(binding?.schema, schema, "wrong isolated contract schema");
   const r = request(binding.request), sources = captureSources(r.commit);
-  const expected = build(r, sources, binding.review?.declaration);
+  const expected = build(r, sources, binding.review?.declaration, binding.campaignMode);
   assert.ok(isDeepStrictEqual(binding, expected), "binding differs from native source, selection, recipe or strict validation state");
   return freeze({ bindingSha256: expected.bindingSha256, binding: "verified-offline", ready: false, executionAuthorized: false });
 }
