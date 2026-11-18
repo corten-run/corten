@@ -242,10 +242,13 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
 /// `corten new` writes one that names every `Failure`. It takes extractors as a handler does
 /// (`viewer: Option<Caller<Viewer>>` to draw it for who is asking).
 async fn error_page(failure: Failure, req: Req) -> HtmlResult {
-    let title = if matches!(failure, Failure::NotFound) { "Not found" } else { "Something went wrong" };
-    req.page(html! { <Layout req={&req} title={title}><h1>{title}</h1></Layout> })
+    let (title, text) = failure.default_text();
+    req.page(html! { <Layout req={&req} title={title}><h1>{title}</h1><p>{text}</p></Layout> })
 }
 ```
+
+This sketch uses Corten's text for every failure. To customize individual cases, match them
+exhaustively, without a catch-all ([Error pages](app.md#error-pages)).
 
 Handlers are async functions whose arguments are extractors (Corten's `Req`, `Form`, `Caller`,
 `State`, ..., or the app's own, `corten::extract`) and whose return type says what the route

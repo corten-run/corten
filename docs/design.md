@@ -6507,6 +6507,27 @@ rules something out.
     Firefox (WebKit, without the Navigation API, skips them) on `04000147b`, each failing on
     `3eeba8d8d` in Chromium, and a middleware's page filled under the deadline and before the error
     page by the crate's tests on `04000147b`, failing without it.
+67. <a id="choice-exhaustive-failure"></a>**Failure stays exhaustive.** An app's error page
+    names every variant, so adding one stops the app from compiling until it decides how to
+    present the new failure and its status. This is a breaking API change, even when all the
+    app needs is one more name in an existing arm. Marking `Failure` as `#[non_exhaustive]`
+    would require a catch-all instead: when the router gained `UnknownMethod` (501), the
+    app could have silently drawn it with a page meant for an internal error (500). Corten
+    sends the failure's status either way. An app that wants Corten's wording can group named
+    variants in one arm and use `failure.default_text()` without giving up the compile error.
+
+    Stands on: reasoned (an exhaustive match without a catch-all has to name a new variant,
+    and the router's 501 is distinct from an app's own error
+    ([Choice 25](#choice-axum-router))); value (correctness before developer convenience,
+    with the compiler pointing out the app's missing decision).
+
+    Revisit when: Corten reaches 1.0 and commits to semver for page types, or apps report that
+    the repeated breaks outweigh the signal.
+
+    Last checked: 2026-11-18, `Failure`, its status and the template's exhaustive error page
+    read at `54f7ca9d`, with the repin that needed a new arm recorded in
+    [#1397 Each new Failure variant breaks every app whose error page matches Failure without a `_` arm: decide whether Failure is `#[non_exhaustive]`](https://github.com/corten-run/corten/issues/1397).
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
