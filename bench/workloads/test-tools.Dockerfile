@@ -13,7 +13,7 @@ RUN apt-get update -qq \
     && install -m 0644 /tmp/corten-git-ppa.asc /etc/apt/keyrings/corten-git-ppa.asc \
     && install -m 0644 /dev/null /etc/apt/sources.list.d/corten-git-ppa.list \
     && printf '%s\n' 'deb [signed-by=/etc/apt/keyrings/corten-git-ppa.asc] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main' > /etc/apt/sources.list.d/corten-git-ppa.list \
-    && apt-get update -qq \
-    && apt-get install -y -qq --no-install-recommends git \
+    && apt-get -o Acquire::Retries=5 update -qq --error-on=any \
+    && apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends git \
     && git --no-replace-objects --no-lazy-fetch --version \
     && rm -rf /var/lib/apt/lists/* /tmp/corten-git-ppa.keys /tmp/corten-git-ppa.asc

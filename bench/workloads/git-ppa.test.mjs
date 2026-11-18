@@ -62,7 +62,13 @@ for (const [name, original] of Object.entries(scripts)) {
       assert.equal(statSync(list).mode & 0o777, 0o644);
       assert.equal(statSync(join(root, "apt/keyrings/corten-git-ppa.asc")).mode & 0o777, 0o644);
       assert.equal(readFileSync(list, "utf8"), `deb [signed-by=${root}/apt/keyrings/corten-git-ppa.asc] https://ppa.launchpadcontent.net/git-core/ppa/ubuntu noble main\n`);
-      assert.match(readFileSync(join(root, "apt-calls"), "utf8"), /update -qq\ninstall -y -qq(?: --no-install-recommends)? git\n$/);
+      const calls = readFileSync(join(root, "apt-calls"), "utf8");
+      if (name === "image") {
+        assert.deepEqual(calls.trimEnd().split("\n").slice(-2), [
+          "-o Acquire::Retries=5 update -qq --error-on=any",
+          "-o Acquire::Retries=5 install -y -qq --no-install-recommends git",
+        ]);
+      } else assert.match(calls, /update -qq\ninstall -y -qq(?: --no-install-recommends)? git\n$/);
     } else {
       assert.notEqual(result.status, 0);
       assert.equal(existsSync(list), false, "unverified key must not authorize a source");

@@ -1,0 +1,1 @@
+- The benchmark CI image retries transient Git package downloads and stops at the index update if a required package source remains unavailable.
