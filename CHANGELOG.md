@@ -7,6 +7,60 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - Document the starter's zstd C compiler requirement, how to turn compression off, and the
   measurements that would justify removing Brotli.
+- A document component with refs, `scope` or `keep` accepts a leading `<!DOCTYPE html>`:
+  its single root is the `<html>` element, so the page can render in standards mode.
+- **Breaking:** `html!` refuses duplicate emitted HTML attribute names (case-insensitively, including
+  names with expression values), hand-written `data-key` (write `key={..}`), and visible HTML
+  nesting whose start tags close or discard an open element: blocks in paragraphs, nested list
+  and definition items without a boundary, active anchors, buttons or `nobr` still in scope,
+  directly nested headings, and select,
+  option-group, option and ruby starts that close an open element. Diagnostics say what to change. The content of a
+  `<template>` or of SVG and MathML is checked apart from the elements around it, where browsers
+  keep what is written.
+  A nesting refusal rests only on literal markup of the same `html!` before the inner element:
+  no nesting is checked after a component (`<Corten />` too, so none in a document's body) or an
+  expression (`raw` may write any element, or leave a script open), nor is a nested form; a
+  duplicate attribute and a hand-written `data-key` need no context and are refused anywhere.
+  Every refusal assumes the output is drawn where a browser reads tags: a component written into
+  script text a caller left open is not supported. This is not a complete HTML validator
+  ([views](docs/guide/views.md)).
+- `html!` no longer refuses an element in a `<textarea>`, `<title>` or another element read as
+  text, or a `<plaintext>`, under the `<foreignObject>`, `<desc>`, `<title>` or `<mtext>` of an
+  `<svg>` or `<math>` at the top of a component's markup or among its children, where its
+  namespace depends on the caller (a `<math>` in an `<svg>` is SVG's), nor an element read as
+  text or taken out of foreign content after an expression or a component, which may close the
+  holder or write an integration point. Wrap such an `<svg>` in an HTML element to have it checked.
+- `html!` no longer refuses markup after a `<script>` or `<style>` whose literal text holds a
+  `<`: it writes that text as is, so `</script>` there ends the element and what follows is
+  markup it does not see, as after `raw`. The nesting, text-holder, foreign-content and patch
+  checks treat such an element as unseen output, so `<p><script>"</script><button><script>"</script><div>..`
+  compiles, as browsers keep it, and a `<div>` after `<script>"if (a < b) go();"</script>` in a
+  `<p>` is no longer refused either (a miss).
+- No nesting, text-holder, foreign-content or patch-shape refusal of `html!` acts after unseen
+  output in the same markup (a duplicate attribute and a hand-written `data-key` still do), even
+  where a later literal
+  `<svg>`, `<p>` or `<textarea>` would have shown the context: what an expression, a component
+  or a script whose text holds `<!--<script>` writes may leave a browser reading the script's
+  text, so `<script>"<!--<script>"</script><p><div>..</div></p>{raw("</script>")}` compiles, as
+  browsers keep it. `<Corten />` is unseen like any other component, so a component of the
+  app's named `Corten` compiles, and nothing in a document's body is refused (a miss).
+- `html!` no longer reads what an element HTML reads as text holds (`<iframe>`, `<textarea>`,
+  `<title>`, `<script>`, `<style>`, `<xmp>`, `<noembed>`, `<noframes>`, `<plaintext>`) where the
+  markup does not show the element is HTML's, nor what a `<noscript>` holds anywhere: it may be
+  text, so `<iframe><p><div>"Detail"</div></p></iframe>` at the top of a component compiles, as
+  browsers keep it, and nothing after such a `<plaintext>` is refused.
+- `html!` compares attribute names as it writes them: `ref` (written `data-ref`), bare `page`
+  (written `data-corten-page`) and `key` (written `data-key`) beside their uppercase literal names
+  (`REF`, `PAGE`, `KEY`) compile as distinct attributes, as does bare `page` beside `page=".."`.
+  Repeated pseudo-attributes and case-insensitive duplicate literals (`Key` beside `KEY`) are
+  still refused, as are hand-written generated attributes.
+- The patch shapes `html!` refuses (below) compile where output the markup does not show (an
+  expression, a component, or a `<script>` or `<style>` whose text holds a `<`) comes before the
+  lost element's start tag: in the first element, between the two, or in a later element that
+  holds the lost one, before it, since what it writes may leave an element open
+  (`raw("<table>")` keeps the row after it); the debug check reads them when sent. One inside
+  the lost top-level element itself does not save it (`<table id={..}>{text}</table>` after a
+  first row, or a row holding an expression after a first `<table>`, is still refused).
 - Every `corten` command accepts `--help` and `-h`, printing its own usage and exiting
   successfully without running the command; `corten help <command>` prints the same and refuses an
   unknown command. An option given twice (`--name`, `--corten-path`, `--port`) is refused instead of
