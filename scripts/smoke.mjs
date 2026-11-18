@@ -529,6 +529,21 @@ async function parsesAsHtmlMeans(browser) {
       },
     ])),
     [
+      "an ordinary < in repeated HTML script data does not change how the following style parses",
+      `<div><script type="text/plain">a < b</script><script type="text/plain">a < b</script><style>.card { & .title { color: red } }</style></div>`,
+      ({ XHTML }) => {
+        const scripts = [...document.querySelectorAll("div > script")];
+        const style = document.querySelector("div > style");
+        return scripts.length === 2 && scripts.every((script) => script.namespaceURI === XHTML && script.textContent === "a < b") &&
+          style?.namespaceURI === XHTML && style.textContent === ".card { & .title { color: red } }";
+      },
+    ],
+    [
+      "a comparison does not make element markup in an HTML script into an element (refused by html!)",
+      `<div><script type="text/plain">a < b<b>Draft</b></script></div>`,
+      () => !document.querySelector("b") && document.querySelector("div > script")?.textContent === "a < b<b>Draft</b>",
+    ],
+    [
       "closing SVG between loop iterations makes the second style HTML's",
       `<div><svg><style>a &lt; b &amp;&amp; c</style></svg><style>a < b && c</style><svg></svg></div>`,
       ({ XHTML }) => {

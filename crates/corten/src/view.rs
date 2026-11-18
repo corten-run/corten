@@ -330,8 +330,8 @@ use std::{
 /// the two elements, followed through control flow. What the markup does not show may write
 /// anything: an expression (`raw` among them), a component, with or without children
 /// (`<Corten />` too: the macro knows it only by its name, which a component of the app's may
-/// share), and a `<script>` or `<style>` whose literal text holds a `<` that `html!` writes as
-/// is. What it writes may close the open elements, open others, or leave a browser reading a
+/// share), and a `<script>` or `<style>` whose literal text can end it early or keep it open.
+/// What it writes may close the open elements, open others, or leave a browser reading a
 /// script's text past any later literal end tag (`<!--<script>` does), so no nesting refusal acts
 /// after it in the same `html!`, whatever it shows: `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
 /// compiles, as browsers keep it. Nor does a literal `<svg>` or `<math>` show its namespace where
@@ -510,9 +510,28 @@ use std::{
 /// let _ = html! { <div><script type="text/x-template"><b>"Draft"</b></script></div> };
 /// ```
 ///
+/// An ordinary comparison in the literal does not end the script:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><script type="text/plain">"a < b"<b>"Draft"</b></script></div> };
+/// ```
+///
 /// ```compile_fail
 /// use corten::prelude::*;
 /// let _ = html! { <div><style><b>"Draft"</b></style></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><style>"/* a < b */"<b>"Draft"</b></style></div> };
+/// ```
+///
+/// A script that can consume its own closing tag still reads a nested start tag as text:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <div><script type="text/plain">"<!--<script>"<b>"Draft"</b></script></div> };
 /// ```
 ///
 /// ```compile_fail
@@ -603,8 +622,10 @@ use std::{
 /// (`<script type="text/x-template">`) gives its markup as a string literal. Its text is written
 /// as is in HTML. In a known foreign context, `html!`
 /// escapes `<` and `&` in those literals so the browser reads the literal text, not tags or
-/// character references. If the context is unknown, use a component's CSS file or
-/// `#[component(js)]`, or move the literal to markup whose parsing context is known.
+/// character references. If the context is unknown, a literal containing either character is
+/// refused. Use a component's CSS file or `#[component(js)]`, or move the literal to markup
+/// whose parsing context is known. For a fixed HTML-only data slot, pass the complete static
+/// tag as trusted `raw` markup without untrusted interpolation.
 ///
 /// ```compile_fail
 /// use corten::prelude::*;
@@ -639,6 +660,12 @@ use std::{
 /// use corten::prelude::*;
 /// let close = true;
 /// let _ = html! { <div><svg>if close { {raw("</svg>")} } <style>"&lt;"</style></svg></div> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let open = true;
+/// let _ = html! { <div>if open { <script>"</script><svg>"</script> } <style>"&lt;"</style></div> };
 /// ```
 ///
 /// ```compile_fail
@@ -1670,8 +1697,8 @@ impl<T: Id, V: Render> Render for Append<T, V> {
 /// ```
 ///
 /// Like every refusal of `html!`, these rest only on the markup between the two elements: what an
-/// expression, a component, or a `<script>` or `<style>` whose text holds a `<` writes may leave
-/// an element open, as `raw("<table>")` keeps the row after it in its table, so with such output
+/// expression, a component, or a script or style literal that can end its holder early writes
+/// may leave an element open, as `raw("<table>")` keeps the row after it in its table, so with such output
 /// before the lost element's start tag (in the first element, between the two, or in a later
 /// element that holds the lost one, before it) the shape compiles and the debug check reads what
 /// is sent:

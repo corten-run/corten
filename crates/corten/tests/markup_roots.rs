@@ -594,6 +594,30 @@ fn stable_control_flow_preserves_foreign_context() {
 }
 
 #[test]
+fn stable_control_flow_preserves_html_raw_text() {
+    assert_eq!(
+        html! { <div>for _ in 0..2 { <script type="text/plain">"a < b"</script> }</div> }.to_html(),
+        r#"<div><script type="text/plain">a < b</script><script type="text/plain">a < b</script></div>"#,
+    );
+    for show in [false, true] {
+        let markup = html! {
+            <div>
+                if show { <script type="text/plain">"a < b"</script> }
+                <style>".card { & .title { color: red } }"</style>
+                <script type="text/plain">"b < c"</script>
+            </div>
+        };
+        let script = if show { r#"<script type="text/plain">a < b</script>"# } else { "" };
+        assert_eq!(
+            markup.to_html(),
+            format!(
+                r#"<div>{script}<style>.card {{ & .title {{ color: red }} }}</style><script type="text/plain">b < c</script></div>"#
+            ),
+        );
+    }
+}
+
+#[test]
 fn each_conditional_arm_starts_in_the_entry_context() {
     let close = false;
     let color = Some("red");
@@ -655,8 +679,8 @@ fn ScriptTemplateForms() -> impl Document {
     }
 }
 
-/// What a `<script>` or `<style>` whose text holds a `<` writes is not shown by the markup, as
-/// what `raw` writes is not: no refusal reaches across it, and browsers keep each of these as
+/// What a `<script>` or `<style>` whose text can end it early writes is not shown by the markup.
+/// As with `raw`, no context-dependent structural refusal reaches across it. Browsers keep these as
 /// written (`parsesAsHtmlMeans` in `scripts/smoke.mjs`).
 #[test]
 fn no_refusal_reaches_across_a_script_whose_text_may_write_tags() {
@@ -695,6 +719,11 @@ fn no_refusal_reaches_across_a_script_whose_text_may_write_tags() {
             }
             .to_html(),
             p,
+        ),
+        // An early end tag can also make what looks like a child an actual element.
+        (
+            html! { <div><script>"</scr" "ipt>"<b>"Detail"</b></script></div> }.to_html(),
+            "<div><script></script><b>Detail</b></script></div>",
         ),
         // An <svg> the text opens makes the <textarea> after it SVG's, which holds elements.
         (

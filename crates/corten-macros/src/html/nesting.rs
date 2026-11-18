@@ -7,9 +7,9 @@
 //! not a tag at all. So once the walk passes one, nothing after it in the same `html!` is
 //! refused, whatever it shows. The content of a `<template>` and of a foreign element (an `<svg>`,
 //! a `<math>`, their integration points, or one whose namespace the markup does not show) starts
-//! with no element open. A `<script>` or `<style>` whose literal text holds a `<` is unseen as
-//! well: `html!` writes that text as is, and `</script>` in it ends the element where the text
-//! says, not where the markup does (and `<!--<script>` keeps it open past the literal end tag).
+//! with no element open. A `<script>` or `<style>` whose text may end the holder early or keep
+//! it open is also unseen: `</script>` in script data ends it where the text says, while
+//! `<!--<script>` can keep it open past the generated end tag.
 //! What a `<noscript>` holds is not walked (text with scripting on), nor what an element a browser
 //! parsing HTML reads as text holds where the markup does not show it is HTML's (`<iframe>`,
 //! `<textarea>`, `<style>` at the top of an `html!`): it may be text. A `<plaintext>` written

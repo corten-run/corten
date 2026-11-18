@@ -17,13 +17,67 @@ const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "inpu
 /// Elements that use raw text in HTML. The parser pre-escapes their literals in known foreign content.
 const RAW_TEXT: &[&str] = &["script", "style"];
 
-/// Whether `name` is a `<script>` or `<style>` holding a literal `<` that will be written as is.
-/// It may end its holder (`</script>`), keep a script open past its end tag (`<!--<script>`)
-/// or, in foreign content the macro could not see, open an element. What follows it is not
-/// shown by the markup, as after `raw`.
+/// Whether the literal text can change how the tags after the holder are read. Foreign text is
+/// already escaped; unescaped text with an unknown context cannot contain '<'.
 fn writes_tags(name: &str, children: &[Node]) -> bool {
-    RAW_TEXT.contains(&name) && children.iter().any(|child| matches!(child, Node::Text(text) if text.contains('<')))
+    RAW_TEXT.contains(&name) && raw_text_boundary(name, children) != RawTextBoundary::Unchanged
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RawTextBoundary {
+    Unchanged,
+    EarlyClose,
+    StillOpen,
+}
+
+/// Check only the lexical transitions that can move the boundary of an HTML raw-text holder.
+/// A matching end tag with a delimiter may end it early; do not try to recover the tree after
+/// it. A script in the double-escaped state consumes its generated end tag as text.
+fn raw_text_boundary(name: &str, children: &[Node]) -> RawTextBoundary {
+    if !children.iter().any(|node| matches!(node, Node::Text(text) if text.contains('<'))) {
+        return RawTextBoundary::Unchanged;
+    }
+    let mut text = String::new();
+    for child in children {
+        match child {
+            Node::Text(literal) | Node::Markup(literal) => text.push_str(literal),
+            Node::Let(_) => {}
+            _ => break,
+        }
+    }
+    let tag = |tail: &str| {
+        let bytes = tail.as_bytes();
+        bytes.get(..name.len()).is_some_and(|start| start.eq_ignore_ascii_case(name.as_bytes()))
+            && matches!(bytes.get(name.len()), Some(b' ' | b'\t' | b'\n' | b'\r' | b'\x0c' | b'/' | b'>'))
+    };
+    let script = name == "script";
+    let mut escaped = false;
+    let mut double = false;
+    for tail in text.split('<').skip(1) {
+        if tail.strip_prefix('/').is_some_and(tag) {
+            if !double {
+                return RawTextBoundary::EarlyClose;
+            }
+            double = false;
+        } else if script {
+            if !escaped && tail.starts_with("!--") {
+                escaped = true;
+            } else if escaped && tag(tail) {
+                double = true;
+            }
+        }
+        if escaped && tail.contains("-->") {
+            escaped = false;
+            double = false;
+        }
+    }
+    if double {
+        RawTextBoundary::StillOpen
+    } else {
+        RawTextBoundary::Unchanged
+    }
+}
+
 /// The other elements whose content a browser parsing HTML reads as text (the HTML standard's
 /// RCDATA and RAWTEXT elements, `<noscript>` aside, which `<template>`'s handling covers): an
 /// element written in one is text to the browser, so `html!` refuses it there where the markup
@@ -1319,6 +1373,7 @@ impl Cursor {
 
     /// Nodes until the end, or until `</` when inside the element named `closing`.
     fn nodes(&mut self, closing: Option<&str>) -> Result<Vec<Node>, Error> {
+        let raw_holder = closing.filter(|name| self.text_only.as_deref() == Some(*name) && RAW_TEXT.contains(name));
         let mut nodes = Vec::new();
         while !self.at_end() {
             if is_punct(self.peek(), '<') && is_punct(self.peek2(), '/') {
@@ -1336,7 +1391,22 @@ impl Cursor {
                 };
                 return err(span, format!("unexpected closing tag </{name}>{hint}"));
             }
+            // An early end tag can release the text-only check. A script that will consume
+            // its closing tag is still a text holder here. Neither depends on literal encoding.
+            if let Some(name) = raw_holder.filter(|_| self.text_only.is_some()) {
+                if is_punct(self.peek(), '<')
+                    && !is_punct(self.peek2(), '!')
+                    && raw_text_boundary(name, &nodes) == RawTextBoundary::EarlyClose
+                {
+                    self.unseen();
+                }
+            }
             nodes.push(self.node()?);
+        }
+        if let Some(name) = raw_holder.filter(|_| self.text_only.is_some()) {
+            if writes_tags(name, &nodes) {
+                self.unseen();
+            }
         }
         Ok(nodes)
     }
@@ -1394,12 +1464,7 @@ impl Cursor {
                         ambiguous_raw_text("the surrounding markup does not show whether it is HTML or foreign content"),
                     )
                 }
-                Parsing::Html | Parsing::MathText => {
-                    // A raw '<' may end the element or leave it open past its closing tag.
-                    if text.contains('<') {
-                        self.unseen();
-                    }
-                }
+                Parsing::Html | Parsing::MathText => {}
                 Parsing::Svg | Parsing::Math | Parsing::AnnotationXml | Parsing::Foreign => {
                     // Gen writes these bytes as is; the browser reads them in the data state.
                     text = text.replace('&', "&amp;").replace('<', "&lt;");
@@ -1968,7 +2033,7 @@ impl Cursor {
 
 fn ambiguous_raw_text(reason: &str) -> String {
     format!(
-        "<script> or <style> text containing '<' or '&' cannot be written here: {reason}; move it to markup with a known parsing context, use a #[component(js)] for behavior or a component's CSS file for styles"
+        "<script> or <style> text containing '<' or '&' cannot be written here: {reason}; move it to markup with a known parsing context, use a #[component(js)] for behavior or a component's CSS file for styles. For a fixed HTML-only data slot, pass the complete static tag via trusted raw(...), without untrusted input"
     )
 }
 
@@ -2103,7 +2168,7 @@ const PARSE_REFUSALS: &str = "https://github.com/corten-run/corten/blob/main/doc
 /// `<form>` of fields after a `<tr>`), so it is left to the debug check in `Action::patch` and
 /// `corten::live`, which finds it when it is sent. Like every refusal of `html!`, each rests only
 /// on the markup between the two elements: an expression, a component, or a `<script>` or
-/// `<style>` whose text holds a `<` (`writes_tags`) before the lost element's start tag (in the
+/// `<style>` whose text may change the parsing context (`writes_tags`) before the lost element's start tag (in the
 /// first element, between the two, or in a later element that holds the lost one, before it) may
 /// write unbalanced markup (`raw("<table>")` keeps a later row in its table), so after one nothing
 /// is refused and the debug check is left to find it. What a lost top-level element holds does
@@ -3167,11 +3232,33 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 #[cfg(test)]
 mod tests {
     use super::{
-        breaks_out, foreign_breakout, local_path, parsing_within, patch_top, reads_as_text, refused_path, text_only_element,
-        Attr, Node, Parsing, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, SVG_HTML_POINTS, TABLE_PARTS, TEMPLATE_HEAD,
-        TEXT_ONLY,
+        breaks_out, foreign_breakout, local_path, parsing_within, patch_top, raw_text_boundary, reads_as_text, refused_path,
+        text_only_element, Attr, Node, Parsing, RawTextBoundary, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, SVG_HTML_POINTS,
+        TABLE_PARTS, TEMPLATE_HEAD, TEXT_ONLY,
     };
     use proc_macro::TokenStream;
+
+    #[test]
+    fn html_raw_text_boundary_depends_on_the_holder_and_delimiter() {
+        use RawTextBoundary::{EarlyClose, StillOpen, Unchanged};
+        for (name, literals, expected) in [
+            ("script", &["a < b && c"][..], Unchanged),
+            ("script", &["</scripture> </script <"], EarlyClose),
+            ("script", &["</scripture> </script"], Unchanged),
+            ("script", &["</sCr", "IpT", "\t>"], EarlyClose),
+            ("style", &["</script> <!--<script>"], Unchanged),
+            ("style", &["<", "/STYLE/>"], EarlyClose),
+            ("script", &["<!", "--<scr", "ipt>"], StillOpen),
+            ("script", &["<!-- a < b"], Unchanged),
+            ("script", &["<!-- --> <script>"], Unchanged),
+            ("script", &["<!--<script> -->"], Unchanged),
+            ("script", &["<!--<script></script>"], Unchanged),
+            ("script", &["<!--<script></script></script>"], EarlyClose),
+        ] {
+            let children: Vec<_> = literals.iter().map(|literal| Node::Text((*literal).into())).collect();
+            assert_eq!(raw_text_boundary(name, &children), expected, "{literals:?}");
+        }
+    }
 
     /// Each element read as text, as each parse would read it: text in HTML, at an `<svg>`'s
     /// integration points too, and an element in an `<svg>`, a `<math>` or where the markup does

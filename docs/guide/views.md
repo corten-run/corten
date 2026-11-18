@@ -62,18 +62,36 @@ foreign content, replace those references with the characters you want the brows
 Known HTML (including HTML integration points) continues to write the text as is.
 
 When the context is unknown, a script or style literal containing either character does not
-compile. An optional `color`, `face` or `size` on a foreign `<font>` (including a spread) can
-close the drawing before the literal, and markup that a conditional or loop can leave open
-can change the context of later markup or the next iteration. Move the literal to markup
-that shows how it parses, split the HTML and foreign cases into separate markup, or use the
-component's CSS file for styles and `#[component(js)]` for behavior.
+compile, even if it worked at its one actual placement. Root fragments, component children
+and slots (including a view passed as a `head` prop), and markup after opaque output do not
+establish an HTML context. An optional `color`, `face` or `size` on a foreign `<font>`
+(including a spread) can close the drawing before the literal, and markup that a conditional
+or loop can leave open can change the context of later markup or the next iteration.
+An ordinary `<` in known HTML raw text, such as a comparison, does not change the context.
+Move the literal to markup that shows how it parses, split the HTML and foreign cases, or use
+the component's CSS file for styles and `#[component(js)]` for behavior.
+
+For an HTML data block, write the literal directly in a proven HTML `<script>`, for example
+under the layout's literal `<head>` before any opaque output. If the tag must be passed to
+a fixed HTML-only slot such as that layout's `head` prop, pass the complete static tag as
+trusted `raw` markup, without adding a wrapper:
+
+```rust
+use corten::prelude::*;
+
+let head = raw(r#"<script type="application/json">{"label":"R&D"}</script>"#);
+assert_eq!(head.to_html(), r#"<script type="application/json">{"label":"R&D"}</script>"#);
+```
+
+Pass that value as `head={head}`. The same applies to a static `text/x-template` data block.
+Never interpolate untrusted data into `raw`. `JsonLd` is for JSON-LD, not arbitrary script data.
 
 At the top
 of a component's markup (its parent may write it into an `<svg>`), among a component's
 children (they go where the component writes them), anywhere after an expression or a
 component, `<Corten />` included (what it writes may open or close an `<svg>` or a
 `<textarea>`, or leave a script open, whose text a later literal tag is part of), after a
-`<script>` or `<style>` whose text holds a `<` written as is (`</script>` in it ends the
+`<script>` or `<style>` whose text can end it early or keep it open (`</script>` in it ends the
 element and may open anything after it, `<!--<script>` keeps it open past its end tag) and in an `<annotation-xml>` whose
 `encoding` an expression or a spread may write first, it does not show, and no element here is
 refused, so a component that draws `<rect><title>"Sales "<b>"42"</b></title></rect>` for an
@@ -102,9 +120,10 @@ component's scope. A refusal rests only on the literal markup of the same `html!
 two elements, followed through control-flow bodies and fragments. A component, with or without
 children (`<Corten />` too: `html!` knows a component only by its name), and an expression,
 `raw` among them, may write any element, or close one, or leave a script open, and so may a
-`<script>` or `<style>` whose literal text holds a `<` that is written as is, so after one no nesting or parsing
-refusal in the same `html!` acts, whatever later literal elements show (a duplicate attribute
-and a hand-written `data-key`, which need no context, are still refused):
+`<script>` or `<style>` whose literal text can end it early or keep it open. After such output, no
+context-dependent structural refusal in the same `html!` acts, whatever later literal elements
+show. The script and style literal encoding refusal still applies, as do checks that need no
+context (duplicate attributes and hand-written `data-key`):
 `<p>{raw("<button>")}<div>"Detail"</div>{raw("</button>")}</p>`
 compiles, as browsers keep it, and so does `<p>{text}<div>..</div></p>`, which they do not.
 Nesting across those boundaries is the app's to keep correct. The content of a
@@ -119,7 +138,8 @@ open (after `raw("<script>")`, or a script whose text holds `<!--<script>`) is n
 since a script's text comes from a string, not markup: there a refused shape would be the
 script's text, which a browser keeps. A
 top-level `<a>` or `<form>` might be foreign content: wrap HTML fragments in an HTML element when their
-namespace needs to be established. This is not a complete HTML validator. It does not check
+namespace needs to be established. These are local checks at tag boundaries, not full HTML
+tree construction or a proof about every fragment insertion mode. They do not check
 insertion modes such as table foster parenting (a `<div>` straight in a `<table>`), or a
 `<table>` in a `<p>` (which closes the paragraph only outside quirks mode).
 
