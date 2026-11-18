@@ -5651,8 +5651,8 @@ rules something out.
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
     above, at `65ac1dc47` against `38587c414`.
 
-62. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in every mode, and the runtime draws it as the page a write
-    redirects to; a patch does not fill a layout read.** A `data-patch` write that answers with its
+62. <a id="choice-write-own-page-whole"></a>**A write's own page is whole in document mode or an action
+    that prefers it; a patch does not fill a layout read.** A `data-patch` write that answers with its
     own result (a form drawn again with what it refused, a bulk add whose failed lines the page
     lists) could not bring a layout read up to date: `req.page` in `Mode::Action` rendered `<main>`
     alone, and a patch carries elements by id where a read's view, drawn at two places, has none. So
@@ -5686,21 +5686,22 @@ rules something out.
     and after the writes that page draws: the server may still be running it as that page is read,
     so the navigation after reads the whole page again. One that failed in view (the network failed,
     a 5xx, or the body of an answer that took it was cut off, or did not draw, after its headers
-    came), which the server may have applied too, counts for the next navigation but not for the
-    page reading itself again (`ReadAgain`, or a navigation to its own address): the page says so (a toast in `<main>`) and the user
-    sends it again under the same key, and a read of the whole page would draw that failure away.
-    That includes a page whose own page drew and asks to be read again, which reads itself whole
-    while its write lands: while such a failure is undrawn it reads `<main>` alone.
-    The limit: a page reading itself again after such a failure keeps the layout as it was until the
-    user leaves it or sends the write again, and a write the server applies after the navigation
+    came), which the server may have applied too, counts for a navigation to another page.
+    An undrawn failure vetoes a whole `ReadAgain` poll even if another write is undrawn or the
+    page normally polls whole while its write lands. If a whole poll is already waiting for its
+    answer or assets, it skips the draw and schedules the next read. This avoids replacing the
+    whole layout, not every failure message: a partial draw can still replace `<main>` and page-owned
+    layout parts. Without the Navigation API, `ReadAgain` reloads.
+    A write the server applies after the navigation
     after its cut-off (a slow write still running then) shows at the next whole page read for another
     reason (another write, a reload). A page the app's or an area's
     middleware makes with `Req` in the route's place is filled as the middleware answers, under the
     request's deadline and before the error page, from the head that `Req` was taken with, as the
     route's own page is. That head is kept on the request's `Signal` (a `Req` stays the size it was
     on `main`), which the head's extensions hold in turn, so it is let go when the write is answered
-    or its future dropped unanswered (the client gone, a middleware's timeout), and a `Req` taken
-    after that keeps none: nothing of the request outlives it. A
+    or its future dropped unanswered (the client gone, a middleware's timeout). Publication checks
+    the closed mark under the slot lock, so a detached extraction cannot recreate the cycle after
+    cleanup. A
     `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
     layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
     page's, as a navigation does, and the next navigation reads the whole page; it cannot load in
@@ -5732,7 +5733,7 @@ rules something out.
     in the runtime for the writes it cuts off. 45 bytes on every page do not pay for a slower first
     write and a second record (Values 1 and 2).
 
-    What it costs: a write's own page in `Mode::Action` sends the layout's markup and waits for its
+    Historical measurements: a write's own page in `Mode::Action` sends the layout's markup and waits for its
     reads, which start only once the handler has answered. In the crate's test app (two layout
     reads, a small layout, a route of a routes module), with a read that takes 20 ms, the whole page
     is 506 bytes and answers in 21.3 ms (median of 25, three runs, 20.2 to 25.8), where `<main>` was
@@ -5799,7 +5800,7 @@ rules something out.
     the head and the request's signal freed where before they leaked, `_int_free`, `free` and
     `malloc_consolidate` 4,253 more per request and `malloc` and `_int_malloc` 1,669 less
     (`callgrind_annotate`, each function's own instructions, 1,200 requests of each build), the
-    memory the leak took handed back. The runtime is 1,181 bytes larger raw and 462 with gzip
+    memory the leak took handed back. In that historical comparison the runtime was 1,181 bytes larger raw and 462 with gzip
     (15,612 to 16,074 at zlib's default level, against `main` at `27c29d7d2`), numbering the
     writes a layout draws and which of them failed in view.
 

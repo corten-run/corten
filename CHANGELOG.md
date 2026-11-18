@@ -1097,23 +1097,28 @@ Corten is pre-1.0, so any minor version may change the API.
   has answered with the page, so they see what the write did, and a write that answers anything
   else starts none. The runtime says it draws the page whole with an HTTP preference (RFC 7240),
   `Prefer: corten-draws=whole`; a runtime without it (a tab open across the deploy) gets `<main>`
-  alone, as before, and a server that does not know it ignores it. A write route whose handler
+  alone, as before, and a server that does not know it ignores it. A typed write route whose handler
   answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) may return
-  `HtmlResult<Patches>`, which keeps no copy of the request's head for a page.
-  Measured against `main` with callgrind: such a write takes about 62,600 instructions where its
+  `HtmlResult<Patches>` to skip the route's copy of the request head; middleware taking `Req` before
+  the route and raw `Table` handlers taking `Req` can still copy it.
+  In historical callgrind comparisons with earlier revisions of `main`, such a write took about
+  62,600 instructions where its
   `<main>` swap took 24,781 (two layout reads), and the same write without JavaScript 57,595; with
   a 20 ms read it answers in 21.3 ms where `<main>` took 0.04 ms. In an app with layout reads a
   route whose answer can be a page (`HtmlResult`) keeps a copy of the request's head, so its patch
   takes about 31,300 where it took 22,900; one that answers patches alone (`HtmlResult<Patches>`)
   keeps none, about 25,900 where it took 23,532. A navigation takes 22,358 where it took 22,221, a whole
   document 53,072 where it took 52,782, a patch in an app without layout reads 23,269 where it took
-  22,752. The runtime is 462 bytes larger with gzip. A read an `Ahead` starts
+  22,752. A read an `Ahead` starts
   before the handler may not see the write. With two writes out at once, whichever page is drawn
   last may be older than the other write, a patch to a layout element included, so the next
   navigation reads the whole page; so does one after a write a navigation cut off before its
   answer, or one that failed in view (the network failed, a 5xx, its answer cut off after its
-  headers), either of which the server may have applied; a page reading itself again
-  (`ReadAgain`, or a navigation to its own address) after such a failure reads only `<main>`, so the failure stays shown. A page the app's or an area's middleware makes with `Req` in the route's place is
+  headers), either of which the server may have applied. While a failure is undrawn, same-page
+  polls use a partial response and in-flight whole polls are skipped and retried. A partial draw
+  may replace `<main>` and page-owned layout parts; browsers without the Navigation API reload.
+  A patch that refuses a field with a 422 scrolls it into view when focusing it.
+  A page the app's or an area's middleware makes with `Req` in the route's place is
   filled too, within the request's deadline. **Breaking:** an app that skips a layout value of its own when
   `req.mode.swaps()` (an `Ahead` read in an extractor) now draws the skipped value on a write's own
   page, which the runtime then shows; make such a value a `LayoutRead`, which Corten starts only

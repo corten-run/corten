@@ -81,9 +81,10 @@ is `req.patch_or_with(|| async { .. req.patch(view) }, || async { req.page(..) }
 sides are closures and only the one the request asks for runs (the part's may answer
 `req.patch_with_status`, or set headers on its response, for a status or headers of its own);
 a refusal whose
-form needs a read is `req.invalid_with` (below). A write that answers with its own page instead,
-in any mode, sends it whole, and the runtime draws what changed around `<main>` as after a
-redirect, so a layout read (a cart's count) is current; a patch fills no layout read, so a write
+form needs a read is `req.invalid_with` (below). A write that answers with its own page instead
+sends it whole in document mode or in an action with `Prefer: corten-draws=whole`, and the runtime
+draws what changed around `<main>` as after a redirect, so a layout read (a cart's count) is
+current; a patch fills no layout read, so a write
 whose answer must change one answers its page ([layout reads](views.md#the-document)). A route with no screen goes under
 [`App::api`](app.md#json-only-routes) instead, where every answer is JSON. The layout around `<main>` renders on full
 loads and on a write's own page ([the document](views.md#the-document)), not on a navigation; every page carries a key hashed from the
@@ -99,8 +100,10 @@ draws the whole page, which a small page with no ids may want. Nothing checks th
 the page read again from its route (`ReadAgain::from`, [below](#a-read-that-has-not-caught-up-yet))
 is the one thing that needs one, so it takes only a route that says `patches`. A write whose
 handler answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) may return
-`HtmlResult<Patches>` too: in an app with layout reads an `HtmlResult` write keeps a copy of the
-request's head for the page it may answer, on every submit, and a `Patches` one keeps none.
+`HtmlResult<Patches>` too: in an app with layout reads a typed `HtmlResult` route keeps a copy of
+the request's head on every preferred submit, in case it answers a page. `HtmlResult<Patches>`
+skips that route's copy, not the copy made by middleware taking `Req` before the route or by a raw
+`Table` handler taking `Req`.
 
 Controls may be named `parentElement`, `parentNode`, `id`, `elements` or other DOM members. A
 control, in the form or joined to it by `form=`, is the form's member of its name, so Corten reads
@@ -814,8 +817,8 @@ a field each need an id of their own, so each takes `name={f.size}`. Each checkb
 `{..e.aria(f.size)}`. A radio does not, since ARIA does not allow `aria-invalid` on one: the
 element around the radios takes it, as a `role="radiogroup"` (a plain `<fieldset>` may not
 carry `aria-invalid` either).
-The runtime focuses the first invalid field (unless the user has moved on to another part of the
-page while waiting).
+The runtime focuses the first invalid field and scrolls it into view (unless the user has moved
+on to another part of the page while waiting).
 
 A group of fields several forms share (an address) is a `Fields` struct of its own, put in a form
 with `#[fields(group)]`. Its fields post under the field's name, `ship_to.street`, so a form can

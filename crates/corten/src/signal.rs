@@ -165,6 +165,8 @@ const HEAD_KEPT: u8 = 2;
 /// (`page::EarlyHeads`), to be let go when the write is answered.
 const EARLY_KEPT: u8 = 4;
 
+type EarlyHeads = Vec<Arc<http::request::Parts>>;
+
 impl Signal {
     /// A request's signal in an app.
     pub(crate) fn for_app(shared: Arc<crate::page::Shared>, body_limit: usize) -> Signal {
@@ -256,15 +258,46 @@ impl Signal {
         self.0.late.fetch_or(HEAD_KEPT, Ordering::Relaxed);
     }
 
-    /// A `Req` taken before a late write's route kept a head on this signal (`page::EarlyHeads`).
-    pub(crate) fn mark_early_kept(&self) {
-        self.0.late.fetch_or(EARLY_KEPT, Ordering::Relaxed);
+    /// Keeps a head copied by `Req` before the route, returning its number (from 1). Cloning
+    /// extensions can run app code, so the copy is made before the lock and the mark is checked
+    /// again here. If release follows this mark, it has to take the lock to remove the slot.
+    pub(crate) fn keep_early_head(&self, head: http::request::Parts) -> u8 {
+        let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.0.late.fetch_or(EARLY_KEPT, Ordering::Relaxed) & HEAD_KEPT != 0 {
+            return 0;
+        }
+        let slot = match found.iter().position(|kept| kept.is::<EarlyHeads>()) {
+            Some(at) => &mut found[at],
+            None => {
+                found.push(Arc::new(EarlyHeads::new()));
+                found.last_mut().expect("just added")
+            }
+        };
+        let heads = Arc::get_mut(slot).and_then(|slot| slot.downcast_mut::<EarlyHeads>()).expect("owned by the signal");
+        // A request takes `Req` a few times at most; past 255 the last number is reused.
+        if heads.len() < usize::from(u8::MAX) {
+            heads.push(Arc::new(head));
+        }
+        heads.len() as u8
     }
 
-    /// Whether a `Req` taken before a late write's route kept a head on this signal: only then is
-    /// there one to let go.
-    pub(crate) fn early_kept(&self) -> bool {
-        self.0.late.load(Ordering::Relaxed) & EARLY_KEPT != 0
+    /// The early head numbered `at`, none for 0 or after release.
+    pub(crate) fn early_head(&self, at: u8) -> Option<Arc<http::request::Parts>> {
+        let at = usize::from(at).checked_sub(1)?;
+        let found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        found.iter().find_map(|kept| kept.downcast_ref::<EarlyHeads>())?.get(at).cloned()
+    }
+
+    /// Closes the slot before releasing the heads (which hold this signal in turn).
+    pub(crate) fn release_early_heads(&self) {
+        if self.0.late.swap(LATE | HEAD_KEPT, Ordering::Relaxed) & EARLY_KEPT != 0 {
+            let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(at) = found.iter().position(|kept| kept.is::<EarlyHeads>()) {
+                let heads = found.swap_remove(at);
+                drop(found);
+                drop(heads);
+            }
+        }
     }
 
     /// A write whose own page is filled after it answers ([`Signal::mark_late`]): `Some(true)`
@@ -438,14 +471,6 @@ impl Signal {
         let cell = Arc::new(tokio::sync::OnceCell::new());
         found.push(cell.clone());
         cell
-    }
-
-    /// Takes the request's cell for a lookup of its type out, if one was made ([`Signal::found`]),
-    /// for the caller to drop outside the lock.
-    pub(crate) fn forget<T: Send + Sync + 'static>(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let at = found.iter().position(|kept| kept.is::<tokio::sync::OnceCell<T>>())?;
-        Some(found.swap_remove(at))
     }
 
     /// Marks the answer as differing by something of the visitor's that does not change the page

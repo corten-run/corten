@@ -1225,36 +1225,10 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
         // (middleware before the route, a route given by hand): a page made with it is filled from
         // this head, as a page route's is from the one it kept (#1370).
         if req.fills && req.write && req.signal.late_write() == Some(false) {
-            req.early = keep_early_head(&req.signal, parts.clone());
+            req.early = req.signal.keep_early_head(parts.clone());
         }
         Ok(req)
     }
-}
-
-/// The heads `Req`s taken before a late write's route kept ([`Req::early`]), on its signal until the
-/// write is answered ([`ReleasesEarlyHeads`]).
-pub(crate) type EarlyHeads = std::sync::Mutex<Vec<Arc<Parts>>>;
-
-/// Keeps `head` among the request's early heads, and gives its number (from 1).
-fn keep_early_head(signal: &crate::Signal, head: Parts) -> u8 {
-    signal.mark_early_kept();
-    let cell = signal.found::<EarlyHeads>();
-    let _ = cell.set(EarlyHeads::default());
-    let Some(heads) = cell.get() else { return 0 };
-    let mut heads = heads.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    // A request takes `Req` a few times at most; past 255 the last number is reused.
-    if heads.len() < usize::from(u8::MAX) {
-        heads.push(Arc::new(head));
-    }
-    heads.len() as u8
-}
-
-/// The early head numbered `at` ([`keep_early_head`]), none for 0.
-fn early_head(signal: &crate::Signal, at: u8) -> Option<Arc<Parts>> {
-    let at = usize::from(at).checked_sub(1)?;
-    let cell = signal.found::<EarlyHeads>();
-    let heads = cell.get()?.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    heads.get(at).cloned()
 }
 
 impl Req {
@@ -1575,7 +1549,7 @@ impl Req {
             res.extensions_mut().insert(crate::layout::Pending { places, signal: self.signal.clone() });
             // Looked for only when there is one: a page with places is otherwise every `GET`'s.
             if self.early != 0 {
-                if let Some(head) = early_head(&self.signal, self.early) {
+                if let Some(head) = self.signal.early_head(self.early) {
                     res.extensions_mut().insert(crate::layout::EarlyHead(head));
                 }
             }
@@ -3320,7 +3294,7 @@ fn late_write<'f, 's: 'f, 'n: 'f, 'g: 'f, S: crate::app::Steps + 'f>(
     })
 }
 
-/// Lets go of the heads `Req`s took before a late write's route ([`EarlyHeads`]) once the write
+/// Lets go of the heads `Req`s took before a late write's route once the write
 /// is answered, or dropped unanswered (the client gone, a middleware's timeout): they are kept on
 /// the request's signal, which each holds in its extensions, so left there a head and the signal
 /// would keep each other, and all the head holds, past the request. A `Req` taken after this keeps
@@ -3329,11 +3303,7 @@ struct ReleasesEarlyHeads<'g>(&'g crate::Signal);
 
 impl Drop for ReleasesEarlyHeads<'_> {
     fn drop(&mut self) {
-        self.0.keep_head();
-        // Looked for only where one was kept; dropped here, outside the signal's lock.
-        if self.0.early_kept() {
-            drop(self.0.forget::<EarlyHeads>());
-        }
+        self.0.release_early_heads();
     }
 }
 

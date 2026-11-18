@@ -5174,9 +5174,14 @@ async function run(browser) {
   // (`ReadAgain`) reads <main> alone and keeps the failure shown, where a whole page, whose header
   // the write changed, would draw it away; the next navigation reads the whole page, which shows
   // what the write changed.
-  const failedName = "a write that failed in view leaves its change to the layout for the next page, and the page reading itself again keeps the failure shown";
-  if (!(await page.evaluate(() => "navigation" in window))) skip(failedName, "without the Navigation API a link is a full load");
-  else {
+  for (const legacy of [false, true]) {
+    const failedName = legacy
+      ? "a legacy write left undrawn does not make a poll replace the layout after a write failed"
+      : "a write that failed in view leaves its change to the layout for the next page, and the page reading itself again keeps the failure shown";
+    if (!(await page.evaluate(() => "navigation" in window))) {
+      skip(failedName, "without the Navigation API a link is a full load");
+      continue;
+    }
     const { own, seen } = await writtenPage(brand, undefined, "/smoke/written/again");
     seen.fail = true;
     // The page says the write failed in its header, as a toaster in the layout shows it.
@@ -5188,6 +5193,13 @@ async function run(browser) {
         () => true,
         () => false,
       );
+    let legacyDrew = true;
+    if (legacy) {
+      seen.fail = false;
+      seen.draws = false;
+      await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+      legacyDrew = (await writtenIn(own)) && "corten-page" in seen.answered;
+    }
     const after = seen.asked.length;
     // The page's next read of itself, and a moment for it to be drawn.
     const deadline = Date.now() + 5000;
@@ -5207,8 +5219,8 @@ async function run(browser) {
     const shown = await shownOf(own);
     check(
       failedName,
-      failed && again === "GET /smoke/written/again nav" && kept && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
-      JSON.stringify({ failed, again, kept, arrived, asked: seen.asked, shown }),
+      failed && legacyDrew && again === "GET /smoke/written/again nav" && kept && arrived && shown.brand === "Watchlist, written" && shown.same && seen.asked.includes("GET /smoke/quoted page"),
+      JSON.stringify({ failed, legacyDrew, again, kept, arrived, asked: seen.asked, shown }),
     );
     await own.context().close();
   }
@@ -5396,6 +5408,43 @@ async function run(browser) {
         seen.asked.includes("GET /smoke/quoted page"),
       JSON.stringify({ drew, wholeBefore, failed, again, kept, arrived, asked: seen.asked, shown }),
     );
+    await own.context().close();
+  }
+  const waitingPollName = "a whole poll waiting for its stylesheet does not replace the layout after a write fails";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(waitingPollName, "without the Navigation API the poll reloads");
+  else {
+    const { own, seen } = await writtenPage(
+      (body, _writes, headers) =>
+        headers ? brand(body) : body.replace(">Watchlist</span>", ">Late poll</span>").replace("</head>", '<link rel="stylesheet" data-corten-style href="/assets/smoke-held-poll.css"></head>'),
+      undefined,
+      "/smoke/written/again",
+    );
+    /** @type {() => void} */
+    let release = () => {};
+    const held = new Promise((resolve) => (release = () => resolve(undefined)));
+    await own.route("**/assets/smoke-held-poll.css", async (route) => {
+      await held;
+      await route.fulfill({ contentType: "text/css", body: "" }).catch(() => {});
+    });
+    await own.evaluate(() => addEventListener("corten:error", () => document.querySelector("header")?.setAttribute("data-failed", "")));
+    const asset = own.waitForRequest("**/assets/smoke-held-poll.css", { timeout: 5000 }).then(() => true, () => false);
+    await own.click("main form button");
+    const drew = (await brandBecomes(own, "Watchlist, written")) && (await writtenIn(own));
+    const waiting = await asset;
+    seen.fail = true;
+    await own.locator("main form button").evaluate((button) => /** @type {HTMLButtonElement} */ (button).click());
+    const failed = await own
+      .waitForFunction(() => !!document.querySelector("header[data-failed]") && !document.querySelector("[aria-busy]"), null, { timeout: 5000 })
+      .then(() => true, () => false);
+    const after = seen.asked.length;
+    release();
+    // Once the held poll is out of the way, the next one asks for a partial response. A whole
+    // draw of the held answer would have replaced the header and lost its failure mark.
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && !seen.asked.slice(after).some((a) => a.startsWith("GET /smoke/written/again"))) await own.waitForTimeout(50);
+    const retry = seen.asked.slice(after).find((a) => a.startsWith("GET /smoke/written/again"));
+    const kept = await own.evaluate(() => !!document.querySelector("header[data-failed]") && document.querySelector("header span")?.textContent === "Watchlist, written");
+    check(waitingPollName, drew && waiting && failed && retry === "GET /smoke/written/again nav" && kept, JSON.stringify({ drew, waiting, failed, retry, kept, asked: seen.asked }));
     await own.context().close();
   }
   // A write's own page that refuses it (422), with a field marked invalid below the fold: drawn in
@@ -9072,17 +9121,31 @@ async function run(browser) {
     // and focus on it.
     const errorsAtRefusal = errors.length;
     await page.fill("input[name=above]", "1.234");
-    await page.click(save);
+    const belowFold = await page.locator(save).evaluate((button) => {
+      const field = document.querySelector("input[name=above]");
+      const spacer = document.createElement("div");
+      spacer.style.height = "200vh";
+      field?.closest("form")?.before(spacer);
+      scrollTo(0, 0);
+      const below = !!field && field.getBoundingClientRect().top >= innerHeight;
+      /** @type {HTMLButtonElement} */ (button).click();
+      return below;
+    });
     await page.waitForSelector('input[name=above][aria-invalid="true"]', { timeout: 5000 }).catch(() => {});
-    const refused = await page.evaluate(() => ({
-      message: document.getElementById("alert-form-above-error")?.textContent,
-      focused: document.activeElement?.getAttribute("name"),
-      value: /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"))?.value,
-    }));
+    const refused = await page.evaluate(() => {
+      const field = /** @type {HTMLInputElement | null} */ (document.querySelector("input[name=above]"));
+      const rect = field?.getBoundingClientRect();
+      return {
+        message: document.getElementById("alert-form-above-error")?.textContent,
+        focused: document.activeElement === field,
+        value: field?.value,
+        inView: !!rect && rect.bottom > 0 && rect.top < innerHeight && scrollY > 0,
+      };
+    });
     check(
-      "a refused field comes back marked, with its message and focus",
-      refused.message === "Enter a price in dollars and cents, such as 129.99." && refused.focused === "above" && refused.value === "1.234",
-      JSON.stringify(refused),
+      "a refused patch field below the fold comes back marked, with its message and focus in view",
+      belowFold && refused.inView && refused.message === "Enter a price in dollars and cents, such as 129.99." && refused.focused && refused.value === "1.234",
+      JSON.stringify({ belowFold, ...refused }),
     );
     // The browser logs the 422 as a failed resource; Corten adds nothing.
     const refusedLogs = errors.slice(errorsAtRefusal);

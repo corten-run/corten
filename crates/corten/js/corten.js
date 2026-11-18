@@ -1520,12 +1520,14 @@ function focusNear(el, root, fresh) {
  * @param {{ apply: () => void } | null} [layout] what changes around `<main>`, drawn in the same
  *   frame as the page ({@link swapDocument})
  * @param {DocumentFragment} [content] `html` parsed already (a whole page's head tags and page)
+ * @param {boolean} [wholePoll] a whole read again may be superseded by a visible write failure
  * @returns {Promise<boolean>} false when it loaded the page in full instead
  */
-async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html)) {
+async function swapPage(html, signal, stay, notice = null, layout = null, content = parse(html), wholePoll) {
   preload(content);
   const [, styled] = await Promise.all([modulesOf(content), stylesOf(content)]);
   signal?.throwIfAborted();
+  if (deferWholeRead(wholePoll)) return false;
   if (!styled) {
     reload(notice);
     return false;
@@ -1921,10 +1923,10 @@ async function swapDocument(html, signal, notice, again, stay, own, covers) {
   // With the layout drawn, they are drawn with it.
   const parts = layout ? [] : Array.from(doc.body.querySelectorAll("[data-corten-page]")).filter((el) => !el.parentElement?.closest("[data-corten-page]"));
   const text = head.map((el) => outerOf(el)).join("") + parts.map((el) => outerOf(el)).join("") + main.innerHTML;
-  const whole = comparableText(text);
   // Read again with nothing new in the page: it stays as it is, with what the user typed and its
   // live streams, and only what changed around it (a count the layout reads) is drawn.
-  if (again && layout && whole === swappedWhole) {
+  if (again && layout && text === swappedWhole) {
+    if (deferWholeRead(true)) return false;
     if (layout.fresh.length === 0) {
       readAgainLater();
       return false;
@@ -1937,10 +1939,10 @@ async function swapDocument(html, signal, notice, again, stay, own, covers) {
   // The nodes parsed above, not the text parsed again.
   const content = document.createDocumentFragment();
   content.append(...head, ...parts, ...Array.from(childNodesOf(main)));
-  const swappedIn = await swapPage(text, signal, stay, notice, layout, content);
+  const swappedIn = await swapPage(text, signal, stay, notice, layout, content, again);
   // The layout not drawn, the write's own page among the writes it has not drawn: the next
   // navigation reads the page whole, as after a write that redirected.
-  if (swappedIn && layout) swappedWhole = whole;
+  if (swappedIn && layout) swappedWhole = text;
   return swappedIn;
 }
 
@@ -2299,21 +2301,16 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  *   user, handed on when the server redirects
  * @param {Element | null} [source] what started it, marked busy with `main`: a link, a form, or
  *   the button that sent a form (and that button's form)
- * @param {boolean} [written] sent by a write: the page is fetched whole and its layout drawn again
+ * @param {boolean} [whole] read the whole page and draw its layout again
  * @param {number} [through] the writes answered before the page is asked for, which its layout
  *   draws ({@link Covers})
  * @param {Precommit} [precommit] where the address waits for the answer ({@link interceptVisit})
  */
-async function visit(url, signal, redirected, again, place, source, written, through = writesIn, precommit) {
-  // A write's page reading itself again is read whole as well, as a browser without JavaScript
-  // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
-  // when the read finds it. It stays whole while the page asks to be read again, unless a write
-  // since failed where the page says so, which a whole read would draw away.
-  const whole = !!written || (!!again && swappedWhole !== "" && !failedUndrawn());
+async function visit(url, signal, redirected, again, place, source, whole, through = writesIn, precommit) {
   const key = pageKey(url);
   // A read again fetches the page on screen, which no prefetch takes.
   const going = again ? null : { key };
-  const hit = again || written ? undefined : prefetched.get(key);
+  const hit = again || whole ? undefined : prefetched.get(key);
   prefetched.delete(key);
   const fresh = hit && performance.now() - hit.at < PREFETCH_FRESH_MS;
   // A redirected visit has its answer already, so a prefetch of the same page goes unused.
@@ -2344,9 +2341,10 @@ async function visit(url, signal, redirected, again, place, source, written, thr
           ? await hit.response.catch(() => fetch(url, { headers: { corten: "nav" }, signal }))
           : // After a write, the whole document, as a full load reads it. A read again sends back
             // the notice the page drew, which it draws the same.
-            await fetch(url, { headers: readHeaders(whole, again), signal });
+            await fetch(url, { headers: readHeaders(!!whole, again), signal });
     } catch (error) {
       if (signal.aborted) throw error;
+      if (deferWholeRead(whole && again)) return;
       // Offline or the server is unreachable: load the URL as a normal navigation, which the
       // service worker (if any) answers with the offline page, and the browser otherwise explains.
       await precommit?.commit();
@@ -2370,6 +2368,7 @@ async function visit(url, signal, redirected, again, place, source, written, thr
     // with the answer after this (a swap, a full load) starts from it.
     const took = (await precommit?.commit(res)) ?? false;
     signal.throwIfAborted();
+    if (deferWholeRead(whole && again)) return;
     const notice = noticeOf(res);
     // A read again's notice is the one the page drew and the user has seen: a full load in its
     // place does not say it again. The answer does not say whether the notice was sent back or is
@@ -2391,6 +2390,7 @@ async function visit(url, signal, redirected, again, place, source, written, thr
     }
     const html = await res.text();
     signal.throwIfAborted();
+    if (deferWholeRead(whole && again)) return;
     // Read again with nothing new (the write has not landed yet): the page stays as it is, with
     // what the user typed and its live streams.
     if (again && !whole && html === swapped) {
@@ -2435,19 +2435,8 @@ let swapped = "";
  * @type {string | null}
  */
 let shown = null;
-/**
- * The last page, when a write's whole page was swapped in: as `comparableText` writes it, since
- * `swapped` then holds the parsed page written out again, and a read again answers as a
- * navigation does, in the server's text.
- */
+/** The last page serialized by `swapDocument`, or empty after a partial draw. */
 let swappedWhole = "";
-/** @param {string} text */
-function comparableText(text) {
-  const template = document.createElement("template");
-  template.innerHTML = trustedHTML(text);
-  for (const noscript of Array.from(template.content.querySelectorAll("noscript"))) noscript.replaceChildren();
-  return template.innerHTML;
-}
 
 /** Bumped by each page, so a read-again timer of an earlier one does nothing. */
 let readAgainPage = 0;
@@ -2542,22 +2531,23 @@ let writesIn = 0;
  */
 const undrawn = new Set();
 /**
- * Which of the writes failed where the page says so (a toast, a message in `<main>`): the page
- * reading itself (`ReadAgain`, or a navigation to its own address) does not read the whole page
- * for them, which would draw that failure away while the user may send it again; a navigation to
- * another page does. A number stays here (a few bytes a failed write), since a page drawn late can
- * make it undrawn again.
+ * Which writes failed where the page says so: while one is undrawn, a same-page read does not
+ * replace the whole layout. A number stays here (a few bytes a failed write), since a page drawn
+ * late can make it undrawn again.
  * @type {Set<number>}
  */
 const failedInView = new Set();
-/**
- * Whether a navigation reads the whole page for what the writes changed: any undrawn write, or, for
- * the page reading itself, any but those that failed in view.
- * @param {boolean} itself
- */
-const anyUndrawn = (itself) => (itself ? Array.from(undrawn).some((n) => !failedInView.has(n)) : undrawn.size > 0);
 /** Whether a write that failed in view is undrawn: the page reading itself leaves the layout as it is. */
-const failedUndrawn = () => Array.from(undrawn).some((n) => failedInView.has(n));
+function failedUndrawn() {
+  for (const n of undrawn) if (failedInView.has(n)) return true;
+  return false;
+}
+/** A write can fail while a whole poll waits for its answer or assets. Retry as a partial read. @param {boolean} [wholePoll] */
+function deferWholeRead(wholePoll) {
+  if (!wholePoll || !failedUndrawn()) return false;
+  readAgainLater();
+  return true;
+}
 /**
  * A write that failed where the page says so, which the server may have applied: undrawn, for the
  * next navigation to another page.
@@ -2678,10 +2668,11 @@ navigation?.addEventListener("navigate", (/** @type {RuntimeNavigateEvent} */ ev
   const cut = cutOff.length > 0;
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
-  // The page reading itself (`ReadAgain`, or a navigation to its own address) leaves a write that
-  // failed in view to the next page, so the failure it shows stays.
-  const itself = !!again || pageKey(url) === pageKey(new URL(location.href));
-  const written = !!event.info?.[WRITTEN] || anyUndrawn(itself) || cut;
+  // A whole draw can replace the layout's failure UI. Leave it to another page, even if another
+  // write is undrawn or the last whole page asked to be read again while its write lands.
+  const written = !!event.info?.[WRITTEN] ||
+    ((undrawn.size > 0 || cut || (!!again && swappedWhole !== "")) &&
+      !((again || pageKey(url) === pageKey(new URL(location.href))) && failedUndrawn()));
   // The same page read again, or a form or link marked `data-keep-place` (filters applied as they
   // change): the page changes under the user, who stays where they were reading, on the control
   // they used. Kept across a redirect the server answers with.

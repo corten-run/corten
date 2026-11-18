@@ -16221,20 +16221,28 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 2, "a patch starts no read");
     }
 
-    /// An extension each request carries ([`Tracks`]): while a copy of the request's head lives,
-    /// so does one of these.
-    #[derive(Clone)]
-    struct Alive {
-        _held: Arc<()>,
+    /// Counts a request as dropped only after every copy of its head is gone.
+    struct TrackedRequest(Arc<AtomicUsize>);
+
+    impl Drop for TrackedRequest {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
-    /// The app's middleware: puts [`Alive`] in every request, and for `/passes` and `/hangs`
-    /// takes `Req` before the route and passes the request on (a guard that reads who is asking).
-    struct Tracks(Arc<()>);
+    #[derive(Clone)]
+    struct Alive {
+        _held: Arc<TrackedRequest>,
+    }
+
+    struct Tracks {
+        dropped: Arc<AtomicUsize>,
+        parked: Arc<tokio::sync::Notify>,
+    }
 
     impl crate::Middleware for Tracks {
         async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
-            req.extensions_mut().insert(Alive { _held: self.0.clone() });
+            req.extensions_mut().insert(Alive { _held: Arc::new(TrackedRequest(self.dropped.clone())) });
             if req.uri().path() == "/early" {
                 return next.run(req).await;
             }
@@ -16242,6 +16250,14 @@ mod layout_reads {
             let (mut parts, body) = req.into_parts();
             let taken = Req::from_request_parts(&mut parts, &()).await.unwrap();
             drop(taken);
+            match parts.uri.path() {
+                "/panic" => panic!("middleware panicked after taking Req"),
+                "/parked" => {
+                    self.parked.notify_one();
+                    std::future::pending::<()>().await;
+                }
+                _ => {}
+            }
             next.run(crate::http::Request::from_parts(parts, body)).await
         }
     }
@@ -16252,7 +16268,9 @@ mod layout_reads {
     /// (#1370).
     #[tokio::test]
     async fn the_head_a_req_keeps_before_a_writes_route_goes_with_the_request() {
-        let alive = Arc::new(());
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let parked = Arc::new(tokio::sync::Notify::new());
+        let drops = || dropped.load(Ordering::SeqCst);
         let routes = Table::new()
             .route("/early", crate::router::post(|req: Req| async move { refused(&req, "the route") }))
             .route(
@@ -16261,36 +16279,96 @@ mod layout_reads {
                     |req: Req| async move { req.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"saved"</p> }) },
                 ),
             )
-            .route(
-                "/hangs",
-                crate::router::post(|req: Req| async move {
-                    std::future::pending::<()>().await;
-                    req.patch::<ForOne, AnyAnswer>(html! { <p id={MsgId}>"never"</p> })
-                }),
-            );
+            .route("/panic", crate::router::post(|| async { StatusCode::OK }))
+            .route("/parked", crate::router::post(|| async { StatusCode::OK }));
         let router = App::new(Routes::from(routes))
             .layout_read(CartCount::default())
             .layout_read(SignedIn)
-            .middleware((Tracks(alive.clone()), AnswersEarly))
+            .middleware((Tracks { dropped: dropped.clone(), parked: parked.clone() }, AnswersEarly))
             .router();
-        // The test's and the middleware's; each case adds what outlives its request.
-        let before = Arc::strong_count(&alive);
-        let left = || Arc::strong_count(&alive) - before;
         let (status, _, body) = call_with(router.clone(), "POST", "/early", Some("action"), None).await;
         assert!(status.is_success() && body.contains("<p>early</p>") && body.contains("count"), "{body}");
-        let page = left();
+        assert_eq!(drops(), 1, "middleware answered with its own page");
         let (_, headers, body) = call_with(router.clone(), "POST", "/passes", Some("action"), None).await;
         assert!(headers.contains_key("corten-patch") && body.contains("saved"), "{headers:?} {body}");
-        let patch = left() - page;
-        // A clone: the router itself, and the middleware's count with it, outlives the request.
-        let cut = call_with(router.clone(), "POST", "/hangs", Some("action"), None);
-        assert!(tokio::time::timeout(Duration::from_millis(50), cut).await.is_err());
-        let dropped = left() - page - patch;
-        assert_eq!(
-            (page, patch, dropped),
-            (0, 0, 0),
-            "outlived: (the middleware's page, passed on to a patch, cut off unanswered)"
-        );
+        assert_eq!(drops(), 2, "middleware passed on to the patch route");
+        let (status, _, _) = call_with(router.clone(), "POST", "/panic", Some("action"), None).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(drops(), 3, "middleware panicked, caught by the app");
+        {
+            let mut cut = std::pin::pin!(call_with(router.clone(), "POST", "/parked", Some("action"), None));
+            tokio::select! {
+                _ = &mut cut => panic!("answered before getting parked in middleware"),
+                reached = tokio::time::timeout(Duration::from_secs(5), parked.notified()) => reached.unwrap(),
+            }
+            assert_eq!(drops(), 3, "still parked in middleware");
+        }
+        assert_eq!(drops(), 4, "dropped while parked in middleware");
+    }
+
+    /// A detached extractor can see the early mark, then be parked in an extension's clone
+    /// until the request has closed its slot and released the heads.
+    #[tokio::test]
+    async fn a_detached_req_cannot_publish_an_early_head_after_its_request_ends() {
+        use crate::extract::FromRequestParts;
+        use tokio::sync::oneshot;
+
+        struct ParkClone {
+            reached: Arc<tokio::sync::Notify>,
+            resume: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+        }
+
+        impl Clone for ParkClone {
+            fn clone(&self) -> Self {
+                let resume = self.resume.lock().unwrap().take();
+                if let Some(resume) = resume {
+                    self.reached.notify_one();
+                    resume.blocking_recv().unwrap();
+                }
+                Self { reached: self.reached.clone(), resume: self.resume.clone() }
+            }
+        }
+
+        struct Detaches {
+            dropped: Arc<AtomicUsize>,
+            resume: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+            task: std::sync::Mutex<Option<oneshot::Sender<tokio::task::JoinHandle<()>>>>,
+        }
+
+        impl crate::Middleware for Detaches {
+            async fn call(&self, req: crate::http::Request, _: impl crate::middleware::Next) -> crate::response::Response {
+                let (mut parts, _) = req.into_parts();
+                let reached = Arc::new(tokio::sync::Notify::new());
+                parts.extensions.insert(Alive { _held: Arc::new(TrackedRequest(self.dropped.clone())) });
+                parts.extensions.insert(ParkClone { reached: reached.clone(), resume: self.resume.clone() });
+                let runtime = tokio::runtime::Handle::current();
+                let task = tokio::task::spawn_blocking(move || {
+                    runtime.block_on(Req::from_request_parts(&mut parts, &())).unwrap();
+                });
+                self.task.lock().unwrap().take().unwrap().send(task).unwrap();
+                tokio::time::timeout(Duration::from_secs(5), reached.notified()).await.unwrap();
+                StatusCode::NO_CONTENT.into_response()
+            }
+        }
+
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let (resume, waiting) = oneshot::channel();
+        let (task, running) = oneshot::channel();
+        let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::OK }));
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .middleware(Detaches {
+                dropped: dropped.clone(),
+                resume: Arc::new(std::sync::Mutex::new(Some(waiting))),
+                task: std::sync::Mutex::new(Some(task)),
+            })
+            .router();
+        let (status, _, _) = call_with(router, "POST", "/", Some("action"), None).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        assert_eq!(dropped.load(Ordering::SeqCst), 0, "detached extraction still owns the head");
+        resume.send(()).unwrap();
+        running.await.unwrap().await.unwrap();
+        assert_eq!(dropped.load(Ordering::SeqCst), 1, "no head was published after cleanup");
     }
 
     /// [`AnswersEarly`]'s page with a body that never ends, or one that fails as it is read.

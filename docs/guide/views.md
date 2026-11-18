@@ -376,7 +376,7 @@ fetched as a document, so when it redirects again, `fetch` follows that redirect
 
 A write that answers with its own page rather than a redirect (a form drawn again with what it
 refused, a bulk add whose failed lines the page lists) needs nothing more either. `req.page(..)` for
-a write is the whole document in every mode, with JavaScript (`Mode::Action`) as without: the layout
+a write is the whole document in document mode or an action with `Prefer: corten-draws=whole`: the layout
 reads it draws start once the handler has answered with it, so they see what the write did (nothing
 runs beside the handler of such a write, and one that answers a patch or a redirect starts none), a
 value the handler read after the write is given with `.give::<CartCount>(n)`, and the runtime draws
@@ -389,12 +389,12 @@ applied, and the navigation after that one, since the server may still have been
 when that page was read. A patch that took a write counts too: one that drew a layout element (a
 count with an id), drawn over by an older write's own page that came after it, leaves the next
 navigation to read the whole page. A write that failed in view (the network failed, a 5xx, or its
-answer was cut off after its headers came) leaves the page as
-it is, with its failure shown, for the user to send again; the server may have applied it, so the
-next navigation reads the whole page, but the page reading itself again
-([`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet), or a navigation to its own
-address) does not, as that would draw
-the failure away, not even a write's own page that reads itself whole while its write lands. A page the app's or an area's middleware makes with `Req` in the
+answer was cut off after its headers came) may still have been applied. A navigation to another
+page reads the whole page. While the failure is undrawn, a same-page poll uses a partial response,
+even if another write is undrawn; a whole [`ReadAgain`](requests-and-forms.md#a-read-that-has-not-caught-up-yet)
+poll already on its way is skipped and retried. A partial draw can still replace `<main>` and
+page-owned layout elements; it does not redraw the rest of the layout. Browsers without the
+Navigation API reload for `ReadAgain`. A page the app's or an area's middleware makes with `Req` in the
 route's place (a sign-in page) is filled the same way, from the request's head as it had it,
 within the request's deadline, and a failure to fill it gets the error page. Only a `GET` form's page (a search) is
 `<main>` alone, as a navigation's is, since a `GET` changes nothing the layout shows. Such an answer
@@ -418,10 +418,11 @@ changes the layout only through an element the layout draws with an id, from a v
 passes it, as a prop, not a layout read. The badge is a component the layout renders and a patch
 can carry (an `#[derive(Id)]` on it), and the write reads the value itself after the write, and
 only for the patch: without JavaScript the redirect's next page is a full load that reads it.
-In an app with layout reads a write route whose answer type can be a page (`HtmlResult`) keeps a
-copy of the request's head on each submit, for the page its handler may answer; one whose handler
-answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) returns `HtmlResult<Patches>`
-and keeps none ([Requests and forms](requests-and-forms.md#request-modes)).
+In an app with layout reads a typed write route whose answer type can be a page (`HtmlResult`)
+keeps a copy of the request's head on each preferred submit, for the page its handler may answer.
+A handler that answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) can return
+`HtmlResult<Patches>` to skip the typed route's copy, not a copy made when middleware or a raw
+`Table` handler takes `Req` ([Requests and forms](requests-and-forms.md#request-modes)).
 
 ```rust,ignore
 #[component]
