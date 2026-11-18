@@ -5781,7 +5781,7 @@ rules something out.
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
     above, at `65ac1dc47` against `38587c414`.
 
-63. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys use literal NATS subjects, not encoded names; the
+62. <a id="choice-cluster-feed-subjects"></a>**Cluster feed keys use literal NATS subjects, not encoded names; the
     relay skips rows with invalid legacy keys.** Corten requires nonempty dot-separated tokens
     without whitespace, control characters, `*` or `>`. This is stricter than the broker: it may
     accept an embedded `*` or a non-breaking space, but the documented naming rules reserve

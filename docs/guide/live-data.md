@@ -500,7 +500,7 @@ ID and key. The relay uses the existing `published_at` marker to take the skippe
 of the queue; it did not deliver that patch. Ordinary pruning can remove it. There is no
 schema migration. An older instance holding the relay lease can still stall on a bad row
 until a new relay takes over. Publish and acknowledgement failures, including message size
-limits, still retry ([Choice 63](../design.md#choice-cluster-feed-subjects)).
+limits, still retry ([Choice 62](../design.md#choice-cluster-feed-subjects)).
 
 To replace an invalid key, write a new feed with a valid key using the app's current
 committed data, and point clients and future writes at it. Do not rename queued rows or
