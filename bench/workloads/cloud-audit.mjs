@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { full } from "./cloud-options.mjs";
 import { digest } from "./cloud-local.mjs";
 import { roundName } from "./cloud-contract.mjs";
-import { descriptor } from "../json-api/contract.mjs";
+import { auditBundleSchemas, descriptor } from "../json-api/contract.mjs";
 import { selectedApps } from "./registry.mjs";
 
 export function auditProtocol(group = "json-api") {
@@ -12,7 +12,7 @@ export function auditProtocol(group = "json-api") {
   const members = mixed ? selectedApps(group).map((app) => ({ app, key: "mixed-native-source" }))
     : descriptor().apps.flatMap((app) => descriptor().cases.map(({ key }) => ({ app, key })));
   return { group, prefix, members, schema: `benchmark-${prefix}-audit-delivery/v1`,
-    bundleSchema: mixed ? "mixed-native-source-audits/v1" : "json-api-native-audits/v1" };
+    bundleSchemas: mixed ? ["mixed-native-source-audits/v1"] : auditBundleSchemas };
 }
 
 export function auditDelivery(bytes, options) {
@@ -26,7 +26,7 @@ export function auditDelivery(bytes, options) {
   assert.equal(data.review?.decision, "approved"); assert.deepEqual(data.review?.findings, []);
   assert.ok(typeof data.review?.reviewer === "string" && data.review.reviewer.trim());
   assert.ok(Number.isFinite(Date.parse(data.review?.reviewedAt)));
-  assert.equal(data.bundle?.schema, protocol.bundleSchema);
+  assert.ok(protocol.bundleSchemas.includes(data.bundle?.schema), "unsupported native audit bundle");
   assert.ok(Array.isArray(data.bundle?.receipts), "native audit receipts array required");
   const actual = data.bundle.receipts.map((r) => ({ app: r.identity?.app, key: r.identity?.key }));
   const sorted = (rows) => [...rows].sort((a, b) => `${a.app}/${a.key}`.localeCompare(`${b.app}/${b.key}`));
@@ -35,7 +35,7 @@ export function auditDelivery(bytes, options) {
   return { group: protocol.group, campaign: options.campaign, subjectSha256: options.approveSubject, sha256: digest(bytes) };
 }
 export function auditProgram(state, intent, publish = false) {
-  const { group, prefix, schema, bundleSchema } = auditProtocol(intent.group);
+  const { group, prefix, schema, bundleSchemas } = auditProtocol(intent.group);
   roundName(state.round);
   full(state.commit, /[a-f0-9]{40}/, "measured commit");
   full(state.token, /[a-f0-9]{16}/, "ownership token");
@@ -56,7 +56,7 @@ function canonical(v){if(Array.isArray(v))return v.map(canonical);if(v!==null&&t
 const {subjectSha256,...body}=subject;a.equal(c.createHash('sha256').update(JSON.stringify(canonical(body))).digest('hex'),subjectSha256);
 ${publish ? `const stage='/bench/cloud-${prefix}-audit-${state.token}.json',target=p.join(dir,'${prefix}-audit-delivery.json');
 const bytes=read(stage);a.equal(c.createHash('sha256').update(bytes).digest('hex'),'${intent.sha256}');a.equal(fs.lstatSync(stage).mode&63,0);
-const data=JSON.parse(bytes);a.equal(data.schema,'${schema}');a.equal(data.subjectSha256,subjectSha256);a.equal(data.review.subjectSha256,subjectSha256);a.equal(data.review.decision,'approved');a.deepEqual(data.review.findings,[]);a.equal(data.bundle.schema,'${bundleSchema}');
+const data=JSON.parse(bytes);a.equal(data.schema,'${schema}');a.equal(data.subjectSha256,subjectSha256);a.equal(data.review.subjectSha256,subjectSha256);a.equal(data.review.decision,'approved');a.deepEqual(data.review.findings,[]);a.ok(${JSON.stringify(bundleSchemas)}.includes(data.bundle?.schema));
 const expected=${group === "mixed-production" ? "subject.requests.map(r=>r.identity)" : "subject.identities"},actual=data.bundle.receipts.map(r=>r.identity);
 a.ok(Array.isArray(expected));a.equal(actual.length,expected.length);
 const keys=new Set();for(let i=0;i<actual.length;i++){const value=actual[i],key=value.app+'/'+value.key;a.ok(!keys.has(key));keys.add(key);const wanted=${group === "mixed-production" ? "expected[i]" : "expected.find(v=>v.app===value.app&&v.key===value.key)"};a.deepEqual(canonical(value),canonical(wanted));}
