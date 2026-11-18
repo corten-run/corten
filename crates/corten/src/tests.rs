@@ -16311,11 +16311,12 @@ mod layout_reads {
     #[tokio::test]
     async fn a_detached_req_cannot_publish_an_early_head_after_its_request_ends() {
         use crate::extract::FromRequestParts;
+        use std::sync::mpsc;
         use tokio::sync::oneshot;
 
         struct ParkClone {
             reached: Arc<tokio::sync::Notify>,
-            resume: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+            resume: Arc<std::sync::Mutex<Option<mpsc::Receiver<()>>>>,
         }
 
         impl Clone for ParkClone {
@@ -16323,7 +16324,7 @@ mod layout_reads {
                 let resume = self.resume.lock().unwrap().take();
                 if let Some(resume) = resume {
                     self.reached.notify_one();
-                    resume.blocking_recv().unwrap();
+                    resume.recv().unwrap();
                 }
                 Self { reached: self.reached.clone(), resume: self.resume.clone() }
             }
@@ -16331,7 +16332,7 @@ mod layout_reads {
 
         struct Detaches {
             dropped: Arc<AtomicUsize>,
-            resume: Arc<std::sync::Mutex<Option<oneshot::Receiver<()>>>>,
+            resume: Arc<std::sync::Mutex<Option<mpsc::Receiver<()>>>>,
             task: std::sync::Mutex<Option<oneshot::Sender<tokio::task::JoinHandle<()>>>>,
         }
 
@@ -16352,7 +16353,7 @@ mod layout_reads {
         }
 
         let dropped = Arc::new(AtomicUsize::new(0));
-        let (resume, waiting) = oneshot::channel();
+        let (resume, waiting) = mpsc::channel();
         let (task, running) = oneshot::channel();
         let routes = Table::new().route("/", crate::router::post(|| async { StatusCode::OK }));
         let router = App::new(Routes::from(routes))
