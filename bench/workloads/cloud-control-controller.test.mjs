@@ -20,9 +20,13 @@ test("foreground timeout permanently marks the monitor invalid without releasing
   const h = harness(t, { active: true, monitorHold: true });
   const pending = h.launch({ run(...args) {
     const result = h.run(...args);
-    if (result.monitor) result.monitor.done = result.monitor.done.then(() => {
-      throw Object.assign(new Error("uncertain foreground completion"), { controlTreeUncertain: true });
-    });
+    if (result.monitor) {
+      result.monitor.done = result.monitor.done.then(() => {
+        throw Object.assign(new Error("uncertain foreground completion"), { controlTreeUncertain: true });
+      });
+      // Like openControlStream, observe an early rejection without replacing the promise the controller awaits.
+      result.monitor.done.catch(() => {});
+    }
     return result;
   } }).launch();
   for (let i = 0; i < 100 && !h.flags.completeMonitor; i++) await new Promise(setImmediate);
