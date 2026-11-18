@@ -3930,6 +3930,13 @@ mod carried_tests {
         assert!(error.contains(r#"data-vars="--m__fill:7%" and no rule"#), "{error}");
     }
 
+    #[test]
+    fn a_data_vars_value_after_a_quoted_raw_text_end_tag_lookalike_is_read() {
+        let html = "<svg><style></stylex a='>'><div data-vars=--m:7%>Visible</div></style></svg>";
+        let error = unruled_vars(html, "").expect_err("7% has no rule").to_string();
+        assert!(error.contains(r#"data-vars="--m:7%" and no rule"#), "{error}");
+    }
+
     /// The failed answer's `Vary` names are added to the error page's, each name once whatever its
     /// case or the line it is on, and a value that is not text as it came.
     #[test]

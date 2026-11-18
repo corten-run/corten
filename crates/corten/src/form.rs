@@ -2754,6 +2754,61 @@ mod tests {
         }
     }
 
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_after_a_quoted_raw_text_end_tag_lookalike_is_read() {
+        let hints = ["qty-hint".to_string()];
+        let html = "<svg><style></stylex a='>'><input id=qty><p id=qty-hint>Visible hint</p></style></svg>";
+        for page in [true, false] {
+            assert_eq!(unnamed_hint(html, &hints, page), Some("qty-hint"), "page={page}");
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_does_not_count_a_lone_lt_in_a_template() {
+        let hints = ["qty-hint".to_string()];
+        for html in [
+            "<input id=qty><p id=qty-hint><template><</template></p>",
+            "<input id=qty><p id=qty-hint><template><template></template><</template></p>",
+        ] {
+            for page in [true, false] {
+                assert_eq!(unnamed_hint(html, &hints, page), None, "{html}, page={page}");
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_does_not_count_a_lone_lt_in_iframe_fallback() {
+        let hints = ["qty-hint".to_string()];
+        let html = "<input id=qty><p id=qty-hint><iframe><</iframe></p>";
+        for page in [true, false] {
+            assert_eq!(unnamed_hint(html, &hints, page), None, "page={page}");
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_counts_a_lone_lt_after_inert_content() {
+        let hints = ["qty-hint".to_string()];
+        for html in
+            ["<input id=qty><p id=qty-hint><template><</template><</p>", "<input id=qty><p id=qty-hint><iframe><</iframe><</p>"]
+        {
+            for page in [true, false] {
+                assert_eq!(unnamed_hint(html, &hints, page), Some("qty-hint"), "{html}, page={page}");
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_can_count_a_lone_lt_in_a_declarative_shadow_root() {
+        let hints = ["qty-hint".to_string()];
+        let html = "<input id=qty><p id=qty-hint><template shadowrootmode=open><</template></p>";
+        assert_eq!(unnamed_hint(html, &hints, true), Some("qty-hint"));
+    }
+
     const EMAIL: FieldName = FieldName::__new("email");
     const PRICE: FieldName = FieldName::__new("price");
     const NAME: FieldName = FieldName::__new("name");

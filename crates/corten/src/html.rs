@@ -104,8 +104,9 @@ impl Tag<'_> {
         let mut at = self.end;
         let mut depth = 1;
         let mut markup_end = at;
-        let is_source = |name: &str| ["script", "style"].iter().any(|tag| name.eq_ignore_ascii_case(tag));
+        let is_source = |name: &str| ["script", "style", "iframe"].iter().any(|tag| name.eq_ignore_ascii_case(tag));
         let mut source = is_source(&self.name).then_some(self.name.as_str());
+        let mut templates = usize::from(self.name == "template");
         while let Some(found) = html[at..].find('<') {
             let lt = at + found;
             if !html[at..lt].trim().is_empty() {
@@ -114,22 +115,43 @@ impl Tag<'_> {
             let tag = &html[lt..];
             let gt = tag.find('>').unwrap_or(tag.len() - 1);
             // Keep the tag-name heuristic's text and depth rules. Only newly recognized `<`
-            // needs to be outside a quoted attribute, a comment or script/stylesheet source.
+            // needs to be outside markup, source text and inert template content.
             if lt >= markup_end {
-                let end_tag = tag.starts_with("</");
-                let name_start = lt + if end_tag { 2 } else { 1 };
+                let mut token_at = lt;
                 if lone_lt(bytes, lt) {
-                    if source.is_none() {
+                    if source.is_none() && templates == 0 {
                         return true;
                     }
-                } else if let Some(body) = tag.strip_prefix("<!--") {
-                    markup_end = body.find("-->").map_or(html.len(), |n| lt + 4 + n + 3);
+                    // The depth scan skips to `>`, but an inert `<` can abut its closing tag.
+                    token_at += tag.bytes().take_while(|&b| b == b'<').count() - 1;
+                }
+                let token = &html[token_at..];
+                let end_tag = token.starts_with("</");
+                let name_start = token_at + if end_tag { 2 } else { 1 };
+                if let Some(body) = token.strip_prefix("<!--") {
+                    markup_end = body.find("-->").map_or(html.len(), |n| token_at + 4 + n + 3);
                 } else if bytes.get(name_start).is_some_and(u8::is_ascii_alphabetic) {
-                    let (name, end, _) = read_tag(html, name_start, |_, _| {});
+                    let mut shadow_mode = None;
+                    let (name, end, _) = read_tag(html, name_start, |attr, value| {
+                        if shadow_mode.is_none() && attr.eq_ignore_ascii_case("shadowrootmode") {
+                            shadow_mode = Some(value);
+                        }
+                    });
                     markup_end = (end + 1).min(html.len());
-                    if end_tag && source.is_some_and(|open| open.eq_ignore_ascii_case(name)) {
-                        source = None;
-                    } else if !end_tag && source.is_none() && is_source(name) {
+                    if let Some(open) = source {
+                        if end_tag && open.eq_ignore_ascii_case(name) {
+                            source = None;
+                        }
+                    } else if name.eq_ignore_ascii_case("template") {
+                        if end_tag {
+                            templates = templates.saturating_sub(1);
+                        } else if templates != 0
+                            || !shadow_mode
+                                .is_some_and(|mode| mode.eq_ignore_ascii_case("open") || mode.eq_ignore_ascii_case("closed"))
+                        {
+                            templates += 1;
+                        }
+                    } else if !end_tag && is_source(name) {
                         source = Some(name);
                     }
                 }
@@ -241,10 +263,12 @@ fn end_tag_end(html: &str, at: usize, raw: Option<&str>) -> usize {
     let (name, end, _) = read_tag(html, at + 2, |_, _| {});
     let after = (end + 1).min(html.len());
     if let Some(raw) = raw.filter(|raw| !name.eq_ignore_ascii_case(raw) && after != first_gt()) {
-        // A name prefix is normally enough for this scan, but quotes on a lookalike
-        // in raw text must not swallow the real end tag.
-        let close = raw_text_end(html, at + 2, raw);
-        return if close == html.len() { close } else { end_tag_end(html, close, None) };
+        // Recover a real close swallowed by the lookalike's quotes, without skipping
+        // later start tags when the lookalike was read in full before the real close.
+        let close = raw_text_end(&html[..after], at + 2, raw);
+        if close != after {
+            return end_tag_end(html, close, None);
+        }
     }
     after
 }
