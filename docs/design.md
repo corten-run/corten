@@ -6036,10 +6036,10 @@ rules something out.
     Last checked: 2026-11-18, release Callgrind 3.19.0 with jemalloc, against main `9de7529fc`.
     Using the same `write_request_cost` fixture on both builds, three alternating 1,200-minus-200
     runs measured these median additional instructions per request without reads: document GET
-    96 (range 94 to 96), navigation GET 104 (103 to 104), typed patch 160 (159 to 160), generic
+    96 (range 95 to 96), navigation GET 102 (102 to 102), typed patch 159 (159 to 159), generic
     patch 454 (454 to 454). With reads configured and pass-through middleware, the preferred
-    versus legacy controls measured 1,086 (1,086 to 1,086) for the late-write path and 2,905
-    (2,905 to 2,907) more for the generic-only path. One profile of the generic patch without
+    versus legacy controls measured 1,086 (1,086 to 1,088) for the late-write path and 2,905
+    (2,904 to 2,905) more for the generic-only path. One profile of the generic patch without
     middleware still counted 1,512 in the inclusive capture. Core gzip measured 15,612 to
     16,108 bytes, upload gzip 539 to 559. The watchlist smoke covers named form controls in
     the frame fallback and both cut and completed 503 bodies after another write draws;
