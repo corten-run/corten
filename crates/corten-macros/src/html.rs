@@ -694,6 +694,17 @@ enum Attr {
     Page(Span),
 }
 
+/// The attribute `want` of an element: `None` when it is not written, `Some(None)` when it is
+/// written as an expression (its value not known here), else `Some(Some(value))`, `""` for a bare one.
+fn attr_named<'a>(attrs: &'a [Attr], want: &str) -> Option<Option<&'a str>> {
+    attrs.iter().find_map(|a| match a {
+        Attr::Bare(n) if n.eq_ignore_ascii_case(want) => Some(Some("")),
+        Attr::Static(n, v) if n.eq_ignore_ascii_case(want) => Some(Some(v.as_str())),
+        Attr::Expr(n, _) if n.eq_ignore_ascii_case(want) => Some(None),
+        _ => None,
+    })
+}
+
 /// Why a `<form>` with `on:corten:progress` would never hear it: the runtime reports progress only
 /// for a `data-patch` form it sends as `multipart/form-data` by a method other than GET. Attributes
 /// a spread may write are not known here, so a form with one is left to the runtime.
@@ -704,15 +715,7 @@ fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
     if attrs.iter().any(|a| matches!(a, Attr::Spread(_))) {
         return None;
     }
-    // `None`: not written; `Some(None)`: written as an expression, so not known here.
-    let named = |want: &str| {
-        attrs.iter().find_map(|a| match a {
-            Attr::Bare(n) if n.eq_ignore_ascii_case(want) => Some(Some("")),
-            Attr::Static(n, v) if n.eq_ignore_ascii_case(want) => Some(Some(v.as_str())),
-            Attr::Expr(n, _) if n.eq_ignore_ascii_case(want) => Some(None),
-            _ => None,
-        })
-    };
+    let named = |want: &str| attr_named(attrs, want);
     if named("data-patch").is_none() {
         return Some("on:corten:progress: the runtime reports an upload's progress only for a data-patch form (a form without it is sent by the browser, which reports none): add data-patch");
     }
@@ -732,6 +735,36 @@ fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
     if !sends_body {
         return Some(
             "on:corten:progress: a GET or dialog form sends no body, so it has no upload progress: give the form method=\"post\"",
+        );
+    }
+    None
+}
+
+/// Why `data-address` would never change the address: the runtime puts the address a `data-patch`
+/// form asked for by GET in the address bar once its answer is drawn, so the mark goes on a
+/// `<form>` with `data-patch` whose `method` sends it as a GET (none, `get`, or one the browser
+/// reads as GET). A spread may write either attribute, so a form with one may lack `data-patch`
+/// here, and a `method` after a spread may not be the one the browser keeps (the first); one before
+/// every spread is. A `method` written as an expression is known only when the form is sent. Those
+/// are left to the runtime, which changes the address only for a GET.
+fn address_unsent(is_form: bool, attrs: &[Attr]) -> Option<&'static str> {
+    attr_named(attrs, "data-address")?;
+    if !is_form {
+        return Some(
+            "data-address: only a <form data-patch method=\"get\"> says its answer is the page at the address it asked for; a link changes the address already",
+        );
+    }
+    let spread = attrs.iter().position(|a| matches!(a, Attr::Spread(_)));
+    if spread.is_none() && attr_named(attrs, "data-patch").is_none() {
+        return Some(
+            "data-address: a form without data-patch is sent by the browser, which changes the address itself: add data-patch, or remove data-address",
+        );
+    }
+    let not_get = |m: &str| m.eq_ignore_ascii_case("post") || m.eq_ignore_ascii_case("dialog");
+    let kept = &attrs[..spread.unwrap_or(attrs.len())];
+    if attr_named(kept, "method").flatten().is_some_and(not_get) {
+        return Some(
+            "data-address: only a GET form's answer is the page at the address it asked for; a form that posts, or closes its dialog, leaves the address as it is: give it method=\"get\", or remove data-address",
         );
     }
     None
@@ -1590,6 +1623,11 @@ impl Cursor {
         }
         if is_form {
             if let Some(why) = progress_unsent(&attrs) {
+                return err(name_span, why);
+            }
+        }
+        if !component {
+            if let Some(why) = address_unsent(is_form, &attrs) {
                 return err(name_span, why);
             }
         }
@@ -2957,10 +2995,36 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
 #[cfg(test)]
 mod tests {
     use super::{
-        breaks_out, foreign_breakout, local_path, parsing_within, patch_top, reads_as_text, refused_path, text_only_element,
-        Attr, Node, Parsing, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TABLE_PARTS, TEMPLATE_HEAD, TEXT_ONLY,
+        address_unsent, breaks_out, foreign_breakout, local_path, parsing_within, patch_top, reads_as_text, refused_path,
+        text_only_element, Attr, Node, Parsing, TopRead, BREAKOUT, MATH_HTML_POINTS, RAW_TEXT, TABLE_PARTS, TEMPLATE_HEAD,
+        TEXT_ONLY,
     };
     use proc_macro::TokenStream;
+
+    #[test]
+    fn data_address_is_refused_where_the_runtime_would_never_change_the_address() {
+        let bare = |n: &str| Attr::Bare(n.into());
+        let method = |m: &str| Attr::Static("method".into(), m.into());
+        let why = |is_form, attrs: Vec<Attr>| {
+            address_unsent(is_form, &attrs).map(|w| w.split(':').nth(1).unwrap_or_default().trim().to_owned())
+        };
+        assert_eq!(why(true, vec![bare("data-patch"), bare("data-address")]), None);
+        assert_eq!(why(true, vec![method("GET"), bare("data-patch"), bare("data-address")]), None);
+        assert_eq!(why(true, vec![method("get")]), None, "no mark, nothing to say");
+        assert!(why(false, vec![bare("data-patch"), bare("data-address")]).is_some_and(|w| w.starts_with("only a <form")));
+        assert!(why(true, vec![method("get"), bare("data-address")]).is_some_and(|w| w.starts_with("a form without data-patch")));
+        for posting in ["post", "POST", "dialog"] {
+            let refused = why(true, vec![method(posting), bare("data-patch"), bare("data-address")]);
+            assert!(refused.is_some_and(|w| w.starts_with("only a GET form")), "{posting}");
+        }
+        // A spread may write data-patch, and a method after it may not be the one the browser
+        // keeps (the first); one before it is.
+        let spread = || Attr::Spread(TokenStream::new());
+        assert_eq!(why(true, vec![bare("data-address"), spread()]), None);
+        assert_eq!(why(true, vec![bare("data-patch"), bare("data-address"), spread(), method("post")]), None);
+        let first = why(true, vec![method("post"), bare("data-patch"), bare("data-address"), spread()]);
+        assert!(first.is_some_and(|w| w.starts_with("only a GET form")));
+    }
 
     /// Each element read as text, as each parse would read it: text in HTML, at an `<svg>`'s
     /// integration points too, and an element in an `<svg>`, a `<math>` or where the markup does

@@ -2071,6 +2071,62 @@ The address does not change with an appended page, so a reload shows the first p
 a list whose length must survive a reload puts it in the address with a link instead.
 `examples/watchlist`'s news page has both.
 
+A filter or scope whose answer is one part of the screen (a panel's period, a chart's range) can
+be a GET `data-patch` form too, so a change reads only what that part shows, not the rest of the
+screen. Mark it `data-address` as well, and its answer is the page at the address it asked for:
+as the patch is drawn, that address goes in the address bar, in a new history entry (none when it
+is the address already), as the browser leaves it after the same form without JavaScript, a
+`#fragment` of its `action` or `formaction` included. A reload, a bookmark and a shared link then
+reach what the screen shows, and a form that posts without an `action` sends to it. A marked
+answer does not draw once another visit has started, even if the old page is still visible. The
+address moves only when the patch draws without skipping any operation: a 204, an empty patch,
+or a patch with a missing target leaves the address alone. A 4xx patch (such as a 422) can move
+the address; a 5xx patch may draw but is a failed request and leaves the address alone. Back and
+Forward read the page at each address, as for any entry. A page answer is drawn in place and
+leaves the address. A GET pressed while a Save (`formmethod="post"`) of the form is on its way
+waits for the Save's answer and is sent only if the visit has not changed. Two marked forms are
+not ordered against each other: their answers are drawn as they come.
+
+Which mark a filter takes depends on what its change redraws. One that changes most of what the
+page shows (a list's results) is a navigation, `data-keep-place`: each change reads the page,
+which is what changes. One that redraws one part of a screen whose rest costs more to read (a
+panel's period beside a long report) is `data-patch data-address`: a change reads only the part.
+`data-keep-place` falls short there: it reads the whole page for each change, where the part is
+all that changes. Back reads the page with either.
+
+```rust,ignore
+#[component]
+fn ScopePanel<'a>(scope: Scope, rows: &'a [Sale]) -> impl Patch {
+    let f = StrategyQuery::FIELDS;
+    html! {
+        <section id={ScopePanelId}>
+            <form method="get" action={url::Strategy::default()} data-patch data-address>
+                <select name={f.scope}>..</select>
+                <button>"Apply"</button>
+            </form>
+            <SalesTable rows={rows} />
+        </section>
+    }
+}
+```
+
+The handler answers both with `req.patch_or`, the panel with JavaScript and the page otherwise,
+so the patch draws everything an address changes: the part, and the form with it, whose controls
+then show the scope the part does, except a field the user changed and did not send, which keeps
+what they typed as in any patch ([Limit 2](../design.md#limit-whole-element-patches)). A route
+whose patch adds to the page (`view::Append`, Load more's) is not one to mark: its address would
+reload to fewer rows than the screen shows. The page's other links and forms keep the address
+they were drawn with, a form that keeps the address's query (`keep_query`) included: its hidden
+inputs are the query of the route it was drawn with, and do not follow the address. A link or
+form that should carry the scope is drawn by the same patch, `keep_query` too, so it sends the
+scope on screen.
+The mark needs the Navigation API
+([Limit 1](../design.md#limit-navigation-api)); without it the browser sends the form itself and
+loads the page at its address, as without JavaScript. `html!` refuses `data-address` on anything
+but a `<form>`, on a form without `data-patch`, and on one whose `method` is `post` or `dialog`; a
+`formmethod="post"` button in a marked form posts as it would in any other, and leaves the
+address.
+
 ## Redirects
 
 After a successful write, `req.redirect(&route)` sends the browser on (post/redirect/get), with

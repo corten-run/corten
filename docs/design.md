@@ -3831,10 +3831,12 @@ rules something out.
     it fails, `style-src 'self'` allows it under the policy the document loaded with, and its
     subresources are under that policy too; the load, the failure and a second patch waiting for
     a load are checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`, and a navigation
-    waiting for a patch's load in Chromium and Firefox, WebKit having no Navigation API; a
-    `<template>` whose first element is a `<col>` keeps only `<col>`s and `<template>`s, the HTML
-    standard's "in column group" insertion mode, checked in the three by `scripts/smoke.mjs`
-    against `crates/corten/src/patch-parsing.json`); reasoned (a
+    waiting for a patch's load in Chromium and Firefox, the smoke's WebKit run hiding the
+    Navigation API on that page, as Playwright's WebKit loses track of a page whose navigation the
+    runtime intercepts there, though WebKit 27.2 has the API; a `<template>` whose first element is
+    a `<col>` keeps only `<col>`s and `<template>`s, the HTML standard's "in column group"
+    insertion mode, checked in the three by `scripts/smoke.mjs` against
+    `crates/corten/src/patch-parsing.json`); reasoned (a
     handler's path decides its area, as a page's does, so the links need nothing the request does
     not have; the runtime already skips a stylesheet the head has, by its URL; the wait a page
     outside the area pays is one request; the harness patch's buffer grows once more for the link,
@@ -3865,10 +3867,11 @@ rules something out.
     Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1) by `scripts/smoke.mjs`, and a navigation
     waiting for a patch's load in Chromium and Firefox; 2026-11-13, both of those waits drawn
     unstyled, and those two checks alone failing, in Chromium and Firefox with round 1's
-    `stylesOf` (`9c722e27`) put back in this head's runtime; 2026-11-16, a leading `<col>`'s
-    patch losing its stylesheet link, a case of `crates/corten/src/patch-parsing.json` that
-    `scripts/smoke.mjs` loaded on `1f0bc47b7`, in Chromium 156.0.8078.80, Firefox 157.0 and
-    WebKit 27.2 (Playwright 1.64.1).
+    `stylesOf` (`9c722e27`) put back in this head's runtime; 2026-11-15, why WebKit is not among
+    them, read from `scripts/smoke.mjs` at `e0be99e67` (the navigation wait itself not checked in
+    WebKit again); 2026-11-16, a leading `<col>`'s patch losing its stylesheet link, a case of
+    `crates/corten/src/patch-parsing.json` that `scripts/smoke.mjs` loaded on `1f0bc47b7`, in
+    Chromium 156.0.8078.80, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
 
 48. <a id="choice-matchit"></a>**Every app uses the exact matchit version Corten tests, 0.9.2.**
     `crates/corten/Cargo.toml` requires `=0.9.2`, not a caret or tilde. The exact pin is what
@@ -5589,6 +5592,112 @@ rules something out.
     filtering on the line's fields, a `CONNECT` tunnel's empty answer over a socket, and the costs
     above, at `65ac1dc47` against `38587c414`.
 
+62. <a id="choice-data-address"></a>**A GET `data-patch` form marked `data-address` puts the address it asked for in
+    history as its patch is drawn.** A filter or scope that redraws one part of a screen with a
+    GET `data-patch` form left the address as it was: a reload, Back and a bookmark lost the
+    filter, the page's other forms still carried the old one, and the same form without
+    JavaScript navigates, so the two paths disagreed (README Value 3)
+    ([#1406 A GET data-patch form redraws the page's part for a new address but leaves the old address, so a filter is lost on reload and the page's other links keep the old one](https://github.com/corten-run/corten/issues/1406)).
+    The mark says what the form already is: its answer is the page at the address it asked for.
+    In the task that draws the patch, before anything else can run (an observer of what it drew,
+    another submit), the runtime pushes the response's URL, the redirect's when there was one,
+    with the `#fragment` of the form's `action` or `formaction`, as the browser does for the form
+    without JavaScript (a fragment a redirect's `Location` names itself is not seen, as `fetch`
+    does not show it, the same as for a link the runtime follows); the same address again adds no
+    entry, and a nav link to the new address is marked current, as for a navigation. The marked
+    answer cannot draw on another visit, even one still pending or one that drew identical HTML.
+    It moves history only after the patch draws and skips no operation: a dropped answer, a 204,
+    an empty patch or a missing target leaves the address alone. A drawn 4xx patch (such as a
+    422) can move history: it is the destination's error view. A 5xx patch may draw, but is a
+    failed request and never moves history. The rest is the runtime's ordinary `data-patch` form: an
+    answer that is a page is drawn in place and leaves the address, a redirect the server asks for
+    (`corten-location`) is followed as a navigation, and its submits are ordered as any form's are,
+    against its own writes and other forms'. A GET pressed while a write of the form is on its way
+    waits for the write's answer and is sent only on the visit where it was pressed, its address
+    following as its patch is drawn. Two forms' answers are drawn as they come; the address is
+    that of the last patch that moved it.
+    Back and Forward to such an entry read the page at its address, as for any entry, and a reload
+    draws it: so the route at each of those addresses answers its part with `req.patch_or`,
+    drawing all that the address changes, a link or form that carries the address included (a
+    `keep_query` form's hidden inputs are the query it was drawn with), and a route whose patch
+    appends (Load more) is not one to mark. Without the Navigation API
+    ([Limit 1](#limit-navigation-api)) the browser sends a marked form itself, which loads the page
+    at its address. It is part of the runtime, with no separate module.
+
+    Not chosen: `data-keep-place` on the filter's form, Corten's way to apply a filter as it
+    changes: it sends the form as a navigation, so the address follows and the user's place stays,
+    but each change reads the whole page, 11,077 bytes of body against the patch's 323 on the
+    smoke's screen. The two marks are not two ways to do one thing (README Value 5):
+    `data-keep-place` is for a filter that changes most of what the page shows (a list's results),
+    which a page read is the right size for, and falls short for one that redraws one part of a
+    screen whose rest costs more to read, which is `data-address`'s; the guide says which to pick.
+    Reading the patch again for Back and Forward between such entries, which this Choice's earlier
+    builds did, sparing Back the page read: it made the runtime keep which entries were patches,
+    what was typed and scrolled on each, and order a marked GET against other forms' writes, and
+    each of seven reviews found a new race in that ordering, one of which changed the queue of
+    forms without the mark; the issue asks for the address. A module of its own, loaded by the
+    pages with a marked form, as those builds had: what is left is smaller than the hooks a module
+    needs, and a module still loading when the answer comes would draw the patch without its
+    address. Cancelling another marked form's GET when one is sent, as a navigation drops the page
+    asked before it: ordering forms against one another is the runtime's queue, which the mark
+    leaves as it is. Reading the page at the address when a marked form is answered with a page,
+    which earlier builds did: a second request, for an answer the guide asks a marked form's route
+    not to give. A header on the patch's answer that names its address (`corten-location` with
+    replace semantics, as the issue suggested), since the same `patch_or` answers Load more and a
+    filter and only the form knows which it is, and a header of Corten's own where the form's
+    markup can say it needs a reason of its own ([Rule 10](#rule-standard-formats)); changing the
+    address for every GET `data-patch` form, which would give Load more an entry per page and an
+    address that reloads to fewer rows than the screen shows; an option to replace the entry
+    rather than push one, which no app has asked for and the browser's own form does not do; and a
+    hook for a script to push the address, a second way to do what the mark does, with URLs
+    written in scripts (README Value 5). Without the Navigation API, patching and leaving the
+    address as an unmarked form does was not chosen either: a reload would show another scope
+    than the screen did, the error the mark is there to end, where a full load costs bytes (README
+    conflict order 1 over 2).
+
+    What it costs: the runtime every page loads is 597 bytes larger raw (43,846 to 44,443), 280
+    with gzip (15,612 to 15,892) and 242 with brotli (14,100 to 14,342), paid once a release by
+    every user. A `data-patch` GET reads the mark, and only a marked one captures a visit and
+    builds an address to push. The runtime compares visit numbers at the draw and at a queued
+    retry, and tracks the outcome of placement as it walks the patch's operations, without a
+    separate scan. On the server nothing runs that did not:
+    `html!` writes the mark as an attribute and refuses a misplaced one when the markup compiles.
+    Back and Forward to such an entry read the page, 11,077 bytes of body (1,586 on the wire)
+    on the smoke's scope screen against 323 (1,196) for its patch; on a local server their times
+    were the same (7.6 against 7.3 ms medians), the page being small.
+
+    Stands on: measured (the runtime's minified size by Node's `zlib` gzip and brotli at their
+    defaults, once each build; the page's and the patch's bytes and times in Chromium, 40 each,
+    alternated); platform (`history.pushState` adds an entry the Navigation API reports and does
+    not ask the runtime to load, and Back and Forward to it are a same-document traversal the
+    runtime intercepts and reads as a page, in Chromium, Firefox and WebKit; the smoke's checks in
+    all three); reasoned (the form's mark says which answers are the page at their address, which
+    neither the handler nor the runtime can tell; a push in the task that draws leaves nothing able
+    to see the patch without its address); value (an address that names what the screen shows is
+    correct output that survives a reload, the README's conflict order 1, above the bytes it costs,
+    its 2; the form works the same with and without JavaScript, README Value 3; one mark, no
+    script, README Value 5).
+
+    Revisit when: an app needs the entry replaced rather than pushed (a slider that applies as it
+    moves); an app's Back between such entries costs too much as a page read, when reading the
+    patch again (Not chosen above) is weighed again; a route's type can say that its patch draws
+    the part for its address, when `html!` could refuse marking a form whose route appends, which
+    the guide only asks today; or the browsers the runtime falls back for gain the Navigation API,
+    when [Limit 1](#limit-navigation-api)'s sentence on the mark goes.
+
+    Last checked: 2026-11-17, the runtime's size on `eca778265` against main `056964945`. The
+    five watchlist checks for pending and identical visits, a stale retry after a 204 write,
+    complete placement, and 5xx versus 4xx fail with `a273cac70`'s bundle and pass on
+    `eca778265` in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2.
+    2026-11-17, the watchlist smoke on `c6beaa655` (its server and runtime
+    `8e381f3e2`'s, the later commits the smoke's own), Chromium 156.0.8078.4 475 checks and Firefox
+    157.0 472 with 1 skipped in the three-engine run, WebKit 27.2 345 with 104 skipped run alone on
+    a server started for it, the `data-address` steps 14 in each, all passed; 2026-11-17, the steps
+    for a patch and its address in one task and for an unmarked form's write queued behind another
+    and sent after a GET, against `8a6ff134a`'s server and runtime (`168a5ddd4`'s image): both
+    fail in all three engines and pass with `8e381f3e2`'s; 2026-11-15, the page's and the patch's
+    bytes and times measured with `307d00bca`'s runtime in Chromium 156.0.8078.4.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -5685,6 +5794,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
 
 1. <a id="limit-navigation-api"></a>Client navigation uses the Navigation API (Chrome, Edge, Firefox 147+, Safari 26.2+); older
    browsers do full page loads, and forms, patches and handlers still work.
+   There the browser sends a `data-address` form itself, its writes too, a full load of the page
+   at its address, as without JavaScript: the runtime could patch and put the address in, but not
+   answer Back to it, which would show the address over the screen it left.
 2. <a id="limit-whole-element-patches"></a>Patches replace whole elements: the server's markup wins, except for what the user is doing.
    A field they edited keeps its value (for the form that was sent, edited after it was sent),
    and focus and the caret move to the matching element (same id; else, inside the nearest

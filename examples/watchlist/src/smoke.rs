@@ -4,10 +4,15 @@
 //! argument and as the value an element gives its ref, a patch drawn with this area's
 //! stylesheet, which a form on a page outside the area is answered with, and a dialog and a
 //! `<details>` drawn closed that a form outside each asks for again, a screen whose data a
-//! script reads (`corten/read`), a form whose fields a handler is given as its controls, and view
-//! classes (`corten/views`) whose holes are in a form, past one and a form's whole text, beside
-//! controls named after the members their paths read.
-use corten::{Error, LiveResponse, prelude::*};
+//! script reads (`corten/read`), a screen whose scope form's answer is the page at the address
+//! it asks for (`data-address`), a form whose fields a handler is given as its controls, and view classes (`corten/views`) whose holes are in a
+//! form, past one and a form's whole text, beside controls named after the members their paths
+//! read.
+use corten::{
+    Error, LiveResponse,
+    http::{IntoResponse, Request, Response, StatusCode, header},
+    prelude::*,
+};
 use futures_util::{StreamExt, stream};
 
 use crate::layout::Layout;
@@ -56,6 +61,31 @@ pub mod url {
         pub missing: Option<bool>,
         pub moved: Option<bool>,
     }
+
+    /// A screen whose scope form says its answer is the page at the address it asks for
+    /// (`data-address`, #1406): with JavaScript the address answers the scope's panel as a patch,
+    /// and without it, or on a reload, the whole screen. Its Save button posts the form here.
+    #[route("/smoke/scope", get = scope_page, post = scope_save)]
+    #[derive(Default)]
+    pub struct Scope {
+        #[route(query)]
+        pub q: super::ScopeQuery,
+    }
+
+    /// The scope's panel at another address than the screen's: a marked form sent there puts
+    /// that address in history.
+    #[route("/smoke/scope-elsewhere", get = scope_elsewhere)]
+    #[derive(Default)]
+    pub struct ScopeElsewhere {
+        #[route(query)]
+        pub q: super::ScopeQuery,
+    }
+
+    /// A scope the server sends on to another with a 303 ([`super::MovedBy303`]), for whichever
+    /// request asks: a marked form sent here puts the address it went to in history, as the
+    /// browser does without JavaScript.
+    #[route("/smoke/scope-moved", get = scope_moved)]
+    pub struct ScopeMoved;
 
     /// Views whose holes are in a form, past one and a form's whole text, with controls outside
     /// each form, joined to it by `form=`, named `firstElementChild`, `nextElementSibling` and
@@ -186,6 +216,131 @@ async fn open_sheet(req: Req) -> HtmlResult {
 /// Answers with the `<details>` drawn open; without JavaScript, the sheet's page with it open.
 async fn open_more(req: Req) -> HtmlResult {
     req.patch_or(More {}, || async { sheet(&req, false, true) }).await
+}
+
+/// The scope screen's parameter, in its address.
+#[derive(Clone, Default, Route, Fields)]
+#[route(query)]
+pub struct ScopeQuery {
+    pub scope: Option<String>,
+}
+
+#[derive(Id)]
+struct SmokeScopeId;
+
+#[derive(Id)]
+struct SmokeScopeFormId;
+
+#[derive(Id)]
+struct SmokeScopeQueueId;
+
+/// The scope's panel with its form, one patch, so the form always shows the scope the panel does.
+/// The form is marked `data-address`: as its answer is drawn, the address is the one it asked for.
+/// A button's `formaction` names a place on the page, which the address keeps; another button's is
+/// another route's. A form that carries the scope (`keep_query`) is drawn by the patch too, so it
+/// sends the scope on screen, not the one the page was drawn with. The marked form has an id, so a
+/// GET sent while Save is on its way is sent from the form Save's answer draws.
+#[component]
+fn ScopePanel<'a>(scope: &'a str) -> impl Patch {
+    let f = ScopeQuery::FIELDS;
+    let here = url::Scope::default();
+    let at = url::Scope { q: ScopeQuery { scope: (scope != "all").then(|| scope.to_string()) } };
+    html! {
+        <section id={SmokeScopeId}>
+            <form id={SmokeScopeFormId} method="get" action={&here} data-patch data-address>
+                <button name={f.scope} value="day">"Day"</button>
+                <button name={f.scope} value="week">"Week"</button>
+                <button name={f.scope} value="month" formaction={here.at(SmokeScopeId)}>"Month"</button>
+                <button name={f.scope} value="far" formaction={url::ScopeElsewhere::default()}>"Elsewhere"</button>
+                <button name={f.scope} value="moved" formaction={url::ScopeMoved.at(SmokeScopeId)}>"Moved"</button>
+                <button name={f.scope} value="saved" formmethod="post">"Save"</button>
+            </form>
+            <form method="get" action={&here}>
+                {corten::form::keep_query(&at, &html! { <button>"Read this scope again"</button> })}
+            </form>
+            <p>"Scope: "<output>{scope}</output></p>
+        </section>
+    }
+}
+
+/// The screen: the panel, a form without the mark that draws the panel for another scope and
+/// leaves the address, a form without it whose writes queue as any `data-patch` form's do, and the
+/// rest of the screen, which a change of scope does not draw again.
+async fn scope_page(req: Req, Params(at): Params<url::Scope>) -> HtmlResult {
+    let scope = at.q.scope.as_deref().unwrap_or("all");
+    let (here, elsewhere) = (url::Scope::default(), url::ScopeElsewhere::default());
+    let (here_link, elsewhere_link) = (req.nav(&here), req.nav(&elsewhere));
+    let f = ScopeQuery::FIELDS;
+    req.patch_or(html! { <ScopePanel scope={scope} /> }, || async {
+        req.page(html! {
+            <Layout req={&req} title="Scope" viewer={None} head="">
+                <ScopePanel scope={scope} />
+                <form method="get" action={url::Scope::default()} data-patch>
+                    <button name={f.scope} value="year">"Year, in place"</button>
+                </form>
+                <form id={SmokeScopeQueueId} method="post" action={url::Scope::default()} data-patch>
+                    <button name={f.scope} value="a">"Post A"</button>
+                    <button name={f.scope} value="b">"Post B"</button>
+                    <button name={f.scope} value="read" formmethod="get">"Read"</button>
+                </form>
+                <nav>
+                    <a {..here_link}>"Scope"</a>
+                    <a {..elsewhere_link}>"Elsewhere"</a>
+                </nav>
+                <ol>
+                    for i in 0..120 {
+                        <li>"Row "{i}" of the rest of the screen, which a change of scope does not draw again."</li>
+                    }
+                </ol>
+            </Layout>
+        })
+    })
+    .await
+}
+
+/// The form posted (its Save button): the panel for the scope it saved, or without JavaScript the
+/// screen at that scope's address.
+async fn scope_save(req: Req) -> HtmlResult {
+    let saved = url::Scope { q: ScopeQuery { scope: Some("saved".into()) } };
+    req.patch_or(html! { <ScopePanel scope="saved" /> }, || async { req.redirect(&saved) }).await
+}
+
+/// The scope's panel at another address, or its page there.
+async fn scope_elsewhere(req: Req, Params(at): Params<url::ScopeElsewhere>) -> HtmlResult {
+    let scope = at.q.scope.as_deref().unwrap_or("all");
+    req.patch_or(html! { <ScopePanel scope={scope} /> }, || async {
+        req.page(html! {
+            <Layout req={&req} title="Elsewhere" viewer={None} head="">
+                <ScopePanel scope={scope} />
+            </Layout>
+        })
+    })
+    .await
+}
+
+/// The day's scope, by Corten's redirect, which [`MovedBy303`] answers in its place.
+async fn scope_moved(req: Req) -> HtmlResult {
+    req.redirect(&day_scope())
+}
+
+/// The scope a moved one is sent to.
+fn day_scope() -> url::Scope {
+    url::Scope { q: ScopeQuery { scope: Some("day".into()) } }
+}
+
+/// Answers every request for [`url::ScopeMoved`] with a 303 to the day's scope, as a proxy or a
+/// layer outside Corten might, where Corten's own redirect answers the runtime with
+/// `corten-location`: the runtime's `fetch` follows it, and its `Location` names no `#id`, so a
+/// marked form's address keeps the one its `formaction` has, as the browser's own load does.
+pub struct MovedBy303;
+
+impl Middleware for MovedBy303 {
+    async fn call(&self, req: Request, next: impl Next) -> Response {
+        if req.uri().path() != url::ScopeMoved.to_string() {
+            return next.run(req).await;
+        }
+        (StatusCode::SEE_OTHER, [(header::LOCATION, day_scope().to_string())]).into_response()
+    }
 }
 
 /// A shipment's package: drawn by `PackageFields`, which knows nothing of the script that fills it.
