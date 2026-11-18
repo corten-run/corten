@@ -65,7 +65,7 @@ test("foreign host identity and bad terminal units never permit access/deletion"
     (d) => d.size_slug = "s-8vcpu-16gb", (d) => d.region.slug = "nyc1", (d) => d.networks.v4[0].ip_address = "192.0.2.11",
     (d) => d.networks.v4.push({ type: "public", ip_address: "192.0.2.12" })]) {
     const h = harness(t); h.seed(); const d = { id: 123, name: h.saved().name,
-      tags: ["corten-bench", "corten-bench-groups", h.saved().tag], size_slug: "c-8", region: { slug: "sfo2" }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
+      tags: ["corten-bench", "corten-bench-groups", h.saved().tag], size_slug: "c-8", region: { slug: "sfo3" }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
     change(d); h.hosts([d]); await assert.rejects(h.task().collect());
     assert.equal(h.deletes, 0); assert.ok(!h.calls.some((c) => c[0] === "ssh"));
   }

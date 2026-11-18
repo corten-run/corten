@@ -11,7 +11,6 @@ import { deploymentSha256 } from "../deployments.mjs";
 import { coverage } from "../evidence.mjs";
 import { evaluateLatestStable, latestStableSources } from "../latest-stable.mjs";
 import { cpuSettings, parseArgs as catalogOptions } from "../../catalog/contract.mjs";
-import { host } from "../../catalog/droplet-contract.mjs";
 import { parseArgs as jsonOptions } from "../../json-api/contract.mjs";
 import { parseArgs as marketplaceOptions } from "../../marketplace/run-contract.mjs";
 import { nightly } from "../../marketplace/droplet-contract.mjs";
@@ -21,7 +20,7 @@ import { createClientWorkload } from "../client.mjs";
 import { inventory, portFor, scenarios, settingsFor, workloadFor } from "../../live/native.mjs";
 import { fanoutProfile } from "../../live/fanout.mjs";
 import { budgets, parseArgs as hardeningOptions } from "../../hardening/plan.mjs";
-import { portableEvidenceSegment } from "../cloud-contract.mjs";
+import { host, portableEvidenceSegment } from "../cloud-contract.mjs";
 
 export const schema = "benchmark-isolated-contract/v1";
 const root = fileURLToPath(new URL("../../../", import.meta.url));

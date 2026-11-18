@@ -92,7 +92,7 @@ test("native account rejection requires request/response/socket close and typed 
   });
 });
 
-const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
   "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", "--context", context];
 test("native account settlement cannot erase preceding create ambiguity or authorize other command replies", { timeout: 15000 }, async (t) => {
   const a = await api(t, "refused-create"), w = worker(t, a);

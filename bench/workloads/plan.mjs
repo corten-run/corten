@@ -38,7 +38,7 @@ export function plan(name, evidence = []) {
       status: "requires-exact-image-page-and-json-browser-gates",
       cloud: {
         runner: "bench/catalog/droplet.mjs", group: name,
-        settings: "bench/catalog/droplet-contract.mjs measurements, host and cpuEnv; durable reservation is authoritative",
+        settings: "bench/catalog/droplet-contract.mjs measurements and cpuEnv; bench/workloads/cloud-contract.mjs grouped host; durable reservation is authoritative",
         status: "explicit-merged-commit-independent-state-root-native-gates-required",
       },
     } : name === "json-api" ? {

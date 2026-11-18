@@ -56,7 +56,7 @@ function fakeConnect(mode, observed, save = () => {}, cancel = () => {}, local, 
         else if (options.method === "POST") {
           const saved = JSON.parse(readFileSync(join(local, "state.json")));
           created = { id: 123, name: saved.name, tags: ["corten-bench", "corten-bench-groups", saved.tag], size_slug: "c-8",
-            region: { slug: "sfo2" }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
+            region: { slug: "sfo3" }, networks: { v4: [{ type: "public", ip_address: "192.0.2.10" }] } };
           value = { droplet: created, links: { actions: [{ id: 456 }] } };
         } else if (path === "/v2/actions/456") value = { action: { id: 456, resource_id: 123, resource_type: "droplet", type: "create", status: "completed" } };
         else if (path === "/v2/droplets/123") value = { droplet: created };

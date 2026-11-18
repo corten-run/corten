@@ -6,6 +6,7 @@ import test from "node:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as contract from "./cloud-contract.mjs";
+import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { groupNames, selectedApps } from "./registry.mjs";
 import { accountId, archive, commit, context, harness, metadata, syntheticInspection } from "./cloud-fixtures.mjs";
 import { campaignOutcome, controllerState, parseDropletArgs } from "./cloud-options.mjs";
@@ -43,6 +44,17 @@ test("fleet fixes the complete current registry to one unique host per group", (
     assert.ok(job.includes(`campaign-entry.mjs r21 --commit ${fleet.commit} --state-dir /bench/campaign --group ${group}`));
     assert.ok(!job.includes("--apps") && !job.includes("--duration") && !job.includes("--passes"));
   }
+});
+
+test("new grouped fleets bind sfo3 without retargeting an sfo2 reservation", () => {
+  const fleet = plan(), s = state(fleet), actual = droplet(fleet.jobs[0]);
+  assert.equal(catalogHost.region, "sfo2");
+  assert.deepEqual(fleet.host, { ...catalogHost, region: "sfo3" });
+  assert.deepEqual(s.host, fleet.host);
+  assert.equal(contract.assertFleetCensus([actual], fleet), true);
+  assert.throws(() => contract.assertFleetCensus([{ ...actual, region: { slug: "sfo2" } }], fleet));
+  assert.throws(() => contract.validateState({ ...s, host: catalogHost }, s.round));
+  assert.throws(() => contract.validateFleet({ ...fleet, host: catalogHost }));
 });
 
 test("partial, duplicate, reordered or altered fleet plans cannot authorize a host", () => {

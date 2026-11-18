@@ -2,10 +2,10 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { isIP } from "node:net";
-import { host } from "../catalog/droplet-contract.mjs";
+import { host as catalogHost } from "../catalog/droplet-contract.mjs";
 import { contractSha256, groupNames, registrySchema, selectedApps } from "./registry.mjs";
 
-export { host };
+export const host = Object.freeze({ ...catalogHost, region: "sfo3" });
 export const tags = Object.freeze(["corten-bench", "corten-bench-groups"]);
 const full = (value, pattern, name) => {
   assert.equal(typeof value, "string", `${name} must be a string`);

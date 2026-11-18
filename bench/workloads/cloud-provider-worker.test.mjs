@@ -42,7 +42,7 @@ test("clean worker uses one immutable private credential across account/create/a
   for (const mode of ["success", "scoped-create-link"]) await t.test(mode, async (t) => {
   const h = harness(t, mode);
   assert.equal(JSON.parse((await h.run(account)).stdout).uuid, "synthetic-user-0001");
-  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
     "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
   await h.run(create); await h.run(["compute", "droplet", "list", "--output", "json", ...account.slice(-2)]);
   await h.run(["compute", "droplet", "delete", "123", "--force", ...account.slice(-2)]);
@@ -110,7 +110,7 @@ test("bounded create classifications survive real worker IPC and cached teardown
     ["first-action-http-failure", { code: "create-action-http", httpStatus: 403 }, 2],
   ]) await t.test(mode, async (t) => {
     const h = harness(t, mode);
-    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
       "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
     const check = (error) => {
       assert.equal(error.controlTreeUncertain, true); assert.equal(error.controlUncertain, true);
@@ -182,7 +182,7 @@ test("public errors only format the closed diagnostic table, never native error 
 
 test("permitted HTTP failure carries only its diagnostic and leaves the worker usable", async (t) => {
   const h = harness(t, "first-action-http-failure");
-  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+  const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
     "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
   assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: { code: "create-action-http", httpStatus: 403 } });
   assert.equal((await h.run(account)).status, 0); await h.run.close();
@@ -194,7 +194,7 @@ test("supported lifecycle real worker retains one private credential through kno
     ["post-link-id", "create-link-id"], ["post-invalid-action-id", "create-link-id"],
     ["first-action-invalid", "create-action-response"]]) await t.test(mode, async (t) => {
     const h = harness(t, mode), suffix = account.slice(-2);
-    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
       "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...suffix];
     assert.deepEqual(await h.run(create, 1000, true), { status: 1, stdout: "", stderr: "", providerDiagnostic: {
       code } });
@@ -252,7 +252,7 @@ test("supported lifecycle real worker count convergence passes its third observa
 test("unused arbitrary create metadata never crosses real IPC or selects requests", async (t) => {
   for (const mode of ["post-link-rel", "post-link-href-variant", "post-link-href-type", "arbitrary-create-hints"]) await t.test(mode, async (t) => {
     const h = harness(t, mode);
-    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo2", "--image", "ubuntu-24-04-x64",
+    const create = ["compute", "droplet", "create", "corten-bench-groups-r21-0123456789abcdef", "--size", "c-8", "--region", "sfo3", "--image", "ubuntu-24-04-x64",
       "--ssh-keys", "42", "--tag-names", "corten-bench,corten-bench-groups,corten-bench-groups-run-0123456789abcdef", "--wait", "--output", "json", ...account.slice(-2)];
     assert.deepEqual(await h.run(create, 1000, true), { status: 0, stdout: '[{"id":123}]', stderr: "" });
     assert.equal((await h.run(account)).status, 0); await h.run.close();

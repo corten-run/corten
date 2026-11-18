@@ -16,7 +16,7 @@ remain pending; the mixed-inbox/inspection bridge does not waive those gates.
 
 The controller is `droplet.mjs`, separate from catalog, marketplace, the dispatcher,
 registry, parity and runners. It imports the existing read-only `cloud-contract.mjs`
-for the complete nine-group selection, c-8/sfo2/Ubuntu identity, fixed remote files,
+for the complete nine-group selection, c-8/sfo3/Ubuntu identity, fixed remote files,
 systemd unit and archive namespace. There are no adapter, provider, workload,
 deployment, environment or numeric-settings CLI overrides. Popular/performance
 views share evidence; they do not launch a second campaign.
@@ -70,6 +70,10 @@ build. These controls do not qualify an official source or establish cloud-run
 readiness; this repair still requires independent source review before merge.
 
 ## Dedicated Group Hosts
+
+A new fleet uses sfo3 for every group. Collect or inspect an older sfo2 fleet
+with its original controller and reservation; do not rewrite its region or
+reuse its approval. A change of region is not a like-for-like comparison.
 
 A fleet binds the complete current registry to one dedicated host per group. The
 hosts run in parallel; contenders and phases within a group retain their native
@@ -813,7 +817,7 @@ qualification flag or a producer's deletion permission.
 
 Launch records create intent before its only create call. A lost response permits
 one list reconciliation, not another allocation. Exact numeric ID (once known),
-name, unique run tag, both shared tags, c-8 size, sfo2 region and exactly one matching
+name, unique run tag, both shared tags, c-8 size, the pinned region and exactly one matching
 public IPv4 are required. Every SSH/SCP call rechecks that identity. Collection of
 a creating reservation may bind that exact unique host, but never provisions or
 starts it. Failed/unstarted/missing units require operator inspection, not deletion.
