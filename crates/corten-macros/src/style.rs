@@ -820,6 +820,12 @@ impl Scoper<'_> {
             let Chunk { end, text, url, joined_comment } = self.chunk()?;
             let source = start..self.i;
             if end == Some(b'{') {
+                if starts_custom_property(&self.text[source.clone()]) {
+                    return Err(self.error(
+                        start,
+                        "a custom property whose value holds a { } block is not supported in a component stylesheet yet (#1602); give the block's contents as a plain value",
+                    ));
+                }
                 self.i += 1;
                 let mut scope_rule = None;
                 let mut unowned_root = None;
@@ -904,8 +910,6 @@ impl Scoper<'_> {
                 } else if text.starts_with('@') || ctx == Ctx::Raw {
                     self.out.push_str(&text);
                 } else {
-                    let joined_comment =
-                        joined_comment.filter(|_| ctx != Ctx::Style || !starts_custom_property(&self.text[source.clone()]));
                     self.check_selector_prelude(url, joined_comment)?;
                     let (selector, anchor) = self.selector(&text, nest, start)?;
                     inner_nest = nest.map(|_| anchor);
@@ -1725,7 +1729,7 @@ fn css_name_end(bytes: &[u8], mut at: usize) -> usize {
     at
 }
 
-/// Only disambiguates the comment check; the block still follows the existing brace path.
+/// The prelude starts with a custom property's ident followed by a colon.
 fn starts_custom_property(text: &str) -> bool {
     let bytes = text.as_bytes();
     let end = css_name_end(bytes, 0);
@@ -2379,15 +2383,40 @@ mod tests {
     }
 
     #[test]
-    fn selector_comment_check_leaves_braced_custom_property_values_alone() {
-        for name in ["--theme", "--theme/**/", "--theme /* before colon */ ", r"--th\65 me/**/"] {
-            let css = format!(".a{{{name}:foo/**/bar{{color:red;}}}}");
-            assert!(scope(&css, "x").is_ok(), "{css}");
+    fn braced_custom_property_values_are_refused() {
+        for (before, after, line) in [
+            ("", "", 1),
+            (".a {\n", "}", 2),
+            (".a {\n .b {\n @media (width > 0) {\n", "}}}", 4),
+            ("@scope (.a) {\n", "}", 2),
+            ("@keyframes x { from {\n", "}}", 2),
+        ] {
+            for declaration in [
+                "--theme: .b {color:red}",
+                "--theme /* before */ /**/ : .b/**/.c {color:red}",
+                "--theme: /**/ {foo/**/bar{color:red}}",
+                r"--th\65 me/**/: {color:red}",
+            ] {
+                let css = format!("{before}{declaration}{after}");
+                let error = scope(&css, "x").unwrap_err();
+                assert_eq!(
+                    error,
+                    format!("line {line}: a custom property whose value holds a {{ }} block is not supported in a component stylesheet yet (#1602); give the block's contents as a plain value"),
+                    "{css}"
+                );
+            }
         }
-        // In a rule list, the dashed ident can instead be a type selector.
-        let error = scope("--theme:empty/**/.a{color:red}", "x").unwrap_err();
-        assert!(error.contains("a comment"), "{error}");
-        for css in [".a{--theme .b/**/.c{color:red}}", r".a{--th\65/**/me:hover.a{color:red}}"] {
+    }
+
+    #[test]
+    fn plain_custom_properties_and_nested_selectors_still_compile() {
+        let sheet = scope(".a{--x: 1px; &:hover{} .b{}}", "x").unwrap();
+        assert_eq!(sheet.css, ".x__a{--x:1px;&:hover{}.x__b{}}");
+        assert_eq!(sheet.classes, ["a", "b"]);
+        let sheet = scope("@scope (.a){--x/**/: 1px; .b{}}", "x").unwrap();
+        assert_eq!(sheet.css, "@scope (.x__a){--x:1px;.x__b{}}");
+        assert_eq!(sheet.classes, ["a", "b"]);
+        for css in [".a{&:hover/**/.b{color:red}}", ".a{--theme .b/**/.c{color:red}}", r".a{--th\65/**/me:hover.a{color:red}}"] {
             let error = scope(css, "x").unwrap_err();
             assert!(error.contains("a comment"), "{error}");
         }
@@ -3027,6 +3056,7 @@ mod tests {
             ("crossed_selector_after_not.css", "mismatched selector block"),
             ("non_ascii_class.css", "non-ASCII characters in a class name"),
             ("joined_selector_comment.css", "a comment directly between two parts of a selector"),
+            ("braced_custom_property.css", "line 2: a custom property whose value holds a { } block"),
             (
                 "invalid_scope_ampersand.css",
                 "`p` styles elements this component does not own: `@scope (:is(main, [foo=&]))` can start outside the component",

@@ -454,6 +454,15 @@
 //! fn JoinedSelectorComment() -> impl ClassList { (List, Selected) }
 //! ```
 //!
+//! A custom property value with a `{ ... }` block at its outer level is refused rather
+//! than read as a nested rule. Give the block's contents as a plain value instead.
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//! #[component(css)]
+//! fn BracedCustomProperty() -> impl ClassList { List }
+//! ```
+//!
 //! An inner scope under an unowned outer scope cannot take its proof from an intervening
 //! style rule. Browsers can resolve the inner root through the outer scope instead, whether
 //! the root uses an explicit `&` or implicit nesting.
