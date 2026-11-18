@@ -480,7 +480,41 @@ once. Against a feed that answers every stream with `sync`, one page made 544 sn
 in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
 221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream), on
-async-nats 0.52 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
+async-nats 0.53 and SQLx 0.8 ([Choice 51](../design.md#choice-msrv) says why).
+An app upgrading `corten-cluster` must set `async-nats = "0.53"` in its own `Cargo.toml` too:
+`Cluster::start` takes its `async_nats::Client`.
+
+**Keep TLS failover when upgrading.** In
+[async-nats 0.53](https://github.com/nats-io/nats.rs/releases/tag/async-nats%2Fv0.53.0),
+`add_root_certificates()`, `add_client_certificate()`, `tls_client_config()`, or a `tls://` URL
+make TLS mandatory for the whole pool by default, including `nats://` URLs and reconnects.
+
+- **Mixed TLS and plaintext:** Use `ConnectOptions::tls_optional()` and explicitly list each
+  secure peer as `tls://` and each intentional plaintext peer as `nats://`.
+  `require_tls(true)` and `tls_first()` both conflict with `tls_optional()` and must be
+  removed before enabling it. In a mixed pool, `tls_server_name()` changes the name checked
+  when TLS is used; it does not require TLS. A peer learned over TLS still uses TLS, but a peer
+  learned over plaintext can be dialed in plaintext if its INFO does not require TLS, and a
+  discovered alias of a `tls://` peer is not bound by that URL. So in a mixed pool also call
+  `ignore_discovered_servers()` and list every endpoint explicitly. For an
+  all-TLS pool, leave `tls_optional()` off and use `require_tls(true)` to require TLS explicitly.
+- **Initial discovery over TLS:** When TLS starts after the first INFO, only lists received
+  inside TLS count. Before nats-server 2.12, a single seed can connect without discovering
+  failover peers. List multiple `tls://` endpoints, use `tls_first()` with `handshake_first`
+  enabled on every broker, or upgrade the brokers to 2.12 or later.
+- **Discovered IPs:** An IP can inherit the reporting server's verified DNS name, not its IP.
+  Even on nats-server 2.12 or later, a seed configured by IP can connect while peers it
+  advertises by IP are skipped by default. List those peers explicitly, set `tls_server_name()`
+  to a name valid on every TLS peer, or use `verify_discovered_servers_by_ip()` with IP subject
+  alternative names and a trust store dedicated to this cluster.
+- **Discovered hostnames:** Have brokers advertise DNS names that match their certificates.
+  By default the client verifies each peer against the hostname learned over TLS, not a
+  configured list of names. Trust only the cluster's CA: give its PEM to
+  `add_root_certificates()`, or set that root in a custom `tls_client_config()`. If you keep
+  system or shared roots, use `ignore_discovered_servers()` with an explicit server list.
+
+Before rollout, take the connected broker out of service in staging and verify that the
+client reconnects to a peer over the intended transport and feed delivery resumes.
 
 Cluster feed keys use literal [NATS subjects](https://docs.nats.io/nats-concepts/subjects):
 nonempty dot-separated tokens without whitespace, control characters (NUL included), `*` or

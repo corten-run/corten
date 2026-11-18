@@ -4327,25 +4327,39 @@ rules something out.
     0.52 fixes that; 0.51 also fixes spurious missing heartbeats and pull-consumer hot loops
     and bounds JetStream API requests. These affect the cluster's feed path. Both releases
     require Rust 1.89. There is no claim that 0.50 is abandoned: its missing fixes suffice.
-    SQLx stays on 0.8.6: 0.9.0 requires Rust 1.94, and none of the Postgres, pool or TLS fixes
-    its changelog lists is on a path corten-cluster uses (Stands on, reasoned).
+    async-nats 0.53 keeps Rust 1.89 and fixes how the client requires TLS and trusts server
+    discovery. `Cluster::start` takes the app's `async_nats::Client`, so staying on 0.52
+    would prevent an app from taking those fixes.
+    SQLx stays on 0.8.6. None of the Postgres, pool or TLS fixes in 0.9.0 is needed on
+    corten-cluster's paths (Stands on, reasoned), but 0.9.1 fixes a pool race that applies
+    to listings-feed. Returning a connection makes it available before incrementing the idle
+    count. A concurrent checkout can decrement a zero count, and if maintenance reads the
+    wrapped count, it can spin on a runtime worker. This is a risk confirmed from the source,
+    not a reproduced Corten hang. Keep Rust 1.89 for now rather than raise the floor for all
+    apps or carry a private SQLx fork without a demonstrated Corten incident. A maintained
+    backport that builds on the floor, or SQLx 0.9.1 or later once the floor can move to Rust
+    1.94, can close [#1673 SQLx 0.8.6 can spin a listings-feed worker in pool maintenance](https://github.com/corten-run/corten/issues/1673).
 
     auction-room keeps SQLx's bundled SQLite, which RUSTSEC-2026-0459 reports: SQLite before
     3.54.0 can return stale process memory when a process opens a database file together with
     a `-wal` file that a less trusted party wrote. auction-room opens only the file its
     operator names in `DATABASE_URL`, never one a user supplies, so it is not exposed, and its
     README says not to copy it to open such files.
-    The fixed bundled libsqlite3-sys 0.39 is out of reach: sqlx-sqlite 0.8.6 requires 0.30 and
-    0.9.0 allows only `<0.38`. Linking a system SQLite 3.54.1 built from sqlite.org was tried
-    and rejected: it cost libclang, a C build and a download in every CI job and a patched
-    SQLite for every contributor, and a version-only scan still flagged the crate. A scan of
-    `Cargo.lock` reports the advisory; this paragraph is the exception, not an audit ignore.
+    SQLx 0.9.1 now allows the fixed bundled libsqlite3-sys, but requires Rust 1.94.
+    Keep the workspace floor at 1.89: although 1.94 meets the age guard, this example does
+    not open untrusted database files, and upgrading it would raise the floor even if
+    corten-cluster stayed on SQLx 0.8. Linking a system SQLite 3.54.1 built from sqlite.org
+    was tried and rejected: it cost libclang, a C build and a download in every CI job and a
+    patched SQLite for every contributor, and a version-only scan still flagged the crate.
+    A scan of `Cargo.lock` reports the advisory; this paragraph is the exception, not an audit ignore.
 
-    Stands on: platform (crates.io declares Rust 1.89.0 for async-nats 0.51.0 and 0.52.0,
-    and Rust 1.94.0 for SQLx 0.9.0; the
+    Stands on: platform (crates.io declares Rust 1.89.0 for async-nats 0.51.0 through 0.53.0,
+    and Rust 1.94.0 for SQLx 0.9.0 and 0.9.1; the
     [async-nats changelog](https://github.com/nats-io/nats.rs/blob/async-nats/v0.52.0/async-nats/CHANGELOG.md)
-    describes the header panic and JetStream fixes; sqlx-sqlite 0.8.6 requires
-    libsqlite3-sys 0.30.1 and 0.9.0 allows `>=0.30.1, <0.38.0`; the
+    describes the header panic and JetStream fixes, and the
+    [0.53.0 release notes](https://github.com/nats-io/nats.rs/releases/tag/async-nats%2Fv0.53.0)
+    describe the TLS and discovery fixes); platform (sqlx-sqlite 0.8.6 requires
+    libsqlite3-sys 0.30.1 and [0.9.1 allows `>=0.30.1, <0.41.0`](https://github.com/transact-rs/sqlx/blob/v0.9.1/sqlx-sqlite/Cargo.toml); the
     [SQLite advisory](https://rustsec.org/advisories/RUSTSEC-2026-0459.html) fixes the bundled
     source in libsqlite3-sys 0.39.0 / SQLite 3.54.0 and exposes only a process that opens a
     database, with its `-wal`, that a less trusted party could have written); bet (apps can
@@ -4368,19 +4382,32 @@ rules something out.
     that reaches Postgres over TLS enables that feature itself and, because `Cluster::start`
     takes SQLx 0.8's `PgPool`, stays on 0.8 without it; the remaining Postgres entries cover
     geometric types, `.pgpass` handling and query macros, which it does not use);
+    platform (SQLx 0.8.6's [return and checkout](https://github.com/transact-rs/sqlx/blob/v0.8.6/sqlx-core/src/pool/inner.rs#L192-L213)
+    can underflow `num_idle`, and its [maintenance sweep](https://github.com/transact-rs/sqlx/blob/v0.8.6/sqlx-core/src/pool/inner.rs#L539-L555)
+    uses the count as its loop bound;
+    [transact-rs/sqlx #4289 fix(pool): prevent num_idle underflow that wedges maintenance in a CPU spin](https://github.com/transact-rs/sqlx/pull/4289)
+    shipped in 0.9.1); reasoned (listings-feed runs on multithreaded Tokio and leaves the
+    pool's default idle and maximum-lifetime maintenance on, so taking the app's `PgPool`
+    does not keep this race off the feed path);
     value (small surface and deliberate dependencies, verified rather than assumed: Values 6
     and 9).
 
-    Revisit when: a SQLx release allows libsqlite3-sys 0.39 or later, any Corten crate or
-    example opens a database another party could write, another advisory is published against
-    the bundled SQLite auction-room builds, SQLx's TLS hang (#4251) is reported on Postgres or
-    an app on corten-cluster needs a SQLx 0.9 fix, a held dependency line needs a
+    Revisit when: a SQLx release that builds on the Rust floor allows libsqlite3-sys 0.39 or
+    later, any Corten crate or example opens a database another party could write, another
+    advisory is published against the bundled SQLite auction-room builds, SQLx's TLS hang
+    (#4251) is reported on Postgres, a Corten app reproduces or reports the pool hang,
+    a maintained backport of the pool fix builds on the floor, the floor reaches 1.94,
+    an app on corten-cluster needs another SQLx 0.9 fix, or a held dependency line needs a
     correctness or security fix or loses maintenance, the Rust floor moves for another needed
     dependency, or an urgent fix requires a compiler less than about six months old. Re-read
     release notes, compiler requirements and advisories before moving either driver, and
     record the reason and the new floor here with its checked build.
 
-    Last checked: 2026-11-14, crates.io metadata for SQLx 0.8.6 and 0.9.0, sqlx-sqlite 0.8.6
+    Last checked: 2026-11-18, crates.io metadata for async-nats 0.53.0 and SQLx 0.9.1,
+    sqlx-sqlite 0.9.1's manifest, RUSTSEC-2026-0459 and async-nats 0.53.0's release notes;
+    2026-11-18, the SQLx 0.8.6 pool and defaults against listings-feed's pool setup on
+    `51675cc48`, and the SQLx 0.9.1 changelog and Rust requirement for the fix;
+    2026-11-14, crates.io metadata for SQLx 0.8.6 and 0.9.0, sqlx-sqlite 0.8.6
     and 0.9.0 and async-nats 0.51.0 and 0.52.0, their release notes, Rust 1.89.0's release
     date and RUSTSEC-2026-0459, against `7d232f93d`; 2026-11-14, the SQLx 0.9.0 changelog's
     Postgres, pool and TLS fixes against corten-cluster's SQLx use, on `f776b350d`.
@@ -5988,6 +6015,11 @@ rules something out.
     its control-line limit, so deployments that change it set `Options::max_control_line` to
     match the lowest server limit the client can encounter.
 
+    The control-line budget is separate from the payload limit. Starting with async-nats
+    0.53, the client's cached payload limit follows later server INFO messages as well as
+    the handshake. The client cannot ask for a fresh limit, and an INFO is not a per-publish
+    measurement of what JetStream will accept.
+
     The relay uses the same check, independent of the client or broker, for rows that an old
     version or external SQL could have queued. It marks an invalid row done with the existing
     `published_at` marker, logs the row ID and key at error level, and continues without
@@ -6038,7 +6070,7 @@ rules something out.
     patch back in its original stream position. Refreshing a shared client to confirm its
     cached limit disrupts followers and other publishers, and a fresh connection's limit
     would still not be an acknowledgement. Discarding the queued publishes on connection loss
-    is not an operation async-nats 0.52 exposes. Dropping a handle does not cancel the connection
+    is not an operation async-nats 0.53 exposes. Dropping a handle does not cancel the connection
     task, `force_reconnect` queues a command, and `drain` flushes pending work. A fresh client
     per lease or batch would need the caller's connection configuration and still would not
     prevent its queue from crossing a socket failure. `max_reconnects(0)` means unlimited;
@@ -6065,11 +6097,11 @@ rules something out.
     [message-ID deduplication](https://github.com/nats-io/nats-server/blob/v2.15.2/server/stream.go#L7020-L7044);
     the [NATS broker](https://github.com/nats-io/nats-server/blob/v2.15.2/server/client.go#L2617-L2621)
     sends a connection error without a subject or reply ID, and
-    [async-nats 0.52](https://docs.rs/crate/async-nats/0.52.0/source/src/connector.rs)
-    caches the limit from its handshake and its
-    [publish queue](https://docs.rs/crate/async-nats/0.52.0/source/src/lib.rs) survives reconnect;
-    zero [maps to no reconnect limit](https://docs.rs/crate/async-nats/0.52.0/source/src/options.rs);
-    [client drain](https://docs.rs/crate/async-nats/0.52.0/source/src/client.rs) flushes pending work);
+    [async-nats 0.53](https://docs.rs/crate/async-nats/0.53.0/source/src/connector.rs)
+    caches the limit from its handshake and later INFOs, and its
+    [publish queue](https://docs.rs/crate/async-nats/0.53.0/source/src/lib.rs) survives reconnect;
+    zero [maps to no reconnect limit](https://docs.rs/crate/async-nats/0.53.0/source/src/options.rs);
+    [client drain](https://docs.rs/crate/async-nats/0.53.0/source/src/client.rs) flushes pending work);
     reasoned (retrying cannot repair a key that fails a pure check; the compact marker fits
     limits that refuse larger patches, provided they can carry the headers; the durable
     app state does not depend on the delta being sent, and followers can reload it even
@@ -6085,7 +6117,10 @@ rules something out.
     subject by a publisher-supplied predecessor ID without first waiting for the predecessor's
     stream sequence.
 
-    Last checked: 2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
+    Last checked: 2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
+    `corten-cluster` integration tests on Postgres 16.13 and NATS 2.15.2 with 0.53.0,
+    including both types of size refusals and follower recovery after a broker disconnect;
+    2026-11-18, `corten-cluster` integration tests on Postgres 16.13 and
     NATS 2.15.2 with async-nats 0.52.0: both refusals publish markers while retaining the
     patch in Postgres. Ready and loading followers reload a refused tail, then apply the
     next patch normally, while a cold follower reads the committed state. A refused marker does

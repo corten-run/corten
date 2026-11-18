@@ -296,6 +296,20 @@ docker rm -f -v corten-test-pg corten-test-nats
 docker network rm corten-test
 ```
 
+The standard command skips the opt-in TLS regression. To run it, keep
+`CORTEN_TEST_DATABASE_URL` set to Postgres and `CORTEN_TEST_NATS_URL` set to a known-good
+plaintext broker. Also set `CORTEN_TEST_NATS_TLS_URL` to a `tls://` URL for a TLS-enabled
+JetStream listener whose certificate matches the URL's host, and `CORTEN_TEST_NATS_CA_FILE`
+to its CA PEM file (mount it and use its container path if running in Docker). With all four
+variables available to the test process, run:
+
+```text
+cargo test --locked -p corten-cluster a_cluster_client_with_a_root_ca_requires_tls -- --nocapture
+```
+
+This checks that the client refuses plaintext with a CA configured and delivers a committed
+feed patch over TLS. It does not test TLS discovery or failover.
+
 The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its header.
 
 ## Pull requests
