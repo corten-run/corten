@@ -4175,14 +4175,24 @@ async fn a_patch_the_browser_would_lose_part_of_is_sent_in_release_builds() {
     }
 }
 
-#[derive(crate::view::Id)]
-struct NoteScriptId;
+// These fixtures exercise the patch parser on exact script bytes, including text a macro at
+// an unknown insertion point cannot write as a literal.
+fn note_script(text: &'static str) -> impl crate::Patch {
+    use std::sync::atomic::AtomicUsize;
+    static SIZE: AtomicUsize = AtomicUsize::new(0);
+    crate::view::Html::new(&SIZE, move |out: &mut String| {
+        out.push_str(r#"<script id="note-script" type="text/x-template">"#);
+        out.push_str(text);
+        out.push_str("</script>");
+        crate::view::__private::Yes
+    })
+}
 
 /// A data block whose text has `<!--` and a tag that begins like `<script` (`<scriptx>`, which
 /// hides no end tag), then the message and the row.
 fn lost_after_script() -> impl crate::Patch {
     html! {
-        <script id={NoteScriptId} type="text/x-template">"<!-- <scriptx> -->"</script>
+        {note_script("<!-- <scriptx> -->")}
         <SavedNote />
         <LostRow />
     }
@@ -4281,7 +4291,7 @@ async fn a_patch_whose_script_text_carries_it_past_an_element_is_logged_in_debug
         "/blocks",
         crate::router::post(|req: Req| async move {
             req.action().ok_or_else(crate::Error::not_found)?.patch::<ForOne, AnyAnswer>(html! {
-                <script id={NoteScriptId} type="text/x-template">"<!--<script>"</script>
+                {note_script("<!--<script>")}
                 <SavedNote />
                 <script id={NoteEndId} type="text/x-template">"-->"</script>
                 <LostRow />
