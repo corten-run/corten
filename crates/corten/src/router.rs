@@ -121,6 +121,7 @@ impl Endpoint for Giving {
 struct Chooser {
     plain: Option<Route>,
     actions: Box<[(&'static str, Route)]>,
+    patches: bool,
 }
 
 impl Endpoint for Chooser {
@@ -138,11 +139,17 @@ impl Endpoint for Chooser {
     }
 
     fn action_patches(&self) -> bool {
-        self.plain.iter().chain(self.actions.iter().map(|(_, route)| route)).all(|route| route.action_patches())
+        self.patches
     }
 }
 
 impl Chooser {
+    fn new(plain: Option<Route>, actions: Box<[(&'static str, Route)]>) -> Self {
+        // A mixed chooser stays eligible without reading the query before dispatch.
+        let patches = plain.iter().chain(actions.iter().map(|(_, route)| route)).all(|route| route.action_patches());
+        Self { plain, actions, patches }
+    }
+
     /// The `400` for a post no handler of the page's is for, its text written for a developer
     /// (the error page shows it under `corten dev`).
     #[cold]
@@ -686,7 +693,7 @@ impl Router {
             // no other request, and no post to a route without them, reads its query.
             if !methods.actions.is_empty() {
                 let actions = methods.actions.into_iter().map(|(name, slot)| (name, slot.route())).collect();
-                slots[POST] = Some(Arc::new(Chooser { plain: slots[POST].take(), actions }));
+                slots[POST] = Some(Arc::new(Chooser::new(slots[POST].take(), actions)));
                 // A debug build marks the route's requests, so only a page of a route with named
                 // posts is checked for a post form that would send to one again (`Req`).
                 #[cfg(debug_assertions)]

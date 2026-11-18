@@ -15298,6 +15298,9 @@ mod layout_reads {
         #[route("/patches-only", post = patches_only)]
         pub struct PatchesOnly;
 
+        #[route("/named-patches", get = typed, post = patches_only, post(save) = patches_only, post(remove) = patches_only)]
+        pub struct NamedPatches;
+
         #[route("/any-patch", post = any_patch)]
         pub struct AnyPatch;
     }
@@ -15316,7 +15319,7 @@ mod layout_reads {
     /// A write named in a routes module that answers patches alone.
     async fn patches_only(req: Req) -> HtmlResult<crate::Patches> {
         let mut patch = req.patch(html! { <p id={MsgId}>"patched"</p> })?;
-        if req.signal().draws_whole() {
+        if req.whole_action {
             patch.headers_mut().insert("x-draws-whole", http::HeaderValue::from_static("yes"));
         }
         Ok(patch)
@@ -16159,13 +16162,80 @@ mod layout_reads {
     }
 
     #[tokio::test]
+    async fn a_writes_page_honors_the_mode_and_preference_left_by_middleware() {
+        struct Draws(Option<&'static str>, Option<&'static str>);
+
+        impl crate::Middleware for Draws {
+            async fn call(&self, mut req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+                let headers = req.headers_mut();
+                if let Some(mode) = self.0 {
+                    headers.insert("corten", http::HeaderValue::from_static(mode));
+                }
+                if let Some(prefer) = self.1 {
+                    headers.insert("prefer", http::HeaderValue::from_static(prefer));
+                } else {
+                    headers.remove("prefer");
+                }
+                next.run(req).await
+            }
+        }
+
+        async fn page(req: Req) -> HtmlResult {
+            req.page(Shell { req: &req, title: "Write", head: (), children: html! { <p>"write answer"</p> } })
+        }
+
+        for (mode, prefer) in [(None, None), (None, Some("corten-draws=main")), (Some("nav"), Some("corten-draws=whole"))] {
+            let routes = Table::new().route("/", crate::router::post(page));
+            let router = App::new(Routes::from(routes)).middleware(Draws(mode, prefer)).router();
+            let (status, headers, body) = call(router, "POST", Some("action")).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(headers.contains_key("corten-page"), "{mode:?} {prefer:?} {headers:?}");
+            assert!(!body.contains("<!DOCTYPE") && body.contains("<p>write answer</p>"), "{body}");
+        }
+
+        let count = CartCount::default();
+        let router =
+            App::new(shop_url::router()).layout_read(count.clone()).layout_read(SignedIn).middleware(Draws(None, None)).router();
+        let (status, headers, body) = call_with(router, "POST", "/typed-write", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(headers.contains_key("corten-page") && body.contains("<p>typed write</p>"), "{headers:?} {body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((Draws(None, Some("corten-draws=whole")), SeesFilled))
+            .router();
+        let req = Request::post("/typed-write").header("corten", "action").body(Body::empty()).unwrap();
+        let res = router.oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(!res.headers().contains_key("corten-page") && res.headers()["x-filled"] == "yes");
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let body = std::str::from_utf8(&bytes).unwrap();
+        assert!(body.contains(r#"<footer><span class="count">3</span></footer>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+
+        let router = App::new(shop_url::router())
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware(Draws(Some("page"), None))
+            .router();
+        let (status, headers, body) = call_with(router, "POST", "/typed-write", Some("action"), None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(!headers.contains_key("corten-page") && body.contains(r#"<footer><span class="count">3</span></footer>"#));
+        assert_eq!(count.started.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn a_patch_only_write_without_middleware_does_not_negotiate_a_whole_answer() {
         let count = CartCount::default();
         let app = App::new(shop_url::router());
         for router in [app.router(), App::new(shop_url::router()).layout_read(count.clone()).router()] {
-            let (status, headers, _) = call_with(router, "POST", "/patches-only", Some("action"), None).await;
-            assert_eq!(status, StatusCode::OK);
-            assert!(headers.contains_key("corten-patch") && !headers.contains_key("x-draws-whole"), "{headers:?}");
+            for uri in ["/patches-only", "/named-patches", "/named-patches?do=save", "/named-patches?do=remove"] {
+                let (status, headers, body) = call_with(router.clone(), "POST", uri, Some("action"), None).await;
+                assert_eq!(status, StatusCode::OK, "{uri}: {body}");
+                assert!(headers.contains_key("corten-patch") && !headers.contains_key("x-draws-whole"), "{uri}: {headers:?}");
+            }
         }
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }

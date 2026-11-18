@@ -147,17 +147,17 @@ struct Inner {
     /// the same reason: the limit XOR the default, so a signal made without one (`Default`, 0)
     /// has the default and every limit, 0 too, is kept.
     body_limit: usize,
-    /// A write the runtime sent whose own page is drawn whole ([`WHOLE`]). When the app has
-    /// layout reads, it is filled after it answers (#1370): [`LATE`] until its
-    /// route is reached, [`HEAD_KEPT`] once its route is reached (and, if its answer can be a page,
+    /// A write's whole-page decision ([`WHOLE`]), or a request to recheck after middleware
+    /// ([`RECHECK_WHOLE`]). When the app has layout reads, it is filled after it answers (#1370):
+    /// [`LATE`] before its route is reached, [`HEAD_KEPT`] once it is (and, if its answer can be a page,
     /// has kept the request's head for it: [`crate::layout::at_late_route`]). A byte, in the
     /// padding beside the others; its deadline is not kept here (`crate::layout::LateUntil`), as
     /// any more would make every request's signal a larger allocation.
     late: AtomicU8,
 }
 
-/// [`Inner::late`]: a write whose own page is filled after it answers, its route not reached yet,
-/// so a page the app's or an area's middleware makes with `Req` carries the head it was made with.
+/// [`Inner::late`]: a write eligible for late fill, so a whole action page the app's or an area's
+/// middleware makes with `Req` before the route carries the head it was made with.
 const LATE: u8 = 1;
 /// [`Inner::late`]: its route is reached, and kept the head if it needs one.
 const HEAD_KEPT: u8 = 2;
@@ -166,6 +166,8 @@ const HEAD_KEPT: u8 = 2;
 const EARLY_KEPT: u8 = 4;
 /// [`Inner::late`]: the runtime draws its own page whole, with or without layout reads.
 const WHOLE: u8 = 8;
+/// [`Inner::late`]: middleware can change the preference, so use the current request's headers.
+const RECHECK_WHOLE: u8 = 16;
 
 type EarlyHeads = Vec<Arc<http::request::Parts>>;
 
@@ -253,8 +255,30 @@ impl Signal {
         self.0.late.store(if late { WHOLE | LATE } else { WHOLE }, Ordering::Relaxed);
     }
 
-    pub(crate) fn draws_whole(&self) -> bool {
-        self.0.late.load(Ordering::Relaxed) & WHOLE != 0
+    pub(crate) fn recheck_whole(&self, late: bool) {
+        self.0.late.store(if late { RECHECK_WHOLE | LATE } else { RECHECK_WHOLE }, Ordering::Relaxed);
+    }
+
+    /// For an action write: use the staged decision unless middleware could change it.
+    pub(crate) fn draws_whole(&self, headers: &http::HeaderMap) -> bool {
+        let flags = self.0.late.load(Ordering::Relaxed);
+        if flags & RECHECK_WHOLE != 0 {
+            crate::page::prefers_whole(headers)
+        } else {
+            flags & WHOLE != 0
+        }
+    }
+
+    /// For a write entering a typed route: does the request as it arrived need late fill?
+    pub(crate) fn fills_late_at_route(&self, headers: &http::HeaderMap) -> bool {
+        let flags = self.0.late.load(Ordering::Relaxed);
+        flags & (LATE | HEAD_KEPT) == LATE
+            && (flags & RECHECK_WHOLE == 0
+                || match crate::Mode::of(headers) {
+                    crate::Mode::Document => true,
+                    crate::Mode::Action => crate::page::prefers_whole(headers),
+                    _ => false,
+                })
     }
 
     /// Its route is reached, and keeps the head for a page it may answer with
@@ -296,8 +320,9 @@ impl Signal {
 
     /// Closes the slot before releasing the heads (which hold this signal in turn).
     pub(crate) fn release_early_heads(&self) {
-        if self.0.late.swap(WHOLE | LATE | HEAD_KEPT, Ordering::Relaxed) & EARLY_KEPT != 0 {
+        if self.0.late.fetch_or(HEAD_KEPT, Ordering::Relaxed) & EARLY_KEPT != 0 {
             let mut found = self.0.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.0.late.fetch_and(!EARLY_KEPT, Ordering::Relaxed);
             if let Some(at) = found.iter().position(|kept| kept.is::<EarlyHeads>()) {
                 let heads = found.swap_remove(at);
                 drop(found);
@@ -306,9 +331,8 @@ impl Signal {
         }
     }
 
-    /// A write whose own page is filled after it answers ([`Signal::mark_whole`]): `Some(true)`
-    /// once the head is kept ([`Signal::keep_head`]), `Some(false)` before, `None` for any other
-    /// request.
+    /// A write eligible for late fill: `Some(true)` once the head is kept ([`Signal::keep_head`]),
+    /// `Some(false)` before, `None` for any other request.
     pub(crate) fn late_write(&self) -> Option<bool> {
         let late = self.0.late.load(Ordering::Relaxed);
         (late & LATE != 0).then_some(late & HEAD_KEPT != 0)

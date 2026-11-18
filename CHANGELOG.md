@@ -1178,7 +1178,9 @@ Corten is pre-1.0, so any minor version may change the API.
   has answered with the page, so they see what the write did, and a write that answers anything
   else starts none. The runtime says it draws the page whole with an HTTP preference (RFC 7240),
   `Prefer: corten-draws=whole`; a runtime without it (a tab open across the deploy) gets `<main>`
-  alone, as before, and a server that does not know it ignores it. A mismatched shell key still
+  alone, as before, and a server that does not know it ignores it. The page uses the mode and
+  drawing preference as middleware leaves them, so middleware can still ask for a fragment.
+  A mismatched shell key still
   reloads the current address without resending the write; across a mixed-version deploy this can
   lose the write's answer, including a refusal. A typed write route whose handler
   answers only patches (`req.patch_or`, `req.patch`, `req.invalid`) may return

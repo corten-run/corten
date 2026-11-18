@@ -5899,9 +5899,13 @@ rules something out.
     or its future dropped unanswered (the client gone, a middleware's timeout). Publication checks
     the closed mark under the slot lock, so a detached extraction cannot recreate the cycle after
     cleanup. The route and middleware fills run only for responses with places. A typed patch-only
-    route with no app or scoped middleware skips the preference and late fill entirely. Middleware
-    can still answer in its place. A late write carries its deadline in a request extension;
-    other requests do not enter the late timeout poller. A
+    route with no app or scoped middleware skips the preference and late fill entirely. A named
+    POST with only patch handlers does too; the router works that out at startup. A mixed POST
+    stays eligible without reading its query twice. Middleware can answer in the route's place or
+    change the mode or preference, so a page made with `Req` honors the headers it was taken with.
+    In an app with reads, a swap write that goes through middleware can enter the late timeout
+    poller even if its incoming request did not prefer a whole page; only a whole page with
+    places fills late. The deadline travels in a request extension. A
     `GET` form's page stays `<main>` alone, as a navigation's, since a `GET` changes nothing the
     layout shows. A page whose frame differs swaps `<main>` and the layout's elements that are the
     page's, as a navigation does, and the next navigation reads the whole page; it cannot load in
@@ -5961,11 +5965,13 @@ rules something out.
     the two patches was 5,464 on `70031a793` (31,180 less 25,716), as on `bb7562d9d` and
     `70b69a3db`. That gap included more than the copy: it also included the route continuation
     and the dropped head.
-    It is made field by field from the request in place: before `main`'s named posts were merged in,
-    that gave 5,395 (`914f4781e`, 30,930 less 25,535) where taking the request apart and putting it
-    back gave 5,535 (`17f285075`, 31,132 less 25,597), 140 less; with them merged in, the same copy
-    gives 5,464 (`70b69a3db`, 31,017 less 25,553), 69 more, not traced. The headers and extensions
-    are cloned either way, since a read is given the whole head. A route given by hand (`Table`)
+    The head is copied field by field from the request in place. Before `main`'s named posts were
+    merged in, that version's patch-to-patch gap was 5,395 (`914f4781e`, 30,930 less 25,535).
+    Taking the request apart and putting it back gave a gap of 5,535
+    (`17f285075`, 31,132 less 25,597), 140 more. With named
+    posts merged in, the field-by-field version's patch-to-patch gap was 5,464
+    (`70b69a3db`, 31,017 less 25,553), 69 more than its earlier gap, not traced. The headers and
+    extensions are cloned either way, since a read is given the whole head. A route given by hand (`Table`)
     copies the head as its `Req` is taken, whatever it answers, and so does a `Req` the app's or an
     area's middleware takes before a write's route, a second copy beside the route's: the own page
     takes 66,413 and an `HtmlResult` patch 35,580 with a middleware that takes `Req` and passes the
@@ -6005,8 +6011,9 @@ rules something out.
     (15,612 to 16,074 at zlib's default level, against `main` at `27c29d7d2`), numbering the
     writes a layout draws and which of them failed in view.
 
-    Stands on: measured (callgrind, release, `what_a_write_answering_in_an_action_costs`,
-    `what_a_page_with_layout_reads_costs` and the watchlist's `what_a_watch_costs`, the difference
+    Stands on: measured (callgrind, release, `write_request_cost`,
+    `what_a_write_answering_in_an_action_costs`, `what_a_page_with_layout_reads_costs` and the
+    watchlist's `what_a_watch_costs`, the difference
     of 1,200 and 200 requests over 1,000, three alternating rounds of each build, every range within
     140 instructions but the watch's (up to 430); `what_a_writes_own_page_costs_in_time_and_bytes` for the time and bytes; the
     runtime's size by Node's `zlib`, once each build); reasoned (a patch carries elements by id, and
@@ -6015,8 +6022,11 @@ rules something out.
     the head its page's reads start from is copied before it runs, and only the answer type says
     beforehand that no page will come); value (the page shows the same values with JavaScript as
     without, Values 3; one answer brings a layout read up to date after a write, a page, Values 5;
-    correctness before the few microseconds a write in an app with layout reads now pays, the order
-    of the values).
+    correctness before performance, the order of the values). The decision accepts measured server
+    overhead on document GETs, navigation GETs and both typed and generic patches even in apps
+    without layout reads, as well as 496 more gzip bytes on every page that loads core. Apps with
+    reads also pay for the late path when eligible, and generic routes can pay for a head capture
+    even if they answer a patch. The server counts below are instructions, not elapsed time.
 
     Revisit when: an app needs a patch to change a layout read and cannot answer its page (a write
     whose page is too costly to draw again), which would reopen markers on the places; or a route
@@ -6024,9 +6034,10 @@ rules something out.
     it on), which would take the copy off an `HtmlResult` route's patch; or the paired
     `write_request_cost` controls show a repeatable increase beyond the measured ranges in the
     generic-only cost or in the cost of the late-write machinery. With `READS=1 MIDDLEWARE=1`,
-    subtract legacy typed patches from preferred typed patches to keep the middleware path
-    eligible, net of the same difference on main. The equivalent generic comparison, net of
-    the typed one, measures the cost specific to the generic path. Separate the capture, boxed
+    pair both preferred and legacy typed patches with main: now both can enter the late poller,
+    so the legacy delta includes staging and the preferred-minus-legacy delta does not. The
+    equivalent generic preferred-minus-legacy comparison, net of the typed one, measures the
+    cost specific to the generic path. Separate the capture, boxed
     continuation and drop by profiling, not by calling the generic-minus-typed gap a copy.
     Also revisit if the paired no-read patch or GET controls
     show a repeatable increase beyond the measured ranges. The 5,467-instruction threshold was

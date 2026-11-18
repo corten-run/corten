@@ -140,7 +140,7 @@ impl Mode {
 /// A write the runtime sent (`mode`, `method`) that answers its own page whole: one whose runtime
 /// says it draws one ([`PREFER`]). Looked up only for such a write.
 #[inline]
-pub(crate) fn own_page_whole(mode: Mode, method: &http::Method, headers: &HeaderMap) -> bool {
+fn own_page_whole(mode: Mode, method: &http::Method, headers: &HeaderMap) -> bool {
     mode == Mode::Action && !matches!(*method, http::Method::GET | http::Method::HEAD) && prefers_whole(headers)
 }
 
@@ -148,7 +148,7 @@ pub(crate) fn own_page_whole(mode: Mode, method: &http::Method, headers: &Header
 /// preference across every `Prefer` line, named case aside, its value as written (a token, or a
 /// quoted string without an escape), its parameters aside. Any other value, or none, is `<main>`,
 /// which every runtime draws.
-fn prefers_whole(headers: &HeaderMap) -> bool {
+pub(crate) fn prefers_whole(headers: &HeaderMap) -> bool {
     for line in headers.get_all(PREFER) {
         // The line the runtime sends, read without taking it apart: nothing before it in the
         // request named `corten-draws`, and it names nothing else.
@@ -1029,6 +1029,8 @@ pub struct Req {
     plain_write: bool,
     /// The request is a write (not `GET` or `HEAD`), which [`Req::resend_to`] needs.
     write: bool,
+    /// This action write asks for a whole page, as read from the request this `Req` was taken with.
+    pub(crate) whole_action: bool,
     /// The runtime sent it ([`Mode::asked`]): a redirect to a place or another site is then
     /// named in `corten-location`, as `fetch` cannot follow one (#1034).
     fetched: bool,
@@ -1243,14 +1245,11 @@ impl Req {
         notice: bool,
     ) -> Self {
         let (mode, fetched) = Mode::asked(headers);
-        let signal = extensions.get::<crate::Signal>().cloned().unwrap_or_else(|| {
-            let signal = crate::Signal::default();
-            if own_page_whole(mode, method, headers) {
-                signal.mark_whole(false);
-            }
-            signal
-        });
+        let signal = extensions.get::<crate::Signal>();
         let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
+        let whole_action =
+            mode == Mode::Action && write && signal.map_or_else(|| prefers_whole(headers), |signal| signal.draws_whole(headers));
+        let signal = signal.cloned().unwrap_or_default();
         Req {
             mode,
             nonce: extensions.get::<NonceSlot>().cloned(),
@@ -1263,10 +1262,11 @@ impl Req {
             },
             plain_write: write && !shared.https_only && plain_origin(headers),
             write,
+            whole_action,
             fetched,
-            // A whole document's `GET` looks at its extensions alone: only a write is ever marked.
             fills: !shared.layout_reads.is_empty()
-                && (extensions.get::<crate::layout::StartHere>().is_some() || (write && signal.late_write().is_some())),
+                && (extensions.get::<crate::layout::StartHere>().is_some()
+                    || (write && (mode == Mode::Document || whole_action) && signal.late_write().is_some())),
             early: 0,
             shared,
             signal,
@@ -1466,8 +1466,7 @@ impl Req {
         static SWAP: AtomicUsize = AtomicUsize::new(16 * 1024);
         // A write's own page is whole, as without JavaScript and as the page a write redirects to,
         // so what the write changed around `<main>` is drawn, for a runtime that draws one (#1370).
-        // The error page takes the same signal, but its reconstructed request is not a write.
-        let swap = self.mode.swaps() && !(self.write && self.signal.draws_whole());
+        let swap = self.mode.swaps() && !(self.mode == Mode::Action && self.whole_action);
         let (part, size) = if swap { (Part::Swap, &SWAP) } else { (Part::Full, &FULL) };
         let mut out = String::with_capacity(size.load(Ordering::Relaxed));
         HEAD_AT.set(None);
@@ -3210,16 +3209,26 @@ pub(crate) fn render_errors<'s, 'n, 'g, 'm, S: crate::app::Steps>(
     api: Option<&'m crate::api::Mount>,
     (mode, fetched): (Mode, bool),
 ) -> impl Future<Output = Response> + Send + use<'s, 'n, 'g, 'm, S> {
-    // Negotiate once, before moving the request, and only if an action write could draw a page.
     let mut late = false;
-    if mode == Mode::Action && api.is_none() && next.can_answer_action_page() && own_page_whole(mode, req.method(), req.headers())
+    if next.has_middleware() {
+        // Middleware may change what is asked for or make the page itself, even on a patch-only
+        // route. Allow late fill on a swap write with reads, but negotiate where the page is made.
+        if mode != Mode::Data && api.is_none() && !matches!(*req.method(), http::Method::GET | http::Method::HEAD) {
+            late = mode.swaps() && !shared.layout_reads.is_empty();
+            signal.recheck_whole(late);
+        }
+    } else if mode == Mode::Action
+        && api.is_none()
+        && next.route_can_answer_action_page()
+        && own_page_whole(mode, req.method(), req.headers())
     {
+        // Without middleware the preference cannot change. A patch-only route need not read it.
         late = !shared.layout_reads.is_empty();
         signal.mark_whole(late);
-        if late {
-            if let Some(limit) = deadline {
-                req.extensions_mut().insert(crate::layout::LateUntil(tokio::time::Instant::now() + limit));
-            }
+    }
+    if late {
+        if let Some(limit) = deadline {
+            req.extensions_mut().insert(crate::layout::LateUntil(tokio::time::Instant::now() + limit));
         }
     }
     errors_rendered(shared, req, next, deadline, signal, api, (mode, fetched), late)

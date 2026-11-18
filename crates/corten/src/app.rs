@@ -2335,9 +2335,12 @@ pub(crate) struct Next<'a, S: Steps> {
 }
 
 impl<'a, S: Steps> Next<'a, S> {
-    /// Middleware may answer in the route's place, even when the route only answers patches.
-    pub(crate) fn can_answer_action_page(&self) -> bool {
-        S::has_middleware(&self.scope) || !self.route.as_ref().is_some_and(|route| route.action_patches())
+    pub(crate) fn has_middleware(&self) -> bool {
+        S::has_middleware(&self.scope)
+    }
+
+    pub(crate) fn route_can_answer_action_page(&self) -> bool {
+        !self.route.as_ref().is_some_and(|route| route.action_patches())
     }
 
     // Not an `async fn`: a layer of its own would move the request once more.

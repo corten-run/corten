@@ -577,7 +577,7 @@ pub(crate) fn reaches_late_route(req: &crate::http::Request) -> Option<&crate::S
         return None;
     }
     let signal = req.extensions().get::<crate::Signal>()?;
-    if signal.late_write() != Some(false) {
+    if !signal.fills_late_at_route(req.headers()) {
         return None;
     }
     signal.keep_head();

@@ -93,6 +93,10 @@ one does), the deploy and its layout, and when a navigation answers with a diffe
 (sign-in, a new release, a page in another layout) the runtime loads the whole document instead, so the layout is
 never stale.
 
+For an action write, the page uses the mode and drawing preference in the request as middleware
+leaves it. Removing the preference, replacing it with `corten-draws=main`, or forwarding the
+request in navigation mode gives a fragment.
+
 During a mixed-version deploy, an older server can answer a new runtime's preferred write with
 `<main>` alone. With the same shell key, the runtime draws that fragment and reads the layout on
 the next navigation. With a different key, it reloads the current address instead: the write is
