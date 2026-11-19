@@ -184,7 +184,6 @@ impl<S: Source> Cluster<S> {
     /// loads, so no patch falls between a load and the stream) and its relay candidate.
     /// Refuses an invalid subject prefix or a reply inbox that exceeds [`Options::max_control_line`]'s
     /// budget before touching Postgres.
-    /// If the client's subscription capacity is overridden, it must hold at least 256 replies.
     pub async fn start(pool: PgPool, nats: async_nats::Client, source: S, options: Options) -> Result<Self, Error> {
         if !literal(&options.subject_prefix, MAX_PREFIX_BYTES) {
             return Err(format!(

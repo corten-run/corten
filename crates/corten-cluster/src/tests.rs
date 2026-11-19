@@ -1266,6 +1266,37 @@ async fn a_retried_batch_stops_receiving_replies_for_abandoned_attempts() {
     delete_test_stream_and_schema(&db, &js, &config.name, &schema).await;
 }
 
+#[tokio::test]
+async fn a_full_batch_retires_with_a_small_reply_queue() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("small_reply_queue_");
+    let pool = schema_pool(&db, &schema).await;
+    let (js, mut config) = unacknowledged_batch(&pool, &nats, &schema).await;
+    config.no_ack = false;
+    js.update_stream(config.clone()).await.unwrap();
+
+    let publisher = async_nats::ConnectOptions::new().subscription_capacity(64).connect(&nats).await.unwrap();
+    let stats = publisher.statistics();
+    let mut sender = relay::Publisher::new(jetstream::new(publisher)).with_timeout(Duration::from_secs(1));
+    let gate = Arc::new(Semaphore::new(0));
+    let rows = store::pending(&pool, 257).await.unwrap();
+    assert_eq!(rows.len(), 256);
+    sender.pause_before.push((rows[128].id, gate.clone()));
+    let options = Arc::new(Options { stream: config.name.clone(), subject_prefix: schema.clone(), ..Options::default() });
+    let relay = tokio::spawn(relay::run(pool.clone(), sender, options, Arc::default()));
+
+    // Let twice the queue capacity reach the client before the remaining sends can proceed.
+    eventually("the first 128 publish replies reached the client", || stats.in_messages.load(Ordering::Relaxed) == 128).await;
+    gate.add_permits(1);
+    wait_pending(&pool, 0).await;
+    let publishes = stats.out_messages.load(Ordering::Relaxed);
+    assert!(matches!(publishes, 256 | 512), "all rows retired with at most one retry: {publishes} publishes");
+    assert_eq!(js.get_stream(&config.name).await.unwrap().cached_info().state.messages, 256);
+    relay.abort();
+    assert!(relay.await.unwrap_err().is_cancelled());
+    delete_test_stream_and_schema(&db, &js, &config.name, &schema).await;
+}
+
 /// Run in release mode with the cluster test URLs to sample relay-process RSS, not broker RSS.
 #[cfg(target_os = "linux")]
 #[tokio::test]

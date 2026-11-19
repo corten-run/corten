@@ -6064,13 +6064,15 @@ rules something out.
     application write remains committed and the outbox body stays available for replay
     and inspection until ordinary pruning.
 
-    The relay pipelines a batch of up to 256 patches before waiting for acknowledgements, even
-    when every patch belongs to one feed. It uses a fresh NATS inbox subscription for each
-    patch batch and another for its marker batch. The reply subject names the slot within
-    that batch, so replies do not have to arrive in order. Dropping the subscription on
-    success, failure, or cancellation closes all its slots and keeps late replies out of
-    retries. The longest slot suffix fits in the existing control-line reserve. A client
-    overriding subscription capacity must leave room for 256 replies on one subscription.
+    The relay pipelines a batch of up to 256 patches, even when every patch belongs to one
+    feed, draining ready acknowledgements while it sends. It uses a fresh NATS inbox
+    for each patch batch and another for its marker batch. The reply subject names the slot
+    within that batch, so replies do not have to arrive in order. The client's subscription
+    capacity is not exposed to the relay. If some slots reply but others time out, subsequent
+    batches on that relay use a separate subscription per slot so a burst cannot overfill
+    a small shared reply queue again. Dropping the batch's subscriptions on success, failure,
+    or cancellation keeps late replies out of retries. The longest slot suffix fits in
+    the existing control-line reserve.
     A broker's connection-wide `Maximum Payload Violation`
     or disconnect identifies no publish; the relay retries all selected rows on an ordinary send
     or acknowledgement failure and does not force a reconnect. Later patches can overtake a
@@ -6082,13 +6084,13 @@ rules something out.
     no supported app can publish. Checking only new keys leaves the pre-upgrade relay failure
     in place. Using async-nats 0.53's JetStream publish acknowledgements retains one reply
     registration per unanswered publish, even after the acknowledgement future is
-    dropped. Subscribing per publish instead of per batch sends a subscribe and unsubscribe
-    for each row. Using `Subject::is_valid` would copy the key and accept whitespace outside the
-    framing bytes. Dropping a refused notification leaves a loaded feed stale if no later
-    patch arrives; retrying the same oversized body can keep the feed stale and block
-    the relay's ordinary pending scan. A per-feed hold adds an index to every append and
-    can make selecting work for unrelated feeds slow. A separate queue would not put a
-    patch back in its original stream position. Refreshing a shared client to confirm its
+    dropped. Always subscribing per publish instead of per batch sends a subscribe and
+    unsubscribe for each row on the healthy path. Using `Subject::is_valid` would copy the key
+    and accept whitespace outside the framing bytes. Dropping a refused notification leaves a
+    loaded feed stale if no later patch arrives; retrying the same oversized body can keep the
+    feed stale and block the relay's ordinary pending scan. A per-feed hold adds an index to
+    every append and can make selecting work for unrelated feeds slow. A separate queue would
+    not put a patch back in its original stream position. Refreshing a shared client to confirm its
     cached limit disrupts followers and other publishers, and a fresh connection's limit
     would still not be an acknowledgement. Discarding the queued publishes on connection loss
     is not an operation async-nats 0.53 exposes. Dropping a handle does not cancel the connection
@@ -6122,7 +6124,8 @@ rules something out.
     caches the limit from its handshake and later INFOs, and its
     [publish queue](https://docs.rs/crate/async-nats/0.53.0/source/src/lib.rs) survives reconnect;
     zero [maps to no reconnect limit](https://docs.rs/crate/async-nats/0.53.0/source/src/options.rs);
-    [client drain](https://docs.rs/crate/async-nats/0.53.0/source/src/client.rs) flushes pending work);
+    [client drain](https://docs.rs/crate/async-nats/0.53.0/source/src/client.rs) flushes pending work;
+    the connection handler drops messages when a subscription's queue is full);
     reasoned (retrying cannot repair a key that fails a pure check; the compact marker fits
     limits that refuse larger patches, provided they can carry the headers; the durable
     app state does not depend on the delta being sent, and followers can reload it even
@@ -6136,13 +6139,15 @@ rules something out.
     delta delivered or immediate recovery on old followers, the NATS client can abandon queued
     publishes on socket loss, deployments need raw stream ordering, or JetStream can guard a
     subject by a publisher-supplied predecessor ID without first waiting for the predecessor's
-    stream sequence. Use the client's JetStream publish API again when a released version
+    stream sequence. If the client exposes subscription capacity, bound the number of
+    outstanding replies directly. Use the client's JetStream publish API again when a released version
     reclaims unanswered publish registrations without a healthy-path regression
     ([nats-io/nats.rs #1641 Prune abandoned requests from the multiplexer](https://github.com/nats-io/nats.rs/pull/1641)).
 
-    Last checked: 2026-11-18, async-nats 0.53.0's reply map and subscription cleanup,
-    real JetStream retries with publish acknowledgements suppressed and then restored,
-    and the relay throughput and missing-ack RSS tests;
+    Last checked: 2026-11-19, async-nats 0.53.0's reply map and subscription cleanup,
+    real JetStream retries with publish acknowledgements suppressed and then restored, a full
+    batch on a 64-reply subscription, and the relay throughput, follower latency and
+    missing-ack RSS tests;
     2026-11-18, async-nats 0.53.0's INFO and reconnect handling and the
     `corten-cluster` integration tests on Postgres 16.13 and NATS 2.15.2 with 0.53.0,
     including both types of size refusals and follower recovery after a broker disconnect;
@@ -7372,8 +7377,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
 34. <a id="limit-relay-stream-order"></a>JetStream stream order is not always Corten feed
     order. Postgres commits each feed's sequence under its row lock. The relay submits
     ordinary patches in outbox-ID order, which is feed-sequence order within a generation.
-    Acknowledgements correlate to one batch attempt; a late reply cannot retire rows in a
-    retry even when the retried message IDs are the same.
+    The relay drains acknowledgements while sending and correlates them to one batch attempt;
+    a late reply cannot retire rows in a retry even when the retried message IDs are the same.
+    After a partial reply timeout the relay isolates each slot in its own subscription on
+    subsequent attempts, rather than repeatedly overflowing a shared reply queue.
 
     - **Connection failure.** An ordinary send or acknowledgement failure retires none of
       the selected outbox IDs in that attempt, including rows already acknowledged. After
