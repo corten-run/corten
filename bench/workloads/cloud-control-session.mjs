@@ -284,9 +284,14 @@ export function verifyControlSession(expected, receipt) {
     assert.ok(typeof sample.scope.exists === "boolean" && Array.isArray(sample.scope.members)
       && sample.scope.members.length <= 8192, "raw session scope observation required");
     same(sample.scope.members, [...map.values()].filter((p) => inScope(p, scope)).map((p) => p.pid).sort((a, b) => a - b), "session membership differs");
+    const intermediateMembers = native && firstMap && sample !== receipt.samples.at(-1) && sample.scope.members.length > 0;
+    const exitingOnly = intermediateMembers && sample.scope.members.every((pid) => {
+      const p = map.get(pid), fields = p.stat.slice(p.stat.lastIndexOf(") ") + 2).split(" ");
+      return p.executable === null && (["Z", "X"].includes(fields[0]) || (BigInt(fields[6]) & 4n) !== 0n);
+    });
     if (bracketed) {
-      assert.ok(native && firstMap && sample !== receipt.samples.at(-1) && sample.scope.members.length > 0
-        && scopeEvents(sample.scope.eventsBeforeInventory, 1)
+      assert.ok(intermediateMembers && (scopeEvents(sample.scope.eventsBeforeInventory, 1)
+        || !sample.scope.exists && exitingOnly && scopeEvents(sample.scope.eventsBeforeInventory, 0))
         && (sample.scope.exists ? scopeEvents(sample.scope.events, 0) : sample.scope.events === null),
       "invalid intermediate scope exit observation");
     }
@@ -294,12 +299,8 @@ export function verifyControlSession(expected, receipt) {
     if (sample.scope.exists) {
       // cgroup.events counts live processes. Keep exit-only members in the
       // ancestry checks, and still require their absence from the final sample.
-      const exitingOnly = native && firstMap && sample !== receipt.samples.at(-1) && sample.scope.members.length > 0
-        && scopeEvents(sample.scope.events, 0) && sample.scope.members.every((pid) => {
-          const p = map.get(pid), fields = p.stat.slice(p.stat.lastIndexOf(") ") + 2).split(" ");
-          return p.executable === null && (["Z", "X"].includes(fields[0]) || (BigInt(fields[6]) & 4n) !== 0n);
-        });
-      assert.ok(bracketed || exitingOnly || scopeEvents(sample.scope.events, sample.scope.members.length ? 1 : 0), "session populated/membership proof differs");
+      assert.ok(bracketed || exitingOnly && scopeEvents(sample.scope.events, 0)
+        || scopeEvents(sample.scope.events, sample.scope.members.length ? 1 : 0), "session populated/membership proof differs");
     }
     assert.ok(sample.scope.members.every((pid) => descendants.has(key(map.get(pid)))), "unowned session scope member");
     if (!firstMap) {

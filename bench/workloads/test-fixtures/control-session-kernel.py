@@ -1,6 +1,7 @@
 """In-memory kernel/systemd/SFTP loopback. Never executes a host command or proc probe."""
 import contextlib
 import copy
+import errno
 import fnmatch
 import hashlib
 import io
@@ -100,6 +101,9 @@ lock = threading.RLock()
 current = {}
 
 
+removed_scopes = set()
+remove_on_read = set()
+
 class Path:
     def __init__(self, value):
         self.value = str(value)
@@ -132,12 +136,18 @@ class Path:
     def exists(self):
         if self.value.startswith("/sys/fs/cgroup/"):
             cg = self.value[len("/sys/fs/cgroup"):]
+            if cg in removed_scopes:
+                return False
             return cg.endswith(".scope") or any(p["cgroup"] == "0::" + cg + "\n" for p in rows.values())
         return self.value in data or self.value in folders
 
     def read_text(self):
         assert self.name == "cgroup.events"
         cg = self.value[len("/sys/fs/cgroup"):-len("/cgroup.events")]
+        if cg in remove_on_read:
+            remove_on_read.remove(cg)
+            removed_scopes.add(cg)
+            raise OSError(errno.ENODEV, "scope removed between open and read")
         populated = any(p["cgroup"] == "0::" + cg + "\n" and ") Z " not in p["stat"] for p in rows.values())
         return "populated " + str(int(populated)) + "\nfrozen 0\n"
 
@@ -322,11 +332,18 @@ scope["time"] = types.SimpleNamespace(monotonic_ns=time.perf_counter_ns, sleep=l
 invocations = []
 commands = {}
 zombie_seen = threading.Event()
-if mode == "reaped-zombie":
+if mode in ("reaped-zombie", "removed-zombie-scope"):
     original_scope_read = scope["scope_read"]
+    empty_before = set()
     def recorded_scope(path, snapshot):
+        if mode == "removed-zombie-scope" and path in empty_before and snapshot:
+            remove_on_read.add(path)
+            empty_before.discard(path)
         observed = original_scope_read(path, snapshot)
-        if observed["members"] and all(") Z " in snapshot[pid]["stat"] for pid in observed["members"]):
+        if not snapshot and observed["events"] and observed["events"].startswith("populated 0\n"):
+            empty_before.add(path)
+        if (observed["members"] and all(") Z " in snapshot[pid]["stat"] for pid in observed["members"])
+                and (mode == "reaped-zombie" or not observed["exists"])):
             zombie_seen.set()
         return observed
     scope["scope_read"] = recorded_scope
@@ -398,7 +415,7 @@ with patch.object(scope["pathlib"], "Path", Path), patch.object(scope["subproces
             pass
         except AssertionError as error:
             raise RuntimeError("synthetic watcher errors: " + str(errors)) from error
-        if mode == "reaped-zombie":
+        if mode in ("reaped-zombie", "removed-zombie-scope"):
             zombie_seen.clear()
             guardian = rows[current["guardian"]]
             rows[current["guardian"]] = {**guardian, "executable": None, "stat": guardian["stat"].replace(") S ", ") Z ")}

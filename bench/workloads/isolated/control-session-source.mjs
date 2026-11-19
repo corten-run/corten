@@ -2,6 +2,7 @@ import streamSource from "./control-stream-source.mjs";
 
 export default String.raw`"""Fixed SSH/SFTP guardian and outside-session observer. No provider or kill API."""
 import contextlib
+import errno
 import hashlib
 import ipaddress
 import json
@@ -189,8 +190,8 @@ def scope_read(scope, rows):
     assert path.resolve() == path
     try:
         events = (path / "cgroup.events").read_text() if path.exists() else None
-    except FileNotFoundError:
-        if path.exists():
+    except OSError as error:
+        if error.errno not in (errno.ENOENT, errno.ENODEV) or path.exists():
             raise
         events = None
     return {"path": scope, "exists": events is not None, "events": events,
@@ -301,8 +302,8 @@ def watch(root, identifier):
         scoped = scope_read(scope, rows)
         # A short-lived member may exit after /proc was read. Preserve both
         # actual cgroup reads and every observed PID; this is never a final sample.
-        if (scoped["members"] and before and before.startswith("populated 1\n")
-                and (not scoped["exists"] or scoped["events"].startswith("populated 0\n"))):
+        if (scoped["members"] and before and (not scoped["exists"]
+                or before.startswith("populated 1\n") and scoped["events"].startswith("populated 0\n"))):
             scoped["eventsBeforeInventory"] = before
         assert all(pid in selected for pid in scoped["members"]), "unowned scope participant"
         for p in (listener, observer):

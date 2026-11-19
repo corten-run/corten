@@ -69,6 +69,17 @@ test("native receipts retain a zombie until reaped even when the scope has no li
   row.stat = row.stat.replace(") Z ", ") S ");
   assert.throws(() => verifyControlAdmission(binding, "bootstrap", admission), /populated\/membership/);
 });
+test("an empty scope removed mid-read is not final proof while an owned zombie is still visible", () => {
+  const { binding, admission } = loopback("removed-zombie-scope");
+  verifyControlAdmission(binding, "bootstrap", admission);
+  const receipt = admission.receipts[0];
+  const missing = receipt.samples.find((s) => !s.scope.exists && s.scope.members.length);
+  assert.equal(missing.scope.events, null);
+  assert.match(missing.scope.eventsBeforeInventory, /^populated 0\n/);
+  const p = missing.processes.find((row) => missing.scope.members.includes(row.pid));
+  p.stat = p.stat.replace(") Z ", ") S ");
+  assert.throws(() => verifyControlAdmission(binding, "bootstrap", admission), /intermediate scope exit/);
+});
 
 test("watcher registration waits for its source-owned systemd launcher to exit before sampling the SSH scope", () => {
   const result = loopback("launcher-overlap");
