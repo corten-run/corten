@@ -1283,12 +1283,23 @@ rules something out.
        A stream-counting idle watch could preserve the connection-level contract; a header-block
        timeout with an open sibling would be a stronger, separately chosen guarantee.
 
-       Hyper 1.12.0 has no per-stream send-wait hook. Its `PipeToSendStream` polls a body,
-       holds the returned chunk and waits in `poll_capacity` without polling the body again.
-       Corten's `Answered` wrapper can observe that handoff and lack of further polls; a
-       connection-level stall detector using it is untried, not ruled out. Closing the whole
-       connection is the same granularity as HTTP/1.1's timeout. False positives for quiet
-       producers, completed bodies and progressing sibling streams still need tests.
+       A detector based only on polling and dropping Corten's `Answered` body cannot preserve
+       the send bound. In [hyper 1.12.0's send loop](https://github.com/hyperium/hyper/blob/v1.12.0/src/proto/h2/mod.rs#L157-L186),
+       a body may be waiting to produce data or hyper may be waiting for room to send a chunk
+       it already took. Seeing the handoff can distinguish those two waits, but hyper hands
+       the whole chunk to h2 as soon as it has some capacity, and can finish the body at that
+       point. [h2 0.4.20's send queue](https://github.com/hyperium/h2/blob/v0.4.20/src/proto/streams/prioritize.rs#L749-L838)
+       can still hold the unsent part. The same body poll and drop can therefore mean either
+       a normal end or a buffered tail still waiting for credit. Clearing a timer on body
+       drop misses the latter; leaving it armed without a completion signal can close the
+       former. Socket writes cannot identify progress on one response rather than a sibling.
+       A stream count released on body drop alone also cannot prove the last answer is out of
+       h2's queue. These are source findings, not new timing or wire measurements.
+
+       Keep HTTP/1.1 in `serve` and HTTP/2 at the proxy. A parser-free detector that tracks
+       the `Body::Data` buffer beyond the body's lifetime is not ruled out, but it has not been
+       shown to distinguish flow-control progress, completion and cancellation. Do not add a second
+       frame parser or treat closing the whole connection as a substitute for that signal.
        The auto builder's missing HTTP/1 `max_header_size` setter is also a prototype
        limitation, not a reason HTTP/2 cannot ship: Corten could detect the preface itself
        and retain its HTTP/1 builder. Decoded h2 head limits, concurrent-stream/reset bounds,
@@ -1298,9 +1309,9 @@ rules something out.
        This weighs two reliability failures, not reliability against convenience alone:
        the no-proxy live app already fails at the fourth tab, and an opt-in feature would
        leave the default unchanged. The reason to defer is that a feature must not silently
-       weaken a security bound. Keep the proxy requirement (option 2) while testing the
-       connection-level design (option 1). One stream per page (option 3) still exhausts the
-       cross-tab cap and adds a custom format where HTTP/2 is standard, against
+       weaken a security bound. Keep the proxy requirement (option 2) until the connection-level
+       design (option 1) can demonstrate both bounds. One stream per page (option 3) still
+       exhausts the cross-tab cap and adds a custom format where HTTP/2 is standard, against
        [Rule 10](#rule-standard-formats). HTTP/3 remains out: `quinn` and an unstable `h3`,
        TLS tied to QUIC, and no need for it merely to remove this connection cap.
     3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
@@ -1661,8 +1672,9 @@ rules something out.
     eight direct-TLS tabs live in Chromium and Firefox, and a zero-window send resumed after
     500 ms with 100 ms configured, as [HTTP/2 evidence](../bench/http2/README.md) records);
     reasoned (the open-sibling header probe matches HTTP/1.1's busy-watch contract, while
-    `watch.take()` in the prototype loses the return to idle; an `Answered` body-stall
-    detector could close the whole connection but has not been tried); value (fast and proven
+    `watch.take()` in the prototype loses the return to idle); reasoned (hyper
+    1.12.0 can finish the body while h2 0.4.20 still has queued data, so body polls and drop
+    alone do not tell Corten that a stream made progress or completed); value (fast and proven
     fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed,
     which is why the dispatch suite comes first and an opt-in protocol must not silently
     weaken a security bound even though the no-proxy live app already fails).
@@ -1670,14 +1682,16 @@ rules something out.
     Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case
     (other than the deliberate `501` and empty-segment changes migration step 1 records), or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
-    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, either
-    hyper or h2 ships a header-block timeout or per-stream send-wait hook (the open proposal is
-    [hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928)),
-    or a stream-counting idle watch plus a body-stall detector passes the two connection-bound
-    cases specified for [limits.mjs](../bench/http2/README.md#follow-up-acceptance): an idle h2
-    connection with no open streams and a zero-window send. The historical open-sibling case
-    is a control, not a demand for a stronger header guarantee. Shipping still needs the
-    shutdown, reset-flood and full three-engine TLS checks omitted from the partial weighing.
+    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); for HTTP/2, hyper or h2
+    exposes a per-stream send-wait signal that covers queued data after the body ends, or a
+    parser-free design demonstrates the two connection bounds and controls specified for
+    [limits.mjs](../bench/http2/README.md#follow-up-acceptance), including final buffered data,
+    progress on a sibling, and reset and cancellation. An upstream header-block timeout
+    ([hyperium/h2 #928 Proposal: enable an HTTP/2 header-block read timeout](https://github.com/hyperium/h2/issues/928))
+    reopens the header half only. The historical open-sibling case is a control, not a demand
+    for a stronger header guarantee. Shipping still needs shutdown, reset-flood and resource
+    checks, decoded head limits, explicit h2 Upgrade refusal and HTTP/1 WebSocket fallback,
+    and full three-engine TLS smoke.
     HTTP/3 also waits for a stable `h3` and a need beyond this cap. A new protocol stays below
     the vocabulary in 3 and leaves 4 to 7 as they are.
     The `501` itself (migration step 1) is reopened when a named client or tool is reported
@@ -1713,7 +1727,9 @@ rules something out.
     and the untried connection-level alternative distinguished from the measured send stall;
     2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
     17 tests passed with empty parameters refused ([Choice 48](#choice-matchit)); 2026-11-14,
-    the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`.
+    the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`;
+    2026-11-18, hyper 1.12.0's response send loop and h2 0.4.20's send queue read against
+    Corten's `Answered` at `e927c2463`, without a new wire run.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
