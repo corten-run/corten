@@ -95,7 +95,7 @@ def emit(frame):
         if mode == 'early-job-exit':
             data['/bench/exit-code'] = b'2\n'
             return
-        if mode == 'already-exited':
+        if mode in ('already-exited', 'exit-after-renewals'):
             return
         put('campaign-active.json', {'owner': {'pid': 40}})
         put('stream-state.json', {'kind': 'progress', 'payload': {'state': 'active'}})
@@ -106,6 +106,8 @@ def emit(frame):
         if mode == 'unknown-login': add(999, 10, '/foreign.scope')
         if mode != 'lost-lease': put('stream-state.json', {'kind': 'audit-ready', 'payload': {'campaign': campaign, 'group': 'json-api', 'subjectSha256': subject}})
     elif kind == 'challenge':
+        if mode == 'exit-after-renewals' and frame['payload']['sequence'] == 3:
+            data['/bench/exit-code'] = b'2\n'
         if mode != 'lost-lease': send('renew', frame['payload'])
         if mode == 'replayed-renewal': send('renew', frame['payload'])
         if mode == 'unknown-input': send('shell', {'command': 'never executed'})
