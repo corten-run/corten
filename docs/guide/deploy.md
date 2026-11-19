@@ -97,7 +97,7 @@ does not add HTTP/2; the live-stream limitation at the top of this guide still a
 | 10 | allow request bodies as large as the app's largest form, and pass a large upload on as it arrives | nginx refuses a body over `client_max_body_size` (1 MB) with a page of its own, before the app can answer it in the form; and it holds the whole body before passing it on (`proxy_request_buffering on`), so a route that reads a body as it arrives (`pieces_up_to`) gets a `location` of its own with its limit and `proxy_request_buffering off` (below) |
 | 11 | keep a quiet WebSocket open, or let the app ping it | nginx closes a proxied connection that sends nothing for `proxy_read_timeout` (60 seconds), a WebSocket included; Corten's `Upgrade` sends no pings of its own, so a socket that may go quiet longer pings from the app or gets a longer timeout in its `location` |
 | 12 | set `Policy::hsts` in the app when it is served only over HTTPS, even when the proxy or CDN already sends `Strict-Transport-Security` | the app sees plain HTTP from a proxy that ends TLS and reads no `X-Forwarded-Proto`, so `hsts` is how it knows its pages are `https`: with it, a write or a WebSocket handshake without `Sec-Fetch-Site` from a plain-http page on the app's host is refused, and without it that page passes ([design Limit 26](../design.md#limit-origin-scheme)); it also keeps a redirect's notice in the `__Host-` cookie ([WebSockets](app.md#websockets-and-relays)) |
-| 13 | pass the browser's `Accept-Encoding` and `If-None-Match` on to the app | a page `GET` is tagged only for a request that accepts a coding or names a tag, and answered `304` only when the tag it names reaches the app; without them every reload ships the whole page ([Response compression](#response-compression)) |
+| 13 | pass the browser's `Accept-Encoding` on to the app, and its `If-None-Match` for a page the proxy does not answer from a store of its own | a page `GET` is tagged only for a request that accepts a coding or names a tag, so without the first a browser that holds no tag is never given one; a `304` for a page the proxy did not store comes only from the app, so without the second that page is sent whole on every reload ([Response compression](#response-compression)) |
 
 ### Live streams
 
@@ -149,8 +149,6 @@ server {
         proxy_set_header Upgrade $http_upgrade;                        # WebSockets (Upgrade)
         proxy_set_header Connection $connection_upgrade;
         proxy_cache app;       # keys on Vary; stores only answers sent public
-        proxy_set_header If-None-Match $http_if_none_match;   # proxy_cache takes it off otherwise: no 304 for a page it does not store
-        proxy_no_cache $http_if_none_match;                   # and the 304 that answers it is not stored for the next reader
     }
 }
 ```
@@ -172,7 +170,7 @@ neither refuses it at the forms' limit nor holds all of it before the app sees a
 app's own 413 (the API's shape, or the handler's) is what the browser reads for a body up to
 that size (a limit of only `max` would have nginx refuse first); past it, the browser reads
 nginx's page. A prefix that also serves downloads keeps
-`proxy_cache app;` and the two lines under it here too:
+`proxy_cache app;` here too:
 
 ```nginx
     location /files/ {
@@ -300,29 +298,36 @@ the feature on and the header passed, the app compresses and the proxy has nothi
 have the proxy compress instead, build without the feature and still pass the header. A proxy
 takes it off when it is told to (nginx's `proxy_set_header Accept-Encoding ""`), and one that
 compresses for the app may be set to: HAProxy's `compression offload` takes it off each request
-that names a coding HAProxy is set to use, which a browser's always does.
+that accepts a coding HAProxy is set to use, as a browser's does.
 
-The tag is half of it: the `304` needs the browser's `If-None-Match` to reach the app too. nginx
-takes it off, with the other conditional headers, in a `location` that has `proxy_cache`
-([`proxy_set_header`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)):
-it answers a tag itself from what it stored, and a page it does not store (a private one) would be
-sent whole on every reload. The [configuration above](#nginx) therefore passes the header on by
-hand, and its `proxy_no_cache` line keeps the `304` that answers it out of the store; without that
-line nginx stored a public page's `304` and gave it to the next reader, who held no page. Checked
-with nginx 1.27.5 and HAProxy 3.0.31 in front of a server that answered as a private and a public
-page do and printed what reached it.
+The tag is half of it: for a page the proxy does not answer from a store of its own, the `304`
+needs the browser's `If-None-Match` to reach the app too. nginx takes it off, with the other
+conditional headers, in a `location` that has `proxy_cache`
+([`proxy_set_header`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)).
+It answers a tag itself for a page it stored; a page it does not store (a private one, which a
+page is unless its handler says `Public`) is sent whole on every reload. The
+[configuration above](#nginx) has `proxy_cache` on `/`, so every private page behind it is; where
+those reloads matter more than one `location` for everything, put `proxy_cache` on the prefixes
+whose pages are `Public` and leave it off the rest, where nginx passes the header on. Passing it
+on by hand beside `proxy_cache` (`proxy_set_header If-None-Match $http_if_none_match`) is not the
+way: nginx then stored a public page's `304` and gave it to the next reader, who held no page,
+and with `proxy_no_cache` on the header to stop that, a request that names a tag never refreshes
+the stored copy. Checked with nginx 1.27.5 and HAProxy 3.0.31 in front of a server that answered
+as a private and a public page do and printed what reached it, not in front of a Corten app.
 
 To check both, pick a page that carries an `ETag` when asked straight from the app (one whose
-layout takes `req.nonce()`, or that is `no_store`, never does), and send the proxy the two requests
-a browser would, as `GET`s with the header a browser sends (a `HEAD`, which `curl -I` sends, is
-always tagged and shows nothing):
+layout takes `req.nonce()`, or that is `no_store`, never does) and that the proxy does not store,
+and send the proxy the two requests a browser would. Send `GET`s: `curl -I` sends a `HEAD`, which
+the app tags whatever it accepts, and which nginx asks the app for as a `GET` in a `location`
+with `proxy_cache`.
 
 ```sh
-curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' https://example.com/
-curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'If-None-Match: W/"<the tag>"' https://example.com/
+curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' https://shop.example/account
+curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'If-None-Match: W/"<the tag>"' https://shop.example/account
 ```
 
-The first must show the `ETag` and the second `304`.
+The first must show the `ETag` and the second `304`. A page nginx stores passes whatever reaches
+the app, since nginx answers its `304` from the store.
 
 ## Building the image
 

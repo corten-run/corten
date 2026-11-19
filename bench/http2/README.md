@@ -127,8 +127,8 @@ this case. No second HTTP/2 frame parser in Corten is proposed.
 5. **One way:** retain ordinary routes and SSE, with no page-wide multiplexing lifecycle.
 6. **Small surface:** eight opt-in crates buy a standard protocol, not mandatory cost for
    deployments whose edge already provides it. TLS stays outside the framework.
-7. **Good defaults:** requiring a second server and nine proxy-specific concerns is a real cost.
-   The deployment table has twelve rows, but 5 is conditional on caching, and 9 and 12
+7. **Good defaults:** requiring a second server and ten proxy-specific concerns is a real cost.
+   The deployment table has thirteen rows, but 5 is conditional on caching, and 9 and 12
    concern health and HTTPS even without a proxy.
    The existing measured `$host`/port WebSocket failure proves it is not just documentation.
    Put the caveat next to the README's production claim; do not describe the proxy as optional.

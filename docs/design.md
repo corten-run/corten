@@ -1246,7 +1246,7 @@ rules something out.
        through nginx; the browser cap is about six connections per host, not eight tabs.
        The app cannot diagnose this at startup: a feed's snapshot and stream both have rows,
        and a TLS-wrapped origin behind a re-encrypting proxy is valid. The deployment guide
-       has nine proxy-specific concerns, not twelve extra requirements: its rows 5 (shared
+       has ten proxy-specific concerns, not thirteen extra requirements: its rows 5 (shared
        caching), 9 (health) and 12 (HTTPS policy) are conditional or apply without a proxy.
        The measured nginx `$host` port loss causing a WebSocket 403 shows a real configuration
        failure. Operator time, money and memory have not been measured, not counted as zero.
@@ -1706,7 +1706,9 @@ rules something out.
     and the untried connection-level alternative distinguished from the measured send stall;
     2026-11-13, matchit 0.9.2's matching and insertion source read and the dispatch suite's
     17 tests passed with empty parameters refused ([Choice 48](#choice-matchit)); 2026-11-14,
-    the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`.
+    the same dispatch suite passed in the merged workspace's full debug tests at `66cb2936e`;
+     2026-11-18, the deployment guide's rows counted again at `83da31ef1`, with its thirteenth
+     (what a proxy passes on for a page's tag and its `304`): ten are proxy-specific.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
