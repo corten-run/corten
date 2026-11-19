@@ -58,10 +58,12 @@
 extern crate self as corten;
 
 /// What Corten's derives name in the code they generate, so an app needs no dependency of its own
-/// for it: serde, whose `Deserialize` `#[derive(Fields)]` and `#[derive(UrlValue)]` implement. Not
-/// a public API.
+/// for it: serde, whose `Deserialize` `#[derive(Fields)]` and `#[derive(UrlValue)]` implement.
+/// And the handle the stages around a route pass the request on in, named here so its examples
+/// can show that reading the request after its route took it does not compile. Not a public API.
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::app::inbound::Inbound;
     pub use serde;
 }
 

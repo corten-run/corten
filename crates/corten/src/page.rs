@@ -28,7 +28,7 @@ use http::Uri;
 
 use crate::{
     answer::{HtmlResponse, HtmlResult},
-    app::{Next, PendingRequest},
+    app::{Inbound, Next},
     assets::Assets,
     extract::{Over, Waited},
     security::NonceSlot,
@@ -3341,14 +3341,14 @@ pub(crate) struct AsIs;
 /// ([`crate::api`]). A request a [`crate::Caller`] sent to sign in is redirected there.
 pub(crate) fn render_errors<'s, 'n, 'g, 'm, 'r, S: crate::app::Steps>(
     shared: &'s Arc<Shared>,
-    pending: &'r mut PendingRequest,
+    mut inbound: Inbound<'r>,
     next: Next<'n, S>,
     deadline: Option<std::time::Duration>,
     signal: &'g crate::Signal,
     api: Option<&'m crate::api::Mount>,
     (mode, fetched): (Mode, bool),
 ) -> impl Future<Output = Response> + Send + use<'s, 'n, 'g, 'm, 'r, S> {
-    let req = pending.get();
+    let req = inbound.request();
     let mut late = false;
     if next.has_middleware() {
         // Middleware may change what is asked for or make the page itself, even on a patch-only
@@ -3366,13 +3366,13 @@ pub(crate) fn render_errors<'s, 'n, 'g, 'm, 'r, S: crate::app::Steps>(
         late = !shared.layout_reads.is_empty();
         signal.mark_whole(late);
     }
-    errors_rendered(shared, pending, next, deadline, signal, api, (mode, fetched), late)
+    errors_rendered(shared, inbound, next, deadline, signal, api, (mode, fetched), late)
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn errors_rendered<S: crate::app::Steps>(
     shared: &Arc<Shared>,
-    pending: &mut PendingRequest,
+    mut inbound: Inbound<'_>,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
@@ -3385,19 +3385,19 @@ async fn errors_rendered<S: crate::app::Steps>(
         // Keep the late poller's state in this box, not in a second box or the ordinary future.
         let _release = ReleasesEarlyHeads(signal);
         let answer: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
-            crate::layout::LateWrite::stage(pending.get(), deadline);
-            let dispatch = |pending| within_late(pending, next, deadline, signal);
-            page_or_error(shared, pending, dispatch, deadline, signal, (mode, fetched)).await
+            crate::layout::LateWrite::stage(inbound.request(), deadline);
+            let dispatch = |inbound| within_late(inbound, next, deadline, signal);
+            page_or_error(shared, inbound, dispatch, deadline, signal, (mode, fetched)).await
         });
         return answer.await;
     }
-    let dispatch = |pending| within_deadline(pending, next, deadline);
+    let dispatch = |inbound| within_deadline(inbound, next, deadline);
     if json {
         let shape = api.and_then(|mount| mount.errors.as_ref());
-        return crate::api::json_failure(run(pending, dispatch, deadline, signal).await, shared.dev, shape).await;
+        return crate::api::json_failure(run(inbound, dispatch, deadline, signal).await, shared.dev, shape).await;
     }
     if shared.layout_reads.is_empty() || mode.swaps() {
-        return page_or_error(shared, pending, dispatch, deadline, signal, (mode, fetched)).await;
+        return page_or_error(shared, inbound, dispatch, deadline, signal, (mode, fetched)).await;
     }
     // A whole document: a page route starts the layout's reads as it is called, and they are
     // polled with the handler on this task, then drawn into whichever page answers: the
@@ -3407,9 +3407,9 @@ async fn errors_rendered<S: crate::app::Steps>(
     // instructions, 8.4k of them copying (callgrind, the item page).
     let until = deadline.map(|limit| tokio::time::Instant::now() + limit);
     let here = crate::layout::StartHere::new(shared.clone(), until);
-    pending.get().extensions_mut().insert(here.clone());
     let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
-        let res = here.beside(page_or_error(shared, pending, dispatch, deadline, signal, (mode, fetched))).await;
+        inbound.request().extensions_mut().insert(here.clone());
+        let res = here.beside(page_or_error(shared, inbound, dispatch, deadline, signal, (mode, fetched))).await;
         here.fill(res).await
     });
     filled.await
@@ -3431,14 +3431,14 @@ impl Drop for ReleasesEarlyHeads<'_> {
 /// The handler's page, or the error page in its place.
 async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     shared: &Arc<Shared>,
-    pending: &'r mut PendingRequest,
-    dispatch: impl FnOnce(&'r mut PendingRequest) -> F,
+    mut inbound: Inbound<'r>,
+    dispatch: impl FnOnce(Inbound<'r>) -> F,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     (mode, fetched): (Mode, bool),
 ) -> Response {
     use http_body::Body as HttpBody;
-    let req = pending.get();
+    let req = inbound.request();
     let offline = req.method() == http::Method::GET && shared.offline.as_deref() == Some(req.uri().path());
     // A browser: the runtime (whose whole-page fetch asks for `*/*`), or a document request that
     // asks for HTML (a health probe or a webhook sender does not).
@@ -3451,7 +3451,7 @@ async fn page_or_error<'r, F: Future<Output = Result<Response, Late>>>(
     // answers it as the whole document at the address it asked; its method, for what it is told.
     #[cfg(debug_assertions)]
     let plain = (browser && !fetched && mode == Mode::Document && top_level(req.headers())).then(|| req.method().clone());
-    let res = run(pending, dispatch, deadline, signal).await;
+    let res = run(inbound, dispatch, deadline, signal).await;
     #[cfg(debug_assertions)]
     let res = refresh_header_is_an_error(res, shared.dev);
     #[cfg(debug_assertions)]
@@ -3660,18 +3660,18 @@ fn sign_in_loops(path: &str, to: &HeaderValue) -> Option<String> {
 /// The handler's response, its deadline failure or, if it panics, a 500 whose message only
 /// `corten dev` shows.
 async fn run<'r, F: Future<Output = Result<Response, Late>>>(
-    pending: &'r mut PendingRequest,
-    dispatch: impl FnOnce(&'r mut PendingRequest) -> F,
+    mut inbound: Inbound<'r>,
+    dispatch: impl FnOnce(Inbound<'r>) -> F,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
 ) -> Response {
     use std::{panic::AssertUnwindSafe, pin::pin, task::Poll};
     // For the log only: a method and a URI clone without allocating.
-    let req = pending.get();
+    let req = inbound.request();
     let (method, uri) = (req.method().clone(), req.uri().clone());
     // Both dispatchers only construct a future here. Polling it, including taking the request
     // and answering a timeout, stays inside the panic catch.
-    let mut fut = pin!(dispatch(pending));
+    let mut fut = pin!(dispatch(inbound));
     let outcome = std::future::poll_fn(|cx| {
         match std::panic::catch_unwind(AssertUnwindSafe(|| {
             fut.as_mut()
@@ -3739,11 +3739,11 @@ fn deadline_failure(
 
 /// Dispatch the ordinary request with only the state its deadline can need.
 async fn within_deadline<S: crate::app::Steps>(
-    pending: &mut PendingRequest,
+    inbound: Inbound<'_>,
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
 ) -> Result<Response, Late> {
-    let req = pending.take();
+    let req = inbound.take();
     if let Some(limit) = deadline {
         within(limit, next.run(req)).await
     } else {
@@ -3779,13 +3779,13 @@ async fn within<F: Future>(limit: std::time::Duration, fut: F) -> Result<F::Outp
 
 /// Like `within`, with one more possible stage: filling a page that no typed route has filled.
 async fn within_late<S: crate::app::Steps>(
-    pending: &mut PendingRequest,
+    inbound: Inbound<'_>,
     next: Next<'_, S>,
     limit: Option<std::time::Duration>,
     signal: &crate::Signal,
 ) -> Result<Response, Late> {
     use std::{future::Future, pin::pin, task::Poll};
-    let mut fut = pin!(Some(next.run(pending.take())));
+    let mut fut = pin!(Some(next.run(inbound.take())));
     let mut timer = pin!(None::<tokio::time::Sleep>);
     let mut fill: Option<std::pin::Pin<Box<dyn Future<Output = Response> + Send>>> = None;
     std::future::poll_fn(|cx| {

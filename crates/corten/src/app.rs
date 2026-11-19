@@ -2295,17 +2295,76 @@ struct At<S> {
     scope: Option<Arc<Scope>>,
 }
 
-/// Held once in the stage future. The stages borrow the request until dispatch hands it to
-/// middleware (or directly to the route).
-pub(crate) struct PendingRequest(Option<Request>);
+pub(crate) use inbound::Inbound;
 
-impl PendingRequest {
-    pub(crate) fn get(&mut self) -> &mut Request {
-        self.0.as_mut().expect("the stages have not dispatched the request yet")
+/// The handle the stages pass the request on in, in a module of its own so that the stages, in
+/// this file and in `page.rs`, reach the request only through its methods.
+pub(crate) mod inbound {
+    use crate::http::Request;
+
+    /// The request, held once in the stage future and handed to the stages as this: one pointer,
+    /// passed on by value. A stage reads the request through it and gives it to the stage inside;
+    /// the one that calls the first middleware (or the route) takes the request, which uses this
+    /// up, and a stage that answers without handing it on drops the request with it. No stage
+    /// has the place the request is held, so none can read it there once its handle is gone.
+    /// Not a public API: `corten::__private` names it only for the examples here.
+    ///
+    /// A stage reads the request and then hands it on:
+    ///
+    /// ```
+    /// let mut held = Some(corten::http::Request::default());
+    /// let mut inbound = corten::__private::Inbound::holding(&mut held);
+    /// assert_eq!(inbound.request().uri(), "/");
+    /// let request = inbound.take();
+    /// assert_eq!(request.uri(), "/");
+    /// assert!(held.is_none());
+    /// ```
+    ///
+    /// and cannot read it after its route has it. That is a use of a moved value, where a
+    /// borrowed slot would compile and panic on the first request to reach the read:
+    ///
+    /// ```compile_fail,E0382
+    /// let mut held = Some(corten::http::Request::default());
+    /// let mut inbound = corten::__private::Inbound::holding(&mut held);
+    /// let request = inbound.take();
+    /// inbound.request();
+    /// ```
+    ///
+    /// A stage that answers itself lets go of the request with its handle:
+    ///
+    /// ```
+    /// let mut held = Some(corten::http::Request::default());
+    /// drop(corten::__private::Inbound::holding(&mut held));
+    /// assert!(held.is_none());
+    /// ```
+    pub struct Inbound<'a>(&'a mut Option<Request>);
+
+    impl<'a> Inbound<'a> {
+        /// `held` is where the stage future keeps the request, and has it. Only the future's own
+        /// block calls this, with the request it was just given.
+        pub fn holding(held: &'a mut Option<Request>) -> Self {
+            Inbound(held)
+        }
+
+        /// The request, read in place. An `async fn` that calls this and then passes the handle
+        /// on keeps the handle in its own future too, a pointer for each such stage, which is
+        /// what the handle costs over a borrowed slot: 15 instructions a request on the lean
+        /// catalog page (docs/design.md#choice-fixed-stages).
+        pub fn request(&mut self) -> &mut Request {
+            self.0.as_mut().expect("only dispatch takes the request, and that uses this up")
+        }
+
+        pub fn take(self) -> Request {
+            self.0.take().expect("only dispatch takes the request, and that uses this up")
+        }
     }
 
-    pub(crate) fn take(&mut self) -> Request {
-        self.0.take().expect("the stages have not dispatched the request yet")
+    impl Drop for Inbound<'_> {
+        /// A stage that answers without handing the request on (a refusal) drops the request
+        /// here, before the stages outside it finish the answer.
+        fn drop(&mut self) {
+            *self.0 = None;
+        }
     }
 }
 
@@ -2315,8 +2374,8 @@ impl PendingRequest {
 impl<S: Steps> crate::router::Stages for At<S> {
     fn run(self: Arc<Self>, req: Request, route: &Route) -> crate::router::Answering {
         let route = route.clone();
-        let mut pending = PendingRequest(Some(req));
-        Box::pin(async move { self.layer.handle(&mut pending, route, self.scope.as_deref()).await })
+        let mut held = Some(req);
+        Box::pin(async move { self.layer.handle(Inbound::holding(&mut held), route, self.scope.as_deref()).await })
     }
 }
 
@@ -2447,17 +2506,17 @@ struct Layer<S> {
 }
 
 impl<S: Steps> Layer<S> {
-    /// `scope` is the request's route's, when its route says it.
-    async fn handle(&self, pending: &mut PendingRequest, route: Route, scope: Option<&Scope>) -> Response {
+    /// `scope` is the request's route's, when its route says it. The request is gone by the
+    /// time the answer is compressed: its route took it, or the stage that refused it dropped
+    /// it with its [`Inbound`].
+    async fn handle(&self, mut inbound: Inbound<'_>, route: Route, scope: Option<&Scope>) -> Response {
         #[cfg(feature = "compress")]
-        let coding = crate::compress::negotiate(pending.get().headers());
+        let coding = crate::compress::negotiate(inbound.request().headers());
         #[cfg(feature = "compress")]
         let accepts_coding = coding.any();
         #[cfg(not(feature = "compress"))]
-        let accepts_coding = cache::accepts_a_coding(pending.get().headers());
-        let res = self.secure(pending, route, accepts_coding, scope).await;
-        // An early refusal leaves the request in the slot. Drop it before finishing the answer.
-        pending.0 = None;
+        let accepts_coding = cache::accepts_a_coding(inbound.request().headers());
+        let res = self.secure(inbound, route, accepts_coding, scope).await;
         #[cfg(feature = "compress")]
         let res = crate::compress::finish(res, coding).await;
         res
@@ -2465,8 +2524,8 @@ impl<S: Steps> Layer<S> {
 
     /// The security policy around the request: the host and same-origin checks first, the
     /// headers last.
-    async fn secure(&self, pending: &mut PendingRequest, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
-        let req = pending.get();
+    async fn secure(&self, mut inbound: Inbound<'_>, route: Route, accepts_coding: bool, scope: Option<&Scope>) -> Response {
+        let req = inbound.request();
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
         if !self.policy.answers(req) {
@@ -2566,7 +2625,7 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let (mut res, caller, (mode, fetched)) = self.run(pending, route, mount, deadline, body_limit, steps).await;
+        let (mut res, caller, (mode, fetched)) = self.run(inbound, route, mount, deadline, body_limit, steps).await;
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
@@ -2648,7 +2707,7 @@ impl<S: Steps> Layer<S> {
     /// runtime sent it ([`page::Mode::asked`]).
     async fn run<'a>(
         &'a self,
-        pending: &mut PendingRequest,
+        mut inbound: Inbound<'_>,
         route: Option<Route>,
         api: Option<&Mount>,
         deadline: Option<Duration>,
@@ -2657,12 +2716,12 @@ impl<S: Steps> Layer<S> {
     ) -> (Response, bool, (Mode, bool)) {
         // Dropped with this future if the client leaves first; then the response's. The zone the
         // browser reported is read once, here.
-        let req = pending.get();
+        let req = inbound.request();
         let watch = Watch(self.signal(req.headers(), body_limit));
         req.extensions_mut().insert(watch.0.clone());
         let mode = page::Mode::asked(req.headers());
         let next = Next { steps: &self.steps, scope, route };
-        let res = page::render_errors(&self.shared, pending, next, deadline, &watch.0, api, mode).await;
+        let res = page::render_errors(&self.shared, inbound, next, deadline, &watch.0, api, mode).await;
         let personal = watch.0.is_personal();
         (signal::follow(res, watch, self.zoned()), personal, mode)
     }

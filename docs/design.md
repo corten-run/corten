@@ -1926,8 +1926,17 @@ rules something out.
     `corten::middleware`'s; the app's steps are resolved at compile time. The page tag stage
     can skip the hash for a `GET`, but not for an otherwise taggable `HEAD`: without its
     validator, a cache could freshen an older page of the same length ([Limit 21](#limit-etag)).
-    The stage future holds the request once. The stages borrow it until dispatch moves it to
-    the first middleware or, when there is none, the route. The late layout poller lives
+    The stage future holds the request once. Each stage is handed a handle it reads the request
+    through and passes on by value: dispatch uses the handle up when it moves the request to
+    the first middleware or, when there is none, the route, and a stage that answers without
+    handing the request on drops the request with its handle. No stage has the place the
+    request is held. So a stage that reads the request after its route took it does not
+    compile, where a borrowed slot would compile and panic on the first request to reach the
+    read; the examples on the handle (`Inbound`, in `crates/corten/src/app.rs`) run the read
+    before the request is taken and show the read after it does not compile. A stage that
+    reads through its handle and then passes it on keeps the handle, a pointer, in its own
+    future beside the one it passed on, which is what the handle costs over the borrowed slot.
+    The late layout poller lives
     in the existing late-write box, so it neither enlarges the ordinary future nor adds
     a box to a late-eligible write.
     An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right after the
@@ -2142,7 +2151,18 @@ rules something out.
     boxed future most of the rest); measured (callgrind, release, the same request path, on an
     uncommitted variant of main `c65c10ec` with the stages written as combinators on axum's
     router, which the repository does not hold: about 200 to 360 instructions a request fewer
-    than main with glibc's allocator, about 200 to 263 more with jemalloc); reasoned (one place for the app's steps is
+    than main with glibc's allocator, about 200 to 263 more with jemalloc); measured (callgrind,
+    release, the lean catalog page of `bench/catalog` with no default features, a run of 1,300
+    requests on one connection less one of 300, three runs with glibc's allocator and three
+    with jemalloc preloaded, the builds taking turns, the handle on the change that adds it
+    against the borrowed slot at its parent `c3be125cc`: 34,928 instructions a request in the
+    app's own code, 34,926 to 34,930, against 34,913, 34,910 to 34,915, which is 15 more, with
+    libc's and the allocator's counts the same within their own spread, so the whole request
+    counted 43,388 against 43,364 with glibc, 43,377 to 43,389 and 43,364 to 43,377, and 40,778
+    against 40,776 with jemalloc, whose own count moved by up to 260 between runs of one build;
+    `router::tests::staged_page_future_sizes` printed a stage future of 2,176 bytes against
+    2,152 in release and 2,632 against 2,600 in debug, with all features; no script in the
+    repository drives the counting runs); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
     of it says so where it is declared); platform (a PDF sent with a sandbox shows in the viewers of
     Chrome, Edge and Firefox as one sent without it, probed as Last checked says; Safari's is not
@@ -2153,7 +2173,10 @@ rules something out.
     production is yet); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
-    for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
+    for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1;
+    and a stage that reads the request after its route took it fails to compile, Value 4, for
+    the 15 instructions and 24 bytes a request measured above, 0.03% of that page's count, a
+    cost Value 1 asks to be measured and this pays knowingly).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a route needs some stages and not others, which
@@ -2190,6 +2213,10 @@ rules something out.
     budget on x86-64 Linux. It measures the real stages and typed handler for a small page
     without app middleware or layout reads. The bounds leave room for build profiles,
     features and compiler layout changes; remeasure before raising one.
+    Also revisit if the handle the stages pass on costs more than about 50 instructions a
+    request over a borrowed slot on the lean catalog page, counted as above, or a stage must
+    read the request after the stage inside it has answered, which a handle passed on by value
+    cannot give.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
@@ -2233,7 +2260,9 @@ rules something out.
     before (`7620ef9be`) and after (`ca900161d`) keeping the request in one slot; 2026-11-18,
     rechecked after moving the poller into the existing late-write box (`8db1903dd`): in DHAT,
     100 catalog GETs on one connection allocated one 2,144-byte stage and one 1,880-byte handler
-    future each, against 4,952 and 1,880 bytes at the baseline.
+    future each, against 4,952 and 1,880 bytes at the baseline; 2026-11-19, the handle passed
+    on by value against the borrowed slot at `c3be125cc`, on rustc 1.99.1 (the instruction
+    counts and future sizes in Stands on, and the handle's examples run as doctests).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
