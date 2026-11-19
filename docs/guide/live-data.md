@@ -579,15 +579,19 @@ within a generation) and reads ready acknowledgements while sending. The relay u
 NATS reply subscription while it holds the lease, with separate reply slots for each patch
 or reload-marker batch. It closes the subscription when a batch is abandoned or the relay
 stops. Missing acknowledgements do not build up reply registrations across retries, and
-a late reply to an abandoned attempt cannot retire a row. A burst can overflow a small
-client queue on the pipelined attempt. If some patch replies arrive but others time out,
-the whole selection stays pending and the relay limits subsequent patch batches to one
-outstanding reply at a time on the same subscription. No minimum `subscription_capacity` above the NATS
-client's own requirements is needed.
+a late reply to an abandoned attempt cannot retire a row. At a tiny client
+`subscription_capacity`, a pipelined burst can fill the queue and the client drops
+replies. If some patch replies arrive but others time out, the whole selection is retried,
+including rows JetStream already stored. This adds broker work even when JetStream
+deduplicates by message ID within its configured window. The relay publisher then keeps
+one patch reply outstanding at a time for its remaining lifetime, without opening more
+subscriptions. It bounds each serial pass by the lease, retires acknowledged rows while
+still holding it, and continues pending rows on later passes. No minimum
+`subscription_capacity` above the NATS client's own requirements is needed.
 
 Two failures can change the order JetStream stores:
 
-- If an ordinary send or acknowledgement fails, all IDs selected for that attempt stay
+- If a pipelined patch send or acknowledgement fails, all IDs selected for that attempt stay
   pending, even those already acknowledged. After a mid-batch disconnect, queued later
   patches of a feed can reach JetStream on the new socket before the earlier patch is
   stored on retry or a reload marker is stored in its place.

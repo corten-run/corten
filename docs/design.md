@@ -6072,12 +6072,17 @@ rules something out.
     the inbox before a retry can use a new one. Losing the lease or cancelling the relay also
     closes the inbox. No unanswered publish leaves a registration in the client's multiplexer.
     The longest slot suffix fits in the existing control-line reserve.
-    The client does not expose its subscription capacity. If some patches reply but others
-    time out, subsequent patch batches on that relay keep only one reply outstanding, which fits
-    any positive queue capacity without using more broker subscriptions. Marker batches can
-    retire the replies that arrived without waiting for an identically sized retry to succeed.
+    The client does not expose its subscription capacity. A tiny queue can drop replies
+    during a burst. If some patch replies arrive but others time out, the whole pipelined
+    selection is retried, adding broker work even when JetStream deduplicates by message ID
+    within its configured window. For the rest of that relay publisher's lifetime, patch
+    batches keep only one reply outstanding, which fits any positive queue capacity without
+    using more broker subscriptions. A serial pass uses the renewal interval to limit new
+    sends, bounds in-flight waits by the lease, and retires acknowledged rows before
+    continuing the pending rows on later passes. Marker batches can also retire replies
+    that arrived without waiting for an identically sized retry to succeed.
     A broker's connection-wide `Maximum Payload Violation`
-    or disconnect identifies no publish; the relay retries all selected rows on an ordinary send
+    or disconnect identifies no publish; the relay retries all selected rows on a pipelined send
     or acknowledgement failure and does not force a reconnect. Later patches can overtake a
     failed one in JetStream; followers recover as described in the
     [relay stream-order limit](#limit-relay-stream-order).
@@ -7384,10 +7389,12 @@ by design; where it is known, a limit says what would lift it or why it is so.
     ordinary patches in outbox-ID order, which is feed-sequence order within a generation.
     The relay drains acknowledgements while sending and correlates them to one batch attempt;
     a late reply cannot retire rows in a retry even when the retried message IDs are the same.
-    After a partial patch reply timeout the relay waits for each patch's reply before
-    sending the next, rather than repeatedly overflowing the queue or opening more subscriptions.
+    A tiny client queue can drop replies on a pipelined attempt. Retrying the selection adds
+    broker work even when JetStream deduplicates it by message ID. After a partial patch reply
+    timeout the relay waits for each patch's reply before sending the next, rather than
+    repeatedly overflowing the queue or opening more subscriptions.
 
-    - **Connection failure.** An ordinary send or acknowledgement failure retires none of
+    - **Connection failure.** A pipelined patch send or acknowledgement failure retires none of
       the selected outbox IDs in that attempt, including rows already acknowledged. After
       a mid-batch disconnect the NATS client may send queued publishes on the replacement
       socket; JetStream can store later patches of a feed before it accepts the missing

@@ -21,7 +21,7 @@ use futures_util::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
     sync::{oneshot, Semaphore},
 };
@@ -1314,6 +1314,104 @@ async fn full_batch_with_reply_capacity(capacity: usize) {
     let publishes = stats.out_messages.load(Ordering::Relaxed);
     assert!(matches!(publishes, 256 | 512), "all rows retired with at most one retry: {publishes} publishes");
     assert_eq!(js.get_stream(&config.name).await.unwrap().cached_info().state.messages, 256);
+    relay.abort();
+    assert!(relay.await.unwrap_err().is_cancelled());
+    delete_test_stream_and_schema(&db, &js, &config.name, &schema).await;
+}
+
+#[tokio::test]
+async fn a_slow_single_reply_batch_retires_in_fresh_lease_passes() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("slow_single_reply_");
+    let pool = schema_pool(&db, &schema).await;
+    let (js, mut config) = unacknowledged_batch(&pool, &nats, &schema).await;
+    config.no_ack = false;
+    config.max_message_size = 512;
+    js.update_stream(config.clone()).await.unwrap();
+    sqlx::query("UPDATE corten_outbox SET body = repeat(' ', 1024) WHERE seq = 2").execute(&pool).await.unwrap();
+
+    let observer = js.client();
+    let mut publishes = observer.subscribe(format!("{schema}.feed")).await.unwrap();
+    observer.flush().await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let upstream: async_nats::ServerAddr = nats.parse().unwrap();
+    let proxy = tokio::spawn(async move {
+        let (mut client, _) = listener.accept().await.unwrap();
+        let mut server = TcpStream::connect((upstream.host(), upstream.port())).await.unwrap();
+        let (mut client_read, mut client_write) = client.split();
+        let (mut server_read, mut server_write) = server.split();
+        tokio::select! {
+            _ = tokio::io::copy(&mut client_read, &mut server_write) => {}
+            () = async {
+                let mut buf = [0; 8192];
+                loop {
+                    let n = server_read.read(&mut buf).await.unwrap();
+                    if n == 0 {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                    client_write.write_all(&buf[..n]).await.unwrap();
+                }
+            } => {}
+        }
+    });
+    let publisher = async_nats::ConnectOptions::new().subscription_capacity(1).connect(addr).await.unwrap();
+    // Start in the fallback so this check does not depend on when the client drops replies.
+    let sender = relay::Publisher::new(jetstream::new(publisher)).with_single_reply();
+    let options = Arc::new(Options { stream: config.name.clone(), subject_prefix: schema.clone(), ..Options::default() });
+    let mut contender = pool.acquire().await.unwrap().detach();
+    let relay = tokio::spawn(relay::run(pool.clone(), sender, options.clone(), Arc::default()));
+    let started = Instant::now();
+    tokio::time::timeout(Duration::from_secs(25), async {
+        // There is one extra publish for the size-refused row's reload marker.
+        for n in 1..=257 {
+            publishes.next().await.unwrap();
+            assert!(!store::lease(&mut contender, "contender", options.lease).await.unwrap(), "lease lost by publish {n}");
+            if n == 128 {
+                let pending = store::pending(&pool, 257).await.unwrap();
+                assert!(!pending.is_empty() && pending.len() < 256, "the acknowledged prefix must retire before the tail");
+                assert!(pending.iter().all(|row| row.seq != 2), "the size-refused row's marker must retire too");
+            }
+        }
+    })
+    .await
+    .expect("the delayed batch kept publishing");
+    assert!(started.elapsed() > options.lease, "the fixture must outlast the original lease");
+    wait_pending(&pool, 0).await;
+    assert_eq!(js.get_stream(&config.name).await.unwrap().cached_info().state.messages, 256);
+    relay.abort();
+    assert!(relay.await.unwrap_err().is_cancelled());
+    proxy.abort();
+    if let Err(error) = proxy.await {
+        assert!(error.is_cancelled(), "{error}");
+    }
+    delete_test_stream_and_schema(&db, &js, &config.name, &schema).await;
+}
+
+#[tokio::test]
+async fn a_stalled_single_reply_send_leaves_only_unacknowledged_rows_pending() {
+    let Some((db, nats)) = urls() else { return eprintln!("skipped: set CORTEN_TEST_DATABASE_URL and CORTEN_TEST_NATS_URL") };
+    let schema = key("stalled_single_reply_");
+    let pool = schema_pool(&db, &schema).await;
+    let (js, mut config) = unacknowledged_batch(&pool, &nats, &schema).await;
+    config.no_ack = false;
+    js.update_stream(config.clone()).await.unwrap();
+
+    let publisher = async_nats::ConnectOptions::new().subscription_capacity(1).connect(&nats).await.unwrap();
+    let stats = publisher.statistics();
+    let mut sender = relay::Publisher::new(jetstream::new(publisher)).with_single_reply();
+    let gate = Arc::new(Semaphore::new(0));
+    let rows = store::pending(&pool, 257).await.unwrap();
+    sender.pause_before.push((rows[3].id, gate.clone()));
+    let options = Arc::new(Options { stream: config.name.clone(), subject_prefix: schema.clone(), ..Options::default() });
+    let relay = tokio::spawn(relay::run(pool.clone(), sender, options, Arc::default()));
+    let pending = wait_pending(&pool, 253).await;
+    assert_eq!(pending[0].seq, 4, "the acknowledged prefix retired even though the next send stalled");
+    assert_eq!(stats.out_messages.load(Ordering::Relaxed), 3, "the stalled send did not enqueue a publish");
+    gate.add_permits(1);
+    wait_pending(&pool, 0).await;
+    assert_eq!(stats.out_messages.load(Ordering::Relaxed), 256, "later passes sent only the remaining rows");
     relay.abort();
     assert!(relay.await.unwrap_err().is_cancelled());
     delete_test_stream_and_schema(&db, &js, &config.name, &schema).await;

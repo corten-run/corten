@@ -140,17 +140,26 @@ async fn drain(
         let mut refused = Vec::new();
         {
             let mut replies = Replies::new(publisher, inbox);
-            let mut awaiting = Vec::with_capacity(rows.len());
-            let window = if publisher.single_reply.load(Ordering::Relaxed) { 1 } else { BATCH as usize };
-            for rows in rows.chunks(window) {
-                let first = awaiting.len();
-                for row in rows {
+            if publisher.single_reply.load(Ordering::Relaxed) {
+                let result = send_serial(&mut replies, options, held.renewed, &rows, &mut sent, &mut refused).await;
+                held.check()?;
+                if let Err(error) = result {
+                    if !sent.is_empty() {
+                        store::mark_published(pool, &sent).await?;
+                    }
+                    // End leadership and close the inbox; the unacknowledged row and any
+                    // refusals stay pending with the rest of the unprocessed rows.
+                    return Err(error);
+                }
+            } else {
+                let mut awaiting = Vec::with_capacity(rows.len());
+                for row in &rows {
                     if !valid_key(&row.feed) {
                         refused.push((row, Refusal::InvalidKey));
                         continue;
                     }
                     let slot = awaiting.len();
-                    match replies.send(options, row, false, slot, slot != first).await {
+                    match replies.send(options, row, false, slot, slot != 0).await {
                         Ok(()) => awaiting.push(Some(row)),
                         Err(error) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
                             awaiting.push(None);
@@ -161,7 +170,7 @@ async fn drain(
                 }
                 let deadline = tokio::time::Instant::now() + publisher.timeout;
                 let mut had_reply = false;
-                for _ in 0..awaiting[first..].iter().flatten().count() {
+                for _ in 0..awaiting.iter().flatten().count() {
                     match replies.recv(&mut awaiting, deadline).await {
                         Ok((row, Ok(_))) => sent.push(row.id),
                         Ok((row, Err(error))) if stream_size_refusal(&error) => refused.push((row, Refusal::Stream)),
@@ -191,6 +200,48 @@ async fn drain(
     }
 }
 
+async fn send_serial<'a>(
+    replies: &mut Replies<'_>,
+    options: &Options,
+    renewed: Instant,
+    rows: &'a [store::Pending],
+    sent: &mut Vec<i64>,
+    refused: &mut Vec<(&'a store::Pending, Refusal)>,
+) -> Result<(), Error> {
+    // Begin the next pass at the usual renewal interval. Allow the in-flight row
+    // longer, but leave time to retire acknowledged rows before the lease gets stale.
+    let next_pass = renewed + options.lease / 4;
+    let deadline = (renewed + options.lease / 2).into();
+    let mut awaiting = Vec::with_capacity(rows.len());
+    for (slot, row) in rows.iter().enumerate() {
+        if slot != 0 && Instant::now() >= next_pass {
+            break;
+        }
+        if !valid_key(&row.feed) {
+            awaiting.push(None);
+            refused.push((row, Refusal::InvalidKey));
+            continue;
+        }
+        match poll_send_before(deadline, replies.send(options, row, false, slot, false)).await {
+            Some(Ok(())) => awaiting.push(Some(row)),
+            Some(Err(error)) if error.kind() == PublishErrorKind::MaxPayloadExceeded => {
+                awaiting.push(None);
+                refused.push((row, Refusal::Cached(error)));
+                continue;
+            }
+            Some(Err(error)) => return Err(error.into()),
+            None => return Err("serial publish reached the relay lease deadline".into()),
+        }
+        let ack_deadline = deadline.min(tokio::time::Instant::now() + replies.publisher.timeout);
+        match replies.recv(&mut awaiting, ack_deadline).await? {
+            (row, Ok(_)) => sent.push(row.id),
+            (row, Err(error)) if stream_size_refusal(&error) => refused.push((row, Refusal::Stream)),
+            (_, Err(error)) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
 pub(crate) struct Publisher {
     js: jetstream::Context,
     client: Client,
@@ -215,6 +266,12 @@ impl Publisher {
     #[cfg(test)]
     pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_single_reply(mut self) -> Self {
+        *self.single_reply.get_mut() = true;
         self
     }
 }
