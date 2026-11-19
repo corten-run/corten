@@ -51,17 +51,24 @@ try {
         pub trait Bind {}
         pub mod __private { pub fn data_on() {} }
     }
-    mod js { pub fn caption(_: &str) {} }
+    struct Ship;
+    struct Names { weight: &'static str }
+    impl Ship { const FIELDS: Names = Names { weight: "weight" }; }
+    mod js {
+        pub fn caption(_: &str) {}
+        pub fn input(_: &str) {}
+    }
     fn matched() {
         let name = "caption";
         let _ = html! {
+            let f = Ship::FIELDS;
             <form><input name={name}><button on:click={js::caption(name)}>"Caption"</button></form>
         };
     }
     fn unmatched() {
-        let name = "caption";
         let _ = html! {
-            <form><input name="posted"><button on:click={js::caption(name)}>"Caption"</button></form>
+            let f = Ship::FIELDS;
+            <form><input name="posted"><button on:click={js::input(f.weight)}>"Fill"</button></form>
         };
     }
   `;
