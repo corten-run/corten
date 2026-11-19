@@ -376,7 +376,8 @@ only in the profile served the same catalog page load and answered the same byte
 one CPU, `wrk` with 64 connections on three others in the same container. Cycles are user and
 kernel together, a request, by `perf stat` on the app's process, over 12 rounds in which the
 builds took turns in the same order; instructions are one connection under callgrind (1,300
-requests less 300), one run a build.
+requests less 300), one run a build. These five were built with the toolchain's steps by hand,
+before `corten build` had the option.
 
 | Profile taken from | Cycles a request, median | Range | Instructions a request |
 |---|---|---|---|
@@ -395,11 +396,28 @@ lower in 7 (11,965 lower to 16,117 higher): these rounds do not tell either from
 app and this load a profile did not have to come from the load it was measured with, only from
 requests that reach the same route; a profile that barely reached it gained about half as much.
 
-Not measured: an app as the starter builds and runs it (the default features, its release
-profile, jemalloc, a deadline and timeouts), another app or page, a profile taken from an
-earlier version of the app or with another rustc, a profile used on another kind of CPU than it
-was taken on, the size of the binary, and the time the two builds and the training run add to a
-release. Nor the time a reader waits: no latency was kept, and the pages a second the same
+The option itself, measured at `70544a54a` with the same rustc, container and load: the catalog
+app with its default features (`compress` on), built by `corten build` and by
+`corten build --profile-from` with a command that asked for the catalog page 3,000 times, each
+on a new connection, accepting a browser's codings. Over 10 rounds in which the two builds took
+turns:
+
+| Load | `corten build`, cycles a request, median (range) | With `--profile-from` | Difference in the same round, median |
+|---|---|---|---|
+| the catalog page, accepting no coding | 155,368 (150,138 to 168,583) | 107,713 (100,153 to 112,414) | 45,676 fewer, 29% |
+| the same page, accepting a browser's codings, so each answer is compressed | 286,487 (248,638 to 309,077) | 233,162 (213,827 to 246,866) | 50,251 fewer, 18% |
+
+The profiled build was lower in all 10 rounds of each. From an empty target directory the
+ordinary build took about four minutes and the profiled one about eleven, the 3,000 requests
+included; a later profiled build that had nothing to compile in the instrumented copy took
+about five. The binaries are 6,154,312 bytes and 5,871,128, the merged profile 2.8 MB, and the
+target directory about 250 MB after the ordinary build against about 580 MB with the
+instrumented copy beside the release.
+
+Not measured: an app as the starter builds and runs it (its release profile, jemalloc, a
+deadline and timeouts), another app or page, a profile taken from an earlier version of the app
+or with another rustc, and a profile used on another kind of CPU than it was taken on. Nor the
+time a reader waits: no latency was kept, and the pages a second the same
 rounds counted (64 connections against one CPU) say little, 17,567 at the median without a
 profile (11,578 to 18,678), 21,504, 21,228 and 22,610 with the first three and 17,727 with the
 JSON API's, whose cycles were 13% lower.
