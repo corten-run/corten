@@ -148,7 +148,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;   # PROXIES=127.0.0.1
         proxy_set_header Upgrade $http_upgrade;                        # WebSockets (Upgrade)
         proxy_set_header Connection $connection_upgrade;
-        proxy_cache app;       # keys on Vary; stores only answers sent public
+        proxy_cache app;       # keys on Vary; stores only answers sent public; a page it
+                               # does not store gets no 304 here (Response compression)
     }
 }
 ```
@@ -169,7 +170,7 @@ neither refuses it at the forms' limit nor holds all of it before the app sees a
 `client_max_body_size` is the route's `max` and the 64 MiB the app reads past (or `0`), so the
 app's own 413 (the API's shape, or the handler's) is what the browser reads for a body up to
 that size (a limit of only `max` would have nginx refuse first); past it, the browser reads
-nginx's page. A prefix that also serves downloads keeps
+nginx's page. A prefix that also serves downloads the app sends `Public` keeps
 `proxy_cache app;` here too:
 
 ```nginx
@@ -313,11 +314,13 @@ on by hand beside `proxy_cache` (`proxy_set_header If-None-Match $http_if_none_m
 way: nginx then stored a public page's `304` and gave it to the next reader, who held no page,
 and with `proxy_no_cache` on the header to stop that, a request that names a tag never refreshes
 the stored copy. Checked with nginx 1.27.5 and HAProxy 3.0.31 in front of a server that answered
-as a private and a public page do and printed what reached it, not in front of a Corten app.
+as a private and a public page do and printed what reached it, not in front of a Corten app. What
+Cloudflare and CloudFront do with the two headers was not checked.
 
-To check both, pick a page that carries an `ETag` when asked straight from the app (one whose
-layout takes `req.nonce()`, or that is `no_store`, never does) and that the proxy does not store,
-and send the proxy the two requests a browser would. Send `GET`s: `curl -I` sends a `HEAD`, which
+To check both, pick a page that carries an `ETag` when asked straight from the app with the
+`Accept-Encoding` below (one whose layout takes `req.nonce()`, that draws a `SubmitKey::field`,
+or that is `no_store`, never does) and that the proxy does not store, and send the proxy the two
+requests a browser would. Send `GET`s: `curl -I` sends a `HEAD`, which
 the app tags whatever it accepts, and which nginx asks the app for as a `GET` in a `location`
 with `proxy_cache`.
 
@@ -326,8 +329,11 @@ curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' https://
 curl -s -o /dev/null -D - -H 'Accept-Encoding: gzip, deflate, br, zstd' -H 'If-None-Match: W/"<the tag>"' https://shop.example/account
 ```
 
-The first must show the `ETag` and the second `304`. A page nginx stores passes whatever reaches
-the app, since nginx answers its `304` from the store.
+The first must show the `ETag`, and the second `304`: behind the [configuration above](#nginx) as
+it is written it shows `200` and the page again, the reload described above, until `/account` is
+in a `location` without `proxy_cache`. A page nginx stores does not test the second header, since
+nginx answers its `304` from the store; it still needs the first, without which the copy it
+stores has no tag to match.
 
 ## Building the image
 
