@@ -252,7 +252,7 @@ const choiceTargetsFit = (t) =>
   t.leftover.every((l) => Math.abs(l.height - 2.25) < 0.02 && Math.abs(l.off) <= 0.5);
 
 for (engine of names) {
-  const browser = steady(await engines[engine].launch({ headless: true }));
+  const browser = steady(await engines[engine].launch({ headless: true }), { gateInitialWebKitLoad: true });
   track(browser);
   try {
     await run(browser);
