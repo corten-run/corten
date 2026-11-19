@@ -80,20 +80,27 @@ jobs:
           # release being served, and there is always the one before to go back to.
           release="/opt/corten-site/releases/${GITHUB_SHA::12}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           site="https://$SITE_DOMAIN"
+          # Linux uptime has 10 ms resolution and does not jump with the wall clock.
+          probe_clock() {
+            local uptime
+            read -r uptime _ < /proc/uptime || return
+            probe_ms=$((10#${uptime/./} * 10))
+          }
           # Observe the public page throughout the ship without gating it.
           if asked=$(mktemp "$RUNNER_TEMP/site-asked.XXXXXX"); then
+            # Give the observer its own process group before it can start a probe.
+            set -m
             (
-              trap 'exit 0' TERM
-              # Linux uptime has 10 ms resolution and does not jump with the wall clock.
-              probe_clock() {
-                read -r uptime _ < /proc/uptime
-                probe_ms=${uptime/./}0
-              }
+              set +m
+              set -o pipefail
+              trap 'wait; exit 0' TERM
               while :; do
                 probe_clock
                 started=$probe_ms
                 printf 'started %s\n' "$started"
-                if got=$(curl -fsS --max-time 0.25 "$site/" 2>/dev/null) && grep -q 'built from' <<< "$got"; then
+                # Read the whole response, and use wait so the TERM trap runs during curl.
+                curl -fsS --max-time 0.25 "$site/" 2>/dev/null | grep 'built from' >/dev/null &
+                if wait "$!"; then
                   echo answered
                 else
                   echo lost
@@ -105,12 +112,23 @@ jobs:
                   sleep "$pause"
                 fi
               done
-            ) > "$asked" &
+            ) >> "$asked" &
             asking=$!
+            set +m
             counted() {
-              local ship_status=$1
-              kill "$asking" 2>/dev/null || true
-              wait "$asking" 2>/dev/null || true
+              local ship_status=$1 i
+              kill -TERM -- "-$asking" 2>/dev/null || true
+              for ((i=0; i<10; i++)); do
+                kill -0 -- "-$asking" 2>/dev/null || break
+                sleep .1
+              done
+              if (( i == 10 )); then kill -KILL -- "-$asking" 2>/dev/null || true; fi
+              # Reap the leader if it has exited; never wait on a still-live process.
+              for ((i=0; i<5; i++)); do
+                [[ -e /proc/$asking ]] || break
+                sleep .02
+              done
+              if [[ ! -e /proc/$asking ]]; then wait "$asking" 2>/dev/null || true; fi
               awk '
                 function save(gap) {
                   if (run > longest || (run == longest && gap > bracket)) {
@@ -119,21 +137,38 @@ jobs:
                   }
                 }
                 $1 == "started" { started++; timestamp = $2 }
-                $1 == "lost" { lost++; run++ }
+                $1 == "lost" { missed[++lost] = timestamp; run++ }
                 $1 == "answered" {
                   if (run) save(answered ? timestamp - last_success : -1)
                   answered++
                   last_success = timestamp
                   run = 0
                 }
+                $1 == "restart-start" { begin = $2; kind = $3 }
+                $1 == "restart-end" {
+                  starts[++windows] = begin
+                  ends[windows] = $2
+                  kinds[windows] = kind
+                  statuses[windows] = $3
+                }
                 END {
                   if (run) save(-1)
                   printf "While the ship ran: %d completed page probes (%d missed), %d interrupted.\n", answered + lost, lost, started - answered - lost
                   print "Target: 100 ms between starts, one request at a time, 250 ms timeout."
-                  printf "Longest run: %d consecutive misses", longest
+                  printf "Ship-wide longest run: %d consecutive misses", longest
                   if (!longest) print "."
                   else if (bracket < 0) print "; no successful probes on both sides."
                   else printf "; bracketing successful starts %d ms apart.\n", bracket
+                  # A probe can start in a window and finish after it.
+                  outside = lost
+                  for (w = 1; w <= windows; w++) {
+                    inside = 0
+                    for (i = 1; i <= lost; i++)
+                      if (missed[i] >= starts[w] && missed[i] < ends[w]) inside++
+                    outside -= inside
+                    printf "%s restart command: %s to %s ms runner uptime (exit %d); %d missed probes by start time.\n", kinds[w], starts[w], ends[w], statuses[w], inside
+                  }
+                  printf "%d missed probes outside the recorded restart command windows.\n", outside
                 }
               ' "$asked" || true
               rm -f "$asked" || true
@@ -147,6 +182,19 @@ jobs:
           ssh="ssh $options deploy@$SITE_HOST"
           # deploy/release.sh runs on the machine, sent with each deploy.
           machine() { $ssh sh -s -- "$@" < examples/corten-site/deploy/release.sh; }
+          note_restart() {
+            if [[ -n "$asked" ]] && probe_clock; then
+              printf '%s %s %s\n' "$1" "$probe_ms" "$2" >> "$asked" || true
+            fi
+          }
+          serve() {
+            local status=0
+            # The SSH call includes the link move and restart, not just systemctl.
+            note_restart restart-start "$1"
+            machine serve "$2" || status=$?
+            note_restart restart-end "$status"
+            return "$status"
+          }
           before=$($ssh 'readlink /opt/corten-site/current 2>/dev/null || true')
           # Nothing on the machine has changed until `serve`: a failure up to there leaves the
           # site as it was.
@@ -158,7 +206,7 @@ jobs:
           page() { got=$(curl -fsS --max-time 5 "$site/") && printf '%s' "$got" | grep -q "built from $1"; }
           json() { got=$(curl -fsS --max-time 5 -H 'accept: application/json' "$site/") && printf '%s' "$got" | grep -q "\"heat\":\"$1\""; }
           stream() { curl -sS -N --max-time 5 "$site/live/works" 2>/dev/null | grep -q '^event: patch'; }
-          if machine serve "$release"; then
+          if serve Release "$release"; then
             for try in $(seq 1 20); do
               if page "$commit" && json "$commit" && stream; then
                 echo "$site/ is serving $commit"
@@ -177,7 +225,7 @@ jobs:
           fi
           # The machine may be out of reach for a moment, which is what failed the deploy: the
           # put-back is tried three times.
-          put_back() { for try in 1 2 3; do machine serve "$before" && return 0; sleep 5; done; return 1; }
+          put_back() { for try in 1 2 3; do serve Rollback "$before" && return 0; sleep 5; done; return 1; }
           # A release's directory starts with its commit, which its page names: the put-back is
           # checked as that release, not as any answer. It is read with this commit's words for
           # it, so a change to how the page names its commit fails this check once.

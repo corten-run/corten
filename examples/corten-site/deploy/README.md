@@ -353,14 +353,17 @@ run of 502s started 152 to 337 ms apart in the first rehearsal. Across rehearsal
 of 600 to 1,000 dense probes got a 502 per ten deploys; probes a second apart usually missed
 the gap. The bracket is a sampling interval, not a measurement of the exact outage boundaries.
 
-The Site workflow now measures the production gap during the ship step. It targets 100 ms
+The Site workflow samples public page availability throughout the ship step. It targets 100 ms
 between public page probe starts, one request at a time, with a 250 ms timeout. A slow probe
 delays the next start. The log separates completed misses (including 502s, connection errors,
 timeouts or a missing page marker) from probes interrupted when the step ends. It reports the
-longest run of misses and the time between the successful starts on either side, when both
-were seen. The observation does not decide the ship result. Keep the ordinary restart unless
-the production gap is well beyond the local measurements or a reader reports disruption;
-then revisit the smallest handoff the evidence justifies.
+ship-wide longest run of misses and the time between the successful starts on either side, when
+both were seen. It also logs the start and end of each release or rollback command on the runner's
+clock and counts missed probes by whether they started inside or outside those windows. Each
+window includes SSH and the symlink move as well as the restart; it is not the outage duration.
+The observation does not decide the ship result. Keep the ordinary restart unless a reader
+reports disruption or a gap well beyond the local measurements is corroborated around a restart.
+Then revisit the smallest handoff the evidence justifies.
 
 ## What it holds
 
