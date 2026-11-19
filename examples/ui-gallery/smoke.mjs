@@ -1986,6 +1986,46 @@ async function run(browser) {
   // The two saves cut on purpose: Chromium logs each as a resource that failed to load.
   errors.splice(errorsBefore, errors.length - errorsBefore, ...errors.slice(errorsBefore).filter((e) => !/ERR_CONNECTION_RESET/.test(e)));
 
+  // dialog::modal: initial focus uses the custom field's focus method, but can also
+  // focus a form whose own focus member is shadowed by a named control.
+  {
+    const invalid = await browser.newPage();
+    invalid.on("pageerror", (e) => errors.push(e.message));
+    try {
+      await invalid.addInitScript(() => {
+        customElements.define("smoke-field", class extends HTMLElement {
+          constructor() {
+            super();
+            this.attachShadow({ mode: "open" }).append(document.createElement("input"));
+          }
+          /** @param {FocusOptions} [options] */
+          focus(options) { this.shadowRoot?.querySelector("input")?.focus(options); }
+        });
+      });
+      for (const field of [true, false]) {
+        const url = `${base}/`;
+        await invalid.route(url, async (route) => {
+          const response = await route.fetch();
+          const body = (await response.text()).replace(/(<dialog\b[^>]*\bid="rename"[^>]*)(>.*?)<form(\b[^>]*)>/s,
+            field
+              ? '$1 open$2<form$3><button type="button" id="before-invalid">Before field</button><smoke-field id="invalid-field" aria-invalid="true"></smoke-field>'
+              : '$1 open$2<button type="button" id="before-invalid">Before form</button><form$3 id="invalid-form" tabindex="-1" aria-invalid="true"><input type="hidden" name="focus">');
+          await route.fulfill({ response, body });
+        }, { times: 1 });
+        await invalid.goto(url);
+        await invalid.locator("#rename:modal").waitFor();
+        const focus = await invalid.evaluate(() => ({
+          outer: document.activeElement?.id,
+          inner: document.activeElement?.shadowRoot?.activeElement?.localName,
+        }));
+        check(field ? "a modal calls the invalid custom field's focus method" : "a modal focuses an invalid form whose focus is shadowed",
+          field ? focus.outer === "invalid-field" && focus.inner === "input" : focus.outer === "invalid-form", JSON.stringify(focus));
+      }
+    } finally {
+      await invalid.context().close();
+    }
+  }
+
   // dialog::modal: a dialog the server draws open is modal.
   {
     const draws = await browser.newPage();

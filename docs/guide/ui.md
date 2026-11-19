@@ -96,6 +96,7 @@ shows, but it is not modal, so focus and Tab leave it for the page behind, which
 and there is no backdrop. `corten_ui::dialog::modal` makes such a dialog modal when it joins the
 page (a load, a navigation or a patch) and focuses the first field marked invalid in it; one drawn
 closed stays closed. It takes the dialog itself, so on any other element it does not compile.
+An invalid custom field can supply its own `focus()` to reach its internal control.
 List `corten_ui::COMPONENTS` and it is served.
 
 If a patch replaces a still-open modal made by `dialog::modal` or `dialog::modalClosedBy` with

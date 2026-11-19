@@ -42,7 +42,9 @@ export async function copy(button, id, said, copied, signal) {
   const from = document.getElementById(id);
   const text = from instanceof HTMLInputElement || from instanceof HTMLTextAreaElement
     ? from.value
-    : from && /** @type {string | null} */ (Reflect.get(Node.prototype, "textContent", from));
+    : from instanceof HTMLFormElement
+      ? /** @type {string | null} */ (Reflect.get(Node.prototype, "textContent", from))
+      : from?.textContent;
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);

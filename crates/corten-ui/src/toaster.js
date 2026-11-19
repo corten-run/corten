@@ -114,7 +114,8 @@ export function connect(root, status, close, failed, seconds, signal) {
     (event) => {
       if (!(event.target instanceof HTMLFormElement)) return;
       const { submitter } = /** @type {SubmitEvent} */ (event);
-      const method = (submitter && Element.prototype.getAttribute.call(submitter, "formmethod"))
+      const method = (submitter instanceof HTMLFormElement
+        ? Element.prototype.getAttribute.call(submitter, "formmethod") : submitter?.getAttribute("formmethod"))
         ?? Element.prototype.getAttribute.call(event.target, "method");
       if (method?.trim().toLowerCase() !== "dialog") over();
     },
