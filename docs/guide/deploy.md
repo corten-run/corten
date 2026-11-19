@@ -113,9 +113,11 @@ upstream's headers, so one without the header is buffered unless its `location` 
 
 ## nginx
 
-Checked with nginx 1.27 in front of `examples/watchlist`: the browser smoke test
+Checked on 2026-11-19 with nginx 1.27.5 in front of `examples/watchlist`: the browser smoke test
 (`scripts/smoke.mjs`) passes through it over HTTP/1.1, and HTTPS negotiates `h2` and streams events
-a second apart. `proxy_cache` was checked in front of `examples/card-market` ([Caching](#caching)).
+a second apart. In front of `examples/card-market`, nginx passed a private page's tag to the app
+on reload and returned its `304`; a versioned stylesheet was a cache
+`MISS` on its first request and a `HIT` on the next ([Caching](#caching)).
 
 ```nginx
 map $http_upgrade $connection_upgrade {
@@ -139,7 +141,7 @@ server {
     ssl_certificate     /etc/nginx/certs/cert.pem;
     ssl_certificate_key /etc/nginx/certs/key.pem;
 
-    location / {
+    location /assets/ {
         client_max_body_size 8m;   # more than twice the app's body limit (2 MiB); see below
         proxy_pass http://app;
         proxy_http_version 1.1;
@@ -149,8 +151,30 @@ server {
         proxy_set_header Connection $connection_upgrade;
         proxy_cache app;       # keys on Vary; stores only answers sent public
     }
+
+    location / {
+        client_max_body_size 8m;
+        proxy_pass http://app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
 }
 ```
+
+Leave `proxy_cache` off `location /` so conditional requests for private pages reach the app:
+where a location caches, nginx does not pass `If-None-Match`, `Range` or `If-Range` to the app
+([proxy_set_header](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_set_header)),
+so a private page answers a reload with its whole body and a download cannot resume. Opt in only on
+prefixes reserved for public content, such as the app's versioned files under `/assets/`.
+
+The cost is that other public answers outside `/assets/` are not stored by nginx: Corten's runtime
+and part modules under `/corten/`, the favicon, the PWA manifest, and an app's `Public` pages and
+files (such as a `robots.txt`). Each still carries its `Cache-Control`, so a browser keeps it as
+before. A prefix that serves only public answers can get a `location` of its own with
+`proxy_cache app;`, as `/assets/` has.
 
 nginx's limit decides who answers a body that is too large. The app reads a body past its limit
 by as much again (at most 64 MiB more; an `Upload` reads 64 MiB past its own limit) and answers
@@ -168,8 +192,8 @@ neither refuses it at the forms' limit nor holds all of it before the app sees a
 `client_max_body_size` is the route's `max` and the 64 MiB the app reads past (or `0`), so the
 app's own 413 (the API's shape, or the handler's) is what the browser reads for a body up to
 that size (a limit of only `max` would have nginx refuse first); past it, the browser reads
-nginx's page. A prefix that also serves downloads keeps
-`proxy_cache app;` here too:
+nginx's page. It leaves `proxy_cache` off like `location /`, so a private download's `Range`
+reaches the app; give a prefix `proxy_cache app;` only when everything under it is public:
 
 ```nginx
     location /files/ {
@@ -230,9 +254,11 @@ locale in its URL) must, or CloudFront sends none and every visitor gets the def
 page says its locale in `Content-Language`.
 
 The Cloudflare and CloudFront rows are from their documentation, not run here. Check a deploy
-the way it was measured: request a public page as a document, then the same URL with
-`corten: nav` and with `Accept: application/json`. The second must carry `corten-page` and the
-third must be JSON.
+the way it was measured, on a location that caches: request a public page as a document twice and
+confirm the second came from the cache (nginx's `$upstream_cache_status` is `HIT`, Cloudflare's
+`cf-cache-status: HIT`, CloudFront's `x-cache: Hit from cloudfront`); without a hit the rest
+proves nothing. Then request the same URL with `corten: nav` and with `Accept: application/json`.
+The first must carry `corten-page` and the second must be JSON.
 
 ## The release profile
 
