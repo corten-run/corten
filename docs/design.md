@@ -5808,7 +5808,9 @@ rules something out.
     `GetStartOfDay` in its spec (read that day), Toronto's 1919-03-31 change in the bundled
     database, and `day.start` against Temporal's start of day around every change in every zone
     from its first, with `Visitor::known_offset` asking jiff at the second an instant is in,
-    passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`.
+    passing on `591222898`; 2026-11-17, the measured costs above, counted on `939be002f`;
+    2026-11-19, both all-zones comparisons and the `Timestamp::MAX` range test passing in CI
+    with Jiff 1.0.0 and jiff-tzdb 1.0.0 (tzdb 2026f) on `ecd649c69`.
 
 60. <a id="choice-connection-info"></a>**A connection's handshake value reaches requests through an opt-in typed extension.**
     `serve_wrapped_with` takes a step returning `(Io, T)`, where
