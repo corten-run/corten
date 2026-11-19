@@ -7,7 +7,6 @@ import test from "node:test";
 import { fleetPlan, remoteFiles as originalFiles, reservation } from "./cloud-contract.mjs";
 import { bootstrapMarker, bootstrapReadScript, remoteFiles, sourceUrl } from "./cloud-remote.mjs";
 import { archiveLimit, archiveMembers, expandedLimit, fileHash } from "./cloud-local.mjs";
-import { guardianSha256 } from "./cloud-control-runtime.mjs";
 import { groupNames } from "./registry.mjs";
 
 const commit = "a".repeat(40);
@@ -162,19 +161,6 @@ test("legacy and every dedicated group share the same scoped public checkout and
     assert.equal(job.split("umask 022").length, 2);
     assert.ok(files["pack.sh"].startsWith("#!/bin/bash\nset -euo pipefail\numask 077\n"));
     assert.ok(!job.includes("chmod"));
-    assert.ok(!job.includes("prepare-bootstrap"), "unsupervised jobs cannot prepare the root manager");
-    if (state.group !== undefined) {
-      const control = { schema: "benchmark-control-ledger/v1", helperSha256: guardianSha256, ledger: [], sealed: [],
-        monitor: { schema: "benchmark-supervised-control/v1", id: "b".repeat(32), phase: "pending" } };
-      const supervised = remoteFiles({ ...state, control })["job.sh"];
-      const prepare = supervised.indexOf("bootstrap_stage=root-manager-preparation");
-      assert.ok(prepare > supervised.indexOf('writeFileSync("/bench/bootstrap-ready.json"'));
-      assert.ok(prepare < supervised.indexOf("bootstrap_stage=native-entry"));
-      const stage = supervised.slice(prepare, supervised.indexOf("bootstrap_stage=native-entry"));
-      assert.match(stage, /sha256sum --check --status/);
-      assert.match(stage, /timeout --foreground --kill-after=5 2700 .* prepare-bootstrap/);
-      assert.ok(!stage.includes("systemd-run") && !stage.includes("ssh"));
-    }
   }
 });
 

@@ -1065,14 +1065,14 @@ mask still fail. After any reset, the mask, inactive state and zero service PID
 are checked again; reset failure is fatal. This does not exempt firmware or any
 other user process from native cleanup evidence.
 
-On Ubuntu, an SSH login can start the root user's systemd manager. Its
-`user@0.service` can remain active even after every setup connection has
-closed. On a dedicated benchmark host, preparation stops that service only
-when it is idle and the registered monitor is the only remaining login.
-The benchmark runs in a system service, not that user service. The monitor
-must stay connected, and the normal process inventory must still pass before
-timing. An unexpected user workload is a setup failure, not something to
-stop or exclude from the inventory.
+On dedicated group hosts, the benchmark and Docker run as system services.
+Root SSH still needs a normal logind session, but not a separate user manager.
+During provisioning, a runtime systemd drop-in skips new starts of
+`user@0.service` while the host's control binding exists. It does not stop
+the current manager or change SSH or PAM. Before publishing the bootstrap
+marker, the job waits up to two minutes for the manager to exit naturally.
+If it stays busy the group fails setup, without terminating anyone's work.
+The normal login inventory and registered-monitor checks still apply.
 
 The generated job records a fixed preparation stage, source line and original
 exit code on command failure, never the failed command or an environment dump.
